@@ -1,11 +1,20 @@
-"""Engine-reap coverage for PrismaWrapper._kill_engine_process (#33414)."""
+"""Engine-reap coverage for PrismaWrapper._kill_engine_process (#33414).
+
+These tests drive real child processes so they assert what the reconnect path
+actually leaves behind in the process table, not which syscalls it made.
+"""
+
 import os
+import subprocess
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from collections.abc import Iterator
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from litellm.proxy.db.prisma_client import PrismaWrapper
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX zombies only exist on POSIX")
 
 
 @pytest.fixture(autouse=True)
@@ -15,86 +24,71 @@ def mock_prisma_binary():
         yield mock_module
 
 
-@pytest.mark.asyncio
-async def test_kill_engine_process_reaps_the_corpse(mock_prisma_binary):
-    """Regression for #33414/#14739/#10216: the killed engine must be waited on."""
-    with (
-        patch("os.kill"),
-        patch("asyncio.sleep", new_callable=AsyncMock),
-        patch("os.waitpid", return_value=(4242, 0)) as mock_waitpid,
-    ):
-        await PrismaWrapper._kill_engine_process(4242)
+@pytest.fixture
+def engine_stand_in() -> Iterator[subprocess.Popen[bytes]]:
+    """A long-lived child standing in for prisma-query-engine."""
+    proc = subprocess.Popen(["sleep", "60"])
+    try:
+        yield proc
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
 
-    mock_waitpid.assert_called_once_with(4242, os.WNOHANG)
 
-
-@pytest.mark.asyncio
-async def test_kill_engine_process_reap_is_non_blocking(mock_prisma_binary):
-    """The reap must use WNOHANG so reconnect never blocks the event loop."""
-    with (
-        patch("os.kill"),
-        patch("asyncio.sleep", new_callable=AsyncMock),
-        patch("os.waitpid", return_value=(4242, 0)) as mock_waitpid,
-    ):
-        await PrismaWrapper._kill_engine_process(4242)
-
-    _pid, flags = mock_waitpid.call_args[0]
-    assert flags == os.WNOHANG, "reap must not block the event loop"
+def _is_unreaped_child(pid: int) -> bool:
+    """True while `pid` is still our child in the process table (alive or zombie)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 @pytest.mark.asyncio
-async def test_kill_engine_process_tolerates_already_reaped_child(mock_prisma_binary):
-    """ChildProcessError means someone else already collected it — not an error."""
-    with (
-        patch("os.kill"),
-        patch("asyncio.sleep", new_callable=AsyncMock),
-        patch("os.waitpid", side_effect=ChildProcessError()),
-    ):
-        await PrismaWrapper._kill_engine_process(4242)  # must not raise
+async def test_kill_engine_process_leaves_no_zombie(engine_stand_in):
+    """Regression for #33414/#14739/#10216: the killed engine must not linger as <defunct>."""
+    pid = engine_stand_in.pid
+
+    await PrismaWrapper._kill_engine_process(pid)
+
+    assert not _is_unreaped_child(pid)
+    with pytest.raises(ChildProcessError):
+        os.waitpid(pid, os.WNOHANG)
 
 
 @pytest.mark.asyncio
-async def test_kill_engine_process_gives_up_rather_than_spinning(mock_prisma_binary):
-    """If the corpse never appears, bail out instead of looping forever."""
-    with (
-        patch("os.kill"),
-        patch("asyncio.sleep", new_callable=AsyncMock),
-        patch("os.waitpid", return_value=(0, 0)),
-        patch("time.monotonic", side_effect=[0.0, 0.0, 99.0]),
-    ):
-        await PrismaWrapper._kill_engine_process(4242)  # must terminate
+async def test_reap_tolerates_already_reaped_child(engine_stand_in):
+    """ChildProcessError means someone else already collected it, which is not an error."""
+    engine_stand_in.kill()
+    engine_stand_in.wait()
+
+    assert await PrismaWrapper._reap_engine_process(engine_stand_in.pid) is None
 
 
 @pytest.mark.asyncio
-async def test_kill_engine_process_skips_reap_for_invalid_pid(mock_prisma_binary):
-    """pid<=0 short-circuits before any signal, so nothing is reaped."""
-    with patch("os.waitpid") as mock_waitpid:
-        await PrismaWrapper._kill_engine_process(0)
-    mock_waitpid.assert_not_called()
+async def test_reap_gives_up_on_a_live_child_instead_of_blocking(engine_stand_in):
+    """A child that never exits is left alone after the bounded wait, not waited on forever."""
+    await PrismaWrapper._reap_engine_process(engine_stand_in.pid)
+
+    assert engine_stand_in.poll() is None, "a live engine must not be killed by the reap"
 
 
 @pytest.mark.asyncio
-async def test_kill_engine_process_no_reap_on_windows(mock_prisma_binary):
-    """Windows has no POSIX zombies and no os.WNOHANG, so the reap is a no-op."""
+async def test_reap_is_a_no_op_without_wnohang(engine_stand_in):
+    """Windows has no os.WNOHANG, so the reap must leave the process table untouched."""
     import litellm.proxy.db.prisma_client as pc
 
-    with (
-        patch("os.kill"),
-        patch("asyncio.sleep", new_callable=AsyncMock),
-        patch.object(pc.os, "WNOHANG", None, create=False),
-        patch("os.waitpid") as mock_waitpid,
-    ):
-        await PrismaWrapper._kill_engine_process(4242)
+    engine_stand_in.kill()
+    with patch.object(pc.os, "WNOHANG", None, create=False):
+        await PrismaWrapper._reap_engine_process(engine_stand_in.pid)
 
-    mock_waitpid.assert_not_called()
+    assert _is_unreaped_child(engine_stand_in.pid)
+    assert engine_stand_in.wait() != 0
 
 
 @pytest.mark.asyncio
-async def test_kill_engine_process_swallows_oserror_from_waitpid(mock_prisma_binary):
+async def test_reap_swallows_unexpected_oserror_from_waitpid():
     """A non-ECHILD OSError from waitpid must not abort reconnect."""
-    with (
-        patch("os.kill"),
-        patch("asyncio.sleep", new_callable=AsyncMock),
-        patch("os.waitpid", side_effect=OSError("EINVAL")),
-    ):
-        await PrismaWrapper._kill_engine_process(4242)  # must not raise
+    with patch("os.waitpid", side_effect=OSError("EINVAL")):
+        assert await PrismaWrapper._reap_engine_process(4242) is None

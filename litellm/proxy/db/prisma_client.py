@@ -454,10 +454,10 @@ class PrismaWrapper:
         The bounded retry only covers the brief window between the signal being
         delivered and the kernel finishing the exit.
         """
-        wnohang = getattr(os, "WNOHANG", None)
+        wnohang: Final[int | None] = getattr(os, "WNOHANG", None)
         if wnohang is None:
             return  # Windows: no POSIX zombies, nothing to reap.
-        deadline = time.monotonic() + 2.0
+        deadline: Final = time.monotonic() + 2.0
         while True:
             try:
                 reaped, _status = os.waitpid(pid, wnohang)
