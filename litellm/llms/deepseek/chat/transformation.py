@@ -256,7 +256,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         tools: Final = optional_params.get("tools")
         if not isinstance(tools, list) or not tools:
             return optional_params
-        sent_tools: Final[list[object]] = tools
+        sent_tools: Final[tuple[object, ...]] = tuple(tools)
 
         def _is_function_tool(tool: object) -> bool:
             return isinstance(tool, dict) and tool.get("type") == "function"
