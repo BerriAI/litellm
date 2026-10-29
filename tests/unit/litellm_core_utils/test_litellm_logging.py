@@ -1143,13 +1143,25 @@ class TestPerSecondMessagesCost:
         finally:
             litellm.model_cost.pop(self.DEPLOYMENT_ID, None)
 
-    def _routed_messages_call(self, *, stream: bool) -> LitellmLogging:
+    def _routed_messages_call(
+        self, *, stream: bool, received_seconds_before_start: float | None = None
+    ) -> LitellmLogging:
+        started: Final = datetime.datetime.now()
+        proxy_receive_stamp: Final = (
+            {}
+            if received_seconds_before_start is None
+            else {
+                "litellm_received_at": (started - datetime.timedelta(seconds=received_seconds_before_start)).astimezone(
+                    datetime.timezone.utc
+                )
+            }
+        )
         logging_obj: Final = LitellmLogging(
             model=self.MODEL_GROUP,
             messages=[{"role": "user", "content": "Say hi in three words"}],
             stream=stream,
             call_type="anthropic_messages",
-            start_time=time.time(),
+            start_time=started,
             litellm_call_id="per-second-call",
             function_id="fn",
             kwargs={"model": self.MODEL_GROUP},
@@ -1157,7 +1169,11 @@ class TestPerSecondMessagesCost:
         logging_obj.update_from_kwargs(
             kwargs={
                 "model": "anthropic/claude-haiku-5-5",
-                "litellm_metadata": {"deployment": "anthropic/claude-haiku-5-5", "model_info": {"id": self.DEPLOYMENT_ID}},
+                "litellm_metadata": {
+                    "deployment": "anthropic/claude-haiku-5-5",
+                    "model_info": {"id": self.DEPLOYMENT_ID},
+                    **proxy_receive_stamp,
+                },
             },
             model="claude-haiku-5-5",
             optional_params={"max_tokens": 32},
@@ -1174,7 +1190,7 @@ class TestPerSecondMessagesCost:
 
     @staticmethod
     def _response_handed_back_after(logging_obj: LitellmLogging, seconds: float) -> None:
-        started: Final = datetime.datetime.fromtimestamp(logging_obj.start_time)
+        started: Final = logging_obj.start_time
         update_response_metadata(
             result=dict(TestPerSecondMessagesCost.MESSAGES_RESPONSE),
             logging_obj=logging_obj,
@@ -1189,16 +1205,24 @@ class TestPerSecondMessagesCost:
         self._response_handed_back_after(logging_obj, seconds=1.0)
         result: Final = logging_obj._handle_anthropic_messages_response_logging(result=dict(self.MESSAGES_RESPONSE))
         cost_for_the_response_header: Final = logging_obj._response_cost_calculator(result=result)
-        logging_obj.model_call_details["end_time"] = logging_obj.start_time + 1.5
+        logging_obj.model_call_details["end_time"] = logging_obj.start_time + datetime.timedelta(seconds=1.5)
         cost_for_the_spend_log: Final = logging_obj._response_cost_calculator(result=result)
 
         assert cost_for_the_response_header == pytest.approx(self.RATE)
         assert cost_for_the_spend_log == pytest.approx(self.RATE)
 
+    def test_messages_call_bills_from_logging_setup_not_from_proxy_receive(self) -> None:
+        logging_obj: Final = self._routed_messages_call(stream=False, received_seconds_before_start=2.0)
+        self._response_handed_back_after(logging_obj, seconds=1.0)
+        result: Final = logging_obj._handle_anthropic_messages_response_logging(result=dict(self.MESSAGES_RESPONSE))
+
+        assert logging_obj.response_timing_metrics["_response_ms"] == pytest.approx(3000)
+        assert logging_obj._response_cost_calculator(result=result) == pytest.approx(self.RATE)
+
     def test_streamed_messages_call_bills_the_whole_stream_not_the_first_byte(self) -> None:
         logging_obj: Final = self._routed_messages_call(stream=True)
         self._response_handed_back_after(logging_obj, seconds=0.25)
-        logging_obj.model_call_details["end_time"] = logging_obj.start_time + 1.0
+        logging_obj.model_call_details["end_time"] = logging_obj.start_time + datetime.timedelta(seconds=1.0)
         result: Final = logging_obj._handle_anthropic_messages_response_logging(result=dict(self.MESSAGES_RESPONSE))
 
         assert logging_obj._response_cost_calculator(result=result) == pytest.approx(self.RATE)
@@ -3809,9 +3833,9 @@ def test_get_extra_header_tags_returns_none_for_absent_or_empty_header(
     monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["x-org-id"], raising=False)
 
     assert StandardLoggingPayloadSetup._get_extra_header_tags(proxy_server_request={"headers": {}}) is None
-    assert StandardLoggingPayloadSetup._get_extra_header_tags(
-        proxy_server_request={"headers": {"x-org-id": ""}}
-    ) is None
+    assert (
+        StandardLoggingPayloadSetup._get_extra_header_tags(proxy_server_request={"headers": {"x-org-id": ""}}) is None
+    )
 
 
 def test_get_extra_header_tags_preserves_configured_header_order(
@@ -13887,7 +13911,9 @@ def test_record_native_bedrock_guardrail_bills_each_call_its_own_trace_when_call
         )
         logging_obj.model_call_details["litellm_params"] = {"metadata": shared_metadata}
         logging_obj.record_native_bedrock_guardrail({"trace": trace})
-        recorded = logging_obj.model_call_details["litellm_params"]["metadata"]["standard_logging_guardrail_information"]
+        recorded = logging_obj.model_call_details["litellm_params"]["metadata"][
+            "standard_logging_guardrail_information"
+        ]
         costs.append(guardrail_information_cost(recorded))
 
     (first_cost, second_cost) = costs
