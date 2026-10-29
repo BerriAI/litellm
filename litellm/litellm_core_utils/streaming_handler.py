@@ -1263,7 +1263,7 @@ class CustomStreamWrapper:
                 )
 
             if _is_delta_empty:
-                model_response.choices[0].delta = Delta(content=None)  # ensure empty delta chunk returned
+                model_response.choices[0].delta = Delta(content=self._close_open_think_block())
                 # get any function call arguments
                 model_response.choices[0].finish_reason = map_finish_reason(
                     finish_reason=self.received_finish_reason
@@ -1292,21 +1292,26 @@ class CustomStreamWrapper:
         if self.merge_reasoning_content_in_choices is not True:
             return
         delta: Final = model_response.choices[0].delta
-        reasoning_content: Final = getattr(delta, "reasoning_content", None)
+        reasoning_content: Final = getattr(delta, "reasoning_content", None) or ""
         content: Final = delta.content or ""
-        if reasoning_content:
-            self._emitted_disqualifying_content = True
-            closes_thinking: Final = bool(content) and not self.sent_last_thinking_block
-            opening: Final = "" if self.sent_first_thinking_block else "<think>"
-            delta.content = opening + reasoning_content + ("</think>" + content if closes_thinking else "")
-            self.sent_first_thinking_block = True
-            self.sent_last_thinking_block = self.sent_last_thinking_block or closes_thinking
-        elif self.sent_first_thinking_block and not self.sent_last_thinking_block and content:
-            delta.content = "</think>" + content
-            self.sent_last_thinking_block = True
-
+        ends_thinking: Final = bool(content or delta.tool_calls or delta.function_call)
+        inside_think_block: Final = self.sent_first_thinking_block and not self.sent_last_thinking_block
+        opening: Final = "<think>" if reasoning_content and not inside_think_block else ""
+        closing: Final = "</think>" if ends_thinking and (reasoning_content or inside_think_block) else ""
         if hasattr(delta, "reasoning_content"):
             del delta.reasoning_content
+        if not reasoning_content and not closing:
+            return
+        delta.content = opening + reasoning_content + closing + content
+        self.sent_first_thinking_block = True
+        self.sent_last_thinking_block = bool(closing)
+        self._emitted_disqualifying_content = self._emitted_disqualifying_content or bool(reasoning_content)
+
+    def _close_open_think_block(self) -> str | None:
+        if not self.sent_first_thinking_block or self.sent_last_thinking_block:
+            return None
+        self.sent_last_thinking_block = True
+        return "</think>"
 
     def _dispatch_provider_chunk(
         self,
@@ -1557,6 +1562,12 @@ class CustomStreamWrapper:
         else:  # openai / azure chat model
             if isinstance(chunk, ChatCompletionChunk):
                 self._openai_handler_receives_chat_chunks = True
+                if any(str(choice.finish_reason) == "abort" for choice in chunk.choices or ()):
+                    raise litellm.InternalServerError(
+                        message="Upstream generation aborted (finish_reason=abort)",
+                        model=chunk.model,
+                        llm_provider=self.custom_llm_provider,
+                    )
             if self.custom_llm_provider in [
                 LlmProviders.AZURE.value,
                 LlmProviders.AZURE_AI.value,
@@ -1589,11 +1600,7 @@ class CustomStreamWrapper:
                     setattr(
                         model_response,
                         "usage",
-                        litellm.Usage(
-                            prompt_tokens=response_obj["usage"].get("prompt_tokens", None) or None,
-                            completion_tokens=response_obj["usage"].get("completion_tokens", None) or None,
-                            total_tokens=response_obj["usage"].get("total_tokens", None) or None,
-                        ),
+                        _usage_from_payload(response_obj["usage"]),
                     )
                 elif isinstance(response_obj["usage"], Usage):
                     setattr(
@@ -1610,6 +1617,8 @@ class CustomStreamWrapper:
         return _ProviderChunkParsed(response_obj)
 
     def chunk_creator(self, chunk: Any):
+        if isinstance(chunk, ModelResponseStream) and chunk.provider_specific_fields:
+            self.logging_obj.record_native_bedrock_guardrail(chunk.provider_specific_fields)
         if self.custom_llm_provider != "cached_response" and isinstance(
             chunk, (ChatCompletionChunk, ModelResponseStream)
         ):
@@ -1717,6 +1726,8 @@ class CustomStreamWrapper:
                 model_response.usage = Usage(**chunk_usage.model_dump())
 
             ## RETURN ARG
+            if isinstance(chunk, ModelResponseStream) and chunk.provider_specific_fields:
+                self.copy_model_response_level_provider_specific_fields(chunk, model_response)
             result: Final = self.return_processed_chunk_logic(
                 completion_obj=completion_obj,
                 model_response=model_response,
@@ -1926,7 +1937,19 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason == "stop" and self.tool_call
         ):  # don't overwrite for other - potential error finish reasons
             model_response.choices[0].finish_reason = "tool_calls"
+        close_tag: Final = self._close_open_think_block()
+        if close_tag is not None:
+            model_response.choices[0].delta.content = close_tag
         return model_response
+
+    def _final_chunk_for_logging(self, processed_chunk: "ModelResponseStream") -> "ModelResponseStream | None":
+        if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
+            return processed_chunk
+        if processed_chunk.choices[0].delta.content is None:
+            return None
+        return processed_chunk.model_copy(
+            update={"choices": [processed_chunk.choices[0].model_copy(update={"finish_reason": None})]}
+        )
 
     def _record_usage_only_chunk(self, model_response: "ModelResponseStream") -> None:
         """
@@ -2167,10 +2190,9 @@ class CustomStreamWrapper:
             else:
                 self.sent_last_chunk = True
                 processed_chunk: Final = self.finish_reason_handler()
-                # The logged response is built from self.chunks; keep a finish_reason the provider sent on its
-                # last content chunk (stripped there), but never add the synthetic "stop" used when it sent none.
-                if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
-                    self.chunks.append(processed_chunk)
+                final_chunk_for_logging: Final = self._final_chunk_for_logging(processed_chunk)
+                if final_chunk_for_logging is not None:
+                    self.chunks.append(final_chunk_for_logging)
                 if self.stream_options is None:
                     self._set_final_chunk_usage(processed_chunk)
                 ## LOGGING
@@ -2400,10 +2422,9 @@ class CustomStreamWrapper:
         else:
             self.sent_last_chunk = True
             processed_chunk: Final = self.finish_reason_handler()
-            # The logged response is built from self.chunks; keep a finish_reason the provider sent on its
-            # last content chunk (stripped there), but never add the synthetic "stop" used when it sent none.
-            if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
-                self.chunks.append(processed_chunk)
+            final_chunk_for_logging: Final = self._final_chunk_for_logging(processed_chunk)
+            if final_chunk_for_logging is not None:
+                self.chunks.append(final_chunk_for_logging)
             if self.stream_options is None:
                 self._set_final_chunk_usage(processed_chunk)
             # see sync __next__'s sibling branch: deliberately do NOT restore
@@ -2656,6 +2677,11 @@ class CustomStreamWrapper:
         return chunk
 
     _strip_sse_data_from_chunk = strip_sse_data_from_chunk
+
+
+def _usage_from_payload(payload: Mapping[str, Any]) -> Usage:
+    """Build ``Usage`` from a wire-shaped usage dict, forwarding every key."""
+    return litellm.Usage(**payload)
 
 
 def _cache_token_count(details: PromptTokensDetailsWrapper | None, keys: tuple[str, ...]) -> int:

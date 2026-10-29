@@ -38,6 +38,7 @@ from litellm.types.decisions import (
 from litellm.types.router import ModelInfo
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
+from tests.unit.conftest import AsyncOnlyImageFetch
 
 _QUESTIONS: Final[Mapping[str, object]] = MappingProxyType(
     {
@@ -577,8 +578,14 @@ async def test_unknown_provider_is_rejected_before_http(respx_mock: respx.MockRo
 
 
 @pytest.mark.asyncio
-async def test_provider_without_decisions_support_is_rejected_before_http(respx_mock: respx.MockRouter) -> None:
-    with pytest.raises(litellm.BadRequestError, match=r"Unknown Decisions provider 'anthropic'\. Supported providers"):
+async def test_provider_without_decisions_support_is_rejected_before_http(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    with pytest.raises(
+        litellm.BadRequestError, match=r"Unknown Decisions provider 'anthropic'\. Supported providers"
+    ) as error:
         await litellm.asystemone(
             model="anthropic/claude-sonnet-4-5",
             state="review",
@@ -586,6 +593,8 @@ async def test_provider_without_decisions_support_is_rejected_before_http(respx_
             api_key="caller-key",
         )
 
+    supported: Final = str(error.value).split("Supported providers: ", 1)[1].split(", ")
+    assert {"ollama", "ollama_chat"} <= set(supported)
     assert len(respx_mock.calls) == 0
 
 
@@ -682,7 +691,9 @@ _PPLX_USAGE: Final = {"model": "pplx-decider-v1-27b", "usage": {"input_tokens": 
     ("reply", "detail"),
     (
         pytest.param(_PPLX_USAGE, "DecisionsResponse answers: Field required", id="usage"),
-        pytest.param({"error": "Rate limit reached"}, "DecisionsResponse answers: Field required", id="rate_limit_text"),
+        pytest.param(
+            {"error": "Rate limit reached"}, "DecisionsResponse answers: Field required", id="rate_limit_text"
+        ),
         pytest.param({"error": "Request timed out"}, "DecisionsResponse answers: Field required", id="timeout_text"),
         pytest.param(
             {**_PPLX_USAGE, "answers": {"rate_limit": None}},
@@ -694,7 +705,9 @@ _PPLX_USAGE: Final = {"model": "pplx-decider-v1-27b", "usage": {"input_tokens": 
             "DecisionsResponse answers.is_defect",
             id="answer_type_timeout_text",
         ),
-        pytest.param(["Rate limit reached"], "DecisionsResponse Input should be a valid dictionary", id="not_an_object"),
+        pytest.param(
+            ["Rate limit reached"], "DecisionsResponse Input should be a valid dictionary", id="not_an_object"
+        ),
     ),
 )
 async def test_a_malformed_upstream_reply_is_a_server_error_whatever_its_text(
@@ -1525,7 +1538,15 @@ async def test_databricks_router_deployment_sends_its_own_key_to_its_own_base(
 
 
 _PROVIDERS_WHOSE_CHAT_MODELS_ALSO_DECIDE: Final = frozenset(
-    {LlmProviders.OPENAI.value, LlmProviders.OPENROUTER.value, LlmProviders.HOSTED_VLLM.value}
+    {
+        LlmProviders.OPENAI.value,
+        LlmProviders.AZURE.value,
+        LlmProviders.OPENROUTER.value,
+        LlmProviders.HOSTED_VLLM.value,
+        LlmProviders.LM_STUDIO.value,
+        LlmProviders.OLLAMA.value,
+        LlmProviders.OLLAMA_CHAT.value,
+    }
 )
 _DEDICATED_DECIDER_PROVIDERS: Final[tuple[str, ...]] = tuple(
     sorted(
@@ -3791,7 +3812,12 @@ async def test_a_returned_model_registered_without_prices_is_billed_at_the_reque
     monkeypatch.setitem(
         litellm.model_cost,
         "typesafe/jev-test-alias",
-        {"litellm_provider": "typesafe", "mode": "evaluation", "input_cost_per_token": 0.001, "output_cost_per_token": 0},
+        {
+            "litellm_provider": "typesafe",
+            "mode": "evaluation",
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0,
+        },
     )
     monkeypatch.setitem(litellm.model_cost, "typesafe/jev-test-unpriced", unpriced_row)
     respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json={**_RESPONSE, "model": "jev-test-unpriced"})
@@ -3893,3 +3919,423 @@ async def test_native_decisions_distinguishes_missing_usage_from_reported_zero(
         expected = litellm.completion_cost(completion_response=response)
         assert response._hidden_params["response_cost"] == pytest.approx(expected)
         assert (expected == 0) == (usage["input_tokens"] == usage["output_tokens"] == 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+@pytest.mark.parametrize("use_async", (True, False), ids=("asystemone", "systemone"))
+@pytest.mark.parametrize("api_base", ("http://ollama.local:11434", "http://ollama.local:11434/v1"))
+@pytest.mark.parametrize("api_key", (None, "fake-api-key"))
+async def test_ollama_systemone_preserves_questions_without_unrelated_or_placeholder_auth(
+    provider: str,
+    use_async: bool,
+    api_base: str,
+    api_key: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    monkeypatch.setattr(litellm, "api_key", "unrelated-global-key")
+    monkeypatch.setattr(litellm, "openai_key", "unrelated-global-openai-key")
+    route: Final = respx_mock.post("http://ollama.local:11434/v1/systemone").respond(json=_RESPONSE)
+    kwargs: Final = {
+        "model": f"{provider}/d3:4b",
+        "state": "review",
+        "questions": _QUESTIONS,
+        "api_base": api_base,
+        "api_key": api_key,
+    }
+
+    response: Final = await litellm.asystemone(**kwargs) if use_async else litellm.systemone(**kwargs)
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "d3:4b",
+        "state": "review",
+        "questions": dict(_QUESTIONS),
+    }
+    assert "authorization" not in route.calls.last.request.headers
+    assert response.answers["is_defect"] == NoulAnswer(type="noul", noul=0.9)
+    assert response.answers["sentiment"].choice == "positive"
+    assert response.answers["severity"].score == 1
+    assert response.usage == DecisionsUsage(input_tokens=_INPUT_TOKENS, output_tokens=_OUTPUT_TOKENS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+@pytest.mark.parametrize("use_async", (True, False), ids=("adecisions", "decisions"))
+async def test_ollama_decisions_translates_openai_questions_and_answers(
+    provider: str, use_async: bool, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    route: Final = respx_mock.post("http://ollama.local:11434/v1/systemone").respond(json=_RESPONSE)
+    kwargs: Final = {
+        "model": f"{provider}/d3:4b",
+        "input": "review",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        "api_base": "http://ollama.local:11434/v1",
+    }
+
+    response: Final = await litellm.adecisions(**kwargs) if use_async else litellm.decisions(**kwargs)
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "d3:4b",
+        "state": "review",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert "authorization" not in route.calls.last.request.headers
+    assert response.answers[0].type == "predicate"
+    assert response.answers[0].name == "is_defect"
+    assert response.answers[0].probability == 0.9
+    assert response.usage is not None
+    assert response.usage.input_tokens == _INPUT_TOKENS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+@pytest.mark.parametrize("environment_base", (None, "http://ollama.local:11434/v1"))
+async def test_ollama_decisions_resolves_environment_base_or_localhost_default(
+    provider: str, environment_base: str | None, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    if environment_base is not None:
+        monkeypatch.setenv("OLLAMA_API_BASE", environment_base)
+    url: Final = f"{environment_base or 'http://localhost:11434/v1'}/systemone"
+    route: Final = respx_mock.post(url).respond(json=_RESPONSE)
+
+    response: Final = await litellm.asystemone(model=f"{provider}/d3:4b", state="review", questions=_QUESTIONS)
+
+    assert route.call_count == 1
+    assert "authorization" not in route.calls.last.request.headers
+    assert response.answers["is_defect"] == NoulAnswer(type="noul", noul=0.9)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+@pytest.mark.parametrize("explicit_key", (None, "deployment-key"))
+async def test_ollama_decisions_resolves_environment_key_and_explicit_connection_overrides(
+    provider: str, explicit_key: str | None, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    monkeypatch.setenv("OLLAMA_API_BASE", "http://ignored.local:11434")
+    monkeypatch.setenv("OLLAMA_API_KEY", "environment-key")
+    route: Final = respx_mock.post("http://ollama.local:11434/v1/systemone").respond(json=_RESPONSE)
+
+    response: Final = await litellm.asystemone(
+        model=f"{provider}/d3:4b",
+        state="review",
+        questions=_QUESTIONS,
+        api_base="http://ollama.local:11434",
+        api_key=explicit_key,
+    )
+
+    assert route.calls.last.request.headers["authorization"] == f"Bearer {explicit_key or 'environment-key'}"
+    assert response.answers["is_defect"] == NoulAnswer(type="noul", noul=0.9)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+async def test_ollama_decisions_maps_upstream_bad_requests(
+    provider: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    route: Final = respx_mock.post("http://ollama.local:11434/v1/systemone").respond(
+        400, json={"error": "decision rejected"}
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="decision rejected") as error:
+        await litellm.asystemone(
+            model=f"{provider}/d3:4b",
+            state="review",
+            questions=_QUESTIONS,
+            api_base="http://ollama.local:11434",
+            num_retries=0,
+        )
+
+    assert error.value.status_code == 400
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+@pytest.mark.parametrize("drop_params", (False, True))
+@pytest.mark.parametrize("image", ("data:image/png;base64,AA==", "https://images.example/input.png"))
+async def test_ollama_decisions_rejects_input_images_before_http_or_drops_them(
+    provider: str, drop_params: bool, image: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "drop_params", False)
+    kwargs: Final = {
+        "model": f"{provider}/d3:4b",
+        "input": [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "review"}, {"type": "input_image", "image_url": image}],
+            }
+        ],
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        "api_base": "http://ollama.local:11434",
+        "drop_params": drop_params,
+    }
+    if not drop_params:
+        with pytest.raises(litellm.UnsupportedParamsError, match=r"\['input_image'\].*drop_params"):
+            await litellm.adecisions(**kwargs)
+        assert len(respx_mock.calls) == 0
+        return
+    route: Final = respx_mock.post("http://ollama.local:11434/v1/systemone").respond(json=_RESPONSE)
+
+    response: Final = await litellm.adecisions(**kwargs)
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "d3:4b",
+        "state": "review",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert response.answers[0].probability == 0.9
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", (True, False), ids=("asystemone", "systemone"))
+@pytest.mark.parametrize("api_base", ("http://lmstudio.local:1234", "http://lmstudio.local:1234/v1"))
+async def test_lm_studio_systemone_preserves_questions_and_omits_placeholder_auth(
+    use_async: bool, api_base: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("LM_STUDIO_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    route: Final = respx_mock.post("http://lmstudio.local:1234/v1/systemone").respond(json=_RESPONSE)
+    kwargs: Final = {
+        "model": "lm_studio/local-decision",
+        "state": "review",
+        "questions": _QUESTIONS,
+        "api_base": api_base,
+    }
+
+    response: Final = await litellm.asystemone(**kwargs) if use_async else litellm.systemone(**kwargs)
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "local-decision",
+        "state": "review",
+        "questions": dict(_QUESTIONS),
+    }
+    assert "authorization" not in route.calls.last.request.headers
+    assert response.answers["is_defect"] == NoulAnswer(type="noul", noul=0.9)
+    assert response.answers["sentiment"].choice == "positive"
+    assert response.answers["severity"].score == 1
+    assert response.usage == DecisionsUsage(input_tokens=_INPUT_TOKENS, output_tokens=_OUTPUT_TOKENS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", (True, False), ids=("adecisions", "decisions"))
+async def test_lm_studio_decisions_translates_openai_questions_and_answers(
+    use_async: bool, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("LM_STUDIO_API_KEY", raising=False)
+    route: Final = respx_mock.post("http://lmstudio.local:1234/v1/systemone").respond(json=_RESPONSE)
+    kwargs: Final = {
+        "model": "lm_studio/local-decision",
+        "input": "review",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        "api_base": "http://lmstudio.local:1234/v1",
+    }
+
+    response: Final = await litellm.adecisions(**kwargs) if use_async else litellm.decisions(**kwargs)
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "local-decision",
+        "state": "review",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert response.answers[0].type == "predicate"
+    assert response.answers[0].name == "is_defect"
+    assert response.answers[0].probability == 0.9
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_key", (None, "deployment-key"))
+async def test_lm_studio_decisions_resolves_environment_connection_and_explicit_key_override(
+    explicit_key: str | None, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setenv("LM_STUDIO_API_BASE", "http://lmstudio.local:1234/v1")
+    monkeypatch.setenv("LM_STUDIO_API_KEY", "environment-key")
+    route: Final = respx_mock.post("http://lmstudio.local:1234/v1/systemone").respond(json=_RESPONSE)
+
+    response: Final = await litellm.asystemone(
+        model="lm_studio/local-decision", state="review", questions=_QUESTIONS, api_key=explicit_key
+    )
+
+    assert route.calls.last.request.headers["authorization"] == f"Bearer {explicit_key or 'environment-key'}"
+    assert response.answers["is_defect"] == NoulAnswer(type="noul", noul=0.9)
+
+
+@pytest.mark.asyncio
+async def test_lm_studio_decisions_requires_a_server_before_http(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("LM_STUDIO_API_BASE", raising=False)
+    with pytest.raises(litellm.BadRequestError, match="api_base is required"):
+        await litellm.asystemone(model="lm_studio/local-decision", state="review", questions=_QUESTIONS)
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("remote_image", (False, True), ids=("inline", "remote"))
+async def test_lm_studio_decisions_sends_inline_images_to_systemone(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    remote_image: bool,
+    async_only_image_fetch: AsyncOnlyImageFetch,
+) -> None:
+    monkeypatch.delenv("LM_STUDIO_API_KEY", raising=False)
+    image: Final = "https://images.example/input.png" if remote_image else "data:image/png;base64,AA=="
+    expected_image: Final = async_only_image_fetch.data_url if remote_image else image
+    route: Final = respx_mock.post("http://lmstudio.local:1234/v1/systemone").respond(json=_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="lm_studio/local-decision",
+        input=[
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "review"}, {"type": "input_image", "image_url": image}],
+            }
+        ],
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_base="http://lmstudio.local:1234/v1",
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "local-decision",
+        "state": "review",
+        "images": [expected_image],
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert response.answers[0].probability == 0.9
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("remote_image", (False, True), ids=("inline", "remote"))
+async def test_hosted_vllm_decisions_sends_input_images_to_systemone(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    remote_image: bool,
+    async_only_image_fetch: AsyncOnlyImageFetch,
+) -> None:
+    monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
+    monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
+    image: Final[str] = "https://images.example/input.png" if remote_image else "data:image/png;base64,AA=="
+    expected_image: Final[str] = async_only_image_fetch.data_url if remote_image else image
+    route: Final = respx_mock.post("http://vllm.local:8000/v1/systemone").respond(json=_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="hosted_vllm/Qwen/Qwen3-0.6B",
+        input=[
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "review"}, {"type": "input_image", "image_url": image}],
+            }
+        ],
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_base="http://vllm.local:8000/v1",
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "Qwen/Qwen3-0.6B",
+        "state": "review",
+        "images": [expected_image],
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert response.answers[0].probability == 0.9
+    assert async_only_image_fetch.fetched == (["https://images.example/input.png"] if remote_image else [])
+
+
+def test_hosted_vllm_systemone_forwards_images(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
+    monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
+    image: Final[str] = "data:image/png;base64,AA=="
+    route: Final = respx_mock.post("http://vllm.local:8000/v1/systemone").respond(json=_RESPONSE)
+
+    litellm.systemone(
+        model="hosted_vllm/Qwen/Qwen3-0.6B",
+        state="review",
+        images=[image],
+        questions={
+            "is_defect": {
+                "type": "choice",
+                "instructions": "Is this a defect?",
+                "criteria": {"yes": "defective", "no": "intact"},
+            }
+        },
+        api_base="http://vllm.local:8000",
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "Qwen/Qwen3-0.6B",
+        "state": "review",
+        "images": [image],
+        "questions": {
+            "is_defect": {
+                "type": "choice",
+                "instructions": "Is this a defect?",
+                "criteria": {"yes": "defective", "no": "intact"},
+            }
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_hosted_vllm_decisions_sends_image_only_input_to_systemone(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
+    monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
+    image: Final[str] = "data:image/png;base64,AA=="
+    route: Final = respx_mock.post("http://vllm.local:8000/v1/systemone").respond(json=_RESPONSE)
+
+    await litellm.adecisions(
+        model="hosted_vllm/Qwen/Qwen3-0.6B",
+        input=[{"role": "user", "content": [{"type": "input_image", "image_url": image}]}],
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_base="http://vllm.local:8000",
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "Qwen/Qwen3-0.6B",
+        "state": "",
+        "images": [image],
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
+def test_hosted_vllm_systemone_maps_image_rejection_to_bad_request(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
+    monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
+    message: Final[str] = "this model does not take image inputs"
+    route: Final = respx_mock.post("http://vllm.local:8000/v1/systemone").respond(
+        status_code=400,
+        json={"error": {"message": message, "type": "BadRequestError", "code": 400}},
+    )
+
+    with pytest.raises(litellm.BadRequestError, match=re.escape(message)) as caught:
+        litellm.systemone(
+            model="hosted_vllm/Qwen/Qwen3-0.6B",
+            state="review",
+            images=["data:image/png;base64,AA=="],
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+            api_base="http://vllm.local:8000",
+            num_retries=0,
+        )
+
+    assert caught.value.status_code == 400
+    assert route.call_count == 1

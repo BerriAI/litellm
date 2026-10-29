@@ -232,7 +232,7 @@ class BadRequestError(openai.BadRequestError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
-        body: dict | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = 400
         self.message = f"litellm.BadRequestError: {message}"
@@ -276,7 +276,7 @@ class ImageFetchError(BadRequestError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
-        body: dict | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         super().__init__(
             message=message,
@@ -314,6 +314,10 @@ class VectorStoreSearchError(BadRequestError):
 
 
 class MalformedRequestFieldError(BadRequestError):
+    pass
+
+
+class UnsupportedEndpointError(BadRequestError):
     pass
 
 
@@ -556,6 +560,7 @@ class ContextWindowExceededError(BadRequestError):
         llm_provider,
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = 400
         self.model = model
@@ -567,6 +572,7 @@ class ContextWindowExceededError(BadRequestError):
             llm_provider=self.llm_provider,
             response=response,
             litellm_debug_info=self.litellm_debug_info,
+            body=body,
         )  # Call the base class constructor with the parameters it needs
 
         # set after, to make it clear the raised error is a context window exceeded error
@@ -685,7 +691,7 @@ class ContentPolicyViolationError(BadRequestError):
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
         provider_specific_fields: dict | None = None,
-        body: dict | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = 400
         self.message = f"litellm.ContentPolicyViolationError: {message}"
@@ -1054,6 +1060,7 @@ LITELLM_EXCEPTION_TYPES: Final = [
     BadRequestError,
     UnprocessableEntityError,
     UnsupportedParamsError,
+    UnsupportedEndpointError,
     Timeout,
     PermissionDeniedError,
     RateLimitError,
