@@ -1,7 +1,7 @@
 import time
 import types
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, Literal, Optional, TypeVar, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, cast
 
 import httpx
 
@@ -2161,11 +2161,8 @@ class OpenAIFilesAPI(BaseLLM):
         return response
 
 
-_BatchPage = TypeVar("_BatchPage", SyncCursorPage[Batch], AsyncCursorPage[Batch])
-
-
-def _as_litellm_batch_page(page: _BatchPage) -> _BatchPage:
-    return page.model_copy(update={"data": [LiteLLMBatch.model_validate(batch.model_dump()) for batch in page.data]})
+def _as_litellm_batches(batches: Sequence[Batch]) -> Sequence[LiteLLMBatch]:
+    return [LiteLLMBatch.model_validate(batch.model_dump()) for batch in batches]
 
 
 class OpenAIBatchesAPI(BaseLLM):
@@ -2358,7 +2355,7 @@ class OpenAIBatchesAPI(BaseLLM):
     ):
         verbose_logger.debug("listing batches, after= %s, limit= %s", after, limit)
         response: Final = await openai_client.batches.list(after=after, limit=limit)
-        return _as_litellm_batch_page(response)
+        return response.model_copy(update={"data": _as_litellm_batches(response.data)})
 
     def list_batches(
         self,
@@ -2394,8 +2391,10 @@ class OpenAIBatchesAPI(BaseLLM):
                     "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
                 )
             return self.alist_batches(openai_client=openai_client, after=after, limit=limit)
+        if not isinstance(openai_client, OpenAI):
+            raise TypeError("OpenAI client is not an instance of OpenAI. Make sure you passed a sync OpenAI client.")
         response: Final = openai_client.batches.list(after=after, limit=limit)
-        return _as_litellm_batch_page(response)
+        return response.model_copy(update={"data": _as_litellm_batches(response.data)})
 
 
 class OpenAIAssistantsAPI(BaseLLM):

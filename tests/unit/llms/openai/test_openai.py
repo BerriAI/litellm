@@ -23,6 +23,7 @@ from litellm.llms.openai.openai import (
     AsyncAssistantEventHandler,
     AsyncCursorPage,
     MessageData,
+    OpenAIBatchesAPI,
     OpenAIChatCompletion,
     OpenAIConfig,
     OpenAIMessage as Message,
@@ -2048,3 +2049,18 @@ def test_openai_config_hoists_a_later_developer_message_only_for_a_model_off_ope
         model_info=None,
     )
     assert [message["role"] for message in messages] == expected_roles
+
+
+def test_sync_batch_list_refuses_an_async_client_instead_of_returning_an_unawaited_page():
+    async_client: Final = AsyncOpenAI(api_key="sk-test", base_url="http://vllm-router.test/v1")
+
+    with pytest.raises(TypeError, match="not an instance of OpenAI"):
+        OpenAIBatchesAPI().list_batches(
+            _is_async=False,
+            api_key="sk-test",
+            api_base="http://vllm-router.test/v1",
+            timeout=5.0,
+            max_retries=0,
+            organization=None,
+            client=async_client,
+        )
