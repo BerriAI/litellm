@@ -703,23 +703,23 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return False
         return True
 
+    @property
+    def custom_llm_provider(self) -> str:
+        return "vertex_ai"
+
     @staticmethod
-    def supports_sampling_params(model: str) -> bool:
+    def supports_sampling_params(model: str, custom_llm_provider: str | None) -> bool:
         """Whether Google still honors ``temperature`` / ``top_p`` / ``top_k`` for ``model``.
 
-        Driven by ``supports_sampling_params`` in the model map: Gemini 3.6 Flash, 3.5 Flash-Lite
-        and later accept the fields but ignore them, and a later generation will 400 on them.
-        A model the map says nothing about keeps forwarding them. ``temperature`` and ``top_p``
-        leave ``get_supported_openai_params`` when the flag is off, so the shared unsupported-param
-        check raises or drops them and ``allowed_openai_params`` still forwards them verbatim;
-        ``top_k`` is a provider-specific kwarg that bypasses that check and is gated while the
-        request body is built."""
-        rows: Final = cast(Mapping[str, Mapping[str, object]], litellm.model_cost)  # cast-ok: JSON rows by model id
-        bare: Final = model.split("/")[-1]
-        for candidate in (model, bare, f"vertex_ai/{bare}", f"gemini/{bare}"):
-            if isinstance(flag := rows.get(candidate, {}).get("supports_sampling_params"), bool):
-                return flag
-        return True
+        Read from the model map through the provider-aware lookup: an explicit ``supports_sampling_params``
+        on the row wins, a chat, Responses or batch row without one and an id the map has never seen are
+        answered by the ``gemini-sampling-params-ignored`` fallback generalization (Gemini 3.6 Flash, 3.5
+        Flash-Lite and every later text model), and a row for any other mode keeps forwarding.
+        ``temperature`` and ``top_p`` leave ``get_supported_openai_params`` when the flag is off, so the
+        shared unsupported-param check raises or drops them and ``allowed_openai_params`` still forwards
+        them verbatim; ``top_k`` is a provider-specific kwarg that bypasses that check and is gated while
+        the request body is built."""
+        return not is_explicitly_disabled_factory(model, custom_llm_provider, "supports_sampling_params")
 
     @staticmethod
     def reject_unsupported_sampling_param(model: str, param: str, drop_params: bool) -> None:
@@ -729,15 +729,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return
         raise UnsupportedParamsError(
             message=(
-                f"{model} does not support {param}: the model map flags it `supports_sampling_params: false` "
-                "because Google ignores sampling params on this model. "
-                "To drop unsupported params, set `litellm.drop_params = True`."
+                f"{model} does not support {param}: Google ignores sampling params on this model, so LiteLLM "
+                "treats it as `supports_sampling_params: false`. To drop unsupported params, set "
+                "`litellm.drop_params = True`, or set `supports_sampling_params: true` in the model's "
+                "model_info to forward them anyway."
             ),
             status_code=400,
         )
 
     def get_supported_openai_params(self, model: str) -> list[str]:
-        sampling_params: Final = ("temperature", "top_p", "top_k") if self.supports_sampling_params(model) else ()
+        sampling_params: Final = (
+            ("temperature", "top_p", "top_k") if self.supports_sampling_params(model, self.custom_llm_provider) else ()
+        )
         supported_params: Final = [
             *sampling_params,
             "max_tokens",
@@ -1617,7 +1620,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         allow_integer_enums: bool = True,
     ) -> dict:
         self._apply_include_server_side_tool_invocations(non_default_params, optional_params)
-        supports_sampling_params: Final = self.supports_sampling_params(model)
+        supports_sampling_params: Final = self.supports_sampling_params(model, self.custom_llm_provider)
         for param, value in non_default_params.items():
             if param in ("temperature", "top_p", "top_k") and not supports_sampling_params:
                 continue

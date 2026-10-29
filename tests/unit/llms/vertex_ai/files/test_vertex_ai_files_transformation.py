@@ -5,25 +5,26 @@ Includes tests for Vertex AI batch output transformation to OpenAI format.
 
 import json
 import urllib.parse
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Iterable, Mapping
 from types import MappingProxyType
+from typing import Final
+from unittest.mock import MagicMock
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from openai.types.file_deleted import FileDeleted
 from pydantic import TypeAdapter
-from unittest.mock import MagicMock
 
 import litellm
+from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.files.transformation import (
     VertexAIFilesConfig,
     _get_litellm_batch_custom_id_from_labels,
     _openai_batch_jsonl_entry_to_vertex_rows,
     _sanitize_gcp_label_value,
 )
-from litellm.types.llms.openai import OpenAIFileObject, HttpxBinaryResponseContent
-from openai.types.file_deleted import FileDeleted
+from litellm.types.llms.openai import HttpxBinaryResponseContent, OpenAIFileObject
 
 
 @pytest.fixture
@@ -171,9 +172,7 @@ class TestBatchObjectNaming:
     def test_should_store_fine_tuned_endpoint_under_endpoints_path(self, config):
         """A numeric endpoint id must not be filed under publishers/google/models/gemini/<id>,
         which the batch transformation later mangles into a nonexistent publisher model (LIT-6899)."""
-        object_name = config._get_gcs_object_name_from_batch_jsonl(
-            [{"body": {"model": "gemini/7768560373388541952"}}]
-        )
+        object_name = config._get_gcs_object_name_from_batch_jsonl([{"body": {"model": "gemini/7768560373388541952"}}])
         assert object_name.startswith("litellm-vertex-files/endpoints/7768560373388541952/")
         assert "publishers" not in object_name
 
@@ -863,7 +862,6 @@ class TestVertexBatchOutputTransformation:
         batch output and must never line-parse or corrupt binary content."""
         binary = b"%PDF-1.4\n%\xc4\xe5\xf2\xe5\xeb\xa7\n" + b"\x00\x01\x02\xff\xfe" * 64
         assert config._try_transform_vertex_batch_output_to_openai(binary) == binary
-
 
 
 class TestTryTransformDoesNotMutateCallerLoggingObj:
@@ -2045,3 +2043,110 @@ def test_batch_row_for_an_unflagged_gemini_model_keeps_the_knobs(monkeypatch: py
     monkeypatch.setattr(litellm, "drop_params", False)
     (row,) = _wrap_entries([_chat_entry("gemini-2.5-flash", _SAMPLING_KNOBS)])
     assert _generation_config(row) == {"max_output_tokens": 5, **_SAMPLING_KNOBS}
+
+
+def _stamp_batch_deployment_row(monkeypatch: pytest.MonkeyPatch, model: str) -> None:
+    monkeypatch.setitem(litellm.model_cost, model, {"mode": "batch", "litellm_provider": "vertex_ai"})
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_batch_row_for_a_gemini_4_batch_deployment_raises_a_400_naming_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The proxy stamps a batch deployment's `mode: batch` onto the backend model's map row, so a Gemini
+    model whose name is past Google's cut must still be filled by the shipped sampling rule and not pass as a
+    non-chat row"""
+    _stamp_batch_deployment_row(monkeypatch, "vertex_ai/gemini-4-zeta")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"temperature, top_p, top_k.*drop_params"):
+        _wrap_entries([_chat_entry("vertex_ai/gemini-4-zeta", _SAMPLING_KNOBS)])
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_batch_row_for_a_gemini_4_batch_deployment_drops_the_knobs_under_global_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stamp_batch_deployment_row(monkeypatch, "vertex_ai/gemini-4-zeta")
+    monkeypatch.setattr(litellm, "drop_params", True)
+    (row,) = _wrap_entries([_chat_entry("vertex_ai/gemini-4-zeta", _SAMPLING_KNOBS)])
+    assert _generation_config(row) == {"max_output_tokens": 5}
+
+
+def _google_rows_flagged_only_on_vertex(monkeypatch: pytest.MonkeyPatch, model_name: str) -> None:
+    monkeypatch.setitem(litellm.model_cost, f"gemini/{model_name}", {"litellm_provider": "gemini", "mode": "chat"})
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"vertex_ai/{model_name}",
+        {"litellm_provider": "vertex_ai", "mode": "chat", "supports_sampling_params": False},
+    )
+
+
+def _upload_rows(
+    entries: Iterable[Mapping[str, object]], deployment_model: str | None, deployment_drop_params: bool | None = None
+) -> list[object]:
+    """The Vertex rows a jsonl upload stores, built through the create-file transform the way the proxy's
+    `?model=<deployment>` branch runs it, with the deployment's model and drop_params in litellm_params"""
+    jsonl: Final = "\n".join(json.dumps(dict(entry)) for entry in entries).encode()
+    litellm_params: Final[dict[str, object]] = {
+        **({"model": deployment_model} if deployment_model else {}),
+        **({"drop_params": deployment_drop_params} if deployment_drop_params is not None else {}),
+    }
+    request: Final = VertexAIFilesConfig().transform_create_file_request(
+        model="",
+        create_file_data={"file": ("batch.jsonl", jsonl, "application/jsonl"), "purpose": "batch"},
+        optional_params={},
+        litellm_params=litellm_params,
+    )
+    assert isinstance(request, dict)
+    body: Final = b"".join(request["streaming_media_upload"]["body_stream"].iter_bytes())
+    return [json.loads(line) for line in body.decode().splitlines()]
+
+
+@pytest.mark.parametrize("deployment_model", ["vertex_ai/gemini-zeta-9", None], ids=["proxy_deployment", "sdk_upload"])
+def test_batch_row_keeping_a_gemini_prefix_is_judged_by_its_vertex_row(
+    deployment_model: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row copied from an AI Studio call keeps its `gemini/` prefix but runs on Vertex, so the Vertex row's flag
+    decides. Looked up under that prefix on the Vertex route it found no row and fell open, so the knobs were
+    stored even though the model ignores them"""
+    _google_rows_flagged_only_on_vertex(monkeypatch, "gemini-zeta-9")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(VertexAIError, match=r"temperature, top_p, top_k.*drop_params"):
+        _upload_rows([_chat_entry("gemini/gemini-zeta-9", _SAMPLING_KNOBS)], deployment_model)
+
+
+@pytest.mark.parametrize("deployment_model", ["vertex_ai/gemini-zeta-9", None], ids=["proxy_deployment", "sdk_upload"])
+def test_batch_row_keeping_a_gemini_prefix_drops_the_knobs_under_global_drop_params(
+    deployment_model: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _google_rows_flagged_only_on_vertex(monkeypatch, "gemini-zeta-9")
+    monkeypatch.setattr(litellm, "drop_params", True)
+    (row,) = _upload_rows([_chat_entry("gemini/gemini-zeta-9", _SAMPLING_KNOBS)], deployment_model)
+    assert _generation_config(TypeAdapter(Mapping[str, object]).validate_python(row)) == {"max_output_tokens": 5}
+
+
+def test_batch_row_for_a_flagged_gemini_model_drops_the_knobs_under_the_deployment_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A batch deployment with `drop_params: true` in its litellm_params gets the knobs dropped the way a
+    real-time call on that deployment does, instead of a 400 that only the global switch could avoid"""
+    _google_rows_flagged_only_on_vertex(monkeypatch, "gemini-zeta-9")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    (row,) = _upload_rows(
+        [_chat_entry("gemini-zeta-9", _SAMPLING_KNOBS)], "vertex_ai/gemini-zeta-9", deployment_drop_params=True
+    )
+    assert _generation_config(TypeAdapter(Mapping[str, object]).validate_python(row)) == {"max_output_tokens": 5}
+
+
+def test_batch_row_is_judged_by_the_deployment_model_it_runs_on_not_the_id_it_was_written_with(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The stored GCS path binds the batch job to the deployment's model, so a row written for an older id that
+    still takes the knobs is gated for the model that actually executes it"""
+    _google_rows_flagged_only_on_vertex(monkeypatch, "gemini-zeta-9")
+    monkeypatch.setitem(
+        litellm.model_cost, "vertex_ai/gemini-zeta-1", {"litellm_provider": "vertex_ai", "mode": "chat"}
+    )
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(VertexAIError, match=r"gemini-zeta-9 does not support temperature, top_p, top_k"):
+        _upload_rows([_chat_entry("gemini-zeta-1", _SAMPLING_KNOBS)], "vertex_ai/gemini-zeta-9")

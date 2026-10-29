@@ -81,8 +81,14 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
     def is_model_gemini_audio_model(self, model: str) -> bool:
         return "tts" in model
 
+    @property
+    def custom_llm_provider(self) -> str:
+        return "gemini"
+
     def get_supported_openai_params(self, model: str) -> list[str]:
-        sampling_params: Final = ("temperature", "top_p") if self.supports_sampling_params(model) else ()
+        sampling_params: Final = (
+            ("temperature", "top_p") if self.supports_sampling_params(model, self.custom_llm_provider) else ()
+        )
         supported_params: Final = [
             *sampling_params,
             "max_tokens",
