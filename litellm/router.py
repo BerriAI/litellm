@@ -16419,6 +16419,7 @@ class Router:
                 filter_web_search_deployments(
                     healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
                     request_kwargs,
+                    empty_for_openai_web_search=False,
                 ),
                 model,
             )

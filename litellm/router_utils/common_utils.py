@@ -48,6 +48,7 @@ _GEMINI_SEARCH_TOOL_KEYS: Final = frozenset(
     }
 )
 _WEB_SEARCH_TOOL_TYPES: Final = frozenset({"web_search", "google_search"})
+_OPENAI_WEB_SEARCH_TOOL_TYPES: Final = frozenset({"web_search", "web_search_preview"})
 _DEPLOYMENT_ROWS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
     tuple[Mapping[str, object], ...]
 )
@@ -456,30 +457,48 @@ def _is_web_search_request(tools: object, web_search_options: object) -> bool:
     return web_search_options is not None or any(_is_web_search_tool(tool) for tool in optional_sequence(tools) or ())
 
 
+def _is_openai_web_search_tool(tool: object) -> bool:
+    tool_fields: Final = as_str_mapping(tool)
+    return (
+        tool_fields is not None
+        and isinstance(tool_type := tool_fields.get("type"), str)
+        and tool_type in _OPENAI_WEB_SEARCH_TOOL_TYPES
+    )
+
+
+def _has_openai_web_search_tool(tools: object) -> bool:
+    tool_list: Final = optional_sequence(tools)
+    return tool_list is not None and any(_is_openai_web_search_tool(tool) for tool in tool_list)
+
+
 def filter_web_search_deployments(
     healthy_deployments: list[dict] | dict,
     request_kwargs: dict | None = None,
+    *,
+    empty_for_openai_web_search: bool = True,
 ) -> list[dict] | dict:
     """
     If the request is websearch, filter out deployments that don't support web search
     """
-    if request_kwargs is None:
+    request_fields: Final = as_str_mapping(request_kwargs)
+    if request_fields is None:
         return healthy_deployments
     # When a specific deployment was already chosen, it's returned as a dict
     # rather than a list - nothing to filter, just pass through
     if isinstance(healthy_deployments, dict):
         return healthy_deployments
 
-    tools: Final[object] = request_kwargs.get("tools")
-    web_search_options: Final[object] = request_kwargs.get("web_search_options")
+    tools: Final = request_fields.get("tools")
+    web_search_options: Final = request_fields.get("web_search_options")
     if not _is_web_search_request(tools, web_search_options):
         return healthy_deployments
 
     # Filter out deployments that don't support web search
     final_deployments: Final = [d for d in healthy_deployments if _deployment_supports_web_search(d)]
-    if healthy_deployments and not final_deployments:
+    empties_group: Final = empty_for_openai_web_search and _has_openai_web_search_tool(tools)
+    if healthy_deployments and not final_deployments and empties_group:
         verbose_logger.warning("No deployments support web search for request")
-    return final_deployments
+    return final_deployments if final_deployments or empties_group else healthy_deployments
 
 
 # Credential params that only one provider family reads, paired with the providers

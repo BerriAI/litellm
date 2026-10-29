@@ -370,21 +370,31 @@ class TestFilterWebSearchDeployments:
         result = filter_web_search_deployments(deployments, request_kwargs)
         assert len(result) == 2
 
-    @pytest.mark.parametrize(
-        "request_kwargs",
-        [
-            {"tools": [{"type": "web_search"}]},
-            {"tools": [{"type": "web_search_20250305", "name": "web_search"}]},
-            {"tools": [{"googleSearch": {}}]},
-            {"web_search_options": {}},
-        ],
-    )
-    def test_no_deployment_supporting_web_search_leaves_none(self, request_kwargs: dict[str, object]) -> None:
+    @pytest.mark.parametrize("tool_type", ["web_search", "web_search_preview"])
+    def test_no_deployment_supporting_openai_web_search_leaves_none(self, tool_type: str) -> None:
         deployments: Final = [
             {"model_info": {"id": "d1", "supports_web_search": False}},
             {"model_info": {"id": "d2", "supports_web_search": False}},
         ]
-        assert filter_web_search_deployments(deployments, request_kwargs) == []
+        assert filter_web_search_deployments(deployments, {"tools": [{"type": tool_type}]}) == []
+
+    @pytest.mark.parametrize(
+        "request_kwargs",
+        [
+            {"tools": [{"type": "web_search_20250305", "name": "web_search"}]},
+            {"tools": [{"type": "web_search_2025_08_26"}]},
+            {"tools": [{"googleSearch": {}}]},
+            {"web_search_options": {}},
+        ],
+    )
+    def test_no_deployment_supporting_other_web_search_keeps_every_deployment(
+        self, request_kwargs: dict[str, object]
+    ) -> None:
+        deployments: Final = [
+            {"model_info": {"id": "d1", "supports_web_search": False}},
+            {"model_info": {"id": "d2", "supports_web_search": False}},
+        ]
+        assert filter_web_search_deployments(deployments, request_kwargs) == deployments
 
     def test_a_tool_that_is_not_an_object_is_no_web_search_request(
         self, sample_deployments: list[dict[str, object]]
@@ -433,7 +443,6 @@ class TestFilterWebSearchDeployments:
         assert result == deployment
 
 
-
 def _router_with_a_deployment_that_disables_web_search(routing_strategy: str) -> Router:
     return Router(
         model_list=[
@@ -467,9 +476,8 @@ def test_sync_pick_skips_deployments_without_web_search(routing_strategy: str) -
     assert picks == {"search"}
 
 
-@pytest.mark.asyncio
-async def test_web_search_request_to_a_group_without_web_search_falls_back_to_a_group_with_it() -> None:
-    router: Final = Router(
+def _router_with_a_group_that_disables_web_search(routing_strategy: str = "simple-shuffle") -> Router:
+    return Router(
         model_list=[
             {
                 "model_name": "flagged-model",
@@ -483,11 +491,35 @@ async def test_web_search_request_to_a_group_without_web_search_falls_back_to_a_
             },
         ],
         fallbacks=[{"flagged-model": ["search-model"]}],
+        routing_strategy=routing_strategy,
     )
-    response: Final = await router.acompletion(
-        model="flagged-model", messages=[{"role": "user", "content": "hi"}], **_ANTHROPIC_WEB_SEARCH_REQUEST
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tools", "expected_content"),
+    [
+        ([{"type": "web_search"}], "searched"),
+        ([{"type": "web_search_20250305", "name": "web_search"}], "flagged"),
+        ([{"googleSearch": dict[str, object]()}], "flagged"),
+    ],
+)
+async def test_web_search_to_a_group_without_web_search_routes_like_main(
+    tools: list[dict[str, object]], expected_content: str
+) -> None:
+    response: Final = await _router_with_a_group_that_disables_web_search().acompletion(
+        model="flagged-model", messages=[{"role": "user", "content": "hi"}], tools=tools
     )
-    assert response.choices[0].message.content == "searched"
+    assert response.choices[0].message.content == expected_content
+
+
+@pytest.mark.parametrize("routing_strategy", ["simple-shuffle", "usage-based-routing"])
+def test_sync_pick_keeps_a_group_without_web_search_for_openai_web_search(routing_strategy: str) -> None:
+    router: Final = _router_with_a_group_that_disables_web_search(routing_strategy)
+    deployment: Final = router.get_available_deployment(
+        model="flagged-model", request_kwargs={"tools": [{"type": "web_search"}]}
+    )
+    assert deployment["model_info"]["id"] == "no-search"
 
 
 @pytest.mark.asyncio
@@ -502,6 +534,7 @@ async def test_legacy_usage_based_async_pick_skips_deployments_without_web_searc
         for _ in range(20)
     }
     assert picks == {"search"}
+
 
 def test_invalidate_model_group_info_cache():
     """Test that _invalidate_model_group_info_cache clears the LRU cache."""
