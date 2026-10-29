@@ -329,8 +329,10 @@ def test_warnings_and_unknown_messages_are_not_forwarded():
     assert parse_server_message(json.dumps({"message_type": ["not", "a", "string"]})) is None
 
 
-@pytest.mark.parametrize("payload", [_frame("partial_transcript"), "[]", "not json"])
-def test_malformed_server_messages_raise_the_protocol_error(payload: str):
+@pytest.mark.parametrize(
+    "payload", [_frame("partial_transcript"), "[]", "not json", b'{"message_type":"partial_transcript","text":"\xff"}']
+)
+def test_malformed_server_messages_raise_the_protocol_error(payload: str | bytes):
     with pytest.raises(ElevenLabsProtocolError):
         parse_server_message(payload)
 

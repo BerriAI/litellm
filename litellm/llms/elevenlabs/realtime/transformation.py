@@ -187,7 +187,10 @@ def session_created_event(config: ElevenLabsSessionConfig, session_id: str) -> O
 
 
 def parse_server_message(payload: str | bytes) -> ElevenLabsServerMessageUnion | None:
-    text: Final = payload.decode("utf-8") if isinstance(payload, bytes) else payload
+    try:
+        text: Final = payload.decode("utf-8") if isinstance(payload, bytes) else payload
+    except UnicodeDecodeError:
+        raise ElevenLabsProtocolError("ElevenLabs sent a message that is not valid UTF-8") from None
     message: Final = json_object(text, ElevenLabsProtocolError)
     message_type: Final = message.get("message_type")
     if not isinstance(message_type, str) or message_type not in _KNOWN_SERVER_MESSAGE_TYPES:
