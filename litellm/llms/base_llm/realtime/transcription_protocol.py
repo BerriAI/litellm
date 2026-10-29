@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Literal
+from urllib.parse import urlparse, urlunparse
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
@@ -283,3 +284,22 @@ def completed_event(
 def duration_usage(seconds: float) -> RealtimeInputAudioTranscriptionUsage:
     usage: Final[RealtimeInputAudioTranscriptionDurationUsage] = {"type": "duration", "seconds": seconds}
     return usage
+
+
+def build_realtime_wss_url(api_base: str | None, *, default_url: str, path: str, provider: str) -> str:
+    if api_base is None:
+        return default_url
+    parsed: Final = urlparse(api_base.strip())
+    scheme: Final = "wss" if parsed.scheme == "https" else parsed.scheme
+    if (
+        scheme != "wss"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+    ):
+        raise ValueError(
+            f"{provider} api_base must be an absolute wss:// or https:// URL without credentials or a fragment"
+        )
+    netloc: Final = f"{parsed.hostname}:{parsed.port}" if parsed.port is not None else parsed.hostname
+    return urlunparse((scheme, netloc, path, "", "", ""))

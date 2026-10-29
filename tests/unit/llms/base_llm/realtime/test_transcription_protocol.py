@@ -1,10 +1,12 @@
 import base64
 import json
+from typing import Final
 
 import pytest
 
 from litellm.llms.base_llm.realtime.transcription_protocol import (
     RealtimeTranscriptionProtocolError,
+    build_realtime_wss_url,
     completed_event,
     decode_pcm16_append,
     parse_transcription_session_update,
@@ -126,3 +128,36 @@ def test_completed_event_carries_usage_only_when_billed():
     assert "usage" not in completed_event("item_1", "hello", None)
     billed = completed_event("item_1", "hello", {"type": "duration", "seconds": 2.5})
     assert (billed["item_id"], billed["transcript"], billed["usage"]) == ("item_1", "hello", {"type": "duration", "seconds": 2.5})
+
+
+_DEFAULT_WSS_URL: Final = "wss://default.example.com/v1/stream"
+
+
+@pytest.mark.parametrize(
+    ("api_base", "expected"),
+    [
+        (None, _DEFAULT_WSS_URL),
+        ("https://eu.example.com", "wss://eu.example.com/v1/stream"),
+        (" wss://eu.example.com:8443/other/path?q=1 ", "wss://eu.example.com:8443/v1/stream"),
+    ],
+)
+def test_build_realtime_wss_url_pins_the_provider_path(api_base: str | None, expected: str):
+    assert (
+        build_realtime_wss_url(api_base, default_url=_DEFAULT_WSS_URL, path="/v1/stream", provider="Example")
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "http://eu.example.com",
+        "ws://eu.example.com",
+        "eu.example.com",
+        "https://user:secret@eu.example.com",
+        "https://eu.example.com#fragment",
+    ],
+)
+def test_build_realtime_wss_url_rejects_insecure_or_ambiguous_bases(api_base: str):
+    with pytest.raises(ValueError, match="Example api_base must be"):
+        build_realtime_wss_url(api_base, default_url=_DEFAULT_WSS_URL, path="/v1/stream", provider="Example")
