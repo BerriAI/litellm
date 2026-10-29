@@ -5235,8 +5235,20 @@ _LATIN1_TEXT_DATA_URI = "data:text/plain;charset=iso-8859-1;base64," + base64.b6
             {"type": "image_url", "image_url": {"url": "data:TEXT/PLAIN;base64," + _TEXT_B64}},
             "the secret code word is MANGO\n",
         ),
+        (
+            {"type": "image_url", "image_url": {"url": _LATIN1_TEXT_DATA_URI.replace("text/plain", "TEXT/PLAIN", 1)}},
+            "the secret code word is MANGÓ\n",
+        ),
     ],
-    ids=["image_url", "file", "image_url_charset", "file_charset", "file_latin1", "image_url_uppercase"],
+    ids=[
+        "image_url",
+        "file",
+        "image_url_charset",
+        "file_charset",
+        "file_latin1",
+        "image_url_uppercase",
+        "uppercase_latin1",
+    ],
 )
 def test_anthropic_messages_pt_text_plain_data_uri_becomes_text_source_document(block, expected_text):
     messages = [{"role": "user", "content": [{"type": "text", "text": "What is the code word?"}, block]}]

@@ -883,10 +883,10 @@ _CHARSET_AWARE_MEDIA_TYPE: Final = "text/plain"
 
 
 def _media_type_with_original_parameters(format_override: str, original_media_type: str) -> str:
-    if format_override.strip() != _CHARSET_AWARE_MEDIA_TYPE:
+    if format_override.strip().lower() != _CHARSET_AWARE_MEDIA_TYPE:
         return format_override
     base_type, separator, parameters = original_media_type.partition(";")
-    if not separator or base_type.strip() != format_override.strip():
+    if not separator or base_type.strip().lower() != format_override.strip().lower():
         return format_override
     return f"{format_override}{separator}{parameters}"
 
