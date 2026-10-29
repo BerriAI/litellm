@@ -101,6 +101,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     read_request_body,
     safe_get_request_headers,
     safe_set_request_parsed_body,
+    with_client_metadata,
 )
 from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
@@ -563,7 +564,7 @@ async def vllm_proxy_route(
                 content=None,
                 data=None,
                 files=None,
-                json=(relay.body if is_json_request else None),
+                json=(with_client_metadata(request, relay.body) if is_json_request else None),
                 params=None,
                 headers=None,
                 cookies=None,
@@ -2262,7 +2263,11 @@ async def _relay_router_model(
             content=None,
             data=None,
             files=None,
-            json=(request_body if is_json_content_type(request.headers.get("content-type", "")) else None),
+            json=(
+                with_client_metadata(request, request_body)
+                if is_json_content_type(request.headers.get("content-type", ""))
+                else None
+            ),
             params=None,
             headers=None,
             cookies=None,

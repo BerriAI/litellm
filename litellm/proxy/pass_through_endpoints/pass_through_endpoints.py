@@ -103,6 +103,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
     safe_get_request_headers,
+    with_client_metadata,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
@@ -120,6 +121,7 @@ from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy modul
     _key_or_team_allows_client_pricing_override,  # pyright: ignore[reportPrivateUsage]  # reuse the proxy's pricing trust policy
     _strip_client_pricing_overrides,  # pyright: ignore[reportPrivateUsage]  # sanitize before trusted hooks add guardrail costs
     get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
+    get_metadata_variable_name,
     redact_credential_headers,
     strip_client_guardrail_information,
 )
@@ -487,7 +489,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         url: httpx.URL,
         headers: dict,
         requested_query_params: dict | None = None,
-        _parsed_body: dict | None = None,
+        _parsed_body: Mapping[str, object] | None = None,
         forward_multipart: bool = False,
     ) -> httpx.Response:
         """
@@ -1511,11 +1513,19 @@ async def pass_through_request(
             else:
                 logging_url = str(url) + "?" + requested_query_params_str
 
+        validated_body: Final = (
+            None if _parsed_body is None else TypeAdapter(dict[str, object]).validate_python(_parsed_body)
+        )
+        upstream_body: Final = (
+            with_client_metadata(request, validated_body or {})
+            if not custom_body and get_metadata_variable_name(request) == "litellm_metadata"
+            else validated_body
+        )
         logging_obj.pre_call(
             input=[{"role": "user", "content": safe_dumps(_parsed_body)}],
             api_key="",
             additional_args={
-                "complete_input_dict": _parsed_body,
+                "complete_input_dict": upstream_body,
                 "api_base": str(logging_url),
                 "headers": redact_credential_headers(upstream_headers),
             },
@@ -1555,7 +1565,7 @@ async def pass_through_request(
                         url,
                         params=requested_query_params,
                         headers=upstream_headers,
-                        json=_parsed_body,
+                        json=upstream_body,
                     )
                 )
 
@@ -1650,7 +1660,7 @@ async def pass_through_request(
                 url=url,
                 headers=upstream_headers,
                 requested_query_params=requested_query_params,
-                _parsed_body=_parsed_body,
+                _parsed_body=upstream_body,
                 forward_multipart=is_multipart,
             )
         verbose_proxy_logger.debug("response.headers= %s", response.headers)

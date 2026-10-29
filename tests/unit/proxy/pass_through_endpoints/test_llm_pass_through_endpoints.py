@@ -2593,6 +2593,7 @@ class TestVLLMProxyRoute:
     )  # test-quality-ok: patching litellm internal for unit test isolation
     async def test_vllm_proxy_route_with_router_model(self, mock_llm_router, mock_is_router, mock_get_body):
         mock_request = MagicMock(spec=Request)
+        mock_request.scope = {}
         mock_request.method = "POST"
         mock_request.headers = {"content-type": "application/json"}
         mock_request.query_params = {}
@@ -2650,6 +2651,7 @@ class TestVLLMProxyRoute:
             b"".join(b"data: " + json.dumps(frame).encode() + b"\n\n" for frame in frames) + b"data: [DONE]\n\n"
         )
         mock_request = MagicMock(spec=Request)
+        mock_request.scope = {}
         mock_request.method = "POST"
         mock_request.headers = {"content-type": "application/json"}
         mock_request.query_params = {}
@@ -2704,6 +2706,7 @@ class TestVLLMProxyRoute:
 
         body = {"model": "router-model", "messages": [{"role": "user", "content": "Hi"}], "stream": True}
         mock_request = MagicMock(spec=Request)
+        mock_request.scope = {}
         mock_request.method = "POST"
         mock_request.headers = {"content-type": "application/json"}
         mock_request.query_params = {}
@@ -2741,6 +2744,7 @@ class TestVLLMProxyRoute:
     )
     async def test_vllm_proxy_route_fallback_to_factory(self, mock_factory_route, mock_is_router, mock_get_body):
         mock_request = MagicMock(spec=Request)
+        mock_request.scope = {}
         mock_fastapi_response = MagicMock(spec=Response)
         mock_user_api_key_dict = MagicMock()
         mock_factory_route.return_value = "factory_success"
@@ -6793,6 +6797,7 @@ class TestPassthroughRouterModelBudgetReservation:
 
     def _request(self) -> MagicMock:
         request = MagicMock(spec=Request)
+        request.scope = {}
         request.method = "POST"
         request.headers = {"content-type": "application/json"}
         request.query_params = {}
@@ -6924,6 +6929,7 @@ class TestAzureRouterModelStreamingDispatch:
         )
 
         request = MagicMock(spec=Request)
+        request.scope = {}
         request.method = "POST"
         request.headers = {"content-type": "application/json"}
         request.query_params = {}
@@ -6988,6 +6994,7 @@ class TestAzureRouterModelStreamingKeepalive:
         )
 
         request = MagicMock(spec=Request)
+        request.scope = {}
         request.method = "POST"
         request.headers = {"content-type": "application/json"}
         request.query_params = {}
@@ -7038,6 +7045,7 @@ class TestAzureRouterModelStreamingKeepalive:
 class TestRouterModelRelayUpstreamContract:
     def _request(self, content_type: str) -> MagicMock:
         request = MagicMock(spec=Request)
+        request.scope = {}
         request.method = "POST"
         request.headers = {"content-type": content_type}
         request.query_params = {}
@@ -7137,6 +7145,7 @@ NIM_INFER_BODY = {
 class TestNvidiaNimProxyRoute:
     def _request(self) -> MagicMock:
         request = MagicMock(spec=Request)
+        request.scope = {}
         request.method = "POST"
         request.headers = {"content-type": "application/json"}
         request.query_params = {}
@@ -7565,6 +7574,7 @@ class TestAzureRelayDeploymentSegment:
 
     def _request(self) -> Request:
         request = MagicMock(spec=Request)
+        request.scope = {}
         request.method = "POST"
         request.headers = {"content-type": "application/json"}
         request.query_params = {}
@@ -7655,6 +7665,7 @@ class TestAzureBodyModelGroupRelay:
 
     def _request(self, content_type: str = "application/json") -> Request:
         request = MagicMock(spec=Request)
+        request.scope = {}
         request.method = "POST"
         request.headers = {"content-type": content_type}
         request.query_params = {"api-version": "2025-03-01-preview"}

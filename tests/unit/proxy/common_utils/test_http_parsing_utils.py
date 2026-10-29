@@ -15,7 +15,7 @@ from starlette.requests import Request
 
 import litellm
 import litellm.proxy.common_utils.http_parsing_utils as http_parsing_utils
-from litellm.proxy._types import ProxyException
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_utils.http_parsing_utils import (
     _is_form_content_type,
     read_request_body,
@@ -30,7 +30,9 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     numeric_form_fields,
     populate_request_with_path_params,
     read_raw_json_body,
+    with_client_metadata,
 )
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from fastapi import Request as Request_http_parsing
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
@@ -222,6 +224,54 @@ async def test_read_raw_json_body_is_none_for_form_bodies():
 
     assert await read_request_body(request) == {"model": "claude-sonnet-4-5"}
     assert await read_raw_json_body(request) is None
+
+
+@pytest.mark.asyncio
+async def test_with_client_metadata_returns_what_the_client_sent_after_the_proxy_writes_into_it():
+    client_metadata: Final = {"user_id": '{"session_id":"s-1"}', "nested": {"tags": ["client"]}}
+    request: Final = _starlette_request(
+        orjson.dumps({"model": "claude-haiku-5-5", "metadata": client_metadata}), "application/json"
+    )
+    parsed_body: Final = await read_request_body(request)
+    LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+        parsed_body, UserAPIKeyAuth(api_key="sk-test", metadata={"tags": ["key-tag"]})
+    )
+    parsed_body["metadata"]["nested"]["tags"].append("proxy")
+
+    assert parsed_body["metadata"]["tags"] == ["key-tag"]
+    assert with_client_metadata(request, parsed_body) == {"model": "claude-haiku-5-5", "metadata": client_metadata}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param({"model": "claude-haiku-5-5"}, id="json-without-metadata"),
+        pytest.param(None, id="form-body"),
+    ],
+)
+async def test_with_client_metadata_drops_metadata_the_client_never_sent(body: dict[str, str] | None):
+    request: Final = (
+        _starlette_request(b"model=claude-haiku-5-5", "application/x-www-form-urlencoded")
+        if body is None
+        else _starlette_request(orjson.dumps(body), "application/json")
+    )
+    await read_request_body(request)
+
+    assert with_client_metadata(request, {"model": "claude-haiku-5-5", "metadata": {"tags": ["key-tag"]}}) == {
+        "model": "claude-haiku-5-5"
+    }
+
+
+@pytest.mark.asyncio
+async def test_with_client_metadata_keeps_an_explicit_null():
+    request: Final = _starlette_request(b'{"model": "claude-haiku-5-5", "metadata": null}', "application/json")
+    parsed_body: Final = await read_request_body(request)
+
+    assert with_client_metadata(request, {**parsed_body, "metadata": {"tags": ["key-tag"]}}) == {
+        "model": "claude-haiku-5-5",
+        "metadata": None,
+    }
 
 
 @pytest.mark.asyncio
