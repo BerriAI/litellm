@@ -231,14 +231,13 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return system_param
 
     def _strip_beta_gated_system_turns(
-        self, messages: Sequence[object], model: str, drop_params: object
-    ) -> tuple[Mapping[str, object], ...]:
-        validated: Final = _MESSAGE_MAPPINGS.validate_python(messages)
+        self, messages: Sequence[Mapping[str, object]], model: str, drop_params: object
+    ) -> Sequence[Mapping[str, object]]:
         if not has_beta_headers_config(self._resolved_provider):
-            return validated
-        gated: Final = strip_beta_gated_system_messages(validated, frozenset(), drop_params=drop_params)
+            return messages
+        gated: Final = strip_beta_gated_system_messages(messages, frozenset(), drop_params=drop_params)
         log_beta_gated_strips(gated.stripped, model=model, provider=self._resolved_provider)
-        return _MESSAGE_MAPPINGS.validate_python(gated.messages) if gated.stripped else validated
+        return _MESSAGE_MAPPINGS.validate_python(gated.messages) if gated.stripped else messages
 
     def _normalize_system_role_messages(
         self, anthropic_messages_request: dict, model: str, drop_params: object

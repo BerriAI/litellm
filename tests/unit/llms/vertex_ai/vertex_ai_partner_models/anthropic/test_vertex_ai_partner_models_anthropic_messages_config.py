@@ -851,6 +851,20 @@ class TestVertexAnthropicMidConversationSystem:
             {"type": "text", "text": "Cite sources."},
         ]
 
+    @pytest.mark.parametrize("drop_params", (False, True))
+    def test_unsupported_model_sends_a_non_object_message_on_for_the_provider_to_reject(
+        self, local_model_cost_map, local_beta_headers_config, drop_params
+    ):
+        messages: Final = [{"role": "user", "content": "hi"}, "oops"]
+        result: Final = VertexAIPartnerModelsAnthropicMessagesConfig().transform_anthropic_messages_request(
+            model="claude-sonnet-4-6",
+            messages=list(messages),
+            anthropic_messages_optional_request_params={"max_tokens": 64},
+            litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+            headers={},
+        )
+        assert result["messages"] == messages
+
     def test_unsupported_model_converts_mid_conversation_system_in_place(self, local_model_cost_map):
         messages = [
             {"role": "user", "content": "read the file"},
