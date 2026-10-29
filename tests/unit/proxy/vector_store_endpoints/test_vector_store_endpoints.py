@@ -3066,6 +3066,58 @@ def test_vector_store_search_rejects_caller_embedding_selection_params(blocked_k
     assert blocked_key in str(response.json())
 
 
+@pytest.mark.parametrize(
+    ("provider", "expected_status", "expected_searches"),
+    [("opensearch", 400, 0), ("opensearch/x", 400, 0), ("openai", 200, 1)],
+)
+def test_vector_store_search_rejects_caller_opensearch_index_name_only_on_opensearch_stores(
+    provider, expected_status, expected_searches
+):
+    """
+    Regression: a caller must not pick the index an OpenSearch store searches, while
+    other providers keep ignoring the key as they did before OpenSearch support.
+    """
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import app
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    store = {
+        "vector_store_id": "kb",
+        "custom_llm_provider": provider,
+        "litellm_params": {"vector_store_id": "kb", "custom_llm_provider": provider},
+    }
+    registry = MagicMock()
+    registry.get_litellm_managed_vector_store_from_registry.return_value = store
+    fake_search = AsyncMock(
+        return_value=VectorStoreSearchResponse(object="vector_store.search_results.page", search_query="q", data=[])
+    )
+    mock_auth = UserAPIKeyAuth(user_id="test_internal_user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+    try:
+        with (
+            patch("litellm.vector_stores.main.asearch", new=fake_search),  # test-quality-ok: the search boundary under test
+            patch.object(litellm, "vector_store_registry", registry),  # test-quality-ok: seeds the store under test
+            patch(  # test-quality-ok: store access is not under test, so the request reaches the search boundary
+                "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+                new=AsyncMock(return_value=True),
+            ),
+        ):
+            router = litellm.Router(model_list=[])
+            with patch("litellm.proxy.proxy_server.llm_router", router):  # test-quality-ok: router built over the fake search
+                response = TestClient(app).post(
+                    "/v1/vector_stores/kb/search",
+                    json={"query": "q", "opensearch_index_name": "another-teams-index"},
+                )
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == expected_status, response.json()
+    assert fake_search.await_count == expected_searches
+
+
 class TestConfigOwnedVectorStores:
     """Stores declared under ``vector_store_registry`` in config.yaml are owned by the config file"""
 

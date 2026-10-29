@@ -11150,7 +11150,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url: Final = api_base
+        url: Final = vector_store_provider_config.get_vector_store_list_url(api_base)
 
         params: Final[dict[str, object]] = {}
         if after is not None:
@@ -11229,7 +11229,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url: Final = api_base
+        url: Final = vector_store_provider_config.get_vector_store_list_url(api_base)
 
         params: Final[dict[str, object]] = {}
         if after is not None:
