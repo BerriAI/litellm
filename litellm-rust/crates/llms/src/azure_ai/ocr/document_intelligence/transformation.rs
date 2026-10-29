@@ -38,6 +38,7 @@ const AZURE_DI_API_KEY_ENV: &str = "AZURE_DOCUMENT_INTELLIGENCE_API_KEY";
 const AZURE_DI_ENDPOINT_ENV: &str = "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT";
 const OUTPUT_CONTENT_FORMAT_PARAM: &str = "outputContentFormat";
 const OUTPUT_CONTENT_FORMAT_ALIAS: &str = "output_content_format";
+const QUERY_PARAMS: [&str; 3] = ["pages", "features", OUTPUT_CONTENT_FORMAT_PARAM];
 const CODE_POINT_STRING_INDEX: &str = "unicodeCodePoint";
 const STRING_INDEX_TYPE_FIELD: &str = "stringIndexType";
 const MARKDOWN_MODEL_ID: &str = "prebuilt-layout";
@@ -217,13 +218,14 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         non_default_params: &CallArguments,
         model: &str,
     ) -> Result<DocumentIntelligenceParams, Error> {
-        let output_content_format = requested_output_content_format(non_default_params)?;
+        let params = with_query_params_from_extra_body(non_default_params);
+        let output_content_format = requested_output_content_format(&params)?;
         let slices_markdown_pages = output_content_format == Some(OutputContentFormat::Markdown)
-            && response_format(non_default_params)? != OcrResponseFormat::Native
+            && response_format(&params)? != OcrResponseFormat::Native
             && model_id(model).is_ok_and(|id| id == MARKDOWN_MODEL_ID);
         Ok(DocumentIntelligenceParams {
-            pages: normalize_pages_param(non_default_params.get("pages"))?,
-            features: normalize_features_param(non_default_params.get("features"))?,
+            pages: normalize_pages_param(params.get("pages"))?,
+            features: normalize_features_param(params.get("features"))?,
             output_content_format,
             string_index_type: slices_markdown_pages.then_some(CODE_POINT_STRING_INDEX),
         })
@@ -402,6 +404,20 @@ fn normalize_features_param(features: Option<&Value>) -> Result<Option<String>, 
         return Err(Error::Features);
     }
     Ok(Some(normalized.join(",")))
+}
+
+fn with_query_params_from_extra_body(arguments: &CallArguments) -> CallArguments {
+    let overrides = arguments
+        .get("extra_body")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(name, _)| QUERY_PARAMS.contains(&name.as_str()));
+    arguments
+        .iter()
+        .chain(overrides)
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect()
 }
 
 fn requested_output_content_format(

@@ -72,6 +72,8 @@ async fn pages_features_and_extra_options_map_to_the_analyze_call() {
 #[case(json!({"features": "languages&pages=1"}), Error::Features)]
 #[case(json!({"req_format": "azure"}), Error::RequestFormat)]
 #[case(json!({"outputContentFormat": "html"}), Error::OutputContentFormat)]
+#[case(json!({"extra_body": {"outputContentFormat": "html"}}), Error::OutputContentFormat)]
+#[case(json!({"extra_body": {"pages": [-1]}}), Error::Pages(PagesFault::Negative))]
 #[tokio::test]
 async fn invalid_pages_features_and_format_are_rejected_before_sending(
     #[case] options: Value,
@@ -261,6 +263,51 @@ async fn the_requested_output_content_format_reaches_azure_in_its_query_spelling
     assert_eq!(sent.query("drop_params"), None);
     assert_eq!(sent.json(), json!({"base64Source": "YWJj"}));
     assert_eq!(response.pages[0].markdown, "hello");
+}
+
+#[rstest]
+#[case::output_content_format(
+    json!({"extra_body": {"outputContentFormat": "markdown"}}),
+    [None, None, Some("markdown"), Some("unicodeCodePoint")]
+)]
+#[case::pages_and_features(
+    json!({"extra_body": {"pages": "2", "features": ["languages"]}}),
+    [Some("2"), Some("languages"), None, None]
+)]
+#[case::over_the_top_level(
+    json!({"pages": [0], "outputContentFormat": "text", "extra_body": {"pages": "2-3", "outputContentFormat": "markdown"}}),
+    [Some("2-3"), None, Some("markdown"), Some("unicodeCodePoint")]
+)]
+#[case::dropped(
+    json!({"extra_body": {"outputContentFormat": "html"}, "drop_params": true}),
+    [None, None, None, None]
+)]
+#[tokio::test]
+async fn azure_query_params_in_extra_body_reach_the_analyze_query(
+    #[case] options: Value,
+    #[case] expected: [Option<&str>; 4],
+) {
+    let upstream = upstream([json_response(json!({
+        "status": "succeeded",
+        "analyzeResult": {"pages": [{"pageNumber": 1, "lines": [{"content": "hello"}]}]}
+    }))])
+    .await;
+
+    perform(ocr_request(LAYOUT_MODEL, &upstream.uri(), options))
+        .await
+        .unwrap();
+
+    let sent = only_request(&upstream).await;
+    assert_eq!(
+        [
+            "pages",
+            "features",
+            "outputContentFormat",
+            "stringIndexType"
+        ]
+        .map(|name| sent.query(name)),
+        expected.map(|value| value.map(String::from))
+    );
 }
 
 #[tokio::test]
