@@ -456,7 +456,7 @@ class TestHandleSkillSearchMCP:
         self, accessible_skills: AsyncMock, embedding_router: MagicMock
     ) -> None:
         from litellm.llms.litellm_proxy.skills.skill_search import MAX_SKILL_SEARCH_TOP_K
-        from litellm.proxy._experimental.mcp_server.tool_search import handle_skill_search
+        from litellm.proxy.mcp_server.tool_search import handle_skill_search
 
         many_skills: Final = tuple(
             LiteLLM_SkillsTable(
@@ -476,7 +476,7 @@ class TestHandleSkillSearchMCP:
     async def test_top_k_below_one_is_raised_to_one(
         self, accessible_skills: AsyncMock, embedding_router: MagicMock
     ) -> None:
-        from litellm.proxy._experimental.mcp_server.tool_search import handle_skill_search
+        from litellm.proxy.mcp_server.tool_search import handle_skill_search
 
         result = await handle_skill_search(
             query="language translation", top_k=0, user_api_key_dict=UserAPIKeyAuth(user_id="u")
