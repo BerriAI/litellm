@@ -15615,8 +15615,8 @@ def test_feedback_box_is_one_json_record_in_json_mode(
 async def test_initialize_prints_the_banner_between_blank_lines_in_plain_mode(
     monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
 ) -> None:
-    """Operators without JSON logs see the banner exactly as before, through show_banner()'s flushing
-    click.echo."""
+    """Operators without JSON logs see the banner exactly as before, flushed at once as show_banner()'s
+    click.echo did."""
     monkeypatch.setattr(litellm, "json_logs", False)
     monkeypatch.setenv("LITELLM_DONT_SHOW_FEEDBACK_BOX", "true")
 
