@@ -303,8 +303,10 @@ def build_elevenlabs_realtime_url(api_base: str | None) -> str:
     )
 
 
-def _default_backend_factory(url: str, headers: Mapping[str, str]) -> RealtimeBackend:
-    return ElevenLabsRealtimeBackend(url, headers)
+def _default_backend_factory(
+    url: str, headers: Mapping[str, str], on_audio_sent: Callable[[float], None]
+) -> RealtimeBackend:
+    return ElevenLabsRealtimeBackend(url, headers, on_audio_sent=on_audio_sent)
 
 
 class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
@@ -313,7 +315,7 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
         *,
         options: ElevenLabsRealtimeOptions | None = None,
         drop_params: bool = False,
-        backend_factory: Callable[[str, Mapping[str, str]], RealtimeBackend] = _default_backend_factory,
+        backend_factory: Callable[[str, Mapping[str, str], Callable[[float], None]], RealtimeBackend] = _default_backend_factory,
         transformer: ElevenLabsEventTransformer | None = None,
     ) -> None:
         self._options: Final = options or ElevenLabsRealtimeOptions()
@@ -340,7 +342,7 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
         return build_elevenlabs_realtime_url(api_base or get_secret_str("ELEVENLABS_API_BASE"))
 
     async def open_backend(self, url: str, headers: Mapping[str, str]) -> RealtimeBackend | None:
-        return self._backend_factory(url, headers)
+        return self._backend_factory(url, headers, self._transformer.record_audio)
 
     def is_setup_message(self, msg_obj: Mapping[str, object]) -> bool:
         return msg_obj.get("kind") == "configure"
@@ -412,9 +414,8 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
         return (ElevenLabsRealtimeConfigure(query=config.query()).model_dump_json(),)
 
     def _append_audio(self, request: Mapping[str, JsonValue]) -> tuple[str, ...]:
-        config: Final = self._require_config()
+        self._require_config()
         audio: Final = decode_pcm16_append(request.get("audio"), error=ElevenLabsProtocolError)
-        self._transformer.record_audio(len(audio) / config.bytes_per_second)
         return tuple(
             self._audio_chunk(audio[start : start + MAX_AUDIO_CHUNK_BYTES], commit=False)
             for start in range(0, len(audio), MAX_AUDIO_CHUNK_BYTES)

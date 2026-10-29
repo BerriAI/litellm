@@ -66,6 +66,7 @@ vertex_llm_base: Final = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
 _EMPTY_MODEL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _EMPTY_AUTH_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+_REALTIME_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 def _realtime_provider_config(
@@ -549,7 +550,11 @@ async def _arealtime(
         return
 
     drop_params: Final = litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
-    realtime_params: Final = TypeAdapter(dict[str, object]).validate_python(kwargs)
+    realtime_params: Final = (
+        _REALTIME_PARAMS_ADAPTER.validate_python(kwargs)
+        if _custom_llm_provider == LlmProviders.ELEVENLABS.value
+        else _EMPTY_MODEL_PARAMS
+    )
     provider_config: Final = _realtime_provider_config(
         _custom_llm_provider, model, realtime_params, drop_params=drop_params
     )

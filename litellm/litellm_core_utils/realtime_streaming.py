@@ -20,6 +20,7 @@ from litellm.constants import (
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.base_llm.realtime.transcription_protocol import SESSION_UPDATE_EVENT_TYPES
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
 from litellm.types.llms.openai import (
     OpenAIRealtimeEvents,
@@ -1671,7 +1672,7 @@ class RealTimeStreaming:
                     should_send_setup_before_buffered_messages = (
                         not self._backend_setup_complete
                         and not self._flushing_pending_messages_until_setup
-                        and msg_type == "session.update"
+                        and msg_type in SESSION_UPDATE_EVENT_TYPES
                     )
                     if not should_send_setup_before_buffered_messages:
                         self._buffer_pending_message_until_setup(message)

@@ -6,6 +6,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
@@ -15,11 +16,14 @@ import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.elevenlabs.realtime.transformation import SCRIBE_REALTIME_MODEL
+from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
 from litellm.llms.openai.workload_identity import _workload_identity_auth
 from litellm.models.credentials import CredentialItem
 from litellm.realtime_api import main as realtime_main
 from litellm.realtime_api.main import _with_resolved_session_model
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.elevenlabs import ElevenLabsRealtimeConfigure
 
 
 @pytest.fixture
@@ -42,6 +46,22 @@ class FakeLogging:
 class _CallCapture:
     def __init__(self) -> None:
         self.values: Mapping[str, object] | None = None
+
+
+def test_provider_dispatch_keeps_elevenlabs_options_and_meta_config():
+    config: Final = realtime_main._realtime_provider_config(
+        "elevenlabs", SCRIBE_REALTIME_MODEL, {"keyterms": ["Scribe"]}, drop_params=False
+    )
+    assert config is not None
+    sent: Final = config.transform_realtime_request(
+        json.dumps({"type": "transcription_session.update", "session": {"type": "transcription"}}),
+        SCRIBE_REALTIME_MODEL,
+    )
+    assert parse_qs(ElevenLabsRealtimeConfigure.model_validate_json(sent[0]).query)["keyterms"] == ["Scribe"]
+    assert isinstance(
+        realtime_main._realtime_provider_config("meta", "muse-voice-transcribe-1.0", {}, drop_params=False),
+        MetaRealtimeConfig,
+    )
 
 
 def test_resolves_top_level_session_model():

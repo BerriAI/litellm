@@ -6,6 +6,7 @@ from typing import Final
 import pytest
 from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK, InvalidHandshake, InvalidStatus
+from websockets.frames import Close
 from websockets.http11 import Response
 
 from litellm.llms.elevenlabs.realtime.backend import ElevenLabsRealtimeBackend
@@ -72,6 +73,28 @@ async def test_configure_opens_one_upstream_connection_with_the_query_and_auth_h
 
     assert connect.calls == [(f"{URL}?model_id=scribe_v2_realtime&audio_format=pcm_24000", HEADERS)]
     assert upstream.sent == ['{"message_type":"input_audio_chunk"}']
+
+
+async def test_only_successfully_forwarded_audio_is_counted():
+    class FailingUpstream(FakeUpstream):
+        async def send(self, message: str | bytes) -> None:
+            if self.sent:
+                raise ConnectionClosedError(rcvd=Close(1006, ""), sent=None)
+            await super().send(message)
+
+    upstream: Final = FailingUpstream()
+    durations: Final[list[float]] = []
+    backend: Final = ElevenLabsRealtimeBackend(
+        URL, HEADERS, connect=RecordingConnect(upstream), on_audio_sent=durations.append
+    )
+    chunk: Final = '{"message_type":"input_audio_chunk","audio_base_64":"AAAAAA==","commit":false,"sample_rate":2}'
+    await backend.send(CONFIGURE)
+    await backend.send(chunk)
+    with pytest.raises(ConnectionClosedError):
+        await backend.send(chunk)
+
+    assert durations == [1.0]
+    assert upstream.sent == [chunk]
 
 
 async def test_audio_before_configure_is_rejected_without_connecting():

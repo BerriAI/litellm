@@ -30,8 +30,8 @@ class ElevenLabsRealtimeOptions(LiteLLMBaseModel):
     secondary_languages: tuple[StrictStr, ...] | None = None
     no_verbatim: StrictBool | None = None
     filter_background_audio: StrictBool | None = None
-    vad_threshold: float | None = Field(default=None, ge=0)
-    vad_silence_threshold_secs: float | None = Field(default=None, ge=0)
+    vad_threshold: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    vad_silence_threshold_secs: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     min_speech_duration_ms: int | None = Field(default=None, ge=0)
     min_silence_duration_ms: int | None = Field(default=None, ge=0)
     enable_logging: StrictBool | None = None

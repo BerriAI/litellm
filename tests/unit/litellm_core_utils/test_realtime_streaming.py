@@ -24,7 +24,8 @@ from litellm.litellm_core_utils.realtime_streaming import (
     client_sent_openai_beta_realtime_header,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
+from litellm.llms.elevenlabs.realtime.transformation import ElevenLabsRealtimeConfig
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
 from litellm.llms.xai.realtime.usage_meter import XAIRealtimeUsageMeter
 from litellm.types.guardrails import GuardrailEventHooks
@@ -2562,6 +2563,29 @@ async def test_deferred_setup_sends_session_update_before_buffered_audio(monkeyp
     assert "setup" in sent_payload
     assert "realtimeInput" not in sent_payload
     assert streaming._pending_messages_until_setup == [audio_msg]
+
+
+@pytest.mark.asyncio
+async def test_deferred_transcription_update_configures_backend_after_early_audio():
+    client_ws: Final = MagicMock()
+    audio: Final = json.dumps({"type": "input_audio_buffer.append", "audio": "AAAA"})
+    update: Final = json.dumps({"type": "transcription_session.update", "session": {"type": "transcription"}})
+    client_ws.receive_text = AsyncMock(side_effect=[audio, update, ConnectionClosed(None, None)])
+    backend_ws: Final = MagicMock(spec=RealtimeBackend)
+    backend_ws.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        _mock_logging(),
+        provider_config=ElevenLabsRealtimeConfig(),
+        model="scribe_v2_realtime",
+    )
+
+    await streaming.client_ack_messages()
+
+    sent: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert len(sent) == 1
+    assert sent[0]["kind"] == "configure"
 
 
 @pytest.mark.asyncio

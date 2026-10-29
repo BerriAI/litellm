@@ -3,12 +3,13 @@ import itertools
 import json
 from collections.abc import Callable, Mapping
 from typing import Final, get_args
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import parse_qs
 
 import pytest
 
 from litellm.llms.base_llm.realtime.transformation import RealtimeBackend
+from litellm.llms.elevenlabs.realtime.backend import ElevenLabsRealtimeBackend
 from litellm.llms.elevenlabs.realtime.transformation import (
     DEFAULT_ELEVENLABS_REALTIME_URL,
     MAX_AUDIO_CHUNK_BYTES,
@@ -178,7 +179,14 @@ def test_options_from_params_ignore_unrelated_litellm_params():
 
 @pytest.mark.parametrize(
     "params",
-    [{"keyterms": "Scribe"}, {"no_verbatim": "yes"}, {"min_speech_duration_ms": -1}, {"vad_threshold": -0.1}],
+    [
+        {"keyterms": "Scribe"},
+        {"no_verbatim": "yes"},
+        {"min_speech_duration_ms": -1},
+        {"vad_threshold": -0.1},
+        {"vad_threshold": float("inf")},
+        {"vad_silence_threshold_secs": float("nan")},
+    ],
 )
 def test_options_from_params_reject_invalid_values(params: dict[str, object]):
     with pytest.raises(ValueError, match="Invalid ElevenLabs realtime options"):
@@ -426,21 +434,64 @@ def test_events_without_an_elevenlabs_equivalent_are_dropped(event_type: str):
     assert _configured().transform_realtime_request(json.dumps({"type": event_type}), SCRIBE_REALTIME_MODEL) == ()
 
 
+async def _billing_session(rate: int, upstream: RealtimeBackend) -> tuple[ElevenLabsRealtimeConfig, RealtimeBackend]:
+    async def connect(url: str, headers: Mapping[str, str]) -> RealtimeBackend:
+        return upstream
+
+    def factory(
+        url: str, headers: Mapping[str, str], on_audio_sent: Callable[[float], None]
+    ) -> RealtimeBackend:
+        return ElevenLabsRealtimeBackend(url, headers, connect=connect, on_audio_sent=on_audio_sent)
+
+    config: Final = ElevenLabsRealtimeConfig(backend_factory=factory)
+    backend: Final = await config.open_backend("wss://h/p", {"xi-api-key": "k"})
+    assert backend is not None
+    for message in config.transform_realtime_request(_session_update(rate=rate), SCRIBE_REALTIME_MODEL):
+        await backend.send(message)
+    return config, backend
+
+
 @pytest.mark.parametrize("rate", [16_000, 48_000])
-def test_completed_transcripts_bill_the_seconds_of_audio_sent(rate: int):
-    config: Final = _configured(_session_update(rate=rate))
-    config.transform_realtime_request(_append(b"\x00\x00" * rate), SCRIBE_REALTIME_MODEL)
-    config.transform_realtime_request(_append(b"\x00\x00" * (rate // 2)), SCRIBE_REALTIME_MODEL)
+async def test_completed_transcripts_bill_the_seconds_of_audio_sent(rate: int):
+    upstream: Final = MagicMock(spec=RealtimeBackend)
+    upstream.send = AsyncMock()
+    config, backend = await _billing_session(rate, upstream)
+    for audio in (b"\x00\x00" * rate, b"\x00\x00" * (rate // 2)):
+        for message in config.transform_realtime_request(_append(audio), SCRIBE_REALTIME_MODEL):
+            await backend.send(message)
     events: Final = _response(config, _frame("committed_transcript", text="hello"))
 
     assert events[-1]["usage"] == {"type": "duration", "seconds": 1.5}
     assert config.unbilled_usage_on_session_close(SCRIBE_REALTIME_MODEL) is None
 
 
-def test_audio_without_a_transcript_is_billed_at_close():
-    config: Final = _configured(_session_update(rate=24_000))
-    config.transform_realtime_request(_append(b"\x00\x00" * 12_000), SCRIBE_REALTIME_MODEL)
+async def test_audio_without_a_transcript_is_billed_at_close():
+    upstream: Final = MagicMock(spec=RealtimeBackend)
+    upstream.send = AsyncMock()
+    config, backend = await _billing_session(24_000, upstream)
+    for message in config.transform_realtime_request(_append(b"\x00\x00" * 12_000), SCRIBE_REALTIME_MODEL):
+        await backend.send(message)
 
+    assert config.unbilled_usage_on_session_close(SCRIBE_REALTIME_MODEL) == {"type": "duration", "seconds": 0.5}
+
+
+async def test_failed_audio_chunks_do_not_contribute_to_completed_or_close_usage():
+    from websockets.exceptions import ConnectionClosedError
+    from websockets.frames import Close
+
+    upstream: Final = MagicMock(spec=RealtimeBackend)
+    upstream.send = AsyncMock(side_effect=[None, ConnectionClosedError(rcvd=Close(1006, ""), sent=None)])
+    config, backend = await _billing_session(16_000, upstream)
+    chunks: Final = config.transform_realtime_request(_append(b"\x00\x00" * 32_000), SCRIBE_REALTIME_MODEL)
+    await backend.send(chunks[0])
+    with pytest.raises(ConnectionClosedError):
+        await backend.send(chunks[1])
+    events: Final = _response(config, _frame("committed_transcript", text="hello"))
+    assert events[-1]["usage"] == {"type": "duration", "seconds": 1.0}
+
+    upstream.send = AsyncMock()
+    for message in config.transform_realtime_request(_append(b"\x00\x00" * 8_000), SCRIBE_REALTIME_MODEL):
+        await backend.send(message)
     assert config.unbilled_usage_on_session_close(SCRIBE_REALTIME_MODEL) == {"type": "duration", "seconds": 0.5}
 
 
@@ -511,7 +562,7 @@ async def test_open_backend_returns_the_injected_backend_for_the_url_and_headers
     calls: Final[list[tuple[str, Mapping[str, str]]]] = []
     sentinel: Final = MagicMock(spec=RealtimeBackend)
 
-    def factory(url: str, headers: Mapping[str, str]) -> RealtimeBackend:
+    def factory(url: str, headers: Mapping[str, str], on_audio_sent: Callable[[float], None]) -> RealtimeBackend:
         calls.append((url, headers))
         return sentinel
 

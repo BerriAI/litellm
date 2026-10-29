@@ -1,9 +1,9 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from types import TracebackType
-from typing import Final, TypeAlias
+from typing import Final, Literal, TypeAlias
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import Self
 from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK, InvalidHandshake, InvalidStatus
@@ -17,6 +17,17 @@ from litellm.types.llms.elevenlabs import ElevenLabsRealtimeConfigure
 RealtimeConnect: TypeAlias = Callable[[str, Mapping[str, str]], Awaitable[RealtimeBackend]]
 
 _OPEN_TIMEOUT_SECONDS: Final = 8.0
+
+
+class _AudioChunk(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    message_type: Literal["input_audio_chunk"]
+    audio_base_64: str
+    commit: bool
+    sample_rate: int
+
+
+_AUDIO_CHUNK_ADAPTER: Final = TypeAdapter(_AudioChunk)
 
 
 async def open_realtime_websocket(url: str, headers: Mapping[str, str]) -> RealtimeBackend:
@@ -83,11 +94,17 @@ def _configure_query(message: str | bytes) -> str:
 
 class ElevenLabsRealtimeBackend:
     def __init__(
-        self, url: str, headers: Mapping[str, str], *, connect: RealtimeConnect = open_realtime_websocket
+        self,
+        url: str,
+        headers: Mapping[str, str],
+        *,
+        connect: RealtimeConnect = open_realtime_websocket,
+        on_audio_sent: Callable[[float], None] | None = None,
     ) -> None:
         self._url: Final = url
         self._headers: Final = headers
         self._connect: Final = connect
+        self._on_audio_sent: Final = on_audio_sent
         self._ready: Final = asyncio.Event()
         self._upstream: RealtimeBackend | None = None
         self._closed: bool = False
@@ -115,6 +132,15 @@ class ElevenLabsRealtimeBackend:
         upstream: Final = self._upstream
         if upstream is not None:
             await upstream.send(message)
+            if self._on_audio_sent is not None and isinstance(message, str):
+                try:
+                    chunk: Final = _AUDIO_CHUNK_ADAPTER.validate_json(message)
+                except ValidationError:
+                    return
+                encoded: Final = chunk.audio_base_64
+                audio_bytes: Final = len(encoded) // 4 * 3 - (len(encoded) - len(encoded.rstrip("=")))
+                if chunk.sample_rate > 0:
+                    self._on_audio_sent(audio_bytes / (chunk.sample_rate * 2))
             return
         if self._closed or self._failure is not None:
             raise self._closure()
