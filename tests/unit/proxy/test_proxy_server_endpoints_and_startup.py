@@ -15546,13 +15546,14 @@ async def test_delete_config_general_settings_removes_a_stored_copy_of_a_ui_lite
     monkeypatch.setattr(litellm, "budget_rollover", True)
 
     admin: Final = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
-    await delete_config_general_settings(
+    response: Final = await delete_config_general_settings(
         data=ConfigFieldDelete(field_name="budget_rollover", config_type="general_settings"),
         user_api_key_dict=admin,
     )
 
     written: Final = json.loads(fake_prisma.db.litellm_config.upsert.await_args.kwargs["data"]["update"]["param_value"])
     assert written == {"store_prompts_in_spend_logs": True}
+    assert response == {"message": "Field budget_rollover removed", "status": "success"}
     assert litellm.budget_rollover is True
     assert pc.settings.unmanaged_db_keys() == ()
 
@@ -15582,26 +15583,28 @@ async def test_delete_config_general_settings_refuses_an_unknown_key_when_the_st
 
 
 @pytest.mark.asyncio
-async def test_delete_config_general_settings_removes_a_key_from_a_json_string_row(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("stored_row", ['{"max_request_size_mb": 42, "store_prompts_in_spend_logs": true}', "not json"])
+async def test_delete_config_general_settings_leaves_a_string_row_untouched(
+    monkeypatch: pytest.MonkeyPatch, stored_row: str
 ) -> None:
     from litellm.proxy._types import ConfigFieldDelete
     from litellm.proxy.proxy_server import ProxyConfig, delete_config_general_settings
 
     pc: Final = ProxyConfig()
     pc._load_yaml_settings_stores({"general_settings": {}})
-    fake_prisma: Final = _fake_prisma_with_config('{"max_request_size_mb": 42, "store_prompts_in_spend_logs": true}')
+    fake_prisma: Final = _fake_prisma_with_config(stored_row)
     monkeypatch.setattr(proxy_server_module, "proxy_config", pc)
     monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
 
     admin: Final = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
-    await delete_config_general_settings(
-        data=ConfigFieldDelete(field_name="max_request_size_mb", config_type="general_settings"),
-        user_api_key_dict=admin,
-    )
+    with pytest.raises(HTTPException) as refused:
+        await delete_config_general_settings(
+            data=ConfigFieldDelete(field_name="max_request_size_mb", config_type="general_settings"),
+            user_api_key_dict=admin,
+        )
 
-    written: Final = json.loads(fake_prisma.db.litellm_config.upsert.await_args.kwargs["data"]["update"]["param_value"])
-    assert written == {"store_prompts_in_spend_logs": True}
+    assert refused.value.status_code == 400
+    fake_prisma.db.litellm_config.upsert.assert_not_awaited()
 
 
 @pytest.mark.asyncio

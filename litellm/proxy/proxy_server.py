@@ -5722,6 +5722,7 @@ class ProxyConfig:
         self._sso_environment_removals: frozenset[str] = frozenset()
         self._warned_shadowed_keys: frozenset[tuple[Section, str]] = frozenset()
         self._warned_unmanaged_keys: frozenset[str] = frozenset()
+        self._warned_unreadable_db_general_settings: bool = False
         self._db_config_callback_entries: Mapping[tuple[str, str], _DbCallbackRegistration] = MappingProxyType({})
         self._settings_stores: Final[Mapping[Section, SettingsStore]] = MappingProxyType(
             {
@@ -8217,7 +8218,10 @@ class ProxyConfig:
 
     async def _update_general_settings(self, db_general_settings: Mapping[str, SettingsJsonValue] | str | None) -> None:
         global general_settings
+        if db_general_settings is None:
+            return
         if not isinstance(db_general_settings, Mapping):
+            self._warn_about_unreadable_db_general_settings()
             return
         if not isinstance(general_settings, SettingsStore):
             self.settings.load_yaml(_as_settings_mapping(general_settings))
@@ -8513,6 +8517,15 @@ class ProxyConfig:
                 else "Set it in the config file to use it, or remove it with POST /config/field/delete.",
             )
         self._warned_unmanaged_keys = unmanaged
+
+    def _warn_about_unreadable_db_general_settings(self) -> None:
+        if self._warned_unreadable_db_general_settings:
+            return
+        verbose_proxy_logger.warning(
+            "general_settings is stored in the database as something other than a JSON object, so the proxy "
+            "ignores every stored general setting."
+        )
+        self._warned_unreadable_db_general_settings = True
 
     def _config_sets_ignored_db_key(self, key: str) -> bool:
         return self.settings.owned_by_config(key) or (
@@ -20651,9 +20664,9 @@ async def delete_config_general_settings(
         stored_copy: Final = await _stored_general_settings()
         if stored_copy is None or data.field_name not in stored_copy:
             return await _reset_general_settings_ui_litellm_field(data.field_name, user_api_key_dict)
-        removed: Final = await _remove_stored_general_setting(data.field_name, stored_copy, user_api_key_dict)
+        await _remove_stored_general_setting(data.field_name, stored_copy, user_api_key_dict)
         if proxy_config.config_owns(section_name="litellm_settings", key=data.field_name):
-            return removed
+            return {"message": f"Field {data.field_name} removed", "status": "success"}
         return await _reset_general_settings_ui_litellm_field(data.field_name, user_api_key_dict)
 
     stored: Final = await _stored_general_settings()
@@ -20679,14 +20692,9 @@ async def delete_config_general_settings(
 async def _stored_general_settings() -> Mapping[str, SettingsJsonValue] | None:
     config_table: Final[TableActions[_ConfigParamValueRow]] = _config_param_table(prisma_client)
     row: Final = await config_table.find_first(where={"param_name": "general_settings"})
-    if row is None or row.param_value is None:
+    if row is None or not isinstance(row.param_value, Mapping):
         return None
-    value: Final = (
-        cast(object, json.loads(row.param_value))  # cast-ok: json.loads is untyped; the row is opaque JSON
-        if isinstance(row.param_value, str)
-        else row.param_value
-    )
-    return _SETTINGS_MAPPING.validate_python(value) if isinstance(value, Mapping) else None
+    return _SETTINGS_MAPPING.validate_python(row.param_value)
 
 
 async def _remove_stored_general_setting(

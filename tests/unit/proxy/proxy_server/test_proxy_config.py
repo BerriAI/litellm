@@ -4422,6 +4422,26 @@ async def test_ProxyConfig__update_general_settings_says_the_config_file_applies
     ]
 
 
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_warns_once_about_a_stored_row_that_is_not_an_object(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    pc: Final = ProxyConfig()
+    pc._load_yaml_settings_stores({"general_settings": {}})
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await pc._update_general_settings(None)
+        await pc._update_general_settings('{"enforce_user_param": true}')
+        await pc._update_general_settings('{"enforce_user_param": true}')
+
+    warnings: Final = [record.getMessage() for record in caplog.records if "JSON object" in record.getMessage()]
+    assert warnings == [
+        "general_settings is stored in the database as something other than a JSON object, so the proxy ignores "
+        "every stored general setting."
+    ]
+
+
 def _paused_scheduler(monkeypatch):
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
