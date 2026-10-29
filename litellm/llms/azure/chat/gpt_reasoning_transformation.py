@@ -4,6 +4,7 @@ from collections.abc import Collection
 from typing import ClassVar, Final
 
 import litellm
+from litellm._logging import WarningLogger, verbose_logger
 from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     OpenAIGPT5Config,
     is_gpt_reasoning_series_name,
@@ -90,6 +91,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         api_version: str = "",
         *,
         declared_reasoning_efforts: Collection[str] | None = None,
+        reasoning_drop_logger: WarningLogger = verbose_logger,
     ) -> dict:
         return OpenAIGPT5Config.map_openai_params(
             self,
@@ -98,6 +100,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
             model=model,
             drop_params=drop_params,
             declared_reasoning_efforts=declared_reasoning_efforts,
+            reasoning_drop_logger=reasoning_drop_logger,
         )
 
     def transform_request(

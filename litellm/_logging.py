@@ -11,7 +11,7 @@ from collections.abc import Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
 from types import FrameType
-from typing import Final, TextIO
+from typing import Final, Protocol, TextIO
 from urllib.parse import unquote
 
 from pydantic import TypeAdapter
@@ -907,6 +907,11 @@ else:
     )
 
     handler.setFormatter(formatter)
+
+
+class WarningLogger(Protocol):
+    def warning(self, msg: str, /, *args: object) -> None: ...
+
 
 verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
 # Malformed virtual key rejections log through this child; LevelRoutingStreamHandler

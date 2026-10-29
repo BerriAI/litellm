@@ -8,7 +8,7 @@ import httpx
 from httpx import Response
 
 import litellm
-from litellm._logging import verbose_logger
+from litellm._logging import WarningLogger, verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     audio_or_image_in_message_content,
     convert_content_list_to_str,
@@ -107,6 +107,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         drop_params: bool,
         *,
         declared_reasoning_efforts: Collection[str] | None = None,
+        reasoning_drop_logger: WarningLogger = verbose_logger,
     ) -> dict[str, object]:  # mutable-ok: OpenAIConfig.map_openai_params signature
         if not azureAIGPT5Config.is_model_gpt_5_model(model):
             return super().map_openai_params(
@@ -121,6 +122,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             model=model,
             drop_params=drop_params,
             declared_reasoning_efforts=declared_reasoning_efforts,
+            reasoning_drop_logger=reasoning_drop_logger,
         )
 
     def _supports_stop_reason(self, model: str) -> bool:

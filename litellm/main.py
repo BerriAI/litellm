@@ -131,7 +131,10 @@ from litellm.llms.bedrock.common_utils import (
 from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
-from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
+from litellm.llms.openai.chat.gpt_reasoning_transformation import (
+    DeferredReasoningDropWarnings,
+    OpenAIGPT5Config,
+)
 from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
@@ -141,6 +144,7 @@ from litellm.llms.vertex_ai.common_utils import (
 from litellm.realtime_api.main import realtime_health_check
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.router_utils.reasoning_effort_capability import (
+    RequestedReasoningEffort,
     model_group_from_metadata,
     reasoning_effort_needs_allowing,
     resolve_chat_reasoning,
@@ -206,7 +210,7 @@ from litellm.utils import (
     token_counter as token_counter,  # noqa: PLC0414  # public re-export
 )
 
-from ._logging import verbose_logger
+from ._logging import WarningLogger, verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.core_helpers import (
     as_str_mapping,
@@ -5336,6 +5340,42 @@ def _complete_langflow(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
     )
 
 
+def _responses_bridge_optional_params(
+    optional_params: dict[str, object],  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    summary_alias: object,
+    requested: RequestedReasoningEffort,
+    *,
+    custom_llm_provider: str,
+    model: str,
+    drop_params: bool,
+    additional_drop_params: object,
+) -> dict[str, object]:  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    if custom_llm_provider == "openai" and isinstance(requested, dict):
+        from litellm.responses.utils import openai_bridge_reasoning
+
+        return {
+            **optional_params,
+            "reasoning_effort": openai_bridge_reasoning(
+                requested=requested,
+                effort_kept="reasoning_effort" in optional_params,
+                summary_alias=summary_alias,
+                model=model,
+                drop_params=drop_params,
+                additional_drop_params=additional_drop_params,
+            ),
+        }
+    if isinstance(requested, dict) and "summary" in requested:
+        return {**optional_params, "reasoning_effort": requested}
+    if summary_alias is None:
+        return optional_params
+    kept_effort: Final = optional_params.get("reasoning_effort", requested)
+    if isinstance(kept_effort, dict):
+        return {**optional_params, "reasoning_effort": {**kept_effort, "summary": summary_alias}}
+    if kept_effort is None:
+        return {**optional_params, "reasoning_effort": {"summary": summary_alias}}
+    return {**optional_params, "reasoning_effort": {"effort": kept_effort, "summary": summary_alias}}
+
+
 def _complete_databricks_agent(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     from litellm.llms.databricks.agent.transformation import DatabricksAgentConfig
 
@@ -5925,11 +5965,21 @@ def completion(
         mapping_args: Final = MappingProxyType({**optional_param_args, "reasoning_effort": provider_reasoning_effort})
         mapping_special_params: Final = MappingProxyType(dict(provider_params))
 
-        def optional_params_for_model_info(deployment_info: Mapping[str, object] | None) -> dict[str, object]:
-            return get_optional_params(**mapping_args, model_info=deployment_info, **mapping_special_params)
+        def optional_params_for_model_info(
+            deployment_info: Mapping[str, object] | None,
+            reasoning_drop_logger: WarningLogger = verbose_logger,
+        ) -> dict[str, object]:
+            return get_optional_params(
+                **mapping_args,
+                model_info=deployment_info,
+                reasoning_drop_logger=reasoning_drop_logger,
+                **mapping_special_params,
+            )
 
+        reasoning_drop_warnings: Final = DeferredReasoningDropWarnings(logger=verbose_logger)
         optional_params = optional_params_for_model_info(
-            _MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None
+            _MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None,
+            reasoning_drop_warnings,
         )
         fakes_stream: Final = partial(
             _completion_fakes_stream,
@@ -6096,6 +6146,7 @@ def completion(
         )
         if mock_response is not None or mock_tool_calls or mock_timeout:
             kwargs.pop("mock_timeout", None)  # remove for any fallbacks triggered
+            reasoning_drop_warnings.log_unless_effort_sent(optional_params.get("reasoning_effort"))
             return mock_completion(
                 model,
                 messages,
@@ -6143,32 +6194,16 @@ def completion(
             from litellm.completion_extras import responses_api_bridge
 
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
-
-            if custom_llm_provider == "openai" and isinstance(resolved_reasoning_effort, dict):
-                from litellm.responses.utils import openai_bridge_reasoning
-
-                optional_params["reasoning_effort"] = openai_bridge_reasoning(
-                    requested=resolved_reasoning_effort,
-                    effort_kept="reasoning_effort" in optional_params,
-                    summary_alias=rs_val,
-                    model=model,
-                    drop_params=drop_unsupported_reasoning,
-                    additional_drop_params=routing_kwargs.get("additional_drop_params"),
-                )
-            elif isinstance(resolved_reasoning_effort, dict) and "summary" in resolved_reasoning_effort:
-                optional_params["reasoning_effort"] = resolved_reasoning_effort
-            elif rs_val is not None:
-                eff: Final = optional_params.get("reasoning_effort", resolved_reasoning_effort)
-                if isinstance(eff, dict):
-                    optional_params["reasoning_effort"] = {**eff, "summary": rs_val}
-                elif eff is not None:
-                    optional_params["reasoning_effort"] = {
-                        "effort": eff,
-                        "summary": rs_val,
-                    }
-                else:
-                    optional_params["reasoning_effort"] = {"summary": rs_val}
-
+            bridge_optional_params: Final = _responses_bridge_optional_params(
+                optional_params,
+                rs_val,
+                resolved_reasoning_effort,
+                custom_llm_provider=custom_llm_provider,
+                model=model,
+                drop_params=drop_unsupported_reasoning,
+                additional_drop_params=routing_kwargs.get("additional_drop_params"),
+            )
+            reasoning_drop_warnings.log_unless_effort_sent(bridge_optional_params.get("reasoning_effort"))
             return responses_api_bridge.completion(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
                 model=model,
                 messages=messages,
@@ -6178,7 +6213,7 @@ def completion(
                 api_base=api_base,
                 acompletion=acompletion,
                 logging_obj=logging,
-                optional_params=optional_params,
+                optional_params=bridge_optional_params,
                 litellm_params=litellm_params,
                 timeout=timeout,
                 client=client,  # pass AsyncOpenAI, OpenAI client
@@ -6187,7 +6222,9 @@ def completion(
                 stream=stream,
                 cache=kwargs.get("cache"),
             )
-        elif (custom_llm_provider == "openai" and OpenAIGPT5Config.is_model_gpt_5_model(model)) or (
+
+        reasoning_drop_warnings.log_unless_effort_sent(optional_params.get("reasoning_effort"))
+        if (custom_llm_provider == "openai" and OpenAIGPT5Config.is_model_gpt_5_model(model)) or (
             custom_llm_provider == "azure"
             and litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(_azure_detection_model)
         ):
