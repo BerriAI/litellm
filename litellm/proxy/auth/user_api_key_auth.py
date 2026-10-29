@@ -371,7 +371,7 @@ class _KeyModelBudgetLimiter(Protocol):
 
 class _UserModelBudgetLimiter(Protocol):
     async def is_user_within_model_budget(
-        self, user_id: str, user_model_max_budget: Mapping[str, object], model: str
+        self, user_id: str, user_model_max_budget: Mapping[str, object], model: str, team_id: str | None = None
     ) -> bool: ...
 
 
@@ -389,11 +389,15 @@ class _EveryModelBudgetLimiter(Protocol):
     async def is_key_within_model_budget(self, user_api_key_dict: UserAPIKeyAuth, model: str) -> bool: ...
 
     async def is_user_within_model_budget(
-        self, user_id: str, user_model_max_budget: Mapping[str, object], model: str
+        self, user_id: str, user_model_max_budget: Mapping[str, object], model: str, team_id: str | None = None
     ) -> bool: ...
 
     async def is_end_user_within_model_budget(
-        self, end_user_id: str, end_user_model_max_budget: Mapping[str, object], model: str
+        self,
+        end_user_id: str,
+        end_user_model_max_budget: Mapping[str, object],
+        model: str,
+        team_id: str | None = None,
     ) -> bool: ...
 
     async def is_team_within_model_budget(
@@ -504,6 +508,7 @@ async def _check_user_model_budget(
             user_id=valid_token.user_id,
             user_model_max_budget=user_model_max_budget,
             model=model_name,
+            team_id=valid_token.team_id,
         )
 
 
@@ -548,6 +553,7 @@ async def _is_within_every_model_budget(
                 user_id=valid_token.user_id,
                 user_model_max_budget=user_model_max_budget,
                 model=model,
+                team_id=valid_token.team_id,
             )
         if (
             valid_token.end_user_id is not None
@@ -558,6 +564,7 @@ async def _is_within_every_model_budget(
                 end_user_id=valid_token.end_user_id,
                 end_user_model_max_budget=end_user_model_max_budget,
                 model=model,
+                team_id=valid_token.team_id,
             )
         if valid_token.team_id is not None and isinstance(team_model_max_budget, Mapping) and team_model_max_budget:
             await model_max_budget_limiter.is_team_within_model_budget(
@@ -3155,6 +3162,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                             end_user_id=valid_token.end_user_id,
                             end_user_model_max_budget=end_user_mmb,
                             model=model_name,
+                            team_id=valid_token.team_id,
                         )
 
         # Check 6: Additional Common Checks across jwt + key auth
@@ -4735,6 +4743,7 @@ async def _run_post_custom_auth_checks(
                 end_user_id=valid_token.end_user_id,
                 end_user_model_max_budget=end_user_mmb,
                 model=model_name,
+                team_id=valid_token.team_id,
             )
 
     # team / user / end_user / project context objects are fetched by

@@ -1126,6 +1126,36 @@ def test_arouter_test_team_model():
     assert result is not None
 
 
+def test_team_public_model_names_of_lists_only_that_teams_live_public_names():
+    def team_deployment(deployment_id: str, team_id: str, public_model_name: str) -> DeploymentTypedDict:
+        return {
+            "model_name": f"model_name_{team_id}_{deployment_id}",
+            "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+            "model_info": {"id": deployment_id, "team_id": team_id, "team_public_model_name": public_model_name},
+        }
+
+    router: Final = litellm.Router(
+        model_list=[
+            team_deployment("team-a-1", "team-a", "shared-model"),
+            team_deployment("team-a-2", "team-a", "shared-model"),
+            team_deployment("team-a-solo", "team-a", "solo-model"),
+            team_deployment("team-b-1", "team-b", "team-b-model"),
+            {
+                "model_name": "plain-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                "model_info": {"id": "plain-1"},
+            },
+        ],
+    )
+
+    assert router.team_public_model_names_of("team-a") == frozenset({"shared-model", "solo-model"})
+    assert router.team_public_model_names_of("team-c") == frozenset()
+
+    router.delete_deployment(id="team-a-solo")
+
+    assert router.team_public_model_names_of("team-a") == frozenset({"shared-model"})
+
+
 def test_team_model_has_alternatives():
     def team_deployment(
         deployment_id: str, team_id: str, public_model_name: str, blocked: bool = False
@@ -31270,3 +31300,51 @@ async def test_anthropic_caller_rate_limit_does_not_block_other_credentials(
     finally:
         await GLOBAL_LOGGING_WORKER.flush()
         await client.close()
+
+
+_FALLBACK_VALIDATION_MODEL_LIST: Final = (
+    {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4", "api_key": "fake-key"}},
+    {"model_name": "gpt-3.5", "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "fake-key"}},
+)
+
+
+@pytest.mark.parametrize(
+    ("router_kwargs", "expected_message"),
+    [
+        ({"fallbacks": [{"gpt-4": "gpt-3.5"}]}, "Fallbacks for 'gpt-4' must be a list of model names, got 'gpt-3.5'"),
+        ({"default_fallbacks": "gpt-3.5"}, "default_fallbacks must be a list of model names, got 'gpt-3.5'"),
+        (
+            {"content_policy_fallbacks": [{"gpt-4": "gpt-3.5"}]},
+            "Fallbacks for 'gpt-4' must be a list of model names, got 'gpt-3.5'",
+        ),
+    ],
+    ids=["string_fallback_target", "string_default_fallbacks", "string_content_policy_fallback_target"],
+)
+def test_router_rejects_a_string_fallback_target_at_init(
+    router_kwargs: Mapping[str, object], expected_message: str
+) -> None:
+    with pytest.raises(TypeError, match="must be a list of model names") as excinfo:
+        Router(model_list=list(_FALLBACK_VALIDATION_MODEL_LIST), **router_kwargs)
+
+    assert expected_message in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("router_kwargs", "expected_fallbacks"),
+    [
+        ({"fallbacks": [{"gpt-4": ["gpt-3.5"]}]}, [{"gpt-4": ["gpt-3.5"]}]),
+        ({"default_fallbacks": ["gpt-3.5"]}, [{"*": ["gpt-3.5"]}]),
+        (
+            {"fallbacks": [{"gpt-4": [{"model": "gpt-3.5", "api_key": "other-key"}]}]},
+            [{"gpt-4": [{"model": "gpt-3.5", "api_key": "other-key"}]}],
+        ),
+        ({"fallbacks": [{"model": "gpt-3.5"}]}, [{"model": "gpt-3.5"}]),
+    ],
+    ids=["list_fallback_target", "list_default_fallbacks", "dict_override_fallback_target", "direct_target_entry"],
+)
+def test_router_keeps_supported_fallback_shapes(
+    router_kwargs: Mapping[str, object], expected_fallbacks: list[dict[str, object]]
+) -> None:
+    router: Final = Router(model_list=list(_FALLBACK_VALIDATION_MODEL_LIST), **router_kwargs)
+
+    assert router.fallbacks == expected_fallbacks

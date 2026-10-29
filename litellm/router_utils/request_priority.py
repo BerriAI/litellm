@@ -47,6 +47,15 @@ def resolve_request_priority(
     return priority
 
 
+def priority_header_fields(header: str | None, drops_params: Callable[[], bool]) -> Mapping[str, int | str]:
+    if not header:
+        return {}
+    priority: Final = _as_priority(header)
+    if isinstance(priority, InvalidPriority):
+        return {} if drops_params() else {"priority": header}
+    return {"priority": priority}
+
+
 def parse_default_priority(value: object) -> int | None | InvalidPriority:
     if value is None:
         return None
