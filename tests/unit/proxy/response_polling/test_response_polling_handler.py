@@ -17,7 +17,7 @@ following the OpenAI Response API format.
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Final, Optional
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -25,6 +25,8 @@ from fastapi import Request
 from pydantic import ValidationError
 
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
+
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 class TestResponsePollingHandler:
@@ -1010,7 +1012,7 @@ class TestPollingConditionChecks:
         )
 
         # Create mock router
-        mock_router = Mock()
+        mock_router = route_entry_points_to_stubs(Mock())
         mock_router.deployments_named.side_effect = {
             "gpt-5": ({"model_name": "gpt-5", "litellm_params": {"model": "openai/gpt-5"}},)
         }.get
@@ -1031,7 +1033,7 @@ class TestPollingConditionChecks:
             should_use_polling_for_request,
         )
 
-        mock_router = Mock()
+        mock_router = route_entry_points_to_stubs(Mock())
         mock_router.deployments_named.side_effect = {
             "claude-3": (
                 {
@@ -1182,7 +1184,7 @@ class TestPollingConditionChecks:
             should_use_polling_for_request,
         )
 
-        mock_router = Mock()
+        mock_router = route_entry_points_to_stubs(Mock())
         mock_router.deployments_named.side_effect = {
             "deep-research": (
                 {
@@ -1400,7 +1402,7 @@ def _make_sse_stream(events: list) -> Mock:
 
     async def _body_iterator():
         for event in events:
-            yield f"data: {json.dumps(event)}"
+            yield f"data: {json.dumps(event, ensure_ascii=False)}"
         yield "data: [DONE]"
 
     mock_response = Mock()
@@ -1638,6 +1640,33 @@ class TestBackgroundStreamingTerminalEvents:
         final_call = handler.update_state.call_args_list[-1]
         assert final_call.kwargs["status"] == "completed"
         assert final_call.kwargs["usage"] == {"input_tokens": 10, "output_tokens": 50}
+
+    @pytest.mark.asyncio
+    async def test_response_completed_whose_json_holds_unicode_line_separators_keeps_its_output(self) -> None:
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        item: Final = {
+            "id": "item_1",
+            "type": "message",
+            "content": [{"type": "output_text", "text": "Line\u2028one\u2029two"}],
+        }
+        events: Final = [
+            {"type": "response.completed", "response": {"id": "resp_123", "status": "completed", "output": [item]}}
+        ]
+        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+
+        with patch(
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=_make_sse_stream(events))
+            await background_streaming_task(**_make_background_streaming_kwargs("poll_u2028", handler))
+
+        calls: Final = handler.update_state.call_args_list
+        outputs: Final = [call.kwargs["output"] for call in calls if "output" in call.kwargs]
+        assert outputs[-1] == [item]
+        assert calls[-1].kwargs["status"] == "completed"
 
     @pytest.mark.asyncio
     async def test_fallback_status_derived_from_event_type_when_status_field_missing(

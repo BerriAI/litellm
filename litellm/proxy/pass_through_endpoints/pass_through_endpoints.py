@@ -30,6 +30,7 @@ from pydantic import TypeAdapter
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.routing import BaseRoute, Route
 from starlette.websockets import WebSocketState
+from typing_extensions import ReadOnly
 from websockets.asyncio.client import connect
 from websockets.exceptions import (
     ConnectionClosedError,
@@ -173,8 +174,17 @@ def _is_mergeable_client_metadata(key: str, value: object) -> bool:
     return not key.startswith("user_api_key_") and (key != "model_info" or isinstance(value, Mapping))
 
 
+class _RegisteredPassThroughRoute(TypedDict):
+    endpoint_id: ReadOnly[str]
+    path: ReadOnly[str | None]
+    type: ReadOnly[str]
+    methods: ReadOnly[str | bool | list[str] | tuple[str, ...] | Mapping[str, object]]
+    auth: ReadOnly[bool]
+    passthrough_params: ReadOnly[Mapping[str, object]]
+
+
 # Global registry to track registered pass-through routes and prevent memory leaks
-_registered_pass_through_routes: Final[dict[str, dict[str, str | bool | list[str] | Mapping[str, object]]]] = {}
+_registered_pass_through_routes: Final[dict[str, _RegisteredPassThroughRoute]] = {}
 
 
 def get_response_body(response: httpx.Response) -> dict | None:
@@ -312,20 +322,27 @@ async def chat_completion_pass_through_endpoint(
         )
 
         ### ROUTE THE REQUESTs ###
-        router_model_names: Final = llm_router.model_names if llm_router is not None else []
+        router_model_names: Final = llm_router.registry().names(kind="group_set") if llm_router is not None else []
         # skip router if user passed their key
         if "api_key" in data:
             llm_response = asyncio.create_task(litellm.aadapter_completion(**data))
-        elif llm_router is not None and llm_router.is_recognized_model(data["model"]):
+        elif (
+            llm_router is not None
+            and data["model"] is not None
+            and llm_router.registry().resolve(data["model"], kind="recognized")
+        ):
             llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
         elif (
             llm_router is not None
             and data["model"] not in router_model_names
-            and (llm_router.default_deployment is not None or len(llm_router.pattern_router.patterns) > 0)
+            and (
+                llm_router.settings().default_deployment is not None
+                or len(llm_router.registry().patterns().patterns) > 0
+            )
         ):  # check for wildcard routes or default deployment before checking deployment_names
             llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
-        elif (
-            llm_router is not None and data["model"] in llm_router.deployment_names
+        elif llm_router is not None and data["model"] in llm_router.registry().names(
+            kind="deployment_names"
         ):  # model in router deployments, calling a specific deployment on the router (lowest priority)
             llm_response = asyncio.create_task(llm_router.aadapter_completion(**data, specific_deployment=True))
         elif user_model is not None:  # `litellm --model <your-model-name>`
@@ -1877,20 +1894,19 @@ async def pass_through_request(
         passthrough_logging_payload["response_body"] = response_body
         end_time: Final = datetime.now()
         if response.status_code < 400:
-            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
-                    httpx_response=response,
-                    response_body=response_body,
-                    url_route=str(url),
-                    result="",
-                    start_time=start_time,
-                    end_time=end_time,
-                    logging_obj=logging_obj,
-                    cache_hit=False,
-                    request_body=_parsed_body or {},
-                    custom_llm_provider=custom_llm_provider,
-                    **kwargs,
-                )
+            await pass_through_endpoint_logging.pass_through_async_success_handler(
+                finalize_before_dispatch=True,
+                httpx_response=response,
+                response_body=response_body,
+                url_route=str(url),
+                result="",
+                start_time=start_time,
+                end_time=end_time,
+                logging_obj=logging_obj,
+                cache_hit=False,
+                request_body=_parsed_body or {},
+                custom_llm_provider=custom_llm_provider,
+                **kwargs,
             )
             bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
@@ -1901,6 +1917,8 @@ async def pass_through_request(
             model_id=None,
             cache_key=None,
             api_base=str(url._uri_reference),
+            response_cost=logging_obj.finalized_cost.amount if logging_obj.finalized_cost is not None else None,
+            litellm_logging_obj=logging_obj,
         )
 
         # Call response headers hook
@@ -2239,7 +2257,7 @@ def create_pass_through_route(
                     status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
                     detail=f"Method {request.method} is not allowed for pass-through endpoint {path}.",
                 )
-            target_params: Final = {
+            target_params: Final[dict[str, object]] = {
                 "target": target,
                 "custom_headers": custom_headers,
                 "forward_headers": _forward_headers,
@@ -2271,7 +2289,9 @@ def create_pass_through_route(
 
             # Ensure custom_headers is a dict. Botocore returns a HeadersDict
             # for SigV4-prepared requests, which is a Mapping but not a dict.
-            headers_dict: Final = dict(param_custom_headers) if isinstance(param_custom_headers, Mapping) else {}
+            headers_dict: Final[dict[str, object]] = (
+                {**param_custom_headers} if isinstance(param_custom_headers, Mapping) else {}
+            )
 
             # Ensure query_params and custom_body are dicts or None
             final_query_params: Final = query_params_data if isinstance(query_params_data, dict) else {}
@@ -3104,9 +3124,7 @@ class SafeRouteAdder:
                 return f"{path}/{{subpath:path}}"
             return None
 
-        def registered_route_methods(
-            route_info: Mapping[str, str | bool | Sequence[str] | Mapping[str, object]],
-        ) -> tuple[tuple[str, str], ...]:
+        def registered_route_methods(route_info: _RegisteredPassThroughRoute) -> tuple[tuple[str, str], ...]:
             starlette_path: Final = registered_route_path(route_info)
             methods: Final = route_info.get("methods")
             if starlette_path is None or not isinstance(methods, (list, tuple)):
@@ -3462,7 +3480,7 @@ class InitPassThroughEndpointHelpers:
         return (comparison_route, *forwarded)
 
     @staticmethod
-    def get_registered_pass_through_route(route: str, method: str | None = None) -> dict[str, Any] | None:
+    def get_registered_pass_through_route(route: str, method: str | None = None) -> _RegisteredPassThroughRoute | None:
         """Get passthrough params for a given route and optionally filter by HTTP method"""
         comparison_route: Final = InitPassThroughEndpointHelpers._route_for_registry_lookup(route)
         for key in _registered_pass_through_routes:

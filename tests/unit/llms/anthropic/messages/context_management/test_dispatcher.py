@@ -151,6 +151,7 @@ async def test_sync_editor_counts_tokens_off_the_event_loop():
                     {
                         "type": "clear_tool_uses_20250919",
                         "trigger": {"type": "input_tokens", "value": 10_000_000},
+                        "keep": {"type": "tool_uses", "value": 0},
                     }
                 ]
             },

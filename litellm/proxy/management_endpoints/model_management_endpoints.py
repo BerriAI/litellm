@@ -77,6 +77,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.proxy.management.teams.authz import TEAM_ADMIN_ONLY, is_team_admin
@@ -131,6 +132,24 @@ from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import ModelTableRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router import Router
+from litellm.router_api import ChangeSet
+from litellm.router_strategy.auto_router.auto_router_model_naming import (
+    GATED_AUTO_ROUTER_CAPABILITIES,
+    STRATEGY_ROUTER_PARAM_FIELDS,
+    GatedAutoRouterCapability,
+    capability_limit_violation,
+    carries_complexity_router_settings,
+    count_capability_routers,
+    gated_capabilities_of,
+    is_complexity_router_model,
+    validate_complexity_router_config_placement,
+    validate_complexity_router_config_write,
+    validate_strategy_router_model_write,
+)
+from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
+    is_mutable_tuned_candidate,
+    tuning_quota_violation,
+)
 from litellm.router_strategy.complexity_router import (
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     ClassificationRubric,
@@ -144,20 +163,6 @@ from litellm.router_strategy.complexity_router import (
     normalize_classification_prompt,
 )
 from litellm.router_strategy.complexity_router.config import resolve_complexity_router_config_write
-from litellm.router_utils.auto_router_model_naming import (
-    GATED_AUTO_ROUTER_CAPABILITIES,
-    STRATEGY_ROUTER_PARAM_FIELDS,
-    GatedAutoRouterCapability,
-    capability_limit_violation,
-    carries_complexity_router_settings,
-    count_capability_routers,
-    gated_capabilities_of,
-    is_complexity_router_model,
-    validate_complexity_router_config_placement,
-    validate_complexity_router_config_write,
-    validate_strategy_router_model_write,
-)
-from litellm.router_utils.auto_router_tuning_baseline import is_mutable_tuned_candidate, tuning_quota_violation
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AwsSessionTag
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -669,7 +674,7 @@ async def _auto_router_capability_slot(
     async with transaction as tx_ctx:
         tables: Final[_TxModelTables] = tx_ctx
         await tx_ctx.query_raw(_CAPABILITY_LOCK_SQL, AUTO_ROUTER_CAPABILITY_SLOT_LOCK_KEY)
-        config_rows: Final = () if llm_router is None else tuple(llm_router.config_deployments())
+        config_rows: Final = () if llm_router is None else tuple(llm_router.registry().deployments(source="config"))
         if member_write is not None:
             if member_write.model_id is not None:
                 await tx_ctx.query_raw(
@@ -724,7 +729,7 @@ async def _auto_router_capability_slot(
                 )
                 team_aliases: Final = team_model_aliases(team)
                 aliases: Final = (
-                    *(llm_router.model_group_alias or ()),
+                    *(llm_router.registry().aliases() or ()),
                     *(litellm.model_alias_map or ()),
                     *(team_aliases or ()),
                 )
@@ -1433,7 +1438,7 @@ async def get_kubernetes_pods(
         )
 
     deployment: Final[Mapping[str, object] | None] = _OPTIONAL_JSON_OBJECT.validate_python(
-        llm_router.get_model_info(id=model_id)  # pyright: ignore[reportUnknownMemberType]  # validated below
+        llm_router.registry().deployment_dict(model_id)  # pyright: ignore[reportUnknownMemberType]  # validated below
     )
     if deployment is None:
         raise ProxyException(
@@ -1443,7 +1448,7 @@ async def get_kubernetes_pods(
             param="model_id",
         )
 
-    lookup: Final = await llm_router.kubernetes_pod_discovery.async_lookup_pods(deployment)
+    lookup: Final = await llm_router.settings().kubernetes_pod_discovery.async_lookup_pods(deployment)
     if lookup is None:
         raw_litellm_params: Final = deployment.get("litellm_params")
         litellm_params: Final[Mapping[str, object] | None] = (
@@ -1530,7 +1535,7 @@ async def patch_model(
 
         if db_model is None:
             # Check if model exists in config but not DB
-            if llm_router and llm_router.get_deployment(model_id=model_id) is not None:
+            if llm_router and llm_router.registry().deployment(model_id) is not None:
                 raise ProxyException(
                     message="Cannot edit config-based model. Store model in DB via /model/new first.",
                     type=ProxyErrorTypes.validation_error.value,
@@ -1790,7 +1795,7 @@ async def _set_model_blocked_status(
         )
 
         if db_model is None:
-            if llm_router and llm_router.get_deployment(model_id=data.model_id) is not None:
+            if llm_router and llm_router.registry().deployment(data.model_id) is not None:
                 raise ProxyException(
                     message="Cannot edit config-based model. Store model in DB via /model/new first.",
                     type=ProxyErrorTypes.validation_error.value,
@@ -2249,7 +2254,7 @@ async def delete_team_models(
         proxy_config.remove_auto_router_catalog_entries(frozenset(deleted_model_ids))
         if llm_router is not None:
             for model_id in deleted_model_ids:
-                llm_router.delete_deployment(id=model_id)
+                llm_router.apply(ChangeSet(delete=[model_id]))
 
     return deleted_model_ids
 
@@ -2307,7 +2312,7 @@ async def _remove_unbacked_team_models(
         return
 
     deleted_name_still_served: Final = (
-        llm_router is not None and model_params.model_name in llm_router.model_name_to_deployment_indices
+        llm_router is not None and model_params.model_name in llm_router.registry().index("model_name")
     )
     removed_model_aliases: Final[list[tuple[str, str]]] = (
         []
@@ -2328,7 +2333,7 @@ async def _remove_unbacked_team_models(
 
     team_backed_names: Final = await _get_team_public_model_names(team_id=team_id, prisma_client=prisma_client)
     router_served_names: Final = (
-        frozenset(name for name in candidate_names if name in llm_router.model_name_to_deployment_indices)
+        frozenset(name for name in candidate_names if name in llm_router.registry().index("model_name"))
         if llm_router is not None
         else frozenset()
     )
@@ -2802,7 +2807,7 @@ async def delete_model(
             async with MODEL_RECONCILE_LOCK:
                 proxy_config.remove_auto_router_catalog_entries(frozenset({model_info.id}))
                 if llm_router is not None:
-                    llm_router.delete_deployment(id=model_info.id)
+                    llm_router.apply(ChangeSet(delete=[model_info.id]))
 
             # Runs after the row delete so the sibling check sees post-delete state.
             if model_params.model_info.team_id is not None:
@@ -2842,21 +2847,9 @@ async def delete_model(
 
     except Exception as e:
         verbose_proxy_logger.exception("Failed to delete model. Due to error - %s", e)
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        if isinstance(e, ProxyException):
+            raise
+        raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
 
 
 async def delete_team_model_alias(
@@ -2894,6 +2887,13 @@ async def delete_team_model_alias(
     await asyncio.gather(*tasks)
 
     return removed_model_aliases
+
+
+def _model_not_added_to_db() -> HTTPException:
+    return HTTPException(
+        status_code=500,
+        detail={"error": "Failed to add model to db. Check your server logs for more details."},
+    )
 
 
 @router.post(
@@ -3077,6 +3077,8 @@ async def add_new_model(
                 if isinstance(e, HTTPException):
                     raise
                 verbose_proxy_logger.exception("Exception in add_new_model: %s", e)
+                if model_response is None:
+                    raise _model_not_added_to_db() from e
 
         else:
             raise HTTPException(
@@ -3085,10 +3087,7 @@ async def add_new_model(
             )
 
         if model_response is None:
-            raise HTTPException(
-                status_code=500,
-                detail={"error": "Failed to add model to db. Check your server logs for more details."},
-            )
+            raise _model_not_added_to_db()
 
         ## CREATE AUDIT LOG ##
         asyncio.create_task(
@@ -3118,21 +3117,9 @@ async def add_new_model(
 
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.add_new_model(): Exception occured - %s", e)
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        if isinstance(e, ProxyException):
+            raise
+        raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
 
 
 #### MODEL MANAGEMENT ####
@@ -3182,7 +3169,7 @@ async def update_model(
         _existing_litellm_params = await ModelRepository(prisma_client).table.find_unique(where={"model_id": _model_id})
 
         if _existing_litellm_params is None:
-            if llm_router is not None and llm_router.get_deployment(model_id=_model_id) is not None:
+            if llm_router is not None and llm_router.registry().deployment(_model_id) is not None:
                 raise HTTPException(
                     status_code=400,
                     detail={"error": "Can't edit model. Model in config. Store model in db via `/model/new`. to edit."},
@@ -3361,21 +3348,9 @@ async def update_model(
             return None if model_response is None else _model_write_response(model_response, member_write)
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_model(): Exception occured - %s", e)
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        if isinstance(e, ProxyException):
+            raise
+        raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
 
 
 @router.post(
@@ -3727,7 +3702,7 @@ def live_model_ids_snapshot() -> frozenset[str]:
 
     if llm_router is None:
         return frozenset()
-    return frozenset(llm_router.get_model_ids())
+    return frozenset(llm_router.registry().names(kind="ids"))
 
 
 def reload_serving_verdict(
@@ -3860,7 +3835,7 @@ async def clear_cache() -> ReconcileOutcome:
             verbose_proxy_logger.debug("Clearing only DB models, preserving config models")
 
             # Get current models and filter out DB models
-            current_models: Final = llm_router.model_list.copy()
+            current_models: Final = llm_router.registry().all().copy()
             config_models: Final = []
             db_model_ids: Final = []
 
@@ -3879,7 +3854,7 @@ async def clear_cache() -> ReconcileOutcome:
                         db_router_names.add(model_name)
                         router_model_id = model_info.get("id")
                         if router_model_id is not None:
-                            llm_router.delete_deployment(id=router_model_id)
+                            llm_router.apply(ChangeSet(delete=[router_model_id]))
                 else:
                     # This is a config model, preserved by the reconcile below
                     config_models.append(model)
@@ -3918,10 +3893,10 @@ async def clear_cache() -> ReconcileOutcome:
             # quality/adaptive entry would otherwise make init raise "already exists"
             # on reload and abort it.
             for model_name in db_router_names:
-                llm_router.auto_routers.pop(model_name, None)
-                llm_router.complexity_routers.pop(model_name, None)
-                llm_router.adaptive_routers.pop(model_name, None)
-                llm_router.quality_routers.pop(model_name, None)
+                llm_router.registry().plugins("auto").pop(model_name, None)
+                llm_router.registry().plugins("complexity").pop(model_name, None)
+                llm_router.registry().plugins("adaptive").pop(model_name, None)
+                llm_router.registry().plugins("quality").pop(model_name, None)
 
             # Reload only DB models. _add_deployment_locked, not add_deployment: this
             # coroutine already holds MODEL_RECONCILE_LOCK and asyncio.Lock is not

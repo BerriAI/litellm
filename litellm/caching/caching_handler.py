@@ -830,6 +830,13 @@ class LLMCachingHandler:
         if is_internal_call.get():
             return
 
+        if logging_obj.defer_async_logging and not logging_obj.stream:
+            from litellm.utils import dispatch_success_logging
+
+            logging_obj.model_call_details["cache_hit"] = cache_hit  # rebind-ok: capture cache status before deferring
+            dispatch_success_logging(logging_obj, cached_result, start_time, end_time, False, False)
+            return
+
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
