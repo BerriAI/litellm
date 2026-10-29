@@ -55,7 +55,11 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
     response_has_hidden_params,
 )
-from litellm.litellm_core_utils.audio_utils.utils import estimate_audio_tokens
+from litellm.litellm_core_utils.audio_utils.utils import (
+    AUDIO_BYTES_PER_TOKEN,
+    DEFAULT_AUDIO_TOKEN_ESTIMATE,
+    estimate_audio_tokens,
+)
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
@@ -531,18 +535,6 @@ GOOGLE_GENAI_NATIVE_CALL_TYPES: Final = (
     CallTypes.agenerate_content_stream.value,
 )
 RESPONSES_API_MIN_OUTPUT_TOKENS: Final = 16
-# litellm.token_counter has no per-type handling for "input_audio" content
-# blocks (unlike images, which use use_default_image_token_count) -- it
-# silently contributes 0 tokens for them. When the block carries a base64
-# payload, the estimate is derived from the decoded byte count; when the
-# block is a reference without a payload (or the payload is missing), this
-# flat per-block floor is used instead.
-DEFAULT_AUDIO_TOKEN_ESTIMATE: Final = 300
-# Conservative bytes-per-token assumption for size-based audio estimation:
-# equivalent to 8 kHz mono PCM-16 (16 000 bytes/s) at 10 tokens/s. Choosing
-# the lowest reasonable bitrate means we never under-reserve for higher-
-# quality audio recorded at the same wall-clock duration.
-_AUDIO_BYTES_PER_TOKEN: Final = 1600
 # Descriptor "key" values for project-scoped ITPM/OTPM. Distinct from
 # "model_per_project" (the combined-TPM descriptor) so both can be enforced
 # on the same project+model simultaneously without colliding on cache keys.
@@ -3925,7 +3917,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Token estimate for one ``input_audio`` content block.
 
         When the block carries a base64 ``data`` payload, the estimate comes
-        from the decoded byte count (``len(b64) * 3 // 4 // _AUDIO_BYTES_PER_TOKEN``),
+        from the decoded byte count (``len(b64) * 3 // 4 // AUDIO_BYTES_PER_TOKEN``),
         assuming the lowest reasonable audio bitrate so we never under-reserve
         for higher-quality recordings of the same duration.
 
@@ -3938,7 +3930,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         b64_data: Final = input_audio.get("data") if isinstance(input_audio, dict) else None
         if b64_data and isinstance(b64_data, str):
             decoded_bytes: Final = len(b64_data) * 3 // 4
-            return max(decoded_bytes // _AUDIO_BYTES_PER_TOKEN, DEFAULT_AUDIO_TOKEN_ESTIMATE)
+            return max(decoded_bytes // AUDIO_BYTES_PER_TOKEN, DEFAULT_AUDIO_TOKEN_ESTIMATE)
         return DEFAULT_AUDIO_TOKEN_ESTIMATE
 
     @classmethod
@@ -3964,11 +3956,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def _strip_audio_content_blocks(messages: object) -> object:
         """
         Drop ``input_audio`` content blocks before passing ``messages`` to
-        ``token_counter``, which raises ``ValueError`` on them (no per-type
-        handling, unlike images). The audio contribution is added back
-        separately via ``DEFAULT_AUDIO_TOKEN_ESTIMATE`` so the rest of the
-        message (text/images/tools) still gets counted accurately instead of
-        the whole call falling back to the cheap char-count estimate.
+        ``token_counter``. It counts them with the same size-derived estimate
+        since #38459 (it used to raise); stripping keeps the audio contribution
+        added exactly once, by ``_estimate_audio_content_tokens``, so the rest
+        of the message (text/images/tools) is counted accurately without ever
+        double-counting the audio.
         """
         if not isinstance(messages, list):
             return messages
