@@ -357,7 +357,12 @@ def _error_event_error_object(event: object) -> object:
 
 
 def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
-    if isinstance(mapped_exception, litellm.ContentPolicyViolationError):
+    # A context-window overflow arrives as a 400, but another deployment with a larger
+    # window can still satisfy it, so it has to reach the Router's fallback chain (#48887).
+    if isinstance(
+        mapped_exception,
+        (litellm.ContentPolicyViolationError, litellm.ContextWindowExceededError),
+    ):
         return True
     status_code: Final = getattr(mapped_exception, "status_code", None)
     return not isinstance(status_code, int) or status_code >= 500 or status_code == 429
