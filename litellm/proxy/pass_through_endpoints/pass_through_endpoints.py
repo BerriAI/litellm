@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from itertools import chain, count, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, TypedDict, cast, overload
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -2395,28 +2395,39 @@ def create_websocket_passthrough_route(
     return websocket_endpoint_func
 
 
-def _rewrite_vertex_live_setup_model(text_data: str, setup_model_rewriter: Callable[[str], str] | None) -> str:
+@overload
+def _rewrite_vertex_live_setup_model(frame_data: str, setup_model_rewriter: Callable[[str], str] | None) -> str: ...
+
+
+@overload
+def _rewrite_vertex_live_setup_model(frame_data: bytes, setup_model_rewriter: Callable[[str], str] | None) -> bytes: ...
+
+
+def _rewrite_vertex_live_setup_model(
+    frame_data: str | bytes, setup_model_rewriter: Callable[[str], str] | None
+) -> str | bytes:
     """
     Rewrite the model of a Vertex AI Live ``setup`` frame, leaving every other frame byte-identical
     """
     if setup_model_rewriter is None:
-        return text_data
+        return frame_data
     try:
-        message: Final[object] = _DECODED_JSON.validate_python(json.loads(text_data))
-    except json.JSONDecodeError:
-        return text_data
+        message: Final[object] = _DECODED_JSON.validate_python(json.loads(frame_data))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return frame_data
     if not isinstance(message, dict):
-        return text_data
+        return frame_data
     setup: Final = message.get("setup")
     if not isinstance(setup, dict):
-        return text_data
+        return frame_data
     setup_model: Final = setup.get("model")
     if not isinstance(setup_model, str):
-        return text_data
+        return frame_data
     rewritten_model: Final = setup_model_rewriter(setup_model)
     if rewritten_model == setup_model:
-        return text_data
-    return json.dumps({**message, "setup": {**setup, "model": rewritten_model}})
+        return frame_data
+    rewritten_frame: Final = json.dumps({**message, "setup": {**setup, "model": rewritten_model}})
+    return rewritten_frame if isinstance(frame_data, str) else rewritten_frame.encode("utf-8")
 
 
 def _resolved_vertex_live_setup(
@@ -2504,15 +2515,32 @@ def _with_trace_context(headers: Mapping[str, str], parent_span: object) -> dict
     return inject_trace_context(headers, parent_span=parent_span)
 
 
+@dataclass(frozen=True, slots=True)
+class LoggedClientFrameRefusal:
+    denial: ProxyException
+
+
+ClientFrameRefusal: TypeAlias = ProxyException | LoggedClientFrameRefusal
+
+
+def _client_frame_denial(refusal: ClientFrameRefusal) -> ProxyException:
+    match refusal:
+        case LoggedClientFrameRefusal(denial=denial):
+            return denial
+        case ProxyException():
+            return refusal
+
+
 class WebsocketClientFrameGate(Protocol):
-    """Authorize one client frame, returning the denial to report or ``None`` to let it through.
+    """Authorize one client frame, returning the denial to report, one its check already reported, or ``None`` to
+    let it through.
 
     A websocket passthrough authenticates before any frame arrives, so a protocol that names its model
     inside a frame has no model to authorize at connect time. The frame, not the extracted model, is the
     argument because where a model sits is part of each provider's wire protocol
     """
 
-    async def __call__(self, frame_data: str | bytes, valid_token: UserAPIKeyAuth, /) -> ProxyException | None: ...
+    async def __call__(self, frame_data: str | bytes, valid_token: UserAPIKeyAuth, /) -> ClientFrameRefusal | None: ...
 
 
 async def _relay_client_frame(
@@ -2521,7 +2549,7 @@ async def _relay_client_frame(
     forwarded_frame: str | bytes,
     gate: WebsocketClientFrameGate | None,
     valid_token: UserAPIKeyAuth,
-) -> ProxyException | None:
+) -> ClientFrameRefusal | None:
     """Forward one client frame upstream, or refuse it and hand back the denial that ended the session.
 
     The denial travels out so the caller reports a failed session instead of leaving the success hooks to
@@ -2693,7 +2721,7 @@ async def websocket_passthrough_request(
                 "WebSocket passthrough (%s): Upstream connection established successfully", endpoint
             )
 
-            async def forward_client_to_upstream() -> ProxyException | None:
+            async def forward_client_to_upstream() -> ClientFrameRefusal | None:
                 """Forward messages from client to upstream WebSocket, returning any denial that ended it"""
                 try:
                     while True:
@@ -2778,7 +2806,7 @@ async def websocket_passthrough_request(
                                 bytes_refusal := await _relay_client_frame(
                                     upstream_ws,
                                     bytes_data,
-                                    bytes_data,
+                                    _rewrite_vertex_live_setup_model(bytes_data, setup_model_rewriter),
                                     client_frame_gate,
                                     user_api_key_dict,
                                 )
@@ -2862,15 +2890,18 @@ async def websocket_passthrough_request(
             # upstream reader's next send fail, so raising that instead would report the wrong cause.
             # Turns that completed before a refusal were served, so they are logged and billed as a success
             client_frame_refusal: Final = next(
-                (result for result in task_results if isinstance(result, ProxyException)), None
+                (result for result in task_results if isinstance(result, (ProxyException, LoggedClientFrameRefusal))),
+                None,
             )
             if client_frame_refusal is not None:
                 await websocket.close(
-                    code=CloseCode.POLICY_VIOLATION, reason=_refusal_close_reason(client_frame_refusal.message)
+                    code=CloseCode.POLICY_VIOLATION,
+                    reason=_refusal_close_reason(_client_frame_denial(client_frame_refusal).message),
                 )
                 await upstream_ws.close()
-            if client_frame_refusal is not None and not websocket_messages:
+            if isinstance(client_frame_refusal, ProxyException) and not websocket_messages:
                 await log_failure(client_frame_refusal)
+            if client_frame_refusal is not None and not websocket_messages:
                 return
 
             # Check for exceptions in completed tasks

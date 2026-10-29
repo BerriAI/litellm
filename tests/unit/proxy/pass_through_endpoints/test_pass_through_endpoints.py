@@ -7342,7 +7342,7 @@ def _patched_websocket_passthrough_environment(upstream_ws):
     ):
         mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
         mock_proxy_logging.post_call_success_hook = AsyncMock()
-        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
         enqueued_handler = MagicMock()
         mock_worker.ensure_initialized_and_enqueue = MagicMock(
             side_effect=lambda async_coroutine: (
@@ -7701,6 +7701,19 @@ async def test_vertex_live_setup_frame_is_gated_when_it_arrives_as_binary():
 
     upstream_ws.send.assert_not_awaited()
     assert _policy_close_reason(websocket) is not None
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_binary_setup_frame_reaches_vertex_as_the_model_the_gate_authorized() -> None:
+    binary_setup: Final = json.dumps({"setup": {"model": f"publishers/google/models/{VERTEX_LIVE_ALIAS_GROUP}"}})
+    _, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [{"type": "websocket.receive", "bytes": binary_setup.encode()}],
+        UserAPIKeyAuth(token="hashed", models=[VERTEX_LIVE_ALIAS_GROUP]),
+    )
+
+    sent_frame: Final = upstream_ws.send.await_args.args[0]
+    assert isinstance(sent_frame, bytes)
+    assert json.loads(sent_frame)["setup"]["model"] == VERTEX_LIVE_FULL_PATH.format(model=VERTEX_LIVE_GROUP)
 
 
 @pytest.mark.asyncio
@@ -8186,13 +8199,22 @@ async def test_vertex_live_setup_frame_naming_an_alias_cannot_open_the_model_the
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("hidden", [False, True], ids=["listed-alias", "hidden-alias"])
-async def test_vertex_live_setup_frame_naming_a_router_alias_cannot_open_the_model_the_alias_shadows(hidden):
-    """A listed router alias runs as its target group, while the setup rewriter cannot see a hidden one and sends it
-    to Vertex as the model whose id it reuses, which a key holding only the target must not open"""
-    llm_router = litellm.Router(
+@pytest.mark.parametrize(
+    ("hidden", "shadows_a_group"),
+    [(False, False), (True, False), (False, True), (True, True)],
+    ids=["listed-alias", "hidden-alias", "listed-alias-named-like-a-group", "hidden-alias-named-like-a-group"],
+)
+async def test_vertex_live_setup_frame_naming_a_router_alias_cannot_open_the_model_the_alias_shadows(
+    hidden: bool, shadows_a_group: bool
+) -> None:
+    """A listed router alias runs as its target group, while the setup rewriter cannot see a hidden one, or one named
+    like a group, and sends it to Vertex as the model whose id it reuses, which a key holding only the target must
+    not open"""
+    shadowed_group: Final = {"model_name": "gemini-3-pro-live", "litellm_params": {"model": "vertex_ai/gemini-3-pro-live"}}
+    llm_router: Final = litellm.Router(
         model_list=[
             {"model_name": "gemini-live-2.5-flash", "litellm_params": {"model": "vertex_ai/gemini-live-2.5-flash"}},
+            *([shadowed_group] if shadows_a_group else []),
         ],
         model_group_alias={"gemini-3-pro-live": {"model": "gemini-live-2.5-flash", "hidden": hidden}},
     )
@@ -8205,7 +8227,11 @@ async def test_vertex_live_setup_frame_naming_a_router_alias_cannot_open_the_mod
 
     sent_models = [json.loads(call.args[0])["setup"]["model"] for call in upstream_ws.send.await_args_list]
     assert not any(model.endswith("/gemini-3-pro-live") for model in sent_models)
-    assert sent_models == ([] if hidden else ["projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"])
+    assert sent_models == (
+        []
+        if hidden or shadows_a_group
+        else ["projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"]
+    )
 
 
 @pytest.mark.asyncio
@@ -8416,20 +8442,50 @@ async def test_vertex_live_route_authorizes_the_setup_model_the_way_connect_time
         param="model",
         code=400,
     )
-    with patch(
-        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True, side_effect=budget_denial
-    ) as reauthorization:
-        websocket, upstream_ws, _ = await _run_vertex_live_route(
+    valid_token: Final = UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"])
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.user_api_key_auth_builder", autospec=True, return_value=valid_token
+        ) as reauthentication,
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.run_centralized_common_checks",
+            autospec=True,
+            side_effect=budget_denial,
+        ),
+    ):
+        websocket, upstream_ws, environment = await _run_vertex_live_route(
             [_setup_frame("models/gemini-live-2.5-flash")],
-            UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"]),
+            valid_token,
             reauthorize_through_user_api_key_auth=True,
         )
 
     upstream_ws.send.assert_not_awaited()
     assert _policy_close_reason(websocket) == budget_denial.message
-    reauthorized_request = reauthorization.call_args.kwargs["request"]
-    assert json.loads(await reauthorized_request.body()) == {"model": "gemini-live-2.5-flash"}
-    assert reauthorization.call_args.kwargs["api_key"] == "Bearer sk-live-client"
+    reauthenticated_request: Final = reauthentication.call_args.kwargs["request"]
+    assert json.loads(await reauthenticated_request.body()) == {"model": "gemini-live-2.5-flash"}
+    assert reauthentication.call_args.kwargs["api_key"] == "Bearer sk-live-client"
+    environment.proxy_logging.post_call_failure_hook.assert_awaited_once()
+    reported: Final = environment.proxy_logging.post_call_failure_hook.await_args.kwargs
+    assert reported["original_exception"].message == budget_denial.message
+    assert reported["request_data"]["model"] == "gemini-live-2.5-flash"
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_route_releases_the_budget_it_reserved_to_authorize_an_allowed_setup_model():
+    """
+    Re-authorizing the setup model reserves the request's worst-case cost the way connect-time auth does, and the
+    session's spend is settled on the connect-time token, so an unreleased reservation pins the key's spend counter
+    and throttles its later sessions until the counter expires
+    """
+    valid_token: Final = UserAPIKeyAuth(
+        token="hashed",
+        models=["gemini-live-2.5-flash"],
+        budget_reservation={"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": False},
+    )
+    _, upstream_ws, _ = await _run_vertex_live_route([_setup_frame("models/gemini-live-2.5-flash")], valid_token)
+
+    upstream_ws.send.assert_awaited_once()
+    assert valid_token.budget_reservation is not None and valid_token.budget_reservation["finalized"] is True
 
 
 @pytest.mark.asyncio
