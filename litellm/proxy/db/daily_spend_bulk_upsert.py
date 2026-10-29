@@ -215,8 +215,6 @@ def build_bulk_upsert(
         if table.carries_request_id
         else ""
     )
-    # Rows written by an older proxy, or by a request without a team's virtual key, carry "", so
-    # only a known team overwrites the stored one.
     team_id_update: Final = (
         f', "team_id" = COALESCE(NULLIF(EXCLUDED."team_id", \'\'), {quoted_table}."team_id")'
         if table.carries_team_id

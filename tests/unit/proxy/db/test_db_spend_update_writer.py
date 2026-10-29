@@ -1345,6 +1345,45 @@ async def test_batch_database_updates_queues_org_member_spend_for_the_request_us
 
 
 @pytest.mark.asyncio
+async def test_batch_database_updates_puts_the_virtual_key_team_on_tag_rows():
+    db_writer: Final = DBSpendUpdateWriter()
+    prisma: Final = MagicMock()
+    prisma.get_request_status = MagicMock(return_value="success")
+    await db_writer._batch_database_updates(
+        response_cost=0.01,
+        user_id="u1",
+        hashed_token="a" * 64,
+        team_id="team-a",
+        org_id=None,
+        end_user_id=None,
+        prisma_client=prisma,
+        litellm_proxy_budget_name=None,
+        payload=cast(
+            SpendLogsPayload,
+            {
+                "request_id": "req-1",
+                "request_tags": '["cost-center:cc-42"]',
+                "team_id": "team-a",
+                "user": "u1",
+                "startTime": "2026-10-29T00:00:00",
+                "api_key": "a" * 64,
+                "model": "gpt-4o",
+                "custom_llm_provider": "openai",
+                "model_group": "gpt-4o",
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "spend": 0.01,
+                "metadata": '{"usage_object": {}}',
+            },
+        ),
+        virtual_key_team_id="team-a",
+    )
+    queued: Final = await db_writer.daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+
+    assert [cast(DailyTagSpendTransaction, txn).get("team_id") for txn in queued.values()] == ["team-a"]
+
+
+@pytest.mark.asyncio
 async def test_project_spend_is_persisted_to_project_table_and_project_cache_is_evicted():
     db_writer: Final = DBSpendUpdateWriter()
     await db_writer._batch_database_updates(
