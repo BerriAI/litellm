@@ -109,22 +109,22 @@ async def test_ocr_contract_malformed_document_is_actionable(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize(
-    "option,value,field",
-    [("pages", [-1], "pages"), ("features", [1], "features"), ("outputContentFormat", "html", "drop_params")],
+    "option,value",
+    [("pages", [-1]), ("features", [1]), ("outputContentFormat", "html")],
 )
 async def test_ocr_contract_azure_invalid_options_are_bad_requests(
     server: RecordingServer,
     asynchronous: bool,
     option: str,
     value: JsonValue,
-    field: str,
 ) -> None:
     server.expected_requests = 0
     arguments: Final = {"model": "azure_ai/doc-intelligence/prebuilt-read", option: value, "num_retries": 0}
     with pytest.raises(litellm.BadRequestError) as caught:
         await call(server, asynchronous, **arguments)
     assert caught.value.status_code == 400
-    assert field in str(caught.value)
+    assert option in str(caught.value)
+    assert "drop_params" in str(caught.value)
     assert server.requests == []
 
 

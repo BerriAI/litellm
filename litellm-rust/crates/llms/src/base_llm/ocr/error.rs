@@ -55,9 +55,11 @@ pub enum Error {
     InvalidDataUri,
     #[error("inline OCR document exceeds the size limit")]
     InlineDocumentTooLarge,
-    #[error("invalid OCR pages: {0}")]
+    #[error(
+        "invalid OCR pages: {0}. To drop unsupported params, set `litellm.drop_params = True`."
+    )]
     Pages(PagesFault),
-    #[error("invalid OCR features")]
+    #[error("invalid OCR features. To drop unsupported params, set `litellm.drop_params = True`.")]
     Features,
     #[error(
         "invalid OCR outputContentFormat, expected text or markdown. To drop unsupported params, set `litellm.drop_params = True`."

@@ -222,8 +222,14 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
             && response_format(non_default_params)? != OcrResponseFormat::Native
             && model_id(model).is_ok_and(|id| id == MARKDOWN_MODEL_ID);
         Ok(DocumentIntelligenceParams {
-            pages: normalize_pages_param(non_default_params.get("pages"))?,
-            features: normalize_features_param(non_default_params.get("features"))?,
+            pages: drop_if_invalid(
+                non_default_params,
+                normalize_pages_param(non_default_params.get("pages")),
+            )?,
+            features: drop_if_invalid(
+                non_default_params,
+                normalize_features_param(non_default_params.get("features")),
+            )?,
             output_content_format,
             string_index_type: slices_markdown_pages.then_some(CODE_POINT_STRING_INDEX),
         })
@@ -411,8 +417,22 @@ fn requested_output_content_format(
         .into_iter()
         .filter_map(|name| params.get(name))
         .find(|format| !is_unset(format));
-    match requested.map(parse_output_content_format).transpose() {
-        Err(Error::OutputContentFormat) if drops_unsupported_params(params) => Ok(None),
+    drop_if_invalid(
+        params,
+        requested.map(parse_output_content_format).transpose(),
+    )
+}
+
+fn drop_if_invalid<T>(
+    params: &CallArguments,
+    parsed: Result<Option<T>, Error>,
+) -> Result<Option<T>, Error> {
+    match parsed {
+        Err(Error::Pages(_) | Error::Features | Error::OutputContentFormat)
+            if drops_unsupported_params(params) =>
+        {
+            Ok(None)
+        }
         parsed => parsed,
     }
 }
@@ -1116,6 +1136,32 @@ mod tests {
         let mapped = map(options).unwrap();
 
         assert_eq!(serde_json::to_value(mapped).unwrap(), json!({"pages": "1"}));
+    }
+
+    #[rstest]
+    #[case::negative_page(
+        json!({"pages": [-1], "features": ["languages"], "drop_params": true}),
+        json!({"features": "languages"})
+    )]
+    #[case::page_range(
+        json!({"pages": "1&&features=bad", "features": "languages", "drop_params": true}),
+        json!({"features": "languages"})
+    )]
+    #[case::feature_number(
+        json!({"features": [1], "pages": [0], "drop_params": true}),
+        json!({"pages": "1"})
+    )]
+    #[case::feature_query_injection(
+        json!({"features": "languages&pages=9", "pages": [0], "drop_params": true}),
+        json!({"pages": "1"})
+    )]
+    fn drop_params_drops_only_the_invalid_pages_or_features(
+        #[case] options: Value,
+        #[case] expected: Value,
+    ) {
+        let mapped = map(options).unwrap();
+
+        assert_eq!(serde_json::to_value(mapped).unwrap(), expected);
     }
 
     #[rstest]
