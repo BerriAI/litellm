@@ -1,5 +1,7 @@
+import itertools
 import json
-from typing import Final
+from collections.abc import Callable
+from typing import Final, get_args
 from urllib.parse import parse_qs
 
 import pytest
@@ -7,14 +9,17 @@ import pytest
 from litellm.llms.elevenlabs.realtime.transformation import (
     SCRIBE_REALTIME_MODEL,
     SUPPORTED_SAMPLE_RATES,
+    ElevenLabsEventTransformer,
     ElevenLabsProtocolError,
     ElevenLabsSessionConfig,
+    default_session_config,
     normalize_language,
+    parse_server_message,
     parse_session_update,
     realtime_options_from_params,
     session_created_event,
 )
-from litellm.types.llms.elevenlabs import ElevenLabsRealtimeOptions
+from litellm.types.llms.elevenlabs import ElevenLabsErrorType, ElevenLabsRealtimeOptions
 
 NO_OPTIONS: Final = ElevenLabsRealtimeOptions()
 
@@ -179,3 +184,156 @@ def test_session_created_event_reports_the_effective_transcription_session():
     assert audio_input["format"] == {"type": "audio/pcm", "rate": 16_000}
     assert audio_input["transcription"] == {"model": SCRIBE_REALTIME_MODEL, "language": "es"}
     assert audio_input["turn_detection"] is None
+
+
+DEFAULT_CONFIG: Final = default_session_config(NO_OPTIONS)
+
+
+def _item_ids() -> Callable[[], str]:
+    counter: Final = itertools.count()
+    return lambda: f"item_{next(counter)}"
+
+
+def _frame(message_type: str, **fields: object) -> str:
+    return json.dumps({"message_type": message_type, **fields})
+
+
+def _transform(transformer: ElevenLabsEventTransformer, frame: str) -> tuple[object, ...]:
+    message: Final = parse_server_message(frame)
+    return () if message is None else transformer.transform(message, DEFAULT_CONFIG)
+
+
+def _events(transformer: ElevenLabsEventTransformer, *frames: str) -> list[dict[str, object]]:
+    transformed: Final = itertools.chain.from_iterable(_transform(transformer, frame) for frame in frames)
+    return [dict(event) for event in transformed]
+
+
+def _summary(events: list[dict[str, object]]) -> list[tuple[object, ...]]:
+    return [(event["type"], event.get("item_id"), event.get("delta", event.get("transcript"))) for event in events]
+
+
+def test_cumulative_partials_start_the_turn_once_and_emit_only_new_text():
+    events: Final = _events(
+        ElevenLabsEventTransformer(new_item_id=_item_ids()),
+        _frame("partial_transcript", text="Hello"),
+        _frame("partial_transcript", text="Hello wor"),
+        _frame("partial_transcript", text="Hello world"),
+    )
+
+    assert _summary(events) == [
+        ("input_audio_buffer.speech_started", "item_0", None),
+        ("conversation.item.input_audio_transcription.delta", "item_0", "Hello"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", " wor"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", "ld"),
+    ]
+
+
+def test_revised_partial_emits_nothing_and_the_commit_carries_the_final_text():
+    events: Final = _events(
+        ElevenLabsEventTransformer(new_item_id=_item_ids()),
+        _frame("partial_transcript", text="Hello wor"),
+        _frame("partial_transcript", text="Hello war"),
+        _frame("partial_transcript", text="Hello world"),
+        _frame("committed_transcript", text="Hello world."),
+    )
+
+    assert _summary(events) == [
+        ("input_audio_buffer.speech_started", "item_0", None),
+        ("conversation.item.input_audio_transcription.delta", "item_0", "Hello wor"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", "ld"),
+        ("input_audio_buffer.speech_stopped", "item_0", None),
+        ("conversation.item.input_audio_transcription.completed", "item_0", "Hello world."),
+    ]
+
+
+def test_each_commit_closes_its_turn_and_the_next_partial_opens_a_new_item():
+    events: Final = _events(
+        ElevenLabsEventTransformer(new_item_id=_item_ids()),
+        _frame("partial_transcript", text="One"),
+        _frame("committed_transcript", text="One."),
+        _frame("partial_transcript", text="Two"),
+        _frame("committed_transcript", text="Two."),
+    )
+
+    completed: Final = [
+        event for event in events if event["type"] == "conversation.item.input_audio_transcription.completed"
+    ]
+    assert [(event["item_id"], event["transcript"]) for event in completed] == [("item_0", "One."), ("item_1", "Two.")]
+
+
+def test_commit_without_partials_still_reports_a_whole_turn():
+    events: Final = _events(
+        ElevenLabsEventTransformer(new_item_id=_item_ids()), _frame("committed_transcript", text="Hi")
+    )
+
+    assert _summary(events) == [
+        ("input_audio_buffer.speech_started", "item_0", None),
+        ("input_audio_buffer.speech_stopped", "item_0", None),
+        ("conversation.item.input_audio_transcription.completed", "item_0", "Hi"),
+    ]
+
+
+def test_empty_partials_and_empty_commits_outside_a_turn_are_ignored():
+    events: Final = _events(
+        ElevenLabsEventTransformer(new_item_id=_item_ids()),
+        _frame("partial_transcript", text=""),
+        _frame("committed_transcript", text=""),
+    )
+
+    assert events == []
+
+
+def test_each_completion_bills_only_the_audio_recorded_since_the_previous_one():
+    transformer: Final = ElevenLabsEventTransformer(new_item_id=_item_ids())
+    transformer.record_audio(1.5)
+    first: Final = _events(transformer, _frame("committed_transcript", text="One."))
+    transformer.record_audio(0.25)
+    second: Final = _events(transformer, _frame("committed_transcript", text="Two."))
+
+    assert first[-1]["usage"] == {"type": "duration", "seconds": 1.5}
+    assert second[-1]["usage"] == {"type": "duration", "seconds": 0.25}
+    assert transformer.take_unbilled_usage() is None
+
+
+def test_trailing_audio_is_billed_once_at_close():
+    transformer: Final = ElevenLabsEventTransformer()
+    transformer.record_audio(2.0)
+
+    assert transformer.take_unbilled_usage() == {"type": "duration", "seconds": 2.0}
+    assert transformer.take_unbilled_usage() is None
+
+
+def test_session_started_reports_session_created_with_the_upstream_session_id():
+    events: Final = _events(ElevenLabsEventTransformer(), _frame("session_started", session_id="el_sess_1", config={}))
+
+    assert [event["type"] for event in events] == ["session.created"]
+    session: Final = events[0]["session"]
+    assert isinstance(session, dict)
+    assert session["id"] == "el_sess_1"
+
+
+@pytest.mark.parametrize("error_type", get_args(ElevenLabsErrorType))
+def test_provider_errors_name_the_error_type_without_upstream_detail(error_type: str):
+    events: Final = _events(ElevenLabsEventTransformer(), _frame(error_type, error="private upstream detail"))
+
+    assert len(events) == 1
+    assert events[0]["type"] == "error"
+    message: Final = json.dumps(events[0])
+    assert error_type in message
+    assert "private upstream detail" not in message
+
+
+def test_warnings_and_unknown_messages_are_not_forwarded():
+    assert _events(ElevenLabsEventTransformer(), _frame("warning", warning="slow down")) == []
+    assert parse_server_message(_frame("committed_transcript_with_timestamps", text="x")) is None
+    assert parse_server_message(json.dumps({"message_type": ["not", "a", "string"]})) is None
+
+
+@pytest.mark.parametrize("payload", [_frame("partial_transcript"), "[]", "not json"])
+def test_malformed_server_messages_raise_the_protocol_error(payload: str):
+    with pytest.raises(ElevenLabsProtocolError):
+        parse_server_message(payload)
+
+
+def test_bytes_payloads_are_decoded():
+    assert parse_server_message(_frame("partial_transcript", text="hi").encode()) is not None

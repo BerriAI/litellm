@@ -1,26 +1,54 @@
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, get_args
 from urllib.parse import urlencode
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import assert_never
 
 from litellm import verbose_logger
+from litellm._uuid import uuid
 from litellm.llms.base_llm.realtime.transcription_protocol import (
     RealtimeTranscriptionProtocolError,
     TranscriptionAudioFormat,
+    completed_event,
+    delta_event,
+    duration_usage,
+    error_event,
+    json_object,
     parse_transcription_session_update,
+    speech_event,
     transcription_session,
     transcription_session_created_event,
     uses_server_vad,
 )
-from litellm.types.llms.elevenlabs import ElevenLabsCommitStrategy, ElevenLabsRealtimeOptions
-from litellm.types.llms.openai import OpenAIRealtimeTranscriptionSession, OpenAIRealtimeTranscriptionSessionCreated
+from litellm.types.llms.elevenlabs import (
+    ElevenLabsCommitStrategy,
+    ElevenLabsCommittedTranscript,
+    ElevenLabsErrorMessage,
+    ElevenLabsErrorType,
+    ElevenLabsPartialTranscript,
+    ElevenLabsRealtimeOptions,
+    ElevenLabsServerMessage,
+    ElevenLabsServerMessageUnion,
+    ElevenLabsSessionStarted,
+    ElevenLabsWarning,
+)
+from litellm.types.llms.openai import (
+    OpenAIRealtimeEvents,
+    OpenAIRealtimeTranscriptionSession,
+    OpenAIRealtimeTranscriptionSessionCreated,
+)
+from litellm.types.realtime import RealtimeInputAudioTranscriptionUsage
 
 SCRIBE_REALTIME_MODEL: Final = "scribe_v2_realtime"
 SUPPORTED_SAMPLE_RATES: Final = frozenset((8_000, 16_000, 22_050, 24_000, 44_100, 48_000))
 _DEFAULT_SAMPLE_RATE: Final = 24_000
 _BACKEND_NAME: Final = "ElevenLabs Scribe realtime"
+_KNOWN_SERVER_MESSAGE_TYPES: Final = frozenset(
+    ("session_started", "partial_transcript", "committed_transcript", "warning", *get_args(ElevenLabsErrorType))
+)
+_SERVER_MESSAGE_ADAPTER: Final = TypeAdapter[ElevenLabsServerMessageUnion](ElevenLabsServerMessage)
 
 
 class ElevenLabsProtocolError(RealtimeTranscriptionProtocolError):
@@ -156,3 +184,92 @@ def parse_session_update(
 
 def session_created_event(config: ElevenLabsSessionConfig, session_id: str) -> OpenAIRealtimeTranscriptionSessionCreated:
     return transcription_session_created_event(config.openai_session(session_id))
+
+
+def parse_server_message(payload: str | bytes) -> ElevenLabsServerMessageUnion | None:
+    text: Final = payload.decode("utf-8") if isinstance(payload, bytes) else payload
+    message: Final = json_object(text, ElevenLabsProtocolError)
+    message_type: Final = message.get("message_type")
+    if not isinstance(message_type, str) or message_type not in _KNOWN_SERVER_MESSAGE_TYPES:
+        verbose_logger.debug("ElevenLabs realtime: dropping unsupported server message %s", message_type)
+        return None
+    try:
+        return _SERVER_MESSAGE_ADAPTER.validate_python(message)
+    except ValidationError:
+        raise ElevenLabsProtocolError(f"ElevenLabs sent an invalid {message_type} message") from None
+
+
+def _new_item_id() -> str:
+    return f"item_{uuid.uuid4().hex}"
+
+
+@dataclass(frozen=True, slots=True)
+class _Turn:
+    item_id: str
+    emitted: str
+
+
+class ElevenLabsEventTransformer:
+    def __init__(self, *, new_item_id: Callable[[], str] = _new_item_id) -> None:
+        self._new_item_id: Final = new_item_id
+        self._turn: _Turn | None = None
+        self._unbilled_seconds: float = 0.0
+
+    def record_audio(self, seconds: float) -> None:
+        self._unbilled_seconds += seconds
+
+    def take_unbilled_usage(self) -> RealtimeInputAudioTranscriptionUsage | None:
+        seconds: Final = self._unbilled_seconds
+        if seconds <= 0:
+            return None
+        self._unbilled_seconds = 0.0
+        return duration_usage(seconds)
+
+    def transform(
+        self, message: ElevenLabsServerMessageUnion, config: ElevenLabsSessionConfig
+    ) -> tuple[OpenAIRealtimeEvents, ...]:
+        match message:
+            case ElevenLabsSessionStarted(session_id=session_id):
+                return (session_created_event(config, session_id),)
+            case ElevenLabsPartialTranscript(text=text):
+                return self._partial(text)
+            case ElevenLabsCommittedTranscript(text=text):
+                return self._committed(text)
+            case ElevenLabsWarning(warning=warning):
+                verbose_logger.warning("ElevenLabs realtime warning: %s", warning)
+                return ()
+            case ElevenLabsErrorMessage(message_type=error_type):
+                return (error_event(f"ElevenLabs realtime transcription failed: {error_type}"),)
+            case _:
+                assert_never(message)
+
+    def _partial(self, text: str) -> tuple[OpenAIRealtimeEvents, ...]:
+        if not text:
+            return ()
+        turn: Final = self._turn
+        if turn is None:
+            started: Final = _Turn(item_id=self._new_item_id(), emitted=text)
+            self._turn = started
+            return (
+                speech_event("input_audio_buffer.speech_started", started.item_id),
+                delta_event(started.item_id, text),
+            )
+        if text == turn.emitted or not text.startswith(turn.emitted):
+            return ()
+        self._turn = _Turn(item_id=turn.item_id, emitted=text)
+        return (delta_event(turn.item_id, text[len(turn.emitted) :]),)
+
+    def _committed(self, text: str) -> tuple[OpenAIRealtimeEvents, ...]:
+        turn: Final = self._turn
+        self._turn = None
+        if turn is None and not text:
+            return ()
+        item_id: Final = self._new_item_id() if turn is None else turn.item_id
+        started: Final[tuple[OpenAIRealtimeEvents, ...]] = (
+            (speech_event("input_audio_buffer.speech_started", item_id),) if turn is None else ()
+        )
+        return (
+            *started,
+            speech_event("input_audio_buffer.speech_stopped", item_id),
+            completed_event(item_id, text, self.take_unbilled_usage()),
+        )
