@@ -108,6 +108,7 @@ UI_API_TYPES_DETECT: Final[str] = next(
     for step in yaml.safe_load(WORKFLOW.read_text())["jobs"]["ui-api-types"]["steps"]
     if step.get("id") == "changes"
 )
+PRE_COMMIT_LINT: Final = WORKFLOW.parents[2] / "scripts" / "pre_commit_lint.sh"
 
 
 def _ui_api_types_relevant(tmp_path: Path, changed: str) -> bool:
@@ -168,3 +169,23 @@ def test_ui_api_types_check_runs_on_a_pull_request_touching_any_spec_input(tmp_p
 )
 def test_ui_api_types_check_skips_a_pull_request_that_cannot_change_the_spec(tmp_path: Path, changed: str) -> None:
     assert not _ui_api_types_relevant(tmp_path, changed)
+
+
+def _first_single_quoted_capture(pattern: str, text: str) -> str:
+    match: Final = re.search(pattern, text, re.MULTILINE)
+    assert match is not None, pattern
+    return match.group(1)
+
+
+def _tracked_paths_matching(extended_regex: str) -> frozenset[str]:
+    tracked: Final = _git(WORKFLOW.parents[2], "ls-files")
+    selected: Final = subprocess.run(["grep", "-E", extended_regex], input=tracked, capture_output=True, text=True)
+    return frozenset(selected.stdout.splitlines())
+
+
+def test_make_check_runs_the_api_type_sync_on_the_same_tracked_files_as_ci() -> None:
+    ci_trigger: Final = _first_single_quoted_capture(r"grep -Eq '([^']+)'", UI_API_TYPES_DETECT)
+    make_check_trigger: Final = _first_single_quoted_capture(r"^spec_pattern='([^']+)'$", PRE_COMMIT_LINT.read_text())
+    ci_selected: Final = _tracked_paths_matching(ci_trigger)
+    assert "pyproject.toml" in ci_selected
+    assert _tracked_paths_matching(make_check_trigger) == ci_selected - {".github/workflows/test-linting.yml"}
