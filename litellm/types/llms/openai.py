@@ -684,6 +684,10 @@ class PromptCacheBreakpoint(TypedDict):
     ttl: NotRequired[ReadOnly[Literal["30m", "12h"]]]
 
 
+class ChatCompletionPromptCacheBreakpoint(TypedDict):
+    mode: ReadOnly[Literal["explicit"]]
+
+
 class PromptCacheOptions(TypedDict, total=False):
     mode: ReadOnly[Literal["implicit", "explicit"]]
     ttl: ReadOnly[Literal["30m", "12h"]]

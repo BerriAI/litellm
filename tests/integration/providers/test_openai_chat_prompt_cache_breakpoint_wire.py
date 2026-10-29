@@ -41,6 +41,7 @@ class _Proxy:
     openai: Wire
     gpt_5_6_with_prompt_cache_options: str
     gpt_5_6_without_prompt_cache_options: str
+    gpt_5_6_dropping_params: str
 
     def openai_receives(
         self, model: str, messages: Sequence[JsonValue], *, stream: bool = False, tools: Sequence[JsonValue] = ()
@@ -79,6 +80,9 @@ def proxy() -> Iterator[_Proxy]:
                 model="openai/gpt-5.6", api_base=api_base, prompt_cache_options={"mode": "explicit"}
             ),
             gpt_5_6_without_prompt_cache_options=scenario.model(model="openai/gpt-5.6", api_base=api_base),
+            gpt_5_6_dropping_params=scenario.model(
+                model="openai/gpt-5.6", api_base=api_base, prompt_cache_options={"mode": "explicit"}, drop_params=True
+            ),
         )
 
 
@@ -202,3 +206,56 @@ def test_custom_api_base_without_prompt_cache_options_forwards_cache_control_unc
     assert received["messages"] == _SYSTEM_AND_USER_WITH_CACHE_CONTROL
     assert "prompt_cache_options" not in received
     assert "prompt_cache_breakpoint" not in str(received)
+
+
+_CLIENT_BREAKPOINTS_ON_PARTS: Final[list[JsonValue]] = [
+    {"type": "text", "text": "Stable rules", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}},
+    {"type": "text", "text": "More rules", "prompt_cache_breakpoint": {"mode": "implicit"}},
+    {"type": "text", "text": "Describe this", "prompt_cache_breakpoint": {"mode": "explicit"}},
+]
+_CLIENT_BREAKPOINTS_AS_CHAT_COMPLETIONS_TAKES_THEM: Final[list[JsonValue]] = [
+    {"type": "text", "text": "Stable rules", "prompt_cache_breakpoint": {"mode": "explicit"}},
+    {"type": "text", "text": "More rules"},
+    {"type": "text", "text": "Describe this", "prompt_cache_breakpoint": {"mode": "explicit"}},
+]
+_CHAT_COMPLETIONS_REJECTS_TTL_AND_IMPLICIT: Final = (
+    "live gpt-6.1-sol Chat Completions answers 400 on a part breakpoint with any ttl or mode implicit (2026-10-28)"
+)
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["unary", "stream"])
+def test_drop_params_cuts_client_breakpoints_down_to_what_chat_completions_takes(proxy: _Proxy, stream: bool) -> None:
+    received: Final = proxy.openai_receives(
+        proxy.gpt_5_6_dropping_params, [{"role": "user", "content": _CLIENT_BREAKPOINTS_ON_PARTS}], stream=stream
+    )
+
+    assert received["messages"] == [
+        {"role": "user", "content": _CLIENT_BREAKPOINTS_AS_CHAT_COMPLETIONS_TAKES_THEM}
+    ], _CHAT_COMPLETIONS_REJECTS_TTL_AND_IMPLICIT
+
+
+def test_without_drop_params_client_breakpoints_reach_openai_unchanged(proxy: _Proxy) -> None:
+    received: Final = proxy.openai_receives(
+        proxy.gpt_5_6_with_prompt_cache_options, [{"role": "user", "content": _CLIENT_BREAKPOINTS_ON_PARTS}]
+    )
+
+    assert received["messages"] == [{"role": "user", "content": _CLIENT_BREAKPOINTS_ON_PARTS}]
+
+
+def test_drop_params_cuts_client_breakpoints_on_v1_messages_routed_to_chat_completions(proxy: _Proxy) -> None:
+    _ = proxy.openai.drain()
+    response: Final = proxy.gateway.request(
+        "POST",
+        "/v1/messages",
+        {
+            "model": proxy.gpt_5_6_dropping_params,
+            "max_tokens": 16,
+            "stop_sequences": ["END"],
+            "messages": [{"role": "user", "content": _CLIENT_BREAKPOINTS_ON_PARTS}],
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    assert proxy.received_by_openai()["messages"] == [
+        {"role": "user", "content": _CLIENT_BREAKPOINTS_AS_CHAT_COMPLETIONS_TAKES_THEM}
+    ], _CHAT_COMPLETIONS_REJECTS_TTL_AND_IMPLICIT

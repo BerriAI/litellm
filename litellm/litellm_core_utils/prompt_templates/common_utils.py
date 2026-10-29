@@ -17,7 +17,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -29,6 +29,7 @@ from litellm.types.llms.openai import (
     ChatCompletionAudioObject,
     ChatCompletionFileObject,
     ChatCompletionImageObject,
+    ChatCompletionPromptCacheBreakpoint,
     ChatCompletionReasoningItem,
     ChatCompletionReasoningSummaryTextBlock,
     ChatCompletionRedactedThinkingBlock,
@@ -2108,6 +2109,36 @@ def without_prompt_cache_breakpoints(block: _MarkedT) -> _MarkedT:
         key: _breakpoints_stripped_from(key, value) for key, value in block.items() if key != "prompt_cache_breakpoint"
     }
     return cast(_MarkedT, stripped)  # cast-ok: same block shape as the input minus the marker keys
+
+
+_CHAT_COMPLETION_PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(ChatCompletionPromptCacheBreakpoint)
+
+
+def _chat_completion_prompt_cache_breakpoint(marker: object) -> ChatCompletionPromptCacheBreakpoint | None:
+    try:
+        return _CHAT_COMPLETION_PROMPT_CACHE_BREAKPOINT.validate_python(marker)
+    except ValidationError:
+        verbose_logger.debug("Dropping malformed chat completions prompt_cache_breakpoint %r under drop_params", marker)
+        return None
+
+
+def _part_with_chat_completion_prompt_cache_breakpoint(part: object) -> object:
+    fields: Final = _BREAKPOINT_FIELDS.validate_python(part)
+    marker: Final = fields.get("prompt_cache_breakpoint")
+    if marker is None:
+        return part
+    unmarked: Final = {key: item for key, item in fields.items() if key != "prompt_cache_breakpoint"}
+    return with_prompt_cache_breakpoint(unmarked, _chat_completion_prompt_cache_breakpoint(marker))
+
+
+def chat_completion_prompt_cache_breakpoints_for_wire(message: _MarkedT, drop_params: bool) -> _MarkedT:
+    content: Final = message.get("content")
+    if not drop_params or not isinstance(content, list):
+        return message
+    parts: Final = [
+        _part_with_chat_completion_prompt_cache_breakpoint(part) for part in _BREAKPOINT_BLOCKS.validate_python(content)
+    ]
+    return cast(_MarkedT, {**message, "content": parts})  # cast-ok: same message shape with its parts' markers trimmed
 
 
 LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS: Final = frozenset(
