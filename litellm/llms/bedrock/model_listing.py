@@ -101,7 +101,7 @@ class BedrockModelLister(BaseAWSLLM):
             raise BedrockError(
                 status_code=response.status_code,
                 message=(
-                    f"Failed to list Bedrock models in {self._aws_region_name}. "
+                    f"Failed to list Bedrock models from {httpx.URL(url).host} in {self._aws_region_name}. "
                     f"Status code: {response.status_code}, Response: {response.text}"
                 ),
             )

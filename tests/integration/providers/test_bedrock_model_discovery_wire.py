@@ -24,6 +24,7 @@ from integration._support.aws_control_plane import (
 )
 from integration._support.bedrock_discovery import (
     CLOSE,
+    CONFIGURED_CONTROL_PLANE_HOST,
     CONTROL_MODEL,
     CONVERSE_MODEL,
     HOSTED_REGIONS,
@@ -84,7 +85,7 @@ class Rig:
 
 @pytest.fixture(scope="module")
 def plane(tmp_path_factory: pytest.TempPathFactory) -> Iterator[ControlPlane]:
-    hosts: Final = tuple(control_plane_host(region) for region in HOSTED_REGIONS)
+    hosts: Final = (*(control_plane_host(region) for region in HOSTED_REGIONS), CONFIGURED_CONTROL_PLANE_HOST)
     with control_plane(tmp_path_factory.mktemp("bedrock_control_plane"), hosts) as value:
         yield value
 
@@ -123,6 +124,24 @@ def test_admin_models_list_the_accounts_invocable_models_signed_for_the_deployme
         requests: Final = mine(rig.plane, key)
         assert_listing_shape(requests)
         assert_sigv4(requests, key=key, secret=secret, region="us-east-1")
+
+
+def test_admin_models_list_through_the_configured_control_plane_endpoint_only(rig: Rig) -> None:
+    key, secret = credential()
+    marker: Final = stem()
+    catalog: Final = catalog_for(marker)
+    with rig.gateway.scenario() as scenario, rig.plane.answering(key, catalog.respond):
+        sigv4_deployment(
+            scenario,
+            key,
+            secret,
+            "us-east-1",
+            litellm_params={"aws_bedrock_control_plane_endpoint": f"https://{CONFIGURED_CONTROL_PLANE_HOST}"},
+        )
+        assert discovered(rig.gateway, catalog, marker) == catalog.invocable_ids()
+        requests: Final = mine(rig.plane, key)
+        assert_listing_shape(requests)
+        assert_sigv4(requests, key=key, secret=secret, region="us-east-1", host=CONFIGURED_CONTROL_PLANE_HOST)
 
 
 def _info_rows(gateway: Gateway, path: str, marker: str, identity: str) -> Mapping[str, str]:

@@ -1,6 +1,6 @@
 # Bedrock batch endpoints
 
-Set `aws_bedrock_control_plane_endpoint` on a deployment when batch create, retrieve, and cancel requests must use a custom Bedrock control-plane endpoint. The proxy signs these requests for the configured URL. Without this setting, batch requests use the standard regional Bedrock endpoint
+Set `aws_bedrock_control_plane_endpoint` on a deployment when Bedrock control-plane requests must use a custom endpoint, such as a VPC endpoint or the FIPS host. Batch create, retrieve, and cancel requests use it, and so does `bedrock/*` model discovery when `check_provider_endpoint` is on. The proxy signs these requests for the configured URL. Without this setting, they use the standard regional Bedrock endpoint
 
 ```yaml
 model_list:

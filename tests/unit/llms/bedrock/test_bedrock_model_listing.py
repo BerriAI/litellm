@@ -177,9 +177,14 @@ def test_get_models_without_a_deployment_uses_ambient_credentials(monkeypatch: p
     assert _bedrock(_control_plane()).get_models() == EXPECTED_MODELS
 
 
-def test_listing_failure_names_the_region_and_response() -> None:
+@pytest.mark.parametrize(
+    ("control_plane_endpoint", "host"),
+    [(None, REGIONAL_HOST), (f"https://{VPC_ENDPOINT_HOST}", VPC_ENDPOINT_HOST)],
+    ids=["regional", "configured"],
+)
+def test_listing_failure_names_the_host_region_and_response(control_plane_endpoint: str | None, host: str) -> None:
     def throttled(request: httpx.Request) -> httpx.Response:
         return httpx.Response(429, json={"message": "Too many requests"})
 
-    with pytest.raises(BedrockError, match=rf"{REGION}.*429.*Too many requests"):
-        _bedrock(throttled).discover_models(_deployment())
+    with pytest.raises(BedrockError, match=rf"{re.escape(host)} in {REGION}.*429.*Too many requests"):
+        _bedrock(throttled).discover_models(_deployment(control_plane_endpoint=control_plane_endpoint))
