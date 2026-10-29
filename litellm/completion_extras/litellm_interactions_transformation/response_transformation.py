@@ -181,13 +181,15 @@ def _advance_sig_scan(state: _SigScanState, step: _SigScanState | JsonMapping) -
     match step.get("type"):
         case "thought":
             sig_val: Final = step.get("signature")
-            next_pending: Final = sig_val if isinstance(sig_val, str) and sig_val else state.pending_thought_sig
+            next_pending: Final = sig_val if isinstance(sig_val, str) and sig_val else None
             return _SigScanState(pending_thought_sig=next_pending, call_sig=None)
         case "function_call":
             step_sig_raw: Final = step.get("signature")
             step_sig: Final = step_sig_raw if isinstance(step_sig_raw, str) and step_sig_raw else None
             effective: Final = step_sig or state.pending_thought_sig
             return _SigScanState(pending_thought_sig=None, call_sig=effective)
+        case "function_result":
+            return _SigScanState(pending_thought_sig=None, call_sig=None)
         case _:
             return _SigScanState(pending_thought_sig=state.pending_thought_sig, call_sig=None)
 

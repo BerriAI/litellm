@@ -252,3 +252,62 @@ async def test_async_mid_stream_error_events_surface_through_stream_wrapper(
     with pytest.raises(MidStreamFallbackError, match=re.escape(expected_substr)):
         await anext(wrapper)
     assert async_resp.is_closed
+
+
+def test_late_thought_signature_delta_backfills_tool_call_id_and_unsigned_thought_resets_state() -> None:
+    late_sig_lines: Final = (
+        'data: {"event_type": "interaction.created", "interaction": {"id": "v1_late_sig", "status": "in_progress"}}',
+        'data: {"event_type": "step.start", "index": 0, "step": {"type": "thought", "signature": ""}}',
+        'data: {"event_type": "step.start", "index": 1, "step": {"id": "call_late", "type": "function_call", "name": "bash"}}',
+        'data: {"event_type": "step.delta", "index": 1, "delta": {"type": "arguments_delta", "arguments": "{\\"cmd\\":\\"ls\\"}"}}',
+        'data: {"event_type": "step.start", "index": 2, "step": {"id": "call_second", "type": "function_call", "name": "bash"}}',
+        'data: {"event_type": "step.delta", "index": 2, "delta": {"type": "arguments_delta", "arguments": "{\\"cmd\\":\\"pwd\\"}"}}',
+        'data: {"event_type": "step.delta", "index": 0, "delta": {"type": "thought_signature", "signature": "LATE_SIG_XYZ"}}',
+        'data: {"event_type": "interaction.completed", "interaction": {"id": "v1_late_sig", "status": "requires_action"}}',
+        "data: [DONE]",
+    )
+    late_iter: Final = InteractionsChatStreamingIterator(
+        model="gemini-3-flash-preview",
+        sync_lines=iter(late_sig_lines),
+    )
+    late_wrapper: Final = CustomStreamWrapper(
+        completion_stream=late_iter,
+        model="gemini-3-flash-preview",
+        custom_llm_provider="gemini",
+        logging_obj=_logging_stub("gemini-3-flash-preview"),
+    )
+    rebuilt_late: Final = stream_chunk_builder(list(late_wrapper))  # pyright: ignore[reportUnknownVariableType,reportUnknownArgumentType]  # stream_chunk_builder parameter lacks element type
+    assert rebuilt_late is not None
+    late_choice: Final = rebuilt_late.choices[0]
+    assert isinstance(late_choice, Choices)
+    late_calls: Final = late_choice.message.tool_calls or []
+    assert [tc.id for tc in late_calls] == ["call_late__thought__LATE_SIG_XYZ", "call_second"]
+
+    non_leak_lines: Final = (
+        'data: {"event_type": "interaction.created", "interaction": {"id": "v1_noleak", "status": "in_progress"}}',
+        'data: {"event_type": "step.start", "index": 0, "step": {"type": "thought", "signature": "STALE_SIG_1"}}',
+        'data: {"event_type": "step.start", "index": 1, "step": {"id": "call_1", "type": "function_call", "name": "bash"}}',
+        'data: {"event_type": "step.delta", "index": 1, "delta": {"type": "arguments_delta", "arguments": "{}"}}',
+        'data: {"event_type": "step.start", "index": 2, "step": {"type": "function_result", "call_id": "call_1", "name": "bash"}}',
+        'data: {"event_type": "step.start", "index": 3, "step": {"type": "thought", "signature": "", "summary": [{"type": "text", "text": "step two"}]}}',
+        'data: {"event_type": "step.start", "index": 4, "step": {"id": "call_2", "type": "function_call", "name": "bash"}}',
+        'data: {"event_type": "step.delta", "index": 4, "delta": {"type": "arguments_delta", "arguments": "{}"}}',
+        'data: {"event_type": "interaction.completed", "interaction": {"id": "v1_noleak", "status": "requires_action"}}',
+        "data: [DONE]",
+    )
+    noleak_iter: Final = InteractionsChatStreamingIterator(
+        model="gemini-3-flash-preview",
+        sync_lines=iter(non_leak_lines),
+    )
+    noleak_wrapper: Final = CustomStreamWrapper(
+        completion_stream=noleak_iter,
+        model="gemini-3-flash-preview",
+        custom_llm_provider="gemini",
+        logging_obj=_logging_stub("gemini-3-flash-preview"),
+    )
+    rebuilt_noleak: Final = stream_chunk_builder(list(noleak_wrapper))  # pyright: ignore[reportUnknownVariableType,reportUnknownArgumentType]  # stream_chunk_builder parameter lacks element type
+    assert rebuilt_noleak is not None
+    noleak_choice: Final = rebuilt_noleak.choices[0]
+    assert isinstance(noleak_choice, Choices)
+    noleak_calls: Final = noleak_choice.message.tool_calls or []
+    assert [tc.id for tc in noleak_calls] == ["call_1__thought__STALE_SIG_1", "call_2"]

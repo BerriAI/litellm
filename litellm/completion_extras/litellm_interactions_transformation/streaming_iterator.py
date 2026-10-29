@@ -134,6 +134,8 @@ class InteractionsChatStreamingIterator:
         self.http_response: httpx.Response | None = http_response
         self._stream_id: str = f"chatcmpl-{uuid.uuid4()}"
         self._pending_thought_signature: str | None = None
+        self._unsigned_tool_call: tuple[int, str] | None = None
+        self._segment_signed_tool_call: bool = False
         self._thought_slots: Final[dict[int, int]] = {}  # mutable-ok: per-stream step-index -> thought-slot state
         self._tool_slots_by_step: Final[dict[int, int]] = {}  # mutable-ok: per-stream step-index -> tool-slot state
         self._buffer: Final[deque[ModelResponseStream]] = deque()  # mutable-ok: per-stream output FIFO queue
@@ -183,6 +185,18 @@ class InteractionsChatStreamingIterator:
         self._tool_slots_by_step[step_index] = slot
         return slot
 
+    def _consume_delta_tool_call_id(self, slot: int, raw_id: JsonValue) -> str | None:
+        if not isinstance(raw_id, str) or not raw_id:
+            return None
+        consumed_sig: Final = self._pending_thought_signature
+        self._pending_thought_signature = None
+        if consumed_sig is not None:
+            self._unsigned_tool_call = None
+            self._segment_signed_tool_call = True
+        elif not self._segment_signed_tool_call and self._unsigned_tool_call is None:
+            self._unsigned_tool_call = (slot, raw_id)
+        return encode_tool_call_id_with_signature(raw_id, consumed_sig)
+
     def _handle_step_start(self, event: JsonMapping) -> tuple[ModelResponseStream, ...]:
         raw_index: Final = event.get("index")
         step_index: Final = raw_index if isinstance(raw_index, int) else 0
@@ -196,8 +210,9 @@ class InteractionsChatStreamingIterator:
                 sig_raw: Final = raw_step.get("signature")
                 sig_str: Final = sig_raw if isinstance(sig_raw, str) and sig_raw else None
                 summary: Final = _text_from_blocks(raw_step.get("summary"))
-                if sig_str is not None:
-                    self._pending_thought_signature = sig_str
+                self._pending_thought_signature = sig_str
+                self._unsigned_tool_call = None
+                self._segment_signed_tool_call = False
                 if not summary and sig_str is None:
                     return ()
                 block: Final = ChatCompletionThinkingBlock(
@@ -223,6 +238,11 @@ class InteractionsChatStreamingIterator:
                 step_sig: Final = step_sig_raw if isinstance(step_sig_raw, str) and step_sig_raw else None
                 effective_sig: Final = step_sig or self._pending_thought_signature
                 self._pending_thought_signature = None
+                if effective_sig is not None:
+                    self._unsigned_tool_call = None
+                    self._segment_signed_tool_call = True
+                elif not self._segment_signed_tool_call and self._unsigned_tool_call is None:
+                    self._unsigned_tool_call = (slot, raw_id)
                 encoded_id: Final = encode_tool_call_id_with_signature(raw_id, effective_sig)
                 tc_chunk: Final = ChatCompletionToolCallChunk(
                     index=slot,
@@ -234,6 +254,11 @@ class InteractionsChatStreamingIterator:
                     ),
                 )
                 return (self._build_chunk(Delta(role="assistant", tool_calls=[tc_chunk])),)
+            case "function_result":
+                self._pending_thought_signature = None
+                self._unsigned_tool_call = None
+                self._segment_signed_tool_call = False
+                return ()
             case "model_output":
                 initial_text: Final = _text_from_blocks(raw_step.get("content"))
                 if not initial_text:
@@ -280,7 +305,6 @@ class InteractionsChatStreamingIterator:
                 sig_val: Final = raw_delta.get("signature")
                 if not isinstance(sig_val, str) or not sig_val:
                     return ()
-                self._pending_thought_signature = sig_val
                 sig_slot: Final = self._allocate_thought_slot(step_index)
                 sig_block: Final = ChatCompletionThinkingBlock(
                     type="thinking",
@@ -288,19 +312,30 @@ class InteractionsChatStreamingIterator:
                     signature=sig_val,
                     index=sig_slot,
                 )
-                return (self._build_chunk(Delta(thinking_blocks=[sig_block])),)
+                sig_chunk: Final = self._build_chunk(Delta(thinking_blocks=[sig_block]))
+                if self._unsigned_tool_call is not None:
+                    target_slot, target_raw_id = self._unsigned_tool_call
+                    self._unsigned_tool_call = None
+                    self._segment_signed_tool_call = True
+                    self._pending_thought_signature = None
+                    backfill_tc: Final = ChatCompletionToolCallChunk(
+                        index=target_slot,
+                        id=encode_tool_call_id_with_signature(target_raw_id, sig_val),
+                        type="function",
+                        function=ChatCompletionToolCallFunctionChunk(name=None, arguments=""),
+                    )
+                    return (sig_chunk, self._build_chunk(Delta(tool_calls=[backfill_tc])))
+                self._pending_thought_signature = sig_val
+                return (sig_chunk,)
             case "arguments_delta" | "arguments" | "function_call":
                 slot: Final = self._allocate_tool_slot(step_index)
                 arg_piece: Final = _arguments_delta_piece(raw_delta)
                 raw_name: Final = raw_delta.get("name")
                 raw_id: Final = raw_delta.get("id")
+                encoded_delta_id: Final = self._consume_delta_tool_call_id(slot, raw_id)
                 delta_tc: Final = ChatCompletionToolCallChunk(
                     index=slot,
-                    id=encode_tool_call_id_with_signature(
-                        raw_id, self._pending_thought_signature if slot == 0 else None
-                    )
-                    if isinstance(raw_id, str) and raw_id
-                    else None,
+                    id=encoded_delta_id,
                     type="function",
                     function=ChatCompletionToolCallFunctionChunk(
                         name=raw_name if isinstance(raw_name, str) and raw_name else None,

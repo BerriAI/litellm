@@ -396,3 +396,39 @@ def test_interleaved_distinct_thought_signatures_roundtrip_across_preserved_and_
         {"type": "function_result", "call_id": "call_a", "name": "bash", "result": [{"type": "text", "text": "a1\n"}]},
         {"type": "function_result", "call_id": "call_b", "name": "bash", "result": [{"type": "text", "text": "b1\n"}]},
     ]
+
+
+def test_multiturn_steps_do_not_leak_signature_across_function_result_or_unsigned_thought() -> None:
+    resp: Final = transform_interactions_response_to_chat_response(
+        raw_response={
+            "id": "v1_multiturn_noleak",
+            "status": "requires_action",
+            "steps": [
+                {"type": "thought", "signature": "sig_turn_1"},
+                {"type": "function_call", "id": "call_1", "name": "bash", "arguments": {"cmd": "ls"}},
+                {
+                    "type": "function_result",
+                    "call_id": "call_1",
+                    "name": "bash",
+                    "result": [{"type": "text", "text": "ok"}],
+                },
+                {"type": "thought", "summary": [{"type": "text", "text": "unsigned second thought"}]},
+                {"type": "function_call", "id": "call_2", "name": "bash", "arguments": {"cmd": "pwd"}},
+                {"type": "thought", "signature": "sig_unused_before_unsigned"},
+                {"type": "thought", "signature": ""},
+                {"type": "function_call", "id": "call_3", "name": "bash", "arguments": {"cmd": "whoami"}},
+            ],
+            "usage": {"total_input_tokens": 20, "total_output_tokens": 10, "total_tokens": 30},
+        },
+        model="gemini-4-argon",
+        model_response=ModelResponse(id="fallback"),
+    )
+    choice: Final = resp.choices[0]
+    assert isinstance(choice, Choices)
+    fn_calls: Final = [tc for tc in (choice.message.tool_calls or []) if isinstance(tc, ChatCompletionMessageToolCall)]
+    assert [tc.id for tc in fn_calls] == ["call_1__thought__sig_turn_1", "call_2", "call_3"]
+    assert [getattr(tc, "provider_specific_fields", None) for tc in fn_calls] == [
+        {"thought_signature": "sig_turn_1"},
+        None,
+        None,
+    ]
