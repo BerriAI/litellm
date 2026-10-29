@@ -130,13 +130,15 @@ def test_changed_file_targets_skip_paths_gone_from_the_working_tree(
     base: Final = _git(repo, "rev-parse", "HEAD")
     (repo / "litellm" / "kept.py").write_text("value = 2\n")
     (repo / "litellm" / "dropped.py").write_text("value = 3\n")
-    _commit(repo, "add two modules")
-    _git(repo, "rm", "-q", "litellm/dropped.py", "litellm/example.py")
     _git(repo, "mv", "litellm/renamed_away.py", "litellm/renamed_to.py")
     (repo / "litellm" / "renamed_to.py").write_text("a = 1\nb = 2\nc = 3\nd = 5\n")
+    _commit(repo, "add two modules and rename one")
+    _git(repo, "rm", "-q", "litellm/dropped.py", "litellm/example.py")
     checked: Final = _make(repo, target, "-o", "install-dev", f"BASE_REF={base}", "UV_RUN=echo")
     assert checked.returncode == 0, checked.stderr
     assert "litellm/kept.py" in checked.stdout
+    assert "litellm/renamed_to.py" in checked.stdout
+    assert "--range 0:" not in checked.stdout
     gone: Final = ("litellm/dropped.py", "litellm/example.py", "litellm/renamed_away.py")
     assert [path for path in gone if path in checked.stdout] == []
 

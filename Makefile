@@ -174,14 +174,11 @@ lint-ruff: $(LINT_DEP_INSTALL)
 # https://github.com/astral-sh/ruff/discussions/4049
 lint-format-changed: install-dev
 	@base_ref=$$($(RESOLVE_BASE)) && \
-	diff=$$(git diff "$$base_ref" --unified=0 --no-color --no-renames --diff-filter=d -- '*.py') && \
+	diff=$$(git diff "$$base_ref" --unified=0 --no-color --diff-filter=d -- '*.py') && \
 	printf '%s\n' "$$diff" | \
-	perl -ne '\
-		if (/^diff --git a\/(.*) b\//) { $$file = $$1; } \
-		if (/^@@ .* \+(\d+)(?:,(\d+))? @@/) { \
-			$$start = $$1; $$count = $$2 || 1; $$end = $$start + $$count - 1; \
-			print "$$file:$$start:1-$$end:999\n"; \
-		}' | \
+	perl -ne 'if (/^\+\+\+ b\/(.*)/) { $$file = $$1; }' \
+		-e 'if (/^@@ .* \+(\d+)(?:,(\d+))? @@/) { $$start = $$1; $$count = $$2 || 1; $$end = $$start + $$count - 1;' \
+		-e 'print "$$file:$$start:1-$$end:999\n"; }' | \
 		while read range; do \
 			file="$${range%%:*}"; \
 			lines="$${range#*:}"; \
