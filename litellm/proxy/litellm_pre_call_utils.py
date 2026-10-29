@@ -2432,7 +2432,12 @@ class LiteLLMProxyRequestSetup:
         )
         if slot == "metadata":
             return
-        caller_metadata: Final = request_data.get("metadata")
+        raw_caller_metadata: Final = request_data.get("metadata")
+        caller_metadata: Final = (
+            _DECODED_JSON.validate_python(safe_json_loads(raw_caller_metadata))
+            if isinstance(raw_caller_metadata, str)
+            else raw_caller_metadata
+        )
         caller_tags: Final = caller_metadata.get("tags") if isinstance(caller_metadata, dict) else None
         if not isinstance(caller_tags, list) or not caller_tags:
             return

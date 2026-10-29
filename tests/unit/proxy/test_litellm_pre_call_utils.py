@@ -11099,3 +11099,15 @@ def test_mapped_baggage_tags_keep_non_string_client_tags_as_sent():
     data: Final[dict[str, object]] = {"metadata": {"tags": [1, {"team": "x"}, "client-tag", "client-tag"]}}
     LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, data)
     assert data["metadata"]["tags"] == [1, {"team": "x"}, "client-tag", "client-tag", "tenant:a"]
+
+
+@pytest.mark.parametrize("caller_metadata", ({"tags": ["client-tag"]}, json.dumps({"tags": ["client-tag"]})))
+def test_caller_tags_reach_litellm_metadata_whether_metadata_is_a_dict_or_a_json_string(caller_metadata):
+    data: Final[dict[str, object]] = {
+        "input": "hi",
+        "metadata": caller_metadata,
+        "litellm_metadata": {"tags": ["key-tag"]},
+    }
+    LiteLLMProxyRequestSetup.merge_caller_body_tags(request_data=data)
+    assert set(data["litellm_metadata"]["tags"]) == {"key-tag", "client-tag"}
+    assert data["metadata"] == caller_metadata

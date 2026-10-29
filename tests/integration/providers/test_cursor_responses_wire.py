@@ -518,14 +518,17 @@ def test_cursor_messages_body_uses_chat_completions_wire(
         assert _REQUEST_TAG in list_value(row["request_tags"]), row
 
 
-@pytest.mark.parametrize("body_shape", ("messages", "input"))
+@pytest.mark.parametrize(
+    ("body_shape", "metadata_as_json_string"), (("messages", False), ("input", False), ("input", True))
+)
 def test_cursor_body_keeps_client_and_key_tags_and_enforces_the_client_tag_budget(
-    gateway: Gateway, body_shape: str
+    gateway: Gateway, body_shape: str, metadata_as_json_string: bool
 ) -> None:
     chat_id: Final = f"chat_cursor_{uuid.uuid4().hex}"
     response_id: Final = f"resp_cursor_tags_{uuid.uuid4().hex}"
     budget_tag: Final = f"cursor-tag-budget-{uuid.uuid4().hex}"
     key_tag: Final = f"cursor-key-tag-{uuid.uuid4().hex}"
+    client_metadata: Final = {"tags": [budget_tag]}
 
     def respond(request: Request) -> Reply:
         if request.method == "GET" and request.target == "/v1/models":
@@ -551,7 +554,7 @@ def test_cursor_body_keeps_client_and_key_tags_and_enforces_the_client_tag_budge
                 {
                     "model": model,
                     body_shape: [{"role": "user", "content": text}],
-                    "metadata": {"tags": [budget_tag]},
+                    "metadata": json.dumps(client_metadata) if metadata_as_json_string else client_metadata,
                 },
                 key=key,
             )
