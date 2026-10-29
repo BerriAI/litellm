@@ -468,6 +468,61 @@ async def test_mapped_error_carries_the_upstream_error_response(
     assert raised.value.response.headers["x-upstream-trace"] == "trace-7"
 
 
+_UPSTREAM_SERVER_ERROR_BODY: Final = (
+    '{"error":{"message":"The server had an error while processing your request.","type":"server_error",'
+    '"param":null,"code":null}}'
+)
+_CHUNKED_UPSTREAM_HEADERS: Final = {
+    "content-type": "application/json",
+    "transfer-encoding": "chunked",
+    "x-request-id": "req_upstream_5xx",
+}
+
+
+def _chunked_upstream_client(status_code: int) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                status_code,
+                headers=_CHUNKED_UPSTREAM_HEADERS,
+                stream=httpx.ByteStream(_UPSTREAM_SERVER_ERROR_BODY.encode()),
+            )
+        )
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ("openai", "litellm_proxy"))
+@pytest.mark.parametrize("stream", (False, True))
+@pytest.mark.parametrize(
+    ("status_code", "mapped_error"),
+    (
+        (429, litellm.RateLimitError),
+        (500, litellm.InternalServerError),
+        (502, litellm.BadGatewayError),
+        (503, litellm.ServiceUnavailableError),
+    ),
+)
+async def test_retryable_error_keeps_the_upstream_body_and_exactly_its_headers(
+    provider: str, stream: bool, status_code: int, mapped_error: type[Exception]
+) -> None:
+    client: Final = AsyncOpenAI(
+        api_key="transport-only",
+        base_url=_UPSTREAM_BASE,
+        max_retries=0,
+        http_client=_chunked_upstream_client(status_code),
+    )
+
+    with pytest.raises(mapped_error) as raised:
+        await litellm.acompletion(messages=_MESSAGES, client=client, stream=stream, **_upstream(provider, "gpt-5.6"))
+
+    error_response: Final = getattr(raised.value, "response")
+    assert error_response.status_code == status_code
+    assert error_response.text == _UPSTREAM_SERVER_ERROR_BODY
+    assert error_response.json() == json.loads(_UPSTREAM_SERVER_ERROR_BODY)
+    assert dict(error_response.headers) == _CHUNKED_UPSTREAM_HEADERS
+
+
 @pytest.mark.asyncio
 async def test_acompletion_streams_text_deltas_over_injected_transport(
     http_backend: ModuleType, sdk_provider: str, monkeypatch: pytest.MonkeyPatch
