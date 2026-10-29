@@ -26,7 +26,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     PermissionError,
 )
 from litellm.types.utils import (
+    ChatCompletionCustomToolCallPayload,
     ChatCompletionDeltaToolCall,
+    ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
     Choices,
     Delta,
@@ -1031,6 +1033,35 @@ class TestToolPermissionGuardrail:
         assert isinstance(choice.message.content, str)
         assert "Permission denied" in choice.message.content
 
+
+    def test_modify_response_with_permission_errors_keeps_custom_tool_call_in_another_choice(self):
+        denied_call = ChatCompletionMessageToolCall(
+            id="call_bash", type="function", function=Function(name="Bash", arguments="{}")
+        )
+        custom_call = ChatCompletionMessageCustomToolCall(
+            id="call_patch", custom=ChatCompletionCustomToolCallPayload(name="apply_patch", input="*** Begin Patch")
+        )
+        response = ModelResponse(
+            choices=[
+                Choices(index=0, message={"role": "assistant", "content": None, "tool_calls": [denied_call]}),
+                Choices(index=1, message={"role": "assistant", "content": None, "tool_calls": [custom_call]}),
+            ]
+        )
+        denied_tools = [
+            (
+                denied_call,
+                PermissionError(tool_name="Bash", rule_id="deny_bash", message="Tool 'Bash' denied by rule 'deny_bash'"),
+            )
+        ]
+
+        self.guardrail._modify_response_with_permission_errors(response, denied_tools)
+
+        kept = [
+            [call.id for call in choice.message.tool_calls or []]
+            for choice in response.choices
+            if isinstance(choice, Choices)
+        ]
+        assert kept == [[], ["call_patch"]]
 
 class TestToolPermissionGuardrailIntegration:
     """Integration tests for Tool Permission Guardrail"""

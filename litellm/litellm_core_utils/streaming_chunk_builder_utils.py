@@ -257,7 +257,7 @@ def apply_grounding_request_counts(
 
 
 class ChunkProcessor:
-    def __init__(self, chunks: list, messages: Sequence | None = None):
+    def __init__(self, chunks: list, messages: Sequence[object] | None = None):
         self.chunks = self._sort_chunks(chunks)
         self.messages = messages
         self.first_chunk = chunks[0]

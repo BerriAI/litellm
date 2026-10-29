@@ -36,6 +36,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
 )
 from litellm.types.utils import (
     CallTypesLiteral,
+    ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
     Choices,
     Function,
@@ -745,7 +746,11 @@ class ToolPermissionGuardrail(CustomGuardrail):
         return ToolResult(tool_use_id=tool_call.id, content=error_message, is_error=True)
 
     @staticmethod
-    def _judged_tool_call(tool_call: ChatCompletionMessageToolCall) -> tuple[str | None, ...]:
+    def _judged_tool_call(
+        tool_call: ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall,
+    ) -> tuple[str | None, ...]:
+        if isinstance(tool_call, ChatCompletionMessageCustomToolCall):
+            return (tool_call.id, tool_call.type, tool_call.custom.name, tool_call.custom.input)
         return (tool_call.id, tool_call.type, tool_call.function.name, tool_call.function.arguments)
 
     def _modify_response_with_permission_errors(
