@@ -18,6 +18,7 @@ import re
 import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from functools import partial
 from html import escape
 from types import MappingProxyType, TracebackType
@@ -1267,7 +1268,9 @@ def generic_response_convertor(
         if jwt_handler.litellm_jwtauth.team_id_upsert and team_id_jwt_field is not None
         else None
     )
-    team_id_to_upsert: Final = upsert_candidate if isinstance(upsert_candidate, str) else None
+    team_id_to_upsert: Final = (
+        upsert_candidate if isinstance(upsert_candidate, str) and upsert_candidate.strip() else None
+    )
     team_ids_with_upsert: Final = (
         all_teams if team_id_to_upsert is None or team_id_to_upsert in all_teams else [*all_teams, team_id_to_upsert]
     )
@@ -1820,11 +1823,18 @@ async def warn_if_id_jag_capture_gap(*, retention_enabled: RetentionCheck | None
     verbose_proxy_logger.warning("SSO debug callback ran with an oauth2_id_jag capture gap: %s", gap)
 
 
+@dataclass(frozen=True, slots=True)
+class _TeamJoinFailure:
+    team_id: str
+    error: Exception
+    team_does_not_exist: bool
+
+
 async def create_team_member_add_task(
     team_id: str,
     user_info: NewUserResponse | LiteLLM_UserTable,
     upsert_team: Callable[[str], Awaitable[object]] | None = None,
-) -> Exception | None:
+) -> _TeamJoinFailure | None:
     """Add the user to one team, creating it first when ``upsert_team`` is given. Returns the failure, if any."""
     upsert_error: Final = await _upsert_team_error(team_id, upsert_team)
     try:
@@ -1833,7 +1843,11 @@ async def create_team_member_add_task(
             user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
         )
     except Exception as e:
-        return e if upsert_error is None else upsert_error
+        return _TeamJoinFailure(
+            team_id=team_id,
+            error=e if upsert_error is None else upsert_error,
+            team_does_not_exist=upsert_team is None and _is_missing_team_error(e),
+        )
     return None
 
 
@@ -1880,8 +1894,8 @@ async def add_missing_team_member(
             for team_id in missing_teams
         )
     )
-    failures: Final = tuple((team_id, error) for team_id, error in zip(missing_teams, results) if error is not None)
-    skipped: Final = tuple(team_id for team_id, error in failures if _is_missing_team_error(error))
+    failures: Final = tuple(failure for failure in results if failure is not None)
+    skipped: Final = tuple(failure.team_id for failure in failures if failure.team_does_not_exist)
     if skipped:
         verbose_proxy_logger.info(
             "SSO login for user %s skipped %d team(s) that do not exist in the db: %s",
@@ -1889,10 +1903,10 @@ async def add_missing_team_member(
             len(skipped),
             ", ".join(skipped),
         )
-    for team_id, error in failures:
-        if not _is_missing_team_error(error):
+    for failure in failures:
+        if not failure.team_does_not_exist:
             verbose_proxy_logger.warning(
-                "SSO login could not add user %s to team %s: %s", user_info.user_id, team_id, error
+                "SSO login could not add user %s to team %s: %s", user_info.user_id, failure.team_id, failure.error
             )
 
 

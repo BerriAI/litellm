@@ -6599,7 +6599,7 @@ class TestAddMissingTeamMember:
         with patch(
             "litellm.proxy.management_endpoints.ui_sso.create_team_member_add_task"
         ) as mock_add_task:
-            mock_add_task.return_value = AsyncMock()
+            mock_add_task.return_value = None
 
             await add_missing_team_member(user_info=new_user, sso_teams=sso_teams)
 
@@ -6636,7 +6636,7 @@ class TestAddMissingTeamMember:
         with patch(
             "litellm.proxy.management_endpoints.ui_sso.create_team_member_add_task"
         ) as mock_add_task:
-            mock_add_task.return_value = AsyncMock()
+            mock_add_task.return_value = None
 
             await add_missing_team_member(user_info=existing_user, sso_teams=sso_teams)
 
@@ -10970,6 +10970,8 @@ def _upsert_jwt_handler(**jwtauth: object) -> JWTHandler:
         ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {"dept": "finance"}, ["finance"], "finance"),
         ({"team_id_jwt_field": "dept", "team_id_upsert": False}, {"dept": "finance"}, ["finance"], None),
         ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {}, [], None),
+        ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {"dept": ""}, [], None),
+        ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {"dept": "  "}, ["  "], None),
         ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {"dept": ["a", "b"]}, ["a", "b"], None),
         (
             {"team_id_jwt_field": "dept", "team_id_upsert": True, "team_id_default": "everyone"},
@@ -10994,6 +10996,8 @@ def _upsert_jwt_handler(**jwtauth: object) -> JWTHandler:
         "upsert-on",
         "upsert-off",
         "claim-missing",
+        "blank-claim-not-upserted",
+        "whitespace-claim-not-upserted",
         "list-valued-claim-join-only",
         "default-team-not-upserted",
         "plural-claim-join-only",
@@ -11061,16 +11065,20 @@ async def test_sso_login_creates_only_the_upsert_team_and_does_so_before_joining
 async def test_sso_login_still_joins_the_team_when_a_concurrent_login_created_it_first() -> None:
     from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
 
+    joined: Final[list[str]] = []  # mutable-ok: records the joins the proxy would persist
+
     async def lost_the_create_race(team_id: str) -> object:
         raise HTTPException(status_code=400, detail={"error": f"Team id = {team_id} already exists"})
 
-    member_add: Final = AsyncMock(return_value=None)
+    async def member_add(data: TeamMemberAddRequest, user_api_key_dict: UserAPIKeyAuth) -> None:
+        joined.append(data.team_id)
+
     user: Final = NewUserResponse(user_id="alice", key="sk-x", teams=None)
 
     with patch("litellm.proxy.management_endpoints.ui_sso.team_member_add", member_add):
         await add_missing_team_member(user, ["finance"], team_id_to_upsert="finance", upsert_team=lost_the_create_race)
 
-    assert [call.kwargs["data"].team_id for call in member_add.call_args_list] == ["finance"]
+    assert joined == ["finance"]
 
 
 @pytest.mark.asyncio
@@ -11093,6 +11101,37 @@ async def test_sso_login_logs_skipped_idp_groups_once_per_login_and_not_as_warni
     assert [r.levelno for r in skip_lines] == [logging.INFO]
     assert all(team in skip_lines[0].getMessage() for team in ("idp-group-a", "idp-group-b", "idp-group-c"))
     assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "create_error",
+    [
+        HTTPException(status_code=403, detail={"error": "team limit reached for this license"}),
+        HTTPException(status_code=404, detail={"error": "Team doesn't exist in db. Team=finance"}),
+    ],
+)
+async def test_sso_login_warns_when_creating_the_team_fails_instead_of_calling_it_missing(
+    caplog: pytest.LogCaptureFixture, create_error: HTTPException
+) -> None:
+    from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+    async def failed_create(team_id: str) -> object:
+        raise create_error
+
+    user: Final = NewUserResponse(user_id="alice", key="sk-x", teams=None)
+    with (
+        caplog.at_level(logging.INFO, logger=verbose_proxy_logger.name),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.team_member_add",
+            AsyncMock(side_effect=TeamNotFoundError(team_id="finance")),
+        ),
+    ):
+        await add_missing_team_member(user, ["finance"], team_id_to_upsert="finance", upsert_team=failed_create)
+
+    warnings: Final = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1 and "finance" in warnings[0] and str(create_error.detail) in warnings[0]
+    assert [r for r in caplog.records if "skipped" in r.getMessage()] == []
 
 
 @pytest.mark.asyncio
