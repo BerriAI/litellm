@@ -1799,8 +1799,8 @@ def tools_without_strict(tools: object) -> ToolsWithoutStrict | None:
 
 def warn_claude_strict_tools_dropped(dropped_count: int) -> None:
     litellm.verbose_logger.warning(
-        "Claude rejected the request's strict schemas, so litellm dropped `strict` from %d tools and sent the "
-        "request again because drop_params is set.",
+        "Claude rejected the request's strict schemas, so litellm removed `strict` from every tool (%d had "
+        "strict true) and sent the request again because drop_params is set.",
         dropped_count,
     )
 

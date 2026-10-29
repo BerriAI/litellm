@@ -486,8 +486,6 @@ STRICT_TOOL: Final = {"name": "a", "input_schema": {"type": "object"}, "strict":
             {"stream": True},
             {"include_cost_in_streaming_usage": True},
         ),
-        (Feature.STRICT_TOOLS_RETRY, "anthropic/claude-sonnet-4-5", {"drop_params": True, "tools": [STRICT_TOOL]}, {}),
-        (Feature.STRICT_TOOLS_RETRY, "anthropic/claude-sonnet-4-5", {"tools": [STRICT_TOOL]}, {"drop_params": True}),
     ),
 )
 def test_each_detected_feature_reaches_its_rule(
@@ -530,6 +528,7 @@ def test_each_detected_feature_reaches_its_rule(
     assert served(kwargs) is python_result
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "kwargs",
     (
@@ -540,7 +539,7 @@ def test_each_detected_feature_reaches_its_rule(
         ),
     ),
 )
-def test_strict_tools_stay_native_unless_python_could_drop_strict(
+async def test_strict_tools_stay_native_unless_python_could_drop_strict(
     monkeypatch: pytest.MonkeyPatch, kwargs: Mapping[str, object]
 ) -> None:
     rules: Final[Rules] = (
@@ -550,11 +549,17 @@ def test_strict_tools_stay_native_unless_python_could_drop_strict(
     native_result: Final = response()
     monkeypatch.setattr(litellm, "drop_params", False)
 
-    served: Final = _DISPATCH.run(
+    async def python(*call_args: object, **python_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: stub
+        pytest.fail("Python cannot drop strict here")
+
+    async def native(request: NativeCall) -> AnthropicMessagesResponse:
+        return native_result
+
+    served: Final = await _ADISPATCH.arun(
         (16, MESSAGES, "anthropic/claude-sonnet-4-5"),
         kwargs,
-        python=lambda *call_args, **python_kwargs: pytest.fail("Python cannot drop strict here"),
-        binding=messages_binding(lambda request: native_result),
+        python=python,
+        binding=amessages_binding(native),
         native=lambda hook, request, call_args, native_kwargs: hook(request),
         rules=rules,
     )
@@ -572,6 +577,12 @@ ASYNC_ONLY_FEATURES: Final = (
         {"model": "deepseek/deepseek-v4-flash", "tools": [ADVISOR_TOOL]},
         {},
         id="messages-interceptor",
+    ),
+    pytest.param(
+        Feature.STRICT_TOOLS_RETRY, {"drop_params": True, "tools": [STRICT_TOOL]}, {}, id="strict-tools-retry"
+    ),
+    pytest.param(
+        Feature.STRICT_TOOLS_RETRY, {"tools": [STRICT_TOOL]}, {"drop_params": True}, id="strict-tools-retry-global"
     ),
 )
 
