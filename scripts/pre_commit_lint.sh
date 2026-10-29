@@ -18,7 +18,9 @@
 #                      -> ruff over ruff-tests.toml + `make lint-test-quality` (test-linting.yml's
 #                         test-tree ruff and test-quality gate steps)
 #   - dashboard        -> prettier + eslint + lint budgets (test-linting.yml's ui job)
-#   - proxy/types      -> regenerate the lazy OpenAPI snapshot and dashboard API types, fail on drift (test-linting.yml's ui-api-types job)
+#   - litellm/, enterprise/, pyproject.toml, uv.lock, the generator and its lockfiles
+#                      -> regenerate the lazy OpenAPI snapshot and dashboard API types, fail on drift
+#                         (test-linting.yml's ui-api-types job)
 #
 # Each block is skipped when no matching files are in scope, so unrelated commits
 # stay fast. This is intentionally not auto-installed as a git hook (see
