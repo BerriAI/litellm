@@ -11,10 +11,10 @@ DELETE /fallback/{model} - Delete fallbacks for a specific model
 # pyright: reportMissingImports=false
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Annotated, Final, Literal
 
-from pydantic import Field, TypeAdapter
+from pydantic import Field, JsonValue, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -47,6 +47,7 @@ ROUTER_SETTINGS_PARAM: Final = "router_settings"
 FallbackRule = dict[str, list[str]]
 StoredFallback = Annotated[FallbackRule | dict[str, object] | str, Field(union_mode="left_to_right")]
 _STORED_FALLBACKS: Final = TypeAdapter(list[StoredFallback])
+_JSON_RULES: Final = TypeAdapter(list[JsonValue])
 
 
 def _rule_covers(entry: StoredFallback, model: str) -> bool:
@@ -57,6 +58,12 @@ async def _router_settings_fresh_from_db(proxy_config: "ProxyConfig") -> dict[st
     await evict_config_param(ROUTER_SETTINGS_PARAM)
     config: Final = await proxy_config.get_config()
     return config.get(ROUTER_SETTINGS_PARAM, {})
+
+
+def _reject_config_owned_rules(proxy_config: "ProxyConfig", fallback_key: str, rules: Sequence[StoredFallback]) -> None:
+    proxy_config.reject_config_owned_writes(
+        section_name=ROUTER_SETTINGS_PARAM, changed_keys={fallback_key: _JSON_RULES.validate_python(rules)}
+    )
 
 
 async def _persist_router_settings(prisma_client: PrismaClient, router_settings: Mapping[str, object]) -> None:
@@ -179,6 +186,8 @@ async def create_fallback(
         if not fallback_updated:
             # Add new fallback
             existing_fallbacks.append({data.model: data.fallback_models})
+
+        _reject_config_owned_rules(proxy_config, fallback_key, existing_fallbacks)
 
         # Update router settings
         router_settings[fallback_key] = existing_fallbacks
@@ -323,20 +332,15 @@ async def delete_fallback(
         # Get existing fallbacks
         existing_fallbacks: Final = _STORED_FALLBACKS.validate_python(router_settings.get(fallback_key) or [])
 
-        # Find and remove the fallback configuration
-        fallback_found = False
-        updated_fallbacks: Final = []
-        for rule in existing_fallbacks:
-            if not _rule_covers(rule, model):
-                updated_fallbacks.append(rule)
-            else:
-                fallback_found = True
+        updated_fallbacks: Final = [rule for rule in existing_fallbacks if not _rule_covers(rule, model)]
 
-        if not fallback_found:
+        if len(updated_fallbacks) == len(existing_fallbacks):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"No {fallback_type} fallbacks configured for model '{model}'"},
             )
+
+        _reject_config_owned_rules(proxy_config, fallback_key, updated_fallbacks)
 
         # Update router settings
         router_settings[fallback_key] = updated_fallbacks

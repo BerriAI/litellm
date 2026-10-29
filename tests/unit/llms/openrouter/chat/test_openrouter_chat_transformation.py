@@ -1,8 +1,13 @@
 
+import json
+from typing import Final
+
 import httpx
 import pytest
+import respx
 
-
+import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openrouter.chat.transformation import (
     OpenRouterChatCompletionStreamingHandler,
@@ -620,3 +625,221 @@ def test_openrouter_reasoning_effort_high_passes_through():
     )
 
     assert result["reasoning_effort"] == "high"
+
+
+OPENROUTER_COST_HEADER = "llm_provider-x-litellm-response-cost"
+
+
+def _complete_with_openrouter_usage(usage):
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "gen-1",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "openai/gpt-4o",
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}],
+                "usage": usage,
+            },
+        )
+
+    return litellm.completion(
+        model="openrouter/openai/gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="sk-test",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+    )
+
+
+@pytest.mark.parametrize(
+    ("cost", "expected"),
+    [
+        pytest.param(0.00015, 0.00015, id="float"),
+        pytest.param(3, 3.0, id="int"),
+        pytest.param(0, 0.0, id="zero"),
+        pytest.param("0.5", 0.5, id="numeric-string"),
+        pytest.param(" 1.5 ", 1.5, id="padded-numeric-string"),
+        pytest.param(True, 1.0, id="bool"),
+    ],
+)
+def test_openrouter_completion_stores_usage_cost_as_float_cost_header(cost, expected):
+    response = _complete_with_openrouter_usage(
+        {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "cost": cost, "is_byok": False}
+    )
+
+    stored = response._hidden_params["additional_headers"][OPENROUTER_COST_HEADER]
+    assert type(stored) is float
+    assert stored == expected
+    assert response._hidden_params["response_cost"] == expected
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        pytest.param({"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}, id="cost-missing"),
+        pytest.param({"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "cost": None}, id="cost-null"),
+        pytest.param({"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "cost": "abc"}, id="cost-text"),
+        pytest.param({"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "cost": [1]}, id="cost-list"),
+        pytest.param(
+            {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "cost": {"upstream": 1.0}},
+            id="cost-object",
+        ),
+        pytest.param({}, id="usage-empty"),
+        pytest.param(None, id="usage-null"),
+    ],
+)
+def test_openrouter_completion_without_usable_cost_returns_response_without_cost_header(usage):
+    response = _complete_with_openrouter_usage(usage)
+
+    assert response.choices[0].message.content == "hi"
+    assert OPENROUTER_COST_HEADER not in response._hidden_params["additional_headers"]
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        pytest.param([{"cost": 1.0}], id="usage-list"),
+        pytest.param("cost", id="usage-text"),
+        pytest.param(5, id="usage-number"),
+    ],
+)
+def test_openrouter_completion_with_non_object_usage_raises_api_connection_error(usage):
+    with pytest.raises(litellm.APIConnectionError):
+        _complete_with_openrouter_usage(usage)
+
+
+@respx.mock
+def test_openrouter_streaming_completion_assembles_text_and_finish_reason() -> None:
+    chunks: Final = (
+        {
+            "id": "gen-stream-model",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "openai/gpt-4o-mini",
+            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+        },
+        {
+            "id": "gen-stream-model",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "openai/gpt-4o-mini",
+            "choices": [{"index": 0, "delta": {"content": "The Supreme Court"}, "finish_reason": None}],
+        },
+        {
+            "id": "gen-stream-model",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "openai/gpt-4o-mini",
+            "choices": [{"index": 0, "delta": {"content": " hears federal cases."}, "finish_reason": None}],
+        },
+        {
+            "id": "gen-stream-model",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "openai/gpt-4o-mini",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        },
+    )
+    body: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+    respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            text=body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    messages: Final = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "How does a case reach the Supreme Court?"},
+    ]
+    stream: Final = litellm.completion(
+        model="openrouter/openai/gpt-4o-mini",
+        messages=messages,
+        stream=True,
+        max_tokens=50,
+        api_key="test-openrouter-key",
+    )
+    stream_chunks: Final = tuple(stream)
+    assert stream_chunks[0].choices[0].delta.role == "assistant"
+    assert tuple(
+        chunk.choices[0].finish_reason for chunk in stream_chunks if chunk.choices[0].finish_reason is not None
+    ) == ("stop",)
+    assert "".join(
+        chunk.choices[0].delta.content or "" for chunk in stream_chunks if chunk.choices
+    ) == "The Supreme Court hears federal cases."
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(stream_chunks), messages=messages)
+    assert assembled is not None
+    assert assembled.choices[0].message.content == "The Supreme Court hears federal cases."
+    assert assembled.choices[0].finish_reason == "stop"
+
+
+@respx.mock
+def test_openrouter_streaming_reasoning_is_preserved() -> None:
+    chunks: Final = (
+        {
+            "id": "gen-reasoning-stream",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "anthropic/claude-sonnet-4.5",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "reasoning": "Consider the evidence. "},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "gen-reasoning-stream",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "anthropic/claude-sonnet-4.5",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "The decision is reasoned.", "reasoning": "Apply the rule."},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "gen-reasoning-stream",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "anthropic/claude-sonnet-4.5",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        },
+    )
+    body: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+    route: Final = respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            text=body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    parsed_reasoning_chunk: Final = OpenRouterChatCompletionStreamingHandler(
+        streaming_response=None, sync_stream=True
+    ).chunk_parser(chunks[0])
+    assert parsed_reasoning_chunk.choices[0]["delta"]["reasoning_content"] == "Consider the evidence. "
+    messages: Final = [{"role": "user", "content": "Explain the decision briefly."}]
+    stream: Final = litellm.completion(
+        model="openrouter/anthropic/claude-sonnet-4.5",
+        messages=messages,
+        stream=True,
+        reasoning={"effort": "high"},
+        drop_params=True,
+        api_key="test-openrouter-key",
+    )
+    stream_chunks: Final = tuple(stream)
+    assert json.loads(route.calls.last.request.content)["reasoning"] == {"effort": "high"}
+    reasoning_deltas: Final = tuple(
+        getattr(chunk.choices[0].delta, "reasoning_content", None)
+        for chunk in stream_chunks
+        if chunk.choices
+    )
+    assert reasoning_deltas == ("Consider the evidence. ", "Apply the rule.", None)
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(stream_chunks), messages=messages)
+    assert assembled is not None
+    assert assembled.choices[0].message.reasoning_content == "Consider the evidence. Apply the rule."

@@ -26,6 +26,7 @@ from litellm.integrations.websearch_interception.tools import (
     get_litellm_web_search_tool_openai,
     get_litellm_web_search_tool_responses,
     is_anthropic_native_web_search_tool,
+    is_chat_completion_request_web_search_tool,
     is_web_search_tool,
     is_web_search_tool_chat_completion,
     is_web_search_tool_responses,
@@ -77,10 +78,10 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.anthropic_messages.transformation import (
         BaseAnthropicMessagesConfig,
     )
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.anthropic_messages.anthropic_response import (
         AnthropicMessagesResponse,
     )
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.types.utils import ModelResponse
     from litellm.utils import CustomStreamWrapper
 
@@ -95,6 +96,8 @@ WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: Final = "_websearch_interception_emit_native_b
 WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY: Final = "websearch_native_blocks"
 
 _RESPONSE_CONTENT_FIELD: Final = "content"
+
+_CLAUDE_CODE_WEB_SEARCH_PROMPT_PREFIX: Final = "Perform a web search for the query:"
 
 _ResponseT: Final = TypeVar("_ResponseT")
 
@@ -362,7 +365,8 @@ class WebSearchInterceptionLogger(CustomLogger):
             get_last_user_message,
         )
 
-        query: Final = get_last_user_message(cast(list[AllMessageValues], messages))
+        last_user_message: Final = get_last_user_message(cast(list[AllMessageValues], messages)) or ""
+        query: Final = last_user_message.removeprefix(_CLAUDE_CODE_WEB_SEARCH_PROMPT_PREFIX).strip()
         if not query:
             return None
 
@@ -457,7 +461,10 @@ class WebSearchInterceptionLogger(CustomLogger):
         if call_type in (CallTypes.responses, CallTypes.aresponses):
             return self._convert_responses_tools(kwargs=kwargs, tools=tools)
 
-        has_websearch: Final = any(is_web_search_tool(t) for t in tools)
+        is_search_tool: Final = (
+            is_chat_completion_request_web_search_tool if call_type == CallTypes.acompletion else is_web_search_tool
+        )
+        has_websearch: Final = any(is_search_tool(t) for t in tools)
 
         if not has_websearch:
             return None
@@ -475,7 +482,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         # Convert native/custom web_search tools to LiteLLM standard
         converted_tools: Final = []
         for tool in tools:
-            if is_web_search_tool(tool):
+            if is_search_tool(tool):
                 # Convert to LiteLLM standard web search tool
                 converted_tool = get_litellm_web_search_tool_openai()
                 converted_tools.append(converted_tool)

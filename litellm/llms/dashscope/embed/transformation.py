@@ -14,8 +14,11 @@ Docs - https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.secret_managers.main import get_secret_str
@@ -25,6 +28,23 @@ from litellm.types.utils import EmbeddingResponse, Usage
 from ..common_utils import DashScopeError
 
 DEFAULT_API_BASE: Final = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _DashScopeUsage(TypedDict, total=False):
+    prompt_tokens: NotRequired[ReadOnly[int]]
+    total_tokens: NotRequired[ReadOnly[int]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _DashScopeEmbeddingResponse(TypedDict, total=False):
+    data: NotRequired[ReadOnly[list[object]]]
+    model: NotRequired[ReadOnly[str | None]]
+    usage: NotRequired[ReadOnly[_DashScopeUsage | None]]
+    id: NotRequired[ReadOnly[object]]
+
+
+_DASHSCOPE_EMBEDDING_RESPONSE: Final = TypeAdapter(_DashScopeEmbeddingResponse)
 
 
 class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
@@ -98,10 +118,7 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        base: Final = self._resolve_embedding_api_base(api_base).rstrip("/")
-        if base.endswith("/embeddings"):
-            return base
-        return f"{base}/embeddings"
+        return ensure_api_route(self._resolve_embedding_api_base(api_base), "embeddings")
 
     def transform_embedding_request(
         self,
@@ -147,18 +164,19 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         )
 
         if "error" in response_json:
-            error: Final = response_json["error"]
+            error: Final[object] = response_json["error"]
             message: Final = error.get("message", str(error)) if isinstance(error, dict) else str(error)
             raise DashScopeError(
                 status_code=raw_response.status_code,
                 message=message,
             )
 
+        parsed_response: Final = _DASHSCOPE_EMBEDDING_RESPONSE.validate_python(response_json)
         model_response.object = "list"
-        model_response.data = response_json.get("data", [])
-        model_response.model = response_json.get("model", model)
+        model_response.data = parsed_response.get("data", [])
+        model_response.model = parsed_response.get("model", model)
 
-        usage: Final = response_json.get("usage") or {}
+        usage: Final = parsed_response.get("usage") or {}
         prompt_tokens: Final = usage.get("prompt_tokens", 0)
         total_tokens: Final = usage.get("total_tokens", prompt_tokens)
         setattr(
@@ -171,8 +189,8 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
             ),
         )
 
-        if "id" in response_json:
-            setattr(model_response, "id", response_json["id"])
+        if "id" in parsed_response:
+            setattr(model_response, "id", parsed_response["id"])
 
         return model_response
 

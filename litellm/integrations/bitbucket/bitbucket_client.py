@@ -47,6 +47,10 @@ def _sanitize_file_path(file_path: str) -> str:
     return "/".join(urllib.parse.quote(part, safe="") for part in parts)
 
 
+def _content_type(headers: Mapping[str, str]) -> str:
+    return headers.get("content-type", "")
+
+
 class BitBucketClient:
     """
     Client for interacting with BitBucket API to fetch .prompt files.
@@ -119,7 +123,7 @@ class BitBucketClient:
             response.raise_for_status()
 
             # BitBucket returns file content as base64 encoded
-            if response.headers.get("content-type", "").startswith("text/"):
+            if _content_type(response.headers).startswith("text/"):
                 return response.text
             else:
                 # For binary files or when content-type is not text, try to decode as base64

@@ -24,7 +24,7 @@ from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.cli_token_utils import CLI_TOKEN_FRESHNESS_BUFFER_SECONDS
-from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from .auth import CliTokenData

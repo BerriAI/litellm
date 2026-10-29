@@ -1,0 +1,441 @@
+suite: ingress component hosts
+templates:
+  - ingress.yaml
+  - backend/deployment.yaml
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+  - ui/deployment.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: routes each hostname to its component and injects the external URLs
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.componentHosts.ui: ui.example.com
+      ingress.componentHosts.backend: backend.example.com
+      ingress.componentHosts.gateway: gateway.example.com
+      lensWorker.mode: disabled
+      ingress.tls:
+        - hosts:
+            - ui.example.com
+            - backend.example.com
+            - gateway.example.com
+          secretName: component-hosts
+      ui.backendUrl: https://backend.example.com
+      ui.publicUrl: https://ui.example.com
+      backend.gatewayUrl: https://gateway.example.com
+    asserts:
+      - equal:
+          path: spec.rules[0].host
+          value: ui.example.com
+      - equal:
+          path: spec.tls[0]
+          value:
+            hosts:
+              - ui.example.com
+              - backend.example.com
+              - gateway.example.com
+            secretName: component-hosts
+      - equal:
+          path: spec.rules[0].http.paths
+          value:
+            - path: /
+              pathType: Prefix
+              backend:
+                service:
+                  name: RELEASE-NAME-litellm-ui
+                  port:
+                    number: 3000
+      - equal:
+          path: spec.rules[1].host
+          value: backend.example.com
+      - equal:
+          path: spec.rules[1].http.paths
+          value:
+            - path: /
+              pathType: Prefix
+              backend:
+                service:
+                  name: RELEASE-NAME-litellm-backend
+                  port:
+                    number: 4001
+      - equal:
+          path: spec.rules[2].host
+          value: gateway.example.com
+      - equal:
+          path: spec.rules[2].http.paths
+          value:
+            - path: /
+              pathType: Prefix
+              backend:
+                service:
+                  name: RELEASE-NAME-litellm-gateway
+                  port:
+                    number: 4000
+
+  - it: keeps Lens ingestion ahead of the gateway catch-all
+    set:
+      ingress.enabled: true
+      ingress.componentHosts.ui: ui.example.com
+      ingress.componentHosts.backend: backend.example.com
+      ingress.componentHosts.gateway: gateway.example.com
+      ui.backendUrl: https://backend.example.com
+      ui.publicUrl: https://ui.example.com
+      backend.gatewayUrl: https://gateway.example.com
+      lensWorker.mode: external
+      lensWorker.externalServiceName: existing-lens
+      lensWorker.externalUrl: https://lens.example.com
+      lensWorker.publicUrl: https://lens.example.com
+      lensWorker.serviceTokenSecret.name: existing-lens-signing
+      lensWorker.gateway.secretName: existing-lens-signing
+    asserts:
+      - equal:
+          path: spec.rules[2].http.paths[0].path
+          value: /lens-ingest
+      - equal:
+          path: spec.rules[2].http.paths[0].backend.service.name
+          value: existing-lens
+      - equal:
+          path: spec.rules[2].http.paths[1].path
+          value: /
+    template: ingress.yaml
+
+  - it: rejects a partial component host configuration
+    set:
+      ingress.enabled: true
+      ingress.componentHosts.ui: ui.example.com
+    asserts:
+      - failedTemplate:
+          errorMessage: ingress.componentHosts.ui, backend, and gateway must all be set together
+    template: ingress.yaml
+
+  - it: rejects component hosts when the gateway is disabled
+    set:
+      ingress.enabled: true
+      ingress.componentHosts.ui: ui.example.com
+      ingress.componentHosts.backend: backend.example.com
+      ingress.componentHosts.gateway: gateway.example.com
+      ui.backendUrl: https://backend.example.com
+      ui.publicUrl: https://ui.example.com
+      backend.gatewayUrl: https://gateway.example.com
+      gateway.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: ingress.componentHosts requires gateway.enabled=true
+    template: ingress.yaml
+
+  - it: rejects component hosts when the backend is disabled
+    set:
+      ingress.enabled: true
+      ingress.componentHosts.ui: ui.example.com
+      ingress.componentHosts.backend: backend.example.com
+      ingress.componentHosts.gateway: gateway.example.com
+      ui.backendUrl: https://backend.example.com
+      ui.publicUrl: https://ui.example.com
+      backend.gatewayUrl: https://gateway.example.com
+      backend.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: ingress.componentHosts requires backend.enabled=true
+    template: ingress.yaml
+
+  - it: rejects component hosts when the UI is disabled
+    set:
+      ingress.enabled: true
+      ingress.componentHosts.ui: ui.example.com
+      ingress.componentHosts.backend: backend.example.com
+      ingress.componentHosts.gateway: gateway.example.com
+      ui.backendUrl: https://backend.example.com
+      ui.publicUrl: https://ui.example.com
+      backend.gatewayUrl: https://gateway.example.com
+      ui.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: ingress.componentHosts requires ui.enabled=true
+    template: ingress.yaml
+
+  - it: rejects a legacy host alongside component hosts
+    set:
+      ingress.enabled: true
+      ingress.host: legacy.example.com
+      ingress.componentHosts.ui: ui.example.com
+      ingress.componentHosts.backend: backend.example.com
+      ingress.componentHosts.gateway: gateway.example.com
+    asserts:
+      - failedTemplate:
+          errorMessage: ingress.host must be empty when ingress.componentHosts is configured
+    template: ingress.yaml
+
+  - it: rejects extra paths alongside component hosts
+    set:
+      ingress.enabled: true
+      ingress.componentHosts.ui: ui.example.com
+      ingress.componentHosts.backend: backend.example.com
+      ingress.componentHosts.gateway: gateway.example.com
+      ingress.extraPaths:
+        - path: /custom
+    asserts:
+      - failedTemplate:
+          errorMessage: ingress.extraPaths must be empty when ingress.componentHosts is configured
+    template: ingress.yaml
+
+  - it: requires the UI backend URL in component host mode
+    set:
+      ingress.enabled: true
+      ingress.componentHosts.ui: ui.example.com
+      ingress.componentHosts.backend: backend.example.com
+      ingress.componentHosts.gateway: gateway.example.com
+      ui.publicUrl: https://ui.example.com
+      backend.gatewayUrl: https://gateway.example.com
+    asserts:
+      - failedTemplate:
+          errorMessage: ui.backendUrl is required when ingress.componentHosts is configured
+    template: ingress.yaml
+
+  - it: requires the backend gateway URL in component host mode
+    set:
+      ingress.enabled: true
+      ingress.componentHosts.ui: ui.example.com
+      ingress.componentHosts.backend: backend.example.com
+      ingress.componentHosts.gateway: gateway.example.com
+      ui.backendUrl: https://backend.example.com
+    asserts:
+      - failedTemplate:
+          errorMessage: backend.gatewayUrl is required when ingress.componentHosts is configured
+    template: ingress.yaml
+
+  - it: requires the public UI origin in component host mode
+    set:
+      ingress.enabled: true
+      ingress.componentHosts.ui: ui.example.com
+      ingress.componentHosts.backend: backend.example.com
+      ingress.componentHosts.gateway: gateway.example.com
+      ui.backendUrl: https://backend.example.com
+      backend.gatewayUrl: https://gateway.example.com
+    asserts:
+      - failedTemplate:
+          errorMessage: ui.publicUrl is required when ingress.componentHosts is configured
+    template: ingress.yaml
+
+  - it: exposes the gateway URL in the backend Deployment
+    set:
+      ingress.enabled: true
+      ingress.componentHosts.ui: ui.example.com
+      ingress.componentHosts.backend: backend.example.com
+      ingress.componentHosts.gateway: gateway.example.com
+      ui.backendUrl: https://backend.example.com
+      ui.publicUrl: https://ui.example.com
+      backend.gatewayUrl: "  https://gateway.example.com/  "
+    template: backend/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_GATEWAY_URL
+            value: https://gateway.example.com
+
+  - it: preserves the backend gateway URL verbatim in single-host mode
+    set:
+      ingress.enabled: true
+      ingress.host: litellm.example.com
+      backend.gatewayUrl: "  https://gateway.example.com/api/  "
+    template: backend/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_GATEWAY_URL
+            value: "  https://gateway.example.com/api/  "
+
+  - it: exposes the backend URL in the UI Deployment
+    set:
+      ingress.enabled: true
+      ingress.componentHosts.ui: ui.example.com
+      ingress.componentHosts.backend: backend.example.com
+      ingress.componentHosts.gateway: gateway.example.com
+      ui.backendUrl: "  https://backend.example.com/  "
+      ui.publicUrl: https://ui.example.com
+      backend.gatewayUrl: https://gateway.example.com
+    template: ui/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BACKEND_URL
+            value: https://backend.example.com
+
+  - it: omits the backend URL from the UI Deployment in single-host mode
+    set:
+      ingress.enabled: true
+      ingress.host: litellm.example.com
+      ui.backendUrl: https://litellm.example.com/api
+    template: ui/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BACKEND_URL
+          any: true
+
+  - it: enables credentialed CORS from the public UI origin on the backend
+    set:
+      ui.publicUrl: https://ui.example.com
+    template: backend/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_CORS_ORIGINS
+            value: https://ui.example.com
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_CORS_ALLOW_CREDENTIALS
+            value: "true"
+
+  - it: lets backend extraEnv override generated CORS values
+    set:
+      ui.publicUrl: https://ui.example.com
+      backend.extraEnv:
+        - name: LITELLM_CORS_ORIGINS
+          value: https://backend-override.example.com
+        - name: LITELLM_CORS_ALLOW_CREDENTIALS
+          value: "false"
+    template: backend/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[0].name
+          value: LITELLM_CORS_ORIGINS
+      - equal:
+          path: spec.template.spec.containers[0].env[0].value
+          value: https://ui.example.com
+      - equal:
+          path: spec.template.spec.containers[0].env[1].name
+          value: LITELLM_CORS_ALLOW_CREDENTIALS
+      - equal:
+          path: spec.template.spec.containers[0].env[1].value
+          value: "true"
+      - equal:
+          path: spec.template.spec.containers[0].env[10].name
+          value: LITELLM_CORS_ORIGINS
+      - equal:
+          path: spec.template.spec.containers[0].env[10].value
+          value: https://backend-override.example.com
+      - equal:
+          path: spec.template.spec.containers[0].env[11].name
+          value: LITELLM_CORS_ALLOW_CREDENTIALS
+      - equal:
+          path: spec.template.spec.containers[0].env[11].value
+          value: "false"
+
+  - it: exposes the public UI origin to the gateway without enabling credentials
+    set:
+      ui.publicUrl: https://ui.example.com
+    template: gateway/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_CORS_ORIGINS
+            value: https://ui.example.com
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_CORS_ALLOW_CREDENTIALS
+            value: "true"
+
+  - it: trims the public UI origin before setting backend CORS
+    set:
+      ui.publicUrl: " https://ui.example.com/ "
+    template: backend/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_CORS_ORIGINS
+            value: https://ui.example.com
+
+  - it: trims the public UI origin before setting gateway CORS
+    set:
+      ui.publicUrl: " https://ui.example.com/ "
+    template: gateway/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_CORS_ORIGINS
+            value: https://ui.example.com
+
+  - it: rejects a UI public URL with a path
+    set:
+      ui.publicUrl: https://ui.example.com/app
+    template: gateway/deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: ui.publicUrl must be an origin like https://ui.example.com, without a path
+
+  - it: lets gateway extraEnv override the generated CORS origin
+    set:
+      ui.publicUrl: https://ui.example.com
+      gateway.extraEnv:
+        - name: LITELLM_CORS_ORIGINS
+          value: https://gateway-override.example.com
+    template: gateway/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[0].name
+          value: LITELLM_CORS_ORIGINS
+      - equal:
+          path: spec.template.spec.containers[0].env[0].value
+          value: https://ui.example.com
+      - equal:
+          path: spec.template.spec.containers[0].env[9].name
+          value: LITELLM_CORS_ORIGINS
+      - equal:
+          path: spec.template.spec.containers[0].env[9].value
+          value: https://gateway-override.example.com
+
+---
+suite: component host UI backend origin validation
+templates:
+  - ingress.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: rejects a pathful UI backend URL in component host mode
+    set:
+      ingress.enabled: true
+      ingress.componentHosts.ui: ui.example.com
+      ingress.componentHosts.backend: backend.example.com
+      ingress.componentHosts.gateway: gateway.example.com
+      ui.backendUrl: https://backend.example.com/api
+      ui.publicUrl: https://ui.example.com
+      backend.gatewayUrl: https://gateway.example.com
+    asserts:
+      - failedTemplate:
+          errorMessage: ui.backendUrl must be an origin like https://backend.example.com, without a path, when ingress.componentHosts is set
+  - it: rejects a pathful backend gateway URL in component host mode
+    set:
+      ingress.enabled: true
+      ingress.componentHosts.ui: ui.example.com
+      ingress.componentHosts.backend: backend.example.com
+      ingress.componentHosts.gateway: gateway.example.com
+      ui.backendUrl: https://backend.example.com
+      ui.publicUrl: https://ui.example.com
+      backend.gatewayUrl: https://gateway.example.com/v1
+    asserts:
+      - failedTemplate:
+          errorMessage: backend.gatewayUrl must be an origin like https://gateway.example.com, without a path, when ingress.componentHosts is set
+  - it: rejects a backend gateway URL without a scheme in component host mode
+    set:
+      ingress.enabled: true
+      ingress.componentHosts.ui: ui.example.com
+      ingress.componentHosts.backend: backend.example.com
+      ingress.componentHosts.gateway: gateway.example.com
+      ui.backendUrl: https://backend.example.com
+      ui.publicUrl: https://ui.example.com
+      backend.gatewayUrl: gateway.example.com
+    asserts:
+      - failedTemplate:
+          errorMessage: backend.gatewayUrl must be an origin like https://gateway.example.com, without a path, when ingress.componentHosts is set

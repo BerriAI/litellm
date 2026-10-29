@@ -441,7 +441,7 @@ async def test_arealtime_transcription_intent_defaults_to_ga(monkeypatch):
         MagicMock(async_realtime=mock_async_realtime),
     )
 
-    def fake_get_llm_provider(model, api_base=None, api_key=None):
+    def fake_get_llm_provider(model, api_base=None, api_key=None, custom_llm_provider=None):
         return (
             "gpt-realtime-whisper",
             "azure",
@@ -605,7 +605,7 @@ async def test_arealtime_resolves_azure_ad_token_when_no_api_key(monkeypatch):
     monkeypatch.setattr(
         realtime_main,
         "get_llm_provider",
-        lambda model, api_base=None, api_key=None: (
+        lambda model, api_base=None, api_key=None, custom_llm_provider=None: (
             "gpt-realtime-whisper",
             "azure",
             None,
@@ -645,7 +645,7 @@ async def test_arealtime_does_not_resolve_azure_ad_token_when_api_key_present(mo
     monkeypatch.setattr(
         realtime_main,
         "get_llm_provider",
-        lambda model, api_base=None, api_key=None: (
+        lambda model, api_base=None, api_key=None, custom_llm_provider=None: (
             "gpt-realtime-whisper",
             "azure",
             "test-key",
@@ -721,7 +721,7 @@ async def test_arealtime_forwards_deployment_azure_ad_token(monkeypatch, no_ambi
     monkeypatch.setattr(
         realtime_main,
         "get_llm_provider",
-        lambda model, api_base=None, api_key=None: (
+        lambda model, api_base=None, api_key=None, custom_llm_provider=None: (
             "gpt-realtime-whisper",
             "azure",
             None,
@@ -740,3 +740,15 @@ async def test_arealtime_forwards_deployment_azure_ad_token(monkeypatch, no_ambi
     )
 
     assert mock_async_realtime.call_args.kwargs["azure_ad_token"] == "deployment-entra-token"
+
+
+@pytest.mark.parametrize("protocol", [None, "GA"])
+def test_construct_url_with_a_trailing_slash_api_base_matches_the_url_without_it(protocol):
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    def url_for(api_base: str) -> str:
+        return AzureOpenAIRealtime().construct_url(
+            api_base=api_base, model="gpt-realtime", api_version="2024-10-01-preview", realtime_protocol=protocol
+        )
+
+    assert url_for("https://gw.example.com/azure/") == url_for("https://gw.example.com/azure")

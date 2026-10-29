@@ -69,13 +69,16 @@ const completion = (
   ],
 });
 
-function transport(responses: ChatCompletion[], statuses: number | readonly number[] = 200) {
+type ModelResponse = ChatCompletion | ((request: ChatCompletionCreateParamsNonStreaming) => ChatCompletion);
+
+function transport(responses: ModelResponse[], statuses: number | readonly number[] = 200) {
   const requests: ChatCompletionCreateParamsNonStreaming[] = [];
   const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
     requests.push(JSON.parse(String(init?.body)) as ChatCompletionCreateParamsNonStreaming);
     const response = responses[requests.length - 1];
     if (!response) throw new Error("Unexpected model request");
-    return json(response, typeof statuses === "number" ? statuses : statuses[requests.length - 1]);
+    const result = typeof response === "function" ? response(requests[requests.length - 1]) : response;
+    return json(result, typeof statuses === "number" ? statuses : statuses[requests.length - 1]);
   });
   return {
     requests,
@@ -88,8 +91,17 @@ function transport(responses: ChatCompletion[], statuses: number | readonly numb
   };
 }
 
+function chartSourceId(request: ChatCompletionCreateParamsNonStreaming): string {
+  const message = request.messages.at(-1);
+  expect(message?.role).toBe("tool");
+  const result: Record<string, unknown> = JSON.parse(String(message?.content));
+  if (typeof result.source_id !== "string") throw new Error("Usage lookup did not return a chart source");
+  return result.source_id;
+}
+
 const options = () =>
   ({
+    access: { mode: "admin" as const },
     model: "selected-model",
     accessToken: "test-session",
     inferenceBaseUrl: "https://inference.example",
@@ -99,6 +111,7 @@ const options = () =>
     confirm: vi.fn(async (_action: LiteAdminAction) => true),
     onResult: vi.fn<(action: LiteAdminAction, result: ActionResult) => void>(),
     onMessage: vi.fn<(message: string) => void>(),
+    onChart: vi.fn<LiteAdminOptions["onChart"]>(),
   }) satisfies LiteAdminOptions;
 
 function deferred<Value>() {
@@ -179,6 +192,9 @@ describe("fixed management operations", () => {
     ],
     ["team_spend_report", "/team/spend/report", "GET", { ...dates, team_id: "team-1" }, false],
     ["key_spend_report", "/key/spend/report", "GET", { ...dates, api_key: keyHash }, false],
+    ["get_usage_data", "/user/daily/activity/aggregated", "GET", { ...dates, user_id: null }, false],
+    ["get_team_usage_data", "/team/daily/activity/aggregated", "GET", { ...dates, team_ids: "team-1,team-2" }, false],
+    ["get_tag_usage_data", "/tag/daily/activity/aggregated", "GET", { ...dates, tags: "production,feature-a" }, false],
     [
       "request_logs",
       "/spend/logs/ui",
@@ -275,6 +291,82 @@ describe("fixed management operations", () => {
     expect(new URL(String(managementFetch.mock.calls[1][0])).searchParams.get("search")).toBe("admin@example.com");
   });
 
+  it.each([
+    ["get_usage_data", "user_id", "user-1"],
+    ["get_team_usage_data", "team_ids", "team-1,team-2"],
+    ["get_tag_usage_data", "tags", "production,feature-a"],
+  ])(
+    "should return model, provider and entity usage through %s in the shared conversation",
+    async (name, filter, value) => {
+      const metrics = { spend: 12, api_requests: 30, total_tokens: 800 };
+      managementFetch.mockImplementation(async () =>
+        json({
+          results: [
+            {
+              date: dates.start_date,
+              metrics,
+              breakdown: {
+                models: { "chat-model": { metrics } },
+                providers: { "model-provider": { metrics } },
+                entities: { production: { metrics } },
+              },
+            },
+          ],
+          metadata: { total_spend: 12, total_api_requests: 30, total_tokens: 800 },
+        }),
+      );
+      const model = transport([completion([call(name, { ...dates, [filter]: value })]), completion()]);
+      const input = options();
+      await runLiteAdmin(input, model.client);
+
+      const query = new URL(String(managementFetch.mock.calls[0][0])).searchParams;
+      expect(query.get(filter)).toBe(value);
+      expect(query.get("start_date")).toBe(dates.start_date);
+      expect(query.get("end_date")).toBe(dates.end_date);
+      expect(query.get("api_key_limit")).toBe("20");
+      const result = model.requests[1].messages.at(-1);
+      expect(result?.role).toBe("tool");
+      const expectedResult = {
+        operation: name,
+        success: true,
+        source_id: expect.any(String),
+        result: {
+          totals: { total_spend: 12, total_api_requests: 30, total_tokens: 800 },
+          daily: [{ date: dates.start_date, ...metrics }],
+          breakdown_limit: 20,
+          top_models: [{ name: "chat-model", ...metrics }],
+          top_providers: [{ name: "model-provider", ...metrics }],
+          top_entities: [{ name: "production", ...metrics }],
+          top_api_keys: [],
+        },
+      };
+      expect(JSON.parse(String(result?.content))).toEqual(expectedResult);
+      expect(input.confirm).not.toHaveBeenCalled();
+    },
+  );
+
+  it("should abort a usage lookup without sending its result back to the model", async () => {
+    const controller = new AbortController();
+    const requested = deferred<void>();
+    const response = deferred<Response>();
+    managementFetch.mockImplementation(async () => {
+      requested.resolve();
+      return response.promise;
+    });
+    const model = transport([completion([call("get_tag_usage_data", { ...dates, tags: null })])]);
+    const input = { ...options(), signal: controller.signal };
+    const running = runLiteAdmin(input, model.client);
+    const rejected = expect(running).rejects.toBeInstanceOf(Error);
+    await requested.promise;
+    expect(managementFetch.mock.calls[0][1]?.signal).toBe(controller.signal);
+    controller.abort();
+    response.resolve(json({ results: [] }));
+    await rejected;
+    expect(model.requests).toHaveLength(1);
+    expect(input.onMessage).not.toHaveBeenCalled();
+    expect(input.confirm).not.toHaveBeenCalled();
+  });
+
   it("provides strict JSON schemas for nullable and transformed tool arguments", async () => {
     const model = transport([completion()]);
     await runLiteAdmin(options(), model.client);
@@ -307,6 +399,220 @@ describe("fixed management operations", () => {
     expect(managementFetch).not.toHaveBeenCalled();
     expect(input.confirm).not.toHaveBeenCalled();
     expect(input.onResult).not.toHaveBeenCalled();
+  });
+});
+
+describe("usage access", () => {
+  it("should query global usage across users, teams and tags without exposing management tools", async () => {
+    const input = { ...options(), access: { mode: "usage", scope: { type: "global" } } as const };
+    const model = transport([
+      completion([
+        call("get_usage_data", { ...dates, user_id: null }, "global"),
+        call("get_team_usage_data", { ...dates, team_ids: null }, "teams"),
+        call("get_tag_usage_data", { ...dates, tags: null }, "tags"),
+      ]),
+      completion(),
+    ]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(managementFetch.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual([
+      "/root/user/daily/activity/aggregated",
+      "/root/team/daily/activity/aggregated",
+      "/root/tag/daily/activity/aggregated",
+    ]);
+    expect(new URL(String(managementFetch.mock.calls[0][0])).searchParams.has("user_id")).toBe(false);
+    expect(input.confirm).not.toHaveBeenCalled();
+    expect(input.onMessage).toHaveBeenCalledExactlyOnceWith("Done");
+    expect(model.requests[0].tools?.map((tool) => (tool.type === "function" ? tool.function.name : null))).toEqual([
+      "render_usage_chart",
+      "get_usage_data",
+      "get_team_usage_data",
+      "get_tag_usage_data",
+    ]);
+  });
+
+  it.each([
+    ["keys_list", { ...pages, team_id: null, user_id: null }],
+    ["team_info", { team_id: "team-1" }],
+    ["budget_info", { budgets: ["budget-1"] }],
+    ["key_create", keyFields],
+  ])("should reject management operation %s for a usage-only session", async (name, args) => {
+    const input = { ...options(), access: { mode: "usage", scope: { type: "global" } } as const };
+    const model = transport([completion([call(String(name), args)]), completion()]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(managementFetch).not.toHaveBeenCalled();
+    expect(input.confirm).not.toHaveBeenCalled();
+    expect(input.onResult).not.toHaveBeenCalled();
+  });
+
+  it("should bind a user's usage lookup to their signed-in identity", async () => {
+    const input = {
+      ...options(),
+      access: { mode: "usage", scope: { type: "user", userId: "signed-in-user" } } as const,
+    };
+    const model = transport([completion([call("get_usage_data", dates)]), completion()]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(managementFetch).toHaveBeenCalledTimes(1);
+    const query = new URL(String(managementFetch.mock.calls[0][0])).searchParams;
+    expect(query.get("user_id")).toBe("signed-in-user");
+    expect(query.get("start_date")).toBe(dates.start_date);
+    expect(query.get("end_date")).toBe(dates.end_date);
+    expect(query.get("api_key_limit")).toBe("20");
+    expect(input.confirm).not.toHaveBeenCalled();
+    expect(input.onMessage).toHaveBeenCalledExactlyOnceWith("Done");
+  });
+
+  it.each([
+    ["get_usage_data", { ...dates, user_id: "other-user" }],
+    ["get_team_usage_data", { ...dates, team_ids: null }],
+    ["get_tag_usage_data", { ...dates, tags: null }],
+  ])("should reject usage outside the signed-in user's scope through %s", async (name, args) => {
+    const input = {
+      ...options(),
+      access: { mode: "usage", scope: { type: "user", userId: "signed-in-user" } } as const,
+    };
+    const model = transport([completion([call(String(name), args)]), completion()]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(managementFetch).not.toHaveBeenCalled();
+    expect(input.confirm).not.toHaveBeenCalled();
+  });
+
+  it("should refuse user usage when the session has no user identity", async () => {
+    const input = { ...options(), access: { mode: "usage", scope: { type: "user", userId: "" } } as const };
+    const model = transport([completion([call("get_usage_data", dates)]), completion()]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(managementFetch).not.toHaveBeenCalled();
+    expect(model.requests[1].messages.at(-1)).toMatchObject({
+      role: "tool",
+      content: JSON.stringify({
+        operation: "get_usage_data",
+        success: false,
+        message: "The gateway could not complete this lookup.",
+      }),
+    });
+  });
+});
+
+describe("usage charts", () => {
+  it.each(["global", "user"] as const)(
+    "should derive a %s chart from the fetched usage source and then return the answer",
+    async (scope) => {
+      const access =
+        scope === "global"
+          ? ({ mode: "usage", scope: { type: "global" } } as const)
+          : ({ mode: "usage", scope: { type: "user", userId: "signed-in-user" } } as const);
+      const input = { ...options(), access };
+      managementFetch.mockImplementation(async () =>
+        json({
+          results: [
+            {
+              date: dates.start_date,
+              metrics: { spend: 15, api_requests: 30, total_tokens: 800 },
+              breakdown: {
+                models: {
+                  "smaller-model": { metrics: { spend: 5, api_requests: 10, total_tokens: 200 } },
+                  "larger-model": { metrics: { spend: 10, api_requests: 20, total_tokens: 600 } },
+                },
+              },
+            },
+          ],
+          metadata: { total_spend: 15 },
+        }),
+      );
+      const args = scope === "global" ? { ...dates, user_id: null } : dates;
+      const model = transport([
+        completion([call("get_usage_data", args)]),
+        (request) =>
+          completion([call("render_usage_chart", { source_id: chartSourceId(request), view: "model_spend" })]),
+        completion([], "The larger model accounts for two thirds of spend."),
+      ]);
+
+      await runLiteAdmin(input, model.client);
+
+      const expectedChart = {
+        kind: "bar",
+        title: "Spend by model",
+        period: `${dates.start_date} to ${dates.end_date} (UTC)`,
+        scope: scope === "global" ? "Gateway usage" : "Your usage",
+        unit: "usd",
+        total: 15,
+        data: [
+          { label: "larger-model", value: 10 },
+          { label: "smaller-model", value: 5 },
+        ],
+        note: undefined,
+      };
+      expect(input.onChart).toHaveBeenCalledExactlyOnceWith(expectedChart);
+      expect(input.onMessage).toHaveBeenCalledExactlyOnceWith("The larger model accounts for two thirds of spend.");
+      expect(managementFetch).toHaveBeenCalledTimes(1);
+      expect(input.confirm).not.toHaveBeenCalled();
+      const query = new URL(String(managementFetch.mock.calls[0][0])).searchParams;
+      expect(query.get("user_id")).toBe(scope === "user" ? "signed-in-user" : null);
+      expect(JSON.parse(String(model.requests[2].messages.at(-1)?.content))).toMatchObject({
+        success: true,
+        chart: { total: 15 },
+      });
+    },
+  );
+
+  it("should reject an unknown source without fetching data or showing a chart", async () => {
+    const input = options();
+    const model = transport([
+      completion([call("render_usage_chart", { source_id: "not-fetched", view: "daily_spend" })]),
+      completion([], "I need to look up usage first."),
+    ]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(input.onChart).not.toHaveBeenCalled();
+    expect(managementFetch).not.toHaveBeenCalled();
+    expect(JSON.parse(String(model.requests[1].messages.at(-1)?.content))).toMatchObject({ success: false });
+    expect(input.onMessage).toHaveBeenCalledExactlyOnceWith("I need to look up usage first.");
+  });
+
+  it("should reject a source from a previous turn even when the session is unchanged", async () => {
+    managementFetch.mockImplementation(async () =>
+      json({ results: [{ date: dates.start_date, metrics: { spend: 8, api_requests: 2, total_tokens: 100 } }] }),
+    );
+    const input = options();
+    const first = transport([completion([call("get_usage_data", { ...dates, user_id: null })]), completion()]);
+    await runLiteAdmin(input, first.client);
+    const earlierSource = chartSourceId(first.requests[1]);
+    const next = transport([
+      completion([call("render_usage_chart", { source_id: earlierSource, view: "daily_spend" })]),
+      completion(),
+    ]);
+
+    await runLiteAdmin(input, next.client);
+
+    expect(input.onChart).not.toHaveBeenCalled();
+    expect(managementFetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(next.requests[1].messages.at(-1)?.content))).toMatchObject({ success: false });
+  });
+
+  it("should explain an empty lookup without rendering a fabricated chart", async () => {
+    managementFetch.mockImplementation(async () => json({ results: [] }));
+    const input = options();
+    const model = transport([
+      completion([call("get_usage_data", { ...dates, user_id: null })]),
+      (request) => completion([call("render_usage_chart", { source_id: chartSourceId(request), view: "daily_spend" })]),
+      completion([], "There is no recorded usage for this period."),
+    ]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(input.onChart).not.toHaveBeenCalled();
+    expect(JSON.parse(String(model.requests[2].messages.at(-1)?.content))).toMatchObject({ success: false });
+    expect(input.onMessage).toHaveBeenCalledExactlyOnceWith("There is no recorded usage for this period.");
   });
 });
 
@@ -653,15 +959,24 @@ describe("preferred LiteAdmin model", () => {
     expect(getPreferredLiteAdminModel([{ model_group }])).toBe(model_group);
   });
 
-  it("leaves the choice empty without an identifiable Sonnet 5.5 route", () => {
+  it("should choose the first available chat model when the preferred route is unavailable", () => {
+    const fallback = { model_group: "chat-alias", mode: "chat" };
+    expect(
+      getPreferredLiteAdminModel([
+        { model_group: "embedding-model", mode: "embedding" },
+        fallback,
+        { model_group: "another-chat-model", mode: "chat" },
+      ]),
+    ).toBe(fallback.model_group);
+    expect(getPreferredLiteAdminModel([{ model_group: "unspecified-mode" }])).toBe("unspecified-mode");
+  });
+
+  it("should leave the choice empty only when no chat models are available", () => {
     expect(getPreferredLiteAdminModel([])).toBeNull();
     expect(
       getPreferredLiteAdminModel([
-        { model_group: "claude-sonnet-5-50", providers: ["anthropic"] },
-        { model_group: "claude-sonnet-5-5other", providers: ["anthropic"] },
-        { model_group: "notclaude-sonnet-5-5", providers: ["anthropic"] },
-        { model_group: "chat-alias", providers: ["anthropic"] },
-        { model_group: "claude-sonnet-4-6", providers: ["anthropic"] },
+        { model_group: "embedding-model", mode: "embedding" },
+        { model_group: "image-model", mode: "image_generation" },
       ]),
     ).toBeNull();
   });

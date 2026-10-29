@@ -12,7 +12,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import suppress
-from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Optional
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Optional, Protocol
 from urllib.parse import urlsplit
 
 import httpx
@@ -23,12 +23,14 @@ from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
 from openai.types.completion_usage import CompletionUsage
+from pydantic import BaseModel, TypeAdapter
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
 
 import litellm
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
 from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -49,6 +51,16 @@ _AZURE_OPENAI_INIT_PARAMS: Final[tuple[str, ...]] = _get_client_init_params(Azur
 
 
 _OPENAI_API_HOST: Final[str] = "api.openai.com"
+
+
+class _ModelDumpable(Protocol):
+    def model_dump(self) -> dict[str, object]: ...  # mutable-ok: pydantic model_dump returns a dict
+
+
+def model_dump_provider_response(response: _ModelDumpable) -> dict[str, object]:  # mutable-ok: callers need a dict
+    if isinstance(response, BaseModel):
+        return response.model_dump(exclude_unset=True)
+    return response.model_dump()
 
 
 _OPENAI_HTTPX_DEFAULT_TIMEOUT: Final = CompletionTimeout.normalize(openai.DEFAULT_TIMEOUT)
@@ -123,6 +135,9 @@ class OpenAIError(BaseLLMException):
         )
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 ####### Error Handling Utils for OpenAI API #######################
 ###################################################################
 def drop_params_from_unprocessable_entity_error(
@@ -141,19 +156,20 @@ def drop_params_from_unprocessable_entity_error(
     """
     invalid_params: Final[list[str]] = []
     if isinstance(e, httpx.HTTPStatusError):
-        error_json: Final = e.response.json()
+        error_json: Final = decoded_json_object(_DECODED_JSON.validate_python(e.response.json()))
         error_message: Final = error_json.get("error", {})
         error_body = error_message
     else:
         error_body = e.body
-    if error_body is not None and isinstance(error_body, dict) and error_body.get("message"):
-        message = error_body.get("message", {})
+    error_mapping: Final = as_str_mapping(error_body)
+    if isinstance(error_mapping, dict) and error_mapping.get("message"):
+        message = error_mapping.get("message", {})
         if isinstance(message, str):
             try:
-                message = json.loads(message)
+                message = _DECODED_JSON.validate_python(json.loads(message))
             except json.JSONDecodeError:
                 message = {"detail": message}
-        detail: Final = message.get("detail")
+        detail: Final = decoded_json_object(message).get("detail")
 
         if isinstance(detail, list) and len(detail) > 0 and isinstance(detail[0], dict):
             for error_dict in detail:
@@ -395,6 +411,10 @@ class BaseOpenAILLM:
             follow_redirects=True,
             http2=http2_enabled(),
         )
+
+    @classmethod
+    def get_sync_http_client(cls) -> httpx.Client | None:
+        return cls._get_sync_http_client()
 
 
 class OpenAICredentials(NamedTuple):

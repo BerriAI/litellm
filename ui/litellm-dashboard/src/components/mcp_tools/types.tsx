@@ -38,6 +38,7 @@ export const AUTH_TYPE = {
   BEARER_TOKEN: "bearer_token",
   TOKEN: "token",
   BASIC: "basic",
+  AUTHORIZATION: "authorization",
   OAUTH2: "oauth2",
   OAUTH2_TOKEN_EXCHANGE: "oauth2_token_exchange",
   OAUTH2_ID_JAG: "oauth2_id_jag",
@@ -52,6 +53,7 @@ export const AUTH_TYPE_ITEMS = [
   { value: AUTH_TYPE.BEARER_TOKEN, label: "Bearer Token" },
   { value: AUTH_TYPE.TOKEN, label: "Token" },
   { value: AUTH_TYPE.BASIC, label: "Basic Auth" },
+  { value: AUTH_TYPE.AUTHORIZATION, label: "Authorization (raw header)" },
   { value: AUTH_TYPE.OAUTH2, label: "OAuth" },
   { value: AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE, label: "OAuth Token Exchange (OBO)" },
   { value: AUTH_TYPE.OAUTH2_ID_JAG, label: "ID-JAG (Okta Cross App Access)" },
@@ -181,10 +183,23 @@ export const preservedDeclaredAppCredentials = (
 // Everything the admin typed into `credentials` and nothing minted: the declared app plus the config
 // keys. This is what must survive the invalidation reset and what a client-forwarded row may persist,
 // so dropping a key from here silently discards admin input on an unrelated edit.
+const adminScopes = (value: unknown): string[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  const kept = value.filter((scope): scope is string => typeof scope === "string" && scope !== "");
+  return kept.length > 0 ? kept : undefined;
+};
+
 export const preservedAdminCredentials = (
   credentials: Record<string, unknown> | null | undefined,
-): Record<string, string> | undefined =>
-  pickStringCredentials(credentials, [...DECLARED_APP_CREDENTIAL_KEYS, ...ADMIN_CONFIG_CREDENTIAL_KEYS]);
+): Record<string, string | string[]> | undefined => {
+  const strings = pickStringCredentials(credentials, [
+    ...DECLARED_APP_CREDENTIAL_KEYS,
+    ...ADMIN_CONFIG_CREDENTIAL_KEYS,
+  ]);
+  const scopes = adminScopes(credentials?.scopes);
+  if (scopes === undefined) return strings;
+  return { ...(strings ?? {}), scopes };
+};
 
 // Drop minted token keys, keeping everything else (the declared app plus any non-token config).
 export const withoutMintedTokenCredentials = (
