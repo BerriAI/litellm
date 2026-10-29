@@ -456,30 +456,37 @@ class Cache:
         """
         litellm_params: Final[dict] = kwargs.get("litellm_params", {}) or {}
         metadata_sources: Final = cast(  # cast-ok: each source is the untyped request's metadata dict or empty
-            "tuple[dict[str, object], ...]",
+            "tuple[dict[str, object], dict[str, object], dict[str, object], dict[str, object]]",
             (
-                kwargs.get("litellm_metadata") or {},
                 kwargs.get("metadata") or {},
-                litellm_params.get("litellm_metadata") or {},
+                kwargs.get("litellm_metadata") or {},
                 litellm_params.get("metadata") or {},
+                litellm_params.get("litellm_metadata") or {},
             ),
         )
+        metadata, litellm_metadata, params_metadata, params_litellm_metadata = metadata_sources
         call_model_info: Final[object] = kwargs.get("model_info")
-        model_group_source: Final = next(
+        routed_source: Final = next(
             (
                 source
-                for source in metadata_sources
+                for source in (litellm_metadata, metadata, params_litellm_metadata, params_metadata)
                 if call_model_info and source.get("model_group") and source.get("model_info") == call_model_info
             ),
             None,
-        ) or next((source for source in metadata_sources if source.get("model_group")), None)
-        if model_group_source is None:
-            model_id_suffix: Final = (
-                f" model_id: {kwargs['model_id']}" if "model_id" in kwargs and kwargs["model_id"] is not None else ""
-            )
-            return f"{kwargs['model']}{model_id_suffix}"
-        model_group: Final = str(model_group_source["model_group"])
-        return self._get_caching_group(model_group_source, model_group) or model_group
+        )
+        model_group: Final = (
+            str(routed_source["model_group"])
+            if routed_source is not None
+            else next((str(source["model_group"]) for source in metadata_sources if source.get("model_group")), None)
+        )
+        caching_group_sources: Final = (routed_source,) if routed_source is not None else metadata_sources
+        caching_group: Final = next(
+            (group for source in caching_group_sources if (group := self._get_caching_group(source, model_group))), None
+        )
+        model_id_suffix: Final = (
+            f" model_id: {kwargs['model_id']}" if "model_id" in kwargs and kwargs["model_id"] is not None else ""
+        )
+        return caching_group or model_group or f"{kwargs['model']}{model_id_suffix}"
 
     def _get_caching_group(self, metadata: dict, model_group: str | None) -> str | None:
         caching_groups: Final[list | None] = metadata.get("caching_groups", [])

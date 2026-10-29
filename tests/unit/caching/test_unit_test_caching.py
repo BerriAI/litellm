@@ -281,11 +281,13 @@ def test_get_model_param_value_reads_model_group_from_litellm_metadata():
 
 def test_get_model_param_value_prefers_the_router_group_over_a_caller_model_group():
     cache: Final = Cache()
-    request: Final = {"model": "openai/gpt-5.6", "input": "search this text"}
+    deployment: Final = {"id": "deployment-1"}
+    request: Final = {"model": "openai/gpt-5.6", "input": "search this text", "model_info": deployment}
+    router_metadata: Final = {"model_group": "caller", "model_info": deployment}
 
     assert (
         cache._get_model_param_value(
-            {**request, "metadata": {"model_group": "target"}, "litellm_metadata": {"model_group": "caller"}}
+            {**request, "metadata": {"model_group": "target"}, "litellm_metadata": router_metadata}
         )
         == "caller"
     )
@@ -293,31 +295,46 @@ def test_get_model_param_value_prefers_the_router_group_over_a_caller_model_grou
         cache._get_model_param_value(
             {
                 **request,
-                "litellm_params": {
-                    "metadata": {"model_group": "target"},
-                    "litellm_metadata": {"model_group": "caller"},
-                },
+                "litellm_params": {"metadata": {"model_group": "target"}, "litellm_metadata": router_metadata},
             }
         )
         == "caller"
     )
     assert (
         cache._get_model_param_value(
-            {**request, "metadata": {"model_group": "group-a"}, "litellm_metadata": {"attempted_retries": 0}}
+            {
+                **request,
+                "metadata": {"model_group": "target", "model_info": deployment},
+                "litellm_metadata": router_metadata,
+            }
+        )
+        == "caller"
+    )
+    assert (
+        cache._get_model_param_value(
+            {
+                **request,
+                "metadata": router_metadata,
+                "litellm_metadata": {"model_group": "parent", "model_info": {"id": "parent-deployment"}},
+            }
+        )
+        == "caller"
+    )
+
+
+def test_get_model_param_value_keeps_metadata_first_outside_the_router():
+    cache: Final = Cache()
+
+    assert (
+        cache._get_model_param_value(
+            {
+                "model": "openai/gpt-5.6",
+                "input": "search this text",
+                "metadata": {"model_group": "group-a"},
+                "litellm_metadata": {"model_group": "group-b"},
+            }
         )
         == "group-a"
-    )
-    deployment: Final = {"id": "deployment-1"}
-    assert (
-        cache._get_model_param_value(
-            {
-                **request,
-                "model_info": deployment,
-                "metadata": {"model_group": "target", "model_info": deployment},
-                "litellm_metadata": {"model_group": "caller", "model_info": deployment},
-            }
-        )
-        == "caller"
     )
 
 
@@ -338,7 +355,10 @@ async def test_router_call_keeps_its_own_group_when_forwarded_litellm_metadata_n
     messages: Final = [{"role": "user", "content": "which group answers this"}]
 
     await router.acompletion(
-        model="group-a", messages=messages, caching=True, litellm_metadata={"model_group": "group-b"}
+        model="group-a",
+        messages=messages,
+        caching=True,
+        litellm_metadata={"model_group": "group-b", "model_info": {"id": "parent-deployment"}},
     )
     await asyncio.gather(*_PENDING_CACHE_WRITES)
     reply: Final = await router.acompletion(model="group-b", messages=messages, caching=True)
@@ -352,7 +372,8 @@ def test_get_model_param_value_reads_caching_groups_only_beside_the_router_group
     request: Final = {
         "model": "openai/gpt-5.6",
         "input": "search this text",
-        "litellm_metadata": {"model_group": "sales", "caching_groups": None},
+        "model_info": {"id": "sales-deployment"},
+        "litellm_metadata": {"model_group": "sales", "caching_groups": None, "model_info": {"id": "sales-deployment"}},
         "metadata": {"caching_groups": planted},
     }
 
