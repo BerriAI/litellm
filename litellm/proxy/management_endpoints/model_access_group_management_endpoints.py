@@ -29,6 +29,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     model_access_group_cache_key,
     model_access_group_registry_cache_key,
 )
+from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 
 # Clear cache and reload models to pick up the access group changes
@@ -168,7 +169,7 @@ class _ModelAccessGroupBudgetTableClient(Protocol):
 
 
 def _model_table(prisma_client: PrismaClient) -> _ModelTableClient:
-    return ModelRepository(prisma_client).table
+    return ModelRepository(WriterPinnedClient(prisma_client.db)).table
 
 
 def _model_access_group_budget_table(prisma_client: PrismaClient) -> _ModelAccessGroupBudgetTableClient:

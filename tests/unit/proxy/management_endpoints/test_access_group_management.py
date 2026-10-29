@@ -704,6 +704,9 @@ class _FakeModelTable:
         self.updates.append((dict(where), dict(data)))
         return None
 
+    async def create(self, data, **kwargs):
+        raise AssertionError("access group endpoints never create deployments")
+
 
 class _FakePrismaClient:
     def __init__(self, journal: list[str], deployments=()) -> None:
@@ -1332,6 +1335,60 @@ async def test_updating_an_access_group_writes_only_the_deployments_that_join_or
     }
     assert written_access_groups == {"joins": ["prod-models"], "leaves": []}
     assert response.models_updated == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "selection",
+    [{"model_ids": ["stays", "joins"]}, {"model_names": ["gpt-stays", "gpt-joins"]}],
+)
+async def test_updating_an_access_group_reads_the_primary_not_a_lagging_replica(selection):
+    import json
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+    from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+        update_access_group,
+    )
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+        UpdateModelGroupRequest,
+    )
+
+    primary = _FakePrismaClient(
+        [],
+        deployments=[
+            _deployment(model_id="stays", model_name="gpt-stays"),
+            _deployment(model_id="leaves", model_name="gpt-leaves"),
+            _deployment(model_id="joins", model_name="gpt-joins", access_groups=()),
+        ],
+    )
+    replica_before_the_last_edit = _FakePrismaClient(
+        [],
+        deployments=[
+            _deployment(model_id="stays", model_name="gpt-stays"),
+            _deployment(model_id="leaves", model_name="gpt-leaves", access_groups=()),
+            _deployment(model_id="joins", model_name="gpt-joins"),
+        ],
+    )
+    primary.db = RoutingPrismaWrapper(
+        writer=PrismaWrapper(original_prisma=primary.db, iam_token_db_auth=False),
+        reader=PrismaWrapper(original_prisma=replica_before_the_last_edit.db, iam_token_db_auth=False),
+    )
+
+    with _proxy_with_stubbed_reload(primary):
+        proxy_server.llm_router.get_model_names.return_value = ["gpt-stays", "gpt-leaves", "gpt-joins"]
+        await update_access_group(
+            access_group="prod-models",
+            data=UpdateModelGroupRequest(**selection),
+            user_api_key_dict=_admin(),
+        )
+
+    written_access_groups = {
+        where["model_id"]: json.loads(data["model_info"])["access_groups"]
+        for where, data in primary.model_table.updates
+    }
+    assert written_access_groups == {"joins": ["prod-models"], "leaves": []}
 
 
 @pytest.mark.asyncio
