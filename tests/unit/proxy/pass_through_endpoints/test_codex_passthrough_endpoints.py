@@ -1,7 +1,7 @@
 import asyncio
 import base64
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from datetime import datetime
 from typing import Final
 
@@ -451,6 +451,9 @@ def test_litellm_model_on_native_route_keeps_chatgpt_credentials_out_of_hook_raw
         pytest.param("open-weights", "none", "request", None, id="none under the request's drop_params"),
         pytest.param("open-weights", "high", "global", "high", id="effort set for a model without a default effort"),
         pytest.param("coding-model", "none", "global", "none", id="none on a model whose entry names a default effort"),
+        pytest.param("api-model", "none", "global", "none", id="none on a model that supports it"),
+        pytest.param("glm-model", "none", "global", None, id="none on a model that does not support it"),
+        pytest.param("declared-model", "none", "global", "none", id="none on a deployment whose model_info allows it"),
     ],
 )
 def test_litellm_model_on_native_route_gets_the_reasoning_effort_codex_m_would_send(
@@ -474,6 +477,12 @@ def test_litellm_model_on_native_route_gets_the_reasoning_effort_codex_m_would_s
                     "litellm_params": {**open_weights["litellm_params"], "drop_params": drop_params == "deployment"},
                 },
                 _open_weights("coding-model", upstream="gpt-5.5"),
+                _open_weights("glm-model", upstream="glm-5p3"),
+                {**_open_weights("declared-model"), "model_info": {"supports_none_reasoning_effort": True}},
+                {
+                    "model_name": "api-model",
+                    "litellm_params": {"model": "openai/gpt-5.4", "api_base": _PROVIDER_BASE, "api_key": _PROVIDER_KEY},
+                },
             ]
         ),
     )
@@ -504,6 +513,7 @@ def test_litellm_model_on_native_route_gets_the_reasoning_effort_codex_m_would_s
     assert native.status_code == v1.status_code == 200
     native_request, v1_request = (json.loads(call.request.content) for call in provider.calls)
     assert native_request == v1_request
+    assert native_request["reasoning"].get("effort") == expected
 
 
 @pytest.mark.parametrize(
@@ -824,6 +834,35 @@ def test_a_failed_account_catalog_read_keeps_the_next_turns_on_the_subscription_
     assert catalog.call_count == 1
 
 
+def test_a_failed_account_catalog_read_with_another_login_leaves_the_accounts_own_list_reachable(
+    client: TestClient, respx_mock: respx.MockRouter, mixed_router: Router
+) -> None:
+    own_login: Final = f"Bearer {_CHATGPT_JWT}"
+    catalog: Final = respx_mock.get(f"{_BASE}/models").mock(
+        side_effect=lambda request: (
+            httpx.Response(200, json=_UPSTREAM_CATALOG)
+            if request.headers["authorization"] == own_login
+            else httpx.Response(401)
+        )
+    )
+    provider: Final = _open_weights_provider(respx_mock)
+    chatgpt: Final = _chatgpt_responses(respx_mock)
+    turn: Final = {"model": "open-weights", "input": "Hello", "stream": True}
+    other_login: Final = client.post(
+        "/backend-api/codex/responses",
+        json=turn,
+        headers={**_ACCOUNT_HEADERS, "authorization": "Bearer test-someone-elses-login"},
+    )
+    own: Final = client.post("/backend-api/codex/responses", json=turn, headers=_ACCOUNT_HEADERS)
+    assert other_login.status_code == own.status_code == 200
+    assert chatgpt.call_count == 1
+    assert provider.call_count == 1
+    assert [call.request.headers["authorization"] for call in catalog.calls] == [
+        "Bearer test-someone-elses-login",
+        own_login,
+    ]
+
+
 def test_account_catalog_lookup_sends_the_callers_chatgpt_login_and_codex_version(
     client: TestClient, respx_mock: respx.MockRouter, mixed_router: Router
 ) -> None:
@@ -909,6 +948,39 @@ def test_native_models_etag_changes_with_the_keys_litellm_models_and_with_upstre
         len({baseline, catalog_etag(wider_window, '"upstream-v1"'), catalog_etag(open_weights, '"upstream-v3"')}) == 3
     )
     assert baseline not in (None, '"upstream-v1"')
+
+
+class FailingModelListing(CustomLogger):
+    async def async_filter_listed_models(
+        self, user_api_key_dict: UserAPIKeyAuth, model_names: Sequence[str]
+    ) -> Sequence[str]:
+        raise RuntimeError("model listing backend unavailable")
+
+
+def test_native_catalog_relays_chatgpts_answer_when_listing_the_keys_models_fails(
+    client: TestClient, respx_mock: respx.MockRouter, mixed_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [FailingModelListing()])
+    respx_mock.get(f"{_BASE}/models").respond(json=_UPSTREAM_CATALOG, headers={"etag": '"upstream-v1"'})
+    response: Final = client.get("/backend-api/codex/models?client_version=0.165.0", headers=_HEADERS)
+    assert response.status_code == 200
+    assert response.json() == _UPSTREAM_CATALOG
+    assert response.headers["etag"] == '"upstream-v1"'
+
+
+def test_native_responses_keep_chatgpts_models_etag_when_listing_the_keys_models_fails(
+    client: TestClient, respx_mock: respx.MockRouter, mixed_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [FailingModelListing()])
+    chatgpt: Final = _chatgpt_responses(respx_mock)
+    response: Final = client.post(
+        "/backend-api/codex/responses",
+        json={"model": "gpt-unlisted", "input": "Hello", "stream": True},
+        headers=_HEADERS,
+    )
+    assert response.status_code == 200
+    assert chatgpt.called
+    assert response.headers["x-models-etag"] == _UPSTREAM_MODELS_ETAG
 
 
 _OPENAI_BASE: Final = "https://openai-api.test/v1"

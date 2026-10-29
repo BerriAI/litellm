@@ -351,16 +351,13 @@ def _resolve_codex_native_chatgpt_model(
     request: Request | None,
     route: str,
 ) -> None:
+    requested: Final = request_data.get("model")
+    if route != _CODEX_NATIVE_RESPONSES_ROUTE or request is None or not isinstance(requested, str):
+        return
     from litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints import native_chatgpt_model
     from litellm.proxy.proxy_server import llm_router
 
-    requested: Final = request_data.get("model")
-    if (
-        route != _CODEX_NATIVE_RESPONSES_ROUTE
-        or request is None
-        or llm_router is None
-        or not isinstance(requested, str)
-    ):
+    if llm_router is None:
         return
     target: Final = native_chatgpt_model(requested, llm_router, valid_token)
     if target is None:

@@ -13,6 +13,7 @@ from pydantic import TypeAdapter, ValidationError
 from starlette.types import Message
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
 from litellm.llms.chatgpt.common_utils import CHATGPT_API_BASE
 from litellm.llms.custom_httpx.http_handler import (
@@ -39,6 +40,7 @@ from litellm.proxy.response_api_endpoints.endpoints import responses_api
 from litellm.responses.litellm_completion_transformation.reasoning_items import is_other_provider_reasoning_item
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.router import Deployment
+from litellm.utils import supports_none_reasoning_effort
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -52,6 +54,7 @@ _MODELS_ETAG_HEADER: Final = "x-models-etag"
 _ENCRYPTED_CONTENT_AFFINITY_FLAG: Final = "encrypted_content_affinity_enabled"
 _LITELLM_RESPONSES_PATH: Final = "/v1/responses"
 _CODEX_NO_DEFAULT_EFFORT: Final = "none"
+_NONE_EFFORT_SUPPORT_FLAG: Final = "supports_none_reasoning_effort"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _INPUT_ITEMS: Final = TypeAdapter(tuple[object, ...])
 _CACHED_SLUGS: Final = TypeAdapter(frozenset[str])
@@ -160,8 +163,12 @@ def _may_call_litellm_responses(user_api_key_dict: UserAPIKeyAuth) -> bool:
     return True
 
 
-def _account_slugs_cache_key(account_id: str) -> str:
-    return f"{_ACCOUNT_SLUGS_CACHE_PREFIX}{hashlib.sha256(account_id.encode()).hexdigest()}"
+def _account_slugs_cache_key(headers: Mapping[str, str]) -> str | None:
+    account_id: Final = headers.get("chatgpt-account-id")
+    if not account_id:
+        return None
+    caller: Final = json.dumps([account_id, headers.get("authorization", "")])
+    return f"{_ACCOUNT_SLUGS_CACHE_PREFIX}{hashlib.sha256(caller.encode()).hexdigest()}"
 
 
 def _cached_slugs(cached: object) -> frozenset[str] | None:
@@ -173,17 +180,11 @@ def _cached_slugs(cached: object) -> frozenset[str] | None:
         return None
 
 
-async def _remember_account_slugs(account_id: str, slugs: frozenset[str] | None, cache: _SharedCache) -> None:
+async def _remember_account_slugs(cache_key: str, slugs: frozenset[str] | None, cache: _SharedCache) -> None:
     if slugs is None:
-        await cache.async_set_cache(
-            _account_slugs_cache_key(account_id),
-            _ACCOUNT_SLUGS_UNAVAILABLE,
-            ttl=_ACCOUNT_SLUGS_UNAVAILABLE_TTL_SECONDS,
-        )
+        await cache.async_set_cache(cache_key, _ACCOUNT_SLUGS_UNAVAILABLE, ttl=_ACCOUNT_SLUGS_UNAVAILABLE_TTL_SECONDS)
         return
-    await cache.async_set_cache(
-        _account_slugs_cache_key(account_id), tuple(sorted(slugs)), ttl=_SHARED_CACHE_TTL_SECONDS
-    )
+    await cache.async_set_cache(cache_key, tuple(sorted(slugs)), ttl=_SHARED_CACHE_TTL_SECONDS)
 
 
 def _codex_client_version(headers: Mapping[str, str]) -> str | None:
@@ -210,10 +211,10 @@ async def _fetched_account_slugs(headers: Mapping[str, str], client_version: str
 
 
 async def _account_slugs(headers: Mapping[str, str], cache: _SharedCache) -> frozenset[str] | None:
-    account_id: Final = headers.get("chatgpt-account-id")
-    if not account_id:
+    cache_key: Final = _account_slugs_cache_key(headers)
+    if cache_key is None:
         return None
-    cached_value: Final = await cache.async_get_cache(_account_slugs_cache_key(account_id))
+    cached_value: Final = await cache.async_get_cache(cache_key)
     if cached_value == _ACCOUNT_SLUGS_UNAVAILABLE:
         return None
     cached: Final = _cached_slugs(cached_value)
@@ -223,7 +224,7 @@ async def _account_slugs(headers: Mapping[str, str], cache: _SharedCache) -> fro
     if client_version is None:
         return None
     fetched: Final = await _fetched_account_slugs(headers, client_version)
-    await _remember_account_slugs(account_id, fetched, cache)
+    await _remember_account_slugs(cache_key, fetched, cache)
     return fetched
 
 
@@ -284,6 +285,20 @@ def _drops_params(body: Mapping[str, object], model: str, llm_router: "Router", 
     )
 
 
+def _deployment_supports_no_effort(deployment: Deployment) -> bool:
+    configured: Final = _json_object(deployment.model_info.model_extra).get(_NONE_EFFORT_SUPPORT_FLAG)
+    if isinstance(configured, bool):
+        return configured
+    return supports_none_reasoning_effort(
+        model=deployment.litellm_params.model, custom_llm_provider=deployment.litellm_params.custom_llm_provider
+    )
+
+
+def _supports_no_effort(model: str, llm_router: "Router", team_id: str | None) -> bool:
+    deployments: Final = _candidate_deployments(model, llm_router, team_id)
+    return bool(deployments) and all(_deployment_supports_no_effort(deployment) for deployment in deployments)
+
+
 def _with_provider_default_reasoning(
     body: Mapping[str, object], llm_router: "Router | None", team_id: str | None
 ) -> Mapping[str, object]:
@@ -298,6 +313,7 @@ def _with_provider_default_reasoning(
         or llm_router is None
         or not _drops_params(body, model, llm_router, team_id)
         or codex_entry_names_default_reasoning_level(model, llm_router, team_id)
+        or _supports_no_effort(model, llm_router, team_id)
     ):
         return body
     return {**body, "reasoning": {key: value for key, value in reasoning.items() if key != "effort"}}
@@ -358,7 +374,14 @@ async def _litellm_catalog_rows(
 
     if llm_router is None or not _may_call_litellm_responses(user_api_key_dict):
         return ()
-    rows: Final = await codex_catalog_rows_for_key(user_api_key_dict)
+    try:
+        rows: Final = await codex_catalog_rows_for_key(user_api_key_dict)
+    except Exception as error:  # noqa: BLE001  # a failed listing must never fail the ChatGPT answer it extends
+        verbose_proxy_logger.warning(
+            "Codex catalog keeps only ChatGPT's models: listing the key's LiteLLM models raised %s",
+            type(error).__name__,
+        )
+        return ()
     return tuple(row for row in rows if _routes_to_litellm(row.id, llm_router, user_api_key_dict.team_id))
 
 
@@ -431,9 +454,9 @@ async def _catalog(
     slugs: Final = upstream_codex_slugs(upstream_body)
     if slugs is None:
         return upstream
-    account_id: Final = headers.get("chatgpt-account-id")
-    if account_id:
-        await _remember_account_slugs(account_id, slugs, cache)
+    account_slugs_key: Final = _account_slugs_cache_key(headers)
+    if account_slugs_key is not None:
+        await _remember_account_slugs(account_slugs_key, slugs, cache)
     rows: Final = await _litellm_catalog_rows(user_api_key_dict, llm_router)
     upstream_etag: Final = upstream.headers.get(_ETAG_HEADER)
     etag: Final = (
