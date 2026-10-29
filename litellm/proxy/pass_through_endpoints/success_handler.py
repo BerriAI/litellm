@@ -404,16 +404,11 @@ class PassThroughEndpointLogging:
             standard_logging_response_object = deepgram_handler_result["result"]  # rebind-ok: elif-chain
             kwargs = deepgram_handler_result["kwargs"]  # rebind-ok: elif-chain contract
         elif DeepgramSpeakPassthroughLoggingHandler.is_deepgram_speak_route(url_route, httpx_response.request.method):
-            deepgram_speak_handler_result: Final = (
+            standard_logging_response_object = (  # rebind-ok: elif-chain
                 DeepgramSpeakPassthroughLoggingHandler.deepgram_speak_passthrough_handler(
-                    request_body=request_body,
-                    logging_obj=logging_obj,
-                    upstream_url=str(httpx_response.request.url),
-                    kwargs=kwargs,
+                    logging_obj=logging_obj, upstream_url=str(httpx_response.request.url)
                 )
             )
-            standard_logging_response_object = deepgram_speak_handler_result["result"]  # rebind-ok: elif-chain
-            kwargs = deepgram_speak_handler_result["kwargs"]  # rebind-ok: elif-chain contract
         elif FalAIPassthroughLoggingHandler.is_fal_ai_route(url_route, custom_llm_provider):
             fal_ai_handler_result: Final = FalAIPassthroughLoggingHandler().fal_ai_passthrough_handler(
                 response_body=response_body if isinstance(response_body, dict) else MappingProxyType({}),

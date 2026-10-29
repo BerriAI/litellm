@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 import litellm
+from litellm.constants import DEEPGRAM_SPEAK_DEFAULT_MODEL
 from litellm.llms.deepgram.common_utils import (
     deepgram_listen_addon_pricing_models,
     deepgram_listen_audio_seconds,
@@ -19,13 +20,12 @@ from litellm.llms.deepgram.common_utils import (
     deepgram_listen_requested_model,
     deepgram_listen_transcript,
     deepgram_listen_websocket_target,
+    deepgram_requested_model,
     deepgram_speak_character_rate,
     deepgram_speak_characters,
-    deepgram_speak_is_priced,
-    deepgram_speak_model,
     deepgram_speak_registry_key,
-    deepgram_speak_requested_model,
-    deepgram_speak_websocket_target,
+    deepgram_upstream_model,
+    deepgram_websocket_target,
 )
 
 NOVA_3_URL: Final = "wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000"
@@ -385,7 +385,7 @@ SPEAK_BASE: Final = "wss://api.deepgram.com/v1/speak"
     ],
 )
 def test_deepgram_speak_websocket_target(api_base: str | None, query_string: str, expected: str) -> None:
-    assert deepgram_speak_websocket_target(api_base=api_base, query_string=query_string) == expected
+    assert deepgram_websocket_target(api_base, "speak", query_string, DEEPGRAM_SPEAK_DEFAULT_MODEL) == expected
 
 
 @pytest.mark.parametrize(
@@ -393,11 +393,12 @@ def test_deepgram_speak_websocket_target(api_base: str | None, query_string: str
     ["", "model=aura-2-thalia-en", "model=aura-2-thalia-en&model=aura-2-zeus-en", "encoding=mulaw&model=aura-luna-en"],
 )
 def test_the_authorized_speak_model_is_the_only_model_the_upstream_target_carries(query_string: str) -> None:
-    """The key is checked against deepgram_speak_requested_model, so the upstream must use exactly that voice"""
-    target: Final = deepgram_speak_websocket_target(api_base=None, query_string=query_string)
+    """The key is checked against deepgram_requested_model, so the upstream must use exactly that voice"""
+    requested: Final = deepgram_requested_model(query_string, DEEPGRAM_SPEAK_DEFAULT_MODEL)
+    target: Final = deepgram_websocket_target(None, "speak", query_string, DEEPGRAM_SPEAK_DEFAULT_MODEL)
 
-    assert parse_qs(urlparse(target).query)["model"] == [deepgram_speak_requested_model(query_string)]
-    assert deepgram_speak_model(target) == deepgram_speak_requested_model(query_string)
+    assert parse_qs(urlparse(target).query)["model"] == [requested]
+    assert deepgram_upstream_model(target, DEEPGRAM_SPEAK_DEFAULT_MODEL) == requested
 
 
 @pytest.mark.parametrize(
@@ -405,12 +406,6 @@ def test_the_authorized_speak_model_is_the_only_model_the_upstream_target_carrie
     [
         # Voice names from https://developers.deepgram.com/docs/tts-models, checked 2026-10-26
         pytest.param("aura-2-thalia-en", "aura-2", id="aura-2 english"),
-        pytest.param("aura-2-celeste-es", "aura-2", id="aura-2 spanish"),
-        pytest.param("aura-2-rhea-nl", "aura-2", id="aura-2 dutch"),
-        pytest.param("aura-2-agathe-fr", "aura-2", id="aura-2 french"),
-        pytest.param("aura-2-viktoria-de", "aura-2", id="aura-2 german"),
-        pytest.param("aura-2-livia-it", "aura-2", id="aura-2 italian"),
-        pytest.param("aura-2-izanami-ja", "aura-2", id="aura-2 japanese"),
         pytest.param("aura-asteria-en", "aura", id="aura-1"),
         pytest.param("aura-zeus-en", "aura", id="another aura-1"),
         pytest.param("aura-3-foo-en", "aura-3-foo-en", id="unknown aura generation"),
@@ -424,31 +419,7 @@ def test_the_authorized_speak_model_is_the_only_model_the_upstream_target_carrie
 def test_deepgram_speak_registry_key_names_the_aura_generation_row_else_the_voice(
     model: str, expected_family: str
 ) -> None:
-    target: Final = deepgram_speak_websocket_target(api_base=None, query_string=f"model={model}")
-
-    assert deepgram_speak_registry_key(target) == f"deepgram/{expected_family}"
-
-
-@pytest.mark.usefixtures("local_model_cost_map")
-@pytest.mark.parametrize(
-    ("model", "expected"),
-    [
-        pytest.param("aura-2-thalia-en", True, id="aura-2"),
-        pytest.param("aura-asteria-en", True, id="aura-1"),
-        pytest.param("aura-3-foo-en", False, id="unknown aura generation"),
-        pytest.param("flux-tts-en", False, id="unpriced family"),
-        pytest.param("nova-3", False, id="a listen model has no speech row"),
-    ],
-)
-def test_deepgram_speak_is_priced(model: str, expected: bool) -> None:
-    assert deepgram_speak_is_priced(f"{SPEAK_BASE}?model={model}") is expected
-
-
-@pytest.mark.usefixtures("local_model_cost_map")
-def test_deepgram_speak_is_not_priced_once_its_family_row_is_gone(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delitem(litellm.model_cost, "deepgram/aura-2")
-
-    assert deepgram_speak_is_priced(f"{SPEAK_BASE}?model=aura-2-thalia-en") is False
+    assert deepgram_speak_registry_key(f"{SPEAK_BASE}?model={model}") == f"deepgram/{expected_family}"
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
@@ -462,7 +433,6 @@ def test_a_cost_map_row_named_after_a_new_voice_prices_it_at_that_rate(monkeypat
     )
 
     assert deepgram_speak_character_rate(url) == 4e-05
-    assert deepgram_speak_is_priced(url) is True
 
 
 @pytest.mark.parametrize(

@@ -2490,7 +2490,7 @@ def _with_trace_context(headers: Mapping[str, str], parent_span: object) -> dict
 async def websocket_passthrough_request(
     websocket: WebSocket,
     target: str,
-    custom_headers: Mapping[str, str],
+    custom_headers: dict,
     user_api_key_dict: UserAPIKeyAuth,
     forward_headers: bool | None = False,
     endpoint: str | None = None,
@@ -2512,8 +2512,9 @@ async def websocket_passthrough_request(
         cost_per_request: Optional field - cost per request to the target endpoint
         setup_model_rewriter: Optional rewrite of the setup frame's model before it reaches the upstream
         count_client_text: Optional read-only count of each client frame, text or binary, after it reaches the
-            upstream, such as billable characters. Only the sum reaches the success handler, under WEBSOCKET_CLIENT_TEXT_COUNT_KEY
-            in request_body, so routes whose client text must not be stored can still bill it
+            upstream, such as billable characters. Only the sum reaches the success handler, under
+            WEBSOCKET_CLIENT_TEXT_COUNT_KEY in logging_obj.model_call_details, so routes whose client text must not be
+            stored can still bill it
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.proxy_server import proxy_config, proxy_logging_obj
@@ -2849,6 +2850,8 @@ async def websocket_passthrough_request(
 
             mock_response: Final = MockWebSocketResponse(target)
 
+            if count_client_text is not None:
+                logging_obj.model_call_details[WEBSOCKET_CLIENT_TEXT_COUNT_KEY] = client_text_count
             # Use the same success handler as HTTP passthrough endpoints
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
                 async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
@@ -2860,9 +2863,7 @@ async def websocket_passthrough_request(
                     end_time=end_time,
                     logging_obj=logging_obj,
                     cache_hit=False,
-                    request_body={}
-                    if count_client_text is None
-                    else {WEBSOCKET_CLIENT_TEXT_COUNT_KEY: client_text_count},
+                    request_body={},
                     **success_kwargs,
                 )
             )

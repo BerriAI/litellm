@@ -41,12 +41,12 @@ class DeepgramException(BaseLLMException):
     pass
 
 
-def _requested_model(query_string: str, default_model: str) -> str:
+def deepgram_requested_model(query_string: str, default_model: str) -> str:
     return httpx.QueryParams(query_string).get("model") or default_model
 
 
 def deepgram_listen_requested_model(query_string: str) -> str:
-    return _requested_model(query_string, DEEPGRAM_LISTEN_DEFAULT_MODEL)
+    return deepgram_requested_model(query_string, DEEPGRAM_LISTEN_DEFAULT_MODEL)
 
 
 def _first_occurrences(query_string: str) -> httpx.QueryParams:
@@ -61,7 +61,7 @@ def _first_occurrences(query_string: str) -> httpx.QueryParams:
     )
 
 
-def _deepgram_websocket_target(api_base: str | None, path: str, query_string: str, default_model: str) -> str:
+def deepgram_websocket_target(api_base: str | None, path: str, query_string: str, default_model: str) -> str:
     http_url: Final = httpx.URL(join_api_base(api_base or DEEPGRAM_DEFAULT_API_BASE, path))
     websocket_url: Final = http_url.copy_with(scheme=_WEBSOCKET_SCHEMES.get(http_url.scheme, http_url.scheme))
     params: Final = _first_occurrences(query_string)
@@ -70,20 +70,20 @@ def _deepgram_websocket_target(api_base: str | None, path: str, query_string: st
 
 
 def deepgram_listen_websocket_target(api_base: str | None, query_string: str) -> str:
-    return _deepgram_websocket_target(api_base, "listen", query_string, DEEPGRAM_LISTEN_DEFAULT_MODEL)
+    return deepgram_websocket_target(api_base, "listen", query_string, DEEPGRAM_LISTEN_DEFAULT_MODEL)
 
 
 def deepgram_listen_callback_params(query_string: str) -> tuple[str, ...]:
     return tuple(sorted(DEEPGRAM_LISTEN_CALLBACK_PARAMS.intersection(httpx.QueryParams(query_string).keys())))
 
 
-def _upstream_model(upstream_url: str, default_model: str) -> str:
+def deepgram_upstream_model(upstream_url: str, default_model: str) -> str:
     models: Final = parse_qs(urlparse(upstream_url).query).get("model")
     return models[0] if models else default_model
 
 
 def deepgram_listen_model(upstream_url: str) -> str:
-    return _upstream_model(upstream_url, DEEPGRAM_LISTEN_DEFAULT_MODEL)
+    return deepgram_upstream_model(upstream_url, DEEPGRAM_LISTEN_DEFAULT_MODEL)
 
 
 def _param_enabled(values: Sequence[str]) -> bool:
@@ -139,11 +139,10 @@ def _channel_count(value: object) -> int | None:
 
 
 def _results_channel_count(frame: Mapping[str, object]) -> int | None:
-    match frame.get("channel_index"):
-        case list([object(), object() as channels]):
-            return _channel_count(channels)
-        case _:
-            return None
+    channel_index: Final = frame.get("channel_index")
+    if not isinstance(channel_index, list) or len(channel_index) != 2:
+        return None
+    return _channel_count(channel_index[1])
 
 
 def _declared_channel_count(upstream_url: str) -> int | None:
@@ -224,21 +223,9 @@ def deepgram_listen_transcript(websocket_messages: Sequence[Mapping[str, object]
     )
 
 
-def deepgram_speak_requested_model(query_string: str) -> str:
-    return _requested_model(query_string, DEEPGRAM_SPEAK_DEFAULT_MODEL)
-
-
-def deepgram_speak_websocket_target(api_base: str | None, query_string: str) -> str:
-    return _deepgram_websocket_target(api_base, "speak", query_string, DEEPGRAM_SPEAK_DEFAULT_MODEL)
-
-
-def deepgram_speak_model(upstream_url: str) -> str:
-    return _upstream_model(upstream_url, DEEPGRAM_SPEAK_DEFAULT_MODEL)
-
-
 def deepgram_speak_registry_key(upstream_url: str) -> str:
     """The row a speak session is billed at: its Aura generation's row, else a row named after the voice itself"""
-    model: Final = deepgram_speak_model(upstream_url)
+    model: Final = deepgram_upstream_model(upstream_url, DEEPGRAM_SPEAK_DEFAULT_MODEL)
     pricing_model: Final = next(
         (family for pattern, family in DEEPGRAM_SPEAK_PRICING_FAMILIES if pattern.fullmatch(model)), model
     )
@@ -248,10 +235,6 @@ def deepgram_speak_registry_key(upstream_url: str) -> str:
 def deepgram_speak_character_rate(upstream_url: str) -> float | None:
     model_info: Final = _exact_registry_entry(deepgram_speak_registry_key(upstream_url))
     return None if model_info is None else model_info.get("input_cost_per_character")
-
-
-def deepgram_speak_is_priced(upstream_url: str) -> bool:
-    return deepgram_speak_character_rate(upstream_url) is not None
 
 
 class _DeepgramSpeakMessage(BaseModel):

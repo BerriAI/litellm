@@ -44,6 +44,7 @@ from litellm.constants import (
     AZURE_SPEECH_STT_DOMAIN,
     AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
+    DEEPGRAM_SPEAK_DEFAULT_MODEL,
     PASS_THROUGH_HEADER_PREFIX,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
 )
@@ -63,11 +64,11 @@ from litellm.llms.deepgram.common_utils import (
     deepgram_listen_registry_key,
     deepgram_listen_requested_model,
     deepgram_listen_websocket_target,
+    deepgram_requested_model,
+    deepgram_speak_character_rate,
     deepgram_speak_characters,
-    deepgram_speak_is_priced,
     deepgram_speak_registry_key,
-    deepgram_speak_requested_model,
-    deepgram_speak_websocket_target,
+    deepgram_websocket_target,
 )
 from litellm.llms.fal_ai.cost_calculator import fal_ai_passthrough_cost, fal_ai_queue_base
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
@@ -3530,12 +3531,12 @@ async def deepgram_listen_websocket_route(
 
 async def deepgram_speak_user_api_key_auth(websocket: WebSocket) -> UserAPIKeyAuth:
     return await user_api_key_auth_websocket_for_model(
-        websocket, model=deepgram_speak_requested_model(websocket.url.query)
+        websocket, model=deepgram_requested_model(websocket.url.query, DEEPGRAM_SPEAK_DEFAULT_MODEL)
     )
 
 
 def _deepgram_speak_refusal(target: str) -> str | None:
-    if deepgram_speak_is_priced(target):
+    if deepgram_speak_character_rate(target) is not None:
         return None
     return _DEEPGRAM_WS_UNPRICED_REASON.format(registry_key=deepgram_speak_registry_key(target))
 
@@ -3547,7 +3548,9 @@ async def deepgram_speak_websocket_route(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(deepgram_speak_user_api_key_auth)],
     relay: Annotated[_WebsocketRelay, Depends(_websocket_relay)],
 ) -> None:
-    target: Final = deepgram_speak_websocket_target(get_secret_str("DEEPGRAM_API_BASE"), websocket.url.query)
+    target: Final = deepgram_websocket_target(
+        get_secret_str("DEEPGRAM_API_BASE"), "speak", websocket.url.query, DEEPGRAM_SPEAK_DEFAULT_MODEL
+    )
     await _relay_deepgram_websocket(
         websocket,
         user_api_key_dict,

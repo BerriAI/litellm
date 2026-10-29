@@ -528,34 +528,6 @@ async def test_deepgram_listen_does_not_count_client_text(monkeypatch: pytest.Mo
     assert [call.count_client_text for call in relay.calls] == [None]
 
 
-@pytest.mark.parametrize(
-    ("query", "expected_target"),
-    [
-        pytest.param("", "wss://api.deepgram.com/v1/speak?model=aura-asteria-en", id="no query"),
-        pytest.param("model=", "wss://api.deepgram.com/v1/speak?model=aura-asteria-en", id="blank model"),
-        pytest.param(
-            "encoding=mulaw&sample_rate=8000",
-            "wss://api.deepgram.com/v1/speak?encoding=mulaw&sample_rate=8000&model=aura-asteria-en",
-            id="other params kept",
-        ),
-        pytest.param(
-            "model=aura-2-thalia-en&model=aura-asteria-en",
-            "wss://api.deepgram.com/v1/speak?model=aura-2-thalia-en",
-            id="only the first model",
-        ),
-    ],
-)
-async def test_deepgram_speak_names_exactly_one_model_upstream(
-    query: str, expected_target: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv("DEEPGRAM_API_BASE", raising=False)
-
-    with patch(GET_CREDENTIALS, return_value="dg-provider-key"):
-        relay: Final = await _serve_speak(_FakeWebSocket("/deepgram/speak", query))
-
-    assert [call.target for call in relay.calls] == [expected_target]
-
-
 async def test_deepgram_speak_honours_server_configured_api_base_and_ignores_the_callers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

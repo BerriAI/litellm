@@ -423,6 +423,7 @@ WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
 DEEPGRAM_DEFAULT_API_BASE: Final = "https://api.deepgram.com/v1"
 NADIR_DEFAULT_API_BASE: Final = "https://api.getnadir.com/v1"
 DEEPGRAM_LISTEN_DEFAULT_MODEL: Final = "nova-3"
+# https://developers.deepgram.com/reference/text-to-speech/speak-streaming, checked 2026-10-28
 DEEPGRAM_SPEAK_DEFAULT_MODEL: Final = "aura-asteria-en"
 
 BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY: Final = "litellm.bedrock_realtime.pending_opening_message"
