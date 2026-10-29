@@ -31,7 +31,7 @@ async fn connect(server: &MockServer) -> AzureBlobCache<JsonCodec<Value>> {
         None,
         ClientOptions {
             transport: Some(Transport::new(Arc::new(ReqwestTransport(
-                litellm_http::Client::plain_for_test(),
+                litellm_http::Client::for_test(),
             )))),
             ..ClientOptions::default()
         },

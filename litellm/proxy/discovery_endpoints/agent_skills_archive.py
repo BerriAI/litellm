@@ -16,6 +16,7 @@ from types import MappingProxyType
 from typing import Final
 
 import yaml
+from pydantic import TypeAdapter
 
 MAX_ARCHIVE_UNPACKED_BYTES: Final = 50 * 1024 * 1024
 MAX_ARCHIVE_ENTRIES: Final = 1000
@@ -26,6 +27,7 @@ _ZIP_ENTRY_PERMISSIONS: Final = 0o644 << 16
 _FRONTMATTER_PATTERN: Final = re.compile(r"^---\s*\n(.*?)\n---\s*(?:\n|$)", re.DOTALL)
 _WINDOWS_DRIVE_PATTERN: Final = re.compile(r"^[A-Za-z]:")
 _EMPTY_FRONTMATTER: Final[Mapping[str, object]] = MappingProxyType({})
+_DECODED_YAML: Final = TypeAdapter(object)
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +102,7 @@ def _manifest_frontmatter(manifest: bytes) -> Mapping[str, object]:
     if match is None:
         return _EMPTY_FRONTMATTER
     try:
-        parsed: Final = yaml.safe_load(match.group(1))
+        parsed: Final = _DECODED_YAML.validate_python(yaml.safe_load(match.group(1)))
     except yaml.YAMLError:
         return _EMPTY_FRONTMATTER
     if not isinstance(parsed, dict):

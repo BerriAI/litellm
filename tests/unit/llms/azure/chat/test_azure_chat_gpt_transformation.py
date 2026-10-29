@@ -11,7 +11,7 @@ sys.path.insert(
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
-from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
+from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
 from litellm.utils import _invalidate_model_cost_lowercase_map, get_optional_params
 from datetime import datetime
@@ -752,4 +752,34 @@ def test_azure_deployment_id_selects_chat_completions_endpoint(respx_mock: MockR
 
     assert route.call_count == 1
     assert route.calls[0].request.url.path == "/openai/deployments/deployment-gpt-4o/chat/completions"
+    assert response.choices[0].message.content == "Hello"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_responses_api_version_leaves_the_chat_route_and_body_untouched(respx_mock: MockRouter) -> None:
+    url: Final = "https://example-resource.openai.azure.com/openai/deployments/gpt-5.4-nano/chat/completions"
+    payload: Final = {
+        "id": "chatcmpl-dated",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-5.4-nano",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+    }
+    route: Final = respx_mock.post(url__startswith=url).mock(return_value=httpx.Response(200, json=payload))
+    messages: Final = [{"role": "user", "content": "Hello"}]
+
+    response: Final = litellm.completion(
+        model="azure/gpt-5.4-nano",
+        messages=messages,
+        api_base="https://example-resource.openai.azure.com",
+        api_key="azure-test-key",
+        api_version="2024-12-01-preview",
+        responses_api_version="preview",
+    )
+    request: Final = route.calls[0].request
+
+    assert route.call_count == 1
+    assert request.url.params["api-version"] == "2024-12-01-preview"
+    assert json.loads(request.content) == {"model": "gpt-5.4-nano", "messages": messages}
     assert response.choices[0].message.content == "Hello"

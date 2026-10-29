@@ -1981,6 +1981,7 @@ model LiteLLM_BackgroundInteractionSettlement {
   outcome             String?
 
   @@index([claimed_at], map: "idx_background_interaction_settlement_claimed_at")
+  @@index([settled_at], map: "idx_background_interaction_settlement_settled_at")
 }
 
 model LiteLLM_Lens {

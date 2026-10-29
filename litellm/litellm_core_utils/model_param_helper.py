@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from functools import lru_cache
 from typing import ClassVar, Final
 
@@ -20,6 +21,24 @@ from openai.types.responses.response_create_params import (
 from litellm._logging import verbose_logger
 from litellm.types.llms.anthropic import AnthropicMessagesRequest
 from litellm.types.rerank import RerankRequest
+
+
+def peek_reasoning_summary_aliases(optional_params: Mapping[str, object]) -> object | None:
+    """Read AI-SDK-style reasoning summary from optional_params or nested extra_body.
+
+    Uses key membership (not ``or`` chains) so falsy values like ``""`` are not skipped.
+    """
+    if "reasoningSummary" in optional_params:
+        return optional_params["reasoningSummary"]
+    if "reasoning_summary" in optional_params:
+        return optional_params["reasoning_summary"]
+    extra_body: Final = optional_params.get("extra_body")
+    if isinstance(extra_body, dict):
+        if "reasoningSummary" in extra_body:
+            return extra_body["reasoningSummary"]
+        if "reasoning_summary" in extra_body:
+            return extra_body["reasoning_summary"]
+    return None
 
 
 class ModelParamHelper:

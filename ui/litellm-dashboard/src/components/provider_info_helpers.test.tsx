@@ -214,6 +214,7 @@ describe("provider_info_helpers", () => {
         Providers.LEMONADE,
         Providers.LLAMAFILE,
         Providers.MARITALK,
+        Providers.Nace,
         Providers.NLP_CLOUD,
         Providers.NSCALE,
         Providers.OVHCLOUD,
@@ -223,6 +224,7 @@ describe("provider_info_helpers", () => {
         Providers.Sail,
         Providers.WANDB,
         Providers.ZAI,
+        Providers.ZeroGPU,
       ];
       const logolessProviders = Object.values(Providers).filter((provider) => !providerLogoMap[provider]);
       expect([...logolessProviders].sort()).toEqual([...knownLogolessProviders].sort());
@@ -354,6 +356,10 @@ describe("provider_info_helpers", () => {
 
     it("should return cognition/swe-1.7 placeholder for Cognition provider", () => {
       expect(getPlaceholder(Providers.Cognition)).toBe("cognition/swe-1.7");
+    });
+
+    it("should return zerogpu/gpt-oss-120b placeholder for ZeroGPU provider", () => {
+      expect(getPlaceholder("ZeroGPU")).toBe("zerogpu/gpt-oss-120b");
     });
 
     it("should return a chatgpt/ placeholder for the CHATGPT dropdown key", () => {
@@ -515,6 +521,16 @@ describe("provider_info_helpers", () => {
         "sagemaker-model": { litellm_provider: "sagemaker" },
       };
       expect(getProviderModels("Sail" as Providers, modelMap)).toEqual(["sail/openai/gpt-oss-120b"]);
+    });
+
+    it("lists Nace decision models and resolves the provider name and model placeholder", () => {
+      const modelMap = {
+        "nace/drex-latest": { litellm_provider: "nace", mode: "evaluation" },
+        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+      };
+      expect(getProviderModels(Providers.Nace, modelMap)).toEqual(["nace/drex-latest"]);
+      expect(getProviderLogoAndName("nace").displayName).toBe("Nace");
+      expect(getPlaceholder("Nace")).toBe("nace/drex-latest");
     });
 
     it("should list only typesafe decision models for the 'TypeSafe' provider key, not the OpenRouter-hosted one", () => {

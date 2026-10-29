@@ -451,6 +451,7 @@ async def test_vertex_discovery_denies_other_team_vector_store_credentials():
                 request=request,
                 fastapi_response=Response(),
                 get_vertex_pass_through_handler=MagicMock(),
+                general_settings={},
                 router_credentials=vector_store_credentials,
             )
 

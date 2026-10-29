@@ -381,7 +381,6 @@ class WebSearchInterceptionLogger(CustomLogger):
             (t for t in tools if is_anthropic_native_web_search_tool(t)),
             None,
         )
-        # The flag covers native tools the pre-request/deployment hooks already converted
         emit_native_blocks: Final = native_tool is not None or (
             kwargs is not None and bool(kwargs.get(WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY))
         )

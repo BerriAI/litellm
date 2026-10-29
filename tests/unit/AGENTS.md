@@ -1,6 +1,12 @@
 # tests/unit
 
-In-process. No network, clock or subprocess
+In-process. No network or subprocess. `interactions/test_openapi_compliance.py` reads the spec snapshot beside it,
+and only the `interactions-spec-canary` workflow passes `--interactions-spec-url` (registered in
+`interactions/conftest.py`, so name that file or directory on the command line) with `ai.google.dev` allowed, to run
+the same tests against Google's live spec
+
+Unit tests must not depend on the current time or execution speed. Use fixed timestamps for fixtures
+and controlled clocks for time-dependent behavior. Incidental clock reads inside production code are allowed
 
 ## What good looks like
 

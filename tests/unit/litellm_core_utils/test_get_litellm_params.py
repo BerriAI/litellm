@@ -6,9 +6,12 @@ Ensures backward compatibility after sparse kwargs extraction optimization.
 
 from typing import Final
 
+import httpx
 import pytest
+from openai import OpenAI
 from pydantic import ValidationError
 
+import litellm
 from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.litellm_core_utils.get_litellm_params import (
     _OPTIONAL_KWARGS_KEYS,
@@ -19,6 +22,7 @@ from litellm.litellm_core_utils.get_litellm_params import (
     stored_control_options,
 )
 from litellm.types.litellm_params import ControlOptions
+from litellm.utils import get_non_default_completion_params
 
 
 def _funnel_kwargs_completion_forwards(monkeypatch, wif_kwargs: dict[str, object]) -> dict[str, object]:
@@ -75,10 +79,39 @@ class TestGetBaseModelFromLitellmCallMetadata:
         )
         assert result == "gpt-4"
 
-    def test_returns_non_string_base_model_without_filtering(self):
-        result = get_base_model_from_litellm_call_metadata({"model_info": {"base_model": 123}})
+    @pytest.mark.parametrize(
+        "model_info",
+        [{"base_model": 123}, {"base_model": ["gpt-4"]}, {"base_model": {"model": "gpt-4"}}],
+    )
+    def test_ignores_a_non_string_base_model(self, model_info: object):
+        assert get_base_model_from_litellm_call_metadata({"model_info": model_info}) is None
 
-        assert result == 123
+
+@pytest.mark.parametrize("model_info", ["malformed", ["malformed"], 123])
+def test_a_call_with_a_non_object_model_info_fails_before_reaching_the_provider(model_info: object) -> None:
+    sent: Final[list[httpx.Request]] = []  # mutable-ok: the transport records each outbound request
+
+    def record(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(500)
+
+    client: Final = OpenAI(
+        api_key="sk-test",
+        base_url="https://api.openai.test/v1",
+        http_client=httpx.Client(transport=httpx.MockTransport(record)),
+        max_retries=0,
+    )
+
+    with pytest.raises(AttributeError):
+        litellm.completion(
+            model="openai/gpt-5.4-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"model_info": model_info},
+            client=client,
+            num_retries=0,
+        )
+
+    assert sent == []
 
 
 class TestGetLitellmParamsKwargsExtraction:
@@ -285,6 +318,10 @@ class TestGetLitellmParamsExplicitFields:
         result = get_litellm_params(no_log=True)
         assert result["no-log"] is True
 
+    def test_github_copilot_host_is_registered_as_a_litellm_param(self):
+        result: Final = get_litellm_params(github_copilot_host="octo.ghe.com")
+        assert result["github_copilot_host"] == "octo.ghe.com"
+
 
 class TestGetLitellmParamsDataResidency:
     """Verify that data_residency is inferred from OpenAI regional api_base."""
@@ -374,6 +411,14 @@ class TestMetadataFallsBackToLitellmMetadata:
         assert result["metadata"] is not litellm_metadata
         result["metadata"].pop("trace_id")
         assert litellm_metadata == {"trace_id": "trace-1"}
+
+    def test_session_id_derived_from_trace_id_adds_no_provider_params(self):
+        from_trace_id: Final = get_litellm_params(metadata={"trace_id": "trace-1"})
+        from_session_id: Final = get_litellm_params(metadata={"session_id": "session-1"})
+        added_by_trace_id: Final = from_trace_id.keys() - from_session_id.keys()
+
+        assert added_by_trace_id
+        assert not added_by_trace_id & get_non_default_completion_params(from_trace_id).keys()
 
 
 @pytest.mark.parametrize(
