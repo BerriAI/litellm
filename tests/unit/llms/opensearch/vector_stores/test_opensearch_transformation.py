@@ -235,10 +235,27 @@ async def test_opensearch_error_keeps_its_status(asynchronous: bool, status: int
     assert error.value.status_code == status
 
 
+MALFORMED_FILTERS: Final = (
+    {"filters": {"type": "between", "key": "revision", "value": [6, 8]}},
+    {"filters": {"type": "gte", "key": "published", "value": True}},
+    {"filters": {"type": "in", "key": "category", "value": "hr"}},
+    {"filters": {"type": "eq", "key": "category"}},
+    {"filters": {"type": "eq", "key": "category", "value": "hr", "case_sensitive": False}},
+    {"filters": {"type": "and", "filters": [{"type": "eq", "key": "category", "value": "hr"}, {"type": "near"}]}},
+    {"filters": "category = hr"},
+    {"filters": []},
+    {"filters": {"type": "gt", "key": "score", "value": float("nan")}},
+    {"filters": {"type": "in", "key": "score", "value": [0.5, float("inf")]}},
+)
+
+
 @pytest.mark.parametrize(
     "overrides,message",
     [
-        ({"filters": {"type": "eq", "key": "category", "value": "hr"}}, "filters"),
+        *((malformed, "filters must be an OpenAI vector store filter") for malformed in MALFORMED_FILTERS),
+        ({"opensearch_hybrid_search": True}, "opensearch_hybrid_search needs opensearch_search_pipeline"),
+        ({"opensearch_hybrid_search": "sometimes"}, "opensearch_hybrid_search must be a boolean"),
+        ({"opensearch_search_pipeline": ["hybrid-norm"]}, "opensearch_search_pipeline"),
         ({"ranking_options": {"score_threshold": 0.5}}, "ranking_options"),
         ({"rewrite_query": True}, "rewrite_query"),
         ({"max_num_results": 0}, "max_num_results"),
@@ -372,7 +389,8 @@ async def test_opensearch_index_name_picks_the_index_so_the_store_id_can_differ(
 @pytest.mark.parametrize(
     "unsupported",
     [
-        {"filters": {"type": "eq", "key": "category", "value": "hr"}},
+        *MALFORMED_FILTERS,
+        {"opensearch_hybrid_search": True},
         {"ranking_options": {"score_threshold": 0.5}},
         {"rewrite_query": True},
     ],
@@ -386,6 +404,7 @@ async def test_unsupported_search_params_are_dropped_under_drop_params(unsupport
     )
 
     assert response["data"] == EXPECTED_RESULTS
+    assert str(_sent(respond)[0].url) == f"{SERVERLESS}/litellm-qa-docs/_search"
     assert json.loads(_sent(respond)[0].content) == {
         "size": 3,
         "query": {"knn": {"embedding": {"vector": QUERY_VECTOR, "k": 3}}},
@@ -403,6 +422,147 @@ async def test_no_op_values_of_unsupported_params_are_accepted() -> None:
     )
 
     assert response["data"] == EXPECTED_RESULTS
+
+
+@pytest.mark.parametrize(
+    "search_filter,opensearch_filter",
+    [
+        pytest.param({"type": "eq", "key": "category", "value": "hr"}, {"term": {"category": "hr"}}, id="eq"),
+        pytest.param({"type": "eq", "key": "published", "value": True}, {"term": {"published": True}}, id="eq-bool"),
+        pytest.param(
+            {"type": "ne", "key": "category", "value": "hr"},
+            {"bool": {"must_not": [{"term": {"category": "hr"}}]}},
+            id="ne",
+        ),
+        *(
+            pytest.param(
+                {"type": operator, "key": "revision", "value": 7}, {"range": {"revision": {operator: 7}}}, id=operator
+            )
+            for operator in ("gt", "gte", "lt", "lte")
+        ),
+        pytest.param({"type": "gte", "key": "score", "value": 0.5}, {"range": {"score": {"gte": 0.5}}}, id="gte-float"),
+        pytest.param(
+            {"type": "lt", "key": "published_at", "value": "2026-01-01"},
+            {"range": {"published_at": {"lt": "2026-01-01"}}},
+            id="lt-date",
+        ),
+        pytest.param(
+            {"type": "in", "key": "category", "value": ["hr", "legal"]},
+            {"terms": {"category": ["hr", "legal"]}},
+            id="in",
+        ),
+        pytest.param(
+            {"type": "nin", "key": "revision", "value": [6, 7]},
+            {"bool": {"must_not": [{"terms": {"revision": [6, 7]}}]}},
+            id="nin",
+        ),
+        pytest.param(
+            {
+                "type": "and",
+                "filters": [
+                    {"type": "eq", "key": "category", "value": "hr"},
+                    {
+                        "type": "or",
+                        "filters": [
+                            {"type": "gte", "key": "revision", "value": 7},
+                            {"type": "eq", "key": "published", "value": False},
+                        ],
+                    },
+                ],
+            },
+            {
+                "bool": {
+                    "filter": [
+                        {"term": {"category": "hr"}},
+                        {
+                            "bool": {
+                                "should": [{"range": {"revision": {"gte": 7}}}, {"term": {"published": False}}],
+                                "minimum_should_match": 1,
+                            }
+                        },
+                    ]
+                }
+            },
+            id="and-of-or",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_filters_narrow_the_knn_query_with_the_matching_opensearch_filter(
+    search_filter: Mapping[str, object], opensearch_filter: Mapping[str, object]
+) -> None:
+    respond: Final = MagicMock(return_value=httpx.Response(200, json=_opensearch_hits("text", "embedding")))
+
+    response: Final = await _search(
+        True, respond, RecordingEmbeddingExecutor(), {"filters": search_filter, "max_num_results": 3}
+    )
+
+    assert response["data"] == EXPECTED_RESULTS
+    assert json.loads(_sent(respond)[0].content) == {
+        "size": 3,
+        "query": {"knn": {"embedding": {"vector": QUERY_VECTOR, "k": 3, "filter": opensearch_filter}}},
+        "_source": {"excludes": ["embedding"]},
+    }
+
+
+HYBRID: Final = {
+    "opensearch_hybrid_search": True,
+    "opensearch_search_pipeline": "hybrid norm",
+    "opensearch_text_field": "passage",
+}
+KEYWORD_QUERY: Final = {"match": {"passage": {"query": QUERY}}}
+HR_ONLY: Final = {"type": "eq", "key": "category", "value": "hr"}
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
+    "filters,queries",
+    [
+        pytest.param({}, [KEYWORD_QUERY, {"knn": {"embedding": {"vector": QUERY_VECTOR, "k": 3}}}], id="unfiltered"),
+        pytest.param(
+            {"filters": HR_ONLY},
+            [
+                {"bool": {"must": [KEYWORD_QUERY], "filter": [{"term": {"category": "hr"}}]}},
+                {"knn": {"embedding": {"vector": QUERY_VECTOR, "k": 3, "filter": {"term": {"category": "hr"}}}}},
+            ],
+            id="filtered",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_hybrid_search_sends_a_keyword_and_a_knn_query_through_the_signed_search_pipeline(
+    asynchronous: bool, filters: Mapping[str, object], queries: list[Mapping[str, object]]
+) -> None:
+    executor: Final = RecordingEmbeddingExecutor()
+    respond: Final = MagicMock(return_value=httpx.Response(200, json=_opensearch_hits("passage", "embedding")))
+
+    response: Final = await _search(asynchronous, respond, executor, {**HYBRID, **filters, "max_num_results": 3})
+
+    assert response["data"] == EXPECTED_RESULTS
+    sent: Final = _sent(respond)
+    assert len(sent) == 1
+    assert str(sent[0].url) == f"{SERVERLESS}/litellm-qa-docs/_search?search_pipeline=hybrid%20norm"
+    assert json.loads(sent[0].content) == {
+        "size": 3,
+        "query": {"hybrid": {"queries": queries}},
+        "_source": {"excludes": ["embedding"]},
+    }
+    assert _signature_scope(sent[0]) == ("aoss", "us-east-1")
+    executor.call.assert_called_once_with("embedding-alias", QUERY, {})
+
+
+@pytest.mark.parametrize("hybrid", [{}, {"opensearch_hybrid_search": False}])
+@pytest.mark.asyncio
+async def test_a_search_pipeline_without_hybrid_search_runs_the_knn_query_through_it(
+    hybrid: Mapping[str, object],
+) -> None:
+    respond: Final = MagicMock(return_value=httpx.Response(200, json={"hits": {"hits": []}}))
+
+    await _search(True, respond, RecordingEmbeddingExecutor(), {**hybrid, "opensearch_search_pipeline": "hybrid-norm"})
+
+    sent: Final = _sent(respond)
+    assert str(sent[0].url) == f"{SERVERLESS}/litellm-qa-docs/_search?search_pipeline=hybrid-norm"
+    assert json.loads(sent[0].content)["query"] == {"knn": {"embedding": {"vector": QUERY_VECTOR, "k": 10}}}
 
 
 def test_create_is_rejected_because_the_store_is_search_only() -> None:

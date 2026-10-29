@@ -2,12 +2,13 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Final, Literal, NoReturn
-from urllib.parse import quote, urlsplit
+from typing import TYPE_CHECKING, Annotated, Final, Literal, NoReturn, TypeAlias
+from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
-from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError, BadRequestError
@@ -93,7 +94,9 @@ class _OpenSearchParams(LiteLLMBaseModel):
 
     litellm_embedding_model: str | None = None
     opensearch_embedding_field: str | None = None
+    opensearch_hybrid_search: bool | None = None
     opensearch_index_name: str | None = None
+    opensearch_search_pipeline: str | None = None
     opensearch_text_field: str | None = None
 
     @property
@@ -122,22 +125,94 @@ class _SigningRegion(LiteLLMBaseModel):
     aws_region_name: str | None = None
 
 
+_FiniteFloat: TypeAlias = Annotated[StrictFloat, Field(allow_inf_nan=False)]
+
+
+class _Equality(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["eq", "ne"]
+    key: str
+    value: StrictStr | StrictInt | _FiniteFloat | StrictBool
+
+
+class _Range(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["gt", "gte", "lt", "lte"]
+    key: str
+    value: StrictStr | StrictInt | _FiniteFloat
+
+
+class _Membership(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["in", "nin"]
+    key: str
+    value: tuple[StrictStr | StrictInt | _FiniteFloat, ...]
+
+
+class _Compound(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["and", "or"]
+    filters: "tuple[_Filter, ...]"
+
+
+_Filter: TypeAlias = Annotated[_Equality | _Range | _Membership | _Compound, Field(discriminator="type")]
+_Compound.model_rebuild()
+_FILTER: Final = TypeAdapter[_Equality | _Range | _Membership | _Compound](_Filter)
+
+
+def _opensearch_filter(search_filter: _Filter) -> Mapping[str, object]:
+    match search_filter:
+        case _Compound(type="and", filters=filters):
+            return {"bool": {"filter": tuple(_opensearch_filter(child) for child in filters)}}
+        case _Compound(filters=filters):
+            return {
+                "bool": {"should": tuple(_opensearch_filter(child) for child in filters), "minimum_should_match": 1}
+            }
+        case _Equality(type="eq", key=key, value=value):
+            return {"term": {key: value}}
+        case _Equality(key=key, value=value):
+            return {"bool": {"must_not": ({"term": {key: value}},)}}
+        case _Membership(type="in", key=key, value=values):
+            return {"terms": {key: values}}
+        case _Membership(key=key, value=values):
+            return {"bool": {"must_not": ({"terms": {key: values}},)}}
+        case _Range(type=operator, key=key, value=value):
+            return {"range": {key: {operator: value}}}
+
+
 class _SearchOptions(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     max_num_results: int | None = None
-    filters: Mapping[str, object] | None = None
+    filters: object = None
     ranking_options: Mapping[str, object] | None = None
     rewrite_query: bool | None = None
 
     @property
     def unsupported(self) -> tuple[str, ...]:
         requested: Final = (
-            ("filters", self.filters),
             ("ranking_options", self.ranking_options),
             ("rewrite_query", self.rewrite_query),
         )
         return tuple(name for name, value in requested if value)
+
+    def search_filter(self, drop_unsupported: bool) -> _Filter | None:
+        if self.filters is None or self.filters == {}:
+            return None
+        try:
+            return _FILTER.validate_python(self.filters)
+        except ValidationError:
+            if drop_unsupported:
+                return None
+            raise _bad_request(
+                "filters must be an OpenAI vector store filter, either a comparison with a key, a value, and type eq, "
+                'ne, gt, gte, lt, lte, in, or nin, or a compound with a filters list and type "and" or "or". Fix it, '
+                "or set drop_params to drop it."
+            ) from None
 
     @property
     def k(self) -> int:
@@ -151,6 +226,48 @@ class _SearchOptions(LiteLLMBaseModel):
 
 
 _KNOWN_PARAMS: Final = frozenset(name for name in _OpenSearchParams.model_fields if name.startswith(_PARAM_PREFIX))
+
+
+@dataclass(frozen=True, slots=True)
+class _Search:
+    params: _OpenSearchParams
+    k: int
+    search_filter: _Filter | None
+
+    @property
+    def hybrid(self) -> bool:
+        return bool(self.params.opensearch_hybrid_search and self.params.opensearch_search_pipeline)
+
+    @property
+    def opensearch_filter(self) -> Mapping[str, object] | None:
+        return None if self.search_filter is None else _opensearch_filter(self.search_filter)
+
+    @property
+    def path(self) -> str:
+        pipeline: Final = self.params.opensearch_search_pipeline
+        return f"/_search?{urlencode({'search_pipeline': pipeline}, quote_via=quote)}" if pipeline else "/_search"
+
+    def query(self, query_text: str, vector: tuple[float, ...]) -> Mapping[str, object]:
+        opensearch_filter: Final = self.opensearch_filter
+        knn: Final[Mapping[str, object]] = {"vector": vector, "k": self.k}
+        knn_query: Final[Mapping[str, object]] = {
+            "knn": {
+                self.params.embedding_field: knn if opensearch_filter is None else {**knn, "filter": opensearch_filter}
+            }
+        }
+        if not self.hybrid:
+            return knn_query
+        keyword_query: Final[Mapping[str, object]] = {"match": {self.params.text_field: {"query": query_text}}}
+        return {
+            "hybrid": {
+                "queries": (
+                    keyword_query
+                    if opensearch_filter is None
+                    else {"bool": {"must": (keyword_query,), "filter": (opensearch_filter,)}},
+                    knn_query,
+                )
+            }
+        }
 
 
 class _LoggedSearch(LiteLLMBaseModel):
@@ -275,7 +392,7 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         litellm_params: Mapping[str, object],
         optional_params: VectorStoreSearchOptionalRequestParams,
         extra_body: Mapping[str, object] | None,
-    ) -> tuple[_OpenSearchParams, int]:
+    ) -> _Search:
         unknown: Final = sorted(
             key for key in litellm_params if key.startswith(_PARAM_PREFIX) and key not in _KNOWN_PARAMS
         )
@@ -290,34 +407,42 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
             options: Final = _SearchOptions.model_validate(optional_params)
         except ValidationError as error:
             raise _bad_request(f"Invalid vector store search parameters: {error}") from None
-        if options.unsupported and not drops_unsupported_params(litellm_params.get("drop_params")):
+        drop_unsupported: Final = drops_unsupported_params(litellm_params.get("drop_params"))
+        if options.unsupported and not drop_unsupported:
             raise _bad_request(
                 f"The OpenSearch vector store does not support {', '.join(options.unsupported)} yet. "
                 "Remove it from the request, or set drop_params to drop it."
             )
         try:
-            return _OpenSearchParams.model_validate(litellm_params), options.k
+            params: Final = _OpenSearchParams.model_validate(litellm_params)
         except ValidationError:
             raise _bad_request(
-                "opensearch_embedding_field, opensearch_index_name, opensearch_text_field, and litellm_embedding_model "
-                "must be strings."
+                "opensearch_embedding_field, opensearch_index_name, opensearch_search_pipeline, opensearch_text_field, "
+                "and litellm_embedding_model must be strings, and opensearch_hybrid_search must be a boolean."
             ) from None
+        if params.opensearch_hybrid_search and not params.opensearch_search_pipeline and not drop_unsupported:
+            raise _bad_request(
+                "opensearch_hybrid_search needs opensearch_search_pipeline, the name of a search pipeline with a "
+                "normalization-processor, since OpenSearch returns unnormalized hybrid scores without one. Set it, or "
+                "set drop_params to run a k-NN search instead."
+            )
+        return _Search(params=params, k=options.k, search_filter=options.search_filter(drop_unsupported))
 
     @staticmethod
     def _search_request(
         vector_store_id: str,
+        query_text: str,
         embedding: EmbeddingResponse,
-        k: int,
-        params: _OpenSearchParams,
+        search: _Search,
         api_base: str,
     ) -> tuple[str, dict[str, object]]:  # mutable-ok: the provider contract returns a writable JSON request body
         vector: Final = _QUERY_VECTOR.validate_python(embedding.data[0]["embedding"])  # pyright: ignore[reportUnknownMemberType]  # EmbeddingResponse.data is an untyped list, the vector is validated here
         return (
-            f"{api_base}/{quote(params.index_name(vector_store_id), safe='')}/_search",
+            f"{api_base}/{quote(search.params.index_name(vector_store_id), safe='')}{search.path}",
             {
-                "size": k,
-                "query": {"knn": {params.embedding_field: {"vector": vector, "k": k}}},
-                "_source": {"excludes": [params.embedding_field]},
+                "size": search.k,
+                "query": search.query(query_text, vector),
+                "_source": {"excludes": [search.params.embedding_field]},
             },
         )
 
@@ -332,11 +457,12 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         extra_body: Mapping[str, object] | None = None,
         embedding_executor: VectorStoreEmbeddingExecutor | None = None,
     ) -> tuple[str, dict[str, object]]:  # mutable-ok: the provider contract returns a writable JSON request body
-        params, k = self._params(litellm_params, vector_store_search_optional_params, extra_body)
+        search: Final = self._params(litellm_params, vector_store_search_optional_params, extra_body)
+        query_text: Final = self.query_text(query)
         embedding: Final = self.query_embedding_executor(embedding_executor, None).embed(
-            params.require_embedding_model(), self.query_text(query), self.query_embedding_configuration(litellm_params)
+            search.params.require_embedding_model(), query_text, self.query_embedding_configuration(litellm_params)
         )
-        return self._search_request(vector_store_id, embedding, k, params, api_base)
+        return self._search_request(vector_store_id, query_text, embedding, search, api_base)
 
     async def atransform_search_vector_store_request(
         self,
@@ -349,11 +475,12 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         extra_body: Mapping[str, object] | None = None,
         embedding_executor: VectorStoreEmbeddingExecutor | None = None,
     ) -> tuple[str, dict[str, object]]:  # mutable-ok: the provider contract returns a writable JSON request body
-        params, k = self._params(litellm_params, vector_store_search_optional_params, extra_body)
+        search: Final = self._params(litellm_params, vector_store_search_optional_params, extra_body)
+        query_text: Final = self.query_text(query)
         embedding: Final = await self.query_embedding_executor(embedding_executor, None).aembed(
-            params.require_embedding_model(), self.query_text(query), self.query_embedding_configuration(litellm_params)
+            search.params.require_embedding_model(), query_text, self.query_embedding_configuration(litellm_params)
         )
-        return self._search_request(vector_store_id, embedding, k, params, api_base)
+        return self._search_request(vector_store_id, query_text, embedding, search, api_base)
 
     def sign_request(
         self,

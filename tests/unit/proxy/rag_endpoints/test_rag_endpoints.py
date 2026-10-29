@@ -1672,15 +1672,25 @@ def test_rag_query_rejects_caller_embedding_selection_params(client_internal_use
 
 
 @pytest.mark.parametrize(
+    "store_key",
+    [
+        "opensearch_index_name",
+        "opensearch_search_pipeline",
+        "opensearch_hybrid_search",
+        "opensearch_text_field",
+        "opensearch_embedding_field",
+    ],
+)
+@pytest.mark.parametrize(
     ("provider", "expected_status", "expected_searches"),
     [("opensearch", 400, 0), ("opensearch/x", 400, 0), ("openai", 200, 1)],
 )
-def test_rag_query_rejects_caller_opensearch_index_name_only_on_opensearch_stores(
-    client_internal_user, provider, expected_status, expected_searches
+def test_rag_query_rejects_caller_opensearch_store_params_only_on_opensearch_stores(
+    client_internal_user, store_key, provider, expected_status, expected_searches
 ):
     """
-    Regression: retrieval_config must not pick the index an OpenSearch store searches,
-    while other providers keep ignoring the key as they did before OpenSearch support.
+    Regression: retrieval_config must not change how an OpenSearch store searches (its index,
+    fields, pipeline, or hybrid mode), while other providers keep ignoring the keys as before.
     """
     import litellm
     from litellm import Router
@@ -1719,12 +1729,13 @@ def test_rag_query_rejects_caller_opensearch_index_name_only_on_opensearch_store
             json={
                 "model": "gpt-4o-mini",
                 "messages": [{"role": "user", "content": "hello"}],
-                "retrieval_config": {"vector_store_id": "kb", "opensearch_index_name": "another-teams-index"},
+                "retrieval_config": {"vector_store_id": "kb", store_key: "_none"},
             },
         )
 
     assert response.status_code == expected_status, response.json()
     assert fake_search.await_count == expected_searches
+    assert expected_status == 200 or store_key in str(response.json())
 
 
 EICAR = r"X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
