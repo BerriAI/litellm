@@ -64,6 +64,7 @@ from integration.providers._mantle_gpt_prompt_cache_support import (
     spend_rows,
     success_row,
     system_item,
+    user_item,
 )
 from pydantic import JsonValue
 
@@ -540,3 +541,55 @@ def test_f4_a_slow_mantle_stream_during_a_burst_completes_with_every_id_landing_
         name: Final = mantle_deployment(gateway, scenario, wire)
         wire.drain()
         assert_burst_landed(wire, name, burst(gateway, name, 12), marked=True)
+
+
+def client_marked_chat_body(name: str, prompt: str, *, stream: bool) -> dict[str, JsonValue]:
+    return request_body(
+        "chat",
+        name,
+        prompt,
+        stream=stream,
+        messages=[
+            {"role": "system", "content": SYSTEM, "cache_control": EPHEMERAL},
+            {"role": "user", "content": prompt},
+        ],
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+def test_g1_a_clients_cache_control_on_a_string_system_message_reaches_mantle_as_its_breakpoint(
+    gateway: Gateway, stream: bool
+) -> None:
+    marker: Final = fresh_marker()
+    with wire_server(mantle_peer()) as wire, gateway.scenario() as scenario:
+        name: Final = mantle_deployment(gateway, scenario, wire, points=[], prompt_cache_options=EXPLICIT)
+        outcome, received = observe(
+            gateway, wire, "chat", client_marked_chat_body(name, prompt_text(marker), stream=stream)
+        )
+        assert_answered(outcome, marker)
+        assert_wire(
+            received,
+            expected_wire(GPT, prompt_text(marker), endpoint="chat", marked=True, options=EXPLICIT),
+            streaming=stream,
+        )
+        success_row(name, marker)
+
+
+def test_g2_a_clients_cache_control_sends_no_mark_to_a_mantle_row_that_does_not_read_breakpoints(
+    gateway: Gateway,
+) -> None:
+    marker: Final = fresh_marker()
+    with wire_server(mantle_peer()) as wire, gateway.scenario() as scenario:
+        name: Final = mantle_deployment(
+            gateway, scenario, wire, GPT_FLAGGED_ROW, model_info={"supports_prompt_cache_breakpoint": False}, points=[]
+        )
+        outcome, received = observe(
+            gateway, wire, "chat", client_marked_chat_body(name, prompt_text(marker), stream=False)
+        )
+        assert_answered(outcome, marker)
+        body: Final = body_of(received)
+        assert body["instructions"] == SYSTEM, received.body
+        assert body["input"] == [user_item(prompt_text(marker), "chat")], received.body
+        assert "prompt_cache_breakpoint" not in received.body.decode(), received.body
+        assert "cache_control" not in received.body.decode(), received.body
+        success_row(name, marker)

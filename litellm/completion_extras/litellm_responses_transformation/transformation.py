@@ -24,7 +24,10 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
-from litellm.integrations.anthropic_cache_control_hook import supports_openai_prompt_cache_breakpoint
+from litellm.integrations.anthropic_cache_control_hook import (
+    AnthropicCacheControlHook,
+    supports_openai_prompt_cache_breakpoint,
+)
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     responses_reasoning_items_from_thinking_blocks,
@@ -209,6 +212,22 @@ def _drops_audio_input(model: str, litellm_params: Mapping[str, object]) -> bool
     if not (litellm_params.get("drop_params") or litellm.drop_params):
         return False
     return not _supports_audio_input(model, litellm_params)
+
+
+def _messages_in_cache_mark_dialect(
+    model: str,
+    messages: Sequence["AllMessageValues"],
+    optional_params: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+) -> Sequence["AllMessageValues"]:
+    if not AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
+        model,
+        _served_provider(litellm_params),
+        litellm_params.get("api_base"),
+        optional_params.get("prompt_cache_options"),
+    ):
+        return messages
+    return tuple(AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message) for message in messages)
 
 
 def responses_provider_metadata(response_fields: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -798,7 +817,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
     def convert_chat_completion_messages_to_responses_api(
         self,
-        messages: list["AllMessageValues"],
+        messages: Sequence["AllMessageValues"],
         *,
         drop_params: bool = False,
         keep_prompt_cache_breakpoints: bool = False,
@@ -820,7 +839,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
     def _convert_chat_completion_messages_to_responses_input(
         self,
-        messages: list["AllMessageValues"],
+        messages: Sequence["AllMessageValues"],
         *,
         drop_params: bool = False,
         replay_tool_search: bool = False,
@@ -1076,7 +1095,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             and supports_openai_prompt_cache_breakpoint(base_model, provider)
         )
         converted_input_items, converted_instructions = self.convert_chat_completion_messages_to_responses_api(
-            messages,
+            _messages_in_cache_mark_dialect(
+                model,
+                messages,
+                cast(Mapping[str, object], optional_params),  # cast-ok: upcast of the untyped params dict
+                litellm_params,
+            ),
             drop_params=bool(litellm_params.get("drop_params") or litellm.drop_params),
             keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
             replay_tool_search=_requests_tool_search(cast(object, optional_params)),  # cast-ok: upcast
