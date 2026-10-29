@@ -82,12 +82,23 @@ class PassThroughStreamingHandler:
         # the tinyfish poller writes the one authoritative row; a failure row here would collide on its request_id
         if endpoint_type == EndpointType.TINYFISH and sse_poller_spawned(litellm_logging_obj):
             return
+        background_response_settled_before: Final = (
+            stream_context is not None
+            and await PassThroughStreamingHandler._stream_background_response_settled_before(
+                passthrough_success_handler_obj=stream_context.passthrough_success_handler_obj,
+                url_route=stream_context.url_route,
+                request_body=request_body,
+                endpoint_type=endpoint_type,
+                raw_bytes=raw_bytes,
+            )
+        )
         await asyncify(PassThroughStreamingHandler._record_partial_usage_for_failure)(
             litellm_logging_obj=litellm_logging_obj,
             endpoint_type=endpoint_type,
             request_body=request_body,
             raw_bytes=raw_bytes,
             stream_context=stream_context,
+            background_response_settled_before=background_response_settled_before,
         )
         try:
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
@@ -124,6 +135,7 @@ class PassThroughStreamingHandler:
         request_body: dict[str, object],
         raw_bytes: Sequence[bytes],
         stream_context: PassThroughStreamContext | None,
+        background_response_settled_before: bool,
     ) -> None:
         if endpoint_type == EndpointType.ANTHROPIC:
             AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure(
@@ -143,6 +155,7 @@ class PassThroughStreamingHandler:
                 raw_bytes=raw_bytes,
                 end_time=datetime.now(timezone.utc),
                 model=None,
+                background_response_settled_before=background_response_settled_before,
             )
         except Exception as e:
             verbose_proxy_logger.warning(
@@ -396,12 +409,12 @@ class PassThroughStreamingHandler:
                 )
                 return
             background_response_settled_before: Final = (
-                endpoint_type == EndpointType.OPENAI
-                and OpenAIPassthroughLoggingHandler.stream_may_settle_background_response(
-                    url_route, _REQUEST_FIELDS.validate_python(request_body)
-                )
-                and await passthrough_success_handler_obj.background_response_settled_before(
-                    await asyncify(PassThroughStreamingHandler._background_response_settled_by_stream)(raw_bytes)
+                await PassThroughStreamingHandler._stream_background_response_settled_before(
+                    passthrough_success_handler_obj=passthrough_success_handler_obj,
+                    url_route=url_route,
+                    request_body=_REQUEST_FIELDS.validate_python(request_body),
+                    endpoint_type=endpoint_type,
+                    raw_bytes=raw_bytes,
                 )
             )
             (
@@ -435,6 +448,22 @@ class PassThroughStreamingHandler:
             verbose_proxy_logger.error("Error in _route_streaming_logging_to_handler: %s", e)
 
     _route_streaming_logging_to_handler = route_streaming_logging_to_handler
+
+    @staticmethod
+    async def _stream_background_response_settled_before(
+        passthrough_success_handler_obj: PassThroughEndpointLogging,
+        url_route: str,
+        request_body: Mapping[str, object],
+        endpoint_type: EndpointType,
+        raw_bytes: Sequence[bytes],
+    ) -> bool:
+        return (
+            endpoint_type == EndpointType.OPENAI
+            and OpenAIPassthroughLoggingHandler.stream_may_settle_background_response(url_route, request_body)
+            and await passthrough_success_handler_obj.background_response_settled_before(
+                await asyncify(PassThroughStreamingHandler._background_response_settled_by_stream)(raw_bytes)
+            )
+        )
 
     @staticmethod
     def _background_response_settled_by_stream(raw_bytes: Sequence[bytes]) -> str | None:

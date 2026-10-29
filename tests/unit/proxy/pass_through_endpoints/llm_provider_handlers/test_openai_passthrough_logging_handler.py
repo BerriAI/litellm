@@ -2,8 +2,7 @@ from dataclasses import dataclass
 import asyncio
 import json
 import logging
-import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Dict, Final, List
@@ -28,11 +27,11 @@ from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.pass_through_endpoints.background_response_settlement import (
     PrismaBackgroundResponseSettlementStore,
 )
-from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamContext, PassThroughStreamingHandler
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
-from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
@@ -2186,23 +2185,35 @@ class _SettlementTable:
     def __init__(self) -> None:
         self.settled_response_ids: Final[set[str]] = set()
 
-    async def create(self, *, data: Mapping[str, str]) -> Mapping[str, str]:
-        if data["response_id"] in self.settled_response_ids:
+    async def create_many(self, data: Sequence[Mapping[str, str]], *, skip_duplicates: bool) -> int:
+        new_ids: Final = {row["response_id"] for row in data} - self.settled_response_ids
+        if not skip_duplicates and len(new_ids) < len(data):
             raise UniqueViolationError({"user_facing_error": {"error_code": "P2002"}})
-        self.settled_response_ids.add(data["response_id"])
-        return data
+        self.settled_response_ids.update(new_ids)
+        return len(new_ids)
 
 
 class _UnreachableSettlementTable:
-    async def create(self, *, data: Mapping[str, str]) -> Mapping[str, str]:
+    async def create_many(self, data: Sequence[Mapping[str, str]], *, skip_duplicates: bool) -> int:
         raise ConnectionResetError("server closed the connection unexpectedly")
 
 
+@dataclass(frozen=True, slots=True)
+class _StalledSettlementTable:
+    table: _SettlementTable
+
+    async def create_many(self, data: Sequence[Mapping[str, str]], *, skip_duplicates: bool) -> int:
+        await asyncio.sleep(3)
+        return await self.table.create_many(data, skip_duplicates=skip_duplicates)
+
+
 def _settling_passthrough_logging(
-    table: _SettlementTable | _UnreachableSettlementTable | None,
+    table: _SettlementTable | _UnreachableSettlementTable | _StalledSettlementTable | None,
 ) -> PassThroughEndpointLogging:
     return PassThroughEndpointLogging(
-        background_response_settlement=PrismaBackgroundResponseSettlementStore(table=lambda: table)
+        background_response_settlement=PrismaBackgroundResponseSettlementStore(
+            table=lambda: table, timeout_seconds=0.05
+        )
     )
 
 
@@ -2447,6 +2458,27 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         )
         return await asyncio.wait_for(recorder.call, timeout=5)
 
+    async def _failed_stream_cost(
+        self,
+        sub_route: str,
+        raw_bytes: list[bytes],
+        litellm_call_id: str,
+        passthrough_logging: PassThroughEndpointLogging,
+    ) -> object:
+        logging_obj: Final = self._recorded_logging_obj(_SpendRowRecorder(), litellm_call_id, stream=True)
+        logging_obj.model_call_details["custom_llm_provider"] = "openai"
+
+        await PassThroughStreamingHandler.schedule_stream_failure_logging(
+            litellm_logging_obj=logging_obj,
+            endpoint_type=EndpointType.OPENAI,
+            request_body={},
+            raw_bytes=raw_bytes,
+            exception=httpx.RemoteProtocolError("peer closed connection without sending complete message body"),
+            stream_context=PassThroughStreamContext(passthrough_logging, f"{RESPONSES_URL}{sub_route}", DISPATCH_TIME),
+        )
+        await GLOBAL_LOGGING_WORKER.flush()
+        return logging_obj.model_call_details.get("response_cost")
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("method", "sub_route", "response_body"),
@@ -2489,23 +2521,6 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         assert not later.spend_row["spend"]
         assert not later.spend_row["total_tokens"]
         assert later.spend_row["request_id"] == later_call_id
-
-    @pytest.mark.asyncio
-    async def test_a_proxy_without_the_prisma_package_still_bills_a_finished_background_read(
-        self, local_model_cost_map, monkeypatch
-    ):
-        monkeypatch.setitem(sys.modules, "prisma.errors", None)
-
-        read: Final = await self._logged_call(
-            "GET",
-            f"/{STORED_RESPONSE_ID}",
-            {},
-            _stored_response("completed", True, RESPONSES_USAGE),
-            "c7d2e9a4-1b6f-4e83-9a50-2f8d4b7c1e36",
-            passthrough_logging=_settling_passthrough_logging(None),
-        )
-
-        assert read.spend_row["spend"] > 0
 
     @pytest.mark.asyncio
     async def test_the_proxy_database_keeps_a_background_response_billed_once(self, local_model_cost_map, monkeypatch):
@@ -2635,15 +2650,65 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         assert resumed_stream.spend_row["request_id"] != retrieve.spend_row["request_id"]
 
     @pytest.mark.asyncio
+    async def test_a_resumed_stream_that_fails_after_a_billed_retrieve_does_not_bill_again(self, local_model_cost_map):
+        passthrough_logging: Final = _settling_passthrough_logging(_SettlementTable())
+        finished: Final = _stored_response("completed", True, RESPONSES_USAGE)
+
+        retrieve: Final = await self._logged_call(
+            "GET",
+            f"/{STORED_RESPONSE_ID}",
+            {},
+            finished,
+            "2f8c6a41-7d3e-4b59-9e1a-c4d7b2e5f803",
+            passthrough_logging=passthrough_logging,
+        )
+        failed_stream_cost: Final = await self._failed_stream_cost(
+            f"/{STORED_RESPONSE_ID}?stream=true",
+            _completed_stream_bytes(finished),
+            "8b4e1d97-3a6c-4f20-b5d8-e9a2c7f1b364",
+            passthrough_logging,
+        )
+
+        assert retrieve.spend_row["spend"] > 0
+        assert not failed_stream_cost
+
+    @pytest.mark.asyncio
+    async def test_a_resumed_stream_that_fails_after_it_finished_bills_once_and_its_later_retrieve_does_not(
+        self, local_model_cost_map
+    ):
+        passthrough_logging: Final = _settling_passthrough_logging(_SettlementTable())
+        finished: Final = _stored_response("completed", True, RESPONSES_USAGE)
+
+        failed_stream_cost: Final = await self._failed_stream_cost(
+            f"/{STORED_RESPONSE_ID}?stream=true",
+            _completed_stream_bytes(finished),
+            "5d9a3f72-1e8b-4c46-a7d0-b3f6e2c9a581",
+            passthrough_logging,
+        )
+        retrieve: Final = await self._logged_call(
+            "GET",
+            f"/{STORED_RESPONSE_ID}",
+            {},
+            finished,
+            "c1e7b4a9-6f2d-4835-9b0e-a8d5f3c2e176",
+            passthrough_logging=passthrough_logging,
+        )
+
+        assert isinstance(failed_stream_cost, float)
+        assert failed_stream_cost > 0
+        assert not retrieve.spend_row["spend"]
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "table",
         [
             pytest.param(None, id="no_database"),
             pytest.param(_UnreachableSettlementTable(), id="database_error"),
+            pytest.param(_StalledSettlementTable(_SettlementTable()), id="database_stalled"),
         ],
     )
     async def test_finished_reads_bill_as_before_when_their_settlement_cannot_be_recorded(
-        self, local_model_cost_map, table: _UnreachableSettlementTable | None
+        self, local_model_cost_map, table: _UnreachableSettlementTable | _StalledSettlementTable | None
     ):
         passthrough_logging: Final = _settling_passthrough_logging(table)
         finished: Final = _stored_response("completed", True, RESPONSES_USAGE)

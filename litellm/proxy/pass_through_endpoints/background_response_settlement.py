@@ -1,11 +1,12 @@
-from collections.abc import Awaitable, Callable
+import asyncio
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Final, Protocol
 
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.repositories.base_repository import is_unique_violation
+from litellm.constants import BACKGROUND_RESPONSE_SETTLEMENT_TIMEOUT_SECONDS
 from litellm.repositories.table_repositories import BackgroundResponseSettlementRepository
 
 
@@ -14,7 +15,7 @@ class _NewSettlementRow(TypedDict):
 
 
 class BackgroundResponseSettlementTable(Protocol):
-    def create(self, *, data: _NewSettlementRow) -> Awaitable[object]: ...
+    def create_many(self, data: Sequence[_NewSettlementRow], *, skip_duplicates: bool) -> Awaitable[int]: ...
 
 
 class BackgroundResponseSettlementStore(Protocol):
@@ -33,21 +34,26 @@ def _proxy_settlement_table() -> BackgroundResponseSettlementTable | None:
 class PrismaBackgroundResponseSettlementStore:
     """
     The primary key lets exactly one call across all replicas insert a response id, and that call bills it.
-    With no database or a failed insert the call still bills, since a lost charge cannot be recovered.
+    Skipping duplicates keeps a repeat read from raising a unique violation in Postgres.
+    With no database, a failed insert, or an insert slower than the timeout the call still bills, since a lost charge
+    cannot be recovered and the claim runs before the client gets its response.
     """
 
     table: Callable[[], BackgroundResponseSettlementTable | None] = _proxy_settlement_table
+    timeout_seconds: float = BACKGROUND_RESPONSE_SETTLEMENT_TIMEOUT_SECONDS
 
     async def claim(self, response_id: str) -> bool:
         try:
             table: Final = self.table()
             if table is None:
                 return True
-            await table.create(data=_NewSettlementRow(response_id=response_id))
+            inserted: Final = await asyncio.wait_for(
+                table.create_many([_NewSettlementRow(response_id=response_id)], skip_duplicates=True),
+                timeout=self.timeout_seconds,
+            )
         except Exception as e:  # noqa: BLE001  # any DB failure must bill as before rather than drop the charge
-            if is_unique_violation(e):
-                return False
             verbose_proxy_logger.warning(
                 "Could not record the settlement of background response %s, billing it anyway: %s", response_id, e
             )
-        return True
+            return True
+        return inserted > 0
