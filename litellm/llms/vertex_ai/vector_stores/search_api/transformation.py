@@ -234,6 +234,9 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
     def __init__(self):
         super().__init__()
 
+    def get_async_httpx_client_params(self) -> Mapping[str, object]:
+        return MappingProxyType({"http2": True})
+
     @staticmethod
     def get_supported_extra_body_fields(is_engine: bool = False) -> frozenset[str]:
         """

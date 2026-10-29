@@ -396,7 +396,8 @@ def _resolve_advisor_router(advisor_model: str) -> "Router | None":
         return None
     if llm_router is None:
         return None
-    if llm_router.is_recognized_model(advisor_model) or llm_router.pattern_router.route(advisor_model):
+    registry: Final = llm_router.registry()
+    if registry.resolve(advisor_model, kind="recognized") or registry.patterns().route(advisor_model):
         return llm_router
     return None
 
