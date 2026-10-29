@@ -3,8 +3,10 @@ Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
 import json
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from typing import Final, Literal, cast, overload
+
+from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
@@ -24,6 +26,17 @@ from litellm.types.llms.openai import (
 )
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+
+
+def _is_str_keyed_mapping(value: object) -> TypeIs[Mapping[str, object]]:  # guard-ok: JSON tool objects have str keys
+    return isinstance(value, Mapping)
+
+
+def _strict_only_when_true(tool: Mapping[str, object]) -> Mapping[str, object]:
+    function: Final = tool.get("function")
+    if not _is_str_keyed_mapping(function) or function.get("strict", True) is True:
+        return tool
+    return {**tool, "function": {key: value for key, value in function.items() if key != "strict"}}
 
 
 class HostedVLLMChatConfig(OpenAIGPTConfig):
@@ -88,7 +101,9 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         tools: Final = non_default_params.pop("tools", None)
         if tools is not None:
             non_default_params["tools"] = (
-                self._convert_custom_tools_to_function_tools(tools) if isinstance(tools, list) else tools
+                [_strict_only_when_true(tool) for tool in self._convert_custom_tools_to_function_tools(tools)]
+                if isinstance(tools, list)
+                else tools
             )
 
         thinking: Final = non_default_params.pop("thinking", None)

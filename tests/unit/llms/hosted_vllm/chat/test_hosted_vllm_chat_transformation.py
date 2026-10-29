@@ -402,7 +402,7 @@ def test_hosted_vllm_custom_tools_use_top_level_input_schema():
     assert tools[0]["function"]["parameters"] == input_schema
 
 
-def _strict_tools(strict: bool = True) -> list[dict[str, object]]:
+def _strict_tools(strict: object = True) -> list[dict[str, object]]:
     return [
         {
             "type": "function",
@@ -428,10 +428,9 @@ def _strict_tools(strict: bool = True) -> list[dict[str, object]]:
     ]
 
 
-@pytest.mark.parametrize("strict", [True, False])
 @pytest.mark.parametrize("drop_params", [True, False])
-def test_hosted_vllm_forwards_strict_tool_schema_as_sent(drop_params: bool, strict: bool) -> None:
-    tools: Final = _strict_tools(strict)
+def test_hosted_vllm_forwards_strict_tool_schema_as_sent(drop_params: bool) -> None:
+    tools: Final = _strict_tools()
     sent: Final = copy.deepcopy(tools)
 
     optional_params: Final = get_optional_params(
@@ -443,6 +442,26 @@ def test_hosted_vllm_forwards_strict_tool_schema_as_sent(drop_params: bool, stri
     )
 
     assert optional_params["tools"] == sent
+    assert tools == sent
+
+
+@pytest.mark.parametrize("unmarked_strict", [False, None, "true", 1])
+def test_hosted_vllm_drops_a_strict_that_is_not_true(unmarked_strict: object) -> None:
+    tools: Final = [*_strict_tools(), *_strict_tools(unmarked_strict)]
+    sent: Final = copy.deepcopy(tools)
+
+    optional_params: Final = get_optional_params(
+        model="my-vllm-model",
+        custom_llm_provider="hosted_vllm",
+        tools=tools,
+        tool_choice="required",
+    )
+
+    strict_tool, unmarked_tool = _strict_tools()[0], _strict_tools(unmarked_strict)[0]
+    assert optional_params["tools"] == [
+        strict_tool,
+        {**unmarked_tool, "function": {k: v for k, v in unmarked_tool["function"].items() if k != "strict"}},
+    ]
     assert tools == sent
 
 

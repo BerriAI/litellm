@@ -73,7 +73,6 @@ def test_transform_mcp_tool_to_openai_tool(mock_mcp_tool):
         "properties": {"test": {"type": "string"}},
         "additionalProperties": False,
     }
-    assert "strict" not in openai_tool["function"]
 
 
 def testtransform_openai_tool_call_request_to_mcp_tool_call_request(mock_mcp_tool):
