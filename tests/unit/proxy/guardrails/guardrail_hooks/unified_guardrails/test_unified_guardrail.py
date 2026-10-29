@@ -3299,24 +3299,18 @@ class TestUnscannedRequestIsAnnounced:
         assert not any("\r" in message or "\n" in message for message in warnings), warnings
 
     @pytest.mark.asyncio
-    async def test_during_call_warns_instead_of_raising_on_a_call_type_outside_the_enum(self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_during_call_still_rejects_a_call_type_outside_the_enum(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
         guardrail: Final = RecordingGuardrail()
 
-        with self._capturing(caplog):
-            returned: Final = await UnifiedLLMGuardrails().async_moderation_hook(
+        with pytest.raises(ValueError, match="acompact_responses"):
+            await UnifiedLLMGuardrails().async_moderation_hook(
                 data=self._request(guardrail),
                 user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/responses/compact"),
                 call_type="acompact_responses",
             )
 
         assert guardrail.apply_calls == []
-        assert returned["messages"] == [{"role": "user", "content": "hello world"}]
-        assert any(
-            "call type 'acompact_responses' is not one litellm can scan" in message
-            and "skipping during-call scanning" in message
-            for message in self._warnings(caplog)
-        ), self._warnings(caplog)
 
     async def _pre_call_on(self, guardrail: CustomGuardrail, request_route: str, call_type: str | None) -> None:
         await UnifiedLLMGuardrails().async_pre_call_hook(

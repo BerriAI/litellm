@@ -421,8 +421,8 @@ class UnifiedLLMGuardrails(CustomLogger):
             return data
 
         mappings: Final = load_guardrail_translation_mappings()
-        resolved_call_type: Final = _resolved_call_type(call_type)
-        if resolved_call_type is None or resolved_call_type not in mappings:
+        resolved_call_type: Final = CallTypes(call_type)
+        if resolved_call_type not in mappings:
             _warn_left_unscanned(
                 guardrail_to_apply=guardrail_to_apply,
                 user_api_key_dict=user_api_key_dict,
