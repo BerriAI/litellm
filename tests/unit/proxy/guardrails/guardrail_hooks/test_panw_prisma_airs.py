@@ -3243,7 +3243,7 @@ class TestPanwAirsMcpToolEventScan:
 
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+                "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager"
             ) as mock_manager,
             patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
         ):
@@ -3938,7 +3938,7 @@ class TestPanwAirsDeveloperRoleGuardrail:
 
         data = {
             "messages": [
-                {"role": "developer", "content": "secret API key: sk-12345"},
+                {"role": "developer", "content": "secret API key: sk-98765"},
             ],
             "model": "gpt-4",
             "litellm_call_id": "test-call-id",
@@ -3959,7 +3959,7 @@ class TestPanwAirsDeveloperRoleGuardrail:
             mock_api.assert_called_once()
             # Verify the developer content was sent to the API
             call_args = mock_api.call_args
-            assert "secret API key: sk-12345" in str(call_args)
+            assert "secret API key: sk-98765" in str(call_args)
 
 
 class TestPanwAirsEmptyToolArgsBlock:

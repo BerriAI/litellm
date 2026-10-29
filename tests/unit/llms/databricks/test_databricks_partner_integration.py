@@ -197,7 +197,7 @@ class TestOAuthM2M:
         mock_response.json.return_value = {"access_token": "test-access-token"}
 
         with patch("requests.post", return_value=mock_response) as mock_post:
-            token = databricks_base._get_oauth_m2m_token(
+            token = databricks_base.get_oauth_m2m_token(
                 api_base="https://adb-123.azuredatabricks.net/serving-endpoints",
                 client_id="test-client-id",
                 client_secret="test-client-secret",
@@ -219,7 +219,7 @@ class TestOAuthM2M:
 
         with patch("requests.post", return_value=mock_response):
             with pytest.raises(DatabricksException) as exc_info:
-                databricks_base._get_oauth_m2m_token(
+                databricks_base.get_oauth_m2m_token(
                     api_base="https://adb-123.azuredatabricks.net",
                     client_id="bad-client-id",
                     client_secret="bad-secret",
@@ -235,7 +235,7 @@ class TestOAuthM2M:
         mock_response.json.return_value = {"access_token": "token"}
 
         with patch("requests.post", return_value=mock_response) as mock_post:
-            databricks_base._get_oauth_m2m_token(
+            databricks_base.get_oauth_m2m_token(
                 api_base="https://adb-123.azuredatabricks.net/serving-endpoints",
                 client_id="id",
                 client_secret="secret",
@@ -254,7 +254,7 @@ class TestOAuthM2M:
         mock_response.json.return_value = {"access_token": "token"}
 
         with patch("requests.post", return_value=mock_response) as mock_post:
-            databricks_base._get_oauth_m2m_token(
+            databricks_base.get_oauth_m2m_token(
                 api_base="https://adb-123.azuredatabricks.net/ai-gateway/mlflow/v1",
                 client_id="id",
                 client_secret="secret",
@@ -278,7 +278,7 @@ class TestValidateEnvironmentWithOAuth:
         databricks_base = DatabricksBase()
 
         with patch.object(
-            databricks_base, "_get_oauth_m2m_token", return_value="oauth-token"
+            databricks_base, "get_oauth_m2m_token", return_value="oauth-token"
         ) as mock_oauth:
             api_base, headers = databricks_base.databricks_validate_environment(
                 api_key=None,
@@ -546,7 +546,7 @@ class TestAuthenticationPriority:
         databricks_base = DatabricksBase()
 
         with patch.object(
-            databricks_base, "_get_oauth_m2m_token", return_value="oauth-token"
+            databricks_base, "get_oauth_m2m_token", return_value="oauth-token"
         ) as mock_oauth:
             api_base, headers = databricks_base.databricks_validate_environment(
                 api_key=None,  # No PAT provided - OAuth should be used
@@ -570,7 +570,7 @@ class TestAuthenticationPriority:
 
         # Mock the OAuth call - it will be attempted but PAT should override
         with patch.object(
-            databricks_base, "_get_oauth_m2m_token", return_value="oauth-token"
+            databricks_base, "get_oauth_m2m_token", return_value="oauth-token"
         ):
             api_base, headers = databricks_base.databricks_validate_environment(
                 api_key="dapi-explicit-pat",

@@ -277,4 +277,25 @@ describe("CacheDashboard cache analytics charts", () => {
     expect(compactTicks(requestsCard).length).toBeGreaterThan(0);
     expect(compactTicks(tokensCard)).toContain("60K");
   });
+
+  it("shows the failed state with the server message and Retry when the activity query errors", async () => {
+    const refetch = vi.fn();
+    const failedActivity = {
+      data: undefined,
+      isError: true,
+      error: { error: { message: "Request timed out after 30s" } },
+      refetch,
+    };
+    useCacheActivity.mockReturnValue(failedActivity);
+    renderDashboard();
+
+    await screen.findByText(REQUESTS_CHART_TITLE);
+    const card = cardTitled(REQUESTS_CHART_TITLE);
+    const alert = within(card).getByRole("alert");
+    expect(alert).toHaveTextContent("Failed to load cache activity");
+    expect(alert).toHaveTextContent("Request timed out after 30s");
+    expect(within(card).getByText(/Click a red failed-requests segment/)).toBeInTheDocument();
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
 });

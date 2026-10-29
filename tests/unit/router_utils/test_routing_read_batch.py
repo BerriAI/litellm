@@ -44,7 +44,7 @@ def _router(redis: MagicMock, routing_strategy: str) -> Router:
         model_list=[_deployment("dep-a"), _deployment("dep-b")],
         routing_strategy=routing_strategy,
     )
-    router._update_redis_cache(cache=redis)
+    router.update_redis_cache(cache=redis)
     return router
 
 

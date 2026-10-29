@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import Final, Literal, TypeVar
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -24,6 +24,7 @@ from litellm.proxy.db.db_span import db_span, db_spanned
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.user_repository import UserRepository
+from litellm.types.llms.base import LiteLLMBaseModel
 
 _T = TypeVar("_T")
 
@@ -118,7 +119,7 @@ class KeyMetadataDict(TypedDict, total=False):
     key_exists: ReadOnly[bool]
 
 
-class _TokenDigestRow(BaseModel):
+class _TokenDigestRow(LiteLLMBaseModel):
     digest: str
     key_alias: str | None = None
     team_id: str | None = None
@@ -131,7 +132,7 @@ def _unanimous(first: str | None, last: str | None) -> str | None:
     return first if last is None or first == last else None
 
 
-class _SpendLogDigestRow(BaseModel):
+class _SpendLogDigestRow(LiteLLMBaseModel):
     digest: str
     first_alias: str | None = None
     last_alias: str | None = None
@@ -148,12 +149,13 @@ class _SpendLogDigestRow(BaseModel):
         )
 
 
-class _DailyUserSpendOwnerRow(BaseModel):
+class _DailyUserSpendOwnerRow(LiteLLMBaseModel):
     api_key: str
     first_owner: str | None = None
     last_owner: str | None = None
 
 
+_RAW_ROWS: Final = TypeAdapter(Sequence[dict[str, object]], config=ConfigDict(strict=True))
 _TOKEN_DIGEST_ROWS: Final = TypeAdapter(tuple[_TokenDigestRow, ...])
 _SPEND_LOG_DIGEST_ROWS: Final = TypeAdapter(tuple[_SpendLogDigestRow, ...])
 _DAILY_USER_SPEND_OWNER_ROWS: Final = TypeAdapter(tuple[_DailyUserSpendOwnerRow, ...])
@@ -193,7 +195,7 @@ async def _rows_within_the_statement_timeout(
         await transaction.execute_raw(_SPEND_LOG_STATEMENT_TIMEOUT_SQL)
         for setting in planner_settings:
             await transaction.execute_raw(setting)
-        return await transaction.query_raw(sql, *params)
+        return _RAW_ROWS.validate_python(await transaction.query_raw(sql, *params))
 
 
 async def _reverse_hash_key_metadata(

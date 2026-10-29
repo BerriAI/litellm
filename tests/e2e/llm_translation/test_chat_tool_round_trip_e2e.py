@@ -6,6 +6,7 @@ from typing import Final
 import pytest
 from e2e_config import unique_marker
 from e2e_http import unwrap
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import (
     ChatAssistantTurn,
@@ -138,22 +139,72 @@ def _assert_tool_results_reach_the_model(
 
 
 class TestChatToolResultRoundTrip:
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.GEMINI,),
+            models=(GEMINI_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_gemini(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model, key = _register(client, resources, _api_key_params(GEMINI_BACKEND, "GEMINI_API_KEY"))
         _assert_tool_results_reach_the_model(client, key, model, thinking=None, tool_choice="required")
 
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.MISTRAL,),
+            models=(MISTRAL_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_mistral(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model, key = _register(client, resources, _api_key_params(MISTRAL_BACKEND, "MISTRAL_API_KEY"))
         _assert_tool_results_reach_the_model(client, key, model, thinking=None, tool_choice="required")
 
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_CONVERSE_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_bedrock_converse(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model, key = _register(client, resources, _bedrock_params(BEDROCK_CONVERSE_BACKEND))
         _assert_tool_results_reach_the_model(client, key, model, thinking=None, tool_choice="required")
 
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING, Capability.REASONING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_anthropic_with_extended_thinking(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model, key = _register(client, resources, _api_key_params(ANTHROPIC_BACKEND, "ANTHROPIC_API_KEY"))
         _assert_tool_results_reach_the_model(client, key, model, thinking=THINKING, tool_choice=None)
 
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_LEGACY_THINKING_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING, Capability.REASONING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_bedrock_converse_with_extended_thinking(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:

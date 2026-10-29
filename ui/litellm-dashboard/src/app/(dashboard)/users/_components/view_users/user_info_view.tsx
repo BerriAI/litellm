@@ -47,6 +47,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import ScopedSavingsTab from "@/components/shared/ScopedSavingsTab";
 import { AutoRouterUsageView } from "@/app/(dashboard)/cost-optimization/_components/AutoRouterBenchmarksTab";
 import { useActivityDateRange } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
+import { BudgetPeriodTooltip } from "@/components/shared/BudgetPeriodTooltip";
 
 interface UserInfoViewProps {
   userId: string;
@@ -341,6 +342,8 @@ export default function UserInfoView({
         user_alias: formValues.user_alias ?? userData.user_alias,
         models: formValues.models ?? userData.models,
         max_budget: formValues.max_budget === undefined ? userData.max_budget : formValues.max_budget,
+        tpm_limit: formValues.tpm_limit === undefined ? userData.tpm_limit : formValues.tpm_limit,
+        rpm_limit: formValues.rpm_limit === undefined ? userData.rpm_limit : formValues.rpm_limit,
         budget_duration:
           formValues.budget_duration === undefined ? userData.budget_duration : formValues.budget_duration,
         metadata: formValues.metadata ?? userData.metadata,
@@ -401,6 +404,8 @@ export default function UserInfoView({
       user_role: userData.user_role,
       models: userData.models,
       max_budget: userData.max_budget,
+      tpm_limit: userData.tpm_limit,
+      rpm_limit: userData.rpm_limit,
       budget_duration: userData.budget_duration,
       metadata: userData.metadata,
       // Without these the per-model budget editor mounts empty and a save
@@ -503,7 +508,15 @@ export default function UserInfoView({
         <TabsContent value="overview" keepMounted>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             <Card className="block p-6">
-              <p>Spend</p>
+              <p>
+                Spend
+                <BudgetPeriodTooltip
+                  spend={userData.spend}
+                  maxBudget={userData.max_budget}
+                  budgetDuration={userData.budget_duration}
+                  budgetResetAt={userData.budget_reset_at}
+                />
+              </p>
               <div className="mt-2">
                 <h3 className="text-lg font-medium">${formatNumberWithCommas(userData.spend || 0, 2)}</h3>
                 <p>

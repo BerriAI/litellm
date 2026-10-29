@@ -8,6 +8,7 @@ import type { AgentCreateInfo } from "@/components/networking";
 
 vi.mock("@/components/networking", () => ({
   createAgentCall: vi.fn(),
+  getProxyBaseUrl: vi.fn(() => "http://gw.test:4000/"),
   getAgentCreateMetadata: vi.fn(),
   getAgentsList: vi.fn(),
   keyCreateForAgentCall: vi.fn(),

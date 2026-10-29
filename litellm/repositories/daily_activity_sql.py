@@ -261,6 +261,25 @@ def build_entity_rollup_sql(scope: DailyActivityScope, *, api_key_limit: int) ->
     return SqlQuery(sql=sql, params=(*where_params, PTU_SENTINEL_API_KEY, api_key_limit))
 
 
+def build_guardrail_spend_sql(scope: DailyActivityScope) -> SqlQuery:
+    pg_table: Final = PRISMA_TO_PG_TABLE[scope.table]
+    where_clause, where_params = build_where_clause(scope)
+    sql: Final = f"""
+        SELECT g.date, g.guardrail_id, COALESCE(t.guardrail_name, g.guardrail_id) AS guardrail_name, g.api_key,
+               COALESCE(SUM(g.cost), 0)::float AS spend,
+               COALESCE(SUM(CASE WHEN g.cost IS NULL THEN g.units ELSE g.untracked_units END), 0)::bigint AS untracked_units
+        FROM "LiteLLM_DailyGuardrailUsageUnits" g
+        LEFT JOIN "LiteLLM_GuardrailsTable" t ON t.guardrail_id = g.guardrail_id
+        WHERE g.date >= $1 AND g.date <= $2
+          AND EXISTS (
+              SELECT 1 FROM "{pg_table}"
+              WHERE {where_clause} AND "{pg_table}".date = g.date AND "{pg_table}".api_key = g.api_key
+          )
+        GROUP BY g.date, g.guardrail_id, t.guardrail_name, g.api_key
+    """
+    return SqlQuery(sql=sql, params=where_params)
+
+
 def _key_spend_select() -> str:
     return """
             COALESCE(SUM(spend), 0)::float AS spend,
@@ -299,6 +318,44 @@ def build_key_page_sql(scope: DailyActivityScope, *, offset: int, limit: int) ->
         ) AS page ON TRUE
     """
     return SqlQuery(sql=sql, params=(*where_params, PTU_SENTINEL_API_KEY, limit, offset))
+
+
+def _user_spend_select() -> str:
+    return """
+            COALESCE(SUM(spend), 0)::float AS spend,
+            COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_tokens,
+            COALESCE(SUM(completion_tokens), 0)::bigint AS completion_tokens,
+            (COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0))::bigint AS total_tokens,
+            COALESCE(SUM(api_requests), 0)::bigint AS api_requests,
+            COALESCE(SUM(successful_requests), 0)::bigint AS successful_requests,
+            COALESCE(SUM(failed_requests), 0)::bigint AS failed_requests"""
+
+
+def build_user_page_sql(scope: DailyActivityScope, *, offset: int, limit: int) -> SqlQuery:
+    if not 1 <= limit <= constants.USAGE_USER_PAGE_MAX:
+        raise ValueError(f"limit must be between 1 and {constants.USAGE_USER_PAGE_MAX}")
+    if offset < 0:
+        raise ValueError("offset must be non-negative")
+    where_clause, where_params = build_where_clause(scope)
+    limit_param: Final = len(where_params) + 1
+    offset_param: Final = limit_param + 1
+    group_expr: Final = f"NULLIF(\"{scope.entity_id_field}\", '')"
+    sql: Final = f"""
+        WITH ranked AS (
+            SELECT {group_expr} AS user_id,{_user_spend_select()}, SUM(spend::numeric) AS rank_spend
+            FROM "{PRISMA_TO_PG_TABLE[scope.table]}"
+            WHERE {where_clause}
+            GROUP BY {group_expr}
+        )
+        SELECT (SELECT COUNT(*) FROM ranked)::bigint AS total_users, page.*
+        FROM (SELECT 1) AS one
+        LEFT JOIN LATERAL (
+            SELECT * FROM ranked
+            ORDER BY rank_spend DESC, user_id ASC NULLS LAST
+            LIMIT ${limit_param} OFFSET ${offset_param}
+        ) AS page ON TRUE
+    """
+    return SqlQuery(sql=sql, params=(*where_params, limit, offset))
 
 
 def _bounded_limit(limit: int, *, minimum: int = 1) -> None:

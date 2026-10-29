@@ -2,8 +2,14 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
-from collections.abc import AsyncIterable, Coroutine, Iterable
-from typing import TYPE_CHECKING, Any, Final, Union
+from collections.abc import AsyncIterable, Coroutine, Iterable, Mapping
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Union,
+    cast,  # noqa: TID251  # optional_params reaches the bridge as an untyped dict
+)
 
 from typing_extensions import TypedDict
 
@@ -245,10 +251,15 @@ class ResponsesToCompletionBridgeHandler:
         else:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
+            from .transformation import is_structured_output_request
+
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
                 sync_stream=True,
                 json_mode=kwargs.get("json_mode"),
+                structured_output=is_structured_output_request(
+                    cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
+                ),
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,
@@ -343,10 +354,15 @@ class ResponsesToCompletionBridgeHandler:
         else:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
+            from .transformation import is_structured_output_request
+
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
                 sync_stream=False,
                 json_mode=kwargs.get("json_mode"),
+                structured_output=is_structured_output_request(
+                    cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
+                ),
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,

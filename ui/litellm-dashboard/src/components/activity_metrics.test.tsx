@@ -603,13 +603,13 @@ describe("ActivityMetrics charts", () => {
       "var(--color-emerald-500, #10b981)",
       "var(--color-red-500, #ef4444)",
     ]);
-    expect(barFills(chartTitled("Spend per day"))).toEqual(["var(--color-green-500, #22c55e)"]);
+    expect(barFills(chartTitled("Spend per day"))).toEqual(["#2b3fd6"]);
     expect(areaStrokes(chartTitled("Total Tokens"))).toEqual([
       "var(--color-blue-500, #3b82f6)",
       "var(--color-cyan-500, #06b6d4)",
       "var(--color-indigo-500, #6366f1)",
     ]);
-    expect(barFills(chartTitled("Requests per day"))).toEqual(["var(--color-blue-500, #3b82f6)"]);
+    expect(barFills(chartTitled("Requests per day"))).toEqual(["#2b3fd6"]);
     expect(areaStrokes(chartTitled("Success vs Failed Requests"))).toEqual([
       "var(--color-green-500, #22c55e)",
       "var(--color-red-500, #ef4444)",
@@ -620,11 +620,12 @@ describe("ActivityMetrics charts", () => {
     ]);
   });
 
-  it("shows the built-in chart legend only on the spend per day chart", () => {
+  it("keys every chart from its panel header instead of a built-in chart legend", () => {
     const { container } = render(<ActivityMetrics modelMetrics={twoDayModelMetrics} />);
 
-    expect(container.querySelectorAll(".recharts-legend-wrapper")).toHaveLength(1);
-    expect(screen.getByText("metrics.spend")).toBeInTheDocument();
+    expect(container.querySelectorAll(".recharts-legend-wrapper")).toHaveLength(0);
+    expect(screen.queryByText("metrics.spend")).not.toBeInTheDocument();
+    expect(screen.getByText("Spend")).toBeInTheDocument();
   });
 
   it("renders formatted header legends for each chart card", () => {

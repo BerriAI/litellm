@@ -205,8 +205,8 @@ def thinking_block(thinking: str, signature: JsonValue) -> Event:
     return {"type": "thinking", "thinking": thinking, "signature": signature}
 
 
-def signature_only(signature: JsonValue = SIGNATURE) -> Event:
-    return thinking_block("", signature)
+def signature_only(signature: JsonValue = SIGNATURE, index: int = 0) -> Event:
+    return {**thinking_block("", signature), "index": index}
 
 
 @dataclass(frozen=True, slots=True)

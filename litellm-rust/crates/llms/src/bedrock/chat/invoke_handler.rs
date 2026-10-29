@@ -2,6 +2,7 @@ use base64::Engine;
 use bytes::Buf;
 use futures_util::{Stream, StreamExt};
 use litellm_framer::{
+    EventStreamError,
     aws_event_stream::{AwsEventStreamCodec, Message},
     frames,
 };
@@ -11,9 +12,8 @@ use serde_json::Value;
 
 use crate::{
     Error,
-    anthropic::chat::handler::ModelResponseIterator,
     base_llm::{
-        chat::streaming::{ChatStream, StreamShape},
+        base_model_iterator::tunnelled_http,
         messages::streaming::{ByteStream, EventStream},
     },
 };
@@ -47,11 +47,21 @@ where
     B: Buf + Send,
     E: std::error::Error + Send + Sync + 'static,
 {
-    frames(input, AwsEventStreamCodec).map(|message| {
-        decode_invoke_chunk(message.map_err(|error| {
+    frames(input, AwsEventStreamCodec).map(|message| decode_invoke_chunk(message.map_err(framing)?))
+}
+
+fn framing(error: EventStreamError) -> Error {
+    match &error {
+        EventStreamError::Body(body) if let Some(http) = tunnelled_http(body) => {
+            Error::Http(http.clone())
+        }
+        EventStreamError::Body(_)
+        | EventStreamError::InvalidLength(_)
+        | EventStreamError::Truncated
+        | EventStreamError::Malformed(_) => {
             Error::InvalidResponse(crate::ErrorDetail::failed("stream framing", error))
-        })?)
-    })
+        }
+    }
 }
 
 pub fn decode_invoke_anthropic_chunk(chunk: Value) -> Result<MessagesStreamEvent, Error> {
@@ -64,38 +74,6 @@ pub fn invoke_anthropic_event_stream(bytes: ByteStream) -> EventStream {
     Box::pin(invoke_chunk_stream(bytes).map(|chunk| decode_invoke_anthropic_chunk(chunk?)))
 }
 
-#[derive(Clone, Copy)]
-enum InvokeProvider {
-    Anthropic,
-    DeepseekR1,
-    Moonshot,
-    Unsupported,
-}
-
-impl From<&str> for InvokeProvider {
-    fn from(value: &str) -> Self {
-        match value {
-            "anthropic" => Self::Anthropic,
-            "deepseek_r1" => Self::DeepseekR1,
-            "moonshot" => Self::Moonshot,
-            _ => Self::Unsupported,
-        }
-    }
-}
-
-pub fn invoke_chat_stream(invoke_provider: &str, shape: StreamShape) -> Result<ChatStream, Error> {
-    match InvokeProvider::from(invoke_provider) {
-        InvokeProvider::Anthropic => Ok(ChatStream::new(
-            invoke_anthropic_event_stream,
-            ModelResponseIterator::new(shape),
-        )),
-        InvokeProvider::DeepseekR1 | InvokeProvider::Moonshot => Err(Error::Unsupported(
-            "Bedrock invoke streaming for this model family",
-        )),
-        InvokeProvider::Unsupported => Err(Error::Unsupported("Bedrock invoke streaming")),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use aws_smithy_eventstream::frame::write_message_to;
@@ -106,7 +84,7 @@ mod tests {
     use litellm_llms_types::formats::messages::streaming::MessagesContentBlockDelta;
 
     use super::*;
-    use crate::base_llm::messages::streaming::anthropic_sse_event_stream;
+    use crate::base_llm::messages::streaming;
 
     fn in_pieces(wire: &[u8]) -> ByteStream {
         let pieces: Vec<Bytes> = wire.chunks(3).map(Bytes::copy_from_slice).collect();
@@ -135,7 +113,7 @@ mod tests {
             .try_collect::<Vec<_>>()
             .await
             .unwrap();
-        let from_sse = anthropic_sse_event_stream(in_pieces(sse.as_bytes()))
+        let from_sse = streaming::event_stream(in_pieces(sse.as_bytes()))
             .try_collect::<Vec<_>>()
             .await
             .unwrap();

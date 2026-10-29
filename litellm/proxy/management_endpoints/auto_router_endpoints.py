@@ -14,7 +14,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Protocol
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, field_validator
+from pydantic import ConfigDict, TypeAdapter, field_validator
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -28,9 +28,10 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import (
-    _virtual_key_max_budget_check,
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    _virtual_key_max_budget_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     can_key_call_resolved_model,
+    virtual_key_max_budget_check,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.autorouter_session_rollup import (
@@ -48,20 +49,28 @@ from litellm.proxy.management_endpoints.common_daily_activity import daily_activ
 from litellm.proxy.management_helpers.auto_router_permissions import (
     authorize_member_auto_router_dependencies,
     authorize_member_auto_router_team,
+    auto_router_environment_reference_error,
+    raise_auto_router_environment_reference_error,
     validate_member_auto_router_config,
 )
 from litellm.repositories.autorouter_session_repository import AutoRouterSessionRepository
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.daily_activity_sql import build_where_clause
+from litellm.repositories.table_repositories import PrismaTableRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
-from litellm.router_strategy.complexity_router import ComplexityRouter
-from litellm.router_utils.auto_router_model_naming import (
+from litellm.router_strategy.auto_router.auto_router_model_naming import (
     StrategyRouterDependencyRole,
     classify_strategy_router_model,
     strategy_router_dependencies,
 )
+from litellm.router_strategy.complexity_router import ComplexityRouter
+from litellm.router_strategy.complexity_router.request_models import (
+    AutoRouterRoutingTestRequest,
+    RequestComplexityRouterConfig,
+)
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.auto_router_endpoints import (
     SHADOW_EVAL_TURN_VALVE,
     AutoRouterAvailabilityRequest,
@@ -71,12 +80,10 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterBenchmarkTotals,
     AutoRouterCacheBucket,
     AutoRouterCacheStats,
-    AutoRouterRoutingTestRequest,
     AutoRouterRoutingTestResponse,
     AutoRouterSessionResponse,
     ComplexityRouterConfigValidationRequest,
     ComplexityRouterConfigValidationResponse,
-    RequestComplexityRouterConfig,
     ShadowEvalDirection,
     ShadowEvalJobResponse,
     ShadowEvalJobTargetResponse,
@@ -175,7 +182,7 @@ class _ShadowEvalAttemptRow(Protocol):
 
 
 class _ShadowEvalFunnelTable(Protocol):
-    async def create_many(self, data: Sequence[Mapping[str, object]], skip_duplicates: bool) -> int: ...
+    async def create_many(self, data: Sequence[Mapping[str, object]], *, skip_duplicates: bool) -> int: ...
 
 
 class _ShadowEvalAttemptTable(Protocol):
@@ -200,21 +207,40 @@ def _user_rows(prisma_client: "PrismaClient") -> _UserRowsTable:
     return UserRepository(prisma_client).table
 
 
+class _ShadowEvalJobRepository(PrismaTableRepository[_ShadowEvalJobRow]):
+    table_name = "litellm_shadowevaljob"
+
+
+class _ShadowEvalFunnelRepository(PrismaTableRepository[object]):
+    table_name = "litellm_shadowevalfunnel"
+
+
+class _ShadowEvalAttemptRepository(PrismaTableRepository[_ShadowEvalAttemptRow]):
+    table_name = "litellm_shadowevalattempt"
+
+
 def _shadow_eval_jobs(prisma_client: "PrismaClient") -> _ShadowEvalJobTable:
-    return prisma_client.db.litellm_shadowevaljob
+    return _ShadowEvalJobRepository(prisma_client).table
 
 
 def _shadow_eval_funnel(prisma_client: "PrismaClient") -> _ShadowEvalFunnelTable:
-    return prisma_client.db.litellm_shadowevalfunnel  # pyright: ignore[reportAttributeAccessIssue]  # generated client
+    return _ShadowEvalFunnelRepository(prisma_client).table
 
 
 def _shadow_eval_attempts(prisma_client: "PrismaClient") -> _ShadowEvalAttemptTable:
-    return prisma_client.db.litellm_shadowevalattempt
+    return _ShadowEvalAttemptRepository(prisma_client).table
+
+
+_RAW_ROWS: Final = TypeAdapter(Sequence[dict[str, object]], config=ConfigDict(strict=True))
 
 
 async def _query_raw(prisma_client: "PrismaClient", query: str, *args: object) -> Sequence[Mapping[str, object]]:
     async with db_span("auto_router_report_query", sql_relation(query)):
-        return await prisma_client.db.query_raw(query, *args)
+        return _RAW_ROWS.validate_python(await prisma_client.db.query_raw(query, *args))
+
+
+async def _execute_raw(prisma_client: "PrismaClient", query: str, *args: object) -> int:
+    return await prisma_client.db.execute_raw(query, *args)
 
 
 async def _authorize_router_dry_run(user_api_key_dict: UserAPIKeyAuth, team_id: str | None) -> LiteLLM_TeamTable | None:
@@ -339,7 +365,7 @@ async def _authorize_models_this_test_can_call(
         )
 
     try:
-        await _virtual_key_max_budget_check(
+        await virtual_key_max_budget_check(
             valid_token=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
         )
@@ -381,7 +407,11 @@ async def validate_complexity_router_config(
     """
     member_team: Final = await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
 
-    from litellm.router_utils.auto_router_model_naming import (
+    raise_auto_router_environment_reference_error(
+        auto_router_environment_reference_error(data.complexity_router_config, user_api_key_dict)
+    )
+
+    from litellm.router_strategy.auto_router.auto_router_model_naming import (
         validate_complexity_router_config_write,
     )
 
@@ -539,6 +569,12 @@ async def preview_auto_router_routing(
             detail={"error": CommonProxyErrors.no_llm_router.value},
         )
     resolved: Final = await _resolve_saved_routing_test(data, user_api_key_dict, llm_router)
+    if data.saved_model_id is None:
+        raise_auto_router_environment_reference_error(
+            auto_router_environment_reference_error(
+                data.complexity_router_config.model_dump(exclude_none=True), user_api_key_dict
+            )
+        )
     actor: Final = (
         await _authorize_member_dry_run_config(
             config=resolved.complexity_router_config.model_dump(exclude_none=True),
@@ -557,10 +593,10 @@ async def preview_auto_router_routing(
 
     if member_team is not None and _models_this_test_can_call(resolved.complexity_router_config):
         from litellm.proxy.auth.user_api_key_auth import (
-            _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # reuse the serving admission policy
+            run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # reuse the serving admission policy
         )
 
-        await _run_centralized_common_checks(
+        await run_centralized_common_checks(
             user_api_key_auth_obj=actor,
             request=http_request,
             request_data=request_data,
@@ -627,7 +663,7 @@ async def preview_auto_router_routing(
     )
 
 
-class _SessionAggRow(BaseModel):
+class _SessionAggRow(LiteLLMBaseModel):
     """One router's window: session shape from overlapping sessions, money from the selected days."""
 
     router_name: str
@@ -649,6 +685,7 @@ class _SessionAggRow(BaseModel):
     ttl_5m_turns: int = 0
     ttl_1h_turns: int = 0
     total_tokens: int = 0
+    day_total_tokens: int | None = None
     session_seconds: float = 0.0
     turns: int = 0
     spend: float = 0.0
@@ -723,6 +760,7 @@ def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
     return AutoRouterBenchmarkTotals(
         sessions=sessions,
         turns=row.turns,
+        total_tokens=row.day_total_tokens,
         avg_turns_per_session=_per_session(row, row.session_turns),
         avg_session_seconds=_per_session(row, row.session_seconds),
         avg_tokens_per_session=_per_session(row, row.total_tokens),
@@ -758,6 +796,7 @@ def _benchmark_group(row: _SessionAggRow) -> AutoRouterBenchmarkGroup:
         tier_turns=row.tier_turns,
         sessions=totals.sessions,
         turns=totals.turns,
+        total_tokens=totals.total_tokens,
         avg_turns_per_session=totals.avg_turns_per_session,
         avg_session_seconds=totals.avg_session_seconds,
         avg_tokens_per_session=totals.avg_tokens_per_session,
@@ -795,6 +834,11 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
         ttl_5m_turns=sum(row.ttl_5m_turns for row in rows),
         ttl_1h_turns=sum(row.ttl_1h_turns for row in rows),
         total_tokens=sum(row.total_tokens for row in rows),
+        day_total_tokens=(
+            sum(row.day_total_tokens or 0 for row in rows)
+            if all(row.day_total_tokens is not None for row in rows)
+            else None
+        ),
         spend=sum(row.spend for row in rows),
         saved_spend=sum(row.saved_spend for row in rows),
         savings_estimated_turns=sum(row.savings_estimated_turns for row in rows),
@@ -1249,7 +1293,7 @@ def _is_unique_violation(error: Exception) -> bool:
     return isinstance(error, UniqueViolationError)
 
 
-class _AttemptAggRow(BaseModel):
+class _AttemptAggRow(LiteLLMBaseModel):
     grp: str
     turn_count: int
     real_wins: int
@@ -1361,7 +1405,7 @@ WHERE group_id = $1 AND stopped_by IS NULL
 """
 
 
-class _FunnelTotalsRow(BaseModel):
+class _FunnelTotalsRow(LiteLLMBaseModel):
     legs_with_rows: int
     not_sampled: int
     unjudgeable: int
@@ -1369,7 +1413,7 @@ class _FunnelTotalsRow(BaseModel):
     withheld: int
 
 
-class _AttemptCountRow(BaseModel):
+class _AttemptCountRow(LiteLLMBaseModel):
     job_id: str
     attempt_count: int
     spend: float
@@ -1395,7 +1439,7 @@ WHERE group_id IN (
 """
 
 
-class _AttemptTotalsRow(BaseModel):
+class _AttemptTotalsRow(LiteLLMBaseModel):
     judged_count: int
     error_count: int
     judge_spend: float
@@ -1429,7 +1473,7 @@ def _leg_group_id(leg: "_LegRow") -> str:
     return leg.group_id
 
 
-class _LegRow(BaseModel):
+class _LegRow(LiteLLMBaseModel):
     """One LiteLLM_ShadowEvalJob row, validated off the untyped prisma record. A row is
     one target's leg of a job; the legs of a job share group_id and identical config,
     written together by one create_many. The API's job id is the group id, so leg ids
@@ -1776,7 +1820,7 @@ async def start_shadow_eval(
     # deliberate. Sweep and claim filter on exact (target_type, id) pairs so a team id
     # that happens to equal a key hash never matches the other kind's slot.
     for target_type, ids in requested_by_type:
-        await prisma_client.db.execute_raw(_SWEEP_FINISHED_JOBS_SQL, list(ids), target_type)
+        await _execute_raw(prisma_client, _SWEEP_FINISHED_JOBS_SQL, list(ids), target_type)
     claimed: Final = await _shadow_eval_jobs(prisma_client).find_many(
         where={
             "OR": [
@@ -1993,8 +2037,8 @@ async def stop_shadow_eval_job(
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
     stamp: Final = datetime.now(timezone.utc)
     operator: Final = user_api_key_dict.user_id or "operator"
-    claimed: Final = await prisma_client.db.execute_raw(
-        _STOP_JOB_SQL, job_id, operator, stamp.replace(tzinfo=None).isoformat()
+    claimed: Final = await _execute_raw(
+        prisma_client, _STOP_JOB_SQL, job_id, operator, stamp.replace(tzinfo=None).isoformat()
     )
     legs: Final = _LEG_ROWS.validate_python(
         await _shadow_eval_jobs(prisma_client).find_many(where={"group_id": job_id}) or ()

@@ -13,21 +13,21 @@ use pyo3::{
 pub struct PublicCall {
     args: Py<PyTuple>,
     kwargs: Py<PyDict>,
-    request: Py<PyAny>,
+    bound: Py<PyDict>,
 }
 
 impl PublicCall {
     /// Copies the keyword arguments once, so the legacy path's rewrites never reach the
     /// caller's own dict while every value keeps its identity.
     pub fn capture(
-        request: &Bound<'_, PyAny>,
+        bound: &Bound<'_, PyDict>,
         args: &Bound<'_, PyTuple>,
         kwargs: &Bound<'_, PyDict>,
     ) -> PyResult<Self> {
         Ok(Self {
             args: args.clone().unbind(),
             kwargs: kwargs.copy()?.unbind(),
-            request: request.clone().unbind(),
+            bound: bound.clone().unbind(),
         })
     }
 
@@ -55,31 +55,30 @@ impl PublicCall {
         py: Python<'py>,
         name: &str,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        lookup(self.kwargs.bind(py), self.request.bind(py), name)
+        lookup(self.kwargs.bind(py), self.bound.bind(py), name)
     }
 
     pub(crate) fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(&self.args)?;
         visit.call(&self.kwargs)?;
-        visit.call(&self.request)
+        visit.call(&self.bound)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{local, local_dict};
 
     fn capture<'py>(py: Python<'py>, source: &std::ffi::CStr) -> (PublicCall, Bound<'py, PyDict>) {
         let locals = PyDict::new(py);
         py.run(source, Some(&locals), Some(&locals)).unwrap();
-        let request = locals.get_item("request").unwrap().unwrap();
-        let kwargs = locals
-            .get_item("kwargs")
-            .unwrap()
-            .unwrap()
-            .cast_into::<PyDict>()
-            .unwrap();
-        let call = PublicCall::capture(&request, &PyTuple::empty(py), &kwargs).unwrap();
+        let call = PublicCall::capture(
+            &local_dict(&locals, "bound"),
+            &PyTuple::empty(py),
+            &local_dict(&locals, "kwargs"),
+        )
+        .unwrap();
         (call, locals)
     }
 
@@ -91,25 +90,22 @@ mod tests {
                 py,
                 c"
 pages = [0]
-class Request:
-    pass
-request = Request()
+bound = {'pages': [1]}
 kwargs = {'pages': pages}
 ",
             );
-            let caller = locals
-                .get_item("kwargs")
-                .unwrap()
-                .unwrap()
-                .cast_into::<PyDict>()
-                .unwrap();
+            let caller = local_dict(&locals, "kwargs");
             call.kwargs()
                 .bind(py)
                 .set_item("litellm_call_id", "call")
                 .unwrap();
             assert!(!caller.contains("litellm_call_id").unwrap());
-            let pages = locals.get_item("pages").unwrap().unwrap();
-            assert!(call.lookup(py, "pages").unwrap().unwrap().is(&pages));
+            assert!(
+                call.lookup(py, "pages")
+                    .unwrap()
+                    .unwrap()
+                    .is(local(&locals, "pages"))
+            );
         });
     }
 }
