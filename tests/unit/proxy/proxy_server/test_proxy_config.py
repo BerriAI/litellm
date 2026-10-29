@@ -4851,9 +4851,6 @@ async def test_ProxyConfig__update_general_settings_none_input_noop():
     # None input returns early.
     result = await pc._update_general_settings(db_general_settings=None)
     assert result is None
-    # Error-style: dict() will fail on non-mapping non-None input.
-    with pytest.raises(TypeError):
-        await pc._update_general_settings(db_general_settings=12345)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio

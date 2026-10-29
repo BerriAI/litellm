@@ -3756,6 +3756,22 @@ async def test_db_reload_keeps_the_resolved_value_of_a_config_owned_env_referenc
     assert proxy_server_module.store_model_in_db is True
 
 
+@pytest.mark.asyncio
+async def test_db_reload_of_a_json_string_general_settings_row_reports_no_ignored_keys(monkeypatch):
+    from litellm.proxy import proxy_server as proxy_server_module
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", MagicMock(), raising=False)
+    proxy_config: Final = ProxyConfig()
+    proxy_config.settings.load_yaml({})
+    monkeypatch.setattr(proxy_server_module, "general_settings", proxy_config.settings, raising=False)
+
+    await proxy_config._update_general_settings('{"budget_rollover": true, "master_key": "sk-stored"}')
+
+    assert proxy_config.settings.unmanaged_db_keys() == ()
+    assert proxy_config.settings.source("master_key") != "db"
+
+
 def test_max_ui_session_budget_default_is_one_dollar():
     """LIT-4662: the dashboard session budget default is a product decision; the
     old 0.25 default locked admins out of auto router Test Connection and the
@@ -15508,6 +15524,34 @@ async def test_delete_config_general_settings_removes_a_stored_general_settings_
     written: Final = json.loads(fake_prisma.db.litellm_config.upsert.await_args.kwargs["data"]["update"]["param_value"])
     assert written == {"store_prompts_in_spend_logs": True}
     assert litellm.budget_rollover is False
+    assert pc.settings.unmanaged_db_keys() == ()
+
+
+@pytest.mark.asyncio
+async def test_delete_config_general_settings_removes_a_stored_copy_of_a_ui_litellm_field_the_config_file_sets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy._types import ConfigFieldDelete
+    from litellm.proxy.proxy_server import ProxyConfig, delete_config_general_settings
+
+    pc: Final = ProxyConfig()
+    pc._load_yaml_settings_stores({"general_settings": {}, "litellm_settings": {"budget_rollover": True}})
+    stored_row: Final = {"budget_rollover": True, "store_prompts_in_spend_logs": True}
+    pc.settings.apply_db_row("general_settings", stored_row)
+    fake_prisma: Final = _fake_prisma_with_config(stored_row)
+    monkeypatch.setattr(proxy_server_module, "proxy_config", pc)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setattr(litellm, "budget_rollover", True)
+
+    admin: Final = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await delete_config_general_settings(
+        data=ConfigFieldDelete(field_name="budget_rollover", config_type="general_settings"),
+        user_api_key_dict=admin,
+    )
+
+    written: Final = json.loads(fake_prisma.db.litellm_config.upsert.await_args.kwargs["data"]["update"]["param_value"])
+    assert written == {"store_prompts_in_spend_logs": True}
+    assert litellm.budget_rollover is True
     assert pc.settings.unmanaged_db_keys() == ()
 
 

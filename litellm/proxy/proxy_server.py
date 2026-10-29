@@ -5926,6 +5926,10 @@ class ProxyConfig:
             store.apply_db_row(cast(DbRow, section_name), wrote_section)
         await invalidate_config_param(section_name)
 
+    def config_owns(self, *, section_name: Section, key: str) -> bool:
+        store: Final = self._settings_stores.get(section_name)
+        return store is not None and store.owned_by_config(key)
+
     def reject_config_owned_deletes(self, *, section_name: str, keys: tuple[str, ...]) -> None:
         """Refuse a delete of a setting the config file owns; unlike a write, the value never makes it allowed."""
         store: Final = self._settings_stores.get(cast(Section, section_name))
@@ -8211,9 +8215,9 @@ class ProxyConfig:
             general_settings.get("maximum_spend_logs_retention_interval", "1d"),
         )
 
-    async def _update_general_settings(self, db_general_settings: Mapping[str, SettingsJsonValue] | None) -> None:
+    async def _update_general_settings(self, db_general_settings: Mapping[str, SettingsJsonValue] | str | None) -> None:
         global general_settings
-        if db_general_settings is None:
+        if not isinstance(db_general_settings, Mapping):
             return
         if not isinstance(general_settings, SettingsStore):
             self.settings.load_yaml(_as_settings_mapping(general_settings))
@@ -20639,11 +20643,13 @@ async def delete_config_general_settings(
         )
 
     if data.field_name in _GENERAL_SETTINGS_UI_LITELLM_FIELDS:
-        reset: Final = await _reset_general_settings_ui_litellm_field(data.field_name, user_api_key_dict)
         stored_copy: Final = await _stored_general_settings()
-        if stored_copy is not None and data.field_name in stored_copy:
-            await _remove_stored_general_setting(data.field_name, stored_copy, user_api_key_dict)
-        return reset
+        if stored_copy is None or data.field_name not in stored_copy:
+            return await _reset_general_settings_ui_litellm_field(data.field_name, user_api_key_dict)
+        removed: Final = await _remove_stored_general_setting(data.field_name, stored_copy, user_api_key_dict)
+        if proxy_config.config_owns(section_name="litellm_settings", key=data.field_name):
+            return removed
+        return await _reset_general_settings_ui_litellm_field(data.field_name, user_api_key_dict)
 
     stored: Final = await _stored_general_settings()
 
