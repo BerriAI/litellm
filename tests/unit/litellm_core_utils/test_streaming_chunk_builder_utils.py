@@ -2519,3 +2519,39 @@ def test_stream_chunk_builder_carries_the_bedrock_guardrail_trace_and_records_it
     (entry,) = logging_obj.model_call_details["litellm_params"]["metadata"]["standard_logging_guardrail_information"]
     assert entry["guardrail_usage"] == {"topicPolicyUnits": 2}
     assert entry["guardrail_cost"] == pytest.approx(2 * 0.00015)
+
+
+@pytest.mark.parametrize(
+    ("base_model", "counted_as"), [("azure/gpt-6.1-sol", "azure/gpt-6.1-sol"), ("claude-sonnet-4-5", "my-gpt-6")]
+)
+def test_stream_chunk_builder_counts_a_custom_named_deployments_missing_usage_with_its_base_model_only_when_openai(
+    base_model: str, counted_as: str
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    messages: Final = [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
+    chunks: Final = [
+        ModelResponseStream(id="s", model="my-gpt-6", choices=[StreamingChoices(index=0, delta=Delta(content="hi"))]),
+        ModelResponseStream(
+            id="s", model="my-gpt-6", choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")]
+        ),
+    ]
+    logging_obj: Final = Logging(
+        model="my-gpt-6",
+        messages=messages,
+        stream=True,
+        call_type="acompletion",
+        start_time=None,
+        litellm_call_id="call",
+        function_id="fn",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"metadata": {"model_info": {"base_model": base_model}}}
+
+    built: Final = stream_chunk_builder(chunks=chunks, messages=messages, logging_obj=logging_obj)
+
+    assert built is not None
+    assert litellm.token_counter(model=base_model, messages=messages) != litellm.token_counter(
+        model="my-gpt-6", messages=messages
+    )
+    assert built.usage.prompt_tokens == litellm.token_counter(model=counted_as, messages=messages)
