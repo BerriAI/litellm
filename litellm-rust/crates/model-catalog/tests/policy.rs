@@ -5,7 +5,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use litellm_model_catalog::wire::Fields;
 use litellm_model_catalog::{
-    BoundMap, Catalog, Error, Held, Installs, IntegrityLimits, Outcome, Pending, Slot,
+    BoundMap, Catalog, Held, Installs, IntegrityLimits, Outcome, Pending, Slot,
 };
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -387,11 +387,7 @@ mod expected {
                 IntegrityLimits::new(min_model_count, max_shrink_ratio).unwrap(),
             )
             .err()
-            .map(|located| match located.error {
-                Error::BelowMinimum { .. } => "below_minimum",
-                Error::Shrunk { .. } => "shrunk",
-                other => panic!("unexpected {other}"),
-            });
+            .map(|error| <&'static str>::from(error.kind()));
         assert_eq!(kind, refused);
     }
 
