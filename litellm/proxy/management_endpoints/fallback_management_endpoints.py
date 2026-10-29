@@ -61,7 +61,7 @@ async def _reload_config_file_ownership(proxy_config: "ProxyConfig") -> None:
 
 async def _stored_router_settings(prisma_client: PrismaClient) -> Mapping[str, JsonValue]:
     row: Final = await ConfigRepository(prisma_client, use_writer=True).get_param(ROUTER_SETTINGS_PARAM)
-    if row is None or row.param_value is None:
+    if row is None or not isinstance(row.param_value, Mapping):
         return {}
     return _STORED_ROUTER_SETTINGS.validate_python(row.param_value)
 
@@ -70,12 +70,10 @@ def _editable_rules(
     proxy_config: "ProxyConfig", stored_settings: Mapping[str, JsonValue], fallback_key: str
 ) -> list[StoredFallback]:
     file_settings: Final = proxy_config.router_settings
-    rules: Final = (
-        file_settings.config_value(fallback_key)
-        if file_settings.owned_by_config(fallback_key)
-        else stored_settings.get(fallback_key)
-    )
-    return _STORED_FALLBACKS.validate_python(rules or [])
+    if not file_settings.owned_by_config(fallback_key):
+        return _STORED_FALLBACKS.validate_python(stored_settings.get(fallback_key) or [])
+    file_rules: Final = file_settings.config_value(fallback_key)
+    return _STORED_FALLBACKS.validate_python(file_rules if isinstance(file_rules, list) else [])
 
 
 async def _write_rules(

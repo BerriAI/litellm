@@ -134,7 +134,7 @@ PRIMARY_DEPLOYMENT_ID: Final = "team-primary-id"
 FALLBACK_DEPLOYMENT_ID: Final = "team-fallback-id"
 
 FallbackRules = list[dict[str, list[str]] | dict[str, object] | str]
-RouterSettings = dict[str, FallbackRules | None]
+RouterSettings = dict[str, FallbackRules | str | None]
 _ROUTER_SETTINGS_JSON: Final = TypeAdapter(dict[str, JsonValue])
 
 
@@ -435,13 +435,14 @@ class TestFallbackWritesSeeTheLatestStoredRules:
 
         assert stored.stored_fallbacks() == [GATEWAY_RULE]
 
-    async def test_a_create_treats_a_null_stored_row_as_empty(self) -> None:
+    @pytest.mark.parametrize("param_value", [None, ["team-primary"], 7])
+    async def test_a_create_replaces_a_stored_row_that_is_not_an_object(self, param_value: JsonValue) -> None:
         stored: Final = _StoredRouterSettings(None)
-        stored.row = SimpleNamespace(param_name="router_settings", param_value=None)
+        stored.row = SimpleNamespace(param_name="router_settings", param_value=param_value)
 
         await self._create(FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"]), stored)
 
-        assert stored.stored_fallbacks() == [GATEWAY_RULE]
+        assert stored.row.param_value == {"fallbacks": [GATEWAY_RULE]}
 
 
 CONFIG_RULE: Final = {"gpt-5.4-mini": ["team-fallback"]}
@@ -538,6 +539,22 @@ class TestFallbackWritesHonourTheConfigFile:
         assert "key 'fallbacks' is set in the config file" in str(refused.value.detail)
         assert stored.row is None
         assert router.fallbacks == [CONFIG_RULE]
+
+    async def test_writes_to_a_config_file_env_reference_that_resolves_to_nothing_are_refused(
+        self, router: Router, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("LITELLM_TEST_UNSET_FALLBACKS", raising=False)
+        stored: Final = _StoredRouterSettings(None, config_file={"fallbacks": "os.environ/LITELLM_TEST_UNSET_FALLBACKS"})
+
+        with pytest.raises(HTTPException) as refused:
+            await self._create(FallbackCreateRequest(model="team-primary", fallback_models=["team-fallback"]), router, stored)
+        with pytest.raises(HTTPException) as not_found:
+            await self._delete("team-primary", router, stored)
+
+        assert refused.value.status_code == 400
+        assert "key 'fallbacks' is set in the config file" in str(refused.value.detail)
+        assert not_found.value.status_code == 404
+        assert stored.row is None
 
     async def test_a_create_that_restates_one_of_several_config_rules_writes_nothing(self, router: Router) -> None:
         stored: Final = _StoredRouterSettings(None, config_file={"fallbacks": [CONFIG_RULE, CONFIG_WINDOW_RULE]})
