@@ -39,12 +39,24 @@ class _NamedTool(BaseModel):
 _NAMED_TOOL: Final = TypeAdapter(_NamedTool)
 
 
-def is_allowed_tools_tool_choice(tool_choice: Mapping[str, object] | str | None) -> bool:
-    return isinstance(tool_choice, Mapping) and tool_choice.get("type") == "allowed_tools"
+class _ToolChoiceType(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: str
+
+
+_TOOL_CHOICE_TYPE: Final = TypeAdapter(_ToolChoiceType)
+
+
+def is_allowed_tools_tool_choice(tool_choice: object) -> bool:
+    try:
+        return _TOOL_CHOICE_TYPE.validate_python(tool_choice).type == "allowed_tools"
+    except ValidationError:
+        return False
 
 
 def raise_if_allowed_tools_tool_choice_unsupported(
-    tool_choice: Mapping[str, object] | str | None,
+    tool_choice: object,
     custom_llm_provider: str,
     model: str,
 ) -> None:
@@ -64,7 +76,7 @@ def raise_if_allowed_tools_tool_choice_unsupported(
     )
 
 
-def parse_chat_allowed_tools_tool_choice(tool_choice: Mapping[str, object]) -> ChatAllowedToolsToolChoice | None:
+def parse_chat_allowed_tools_tool_choice(tool_choice: object) -> ChatAllowedToolsToolChoice | None:
     try:
         return _CHAT_ALLOWED_TOOLS_TOOL_CHOICE.validate_python(tool_choice)
     except ValidationError:

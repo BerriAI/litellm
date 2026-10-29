@@ -9069,20 +9069,21 @@ def validate_chat_completion_tool_choice(
         tool_choice_type = tool_choice.get("type")
         if tool_choice_type in ("auto", "none", "required") and "function" not in tool_choice:
             return tool_choice_type
-        if tool_choice_type == "allowed_tools":
-            if parse_chat_allowed_tools_tool_choice(tool_choice) is None:
-                raise BadRequestError(
-                    message=(
-                        f"Invalid tool choice, tool_choice={tool_choice}. On chat completions allowed_tools is "
-                        f"{CHAT_ALLOWED_TOOLS_LAYOUT}; the flat Responses API layout is not accepted here"
-                    ),
-                    model=model,
-                    llm_provider="",
-                )
-            return tool_choice
+        if (
+            tool_choice_type == "allowed_tools"
+            and parse_chat_allowed_tools_tool_choice(cast(object, tool_choice)) is None
+        ):
+            raise BadRequestError(
+                message=(
+                    f"Invalid tool choice, tool_choice={tool_choice}. On chat completions allowed_tools is "
+                    f"{CHAT_ALLOWED_TOOLS_LAYOUT}; the flat Responses API layout is not accepted here"
+                ),
+                model=model,
+                llm_provider="",
+            )
 
         # Standard OpenAI format: {"type": "function", "function": {...}}
-        if tool_choice.get("type") is None or tool_choice.get("function") is None:
+        if tool_choice_type != "allowed_tools" and (tool_choice_type is None or tool_choice.get("function") is None):
             raise BadRequestError(
                 message=f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec",
                 model=model,
