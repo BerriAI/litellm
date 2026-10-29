@@ -736,7 +736,6 @@ def add_internal_model_credentials(
     data: dict,
     llm_router: "Router",
     model_id: str | None,
-    team_id: str | None = None,
 ) -> None:
     """
     Attach the deployment's immutable server-side credential snapshot to a router-routed
@@ -750,7 +749,7 @@ def add_internal_model_credentials(
     if model_id is None:
         return
     try:
-        credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
+        credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
     except Exception:  # noqa: BLE001  # the snapshot only enables cost accounting; a batch whose deployment no longer resolves must still be retrievable
         return
     if credentials is None:

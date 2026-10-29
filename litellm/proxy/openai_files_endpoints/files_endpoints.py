@@ -1094,9 +1094,7 @@ async def get_file_content(
 
             model: Final = cast(str | None, data.get("model"))
             if model:
-                add_internal_model_credentials(
-                    data=data, llm_router=llm_router, model_id=model, team_id=user_api_key_dict.team_id
-                )
+                add_internal_model_credentials(data=data, llm_router=llm_router, model_id=model)
                 response = await llm_router.afile_content(
                     **{
                         "model": model,

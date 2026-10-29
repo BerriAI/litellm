@@ -1695,7 +1695,7 @@ async def test_retrieve__unified_batch_id_routes_to_router(retrieve_harness):
     # Credentials are resolved for the deployment behind the unified id so the batch's
     # output file can be read for cost accounting. This id resolves to nothing here, and
     # the retrieve must still serve the batch rather than fail on the lookup.
-    retrieve_harness.creds_resolver.assert_called_once_with(model_id="gpt-4o-mini", team_id=None)
+    retrieve_harness.creds_resolver.assert_called_once_with(model_id="gpt-4o-mini")
 
     # router receives the (still-encoded) batch id verbatim - this layer does
     # not decode it for the unified path.

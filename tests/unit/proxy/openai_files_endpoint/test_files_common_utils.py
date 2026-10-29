@@ -12,7 +12,6 @@ from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     add_deployment_model_info,
-    add_internal_model_credentials,
     apply_team_provider_credentials,
     apply_unified_file_ids,
     deployment_drop_params,
@@ -423,7 +422,7 @@ def test_add_internal_model_credentials_attaches_an_immutable_snapshot():
     assert isinstance(snapshot, MappingProxyType)
     with pytest.raises(TypeError):
         snapshot["s3_bucket_name"] = "attacker-bucket"
-    router.get_deployment_credentials_with_provider.assert_called_once_with(model_id="deployment-1", team_id=None)
+    router.get_deployment_credentials_with_provider.assert_called_once_with(model_id="deployment-1")
 
 
 @pytest.mark.parametrize(
@@ -894,18 +893,16 @@ async def test_a_team_model_public_name_never_resolves_for_another_team(team_id:
 
 
 @pytest.mark.parametrize(
-    "team_id, drop_params, model_info_id, credentials_api_key",
-    [("team-a", {"drop_params": True}, "team-a-deployment", "team-a-key"), ("team-b", {}, None, None)],
+    "team_id, drop_params, model_info_id",
+    [("team-a", {"drop_params": True}, "team-a-deployment"), ("team-b", {}, None)],
 )
 def test_the_deployment_settings_of_a_team_model_follow_the_caller_team(
-    team_id: str, drop_params: dict[str, bool], model_info_id: str | None, credentials_api_key: str | None
+    team_id: str, drop_params: dict[str, bool], model_info_id: str | None
 ):
     llm_router: Final = _team_a_router()
     data: Final[dict[str, object]] = {}
 
     add_deployment_model_info(data=data, llm_router=llm_router, model_id="team-gpt", team_id=team_id)
-    add_internal_model_credentials(data=data, llm_router=llm_router, model_id="team-gpt", team_id=team_id)
 
     assert dict(deployment_drop_params(llm_router, "team-gpt", {}, team_id)) == drop_params
     assert (data.get("litellm_metadata") or {}).get("model_info", {}).get("id") == model_info_id
-    assert (data.get("_litellm_internal_model_credentials") or {}).get("api_key") == credentials_api_key
