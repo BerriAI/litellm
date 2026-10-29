@@ -50,6 +50,7 @@ from litellm.constants import (
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming, is_guardrail_intervention
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.fallback_generalizations import match_routing_generalization
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, merge_anthropic_beta_headers
 from litellm.llms.azure.passthrough.transformation import (
     foreign_azure_deployment,
@@ -705,10 +706,11 @@ def typesafe_allowlist_model_names() -> tuple[str, ...]:
     if not passthrough_endpoint_router.has_credentials(custom_llm_provider="typesafe"):
         return ()
     cost_map: Final = _COST_MAP_ENTRIES.validate_python(litellm.model_cost)  # pyright: ignore[reportUnknownMemberType]  # legacy registry is validated at this boundary
-    priced_jev_models: Final = sorted(
-        name.removeprefix("typesafe/") for name in cost_map if name.startswith("typesafe/")
+    priced_names: Final = (name.removeprefix("typesafe/") for name in cost_map if name.startswith("typesafe/"))
+    jev_models_typesafe_serves: Final = sorted(
+        name for name in priced_names if match_routing_generalization(name) == "typesafe"
     )
-    return ("typesafe/*", *priced_jev_models)
+    return ("typesafe/*", *jev_models_typesafe_serves)
 
 
 @router.post(

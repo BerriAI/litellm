@@ -12492,11 +12492,8 @@ async def model_list(
     offers_typesafe_allowlist_names: Final = (
         asks_for_allowlist_names and team_id is None and user_api_key_has_admin_view(user_api_key_dict)
     )
-    all_models = list(
-        dict.fromkeys(
-            [*available_models, *(typesafe_allowlist_model_names() if offers_typesafe_allowlist_names else ())]
-        )
-    )
+    typesafe_names_to_offer: Final = typesafe_allowlist_model_names() if offers_typesafe_allowlist_names else ()
+    all_models = [*available_models, *(name for name in typesafe_names_to_offer if name not in available_models)]
 
     undiscoverable_names: Final = undiscoverable_model_names(
         all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id

@@ -629,6 +629,40 @@ async def test_key_dialog_without_a_team_offers_typesafe_models_to_an_admin(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["expand", None])
+async def test_pickers_offer_typesafe_names_once_and_no_bare_name_for_registered_typesafe_deployments(
+    monkeypatch: pytest.MonkeyPatch, scope: str | None
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+    jev_models: Final = _priced_jev_models()
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost})
+    router: Final = Router(
+        model_list=[
+            {"model_name": "typesafe/*", "litellm_params": {"model": "typesafe/*", "api_key": "sk-typesafe-fake"}},
+            {
+                "model_name": "ticket-router",
+                "litellm_params": {"model": "typesafe/my-classifier", "api_key": "sk-typesafe-fake"},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    admin: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    response: Final = await proxy_server.model_list(
+        user_api_key_dict=admin, return_wildcard_routes=True, include_model_access_groups=True, scope=scope
+    )
+
+    listed: Final = [model["id"] for model in response["data"]]
+    assert {"ticket-router", *jev_models} <= set(listed)
+    assert listed.count("typesafe/*") == 1
+    assert set(listed).isdisjoint({"*", "my-classifier"})
+
+
+@pytest.mark.asyncio
 async def test_key_dialog_offers_no_typesafe_models_to_an_internal_user(
     openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
 ) -> None:
