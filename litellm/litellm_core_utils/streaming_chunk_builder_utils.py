@@ -12,9 +12,14 @@ from typing_extensions import ReadOnly, Required
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import chunk_usage, provider_reported_usage_cost
+from litellm.litellm_core_utils.core_helpers import (
+    USAGE_COST_BILLED_PROVIDERS,
+    chunk_usage,
+    provider_reported_usage_cost,
+)
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import BEDROCK_TRACE_FIELDS, object_items, object_mapping
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import partition_annotations
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,  # pyright: ignore[reportUnknownVariableType]  # response param accepts an untyped dict
 )
@@ -1375,7 +1380,7 @@ def stream_chunk_builder_text_completion(
     return TextCompletionResponse(**response)
 
 
-_CALCULATOR_PRICED_REPORTED_COST_PROVIDERS: Final = frozenset({LlmProviders.XAI.value})
+_CALCULATOR_PRICED_REPORTED_COST_PROVIDERS: Final = frozenset({LlmProviders.XAI.value}) | USAGE_COST_BILLED_PROVIDERS
 
 
 def _logged_provider(logging_obj: Optional["Logging"]) -> object:
@@ -1645,14 +1650,15 @@ def _assembled_message_fields(processor: ChunkProcessor, chunks: Sequence) -> It
         and chunk["choices"][0]["delta"]["annotations"] is not None
     ]
 
-    if annotation_chunks:
-        # Merge annotations from ALL chunks — providers may spread
-        # them across multiple streaming chunks or send them only in
-        # the final chunk.
-        all_annotations: Final[list[object]] = []
-        for ac in annotation_chunks:
-            all_annotations.extend(ac["choices"][0]["delta"]["annotations"])
-        yield "annotations", all_annotations
+    message_annotations, provider_annotations = (
+        partition_annotations(
+            list(chain.from_iterable(chunk["choices"][0]["delta"]["annotations"] for chunk in annotation_chunks))
+        )
+        if annotation_chunks
+        else (None, ())
+    )
+    if message_annotations is not None:
+        yield "annotations", message_annotations
 
     audio_chunks: Final = [
         chunk
@@ -1692,28 +1698,26 @@ def _assembled_message_fields(processor: ChunkProcessor, chunks: Sequence) -> It
         and chunk["choices"][0]["delta"]["provider_specific_fields"] is not None
     ]
 
-    if provider_specific_chunks:
-        provider_field_dicts: Final = tuple(
-            fields
-            for chunk in provider_specific_chunks
-            for fields in (chunk["choices"][0]["delta"]["provider_specific_fields"],)
-            if isinstance(fields, dict)
-        )
-        streamed_citations: Final = tuple(
-            fields["citation"] for fields in provider_field_dicts if fields.get("citation") is not None
-        )
-        citation_fields: Final = (
-            {"citations": _joined_streamed_citations(streamed_citations)} if streamed_citations else {}
-        )
-        combined_provider_fields: Final = {
-            key: value
-            for fields in (citation_fields, *provider_field_dicts)
-            for key, value in fields.items()
-            if key != "citation"
-        }
+    provider_field_dicts: Final = tuple(
+        fields
+        for chunk in provider_specific_chunks
+        for fields in (chunk["choices"][0]["delta"]["provider_specific_fields"],)
+        if isinstance(fields, dict)
+    )
+    streamed_citations: Final = tuple(
+        fields["citation"] for fields in provider_field_dicts if fields.get("citation") is not None
+    )
+    citation_fields: Final = {"citations": _joined_streamed_citations(streamed_citations)} if streamed_citations else {}
+    provider_annotation_fields: Final = {"annotations": list(provider_annotations)} if provider_annotations else {}
+    combined_provider_fields: Final = {
+        key: value
+        for fields in (provider_annotation_fields, citation_fields, *provider_field_dicts)
+        for key, value in fields.items()
+        if key != "citation"
+    }
 
-        if combined_provider_fields:
-            yield "provider_specific_fields", combined_provider_fields
+    if combined_provider_fields:
+        yield "provider_specific_fields", combined_provider_fields
 
 
 def stream_chunk_builder(
