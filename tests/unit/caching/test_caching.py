@@ -1243,6 +1243,10 @@ def test_redis_cache_ignores_a_leftover_disk_cache_dir(
     redis_client_without_network: None, caplog: pytest.LogCaptureFixture
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        Cache(type=LiteLLMCacheType.REDIS, host="127.0.0.1", port="6379")
+    assert "disk_cache_dir" not in caplog.text
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         cache: Final = Cache(
             type=LiteLLMCacheType.REDIS, host="127.0.0.1", port="6379", disk_cache_dir="/tmp/litellm-cache"
         )

@@ -200,8 +200,6 @@ class Cache:
         Returns:
             None. Cache is set as a litellm param
         """
-        if disk_cache_dir is not None:
-            verbose_logger.warning("Ignoring disk_cache_dir, the disk cache backend was removed")
         if _backend is not None:
             self.cache: BaseCache = _backend
         elif type == LiteLLMCacheType.REDIS:
@@ -307,6 +305,8 @@ class Cache:
         else:
             supported_types: Final = ", ".join(member.value for member in LiteLLMCacheType)
             raise ValueError(f"Unsupported cache type {type!r}. Supported types: {supported_types}")
+        if disk_cache_dir is not None:
+            verbose_logger.warning("Ignoring disk_cache_dir, the disk cache backend was removed")
         if "cache" not in litellm.input_callback:
             litellm.input_callback.append("cache")
         if "cache" not in litellm.success_callback:
@@ -1055,7 +1055,7 @@ def enable_cache(
         None
 
     Raises:
-        ValueError: If an unsupported cache type is provided.
+        ValueError: If no cache is set yet and the cache type is unsupported.
     """
     print_verbose("LiteLLM: Enabling Cache")
     if "cache" not in litellm.input_callback:
