@@ -3,7 +3,7 @@ Unit tests for OpenAI Text Completion Guardrail Translation Handler
 """
 
 import json
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.openai.completion.guardrail_translation.handler import (
     OpenAITextCompletionHandler,
@@ -19,7 +20,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
 from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
-from litellm.types.utils import CallTypes, TextChoices, TextCompletionResponse, Usage
+from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs, TextChoices, TextCompletionResponse, Usage
 
 
 class MockGuardrail(CustomGuardrail):
@@ -363,13 +364,25 @@ class _RecordingKeywordFilter(ContentFilterGuardrail):
         self.streaming_sampling_rate = 1
         self.scanned_texts: tuple[tuple[str, ...], ...] = ()
 
-    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
         self.scanned_texts = (*self.scanned_texts, tuple(inputs.get("texts") or ()))
         return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
 
 
 class _PassthroughReplaceGuardrail(CustomGuardrail):
-    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
         if any("kumquat" in text for text in inputs.get("texts") or []):
             self.raise_passthrough_exception(violation_message="replaced kumquat", request_data=request_data)
         return inputs

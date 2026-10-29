@@ -38,6 +38,7 @@ from litellm.types.utils import (
     StreamingChoices,
     TextChoices,
     TextCompletionResponse,
+    Usage,
 )
 
 
@@ -3629,6 +3630,40 @@ async def test_streaming_hook_releases_the_held_tail_of_a_choice_the_stream_neve
         "persimmon", "[KEYWORD_REDACTED]"
     )
     assert all(getattr(chunk, "usage", None) is None for chunk in delivered)
+
+
+_STREAM_USAGE: Final = Usage(prompt_tokens=5, completion_tokens=20, total_tokens=25)
+
+
+async def _then_usage_chunk(stream, usage_chunk):
+    async for chunk in stream():
+        yield chunk
+    yield usage_chunk
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stream", "usage_chunk"),
+    [
+        (
+            _text_completion_n2_stream_without_choice_1_finish,
+            TextCompletionResponse(id="cmpl-stream", object="text_completion", choices=[], usage=_STREAM_USAGE),
+        ),
+        (_chat_n2_stream_without_choice_1_finish, ModelResponseStream(id="chatcmpl-stream", choices=[], usage=_STREAM_USAGE)),
+    ],
+)
+async def test_streaming_hook_keeps_the_usage_chunk_last_after_releasing_a_held_tail(stream, usage_chunk):
+    delivered: Final = [
+        chunk
+        async for chunk in _fruit_word_filter().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=MagicMock(), response=_then_usage_chunk(stream, usage_chunk), request_data={}
+        )
+    ]
+
+    assert delivered[-1] is usage_chunk
+    assert "".join(_streamed_text(chunk, 1) for chunk in delivered[:-1]) == _LONG_TAIL.replace(
+        "persimmon", "[KEYWORD_REDACTED]"
+    )
 
 
 @pytest.mark.asyncio

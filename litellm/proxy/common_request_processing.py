@@ -4029,13 +4029,13 @@ class ProxyBaseLLMRequestProcessing:
           (assembled_response, cache_hit); the closure also runs
           non-apply_guardrail post-call hooks via
           _run_deferred_stream_guardrails.
-        - Every other anthropic_messages/aresponses stream gets a closure
-          that dispatches on the stored args shape, because the arming site
-          cannot tell the producers apart: native iterators store a single
-          ready-made logging coroutine to enqueue, while bridged streams
-          (LiteLLMCompletionStreamingIterator, and the plain SSE generator
-          AnthropicStreamWrapper returns for bridged /v1/messages) share
-          their inner CustomStreamWrapper's logging_obj and so store
+        - Every other anthropic_messages/aresponses/atext_completion stream
+          gets a closure that dispatches on the stored args shape, because the
+          arming site cannot tell the producers apart: native iterators store
+          a single ready-made logging coroutine to enqueue, while bridged
+          streams (LiteLLMCompletionStreamingIterator, TextCompletionStreamWrapper,
+          and the plain SSE generator AnthropicStreamWrapper returns for bridged
+          /v1/messages) share their inner CustomStreamWrapper's logging_obj and so store
           (assembled_response, cache_hit); for those the closure only
           dispatches success logging, matching the route's pre-existing
           hook surface.
@@ -4072,7 +4072,11 @@ class ProxyBaseLLMRequestProcessing:
             logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete
             return
 
-        if route_type not in ("anthropic_messages", "aresponses") or not self._is_streaming_response(response):
+        if route_type not in (
+            "anthropic_messages",
+            "aresponses",
+            "atext_completion",
+        ) or not self._is_streaming_response(response):
             return
 
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
