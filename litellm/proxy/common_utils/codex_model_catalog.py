@@ -427,6 +427,15 @@ def merged_codex_catalog(
     return _compact_json({**top, "models": [*upstream, *(added_models[position] for position in kept)]})
 
 
+def upstream_codex_slugs(upstream_body: bytes) -> frozenset[str] | None:
+    try:
+        upstream: Final = _JSON_OBJECTS.validate_python(_JSON_OBJECT.validate_json(upstream_body).get("models"))
+    except ValidationError:
+        return None
+    slugs: Final = (model.get("slug") for model in upstream)
+    return frozenset(slug for slug in slugs if isinstance(slug, str))
+
+
 def _catalog_row(
     row: ModelInfoResponse, lookup_id: str, label_id: str, llm_router: Router | None, team_id: str | None
 ) -> CodexCatalogRow:
