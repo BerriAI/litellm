@@ -37,13 +37,14 @@ import litellm.batches.main as bm
 import asyncio
 import datetime
 import json
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Final
 import httpx
 import respx
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import LiteLLMBatch
 
 
 # --------------------------------------------------------------------------- #
@@ -1204,3 +1205,92 @@ async def test_delete_batch_output_file(respx_mock: respx.MockRouter, monkeypatc
     assert delete_route.call_count == 1
     assert delete_response.id == "file-output123"
     assert delete_response.deleted is True
+
+
+VLLM_ROUTER_API_BASE: Final = "http://vllm-router.test/v1"
+VLLM_ROUTER_BATCH: Final = MappingProxyType(
+    {
+        "id": "batch_5f8dac",
+        "status": "pending",
+        "input_file_id": "file-b73f4c",
+        "created_at": 1793239207,
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h",
+        "output_file_id": None,
+        "total_requests": None,
+        "completed_requests": 0,
+        "failed_requests": 0,
+        "metadata": {},
+    }
+)
+
+
+async def _create_on_vllm_router() -> LiteLLMBatch:
+    return await litellm.acreate_batch(
+        completion_window="24h",
+        endpoint="/v1/chat/completions",
+        input_file_id="file-b73f4c",
+        custom_llm_provider="hosted_vllm",
+        api_key="sk-test",
+        api_base=VLLM_ROUTER_API_BASE,
+    )
+
+
+async def _retrieve_from_vllm_router() -> LiteLLMBatch:
+    return await litellm.aretrieve_batch(
+        batch_id="batch_5f8dac", custom_llm_provider="hosted_vllm", api_key="sk-test", api_base=VLLM_ROUTER_API_BASE
+    )
+
+
+VLLM_ROUTER_BATCH_CALLS: Final = (
+    pytest.param("POST", "/batches", _create_on_vllm_router, id="acreate_batch"),
+    pytest.param("GET", "/batches/batch_5f8dac", _retrieve_from_vllm_router, id="aretrieve_batch"),
+)
+
+
+@pytest.mark.parametrize("method, path, call_router", VLLM_ROUTER_BATCH_CALLS)
+@pytest.mark.parametrize(
+    "router_status, openai_status",
+    (
+        ("pending", "validating"),
+        ("running", "in_progress"),
+        ("completed", "completed"),
+        ("failed", "failed"),
+        ("cancelled", "cancelled"),
+    ),
+)
+async def test_hosted_vllm_router_batch_comes_back_as_an_openai_batch(
+    respx_mock: respx.MockRouter,
+    method: str,
+    path: str,
+    call_router: Callable[[], Awaitable[LiteLLMBatch]],
+    router_status: str,
+    openai_status: str,
+):
+    respx_mock.route(method=method, url=f"{VLLM_ROUTER_API_BASE}{path}").respond(
+        200, json={**VLLM_ROUTER_BATCH, "status": router_status}
+    )
+
+    batch: Final = await call_router()
+
+    assert (batch.id, batch.object, batch.status) == ("batch_5f8dac", "batch", openai_status)
+
+
+@pytest.mark.parametrize("method, path, call_router", VLLM_ROUTER_BATCH_CALLS)
+@pytest.mark.parametrize("field, value", (("status", "queued"), ("object", "file")))
+async def test_hosted_vllm_router_batch_with_an_unknown_value_is_rejected(
+    respx_mock: respx.MockRouter,
+    method: str,
+    path: str,
+    call_router: Callable[[], Awaitable[LiteLLMBatch]],
+    field: str,
+    value: str,
+):
+    respx_mock.route(method=method, url=f"{VLLM_ROUTER_API_BASE}{path}").respond(
+        200, json={**VLLM_ROUTER_BATCH, field: value}
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        await call_router()
+
+    assert [error["loc"] for error in exc_info.value.errors()] == [(field,)]
