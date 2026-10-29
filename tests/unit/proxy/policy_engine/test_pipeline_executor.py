@@ -1729,21 +1729,6 @@ async def test_streaming_step_discards_legacy_rewrite_whose_texts_do_not_line_up
 
 
 @pytest.mark.asyncio
-async def test_streaming_step_discards_legacy_rewrite_that_changes_a_tool_call(monkeypatch, caplog):
-    masked_tool_call = {"function": {"name": "lookup", "arguments": '{"ssn": "[MASKED]"}'}}
-    guardrail = _LegacyHookGuardrail(
-        replacement=_legacy_replacement("[REWRITTEN] hello world", tool_calls=[masked_tool_call])
-    )
-    chunks = [_chunk()]
-
-    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        result = await _run_legacy_streaming_step(monkeypatch, guardrail, chunks)
-
-    _assert_passed_with_discard_warning(result, caplog, "the legacy hook changed a tool call's name or arguments")
-    assert chunks == [_chunk()]
-
-
-@pytest.mark.asyncio
 async def test_streaming_step_discards_legacy_rewrite_that_drops_the_tool_calls(monkeypatch, caplog):
     guardrail = _LegacyHookGuardrail(replacement=_legacy_replacement("[REWRITTEN] hello world", tool_calls=[]))
     chunks = [_chunk()]
@@ -1772,21 +1757,6 @@ async def test_streaming_step_passes_a_tool_only_stream_the_legacy_hook_left_alo
     assert result.modified_data["metadata"]["applied_guardrails"] == ["masker"]
     assert chunks == [_tool_only_chunk()]
     assert not any("discarded" in record.getMessage() for record in caplog.records)
-
-
-@pytest.mark.asyncio
-async def test_streaming_step_discards_a_legacy_tool_call_rewrite_on_a_tool_only_stream(monkeypatch, caplog):
-    masked_tool_call = {"function": {"name": "lookup", "arguments": '{"ssn": "[MASKED]"}'}}
-    guardrail = _LegacyHookGuardrail(replacement=_legacy_replacement(tool_calls=[masked_tool_call]))
-    chunks = [_tool_only_chunk()]
-
-    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        result = await _run_legacy_streaming_step(
-            monkeypatch, guardrail, chunks, translation=_ToolOnlyLegacyScanningTranslation()
-        )
-
-    _assert_passed_with_discard_warning(result, caplog, "the legacy hook changed a tool call's name or arguments")
-    assert chunks == [_tool_only_chunk()]
 
 
 class _NoHooksGuardrail(CustomGuardrail):
@@ -1875,7 +1845,93 @@ def _anthropic_web_search_stream():
         {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 2}},
         {"type": "message_stop"},
     )
+    return _anthropic_sse(events)
+
+
+def _anthropic_sse(events):
     return [f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events]
+
+
+def _anthropic_tool_only_stream():
+    return _anthropic_sse(
+        (
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "m",
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 0},
+                },
+            },
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {}},
+            },
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"ssn"'},
+            },
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": ': "123"}'},
+            },
+            {"type": "content_block_stop", "index": 0},
+            {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 2}},
+            {"type": "message_stop"},
+        )
+    )
+
+
+def _streamed_block_deltas(chunks, index, field):
+    events = (
+        json.loads(line[len("data: ") :])
+        for line in b"".join(chunks).decode().splitlines()
+        if line.startswith("data: ")
+    )
+    return "".join(
+        event["delta"][field]
+        for event in events
+        if event.get("index") == index and event["type"] == "content_block_delta"
+    )
+
+
+class _AnthropicMaskingLegacyGuardrail(_LegacyHookGuardrail):
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+        for block in response["content"]:
+            if block["type"] == "text":
+                block["text"] = block["text"].replace("hello", "[MASKED]")
+            if block["type"] == "tool_use":
+                block["input"] = {key: "[MASKED]" for key in block["input"]}
+
+
+@pytest.mark.parametrize(
+    "stream, masked_key",
+    [(_anthropic_web_search_stream, "query"), (_anthropic_tool_only_stream, "ssn")],
+    ids=["web_search_query", "tool_only"],
+)
+@pytest.mark.asyncio
+async def test_streaming_step_delivers_a_legacy_hook_mask_of_a_streamed_tool_input(
+    monkeypatch, caplog, stream, masked_key
+):
+    chunks = stream()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await _run_legacy_streaming_step(
+            monkeypatch, _AnthropicMaskingLegacyGuardrail(), chunks, translation=AnthropicMessagesHandler()
+        )
+
+    assert result.terminal_action == "allow"
+    assert [step.outcome for step in result.step_results] == ["pass"]
+    assert json.loads(_streamed_block_deltas(chunks, 0, "partial_json")) == {masked_key: "[MASKED]"}
+    assert "hello" not in b"".join(chunks).decode()
+    assert not any("discarded" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio
