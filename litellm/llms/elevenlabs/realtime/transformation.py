@@ -319,6 +319,7 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
         self._backend_factory: Final = backend_factory
         self._transformer: Final = transformer or ElevenLabsEventTransformer()
         self._config: ElevenLabsSessionConfig | None = None
+        self._session_id: str | None = None
 
     def validate_environment(
         self,
@@ -348,6 +349,7 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
         logging_session_id: str,
         session_configuration_request: str | None = None,
     ) -> OpenAIRealtimeTranscriptionSessionCreated:
+        self._session_id = logging_session_id
         return session_created_event(default_session_config(self._options), logging_session_id)
 
     def transform_realtime_request(
@@ -379,9 +381,7 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
         realtime_response_transform_input: RealtimeResponseTransformInput,
     ) -> RealtimeResponseTypedDict:
         server_message: Final = parse_server_message(message)
-        events: Final = (
-            () if server_message is None else self._transformer.transform(server_message, self._require_config())
-        )
+        events: Final = () if server_message is None else self._server_events(server_message)
         result: Final[RealtimeResponseTypedDict] = {
             "response": list(events),
             "current_output_item_id": realtime_response_transform_input.get("current_output_item_id"),
@@ -393,6 +393,13 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
             "session_configuration_request": realtime_response_transform_input.get("session_configuration_request"),
         }
         return result
+
+    def _server_events(self, message: ElevenLabsServerMessageUnion) -> tuple[OpenAIRealtimeEvents, ...]:
+        if isinstance(message, ElevenLabsSessionStarted):
+            verbose_logger.debug("ElevenLabs realtime session started: %s", message.session_id)
+            session_id: Final = self._session_id if self._session_id is not None else message.session_id
+            return (session_created_event(self._require_config(), session_id),)
+        return self._transformer.transform(message, self._require_config())
 
     def _configure(self, message: str) -> tuple[str, ...]:
         if self._config is not None:

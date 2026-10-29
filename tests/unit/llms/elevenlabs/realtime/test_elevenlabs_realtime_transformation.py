@@ -444,7 +444,7 @@ def test_audio_without_a_transcript_is_billed_at_close():
     assert config.unbilled_usage_on_session_close(SCRIBE_REALTIME_MODEL) == {"type": "duration", "seconds": 0.5}
 
 
-def test_session_started_reports_the_configured_session():
+def test_session_started_without_a_synthetic_event_reports_the_upstream_id_and_configured_session():
     config: Final = _configured(_session_update(rate=16_000, language="es"))
     events: Final = _response(config, _frame("session_started", session_id="el_sess_1"))
 
@@ -460,6 +460,18 @@ def test_synthetic_session_created_uses_the_defaults():
 
     assert event["session"]["id"] == "trace_1"
     assert event["session"]["audio"]["input"]["format"] == {"type": "audio/pcm", "rate": 24_000}
+
+
+def test_session_started_keeps_the_synthetic_id_and_reports_the_configured_audio_rate():
+    config: Final = ElevenLabsRealtimeConfig()
+    synthetic: Final = config.transform_session_created_event(SCRIBE_REALTIME_MODEL, "trace_1")
+    config.transform_realtime_request(_session_update(rate=16_000), SCRIBE_REALTIME_MODEL)
+    events: Final = _response(config, _frame("session_started", session_id="el_sess_1"))
+
+    assert synthetic["session"]["id"] == "trace_1"
+    assert synthetic["session"]["audio"]["input"]["format"] == {"type": "audio/pcm", "rate": 24_000}
+    assert events[0]["session"]["id"] == "trace_1"
+    assert events[0]["session"]["audio"]["input"]["format"] == {"type": "audio/pcm", "rate": 16_000}
 
 
 def test_api_key_travels_only_in_the_xi_api_key_header():
