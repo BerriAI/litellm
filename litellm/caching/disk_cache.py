@@ -46,7 +46,7 @@ class DiskCache(BaseCache):
 
     def get_cache(self, key, **kwargs):
         original_cached_response: Final = self.disk_cache.get(key)
-        if original_cached_response:
+        if original_cached_response is not None:
             try:
                 cached_response = _DECODED_DISK_VALUE.validate_python(json.loads(original_cached_response))
             except Exception:
