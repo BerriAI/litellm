@@ -19,11 +19,17 @@ from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.token_counter import pdf_page_pricing, reads_pdf_pages
+from litellm.litellm_core_utils.token_counter import (
+    deployment_openai_model,
+    pdf_page_pricing,
+    reads_pdf_pages,
+    unresolved_tokenizer_model,
+)
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     billable_input_since_newest_compaction,
     holds_compaction_summary,
 )
+from litellm.router_utils.deployment_pricing import deployment_pricing_models
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.token_counter import (
@@ -135,19 +141,26 @@ def _count_input_tokens_for_models(
 
 
 def models_counted_for(model: str, llm_router: Router | None, team_id: str | None) -> tuple[str, ...]:
-    """The names a request for `model` from `team_id` is counted with: `model` itself, except for a deployment that
-    reads PDF pages and prices them unlike `model`, which is counted with its own model minus the provider prefix,
-    the name `/v1/messages/count_tokens` counts with."""
-    served: Final = (
-        llm_router.resolved_litellm_models(model, team_id, use_base_model=True) if llm_router is not None else ()
-    )
-    return tuple(dict.fromkeys(_counted_name(model, served_model) for served_model in served)) or (model,)
+    """The names to count a request for `model` from `team_id` with, keeping the largest count, one per deployment
+    serving it.
+
+    An OpenAI deployment counts as its OpenAI model, so it gets that model's tokenizer and PDF page pricing. A
+    deployment that reads PDF pages and prices them unlike `model` counts as its model minus the provider prefix, the
+    name `/v1/messages/count_tokens` counts with. Any other deployment counts as the requested name with the encoding
+    tiktoken gives that name as written, without loading its vendor's tokenizer. A name no deployment serves counts as
+    written."""
+    deployments: Final = (llm_router.get_model_list(model_name=model, team_id=team_id) or ()) if llm_router else ()
+    return tuple(dict.fromkeys(_counted_name(model, deployment) for deployment in deployments)) or (model,)
 
 
-def _counted_name(model: str, served_model: str) -> str:
-    if pdf_page_pricing(served_model) == pdf_page_pricing(model) or not reads_pdf_pages(served_model):
-        return model
-    return served_model.partition("/")[2] or served_model
+def _counted_name(model: str, deployment: object) -> str:
+    openai_model: Final = deployment_openai_model(deployment)
+    if openai_model is not None:
+        return openai_model
+    served: Final = next(iter(deployment_pricing_models(deployment)), model)
+    if pdf_page_pricing(served) != pdf_page_pricing(model) and reads_pdf_pages(served):
+        return served.partition("/")[2] or served
+    return unresolved_tokenizer_model(model)
 
 
 def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:

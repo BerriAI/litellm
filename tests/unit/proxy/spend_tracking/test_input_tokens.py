@@ -74,12 +74,12 @@ def _router(*deployments: tuple[str, str]) -> Router:
 
 
 @pytest.mark.parametrize(
-    ("group", "deployment_model"),
+    ("group", "deployment_model", "counted_with"),
     [
-        ("gpt-4o", "anthropic/claude-haiku-5-5"),
-        ("pdf-reports", "azure/gpt-5.6-sol"),
-        ("pdf-reports", "azure/responses/gpt-5.6-sol"),
-        ("pdf-reports", "openrouter/openai/gpt-5.6-sol"),
+        ("gpt-4o", "anthropic/claude-haiku-5-5", "claude-haiku-5-5"),
+        ("pdf-reports", "azure/gpt-5.6-sol", "azure/gpt-5.6-sol"),
+        ("pdf-reports", "azure/responses/gpt-5.6-sol", "azure/responses/gpt-5.6-sol"),
+        ("pdf-reports", "openrouter/openai/gpt-5.6-sol", "openrouter/openai/gpt-5.6-sol"),
     ],
     ids=[
         "gpt-named-group-served-by-claude",
@@ -88,9 +88,10 @@ def _router(*deployments: tuple[str, str]) -> Router:
         "custom-group-served-by-openrouter-gpt",
     ],
 )
-def test_a_model_group_counts_like_the_deployment_that_serves_it(group: str, deployment_model: str) -> None:
+def test_a_model_group_counts_like_the_deployment_that_serves_it(
+    group: str, deployment_model: str, counted_with: str
+) -> None:
     request_body: Final = {"model": group, "messages": _one_page_pdf_message()}
-    counted_with: Final = deployment_model.partition("/")[2]
 
     assert models_counted_for(group, _router((group, deployment_model)), None) == (counted_with,)
     assert count_input_tokens_for_model(request_body=request_body, model=counted_with) != count_input_tokens_for_model(
@@ -126,14 +127,14 @@ def test_a_custom_named_deployment_counts_with_its_base_model():
         ]
     )
 
-    assert models_counted_for("reports", router, None) == ("gpt-5.6-sol",)
+    assert models_counted_for("reports", router, None) == ("azure/gpt-5.6-sol",)
     assert models_counted_for("drafts", router, None) == ("drafts",)
 
 
 def test_a_group_of_differently_priced_deployments_counts_with_each_and_a_name_no_deployment_serves_counts_as_is():
     router: Final = _router(("mixed", "anthropic/claude-haiku-5-5"), ("mixed", "azure/gpt-5.6-sol"))
 
-    assert models_counted_for("mixed", router, None) == ("mixed", "gpt-5.6-sol")
+    assert models_counted_for("mixed", router, None) == ("mixed", "azure/gpt-5.6-sol")
     assert models_counted_for("not-deployed", router, None) == ("not-deployed",)
     assert models_counted_for("gpt-4o", None, None) == ("gpt-4o",)
 
@@ -150,7 +151,7 @@ def test_a_team_request_counts_with_the_deployment_its_team_is_served_by():
         ]
     )
 
-    assert models_counted_for("reports", router, "team-a") == ("gpt-5.6-sol",)
+    assert models_counted_for("reports", router, "team-a") == ("azure/gpt-5.6-sol",)
     assert models_counted_for("reports", router, "team-b") == ("reports",)
 
 

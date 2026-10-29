@@ -3948,7 +3948,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         state: Final = data.get("state")
         return f"{state if isinstance(state, str) else ''}\n{json.dumps(data.get('fields'), default=str)}"
 
-    def _estimate_precise_input_tokens(self, data: object, model: str | None, call_type: str | None = None) -> int:
+    def _estimate_precise_input_tokens(
+        self, data: object, model: str | None, call_type: str | None = None, team_id: str | None = None
+    ) -> int:
         """
         Model-aware input token estimate for the project ITPM reservation,
         using ``litellm.token_counter`` -- the same approach the
@@ -4018,15 +4020,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         try:
             estimate: Final = max(
                 0,
-                int(
-                    token_counter(
-                        model=model or "",
-                        messages=countable_messages,
-                        text=selected_text,
-                        tools=countable_tools,
-                        tool_choice=countable_tool_choice,
-                        use_default_image_token_count=True,
+                *(
+                    int(
+                        token_counter(
+                            model=tokenizer_model,
+                            messages=countable_messages,
+                            text=selected_text,
+                            tools=countable_tools,
+                            tool_choice=countable_tool_choice,
+                            use_default_image_token_count=True,
+                        )
                     )
+                    for tokenizer_model in (self._counted_models_resolver(model, team_id) if model else ("",))
                 ),
             )
             return estimate + audio_token_estimate
@@ -4082,18 +4087,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             call_type=call_type,
             include_media=False,
         )
-        counted_models: Final = (
-            self._counted_models_resolver(requested_model, user_api_key_dict.team_id) if requested_model else (None,)
-        )
-        raw_estimated_input_tokens: Final = max(
-            await asyncio.gather(
-                *(
-                    offload_token_count(self._estimate_precise_input_tokens)(
-                        data=data, model=model, call_type=call_type
-                    )
-                    for model in counted_models
-                )
-            )
+        raw_estimated_input_tokens: Final = await offload_token_count(self._estimate_precise_input_tokens)(
+            data=data, model=requested_model, call_type=call_type, team_id=user_api_key_dict.team_id
         )
         estimated_input_tokens: Final = max(raw_estimated_input_tokens, 1)
         estimated_output_tokens: Final = (

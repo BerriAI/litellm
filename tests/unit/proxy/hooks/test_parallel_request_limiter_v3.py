@@ -10,6 +10,7 @@ import time
 from collections.abc import AsyncGenerator, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from typing import Any, Dict, Final, List, Optional
 from unittest.mock import patch
 
@@ -45,6 +46,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
 )
+from litellm.proxy.spend_tracking.input_tokens import models_counted_for
 from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.router_utils.ptu_shares import PTUTeamCeiling
@@ -9124,8 +9126,11 @@ async def test_project_itpm_reserves_a_pdf_at_the_largest_count_of_the_group_dep
 
     stash: Final = get_request_stash()
     assert stash is not None
-    claude_count: Final = handler._estimate_precise_input_tokens({"messages": messages}, "claude-haiku-5-5")
-    assert claude_count > handler._estimate_precise_input_tokens({"messages": messages}, "gpt-4o")
+    by_name: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), counted_models_resolver=lambda model, team_id: (model,)
+    )
+    claude_count: Final = by_name._estimate_precise_input_tokens({"messages": messages}, "claude-haiku-5-5")
+    assert claude_count > by_name._estimate_precise_input_tokens({"messages": messages}, "gpt-4o")
     assert stash.itpm_reserved_tokens == claude_count
 
 
@@ -9202,3 +9207,42 @@ async def test_a_successful_extraction_counts_its_input_tokens_toward_the_key_tp
             call_type="aextraction",
         )
     assert refused.value.status_code == 429
+
+
+_MULTILINGUAL_REQUEST: Final[dict[str, object]] = {
+    "messages": [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
+}
+
+
+def _project_itpm_estimate(router: Router, model: str) -> int:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()),
+        counted_models_resolver=lambda model, team_id: models_counted_for(model, router, team_id),
+    )
+    return handler._estimate_precise_input_tokens(_MULTILINGUAL_REQUEST, model, "acompletion")
+
+
+def test_project_itpm_counts_a_group_mixing_in_a_non_openai_model_by_its_name_as_written_and_its_openai_models():
+    router: Final = Router(
+        model_list=[
+            {"model_name": "gpt-6.1-sol", "litellm_params": {"model": model, "api_key": "sk-test"}}
+            for model in ("openai/gpt-6.1-sol", "cohere/command-r-plus")
+        ]
+    )
+    messages: Final = _MULTILINGUAL_REQUEST["messages"]
+
+    assert _project_itpm_estimate(router, "gpt-6.1-sol") == max(
+        litellm.token_counter(model="my-model", messages=messages),
+        litellm.token_counter(model="openai/gpt-6.1-sol", messages=messages),
+    )
+
+
+def test_project_itpm_counts_a_model_group_alias_as_its_target_group():
+    router: Final = Router(
+        model_list=[
+            {"model_name": "gpt-6.1-sol", "litellm_params": {"model": "openai/gpt-6.1-sol", "api_key": "sk-test"}}
+        ],
+        model_group_alias={"prod": "gpt-6.1-sol"},
+    )
+
+    assert _project_itpm_estimate(router, "prod") == _project_itpm_estimate(router, "gpt-6.1-sol")

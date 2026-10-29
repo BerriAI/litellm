@@ -17,6 +17,7 @@ import anyio
 import anyio.lowlevel
 import httpx
 import tiktoken
+from tiktoken.model import MODEL_TO_ENCODING
 from typing_extensions import ParamSpec, TypeVar
 
 import litellm
@@ -56,6 +57,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace
 from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.custom_httpx.http_handler import get_httpx_client, header_value
+from litellm.router_utils.deployment_pricing import deployment_pricing_models
 from litellm.rust_bridge.tokenizer import get_encoding
 from litellm.types.llms.anthropic import (
     AnthropicContentParamSource,
@@ -1098,30 +1100,161 @@ def openai_tokenizer_encoding(model: str) -> "Encoding":
     return get_encoding(openai_tokenizer_encoding_name(model))
 
 
-def _tiktoken_model_name(model: str) -> str:
-    listed_name: Final = _fix_model_name(model)
-    if listed_name != "gpt-3.5-turbo":
-        return listed_name
-    family: Final = _openai_model_family(model)
-    if family is not None:
-        return _fix_model_name(family)
-    return _openai_deployment_name(model) if _is_azure_openai_chat_model(model) else listed_name
-
-
 def _is_listed_non_chat_model(model: str) -> bool:
     modes: Final = (_cost_map_entry(name).get("mode") for name in (model, f"azure/{model}"))
     return any(mode is not None and mode not in OPENAI_CHAT_MODES for mode in modes)
 
 
 def openai_tokenizer_encoding_name(model: str) -> str:
-    """The tiktoken encoding name for `model`, without loading the encoding."""
-    model_to_use: Final = _tiktoken_model_name(model)
+    """The tiktoken encoding name for `model`, without loading the encoding.
+
+    A listed OpenAI or Azure model that tiktoken does not know is either a suffixed variant of a model it does
+    know (`text-embedding-ada-002-v2`) or a newer release than its table, which gets o200k_base, the encoding every
+    OpenAI model since gpt-4o uses. Provider and region prefixes (`azure/eu/`, `azure_ai/`) are dropped, a name
+    listed only under Azure (`gpt-41`, `openai/o1-mini`) counts as listed through its `azure/` cost-map key, and an
+    unlisted name tiktoken counts with o200k_base (`openai/gpt-5.9`) or named like a gpt-5 or o-series release
+    (`openai/gpt-6.2`) gets it."""
+    model_to_use: Final = _openai_model_name(model) or _fix_model_name(model)
     if "gpt-4o" in model_to_use:
         return "o200k_base"
     try:
         return tiktoken.encoding_name_for_model(model_to_use)
     except KeyError:
-        return "cl100k_base" if _is_listed_non_chat_model(model_to_use) else "o200k_base"
+        return _suffixed_variant_encoding_name(model_to_use) or (
+            "cl100k_base" if _is_listed_non_chat_model(model_to_use) else "o200k_base"
+        )
+
+
+def unresolved_tokenizer_model(model: str) -> str:
+    """`model`, or `gpt-3.5-turbo` when resolving the OpenAI model `model` names moves it off cl100k_base, the encoding
+    tiktoken gives the name as written, so a count with the result never drops below that one."""
+    as_written: Final = _fix_model_name(model)
+    as_written_encoding: Final = (
+        "o200k_base" if "gpt-4o" in as_written else (_tiktoken_encoding_name(as_written) or "cl100k_base")
+    )
+    moved_off_cl100k: Final = (
+        as_written_encoding == "cl100k_base" and openai_tokenizer_encoding_name(model) != "cl100k_base"
+    )
+    return "gpt-3.5-turbo" if moved_off_cl100k else model
+
+
+def usage_tokenizer_model(model: str, base_model: str | None) -> str:
+    """The model to estimate missing usage with: a deployment's `base_model` when it names an OpenAI model, since a
+    custom deployment name says nothing about its tokenizer, else `model`."""
+    return base_model if base_model is not None and is_openai_model(base_model) else model
+
+
+def is_openai_model(model: str) -> bool:
+    """Whether `model` names an OpenAI or Azure OpenAI model, listed in the cost map or counted with o200k_base by
+    tiktoken, with or without its prefixes."""
+    return _openai_model_name(model) is not None
+
+
+def deployment_openai_model(deployment: object) -> str | None:
+    """The OpenAI model a router deployment serves, read from its base model first, since a custom deployment name
+    (`azure/my-gpt-5`) says nothing about its tokenizer, or None when it serves no OpenAI model."""
+    return _as_openai_model(_served_model(deployment))
+
+
+def served_openai_models(deployments: Iterable[object]) -> tuple[str | None, ...]:
+    """The distinct OpenAI models `deployments` serve, with None standing for any deployment serving another model."""
+    served: Final = dict.fromkeys(_served_model(deployment) for deployment in deployments)
+    return tuple(dict.fromkeys(_as_openai_model(model) for model in served))
+
+
+def _served_model(deployment: object) -> str | None:
+    return next(iter(deployment_pricing_models(deployment)), None)
+
+
+def _as_openai_model(model: str | None) -> str | None:
+    return model if model is not None and is_openai_model(model) else None
+
+
+def single_encoding_openai_model(served: Sequence[str | None]) -> str | None:
+    """An OpenAI model to count a request with, when every `served_openai_models` entry is an OpenAI model on the same
+    encoding, else None."""
+    if not served or None in served:
+        return None
+    encodings: Final = frozenset(openai_tokenizer_encoding_name(model) for model in served if model is not None)
+    return served[0] if len(encodings) == 1 else None
+
+
+def _openai_model_name(model: str) -> str | None:
+    return (
+        _listed_openai_model_name(model)
+        or _tiktoken_o200k_model_name(model)
+        or _versioned_openai_model_name(model)
+        or _azure_openai_chat_model_name(model)
+    )
+
+
+def _azure_openai_chat_model_name(model: str) -> str | None:
+    return _openai_deployment_name(model) if _is_azure_openai_chat_model(model) else None
+
+
+_VERSIONED_OPENAI_MODEL: Final = re.compile(r"(?:gpt-(?:[5-9]|[1-9]\d+)|o[1-9]\d*)(?:[.-]|$)")
+
+
+def _versioned_openai_model_name(model: str) -> str | None:
+    name: Final = model.rsplit("/", 1)[-1]
+    return name if _VERSIONED_OPENAI_MODEL.match(name) else None
+
+
+def _tiktoken_o200k_model_name(model: str) -> str | None:
+    name: Final = model.rsplit("/", 1)[-1]
+    return name if _tiktoken_encoding_name(name) == "o200k_base" else None
+
+
+def _listed_openai_model_name(model: str) -> str | None:
+    segments: Final = model.split("/")
+    suffixes: Final = ("/".join(segments[start:]) for start in range(len(segments)))
+    listed: Final = any(
+        _is_openai_cost_map_model(suffix) or _is_openai_cost_map_model(f"azure/{suffix}") for suffix in suffixes
+    )
+    return segments[-1] if listed else None
+
+
+def _is_openai_cost_map_model(model: str) -> bool:
+    return (
+        model in litellm.azure_llms
+        or model in litellm.open_ai_chat_completion_models
+        or _is_azure_openai_text_model(model)
+    )
+
+
+_TEXT_MODEL_MODES: Final = frozenset({"chat", "completion", "responses", "realtime"})
+
+
+def _is_azure_openai_text_model(model: str) -> bool:
+    cost_info: Final[Mapping[str, object]] = litellm.model_cost.get(model) or {}
+    return (
+        cost_info.get("litellm_provider") == "azure"
+        and cost_info.get("mode") in _TEXT_MODEL_MODES
+        and _is_openai_model_name(model.rsplit("/", 1)[-1])
+    )
+
+
+def _is_openai_model_name(name: str) -> bool:
+    return (
+        name in litellm.open_ai_chat_completion_models
+        or _tiktoken_encoding_name(name) is not None
+        or any(
+            name.startswith(f"{listed}-") or listed.startswith(f"{name}-")
+            for listed in tuple(litellm.open_ai_chat_completion_models)
+        )
+    )
+
+
+def _tiktoken_encoding_name(model: str) -> str | None:
+    try:
+        return tiktoken.encoding_name_for_model(model)
+    except KeyError:
+        return None
+
+
+def _suffixed_variant_encoding_name(model: str) -> str | None:
+    known: Final = tuple(name for name in MODEL_TO_ENCODING if model.startswith(f"{name}-"))
+    return MODEL_TO_ENCODING[max(known, key=len)] if known else None
 
 
 def uses_legacy_message_accounting(model: str) -> bool:
