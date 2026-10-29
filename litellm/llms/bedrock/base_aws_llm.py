@@ -33,6 +33,11 @@ from litellm.constants import (
 from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn, get_aws_dns_suffix
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
+from litellm.llms.bedrock.web_identity_session_policy import (
+    BEDROCK_SESSION_POLICY,
+    WebIdentitySessionPolicy,
+    session_policy_document,
+)
 from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams, AwsSessionTag, BearerPreparedRequest
@@ -105,95 +110,6 @@ def _assume_role_params(
             )
 
 
-_SecureTransportBool: Final = TypedDict("_SecureTransportBool", {"aws:SecureTransport": ReadOnly[Literal["true"]]})
-
-_CalledViaLastEquals: Final = TypedDict(
-    "_CalledViaLastEquals", {"aws:CalledViaLast": ReadOnly[Literal["aws-external-anthropic.amazonaws.com"]]}
-)
-
-
-class _SessionPolicyCondition(TypedDict):
-    Bool: ReadOnly[_SecureTransportBool]
-    StringEquals: NotRequired[ReadOnly[_CalledViaLastEquals]]
-
-
-class _SessionPolicyStatement(TypedDict):
-    Sid: ReadOnly[str]
-    Effect: ReadOnly[Literal["Allow"]]
-    Action: ReadOnly[tuple[str, ...]]
-    Resource: ReadOnly[Literal["*"]]
-    Condition: ReadOnly[_SessionPolicyCondition]
-
-
-class WebIdentitySessionPolicy(TypedDict):
-    Version: ReadOnly[Literal["2012-10-17"]]
-    Statement: ReadOnly[tuple[_SessionPolicyStatement, ...]]
-
-
-_WEB_IDENTITY_SESSION_POLICY_ACTIONS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
-    {
-        "BedrockLiteLLM": (
-            "bedrock:InvokeModel",
-            "bedrock:InvokeModelWithResponseStream",
-            "bedrock:CountTokens",
-            "bedrock:Rerank",
-            "bedrock:Retrieve",
-            "bedrock:ListKnowledgeBases",
-            "bedrock:InvokeAgent",
-            "bedrock:ApplyGuardrail",
-            "bedrock:GetGuardrail",
-            "bedrock:ListGuardrails",
-        ),
-        "BedrockAgentCoreLiteLLM": (
-            "bedrock-agentcore:InvokeAgentRuntime",
-            "bedrock-agentcore:InvokeAgentRuntimeForUser",
-            "bedrock-agentcore:InvokeGateway",
-        ),
-        "ClaudePlatformLiteLLM": (
-            "aws-external-anthropic:CreateInference",
-            "aws-external-anthropic:CreateBatchInference",
-            "aws-external-anthropic:CancelBatchInference",
-            "aws-external-anthropic:DeleteBatchInference",
-            "aws-external-anthropic:CountTokens",
-            "aws-external-anthropic:Get*",
-            "aws-external-anthropic:List*",
-        ),
-        "ClaudePlatformOutboundIdentityLiteLLM": (
-            "sts:GetWebIdentityToken",
-            "sts:TagGetWebIdentityToken",
-        ),
-        "BedrockMantleLiteLLM": ("bedrock-mantle:CreateInference",),
-    }
-)
-
-_SECURE_TRANSPORT_ONLY: Final = _SessionPolicyCondition(Bool=_SecureTransportBool({"aws:SecureTransport": "true"}))
-
-_WEB_IDENTITY_SESSION_POLICY_CONDITIONS: Final[Mapping[str, _SessionPolicyCondition]] = MappingProxyType(
-    {
-        "ClaudePlatformOutboundIdentityLiteLLM": _SessionPolicyCondition(
-            Bool=_SecureTransportBool({"aws:SecureTransport": "true"}),
-            StringEquals=_CalledViaLastEquals({"aws:CalledViaLast": "aws-external-anthropic.amazonaws.com"}),
-        ),
-    }
-)
-
-
-def build_web_identity_session_policy() -> WebIdentitySessionPolicy:
-    return WebIdentitySessionPolicy(
-        Version="2012-10-17",
-        Statement=tuple(
-            _SessionPolicyStatement(
-                Sid=sid,
-                Effect="Allow",
-                Action=actions,
-                Resource="*",
-                Condition=_WEB_IDENTITY_SESSION_POLICY_CONDITIONS.get(sid, _SECURE_TRANSPORT_ONLY),
-            )
-            for sid, actions in _WEB_IDENTITY_SESSION_POLICY_ACTIONS.items()
-        ),
-    )
-
-
 def pop_aws_auth_params(
     optional_params: MutableMapping[str, object],  # mutable-ok: pops the aws_* keys out of the caller's mapping
 ) -> AwsAuthParams:
@@ -246,7 +162,8 @@ class BaseAWSLLM(SignsRequestsWithAWS):
     # (600 seconds / 10 minutes); web identity STS credentials use
     # ``_get_default_ttl_for_boto3_credentials`` (~59 minutes); AssumeRole STS credentials expire with
     # the STS session itself (Expiration minus a safety margin). All are keyed on all aws_* credential
-    # args plus ssl_verify, so ``aws_session_name`` scopes an entry to one attributed identity. Profiles
+    # args plus ssl_verify, and web identity entries also on the caller class's session policy, so
+    # ``aws_session_name`` scopes an entry to one attributed identity. Profiles
     # and explicit session-token tuples are not cached — see ``get_credentials`` and
     # ``_get_or_set_cached_credentials``. The bound is larger than ``InMemoryCache``'s default because
     # per-user cost attribution puts one entry per attributed identity in this cache.
@@ -262,6 +179,8 @@ class BaseAWSLLM(SignsRequestsWithAWS):
     _credential_fetch_locks: ClassVar[tuple[Lock, ...]] = tuple(
         Lock() for _ in range(BEDROCK_IAM_CACHE_FETCH_LOCK_STRIPES)
     )
+
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = BEDROCK_SESSION_POLICY
 
     def __init__(self) -> None:
         self.iam_cache = BaseAWSLLM._shared_iam_cache
@@ -478,7 +397,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             aws_session_name,
         ):
             return self._get_or_set_cached_credentials(
-                args,
+                {**args, "web_identity_session_policy": session_policy_document(self._web_identity_session_policy)},
                 lambda: self._auth_with_web_identity_token(
                     aws_web_identity_token=cast(str, aws_web_identity_token),
                     aws_role_name=cast(str, aws_role_name),
@@ -1095,9 +1014,10 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         # The session policy is an IAM PERMISSION CEILING — effective
         # permissions are the intersection of the role's identity policies
         # and this policy. Any action not listed here is silently denied
-        # even when the IAM role grants it. So every Bedrock route we
-        # support needs a matching action statement, or it 403s on OIDC
-        # auth only (static creds + IRSA take other code paths).
+        # even when the IAM role grants it. So each caller class's
+        # _web_identity_session_policy must list every action its routes
+        # call, or they 403 on OIDC auth only (static creds + IRSA take
+        # other code paths).
         # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
         # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
         assume_role_params: Final = {
@@ -1105,7 +1025,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             "RoleSessionName": aws_session_name,
             "WebIdentityToken": oidc_token,
             "DurationSeconds": 3600,
-            "Policy": json.dumps(build_web_identity_session_policy(), separators=(",", ":")),
+            "Policy": session_policy_document(self._web_identity_session_policy),
         }
 
         # Add ExternalId parameter if provided

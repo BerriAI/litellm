@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
 
+    from .base_aws_llm import BaseAWSLLM
+
 import httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
@@ -2310,11 +2312,8 @@ class CommonBatchFilesUtils:
     Provides shared functionality to reduce code duplication between batches and files.
     """
 
-    def __init__(self):
-        # Import here to avoid circular imports
-        from .base_aws_llm import BaseAWSLLM
-
-        self._base_aws = BaseAWSLLM()
+    def __init__(self, aws: BaseAWSLLM) -> None:
+        self._base_aws = aws
 
     def get_bedrock_model_id_from_litellm_model(self, model: str) -> str:
         """

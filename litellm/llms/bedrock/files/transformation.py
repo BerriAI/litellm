@@ -11,7 +11,7 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime
 from itertools import chain
 from types import MappingProxyType
-from typing import Any, Final, Literal, TypeAlias, TypedDict
+from typing import Any, ClassVar, Final, Literal, TypeAlias, TypedDict
 from urllib.parse import quote, unquote, urlencode
 
 import httpx
@@ -49,6 +49,7 @@ from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
 )
+from litellm.llms.bedrock.web_identity_session_policy import BEDROCK_FILES_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AwsAuthParams, BedrockBatchRecordKind
@@ -568,6 +569,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     """
     Config for Bedrock Files - handles S3 uploads for Bedrock batch processing
     """
+
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = BEDROCK_FILES_SESSION_POLICY
 
     def __init__(self):
         self.jsonl_transformation = BedrockJsonlFilesTransformation()

@@ -39,7 +39,19 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import TypeAdapter
 
-from litellm.llms.bedrock.base_aws_llm import WebIdentitySessionPolicy, _SessionPolicyStatement
+from litellm.integrations.s3_v2 import S3Logger
+from litellm.integrations.sqs import SQSLogger
+from litellm.llms.aws_polly.text_to_speech.transformation import AWSPollyTextToSpeechConfig
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
+from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
+from litellm.llms.bedrock.files.handler import BedrockFilesHandler
+from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+from litellm.llms.bedrock.web_identity_session_policy import WebIdentitySessionPolicy, _SessionPolicyStatement
+from litellm.llms.s3_vectors.vector_stores.transformation import S3VectorsVectorStoreConfig
+from litellm.llms.sagemaker.chat.transformation import SagemakerChatConfig
+from litellm.llms.sagemaker.completion.handler import SagemakerLLM
+from litellm.rag.ingestion.s3_vectors_ingestion import S3VectorsRAGIngestion
 
 # Actions the Claude Platform on AWS service is documented to call.
 # Source: AWS IAM action reference + the #27678 surface area.
@@ -107,10 +119,7 @@ def _statement_by_sid(policy: WebIdentitySessionPolicy, sid: str) -> _SessionPol
     for stmt in policy["Statement"]:
         if stmt.get("Sid") == sid:
             return stmt
-    raise AssertionError(
-        f"Sid={sid!r} not found in session policy; "
-        f"saw {[s.get('Sid') for s in policy['Statement']]}"
-    )
+    raise AssertionError(f"Sid={sid!r} not found in session policy; saw {[s.get('Sid') for s in policy['Statement']]}")
 
 
 class TestWebIdentitySessionPolicyShape:
@@ -140,8 +149,7 @@ class TestWebIdentitySessionPolicyShape:
         bedrock_stmt = _statement_by_sid(policy, "BedrockLiteLLM")
         actions = set(bedrock_stmt["Action"])
         assert "bedrock:CountTokens" in actions, (
-            "bedrock:CountTokens missing from BedrockLiteLLM — "
-            "count-tokens requests will 403 on OIDC auth"
+            "bedrock:CountTokens missing from BedrockLiteLLM — count-tokens requests will 403 on OIDC auth"
         )
 
 
@@ -152,8 +160,7 @@ class TestClaudePlatformActionsCovered:
     @pytest.mark.parametrize("action", sorted(_CLAUDE_PLATFORM_ACTIONS))
     def test_claude_platform_action_present(self, action: str):
         assert action in _granted_actions(_captured_policy()), (
-            f"{action} missing from session policy — "
-            f"bedrock/claude_platform/* requests will 403 on OIDC auth"
+            f"{action} missing from session policy — bedrock/claude_platform/* requests will 403 on OIDC auth"
         )
 
     def test_claude_platform_statement_allows(self):
@@ -240,8 +247,7 @@ class TestBedrockMantleActionsCovered:
         if isinstance(actions, str):
             actions = [actions]
         assert "bedrock-mantle:*" not in actions, (
-            "session policy must not grant bedrock-mantle:* — "
-            "the ceiling should match the documented action set"
+            "session policy must not grant bedrock-mantle:* — the ceiling should match the documented action set"
         )
 
     def test_bedrock_mantle_statement_carries_secure_transport_condition(self):
@@ -249,8 +255,7 @@ class TestBedrockMantleActionsCovered:
         stmt = _statement_by_sid(policy, "BedrockMantleLiteLLM")
         cond = stmt.get("Condition") or {}
         assert cond.get("Bool", {}).get("aws:SecureTransport") == "true", (
-            "BedrockMantleLiteLLM must require aws:SecureTransport=true "
-            "to keep parity with the bedrock statement"
+            "BedrockMantleLiteLLM must require aws:SecureTransport=true to keep parity with the bedrock statement"
         )
 
 
@@ -285,12 +290,8 @@ class TestInvalidIdentityTokenSurfacesAudience:
         class _InvalidIdentityTokenException(Exception):
             pass
 
-        mock_sts.exceptions.InvalidIdentityTokenException = (
-            _InvalidIdentityTokenException
-        )
-        mock_sts.assume_role_with_web_identity.side_effect = (
-            _InvalidIdentityTokenException(self._STS_MESSAGE)
-        )
+        mock_sts.exceptions.InvalidIdentityTokenException = _InvalidIdentityTokenException
+        mock_sts.assume_role_with_web_identity.side_effect = _InvalidIdentityTokenException(self._STS_MESSAGE)
 
         with (
             patch("boto3.client", return_value=mock_sts),
@@ -340,8 +341,7 @@ class TestPolicyTransportConditions:
         stmt = _statement_by_sid(policy, "ClaudePlatformLiteLLM")
         cond = stmt.get("Condition") or {}
         assert cond.get("Bool", {}).get("aws:SecureTransport") == "true", (
-            "ClaudePlatformLiteLLM must require aws:SecureTransport=true "
-            "to keep parity with the bedrock statement"
+            "ClaudePlatformLiteLLM must require aws:SecureTransport=true to keep parity with the bedrock statement"
         )
 
     def test_only_the_outbound_identity_statement_requires_a_claude_platform_caller(self):
@@ -393,3 +393,193 @@ class TestSessionPolicyGrantsEveryBedrockRoute:
 
     def test_policy_document_fits_the_sts_plaintext_limit(self):
         assert len(_captured_policy_document()) <= _STS_SESSION_POLICY_PLAINTEXT_LIMIT
+
+
+def _s3_logger() -> S3Logger:
+    with patch("asyncio.create_task"):
+        return S3Logger(s3_bucket_name="litellm-logs", s3_region_name="us-east-1")
+
+
+def _sqs_logger() -> SQSLogger:
+    with patch("asyncio.create_task"), patch("litellm.aws_sqs_callback_params", {}):
+        return SQSLogger(
+            sqs_queue_url="https://sqs.us-east-1.amazonaws.com/123456789012/logs", sqs_region_name="us-east-1"
+        )
+
+
+def _s3_vectors_ingestion() -> S3VectorsRAGIngestion:
+    return S3VectorsRAGIngestion(
+        ingest_options={
+            "embedding": {"model": "bedrock/amazon.titan-embed-text-v2:0"},
+            "vector_store": {
+                "custom_llm_provider": "s3_vectors",
+                "vector_bucket_name": "litellm-vectors",
+                "aws_region_name": "us-east-1",
+            },
+        }
+    )
+
+
+_CALLER_ROUTE_ACTIONS: Final = MappingProxyType(
+    {
+        "bedrock async invoke": (BedrockEmbedding, ("bedrock:InvokeModel", "bedrock:GetAsyncInvoke")),
+        "bedrock batches": (
+            BedrockBatchesConfig,
+            (
+                "bedrock:CreateModelInvocationJob",
+                "bedrock:GetModelInvocationJob",
+                "bedrock:StopModelInvocationJob",
+                "bedrock:TagResource",
+                "iam:PassRole",
+            ),
+        ),
+        "bedrock files": (
+            BedrockFilesConfig,
+            ("s3:PutObject", "s3:GetObject", "s3:DeleteObject", "s3:ListBucket", "kms:GenerateDataKey"),
+        ),
+        "bedrock file download": (BedrockFilesHandler, ("s3:GetObject", "kms:Decrypt")),
+        "sagemaker completion": (
+            SagemakerLLM,
+            ("sagemaker:InvokeEndpoint", "sagemaker:InvokeEndpointWithResponseStream"),
+        ),
+        "sagemaker chat": (
+            SagemakerChatConfig,
+            ("sagemaker:InvokeEndpoint", "sagemaker:InvokeEndpointWithResponseStream"),
+        ),
+        "polly speech": (AWSPollyTextToSpeechConfig, ("polly:SynthesizeSpeech",)),
+        "s3 vectors search": (S3VectorsVectorStoreConfig, ("s3vectors:QueryVectors",)),
+        "s3 vectors ingest": (
+            _s3_vectors_ingestion,
+            (
+                "s3vectors:GetVectorBucket",
+                "s3vectors:CreateVectorBucket",
+                "s3vectors:GetIndex",
+                "s3vectors:CreateIndex",
+                "s3vectors:PutVectors",
+            ),
+        ),
+        "s3 logging": (_s3_logger, ("s3:PutObject", "kms:GenerateDataKey")),
+        "sqs logging": (_sqs_logger, ("sqs:SendMessage", "kms:GenerateDataKey")),
+    }
+)
+
+
+def _sts_mock() -> MagicMock:
+    sts: Final = MagicMock()
+    sts.assume_role_with_web_identity.return_value = {
+        "Credentials": {
+            "AccessKeyId": "k",
+            "SecretAccessKey": "s",
+            "SessionToken": "t",
+            "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+        },
+        "PackedPolicySize": 0,
+    }
+    return sts
+
+
+def _policies_sent_to_sts(callers: tuple[BaseAWSLLM, ...], session_name: str) -> tuple[WebIdentitySessionPolicy, ...]:
+    sts: Final = _sts_mock()
+    with (
+        patch("boto3.client", return_value=sts),
+        patch("litellm.llms.bedrock.base_aws_llm.get_secret", return_value="oidc-jwt-token"),
+    ):
+        for caller in callers:
+            caller.get_credentials(
+                aws_web_identity_token="oidc/google/litellm",
+                aws_role_name="arn:aws:iam::123456789012:role/litellm-role",
+                aws_session_name=session_name,
+                aws_region_name="us-east-1",
+            )
+    return tuple(
+        _SESSION_POLICY_ADAPTER.validate_python(json.loads(call.kwargs["Policy"]))
+        for call in sts.assume_role_with_web_identity.call_args_list
+    )
+
+
+def _service(action: str) -> str:
+    return action.split(":", 1)[0]
+
+
+class TestEachCallerGetsItsOwnCeiling:
+    """Async invoke, batches, files, SageMaker, Polly, S3 Vectors and the S3 and SQS loggers each
+    authorize against actions outside the Bedrock runtime ceiling, so on web identity auth they 403d
+    with "no session policy allows" even when the role allowed them. Each caller's STS session must
+    carry a ceiling that grants what its routes call and nothing from another caller's service."""
+
+    @pytest.mark.parametrize(("route", "caller_and_actions"), sorted(_CALLER_ROUTE_ACTIONS.items()))
+    def test_route_actions_are_granted_by_the_callers_ceiling(self, route, caller_and_actions):
+        make_caller, actions = caller_and_actions
+        (policy,) = _policies_sent_to_sts((make_caller(),), session_name=f"grant-{route}")
+        missing: Final = frozenset(actions) - _granted_actions(policy)
+        assert not missing, f"{route} calls {sorted(missing)}, which its session policy does not grant"
+
+    @pytest.mark.parametrize(("route", "caller_and_actions"), sorted(_CALLER_ROUTE_ACTIONS.items()))
+    def test_ceiling_grants_no_service_the_route_does_not_call(self, route, caller_and_actions):
+        make_caller, actions = caller_and_actions
+        (policy,) = _policies_sent_to_sts((make_caller(),), session_name=f"deny-{route}")
+        called_services: Final = frozenset(_service(action) for action in actions)
+        extra: Final = sorted(a for a in _granted_actions(policy) if _service(a) not in called_services)
+        assert not extra, f"{route}'s session policy also grants {extra}"
+
+    @pytest.mark.parametrize(("route", "caller_and_actions"), sorted(_CALLER_ROUTE_ACTIONS.items()))
+    def test_ceiling_fits_the_sts_plaintext_limit(self, route, caller_and_actions):
+        make_caller, _actions = caller_and_actions
+        (policy,) = _policies_sent_to_sts((make_caller(),), session_name=f"size-{route}")
+        assert len(json.dumps(policy, separators=(",", ":"))) <= _STS_SESSION_POLICY_PLAINTEXT_LIMIT
+
+    def test_bedrock_runtime_ceiling_grants_none_of_the_other_callers_services(self):
+        other_services: Final = frozenset(
+            _service(action)
+            for _caller, actions in _CALLER_ROUTE_ACTIONS.values()
+            for action in actions
+            if _service(action) != "bedrock"
+        )
+        granted: Final = frozenset(_service(action) for action in _granted_actions(_captured_policy()))
+        assert not granted & other_services
+
+    def test_batch_service_role_can_only_be_passed_to_bedrock(self):
+        (policy,) = _policies_sent_to_sts((BedrockBatchesConfig(),), session_name="batch-pass-role")
+        granting: Final = tuple(stmt for stmt in policy["Statement"] if "iam:PassRole" in stmt["Action"])
+        assert granting
+        assert all(
+            stmt["Condition"].get("StringEquals") == {"iam:PassedToService": "bedrock.amazonaws.com"}
+            for stmt in granting
+        )
+
+
+class TestWebIdentityCredentialCacheIsPerCeiling:
+    def test_callers_with_different_ceilings_get_their_own_sts_session(self):
+        bedrock_policy, sagemaker_policy = _policies_sent_to_sts(
+            (BaseAWSLLM(), SagemakerLLM()), session_name="cache-split"
+        )
+        assert "sagemaker:InvokeEndpoint" not in _granted_actions(bedrock_policy)
+        assert "sagemaker:InvokeEndpoint" in _granted_actions(sagemaker_policy)
+
+    def test_callers_with_the_same_ceiling_share_one_sts_session(self):
+        policies: Final = _policies_sent_to_sts((SagemakerLLM(), SagemakerLLM()), session_name="cache-share")
+        assert len(policies) == 1
+
+
+class TestBedrockBatchRequestSigning:
+    def test_create_batch_job_is_signed_with_the_batch_ceiling(self):
+        sts: Final = _sts_mock()
+        with (
+            patch("boto3.client", return_value=sts),
+            patch("litellm.llms.bedrock.base_aws_llm.get_secret", return_value="oidc-jwt-token"),
+        ):
+            BedrockBatchesConfig().common_utils.sign_aws_request(
+                service_name="bedrock",
+                data={"jobName": "litellm-batch-job"},
+                endpoint_url="https://bedrock.us-east-1.amazonaws.com/model-invocation-job",
+                optional_params={
+                    "aws_web_identity_token": "oidc/google/litellm",
+                    "aws_role_name": "arn:aws:iam::123456789012:role/litellm-role",
+                    "aws_session_name": "batch-sign",
+                    "aws_region_name": "us-east-1",
+                },
+            )
+        policy: Final = _SESSION_POLICY_ADAPTER.validate_python(
+            json.loads(sts.assume_role_with_web_identity.call_args.kwargs["Policy"])
+        )
+        assert "bedrock:CreateModelInvocationJob" in _granted_actions(policy)

@@ -2,7 +2,7 @@ import json
 import types
 from collections.abc import Callable, Mapping
 from copy import deepcopy
-from typing import Final, cast
+from typing import ClassVar, Final, cast
 
 import httpx
 from pydantic import TypeAdapter
@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, pop_aws_auth_params
+from litellm.llms.bedrock.web_identity_session_policy import SAGEMAKER_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
@@ -57,6 +58,8 @@ os.environ['AWS_SECRET_ACCESS_KEY'] = ""
 
 # set os.environ['AWS_REGION_NAME'] = <your-region_name>
 class SagemakerLLM(BaseAWSLLM):
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = SAGEMAKER_SESSION_POLICY
+
     def _load_credentials(
         self,
         optional_params: dict,
