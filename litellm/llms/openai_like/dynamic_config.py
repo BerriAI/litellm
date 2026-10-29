@@ -2,12 +2,15 @@
 Dynamic configuration class generator for JSON-based providers.
 """
 
-from collections.abc import Coroutine, Mapping
+import json
+from collections.abc import Callable, Coroutine, Mapping
 from typing import TYPE_CHECKING, Final, Literal, overload
 
 from pydantic import JsonValue, TypeAdapter
 
+import litellm
 from litellm._logging import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
     migrate_file_to_image_url,
@@ -37,14 +40,35 @@ def _with_file_parts_as_image_url(message: AllMessageValues) -> AllMessageValues
     return updated
 
 
-def _without_additional_properties(value: JsonValue) -> JsonValue:
-    if isinstance(value, dict):
-        return {
-            key: _without_additional_properties(item) for key, item in value.items() if key != "additionalProperties"
-        }
-    if isinstance(value, list):
-        return [_without_additional_properties(item) for item in value]
-    return value
+def _without_additional_properties_flags(node: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    return {key: item for key, item in node.items() if key != "additionalProperties" or not isinstance(item, bool)}
+
+
+def _without_additional_properties_key(node: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    return {key: item for key, item in node.items() if key != "additionalProperties"}
+
+
+def _rebuilt_json(
+    value: JsonValue, object_hook: Callable[[Mapping[str, JsonValue]], Mapping[str, JsonValue]]
+) -> JsonValue:
+    return _JSON_VALUE_ADAPTER.validate_python(json.loads(json.dumps(value), object_hook=object_hook))
+
+
+def _response_format_without_additional_properties(
+    response_format: JsonValue, provider_slug: str, model: str, drop_params: bool
+) -> JsonValue:
+    without_flags: Final = _rebuilt_json(response_format, _without_additional_properties_flags)
+    without_any: Final = _rebuilt_json(response_format, _without_additional_properties_key)
+    if without_flags == without_any or drop_params:
+        return without_any
+    raise UnsupportedParamsError(
+        message=(
+            f"{provider_slug} does not support schema-valued additionalProperties (map fields) in response_format. "
+            "To drop them, set `drop_params=True`"
+        ),
+        llm_provider=provider_slug,
+        model=model,
+    )
 
 
 def create_config_class(provider: SimpleProviderConfig):
@@ -178,7 +202,12 @@ def create_config_class(provider: SimpleProviderConfig):
                     optional_params[provider.param_mappings[param]] = value
                 elif param in supported_params:
                     optional_params[param] = (
-                        _without_additional_properties(_JSON_VALUE_ADAPTER.validate_python(value))
+                        _response_format_without_additional_properties(
+                            _JSON_VALUE_ADAPTER.validate_python(value),
+                            provider_slug=provider.slug,
+                            model=model,
+                            drop_params=drop_params or litellm.drop_params is True,
+                        )
                         if param == "response_format"
                         and provider.special_handling.get("remove_additional_properties_from_response_format")
                         else value

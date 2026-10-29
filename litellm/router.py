@@ -10331,19 +10331,20 @@ class Router:
             model_info[field] = copy.deepcopy(backend_value)
 
     @staticmethod
-    def _inherit_builtin_base_rates_for_off_peak(
+    def _inherit_builtin_base_rates_for_scoped_pricing(
         model_info: dict,  # mutable-ok: cost-map entry filled in place
         backend_model: str,
         custom_llm_provider: str | None,
     ) -> None:
         """Fill missing pricing fields on a deployment entry that only sets
-        ``off_peak_pricing``, from the backend model's built-in cost map entry.
+        ``off_peak_pricing`` or ``min_billed_input_tokens``, from the backend
+        model's built-in cost map entry.
 
         Cost lookup selects the deployment-scoped entry over the shared backend
         entry only when the deployment entry carries a base pricing field, and
-        ``off_peak_pricing`` is deliberately kept off the shared entry, so a
-        deployment spelling out only its off-peak schedule would otherwise
-        never receive the discount. The backend model's entire canonical cost
+        both fields are deliberately kept off the shared entry, so a deployment
+        spelling out only its off-peak schedule or input minimum would otherwise
+        never have it applied. The backend model's entire canonical cost
         map entry is copied, field by field, so threshold, tiered,
         service-tier, cache, character, and per-second rates as well as
         companion billing fields like ``web_search_billing_unit`` and the
@@ -10357,7 +10358,7 @@ class Router:
         no-op when any base pricing field is already set or the backend model
         has no canonical entry.
         """
-        if not model_info.get("off_peak_pricing"):
+        if not model_info.get("off_peak_pricing") and model_info.get("min_billed_input_tokens") is None:
             return
         if any(
             model_info.get(field) is not None
@@ -11548,7 +11549,7 @@ class Router:
                 model_info.update(
                     {key: value for key, value in priced_info.items() if is_server_derived_pricing_key(key)}
                 )
-        Router._inherit_builtin_base_rates_for_off_peak(
+        Router._inherit_builtin_base_rates_for_scoped_pricing(
             model_info=model_info,
             backend_model=backend_model,
             custom_llm_provider=pricing_provider,

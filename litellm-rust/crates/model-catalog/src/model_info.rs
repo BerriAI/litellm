@@ -294,6 +294,9 @@ pub struct ModelInfo {
     /// Free-form notes about the entry (e.g. pricing derivation).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<BTreeMap<String, Value>>,
+    /// Input tokens billed per request even when the prompt is shorter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_billed_input_tokens: Option<u64>,
     /// Primary API surface / task type of the model.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<Mode>,

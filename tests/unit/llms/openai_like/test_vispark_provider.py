@@ -126,10 +126,8 @@ def test_vispark_chat_completion_request_maps_max_completion_tokens():
     assert response.choices[0].message.content == "Hello from Vispark"
 
 
-@pytest.mark.parametrize("additional_properties", [False, True, {"type": "string"}])
-def test_vispark_strips_additional_properties_from_a_json_schema_response_format(
-    additional_properties: bool | dict[str, str],
-):
+@pytest.mark.parametrize("additional_properties", [False, True])
+def test_vispark_strips_additional_properties_from_a_json_schema_response_format(additional_properties: bool):
     city_schema: Final = {
         "type": "object",
         "properties": {"name": {"type": "string"}},
@@ -158,6 +156,50 @@ def test_vispark_strips_additional_properties_from_a_json_schema_response_format
     assert sent_format["json_schema"]["strict"] is True
     assert sent_format["json_schema"]["schema"]["properties"]["city"]["properties"] == {"name": {"type": "string"}}
     assert city_schema["additionalProperties"] == additional_properties
+
+
+def _map_field_response_format() -> dict[str, object]:
+    schema: Final = {
+        "type": "object",
+        "properties": {"facts": {"type": "object", "additionalProperties": {"type": "string"}}},
+        "required": ["facts"],
+        "additionalProperties": False,
+    }
+    return {"type": "json_schema", "json_schema": {"name": "Facts", "schema": schema}}
+
+
+def test_vispark_rejects_a_map_field_response_format_without_drop_params():
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(
+            200, json=_CHAT_COMPLETION
+        )
+        with pytest.raises(litellm.UnsupportedParamsError) as error:
+            litellm.completion(
+                model="vispark/vision-medium",
+                messages=[{"role": "user", "content": "Facts about Paris as JSON"}],
+                response_format=_map_field_response_format(),
+                api_key="vispark-test-key",
+            )
+
+    assert error.value.status_code == 400
+    assert route.call_count == 0
+
+
+def test_vispark_drops_a_map_field_schema_with_drop_params():
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(
+            200, json=_CHAT_COMPLETION
+        )
+        litellm.completion(
+            model="vispark/vision-medium",
+            messages=[{"role": "user", "content": "Facts about Paris as JSON"}],
+            response_format=_map_field_response_format(),
+            drop_params=True,
+            api_key="vispark-test-key",
+        )
+
+    sent_schema: Final = json.loads(route.calls.last.request.content)["response_format"]["json_schema"]["schema"]
+    assert sent_schema == {"type": "object", "properties": {"facts": {"type": "object"}}, "required": ["facts"]}
 
 
 def test_other_json_providers_keep_additional_properties_and_file_parts():
@@ -279,6 +321,42 @@ def test_vispark_router_deployment_with_custom_pricing_still_bills_the_minimum_i
 
     completion_tokens: Final = _CHAT_COMPLETION["usage"]["completion_tokens"]
     assert response._hidden_params["response_cost"] == pytest.approx(minimum * 2e-6 + completion_tokens * 5e-6)
+
+
+def test_vispark_deployment_minimum_override_stays_on_its_own_deployment():
+    builtin: Final = litellm.model_cost["vispark/vision-small"]
+    minimum: Final = builtin["min_billed_input_tokens"]
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vispark-no-minimum",
+                "litellm_params": {"model": "vispark/vision-small", "api_key": "vispark-test-key"},
+                "model_info": {"min_billed_input_tokens": 0},
+            },
+            {
+                "model_name": "vispark-default",
+                "litellm_params": {"model": "vispark/vision-small", "api_key": "vispark-test-key"},
+            },
+        ]
+    )
+    with respx.mock() as upstream:
+        upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(
+            200, json={**_CHAT_COMPLETION, "model": "vision-small"}
+        )
+        no_minimum: Final = router.completion(
+            model="vispark-no-minimum", messages=[{"role": "user", "content": "Say hello"}]
+        )
+        default: Final = router.completion(model="vispark-default", messages=[{"role": "user", "content": "Say hello"}])
+
+    usage: Final = _CHAT_COMPLETION["usage"]
+    completion_cost: Final = usage["completion_tokens"] * builtin["output_cost_per_token"]
+    assert no_minimum._hidden_params["response_cost"] == pytest.approx(
+        usage["prompt_tokens"] * builtin["input_cost_per_token"] + completion_cost
+    )
+    assert default._hidden_params["response_cost"] == pytest.approx(
+        minimum * builtin["input_cost_per_token"] + completion_cost
+    )
+    assert litellm.model_cost["vispark/vision-small"]["min_billed_input_tokens"] == minimum
 
 
 def test_vispark_explicit_custom_cost_per_token_still_bills_the_minimum_input_tokens():

@@ -1637,7 +1637,7 @@ def test_cost_map_backend_model_uses_canonical_model_precedence(
     assert Router._cost_map_backend_model(deployment) == expected
 
 
-def test_inherit_builtin_base_rates_for_off_peak_fills_missing_rates():
+def test_inherit_builtin_base_rates_for_scoped_pricing_fills_missing_rates():
     """Direct unit test of the helper: an entry carrying only an
     off_peak_pricing block inherits the backend model's built-in base token
     rates, so cost lookup via the deployment id can bill standard rates
@@ -1652,7 +1652,7 @@ def test_inherit_builtin_base_rates_for_off_peak_fills_missing_rates():
     }
     model_info = {"off_peak_pricing": off_peak_block}
 
-    Router._inherit_builtin_base_rates_for_off_peak(
+    Router._inherit_builtin_base_rates_for_scoped_pricing(
         model_info=model_info,
         backend_model=backend_model,
         custom_llm_provider="openai",
@@ -1663,7 +1663,7 @@ def test_inherit_builtin_base_rates_for_off_peak_fills_missing_rates():
     assert model_info["off_peak_pricing"] == off_peak_block
 
 
-def test_inherit_builtin_base_rates_for_off_peak_carries_threshold_rates():
+def test_inherit_builtin_base_rates_for_scoped_pricing_carries_threshold_rates():
     """A backend with above-threshold pricing hands the whole rate structure to
     the deployment entry, so peak-hour billing of large prompts through that
     entry matches the shared backend entry instead of flattening to the base
@@ -1677,7 +1677,7 @@ def test_inherit_builtin_base_rates_for_off_peak_carries_threshold_rates():
         "off_peak_pricing": {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-07},
     }
 
-    Router._inherit_builtin_base_rates_for_off_peak(
+    Router._inherit_builtin_base_rates_for_scoped_pricing(
         model_info=model_info,
         backend_model=backend_model,
         custom_llm_provider="gemini",
@@ -1692,7 +1692,7 @@ def test_inherit_builtin_base_rates_for_off_peak_carries_threshold_rates():
     )
 
 
-def test_inherit_builtin_base_rates_for_off_peak_carries_companion_billing_fields():
+def test_inherit_builtin_base_rates_for_scoped_pricing_carries_companion_billing_fields():
     """Billing rules that are not literal cost rates, like the web search
     billing unit, must ride along, or grounding and regional uplifts would
     bill differently through the deployment entry than through the shared
@@ -1706,7 +1706,7 @@ def test_inherit_builtin_base_rates_for_off_peak_carries_companion_billing_field
         "off_peak_pricing": {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-07},
     }
 
-    Router._inherit_builtin_base_rates_for_off_peak(
+    Router._inherit_builtin_base_rates_for_scoped_pricing(
         model_info=model_info,
         backend_model=backend_model,
         custom_llm_provider=None,
@@ -1716,7 +1716,7 @@ def test_inherit_builtin_base_rates_for_off_peak_carries_companion_billing_field
     assert model_info["input_cost_per_token"] == raw_entry["input_cost_per_token"]
 
 
-def test_inherit_builtin_base_rates_for_off_peak_tiered_only_backend_stores_no_zero():
+def test_inherit_builtin_base_rates_for_scoped_pricing_tiered_only_backend_stores_no_zero():
     """A tiered-only backend has no flat token rates; get_model_info synthesizes
     zeros for them, and storing those would mark the deployment explicitly
     priced free. The tier table itself must carry over as an isolated copy so
@@ -1729,7 +1729,7 @@ def test_inherit_builtin_base_rates_for_off_peak_tiered_only_backend_stores_no_z
         "off_peak_pricing": {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-07},
     }
 
-    Router._inherit_builtin_base_rates_for_off_peak(
+    Router._inherit_builtin_base_rates_for_scoped_pricing(
         model_info=model_info,
         backend_model=backend_model,
         custom_llm_provider="dashscope",
@@ -1746,7 +1746,7 @@ def test_inherit_builtin_base_rates_for_off_peak_tiered_only_backend_stores_no_z
     assert raw_tiers[0] == original_first_tier
 
 
-def test_inherit_builtin_base_rates_for_off_peak_leaves_explicit_rates_alone():
+def test_inherit_builtin_base_rates_for_scoped_pricing_leaves_explicit_rates_alone():
     """An entry that sets its own base rate beside the block already counts as
     a full custom pricing entry; the helper must not mix builtin rates into it.
     """
@@ -1755,7 +1755,7 @@ def test_inherit_builtin_base_rates_for_off_peak_leaves_explicit_rates_alone():
         "input_cost_per_token": 3e-06,
     }
 
-    Router._inherit_builtin_base_rates_for_off_peak(
+    Router._inherit_builtin_base_rates_for_scoped_pricing(
         model_info=model_info,
         backend_model="gpt-4o-mini",
         custom_llm_provider="openai",
@@ -1765,12 +1765,12 @@ def test_inherit_builtin_base_rates_for_off_peak_leaves_explicit_rates_alone():
     assert "output_cost_per_token" not in model_info
 
 
-def test_inherit_builtin_base_rates_for_off_peak_noop_without_block_or_backend():
+def test_inherit_builtin_base_rates_for_scoped_pricing_noop_without_block_or_backend():
     """Nothing happens without an off_peak_pricing block, and an unmapped
     backend model leaves the entry unchanged rather than raising.
     """
     plain_info = {"id": "dep-1"}
-    Router._inherit_builtin_base_rates_for_off_peak(
+    Router._inherit_builtin_base_rates_for_scoped_pricing(
         model_info=plain_info,
         backend_model="gpt-4o-mini",
         custom_llm_provider="openai",
@@ -1778,7 +1778,7 @@ def test_inherit_builtin_base_rates_for_off_peak_noop_without_block_or_backend()
     assert plain_info == {"id": "dep-1"}
 
     off_peak_info = {"off_peak_pricing": {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-07}}
-    Router._inherit_builtin_base_rates_for_off_peak(
+    Router._inherit_builtin_base_rates_for_scoped_pricing(
         model_info=off_peak_info,
         backend_model="this-backend-model-does-not-exist-x9y8z7",
         custom_llm_provider=None,
