@@ -86,13 +86,9 @@ class TestGitHubCopilotAuthenticator:
         headers_with_token = authenticator._get_github_headers("test-token")
         assert headers_with_token["authorization"] == "token test-token"
 
-    def test_get_access_token_from_file(self, authenticator):
+    def test_get_access_token_from_file(self, logged_in_token_dir):
         """Test retrieving an access token from a file."""
-        mock_token = "mock-access-token"
-
-        with patch("builtins.open", mock_open(read_data=mock_token)):
-            token = authenticator.get_access_token()
-            assert token == mock_token
+        assert Authenticator().get_access_token() == "gho_logged_in"
 
     def test_get_access_token_login(self, authenticator):
         """Test logging in to get an access token."""
@@ -134,6 +130,28 @@ class TestGitHubCopilotAuthenticator:
         assert "worker thread" in str(exc.value)
         assert authenticator.access_token_file not in str(exc.value)
         mock_login.assert_not_called()
+
+    @pytest.mark.parametrize("encoding", ["utf-16", "utf-16-le", "utf-8-sig"])
+    def test_saved_access_token_in_another_encoding_is_sent_on_refresh(self, logged_in_token_dir, encoding):
+        """An access-token file a Windows editor saved as UTF-16 or with a BOM still refreshes the key."""
+        (logged_in_token_dir / "access-token").write_bytes("gho_logged_in\n".encode(encoding))
+
+        with respx.mock(assert_all_called=True) as router:
+            route: Final = router.get(API_KEY_URL).respond(json=dict(REFRESHED_KEY))
+            assert Authenticator().get_api_key() == "new-api-key"
+
+        assert route.calls.last.request.headers["authorization"] == "token gho_logged_in"
+
+    def test_undecodable_access_token_is_refused_like_a_missing_one(self, logged_in_token_dir):
+        """A proxy worker gets the login hint for an access-token file it cannot decode, and the file is kept."""
+        access_token_file: Final = logged_in_token_dir / "access-token"
+        access_token_file.write_bytes(TRUNCATED_UTF_16)
+
+        with ThreadPoolExecutor(max_workers=1) as pool, pytest.raises(GetAccessTokenError) as exc:
+            pool.submit(Authenticator().get_access_token).result()
+
+        assert "worker thread" in str(exc.value)
+        assert access_token_file.read_bytes() == TRUNCATED_UTF_16
 
     def test_get_access_token_failure(self, authenticator):
         """Test that an exception is raised after multiple login failures."""

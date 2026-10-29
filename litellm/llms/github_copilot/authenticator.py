@@ -49,6 +49,12 @@ class CopilotCachedEndpoints(BaseModel):
 ApiKeyFileView = TypeVar("ApiKeyFileView", CopilotCachedKey, CopilotCachedEndpoints)
 
 
+def _read_token_file(path: str) -> str:
+    with open(path, "rb") as f:
+        raw: Final = f.read()
+    return raw.decode(json.detect_encoding(raw))
+
+
 @with_config(ConfigDict(extra="allow", strict=True))
 class _DeviceCode(TypedDict):
     device_code: ReadOnly[str]
@@ -109,12 +115,13 @@ class Authenticator:
             GetAccessTokenError: If unable to obtain an access token after retries.
         """
         try:
-            with open(self.access_token_file, "r") as f:
-                access_token = f.read().strip()
-                if access_token:
-                    return access_token
+            saved_token: Final = _read_token_file(self.access_token_file).strip()
+            if saved_token:
+                return saved_token
         except OSError:
             verbose_logger.warning("No existing access token found or error reading file")
+        except ValueError as e:
+            verbose_logger.warning("Ignoring %s, not a text access token: %s", self.access_token_file, e)
 
         if not can_block_current_thread():
             raise GetAccessTokenError(
@@ -201,13 +208,10 @@ class Authenticator:
 
     def _read_api_key_file(self, view: type[ApiKeyFileView]) -> ApiKeyFileView | None:
         try:
-            with open(self.api_key_file, "rb") as f:
-                raw: Final = f.read()
+            return view.model_validate_json(_read_token_file(self.api_key_file))
         except OSError:
             verbose_logger.warning("No API key file found or error opening file")
             return None
-        try:
-            return view.model_validate_json(raw.decode(json.detect_encoding(raw)))
         except ValueError as e:
             verbose_logger.warning("Ignoring %s, not a Copilot API key file: %s", self.api_key_file, e)
             return None
