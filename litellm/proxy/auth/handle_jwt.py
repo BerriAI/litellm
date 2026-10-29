@@ -3056,6 +3056,7 @@ class JWTAuthManager:
             agent_id=result.get("agent_id"),
             user_tpm_limit=user.tpm_limit if user is not None and not admin else None,
             user_rpm_limit=user.rpm_limit if user is not None and not admin else None,
+            user_max_parallel_requests=user.max_parallel_requests if user is not None and not admin else None,
             user_model_max_budget=user.model_max_budget if user is not None and not admin else None,
             **team_grants(
                 team_object=result["team_object"],

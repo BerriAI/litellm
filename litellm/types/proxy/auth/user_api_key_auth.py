@@ -139,6 +139,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     tpm_limit_per_model: dict[str, int] | None = None
     user_tpm_limit: int | None = None
     user_rpm_limit: int | None = None
+    user_max_parallel_requests: int | None = None
     user_email: str | None = None
     user_spend: float | None = None
     user_max_budget: float | None = None

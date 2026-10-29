@@ -1030,6 +1030,47 @@ async def test_rejected_request_does_not_consume_parallel_slot_v3():
 
 
 @pytest.mark.asyncio
+async def test_user_max_parallel_requests_is_enforced_v3():
+    """
+    A user's own `max_parallel_requests` (set via /user/new or /user/update,
+    independent of any key-level limit) must be enforced: a second concurrent
+    request from the same user, admitted under a different API key, is
+    refused with 429 once the user's slot is full.
+    """
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_id = "pia"
+    first_key = hash_token("sk-pia-key-one")
+    second_key = hash_token("sk-pia-key-two")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=first_key, user_id=user_id, user_max_parallel_requests=1
+    )
+    other_key_same_user = UserAPIKeyAuth(
+        api_key=second_key, user_id=user_id, user_max_parallel_requests=1
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "gpt-3.5-turbo"},
+        call_type="",
+    )
+    acquisition = get_request_stash().parallel_slot
+    assert acquisition is not None
+    assert acquisition["counter_keys"] == [f"{{user:{user_id}}}:max_parallel_requests"]
+
+    with pytest.raises(HTTPException):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=other_key_same_user,
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo"},
+            call_type="",
+        )
+
+
+@pytest.mark.asyncio
 async def test_parallel_gauge_uses_atomic_redis_script_v3():
     """
     With Redis available, gauge admission goes through the atomic
@@ -1241,6 +1282,25 @@ async def test_should_rate_limit_only_called_when_limits_exist_v3():
     assert (
         should_rate_limit_called
     ), "should_rate_limit should be called when max parallel requests are configured"
+
+    # Test 7: User-level max parallel requests configured - should_rate_limit SHOULD be called
+    should_rate_limit_called = False
+    user_api_key_dict_with_user_parallel_limits = UserAPIKeyAuth(
+        api_key=_api_key,
+        user_id="test_user",
+        user_max_parallel_requests=5,  # User-level max parallel requests configured
+    )
+
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict_with_user_parallel_limits,
+        cache=local_cache,
+        data={"model": "gpt-3.5-turbo"},
+        call_type="",
+    )
+
+    assert (
+        should_rate_limit_called
+    ), "should_rate_limit should be called when user-level max parallel requests are configured"
 
 
 @pytest.mark.asyncio

@@ -2255,16 +2255,20 @@ def test_update_internal_user_params_ignores_other_nones():
     assert non_default_values["max_budget"] == 100.0
 
 
-@pytest.mark.parametrize("field", ["tpm_limit", "rpm_limit"], ids=["tpm_limit", "rpm_limit"])
+@pytest.mark.parametrize(
+    "field",
+    ["tpm_limit", "rpm_limit", "max_parallel_requests"],
+    ids=["tpm_limit", "rpm_limit", "max_parallel_requests"],
+)
 def test_update_internal_user_params_explicit_null_clears_rate_limit_but_omitted_is_untouched(
     field: str,
 ) -> None:
     data: Final = UpdateUserRequest(user_id="limit-clear", **{field: None})
     result: Final = _update_internal_user_params(data_json=data.model_dump(exclude_unset=True), data=data)
-    other_field: Final = "rpm_limit" if field == "tpm_limit" else "tpm_limit"
+    other_fields: Final = {"tpm_limit", "rpm_limit", "max_parallel_requests"} - {field}
 
     assert result[field] is None
-    assert other_field not in result
+    assert other_fields.isdisjoint(result)
 
 
 def test_update_internal_user_params_keeps_original_max_budget_when_not_provided():
