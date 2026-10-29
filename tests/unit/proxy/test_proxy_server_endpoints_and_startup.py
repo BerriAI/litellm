@@ -1792,9 +1792,7 @@ class _DatabaseWithOneStoredCredential:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "encrypted_with, asks_to_migrate", [(PUBLICLY_KNOWN_KEY, True), ("sk-some-other-key", False)]
-)
+@pytest.mark.parametrize("encrypted_with, asks_to_migrate", [(PUBLICLY_KNOWN_KEY, True), ("sk-some-other-key", False)])
 async def test_proxy_startup_asks_to_migrate_only_when_the_database_holds_values_under_the_unsafe_key(
     monkeypatch, tmp_path, encrypted_with, asks_to_migrate
 ):
@@ -1877,9 +1875,7 @@ async def test_proxy_startup_names_the_config_file_that_set_the_unsafe_key(monke
     from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
     from litellm.proxy.proxy_server import proxy_startup_event
 
-    config_path, announced = _boot_with_general_settings(
-        monkeypatch, tmp_path, {"master_key": PUBLICLY_KNOWN_KEY}
-    )
+    config_path, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": PUBLICLY_KNOWN_KEY})
 
     with pytest.raises(UnsafeMasterKeyError):
         async with proxy_startup_event(FastAPI()):
@@ -8104,10 +8100,18 @@ async def test_update_general_settings_db_pass_through_endpoint_overrides_yaml_e
     request.headers = {}
     request.query_params = {}
 
-    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
-    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint])  # test-quality-ok: module global holding the YAML endpoints the fix merges in
-    initialize: Final = patch("litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock())  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
-    master_key: Final = patch("litellm.proxy.proxy_server.master_key", MASTER_KEY)  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
+    settings: Final = patch(
+        "litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]}
+    )  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch(
+        "litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint]
+    )  # test-quality-ok: module global holding the YAML endpoints the fix merges in
+    initialize: Final = patch(
+        "litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock()
+    )  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
+    master_key: Final = patch(
+        "litellm.proxy.proxy_server.master_key", MASTER_KEY
+    )  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
     with settings, yaml_endpoints, initialize, master_key:
         await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
 
@@ -12220,8 +12224,6 @@ async def test_update_config_field_prompt_caching_rejects_invalid(monkeypatch, f
 async def test_reset_config_field_restores_type_default(monkeypatch, field_name, expected_default):
     """Reset must restore each field's own default. Blanket None would leave the boolean flag
     set to None, which is not a bool and would read as neither on nor off."""
-    from unittest.mock import MagicMock
-
     import litellm.proxy.proxy_server as ps
     from litellm.proxy._types import (
         ConfigFieldDelete,
@@ -12238,9 +12240,10 @@ async def test_reset_config_field_restores_type_default(monkeypatch, field_name,
     async def fake_save_config(new_config=None):
         saved.update(new_config or {})
 
+    fake_prisma = _fake_prisma_with_config({"store_prompts_in_spend_logs": True})
     monkeypatch.setattr(ps.proxy_config, "get_config", fake_get_config)
     monkeypatch.setattr(ps.proxy_config, "save_config", fake_save_config)
-    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma)
     monkeypatch.setattr(litellm, "store_audit_logs", False)
     monkeypatch.setattr(litellm, field_name, "stale")
 
@@ -12252,6 +12255,7 @@ async def test_reset_config_field_restores_type_default(monkeypatch, field_name,
 
     assert getattr(litellm, field_name) is expected_default
     assert field_name not in saved["litellm_settings"]
+    fake_prisma.db.litellm_config.upsert.assert_not_awaited()
 
 
 @pytest.mark.parametrize("bad_value", [0, -0.1, 1.5, True])
@@ -15468,6 +15472,90 @@ async def test_delete_config_general_settings_removes_an_ignored_stored_key_the_
     assert written == {"store_prompts_in_spend_logs": True}
     assert pc.settings["enforce_user_param"] is False
     assert pc.settings.unmanaged_db_keys() == ()
+
+
+@pytest.mark.asyncio
+async def test_delete_config_general_settings_removes_a_stored_general_settings_copy_of_a_ui_litellm_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy._types import ConfigFieldDelete
+    from litellm.proxy.proxy_server import ProxyConfig, delete_config_general_settings
+
+    pc: Final = ProxyConfig()
+    pc._load_yaml_settings_stores({"general_settings": {}})
+    stored_row: Final = {"budget_rollover": True, "store_prompts_in_spend_logs": True}
+    pc.settings.apply_db_row("general_settings", stored_row)
+    fake_prisma: Final = _fake_prisma_with_config(stored_row)
+
+    async def litellm_settings_with_rollover() -> dict[str, dict[str, bool]]:
+        return {"litellm_settings": {"budget_rollover": True}}
+
+    async def discard_save(new_config: object = None) -> None:
+        return None
+
+    monkeypatch.setattr(pc, "get_config", litellm_settings_with_rollover)
+    monkeypatch.setattr(pc, "save_config", discard_save)
+    monkeypatch.setattr(proxy_server_module, "proxy_config", pc)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setattr(litellm, "budget_rollover", True)
+
+    admin: Final = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await delete_config_general_settings(
+        data=ConfigFieldDelete(field_name="budget_rollover", config_type="general_settings"),
+        user_api_key_dict=admin,
+    )
+
+    written: Final = json.loads(fake_prisma.db.litellm_config.upsert.await_args.kwargs["data"]["update"]["param_value"])
+    assert written == {"store_prompts_in_spend_logs": True}
+    assert litellm.budget_rollover is False
+    assert pc.settings.unmanaged_db_keys() == ()
+
+
+@pytest.mark.asyncio
+async def test_delete_config_general_settings_refuses_an_unknown_key_when_the_stored_row_is_a_json_string(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy._types import ConfigFieldDelete
+    from litellm.proxy.proxy_server import ProxyConfig, delete_config_general_settings
+
+    pc: Final = ProxyConfig()
+    pc._load_yaml_settings_stores({"general_settings": {}})
+    fake_prisma: Final = _fake_prisma_with_config('{"store_prompts_in_spend_logs": true}')
+    monkeypatch.setattr(proxy_server_module, "proxy_config", pc)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+
+    admin: Final = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with pytest.raises(HTTPException) as refused:
+        await delete_config_general_settings(
+            data=ConfigFieldDelete(field_name="not_a_setting", config_type="general_settings"),
+            user_api_key_dict=admin,
+        )
+
+    assert refused.value.status_code == 400
+    fake_prisma.db.litellm_config.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_config_general_settings_removes_a_key_from_a_json_string_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy._types import ConfigFieldDelete
+    from litellm.proxy.proxy_server import ProxyConfig, delete_config_general_settings
+
+    pc: Final = ProxyConfig()
+    pc._load_yaml_settings_stores({"general_settings": {}})
+    fake_prisma: Final = _fake_prisma_with_config('{"max_request_size_mb": 42, "store_prompts_in_spend_logs": true}')
+    monkeypatch.setattr(proxy_server_module, "proxy_config", pc)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+
+    admin: Final = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await delete_config_general_settings(
+        data=ConfigFieldDelete(field_name="max_request_size_mb", config_type="general_settings"),
+        user_api_key_dict=admin,
+    )
+
+    written: Final = json.loads(fake_prisma.db.litellm_config.upsert.await_args.kwargs["data"]["update"]["param_value"])
+    assert written == {"store_prompts_in_spend_logs": True}
 
 
 @pytest.mark.asyncio

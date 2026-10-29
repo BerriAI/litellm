@@ -8501,7 +8501,7 @@ class ProxyConfig:
         unmanaged: Final = frozenset(self.settings.unmanaged_db_keys())
         for key in sorted(unmanaged - self._warned_unmanaged_keys):
             verbose_proxy_logger.warning(
-                "general_settings.%s is stored in the database, but no settings API manages it, so the stored value "
+                "general_settings.%s is stored in the database, but the proxy does not apply that stored value, so it "
                 "is ignored. %s",
                 key,
                 "The config file's value applies. Remove the stored copy with POST /config/field/delete."
@@ -20411,7 +20411,9 @@ async def _persist_general_settings_ui_litellm_field(
     return {"message": f"Field {field_name} updated", "status": "success"}
 
 
-async def _reset_general_settings_ui_litellm_field(field_name: str, user_api_key_dict: UserAPIKeyAuth) -> dict:
+async def _reset_general_settings_ui_litellm_field(
+    field_name: str, user_api_key_dict: UserAPIKeyAuth
+) -> dict[str, str]:
     default_value: Final = _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name])
     proxy_config.reject_config_owned_writes(section_name="litellm_settings", changed_keys={field_name: default_value})
     config: Final = await proxy_config.get_config()
@@ -20637,18 +20639,15 @@ async def delete_config_general_settings(
         )
 
     if data.field_name in _GENERAL_SETTINGS_UI_LITELLM_FIELDS:
-        return await _reset_general_settings_ui_litellm_field(data.field_name, user_api_key_dict)
+        reset: Final = await _reset_general_settings_ui_litellm_field(data.field_name, user_api_key_dict)
+        stored_copy: Final = await _stored_general_settings()
+        if stored_copy is not None and data.field_name in stored_copy:
+            await _remove_stored_general_setting(data.field_name, stored_copy, user_api_key_dict)
+        return reset
 
-    db_general_settings: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
-        where={"param_name": "general_settings"}
-    )
-    stored_keys: Final[frozenset[str]] = (
-        frozenset(dict(db_general_settings.param_value))
-        if db_general_settings is not None and db_general_settings.param_value is not None
-        else frozenset()
-    )
+    stored: Final = await _stored_general_settings()
 
-    if data.field_name not in ConfigGeneralSettings.model_fields and data.field_name not in stored_keys:
+    if data.field_name not in ConfigGeneralSettings.model_fields and (stored is None or data.field_name not in stored):
         raise HTTPException(
             status_code=400,
             detail={"error": f"Invalid field={data.field_name} passed in."},
@@ -20657,39 +20656,49 @@ async def delete_config_general_settings(
     if data.field_name in _db_managed_general_settings_keys():
         proxy_config.reject_config_owned_deletes(section_name="general_settings", keys=(data.field_name,))
 
-    if db_general_settings is None or db_general_settings.param_value is None:
+    if stored is None:
         raise HTTPException(
             status_code=400,
             detail={"error": f"Field name={data.field_name} not in config"},
         )
-    else:
-        general_settings = dict(db_general_settings.param_value)
 
-    before_general_settings: Final = copy.deepcopy(general_settings)
+    return await _remove_stored_general_setting(data.field_name, stored, user_api_key_dict)
 
-    ## update db
 
-    general_settings.pop(data.field_name, None)
+async def _stored_general_settings() -> Mapping[str, SettingsJsonValue] | None:
+    config_table: Final[TableActions[_ConfigParamValueRow]] = _config_param_table(prisma_client)
+    row: Final = await config_table.find_first(where={"param_name": "general_settings"})
+    if row is None or row.param_value is None:
+        return None
+    value: Final = (
+        cast(object, json.loads(row.param_value))  # cast-ok: json.loads is untyped; the row is opaque JSON
+        if isinstance(row.param_value, str)
+        else row.param_value
+    )
+    return _SETTINGS_MAPPING.validate_python(value) if isinstance(value, Mapping) else None
 
+
+async def _remove_stored_general_setting(
+    field_name: str, stored: Mapping[str, SettingsJsonValue], user_api_key_dict: UserAPIKeyAuth
+) -> _ConfigParamValueRow:
+    remaining: Final = {key: value for key, value in stored.items() if key != field_name}
     response: Final = await ConfigRepository(prisma_client).table.upsert(
         where={"param_name": "general_settings"},
         data={
             "create": {
                 "param_name": "general_settings",
-                "param_value": json.dumps(general_settings),
+                "param_value": json.dumps(remaining),
             },
-            "update": {"param_value": json.dumps(general_settings)},
+            "update": {"param_value": json.dumps(remaining)},
         },
     )
     await invalidate_config_param("general_settings")
-    proxy_config.settings.apply_db_row("general_settings", general_settings)
-    if is_resource_list("general_settings", data.field_name):
-        stored_endpoints: Final = general_settings.get("pass_through_endpoints")
+    proxy_config.settings.apply_db_row("general_settings", remaining)
+    if is_resource_list("general_settings", field_name):
+        stored_endpoints: Final = remaining.get("pass_through_endpoints")
         await proxy_config.serve_pass_through_endpoints(stored_endpoints if isinstance(stored_endpoints, list) else ())
     asyncio.create_task(
-        create_config_audit_log(
-            "general_settings", "deleted", before_general_settings, general_settings, user_api_key_dict
-        )
+        create_config_audit_log("general_settings", "deleted", dict(stored), remaining, user_api_key_dict)
     )
 
     return response

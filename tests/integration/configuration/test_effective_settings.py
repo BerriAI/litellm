@@ -1754,4 +1754,4 @@ def test_a_stored_general_setting_no_settings_api_manages_stays_off_and_the_rest
         if entry["field_name"] == "store_prompts_in_spend_logs"
     )
     assert (stored_prompts["field_value"], stored_prompts["source"]) == (True, "db")
-    assert "general_settings.enforce_user_param is stored in the database, but no settings API manages it" in log
+    assert "general_settings.enforce_user_param is stored in the database, but the proxy does not apply" in log
