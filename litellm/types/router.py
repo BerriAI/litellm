@@ -6,6 +6,7 @@ import datetime
 import enum
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -22,7 +23,19 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from openai import Timeout as SDKTimeout
-from pydantic import BeforeValidator, ConfigDict, Field, JsonValue, StrictInt, field_validator, model_validator
+from pydantic import (
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    JsonValue,
+    StrictInt,
+    ValidationError,
+    ValidationInfo,
+    ValidatorFunctionWrapHandler,
+    WrapValidator,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._logging import verbose_logger
@@ -517,6 +530,19 @@ def holds_secret_pointer(param_name: str) -> bool:
 
 _RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})
 
+STRICT_LITELLM_PARAMS: Final = MappingProxyType({"strict_litellm_params": True})
+
+
+def _none_when_malformed_outside_strict_validation(
+    value: object, handler: ValidatorFunctionWrapHandler, info: ValidationInfo
+) -> object:
+    try:
+        return handler(value)
+    except ValidationError:
+        if info.context is STRICT_LITELLM_PARAMS:
+            raise
+        return None
+
 
 class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     """
@@ -582,7 +608,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     )
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: bool | None = False
-    thought_signature_in_tool_call_id: bool | None = None
+    thought_signature_in_tool_call_id: Annotated[
+        bool | None, WrapValidator(_none_when_malformed_outside_strict_validation)
+    ] = None
     model_info: dict | None = None
     mock_response: str | ModelResponse | Exception | object | None = None
 

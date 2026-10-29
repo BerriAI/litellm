@@ -11,7 +11,7 @@ enable_preview_features=True to be enabled.
 
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
 from typing import Final
@@ -28,9 +28,11 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     get_thought_signature_from_tool,
     convert_to_gemini_tool_call_invoke,
 )
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.llms.vertex_ai import HttpxPartType
 
 
@@ -300,13 +302,11 @@ def test_parallel_tool_calls_with_signatures(enable_preview_features):
 GEMINI_URL_PATTERN: Final = r"https://generativelanguage\.googleapis\.com/v1[a-z]*/models/gemini-3\.5-flash:.*"
 BOUNDED_TOOL_CALL_ID: Final = re.compile(r"[A-Za-z0-9_-]{1,64}")
 LONG_SIGNATURE: Final = "Ab+/" * 200
-WEATHER_TOOL: Final = {
-    "type": "function",
-    "function": {
-        "name": "get_weather",
-        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
-    },
+WEATHER_FUNCTION: Final = {
+    "name": "get_weather",
+    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
 }
+WEATHER_TOOL: Final = {"type": "function", "function": WEATHER_FUNCTION}
 USER_TURN: Final = {"role": "user", "content": "What is the weather in Paris?"}
 
 
@@ -385,9 +385,10 @@ def _returned_tool_calls(
             api_key="test-gemini-key",
             **request_params,
         )
+        assert isinstance(response, CustomStreamWrapper) == stream
         returned_calls: Final = (
             chain.from_iterable(chunk.choices[0].delta.tool_calls or () for chunk in response)
-            if stream
+            if isinstance(response, CustomStreamWrapper)
             else response.choices[0].message.tool_calls
         )
         tool_calls: Final = [call.model_dump() for call in returned_calls]
@@ -512,6 +513,7 @@ async def _messages_tool_use_blocks(stream: bool) -> list[Mapping[str, object]]:
         )
         if not stream:
             return [block for block in response["content"] if block["type"] == "tool_use"]
+        assert isinstance(response, AsyncIterator)
         relayed: Final = b"".join([chunk async for chunk in response])
     events: Final = [json.loads(line.removeprefix(b"data: ")) for line in relayed.splitlines() if line.startswith(b"data:")]
     return [event["content_block"] for event in events if _is_tool_use_start(event)]
@@ -529,7 +531,7 @@ async def test_messages_tool_use_keeps_thought_signature_kept_out_of_its_id(
     assert tool_uses[0]["provider_specific_fields"]["signature"] == LONG_SIGNATURE
 
 
-RESPONSES_WEATHER_TOOL: Final = {"type": "function", **WEATHER_TOOL["function"]}
+RESPONSES_WEATHER_TOOL: Final = {"type": "function", **WEATHER_FUNCTION}
 SHORT_IDS: Final = MappingProxyType({"thought_signature_in_tool_call_id": False})
 
 
@@ -544,9 +546,10 @@ def _responses_function_call_items(stream: bool, request_params: Mapping[str, ob
             api_key="test-gemini-key",
             **request_params,
         )
+        assert isinstance(response, Iterator) == stream
         items: Final = (
             [event.item for event in response if event.type == "response.output_item.done"]
-            if stream
+            if isinstance(response, Iterator) and not isinstance(response, ResponsesAPIResponse)
             else response.output
         )
     return [item for item in items if getattr(item, "type", None) == "function_call"]
@@ -724,3 +727,138 @@ def test_deployment_setting_rejects_a_value_that_is_not_a_boolean():
                 }
             ]
         )
+
+
+def test_deployment_setting_survives_a_request_value_that_drop_params_drops():
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-agentcore",
+                "litellm_params": {
+                    "model": "gemini/gemini-3.5-flash",
+                    "api_key": "test-gemini-key",
+                    "thought_signature_in_tool_call_id": False,
+                },
+            }
+        ]
+    )
+    with respx.mock:
+        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_response(None, False))
+        response: Final = router.completion(
+            model="gemini-agentcore",
+            messages=[USER_TURN],
+            tools=[WEATHER_TOOL],
+            thought_signature_in_tool_call_id="maybe",
+            drop_params=True,
+        )
+
+    assert _is_bounded(response.choices[0].message.tool_calls[0].id)
+
+
+def test_responses_request_setting_that_is_not_a_boolean_answers_400():
+    with pytest.raises(litellm.BadRequestError, match="thought_signature_in_tool_call_id") as raised:
+        _responses_function_call_items(False, {"thought_signature_in_tool_call_id": "maybe"})
+
+    assert raised.value.status_code == 400
+
+
+def test_responses_request_setting_that_is_not_a_boolean_is_dropped_under_drop_params():
+    function_calls: Final = _responses_function_call_items(
+        False, {"thought_signature_in_tool_call_id": "maybe", "drop_params": True}
+    )
+
+    assert len(function_calls) == 1
+    assert get_thought_signature_from_tool({"id": function_calls[0].call_id}) == LONG_SIGNATURE
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+async def test_messages_request_setting_that_is_not_a_boolean_follows_drop_params(
+    drop_params: bool, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=False) as mocked:
+        mocked.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_response(None, False))
+        request: Final = litellm.anthropic.messages.acreate(
+            max_tokens=256,
+            messages=[USER_TURN],
+            model="gemini/gemini-3.5-flash",
+            tools=[ANTHROPIC_WEATHER_TOOL],
+            api_key="test-gemini-key",
+            thought_signature_in_tool_call_id="maybe",
+            drop_params=drop_params,
+        )
+        if not drop_params:
+            with pytest.raises(litellm.BadRequestError, match="thought_signature_in_tool_call_id"):
+                await request
+            return
+        response: Final = await request
+
+    tool_uses: Final = [block for block in response["content"] if block["type"] == "tool_use"]
+    assert len(tool_uses) == 1
+
+
+def test_setting_that_is_not_a_boolean_is_ignored_where_nothing_reads_it():
+    embedding_vector: Final = [0.25, 0.5]
+    with respx.mock:
+        route: Final = respx.post("https://api.openai.com/v1/embeddings").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [{"object": "embedding", "index": 0, "embedding": embedding_vector}],
+                    "model": "text-embedding-3-small",
+                    "usage": {"prompt_tokens": 1, "total_tokens": 1},
+                },
+            )
+        )
+        response: Final = litellm.embedding(
+            model="openai/text-embedding-3-small",
+            input=["hi"],
+            api_key="test-openai-key",
+            thought_signature_in_tool_call_id="maybe",
+        )
+        sent_body: Final = json.loads(route.calls.last.request.content)
+
+    assert response.data[0]["embedding"] == embedding_vector
+    assert "thought_signature_in_tool_call_id" not in sent_body
+
+
+TIME_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_time", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}},
+}
+
+
+@pytest.mark.parametrize(
+    "tool_call_ids",
+    [
+        ("call_1__thought__S1", "call_1__thought__S2"),
+        ("__thought__S1", "__thought__S2"),
+    ],
+)
+def test_tool_results_keep_their_own_names_when_tool_call_ids_share_a_prefix(tool_call_ids: tuple[str, str]):
+    called_tools: Final = (("get_weather", tool_call_ids[0]), ("get_time", tool_call_ids[1]))
+    with respx.mock:
+        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
+        litellm.completion(
+            model="gemini/gemini-3.5-flash",
+            messages=[
+                USER_TURN,
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": call_id, "type": "function", "function": {"name": name, "arguments": '{"city": "Paris"}'}}
+                        for name, call_id in called_tools
+                    ],
+                },
+                *({"role": "tool", "tool_call_id": call_id, "content": f'{{"{name}": 1}}'} for name, call_id in called_tools),
+            ],
+            tools=[WEATHER_TOOL, TIME_TOOL],
+            api_key="test-gemini-key",
+        )
+        sent_body: Final = json.loads(route.calls.last.request.content)
+
+    parts: Final = chain.from_iterable(turn["parts"] for turn in sent_body["contents"])
+    sent_names: Final = [part["function_response"]["name"] for part in parts if "function_response" in part]
+    assert sent_names == ["get_weather", "get_time"]

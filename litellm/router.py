@@ -96,6 +96,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, reject_api_key_secret_reference
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.get_litellm_params import SUPPLEMENTAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
     inferred_provider,
@@ -387,6 +388,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.router import (
     CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
+    STRICT_LITELLM_PARAMS,
     VALID_LITELLM_ENVIRONMENTS,
     AlertingConfig,
     AllowedFailsPolicy,
@@ -664,6 +666,24 @@ def _drops_malformed_request_tools(
         return False
     set_defaults: Final = {name: value for name, value in defaults.items() if value is not None}
     return drop_policy({**deployment_params, **set_defaults, **request}).drops("tools")
+
+
+def _malformed_request_params_the_deployment_sets(
+    deployment_params: Mapping[str, object], defaults: Mapping[str, object], request: Mapping[str, object]
+) -> frozenset[str]:
+    overrides: Final = {
+        key: request[key]
+        for key in SUPPLEMENTAL_KWARGS_KEYS
+        if key in request and deployment_params.get(key) is not None
+    }
+    try:
+        GenericLiteLLMParams.model_validate(overrides, context=STRICT_LITELLM_PARAMS)
+    except ValidationError as error:
+        set_defaults: Final = {name: value for name, value in defaults.items() if value is not None}
+        policy: Final = drop_policy({**deployment_params, **set_defaults, **request})
+        malformed: Final = (str(detail["loc"][0]) for detail in error.errors() if detail["loc"])
+        return frozenset(key for key in malformed if policy.drops(key))
+    return frozenset()
 
 
 def _merged_tools(deployment_tools: Sequence[object], request_tools: object) -> list[object] | None:
@@ -4826,6 +4846,8 @@ class Router:
             if isinstance(raw_deployment_params, LiteLLM_Params)
             else raw_deployment_params
         )
+        for key in _malformed_request_params_the_deployment_sets(deployment_context, defaults, request_context):
+            kwargs.pop(key)
         declared_provider: Final = deployment_context.get("custom_llm_provider")
         declared_model: Final = deployment_context.get("model")
         deployment_provider: Final = (
@@ -10462,7 +10484,9 @@ class Router:
             merged_params: Final[Mapping[str, object]] = (
                 _litellm_params if zeroed_pricing is None else MappingProxyType({**_litellm_params, **zeroed_pricing})
             )
-            litellm_params: Final[LiteLLM_Params] = LiteLLM_Params.model_validate(dict(**merged_params))
+            litellm_params: Final[LiteLLM_Params] = LiteLLM_Params.model_validate(
+                dict(**merged_params), context=STRICT_LITELLM_PARAMS
+            )
             declared_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(_litellm_params)
             warn_on_provider_credential_mismatch(model_name=_model_name, litellm_params=declared_params)
             warn_on_ignored_model_capability_flags(model_name=_model_name, litellm_params=declared_params)

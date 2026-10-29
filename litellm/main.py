@@ -83,8 +83,8 @@ from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_litellm_params import (
     AWS_CREDENTIAL_KWARGS_KEYS,
     OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
-    OPTIONAL_KWARGS_KEYS,
     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+    SUPPLEMENTAL_KWARGS_KEYS,
     InvalidControlOption,
     parse_control_options,
     with_control_options,
@@ -154,7 +154,7 @@ from litellm.types.completion import (
 )
 from litellm.types.litellm_params import ControlOptions, RetryStrategy
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.router import GenericLiteLLMParams
+from litellm.types.router import STRICT_LITELLM_PARAMS, GenericLiteLLMParams
 from litellm.types.utils import (
     BaseUrlRoutingHint,
     CustomPricingLiteLLMParams,
@@ -398,13 +398,12 @@ class _SupplementalProviderParams:
     dropped_keys: frozenset[str] = frozenset()
 
 
-_SUPPLEMENTAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS | {"provider_specific_header", "extra_headers"}
-
-
 def _supplemental_provider_params(kwargs: Mapping[str, object], model: str) -> _SupplementalProviderParams:
-    supplemental: Final = {key: kwargs[key] for key in _SUPPLEMENTAL_KWARGS_KEYS if key in kwargs}
+    supplemental: Final = {key: kwargs[key] for key in SUPPLEMENTAL_KWARGS_KEYS if key in kwargs}
     try:
-        return _SupplementalProviderParams(params=GenericLiteLLMParams.model_validate(supplemental))
+        return _SupplementalProviderParams(
+            params=GenericLiteLLMParams.model_validate(supplemental, context=STRICT_LITELLM_PARAMS)
+        )
     except ValidationError as error:
         invalid: Final = tuple(detail for detail in error.errors() if detail["loc"])
         invalid_keys: Final = frozenset(str(detail["loc"][0]) for detail in invalid)
