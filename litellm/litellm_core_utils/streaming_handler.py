@@ -150,6 +150,21 @@ def _skips_stream_fallback(status_code: int | None) -> bool:
     return status_code is not None and 400 <= status_code < 500 and status_code != 429
 
 
+def _mid_stream_error_is_terminal(
+    mapped_exception: Exception,
+    mapped_status_code: int | None,
+    original_status_code: int | None,
+) -> bool:
+    """Whether a mid-stream failure is surfaced instead of retried on another deployment.
+
+    A 4xx is terminal, with two exceptions: 429 is transient, and a context-window overflow
+    is satisfiable by a deployment with a larger window (#48887).
+    """
+    if isinstance(mapped_exception, litellm.ContextWindowExceededError):
+        return False
+    return _skips_stream_fallback(mapped_status_code) or _skips_stream_fallback(original_status_code)
+
+
 def is_async_iterable(obj: object) -> bool:
     """
     Check if an object is an async iterable (can be used with 'async for').
@@ -2639,8 +2654,8 @@ class CustomStreamWrapper:
         # Raise non-retriable client errors directly (skip fallback).
         # Exception: 429 (rate-limit) IS retriable/transient — allow it
         # through so the Router can switch to a different model group.
-        if not _is_transport_timeout(e) and (
-            _skips_stream_fallback(mapped_status_code) or _skips_stream_fallback(original_status_code)
+        if not _is_transport_timeout(e) and _mid_stream_error_is_terminal(
+            mapped_exception, mapped_status_code, original_status_code
         ):
             raise mapped_exception
 

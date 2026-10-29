@@ -3714,8 +3714,19 @@ class Router:
                     else:
                         initial_kwargs["messages"] = messages
                     self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
+                    # The context-window and content-policy dispatch branches match on the
+                    # trigger's own type, so unwrap the MidStreamFallbackError envelope here
+                    # or the wrong fallback list is consulted (#48887).
+                    fallback_trigger: Final[Exception] = (
+                        e.original_exception
+                        if isinstance(
+                            e.original_exception,
+                            (litellm.ContentPolicyViolationError, litellm.ContextWindowExceededError),
+                        )
+                        else e
+                    )
                     fallback_response = await self.async_function_with_fallbacks_common_utils(
-                        e=e,
+                        e=fallback_trigger,
                         disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
                         fallbacks=fallbacks,
                         context_window_fallbacks=context_window_fallbacks,
@@ -4363,10 +4374,16 @@ class Router:
                 kwargs=initial_kwargs,
                 metadata_variable_name="litellm_metadata",
             )
-            # The content-policy dispatch branch matches on the trigger's own type, so a refusal's
-            # MidStreamFallbackError envelope is unwrapped here or the wrong fallback list is consulted.
+            # The context-window and content-policy dispatch branches match on the trigger's own
+            # type, so a refusal's or an overflow's MidStreamFallbackError envelope is unwrapped
+            # here or the wrong fallback list is consulted (#48887).
             fallback_trigger: Final[Exception] = (
-                e.original_exception if isinstance(e.original_exception, litellm.ContentPolicyViolationError) else e
+                e.original_exception
+                if isinstance(
+                    e.original_exception,
+                    (litellm.ContentPolicyViolationError, litellm.ContextWindowExceededError),
+                )
+                else e
             )
             fallback_response = await self.async_function_with_fallbacks_common_utils(  # rebind-ok: set on success
                 e=fallback_trigger,
