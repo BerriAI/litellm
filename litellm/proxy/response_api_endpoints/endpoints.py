@@ -294,11 +294,12 @@ def _parse_cursor_model_variant(model: str) -> _CursorModelVariant:
 def _router_can_serve(model: str, llm_router: "Router | None") -> bool:
     if llm_router is None:
         return False
-    if llm_router.is_recognized_model(model):
+    registry: Final = llm_router.registry()
+    if registry.resolve(model, kind="recognized"):
         return True
-    if model in llm_router.team_public_model_names:
+    if model in registry.names(kind="team_public"):
         return True
-    return bool(llm_router.pattern_router.get_pattern(model))
+    return bool(registry.patterns().get_pattern(model))
 
 
 def _resolve_cursor_model_variant(

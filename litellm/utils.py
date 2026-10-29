@@ -1585,7 +1585,7 @@ def function_setup(
         raise e
 
 
-def _dispatch_success_logging(
+def dispatch_success_logging(
     logging_obj: LiteLLMLoggingObject,
     result: object,
     start_time: datetime.datetime,
@@ -1603,11 +1603,12 @@ def _dispatch_success_logging(
         end_time=end_time,
         is_completion_with_fallbacks=is_completion_with_fallbacks,
     )
-    logging_obj.handle_sync_success_callbacks_for_async_calls(
-        result=result,
-        start_time=start_time,
-        end_time=end_time,
-    )
+    if not logging_obj.defer_async_logging:
+        logging_obj.handle_sync_success_callbacks_for_async_calls(
+            result=result,
+            start_time=start_time,
+            end_time=end_time,
+        )
 
 
 def _schedule_async_success_logging(
@@ -1632,15 +1633,23 @@ def _schedule_async_success_logging(
         return
 
     def _enqueue_async_logging() -> None:
+        from litellm.responses.streaming_iterator import spawn_logging_task
+
+        if logging_obj.defer_async_logging:
+            logging_obj.handle_sync_success_callbacks_for_async_calls(
+                result=result, start_time=start_time, end_time=end_time
+            )
         logging_obj.mark_async_success_log_enqueued()
-        asyncio.create_task(
+        spawn_logging_task(
+            asyncio.get_running_loop(),
             _client_async_logging_helper(
                 logging_obj=logging_obj,
                 result=result,
                 start_time=start_time,
                 end_time=end_time,
                 is_completion_with_fallbacks=is_completion_with_fallbacks,
-            )
+            ),
+            task_name="success callback enqueue",
         )
 
     if not logging_obj.defer_async_logging:
@@ -1648,6 +1657,11 @@ def _schedule_async_success_logging(
         return
     if logging_obj.enqueue_deferred_logging is not None:
         return
+    logging_obj.deferred_success_result = (  # rebind-ok: capture the innermost wrapper before dispatch
+        result,
+        start_time,
+        end_time,
+    )
     logging_obj.enqueue_deferred_logging = _enqueue_async_logging
 
 
@@ -2480,7 +2494,7 @@ def client(original_function):
                 and _caching_handler_response is not None
                 and _caching_handler_response.final_embedding_cached_response is not None
             ):
-                _dispatch_success_logging(
+                dispatch_success_logging(
                     logging_obj=logging_obj,
                     result=result,
                     start_time=start_time,
@@ -2503,7 +2517,7 @@ def client(original_function):
                 start_time=start_time,
                 end_time=end_time,
             )
-            _dispatch_success_logging(
+            dispatch_success_logging(
                 logging_obj=logging_obj,
                 result=result,
                 start_time=start_time,
@@ -10048,6 +10062,12 @@ class ProviderConfigManager:
             )
 
             return TencentAnthropicMessagesConfig()
+        elif litellm.LlmProviders.DASHSCOPE == provider:
+            from litellm.llms.dashscope.messages.transformation import (
+                DashScopeAnthropicMessagesConfig,
+            )
+
+            return DashScopeAnthropicMessagesConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
             if "claude" in model_lower:
                 from litellm.llms.github_copilot.messages.transformation import (
@@ -10562,10 +10582,10 @@ class ProviderConfigManager:
             return VertexVectorStoreConfig()
         if api_type == "search_api":
             from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
-                VertexSearchAPIVectorStoreConfig,
+                vertex_search_api_vector_store_config,
             )
 
-            return VertexSearchAPIVectorStoreConfig()
+            return vertex_search_api_vector_store_config
         return None
 
     @staticmethod

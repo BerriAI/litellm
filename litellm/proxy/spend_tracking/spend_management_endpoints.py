@@ -1410,7 +1410,7 @@ async def get_global_spend_provider(
             _model_id = row["model_id"]
             _provider = "Unknown"
             if llm_router is not None:
-                _deployment = llm_router.get_deployment(model_id=_model_id)
+                _deployment = llm_router.registry().deployment(_model_id)
                 if _deployment is not None:
                     try:
                         _, _provider, _, _ = litellm.get_llm_provider(
@@ -2392,17 +2392,19 @@ async def calculate_spend(request: SpendCalculateRequest):
             _model_in_llm_router = None
             cost_per_token: CostPerToken | None = None
             if llm_router is not None:
-                if llm_router.model_group_alias is not None and request.model in llm_router.model_group_alias:
+                router_registry: Final = llm_router.registry()
+                model_group_alias: Final = router_registry.aliases()
+                if model_group_alias is not None and request.model in model_group_alias:
                     # lookup alias in llm_router
-                    _model_group_name: Final = llm_router.model_group_alias[request.model]
-                    for model in llm_router.model_list:
+                    _model_group_name: Final = model_group_alias[request.model]
+                    for model in router_registry.all():
                         if model.get("model_name") == _model_group_name:
                             _model_in_llm_router = model
 
                 else:
                     # no model_group aliases set -> try finding model in llm_router
                     # find model in llm_router
-                    for model in llm_router.model_list:
+                    for model in router_registry.all():
                         if model.get("model_name") == request.model:
                             _model_in_llm_router = model
 
@@ -4374,13 +4376,13 @@ async def provider_budgets() -> ProviderBudgetResponse:
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": "No llm_router found"})
 
-        provider_budget_config: Final = llm_router.provider_budget_config
+        provider_budget_config: Final = llm_router.settings().provider_budget_config
         if provider_budget_config is None:
             raise ValueError(
                 "No provider budget config found. Please set a provider budget config in the router settings. https://docs.litellm.ai/docs/proxy/provider_budget_routing"
             )
 
-        router_budget_logger: Final = llm_router.get_router_deployment_budget_limiter()
+        router_budget_logger: Final = llm_router.registry().plugins("budget_limiter")
         if router_budget_logger is None:
             raise ValueError("No router budget logger found")
 
