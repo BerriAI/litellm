@@ -469,6 +469,33 @@ async def _input_tokens(router: Router, model: str) -> dict[str, int]:
     )
 
 
+async def _reserved_input_tokens(router: Router, model: str, route: str, messages: list[dict[str, object]]) -> int:
+    counts: Final = await count_request_input_tokens(
+        request_body={"model": model, "messages": messages}, route=route, llm_router=router, team_id=None
+    )
+    return counts[model]
+
+
+@pytest.mark.asyncio
+async def test_an_openai_chat_request_reserves_what_openai_chat_bills_on_top_of_each_pdf_files_pages() -> None:
+    from litellm.constants import OPENAI_CHAT_PDF_FILE_TOKENS
+    from tests.unit.proxy.spend_tracking.test_input_tokens import _one_page_pdf_message
+
+    router: Final = _router_with_groups(("on-openai", "openai/gpt-5.6-sol"), ("on-azure", "azure/gpt-5.6-sol"))
+    two_pdfs: Final = [*_one_page_pdf_message(), *_one_page_pdf_message()]
+
+    assert await _reserved_input_tokens(router, "on-openai", "/v1/chat/completions", two_pdfs) == (
+        await _reserved_input_tokens(router, "on-azure", "/v1/chat/completions", two_pdfs)
+        + 2 * OPENAI_CHAT_PDF_FILE_TOKENS
+    )
+    assert await _reserved_input_tokens(router, "on-openai", "/v1/messages", two_pdfs) == (
+        await _reserved_input_tokens(router, "on-azure", "/v1/messages", two_pdfs)
+    )
+    assert await _reserved_input_tokens(router, "on-openai", "/v1/chat/completions", _MULTILINGUAL_MESSAGES) == (
+        await _reserved_input_tokens(router, "on-azure", "/v1/chat/completions", _MULTILINGUAL_MESSAGES)
+    )
+
+
 @pytest.mark.asyncio
 async def test_alias_group_of_an_openai_model_reserves_on_that_models_token_count():
     router: Final = _router_with_groups(("gpt-6.1-sol", "openai/gpt-6.1-sol"), ("prod-gpt-6", "openai/gpt-6.1-sol"))

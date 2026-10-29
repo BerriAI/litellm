@@ -9134,6 +9134,30 @@ async def test_project_itpm_reserves_a_pdf_at_the_largest_count_of_the_group_dep
     assert stash.itpm_reserved_tokens == claude_count
 
 
+def test_project_itpm_adds_what_openai_chat_bills_on_top_of_a_pdf_files_pages_on_chat_completions_only() -> None:
+    from litellm.constants import OPENAI_CHAT_PDF_FILE_TOKENS
+    from tests.unit.proxy.spend_tracking.test_input_tokens import _one_page_pdf_message
+
+    router: Final = Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": model, "api_key": "sk-test"}}
+            for name, model in (("on-openai", "openai/gpt-5.6-sol"), ("on-azure", "azure/gpt-5.6-sol"))
+        ]
+    )
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()),
+        counted_models_resolver=lambda model, team_id: models_counted_for(model, router, team_id),
+    )
+    data: Final = {"messages": _one_page_pdf_message()}
+
+    assert handler._estimate_precise_input_tokens(data, "on-openai", "acompletion") == (
+        handler._estimate_precise_input_tokens(data, "on-azure", "acompletion") + OPENAI_CHAT_PDF_FILE_TOKENS
+    )
+    assert handler._estimate_precise_input_tokens(data, "on-openai", "anthropic_messages") == (
+        handler._estimate_precise_input_tokens(data, "on-azure", "anthropic_messages")
+    )
+
+
 def _extraction_request(state: str, call_id: str) -> dict[str, object]:
     return {
         "model": "invoice-reader",

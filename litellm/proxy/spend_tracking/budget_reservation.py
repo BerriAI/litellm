@@ -17,6 +17,7 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.proxy._types import (
@@ -43,13 +44,16 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.spend_tracking.input_tokens import (
     count_input_tokens,
     count_input_tokens_for_model,
+    inline_pdf_file_count,
     models_counted_for,
+    openai_chat_pdf_file_tokens,
 )
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement, spend_counter_batch_scope
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
+from litellm.types.utils import CallTypes
 
 
 @dataclass
@@ -1614,17 +1618,25 @@ async def count_request_input_tokens(
         raw_body=raw_body,
         models=tuple(dict.fromkeys(chain.from_iterable(counted_models.values()))),
     )
+    chat_pdf_files: Final = (
+        inline_pdf_file_count(request_body.get("messages"))
+        if CallTypes.acompletion in (get_call_types_for_route(route) or ())
+        else 0
+    )
     return MappingProxyType(
         {
             model: largest
             for model, names in counted_models.items()
-            if (largest := _largest_count(counts, names)) is not None
+            if (largest := _largest_count(counts, names, chat_pdf_files)) is not None
         }
     )
 
 
-def _largest_count(counts: Mapping[str, int], names: Sequence[str]) -> int | None:
-    return max((counts[name] for name in names if name in counts), default=None)
+def _largest_count(counts: Mapping[str, int], names: Sequence[str], chat_pdf_files: int) -> int | None:
+    return max(
+        (counts[name] + openai_chat_pdf_file_tokens(name, chat_pdf_files) for name in names if name in counts),
+        default=None,
+    )
 
 
 def _estimate_input_tokens(

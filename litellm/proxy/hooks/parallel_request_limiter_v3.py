@@ -76,7 +76,11 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
     canonical_provider_batch_id,
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
-from litellm.proxy.spend_tracking.input_tokens import models_counted_for
+from litellm.proxy.spend_tracking.input_tokens import (
+    inline_pdf_file_count,
+    models_counted_for,
+    openai_chat_pdf_file_tokens,
+)
 from litellm.responses.litellm_completion_transformation.compaction_items import billable_input_since_newest_compaction
 from litellm.router_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
@@ -514,6 +518,7 @@ _TPM_FLOOR_FRACTION: Final = 4
 # check on data["input"] must exclude these call types, or a Responses call
 # gets misclassified as an embedding and skips output-token reservation/caps.
 RESPONSES_API_CALL_TYPES: Final = ("aresponses", "responses")
+CHAT_COMPLETION_API_CALL_TYPES: Final = (CallTypes.completion.value, CallTypes.acompletion.value)
 EMBEDDING_API_CALL_TYPES: Final = ("aembedding", "embedding")
 TEXT_COMPLETION_API_CALL_TYPES: Final = ("atext_completion", "text_completion")
 RERANK_API_CALL_TYPES: Final = (CallTypes.rerank.value, CallTypes.arerank.value)
@@ -4016,6 +4021,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         audio_token_estimate: Final = self._estimate_audio_content_tokens(messages)
         countable_messages: Final = self._strip_audio_content_blocks(messages) if audio_token_estimate > 0 else messages
+        chat_pdf_files: Final = (
+            inline_pdf_file_count(countable_messages) if call_type in CHAT_COMPLETION_API_CALL_TYPES else 0
+        )
 
         try:
             estimate: Final = max(
@@ -4031,6 +4039,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                             use_default_image_token_count=True,
                         )
                     )
+                    + openai_chat_pdf_file_tokens(tokenizer_model, chat_pdf_files)
                     for tokenizer_model in (self._counted_models_resolver(model, team_id) if model else ("",))
                 ),
             )

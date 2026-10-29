@@ -80,12 +80,16 @@ def _router(*deployments: tuple[str, str]) -> Router:
         ("pdf-reports", "azure/gpt-5.6-sol", "azure/gpt-5.6-sol"),
         ("pdf-reports", "azure/responses/gpt-5.6-sol", "azure/responses/gpt-5.6-sol"),
         ("pdf-reports", "openrouter/openai/gpt-5.6-sol", "openrouter/openai/gpt-5.6-sol"),
+        ("pdf-reports", "openai/gpt-5.6-sol", "openai/gpt-5.6-sol"),
+        ("pdf-reports", "gpt-5.6-sol", "openai/gpt-5.6-sol"),
     ],
     ids=[
         "gpt-named-group-served-by-claude",
         "custom-group-served-by-azure-gpt",
         "custom-group-served-by-azure-responses-gpt",
         "custom-group-served-by-openrouter-gpt",
+        "custom-group-served-by-openai-gpt",
+        "custom-group-served-by-unprefixed-openai-gpt",
     ],
 )
 def test_a_model_group_counts_like_the_deployment_that_serves_it(
@@ -153,6 +157,23 @@ def test_a_team_request_counts_with_the_deployment_its_team_is_served_by():
 
     assert models_counted_for("reports", router, "team-a") == ("azure/gpt-5.6-sol",)
     assert models_counted_for("reports", router, "team-b") == ("reports",)
+
+
+def test_a_team_with_its_own_wildcard_counts_with_it_and_never_with_a_proxy_wide_wildcard():
+    router: Final = Router(
+        model_list=[
+            {"model_name": "*", "litellm_params": {"model": "anthropic/*", "api_key": "x"}},
+            {
+                "model_name": "team-a-gpt",
+                "litellm_params": {"model": "azure/gpt-*", "api_key": "x", "api_base": "https://x"},
+                "model_info": {"team_id": "team-a", "team_public_model_name": "gpt-*"},
+            },
+        ]
+    )
+
+    assert models_counted_for("gpt-5.6-sol", router, "team-a") == ("azure/gpt-5.6-sol",)
+    assert models_counted_for("gpt-5.6-sol", router, "team-b") == models_counted_for("gpt-5.6-sol", router, None)
+    assert "azure/gpt-5.6-sol" not in models_counted_for("gpt-5.6-sol", router, "team-b")
 
 
 def test_count_input_tokens_for_model_counts_anthropic_auto_tool_choice() -> None:
