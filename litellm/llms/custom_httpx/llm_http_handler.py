@@ -7144,6 +7144,7 @@ class BaseLLMHTTPHandler:
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
         turn_admission: Callable[[], Awaitable[None]] | None = None,
         frame_guard: "ResponsesWsFrameGuard | None" = None,
+        client_model: str | None = None,
         **kwargs: object,
     ) -> Exception | None:
         """
@@ -7208,6 +7209,7 @@ class BaseLLMHTTPHandler:
                 turn_admission=turn_admission,
                 guardrail_callbacks=_ws_guardrail_callbacks,  # pyright: ignore[reportUnknownArgumentType]  # duck-typed callbacks from litellm.callbacks
                 frame_guard=frame_guard,
+                client_model=client_model,
                 **kwargs,
             )
             return await handler.run()
@@ -7304,6 +7306,7 @@ class BaseLLMHTTPHandler:
                     request_defaults=request_defaults,
                     turn_admission=turn_admission,
                     frame_guard=frame_guard,
+                    client_model=client_model,
                 )
                 return await streaming.bidirectional_forward()
 

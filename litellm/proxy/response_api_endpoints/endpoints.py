@@ -87,6 +87,7 @@ from litellm.proxy.utils import count_request_input_tokens, handle_exception_on_
 from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
 from litellm.responses.litellm_completion_transformation.count_request import MODEL_FILE_ID_MAPPING_FIELD
 from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard, spawn_logging_task
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
@@ -866,7 +867,19 @@ async def get_response(
         fastapi_response=fastapi_response,
         read_settles_billing=read_settles_billing,
     )
-    return response
+    return _with_deployment_model_name(response, response_id, llm_router, processor.returns_raw_model_name)
+
+
+def _with_deployment_model_name(
+    response: object, response_id: str, llm_router: Router | None, return_raw_model_name: bool
+) -> object:
+    if return_raw_model_name or llm_router is None or not isinstance(response, ResponsesAPIResponse):
+        return response
+    model_id: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(decrypted_response_id(response_id))
+    deployment: Final = None if model_id is None else llm_router.get_deployment(model_id=model_id)
+    if deployment is None or "*" in deployment.model_name:
+        return response
+    return response.model_copy(update={"model": deployment.model_name})
 
 
 def _background_response_spend_tags(data: Mapping[str, object]) -> tuple[str, ...] | None:
@@ -1873,7 +1886,7 @@ async def cancel_response(
         fastapi_response=fastapi_response,
         read_settles_billing=read_settles_billing,
     )
-    return response
+    return _with_deployment_model_name(response, response_id, llm_router, processor.returns_raw_model_name)
 
 
 def _resolve_responses_ws_session_limit_seconds() -> float:
@@ -2321,6 +2334,7 @@ async def _responses_websocket_session(
         responses_ws_frame_guard=_responses_ws_frame_guard(
             data, user_api_key_dict, proxy_logging_obj, refused_turns.add
         ),
+        responses_ws_client_model=resolved_model,
         **_routing_hints_from_first_ws_frame(first_message),
     )
 

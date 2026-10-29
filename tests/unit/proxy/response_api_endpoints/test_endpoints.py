@@ -1052,6 +1052,82 @@ async def test_a_finished_read_or_cancel_bills_usage_only_the_configured_deploym
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "endpoint_name, finished_status",
+    [("get_response", "completed"), ("cancel_response", "cancelled")],
+)
+@pytest.mark.parametrize(
+    "deployment_name, return_raw_model_name, reported_model",
+    [
+        ("oai-alias", False, "oai-alias"),
+        ("oai-alias", True, "gpt-5.4-mini-2026-03-17"),
+        ("openai/*", False, "gpt-5.4-mini-2026-03-17"),
+    ],
+)
+async def test_a_read_or_cancel_reports_the_deployment_model_name_while_billing_logs_the_provider_model(
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint_name: str,
+    finished_status: str,
+    deployment_name: str,
+    return_raw_model_name: bool,
+    reported_model: str,
+):
+    from fastapi import Response as FastAPIResponse
+
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.response_api_endpoints import endpoints
+
+    class _CapturingLogger(_SpendEvents, CustomLogger):
+        pass
+
+    spend_events: Final = _CapturingLogger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [spend_events])
+    stored: Final = _one_pending_background_response()
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": deployment_name,
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-fake"},
+                "model_info": {"id": "deployment-read"},
+            }
+        ]
+    )
+    provider_response: Final = _background_response(stored.response_id, finished_status, 100).model_copy(
+        update={"model": "gpt-5.4-mini-2026-03-17"}
+    )
+    processor: Final = MagicMock()
+    processor.returns_raw_model_name = return_raw_model_name
+    processor.base_process_llm_request = AsyncMock(return_value=provider_response)
+
+    with (
+        patch(  # test-quality-ok: endpoint constructs the processor directly
+            "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+            return_value=processor,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", stored.prisma_client
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.llm_router", router
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj", stored.proxy_logging
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+    ):
+        returned = await getattr(endpoints, endpoint_name)(
+            response_id=stored.response_id,
+            request=_request_for("GET", f"/v1/responses/{stored.response_id}", b""),
+            fastapi_response=FastAPIResponse(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-reader"),
+        )
+        await _drain_spend_events()
+
+    assert returned.model == reported_model
+    assert [payload["response"]["model"] for payload in spend_events.payloads] == ["gpt-5.4-mini-2026-03-17"]
+
+
+@pytest.mark.asyncio
 async def test_deleting_a_finished_unbilled_background_response_bills_it_before_the_provider_forgets_it(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -2106,6 +2182,46 @@ class TestResponsesWSFirstFrameModelAuth:
         assert callable(routed["responses_ws_frame_guard"])
         assert mock_route_request.await_args.kwargs["route_type"] == "_aresponses_websocket"
         ws.close.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_endpoint_threads_the_client_model_past_the_pre_call_model_rewrite(self):
+        from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
+
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(return_value=json.dumps({"type": "response.create", "model": "oai-alias", "input": "hi"}))
+        ws.close = AsyncMock()
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(
+            return_value=({"model": "gpt-mini", "litellm_metadata": {}}, MagicMock())
+        )
+
+        async def fake_llm_call():
+            return None
+
+        with (
+            patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests below
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: the pre-call processor needs a live proxy; the model it rewrites is the input here
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(  # test-quality-ok: routing is the seam where the client's model name becomes observable
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                return_value=fake_llm_call(),
+            ) as mock_route_request,
+        ):
+            await responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=MagicMock())
+
+        routed = mock_route_request.await_args.kwargs["data"]
+        assert (routed["model"], routed["responses_ws_client_model"]) == ("gpt-mini", "oai-alias")
 
     @pytest.mark.asyncio
     async def test_frame_guard_runs_the_guardrail_walk_on_the_frame_body_and_returns_its_records(self):

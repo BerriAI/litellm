@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 from litellm.llms.databricks.responses.transformation import (
@@ -4356,3 +4357,173 @@ class TestNativeWebSocketEncryptedContentAffinity:
         )
 
         assert await handler.bidirectional_forward() is None
+
+
+def _managed_logging_obj():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    return Logging(
+        model="openai/gpt-5.4-mini",
+        messages=[],
+        stream=True,
+        call_type="aresponses",
+        start_time=0,
+        litellm_call_id="test-id",
+        function_id="test-func",
+    )
+
+
+def _provider_response_event(event_type: str, status: str) -> dict[str, object]:
+    return {
+        "type": event_type,
+        "response": {"id": "resp_1", "model": "gpt-5.4-mini-2026-03-17", "status": status, "output": []},
+    }
+
+
+class TestResponsesWebSocketClientModel:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "litellm_metadata, reported_model",
+        [({}, "oai-alias"), ({RETURN_RAW_MODEL_NAME_METADATA_KEY: True}, "gpt-5.4-mini-2026-03-17")],
+    )
+    async def test_native_relay_sends_the_client_model_and_logs_the_provider_model(
+        self, litellm_metadata: Mapping[str, object], reported_model: str
+    ):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.responses import main as responses_main
+
+        provider_frames: Final = iter(
+            json.dumps(_provider_response_event(event_type, status))
+            for event_type, status in (("response.created", "in_progress"), ("response.completed", "completed"))
+        )
+
+        class FakeBackend:
+            async def send(self, message: str) -> None:
+                pass
+
+            async def recv(self, decode: bool = False) -> str:
+                frame = next(provider_frames, None)
+                if frame is None:
+                    raise RuntimeError("backend closed")
+                return frame
+
+            async def close(self) -> None:
+                pass
+
+        class FakeConnect:
+            def __init__(self, url: str, **kwargs: object) -> None:
+                pass
+
+            async def __aenter__(self) -> FakeBackend:
+                return FakeBackend()
+
+            async def __aexit__(self, *args: object) -> None:
+                pass
+
+        completed: Final = asyncio.Event()
+
+        async def send_text(frame: str) -> None:
+            if '"response.completed"' in frame:
+                completed.set()
+
+        async def receive_text() -> str:
+            await completed.wait()
+            raise RuntimeError("client closed")
+
+        client_ws: Final = MagicMock()
+        client_ws.send_text = AsyncMock(side_effect=send_text)
+        client_ws.receive_text = AsyncMock(side_effect=receive_text)
+        client_ws.close = AsyncMock()
+        logging_obj: Final = MagicMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.copy_for_new_call.return_value = logging_obj
+
+        with patch("websockets.connect", FakeConnect):
+            await asyncio.wait_for(
+                responses_main._aresponses_websocket.__wrapped__(
+                    model="openai/gpt-5.4-mini",
+                    websocket=client_ws,
+                    api_key="sk-test",
+                    litellm_logging_obj=logging_obj,
+                    litellm_metadata=dict(litellm_metadata),
+                    first_message=json.dumps({"type": "response.create", "model": "oai-alias", "input": "hi"}),
+                    responses_ws_client_model="oai-alias",
+                ),
+                timeout=10,
+            )
+        await asyncio.sleep(0)
+
+        sent: Final = [json.loads(sent_call.args[0]) for sent_call in client_ws.send_text.await_args_list]
+        assert [event["response"]["model"] for event in sent] == [reported_model, reported_model]
+        logged: Final = logging_obj.dispatch_success_handlers.await_args.args[0]
+        assert {event["response"]["model"] for event in logged} == {"gpt-5.4-mini-2026-03-17"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("frame_model, reported_model", [(None, "oai-alias"), ("gpt-mini", "gpt-mini")])
+    async def test_managed_relay_sends_the_client_model_while_the_provider_chunks_keep_theirs(
+        self, monkeypatch: pytest.MonkeyPatch, frame_model: str | None, reported_model: str
+    ):
+        from unittest.mock import AsyncMock
+
+        import litellm
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        provider_chunks: Final = (
+            _provider_response_event("response.created", "in_progress"),
+            {"type": "response.in_progress", "response": {"id": "resp_1", "status": "in_progress"}},
+            {"type": "response.output_text.delta", "delta": "hi"},
+            _provider_response_event("response.completed", "completed"),
+        )
+
+        async def provider_stream():
+            for chunk in provider_chunks:
+                yield chunk
+
+        monkeypatch.setattr(litellm, "aresponses", AsyncMock(return_value=provider_stream()))
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="openai/gpt-5.4-mini",
+            logging_obj=_managed_logging_obj(),
+            litellm_metadata={"model_group": "gpt-mini"},
+            client_model="oai-alias",
+        )
+        frame_body: Final = {"type": "response.create", "input": "hi"}
+
+        await handler._process_response_create(
+            json.dumps(frame_body if frame_model is None else {**frame_body, "model": frame_model})
+        )
+
+        sent: Final = [json.loads(sent_call.args[0]) for sent_call in websocket.send_text.await_args_list]
+        assert [event.get("response", {}).get("model") for event in sent] == [reported_model, None, None, reported_model]
+        assert [chunk.get("response", {}).get("model") for chunk in provider_chunks] == [
+            "gpt-5.4-mini-2026-03-17",
+            None,
+            None,
+            "gpt-5.4-mini-2026-03-17",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_managed_warmup_ack_reports_the_client_model(self, monkeypatch: pytest.MonkeyPatch):
+        from unittest.mock import AsyncMock
+
+        import litellm
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        monkeypatch.setattr(litellm, "aresponses", AsyncMock(side_effect=AssertionError("warmup skips the provider")))
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="openai/gpt-5.4-mini",
+            logging_obj=_managed_logging_obj(),
+            litellm_metadata={"model_group": "gpt-mini"},
+            client_model="oai-alias",
+        )
+
+        await handler._process_response_create(json.dumps({"type": "response.create", "generate": False, "input": []}))
+
+        sent: Final = [json.loads(sent_call.args[0]) for sent_call in websocket.send_text.await_args_list]
+        assert [event["response"]["model"] for event in sent] == ["oai-alias", "oai-alias"]

@@ -2273,6 +2273,19 @@ def _json_object_or_none(message: object) -> Mapping[str, object] | None:
     return parsed if _is_json_object(parsed) else None
 
 
+_NESTED_RESPONSE_MARKER: Final = '"response"'
+
+
+def _with_client_response_model(frame: str, client_model: str | None) -> str:
+    if not client_model or _NESTED_RESPONSE_MARKER not in frame:
+        return frame
+    event: Final = _json_object_or_none(frame)
+    response: Final = None if event is None else event.get("response")
+    if event is None or not _is_json_object(response) or response.get("model") in (None, client_model):
+        return frame
+    return json.dumps({**event, "response": {**response, "model": client_model}})
+
+
 def _user_texts_in_input_item(item: object) -> tuple[str, ...]:
     if not _is_json_object(item) or item.get("type") != "message" or item.get("role") != "user":
         return ()
@@ -2445,9 +2458,11 @@ class ResponsesWebSocketStreaming:
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
         turn_admission: Callable[[], Awaitable[None]] | None = None,
         frame_guard: ResponsesWsFrameGuard | None = None,
+        client_model: str | None = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
+        self.client_model: str | None = client_model
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
         self.frame_guard: ResponsesWsFrameGuard | None = frame_guard
@@ -2636,7 +2651,7 @@ class ResponsesWebSocketStreaming:
                 # guardrails does not appear in success logs.
                 self._record_backend_event(wrapped_str)
 
-                await self.websocket.send_text(wrapped_str)
+                await self.websocket.send_text(_with_client_response_model(wrapped_str, self.client_model))
 
         except websockets.exceptions.ConnectionClosed as e:
             verbose_logger.debug("Responses WS backend connection closed: %s", e)
@@ -3040,10 +3055,12 @@ class ManagedResponsesWebSocketHandler:
         turn_admission: Callable[[], Awaitable[None]] | None = None,
         frame_guard: ResponsesWsFrameGuard | None = None,
         guardrail_callbacks: Sequence[PresidioGuardrailCallback] | None = None,
+        client_model: str | None = None,
         **kwargs: object,
     ) -> None:
         self.websocket = websocket
         self.model = model
+        self.client_model: str | None = client_model
         self.frame_guard = frame_guard
         self.guardrail_callbacks: tuple[PresidioGuardrailCallback, ...] = tuple(guardrail_callbacks or ())
         self._pii_tokens: Mapping[str, str] = {}
@@ -3228,7 +3245,7 @@ class ManagedResponsesWebSocketHandler:
     def _build_warmup_response(self, msg_obj: _MutableJsonObject) -> dict[str, object]:
         """Build a minimal completed Responses API object for a warmup ack."""
         source: Final = self._warmup_source_params(msg_obj)
-        wire_model: Final = source.get("model") or self.model_group or self.model
+        wire_model: Final = source.get("model") or self.client_model or self.model_group or self.model
         return {
             "id": f"{_WARMUP_RESPONSE_ID_PREFIX}{uuid.uuid4().hex}",
             "object": "response",
@@ -3395,7 +3412,9 @@ class ManagedResponsesWebSocketHandler:
         call_kwargs["litellm_metadata"]["proxy_server_request"] = proxy_server_request
         call_kwargs["proxy_server_request"] = proxy_server_request
 
-    async def _stream_and_forward(self, model: str, call_kwargs: dict[str, object]) -> _MutableJsonObject | None:
+    async def _stream_and_forward(
+        self, model: str, call_kwargs: dict[str, object], client_model: str | None
+    ) -> _MutableJsonObject | None:
         """
         Stream ``litellm.aresponses`` and forward every chunk over the WebSocket.
 
@@ -3419,7 +3438,9 @@ class ManagedResponsesWebSocketHandler:
                 except Exception:
                     pass
             try:
-                await self.websocket.send_text(self._unmask_for_client(serialized))
+                await self.websocket.send_text(
+                    _with_client_response_model(self._unmask_for_client(serialized), client_model)
+                )
             except Exception as send_exc:
                 verbose_logger.debug("ManagedResponsesWS: error sending chunk to client: %s", send_exc)
                 return terminal_event  # Client disconnected
@@ -3542,7 +3563,9 @@ class ManagedResponsesWebSocketHandler:
         call_kwargs.update(self.extra_kwargs)
 
         try:
-            terminal_event: Final = await self._stream_and_forward(model, call_kwargs)
+            terminal_event: Final = await self._stream_and_forward(
+                model, call_kwargs, None if self.client_model is None else requested_model or self.client_model
+            )
         except Exception as exc:
             verbose_logger.exception("ManagedResponsesWS: error processing response.create: %s", exc)
             await self._send_error(str(exc))

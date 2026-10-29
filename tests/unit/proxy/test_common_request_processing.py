@@ -3270,65 +3270,66 @@ class TestOverrideOpenAIResponseModel:
     )
     def test_raw_model_name_toggle_metadata(self, request_data, expected):
         assert should_return_raw_model_name(request_data) is expected
+        assert ProxyBaseLLMRequestProcessing(data=request_data).returns_raw_model_name is expected
 
-    def test_override_model_preserves_fallback_model_when_fallback_occurred_object(
-        self,
-    ):
-        """
-        Test that when a fallback occurred (x-litellm-attempted-fallbacks > 0),
-        the actual model used (fallback model) is preserved instead of being
-        overridden with the requested model.
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "call, request_body",
+        [
+            ("acompletion", {"messages": [{"role": "user", "content": "hi"}]}),
+            ("aresponses", {"input": "hi"}),
+        ],
+    )
+    async def test_non_streamed_fallback_reports_the_fallback_group(self, call, request_body):
+        router: Final = litellm.Router(
+            model_list=[
+                {"model_name": "broken-primary", "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-fake"}},
+                {"model_name": "gpt-mini", "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-fake"}},
+            ],
+            fallbacks=[{"broken-primary": ["gpt-mini"]}],
+        )
+        response: Final = await getattr(router, call)(
+            model="broken-primary", mock_testing_fallbacks=True, mock_response="ok", **request_body
+        )
 
-        This is the regression test to ensure the model being called is properly
-        displayed when a fallback happens.
-        """
-        requested_model = "gpt-4"
-        fallback_model = "gpt-3.5-turbo"
+        stamped: Final = _override_openai_response_model(
+            response_obj=response, requested_model="broken-primary", log_context="test_context"
+        )
 
-        # Create a mock object response with fallback model
-        # _hidden_params is an attribute (not a dict key) accessed via getattr
+        assert stamped.model == "gpt-mini"
+
+    @pytest.mark.parametrize("requested_model", ["gpt-4", "azure_ai/model_router"])
+    def test_override_model_reports_fallback_group_when_fallback_occurred_object(self, requested_model):
         response_obj = MagicMock()
-        response_obj.model = fallback_model
-        response_obj._hidden_params = {"additional_headers": {"x-litellm-attempted-fallbacks": 1}}
+        response_obj.model = "gpt-5.4-mini-2026-03-17"
+        response_obj._hidden_params = {
+            "additional_headers": {"x-litellm-attempted-fallbacks": 1, "x-litellm-model-group": "gpt-mini"}
+        }
 
-        # Call the function - should preserve fallback model
         _override_openai_response_model(
             response_obj=response_obj,
             requested_model=requested_model,
             log_context="test_context",
         )
 
-        # Verify the model was NOT overridden - should still be the fallback model
-        assert response_obj.model == fallback_model
-        assert response_obj.model != requested_model
+        assert response_obj.model == "gpt-mini"
 
-    def test_override_model_preserves_fallback_model_multiple_fallbacks(self):
-        """
-        Test that when multiple fallbacks occurred, the actual model used
-        (fallback model) is preserved.
-        """
-        requested_model = "gpt-4"
+    @pytest.mark.parametrize("model_group", [None, ""])
+    def test_override_model_preserves_fallback_model_without_model_group_header(self, model_group):
         fallback_model = "claude-haiku-4-5-20251001"
-
-        # Create a mock object response with fallback model
         response_obj = MagicMock()
         response_obj.model = fallback_model
         response_obj._hidden_params = {
-            "additional_headers": {
-                "x-litellm-attempted-fallbacks": 2  # Multiple fallbacks
-            }
+            "additional_headers": {"x-litellm-attempted-fallbacks": 2, "x-litellm-model-group": model_group}
         }
 
-        # Call the function - should preserve fallback model
         _override_openai_response_model(
             response_obj=response_obj,
-            requested_model=requested_model,
+            requested_model="gpt-4",
             log_context="test_context",
         )
 
-        # Verify the model was NOT overridden - should still be the fallback model
         assert response_obj.model == fallback_model
-        assert response_obj.model != requested_model
 
     def test_override_model_overrides_when_no_fallback_dict(self):
         """

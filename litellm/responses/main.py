@@ -30,7 +30,11 @@ from litellm.integrations.anthropic_cache_control_hook import (
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import (
+    drops_unsupported_params,
+    normalize_drop_params,
+    should_return_raw_model_name,
+)
 from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
@@ -2782,6 +2786,7 @@ async def _aresponses_websocket(
     timeout: float | None = None,
     turn_admission: Callable[[], Awaitable[None]] | None = None,
     responses_ws_frame_guard: "ResponsesWsFrameGuard | None" = None,
+    responses_ws_client_model: str | None = None,
     **kwargs,
 ) -> Exception | None:
     """
@@ -2856,6 +2861,9 @@ async def _aresponses_websocket(
     remaining_kwargs: Final = {k: v for k, v in kwargs.items() if k not in _explicit_keys}
     deployment_kwargs: Final = {k: v for k, v in kwargs.items() if k not in _RESPONSES_WS_ROUTING_HINT_KEYS}
     first_message: Final = kwargs.get("first_message")
+    client_model: Final = (
+        None if should_return_raw_model_name(_STR_MAPPING.validate_python(kwargs)) else responses_ws_client_model
+    )
 
     return await base_llm_http_handler.async_responses_websocket(
         model=resolved_model,
@@ -2876,5 +2884,6 @@ async def _aresponses_websocket(
         request_defaults=_build_responses_websocket_request_defaults(deployment_kwargs),
         turn_admission=turn_admission,
         frame_guard=responses_ws_frame_guard,
+        client_model=client_model,
         **remaining_kwargs,
     )

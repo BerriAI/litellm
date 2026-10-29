@@ -46,7 +46,6 @@ from litellm.constants import (
     MAX_LITELLM_CALL_ID_LENGTH,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     NON_INFERENCE_CALL_TYPES,
-    RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_DATA_PREFIX,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
     UNSAFE_PROXY_RESPONSE_HEADERS,
@@ -60,10 +59,12 @@ from litellm.litellm_core_utils.bug_report import (
     strip_bug_report_notice,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     get_or_create_metadata_bucket,
     independent_snapshot,
     is_expected_client_error,
     redact_nested_match_and_regex_keys,
+    should_return_raw_model_name,
 )
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
@@ -336,13 +337,6 @@ def resolve_litellm_call_id(client_call_id: str | None) -> str:
     if client_call_id is not None and 0 < len(client_call_id) <= MAX_LITELLM_CALL_ID_LENGTH:
         return client_call_id
     return str(uuid.uuid4())
-
-
-def should_return_raw_model_name(request_data: dict[str, object]) -> bool:
-    return any(
-        isinstance(metadata, dict) and metadata.get(RETURN_RAW_MODEL_NAME_METADATA_KEY) is True
-        for metadata in (request_data.get("metadata"), request_data.get("litellm_metadata"))
-    )
 
 
 _should_return_raw_model_name: Final = should_return_raw_model_name
@@ -1521,6 +1515,43 @@ def is_azure_model_router_request(model: str, hidden_params: Mapping[str, object
 _is_azure_model_router_request: Final = is_azure_model_router_request
 
 
+def _non_empty_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+_NO_HEADERS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _client_facing_response_model(
+    requested_model: str, hidden_params: Mapping[str, object], log_context: str
+) -> str | None:
+    additional_headers: Final = as_str_mapping(hidden_params.get("additional_headers")) or _NO_HEADERS
+    model_group: Final = _non_empty_str(additional_headers.get("x-litellm-model-group"))
+    attempted_fallbacks: Final = additional_headers.get("x-litellm-attempted-fallbacks")
+    if isinstance(attempted_fallbacks, (int, float)) and attempted_fallbacks > 0:
+        verbose_proxy_logger.debug(
+            "%s: fallback detected (attempted_fallbacks=%s), reporting fallback model group=%r.",
+            log_context,
+            attempted_fallbacks,
+            model_group,
+        )
+        return model_group
+    candidate_model: Final = model_group if hidden_params.get("fastest_response_batch_completion") else requested_model
+    if candidate_model is None:
+        verbose_proxy_logger.debug(
+            "%s: fastest_response detected but no model group header found, preserving actual model from response.",
+            log_context,
+        )
+        return None
+    if is_azure_model_router_request(candidate_model, hidden_params):
+        verbose_proxy_logger.debug(
+            "%s: Azure Model Router detected - preserving actual model used from response instead of overriding to router model.",
+            log_context,
+        )
+        return None
+    return candidate_model
+
+
 def _override_openai_response_model(
     *,
     response_obj: _ResponseT,
@@ -1544,7 +1575,9 @@ def _override_openai_response_model(
 
     Exceptions:
     1. If a fallback occurred (indicated by x-litellm-attempted-fallbacks header),
-       we preserve the actual model that was used (the fallback model).
+       we report the fallback model group from the x-litellm-model-group header, the
+       same name streamed responses report, and leave the response unchanged when that
+       header is missing. Exceptions 2 and 3 do not apply to a fallback.
     2. If the request was to an Azure Model Router, we preserve the actual model
        that was used (e.g., gpt-5-nano-2025-08-07) instead of the router model.
     3. If this was a fastest_response batch completion, use the winning model's
@@ -1553,44 +1586,10 @@ def _override_openai_response_model(
     if return_raw_model_name or not requested_model:
         return response_obj
 
-    hidden_params: Final = get_hidden_params_dict(response_obj)
-    if isinstance(hidden_params, dict):
-        # Check if a fallback occurred - if so, preserve the actual model used
-        fallback_headers: Final = hidden_params.get("additional_headers", {}) or {}
-        attempted_fallbacks: Final = fallback_headers.get("x-litellm-attempted-fallbacks", None)
-        if attempted_fallbacks is not None and attempted_fallbacks > 0:
-            verbose_proxy_logger.debug(
-                "%s: fallback detected (attempted_fallbacks=%d), preserving actual model used instead of overriding to requested model.",
-                log_context,
-                attempted_fallbacks,
-            )
-            return response_obj
-
-        # For fastest_response batch completions, use the winning model's group
-        # name rather than the comma-separated list the client sent.
-        if hidden_params.get("fastest_response_batch_completion"):
-            winning_model: Final = fallback_headers.get("x-litellm-model-group")
-            if winning_model:
-                verbose_proxy_logger.debug(
-                    "%s: fastest_response detected, using winning model group=%r instead of requested=%r.",
-                    log_context,
-                    winning_model,
-                    requested_model,
-                )
-                requested_model = winning_model
-            else:
-                verbose_proxy_logger.debug(
-                    "%s: fastest_response detected but no model group header found, preserving actual model from response.",
-                    log_context,
-                )
-                return response_obj
-
-    # Check if this is an Azure Model Router request - if so, preserve the actual model used
-    if is_azure_model_router_request(requested_model, hidden_params):
-        verbose_proxy_logger.debug(
-            "%s: Azure Model Router detected - preserving actual model used from response instead of overriding to router model.",
-            log_context,
-        )
+    target_model: Final = _client_facing_response_model(
+        requested_model, get_hidden_params_dict(response_obj), log_context
+    )
+    if target_model is None:
         return response_obj
 
     unchanged_response: Final = response_obj
@@ -1598,38 +1597,38 @@ def _override_openai_response_model(
         if "model" not in response_obj:
             return unchanged_response
         downstream_model = response_obj.get("model")
-        if downstream_model != requested_model:
+        if downstream_model != target_model:
             verbose_proxy_logger.debug(
-                "%s: response model mismatch - requested=%r downstream=%r. Overriding response['model'] to requested model.",
+                "%s: response model mismatch - target=%r downstream=%r. Overriding response['model'] to target model.",
                 log_context,
-                requested_model,
+                target_model,
                 downstream_model,
             )
-        response_obj["model"] = requested_model
+        response_obj["model"] = target_model
         return unchanged_response
 
     if not hasattr(response_obj, "model"):
         return response_obj
 
     downstream_model = getattr(response_obj, "model", None)
-    if downstream_model != requested_model:
+    if downstream_model != target_model:
         verbose_proxy_logger.debug(
-            "%s: response model mismatch - requested=%r downstream=%r. Overriding response.model to requested model.",
+            "%s: response model mismatch - target=%r downstream=%r. Overriding response.model to target model.",
             log_context,
-            requested_model,
+            target_model,
             downstream_model,
         )
 
     if isinstance(response_obj, ExtractionResponse):
-        return response_obj.model_copy(update={"model": requested_model})
+        return response_obj.model_copy(update={"model": target_model})
 
     try:
-        setattr(response_obj, "model", requested_model)
+        setattr(response_obj, "model", target_model)
     except Exception as e:
         verbose_proxy_logger.debug(
             "%s: failed to override response.model=%r on response_type=%s. error=%s",
             log_context,
-            requested_model,
+            target_model,
             type(response_obj),
             str(e),
             exc_info=True,
@@ -2062,6 +2061,10 @@ class ProxyBaseLLMRequestProcessing:
     @property
     def litellm_call_id(self) -> str | None:
         return request_litellm_call_id(self.data)
+
+    @property
+    def returns_raw_model_name(self) -> bool:
+        return should_return_raw_model_name(self.data)
 
     @staticmethod
     def _merge_passthrough_streaming_headers(
@@ -3190,9 +3193,7 @@ class ProxyBaseLLMRequestProcessing:
                             request_data=self.data,
                             proxy_logging_obj=proxy_logging_obj,
                             request=request,
-                            restamp_model=(
-                                None if should_return_raw_model_name(self.data) else requested_model_from_client
-                            ),
+                            restamp_model=(None if self.returns_raw_model_name else requested_model_from_client),
                         )
                         selected_data_generator = wrap_sse_stream_with_keepalive_pings(
                             stream=selected_data_generator,
@@ -3330,7 +3331,7 @@ class ProxyBaseLLMRequestProcessing:
                 response_obj=response,
                 requested_model=requested_model_from_client,
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
-                return_raw_model_name=should_return_raw_model_name(self.data),
+                return_raw_model_name=self.returns_raw_model_name,
             )
 
         fastapi_response.headers.update(

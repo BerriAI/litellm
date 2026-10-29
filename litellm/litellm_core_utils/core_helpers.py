@@ -13,7 +13,7 @@ from typing_extensions import TypeIs  # noqa: TID251  # narrows a duck-typed val
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import KUBERNETES_POD_ROUTING_KEY
+from litellm.constants import KUBERNETES_POD_ROUTING_KEY, RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
@@ -57,6 +57,11 @@ _DROP_PARAMS_BOOL: Final = TypeAdapter(bool)
 
 def as_str_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, Mapping) else None
+
+
+def should_return_raw_model_name(request_data: Mapping[str, object]) -> bool:
+    buckets: Final = (as_str_mapping(request_data.get(key)) for key in ("metadata", "litellm_metadata"))
+    return any(bucket is not None and bucket.get(RETURN_RAW_MODEL_NAME_METADATA_KEY) is True for bucket in buckets)
 
 
 def decoded_json_object(value: object) -> Mapping[str, object]:
