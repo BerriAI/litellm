@@ -97,6 +97,7 @@ from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
 )
 from litellm.litellm_core_utils.health_check_utils import (
+    OPTIONAL_STR,
     _filter_model_params,
     create_health_check_response,
 )
@@ -241,6 +242,7 @@ from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
 from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
 from .llms.azure_ai.anthropic.transformation import azure_anthropic_messages_url
+from .llms.azure_ai.common_utils import has_azure_entra_params
 from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.bedrock.chat import BedrockConverseLLM
 from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
@@ -8837,19 +8839,26 @@ def speech(
 
             api_version = api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
 
+            request_azure_ad_token: Final = OPTIONAL_STR.validate_python(
+                optional_params.get("extra_body", {}).pop("azure_ad_token", None)
+            )
+            request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
+            deployment_uses_entra: Final = (
+                request_azure_ad_token is not None
+                or request_kwargs.get("azure_ad_token_provider") is not None
+                or has_azure_entra_params(request_kwargs)
+            )
+
             api_key = (
                 api_key
-                or provider_api_key
+                or (None if deployment_uses_entra else provider_api_key)
                 or litellm.api_key
                 or litellm.azure_key
                 or get_secret("AZURE_OPENAI_API_KEY")
                 or get_secret("AZURE_API_KEY")
             )
 
-            azure_ad_token: Final[str | None] = optional_params.get("extra_body", {}).pop(
-                "azure_ad_token", None
-            ) or get_secret("AZURE_AD_TOKEN")
-            azure_ad_token_provider: Final = kwargs.get("azure_ad_token_provider", None)
+            azure_ad_token: Final[str | None] = request_azure_ad_token or get_secret("AZURE_AD_TOKEN")
 
             if extra_headers:
                 optional_params["extra_headers"] = extra_headers
@@ -8863,7 +8872,7 @@ def speech(
                 api_base=api_base,
                 api_version=api_version,
                 azure_ad_token=azure_ad_token,
-                azure_ad_token_provider=azure_ad_token_provider,
+                azure_ad_token_provider=kwargs.get("azure_ad_token_provider", None),
                 organization=organization,
                 max_retries=max_retries,
                 timeout=http_timeout,
@@ -9147,7 +9156,6 @@ async def ahealth_check(
     """
     from litellm.litellm_core_utils.cached_imports import get_litellm_logging_class
     from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers, default_health_check_mode
-    from litellm.litellm_core_utils.health_check_utils import OPTIONAL_STR
 
     # Use cached import helper to lazy-load Logging class (only loads when function is called)
     Logging: Final = get_litellm_logging_class()

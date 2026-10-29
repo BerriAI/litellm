@@ -5533,6 +5533,72 @@ def test_speech_azure_sends_the_provider_scoped_key(
     assert route.calls.last.request.headers["api-key"] == sent_api_key
 
 
+@pytest.mark.parametrize(
+    ("model", "provider_env", "module_key", "header", "sent_key"),
+    [
+        ("hosted_vllm/tts-1", "HOSTED_VLLM_API_KEY", "api_key", "authorization", "Bearer provider-scoped-key"),
+        ("hosted_vllm/tts-1", "HOSTED_VLLM_API_KEY", "openai_key", "authorization", "Bearer provider-scoped-key"),
+        ("azure_ai/tts-1", "AZURE_AI_API_KEY", "api_key", "api-key", "provider-scoped-key"),
+        ("azure_ai/tts-1", "AZURE_AI_API_KEY", "azure_key", "api-key", "provider-scoped-key"),
+    ],
+    ids=["openai-compatible-over-api_key", "openai-compatible-over-openai_key", "azure-over-api_key", "azure-over-azure_key"],
+)
+def test_speech_provider_scoped_key_beats_module_level_keys(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    provider_env: str,
+    module_key: str,
+    header: str,
+    sent_key: str,
+):
+    _clear_global_tts_keys(monkeypatch)
+    _set_or_clear_env(
+        monkeypatch,
+        {provider_env: "provider-scoped-key", "OPENAI_API_KEY": None, "AZURE_OPENAI_API_KEY": None, "AZURE_API_KEY": None},
+    )
+    monkeypatch.setattr(litellm, module_key, "module-level-key")
+    route: Final = respx_mock.post(url__regex=r"https://tts\.internal/.*audio/speech.*").mock(
+        return_value=httpx.Response(200, content=TTS_AUDIO, headers={"content-type": "audio/mpeg"})
+    )
+
+    litellm.speech(
+        model=model,
+        input="which key goes out",
+        voice="alloy",
+        api_base="https://tts.internal/v1" if model.startswith("hosted_vllm/") else "https://tts.internal",
+        api_version="2024-05-01-preview",
+    )
+
+    assert route.calls.last.request.headers[header] == sent_key
+
+
+def test_speech_azure_ai_keeps_the_deployments_entra_token_over_the_provider_scoped_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _clear_global_tts_keys(monkeypatch)
+    _set_or_clear_env(
+        monkeypatch,
+        {"AZURE_AI_API_KEY": "key-for-another-resource", "AZURE_OPENAI_API_KEY": None, "AZURE_API_KEY": None},
+    )
+    route: Final = respx_mock.post(url__regex=r"https://foundry\.internal/openai/v1/audio/speech.*").mock(
+        return_value=httpx.Response(200, content=TTS_AUDIO, headers={"content-type": "audio/mpeg"})
+    )
+
+    litellm.speech(
+        model="azure_ai/tts-1",
+        input="which key goes out",
+        voice="alloy",
+        api_base="https://foundry.internal",
+        api_version="preview",
+        azure_ad_token="deployment-entra-token",
+    )
+
+    sent_headers: Final = route.calls.last.request.headers
+    assert sent_headers["authorization"] == "Bearer deployment-entra-token"
+    assert "key-for-another-resource" not in sent_headers.get("api-key", "")
+
+
 def test_speech_docker_model_runner_placeholder_does_not_beat_a_real_key(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
