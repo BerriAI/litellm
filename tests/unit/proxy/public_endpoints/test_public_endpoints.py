@@ -1141,6 +1141,25 @@ def test_get_supported_endpoints_chat_completions_present(reset_endpoints_cache)
     assert len(chat["providers"]) > 0
 
 
+def test_get_supported_endpoints_lists_streamlake_on_chat_messages_and_responses(
+    reset_endpoints_cache: None,
+) -> None:
+    app: Final[FastAPI] = FastAPI()
+    app.include_router(router)
+    client: Final[TestClient] = TestClient(app)
+    with client:
+        response: Final = client.get("/public/endpoints")
+    assert response.status_code == 200, response.text
+
+    streamlake_endpoints: Final = {
+        endpoint["key"]
+        for endpoint in response.json()["endpoints"]
+        if any(provider["slug"] == "streamlake" for provider in endpoint["providers"])
+    }
+    assert {"chat_completions", "messages", "responses"} <= streamlake_endpoints
+    assert "embeddings" not in streamlake_endpoints
+
+
 def test_get_supported_endpoints_display_names_have_no_slug_suffix(
     reset_endpoints_cache,
 ):

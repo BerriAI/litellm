@@ -135,6 +135,84 @@ def test_alias_of_a_known_upstream_model_takes_stock_metadata_under_its_own_name
     assert (entry["slug"], entry["display_name"]) == ("team-55", "team-55")
 
 
+@pytest.mark.parametrize(("max_input_tokens", "expected"), [(100000, 100000), (922000, 272000), (None, 272000)])
+def test_alias_with_deployment_defaults_caps_codexs_window_at_its_listed_max_input_tokens(max_input_tokens, expected):
+    stock = MappingProxyType({"gpt-5.5": _stock("gpt-5.5").model_copy(update={"context_window": 272000})})
+    alias = _row("team-55", upstream_model="openai/gpt-5.5", max_input_tokens=max_input_tokens)
+
+    body = codex_models_response_json((alias,), stock=stock, instructions=_PROMPT, alias_defaults="deployment")
+
+    assert json.loads(body.json)["models"][0]["context_window"] == expected
+
+
+def test_alias_with_deployment_defaults_drops_codexs_tier_and_upgrade_while_the_native_name_keeps_them():
+    rows = (_row("gpt-6-sol"), _row("team-sol", upstream_model="gpt-6-sol"), _row("team-55", upstream_model="gpt-5.5"))
+    codex = {entry["slug"]: entry for entry in _models(*rows)}
+    deployment = {entry["slug"]: entry for entry in _models(*rows, alias_defaults="deployment")}
+
+    assert deployment["gpt-6-sol"] == codex["gpt-6-sol"]
+    assert (codex["team-sol"]["default_service_tier"], codex["team-55"]["upgrade"]) == (
+        "priority",
+        {"model": "gpt-6-sol"},
+    )
+    assert _tiers(codex["team-sol"]) == _tiers(codex["gpt-6-sol"]) != []
+    assert [
+        (deployment[slug]["service_tiers"], deployment[slug]["default_service_tier"])
+        for slug in ("team-sol", "team-55")
+    ] == [
+        ([], None),
+        ([], None),
+    ]
+    assert deployment["team-55"]["upgrade"] is None
+    assert deployment["team-sol"]["model_messages"] == codex["team-sol"]["model_messages"]
+
+
+@pytest.mark.parametrize(("pinned", "expected"), [("high", "high"), ("turbo", None), (None, None)])
+def test_alias_with_deployment_defaults_starts_only_at_a_reasoning_effort_its_deployments_pin(pinned, expected):
+    stock = CodexStockModel.model_validate(
+        {
+            "slug": "gpt-5.5",
+            "display_name": "GPT-5.5",
+            "priority": 1,
+            "visibility": "list",
+            "default_reasoning_level": "medium",
+            "supported_reasoning_levels": [{"effort": e, "description": e} for e in ("low", "medium", "high")],
+        }
+    )
+    alias = _row("team-55", upstream_model="gpt-5.5", reasoning_effort=pinned)
+
+    body = codex_models_response_json(
+        (alias,), stock=MappingProxyType({"gpt-5.5": stock}), instructions=_PROMPT, alias_defaults="deployment"
+    )
+
+    assert json.loads(body.json)["models"][0]["default_reasoning_level"] == expected
+
+
+def test_alias_with_deployment_defaults_sends_no_verbosity_or_promo_of_codexs_while_the_native_name_keeps_them():
+    stock = CodexStockModel.model_validate(
+        {
+            "slug": "gpt-6-sol",
+            "display_name": "GPT-6 Sol",
+            "priority": 1,
+            "visibility": "list",
+            "support_verbosity": True,
+            "default_verbosity": "low",
+            "availability_nux": {"message": "GPT-6 Sol is here"},
+        }
+    )
+    rows = (_row("gpt-6-sol"), _row("team-sol", upstream_model="gpt-6-sol"))
+
+    body = codex_models_response_json(
+        rows, stock=MappingProxyType({"gpt-6-sol": stock}), instructions=_PROMPT, alias_defaults="deployment"
+    )
+    native, alias = json.loads(body.json)["models"]
+
+    assert [(e["support_verbosity"], e["default_verbosity"], e["availability_nux"]) for e in (native, alias)] == [
+        (True, "low", {"message": "GPT-6 Sol is here"}),
+        (True, None, None),
+    ]
+
+
 @pytest.mark.parametrize(
     ("row", "expected"),
     [
