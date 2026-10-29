@@ -167,6 +167,22 @@ def get_sagemaker_response_stream_shape():
     return _load_sagemaker_response_stream_shape()
 
 
+INFERENCE_COMPONENT_HEADER: Final = "X-Amzn-SageMaker-Inference-Component"
+
+
+def inference_component_in_headers(headers: object) -> str | None:
+    if not isinstance(headers, Mapping):
+        return None
+    return next(
+        (
+            value
+            for name, value in STR_KEYED_MAPPING.validate_python(headers).items()
+            if name.lower() == INFERENCE_COMPONENT_HEADER.lower() and isinstance(value, str)
+        ),
+        None,
+    )
+
+
 def with_inference_component_hint(error_message: str) -> str:
     if "Inference Component Name header is required" in error_message:
         return f"{error_message}\n pass in via `litellm.embedding(..., model_id={{InferenceComponentName}})`"

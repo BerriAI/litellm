@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._models import Headers
-from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
@@ -29,7 +28,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import LlmProviders
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
-from ..common_utils import AWSEventStreamDecoder, SagemakerError
+from ..common_utils import INFERENCE_COMPONENT_HEADER, STR_KEYED_MAPPING, AWSEventStreamDecoder, SagemakerError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -37,9 +36,6 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
-
-_INFERENCE_COMPONENT_HEADER: Final = "X-Amzn-SageMaker-Inference-Component"
-_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
@@ -65,10 +61,10 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             return headers
         other_headers: Final = {
             name: value
-            for name, value in _HEADERS_ADAPTER.validate_python(headers).items()
-            if name.lower() != _INFERENCE_COMPONENT_HEADER.lower()
+            for name, value in STR_KEYED_MAPPING.validate_python(headers).items()
+            if name.lower() != INFERENCE_COMPONENT_HEADER.lower()
         }
-        return {**other_headers, _INFERENCE_COMPONENT_HEADER: inference_component_name}
+        return {**other_headers, INFERENCE_COMPONENT_HEADER: inference_component_name}
 
     def transform_request(
         self,

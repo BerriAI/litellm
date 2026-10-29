@@ -31284,11 +31284,15 @@ _SAGEMAKER_ROUTER_CREDENTIALS: Final = MappingProxyType(
 )
 
 _PINNED_COMPONENT: Final = MappingProxyType({"model_id": "deployment-component"})
+_HEADER_PINNED_COMPONENT: Final = MappingProxyType(
+    {"extra_headers": {"x-amzn-sagemaker-inference-component": "deployment-component"}}
+)
 
 _INFERENCE_COMPONENT_PRECEDENCE: Final = pytest.mark.parametrize(
     ("deployment_params", "sent_component"),
     [
         (_PINNED_COMPONENT, "deployment-component"),
+        (_HEADER_PINNED_COMPONENT, "deployment-component"),
         (MappingProxyType({}), "client-component"),
         (
             MappingProxyType({**_PINNED_COMPONENT, "configurable_clientside_auth_params": ["model_id"]}),
@@ -31297,6 +31301,7 @@ _INFERENCE_COMPONENT_PRECEDENCE: Final = pytest.mark.parametrize(
     ],
     ids=[
         "deployment_pins_the_component",
+        "deployment_pins_the_component_with_a_header",
         "deployment_leaves_the_component_to_the_client",
         "deployment_lets_the_client_override_its_component",
     ],
@@ -31385,12 +31390,18 @@ def test_a_client_model_id_cannot_move_a_sync_sagemaker_text_completion_off_the_
     ],
     ids=["extra_headers", "headers", "provider_specific_header"],
 )
+@pytest.mark.parametrize(
+    "deployment_pin", [_PINNED_COMPONENT, _HEADER_PINNED_COMPONENT], ids=["model_id_pin", "header_pin"]
+)
 @pytest.mark.asyncio
 async def test_a_client_inference_component_header_cannot_move_a_pinned_sagemaker_chat_call(
-    respx_mock: respx.MockRouter, _router_httpx_transport: None, client_header: Mapping[str, object]
+    respx_mock: respx.MockRouter,
+    _router_httpx_transport: None,
+    client_header: Mapping[str, object],
+    deployment_pin: Mapping[str, object],
 ) -> None:
     route: Final = _sagemaker_chat_route(respx_mock)
-    router: Final = _sagemaker_router("sagemaker_chat/chat-endpoint", _PINNED_COMPONENT, "chat")
+    router: Final = _sagemaker_router("sagemaker_chat/chat-endpoint", deployment_pin, "chat")
 
     await router.acompletion(model="sagemaker-model", messages=[{"role": "user", "content": "hi"}], **client_header)
 

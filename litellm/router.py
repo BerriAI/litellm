@@ -179,6 +179,7 @@ from litellm.llms.openai_like.model_info import (
     MODEL_INFO_REFRESH_SECONDS,
     get_openai_compatible_model_info,
 )
+from litellm.llms.sagemaker.common_utils import inference_component_in_headers
 from litellm.responses.bridge_check import keep_registered_mode
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     AUTO_ROUTER_MODEL_PREFIX,
@@ -5112,8 +5113,9 @@ class Router:
         ):
             kwargs[STREAM_USAGE_INJECTED_FIELD] = True
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
-        if self._deployment_pins_model_id(deployment_context):
-            kwargs.pop("model_id", None)  # pyright: ignore[reportUnknownMemberType]  # kwargs is an untyped dict
+        pinned_model_id: Final = self._deployment_model_id_pin(deployment_context)
+        if pinned_model_id is not None:
+            kwargs["model_id"] = pinned_model_id  # rebind-ok: this method's contract is filling the caller's kwargs
         hop_kwargs: Final = _FALLBACK_HOP_ADAPTER.validate_python(kwargs)
         if _is_fallback_hop(hop_kwargs):
             EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
@@ -6039,8 +6041,9 @@ class Router:
                     kwargs[k] = v
                 elif k == "metadata":
                     kwargs[k].update(v)
-            if self._deployment_pins_model_id(_LITELLM_PARAMS_ADAPTER.validate_python(data)):
-                kwargs.pop("model_id", None)  # pyright: ignore[reportUnknownMemberType]  # kwargs is an untyped dict
+            pinned_model_id: Final = self._deployment_model_id_pin(_LITELLM_PARAMS_ADAPTER.validate_python(data))
+            if pinned_model_id is not None:
+                kwargs["model_id"] = pinned_model_id  # rebind-ok: this call's own kwargs, filled like the defaults
 
             # call via litellm.completion()
             return litellm.text_completion(**{**data, "prompt": prompt, "caching": self.cache_responses, **kwargs})
@@ -16254,13 +16257,15 @@ class Router:
         )
 
     @staticmethod
-    def _deployment_pins_model_id(deployment_litellm_params: Mapping[str, object]) -> bool:
+    def _deployment_model_id_pin(deployment_litellm_params: Mapping[str, object]) -> object | None:
         clientside_params: Final = _CLIENTSIDE_PARAMS_ADAPTER.validate_python(
             deployment_litellm_params.get("configurable_clientside_auth_params") or ()
         )
-        return "model_id" not in clientside_params and Router._deployment_sets_litellm_param(
-            deployment_litellm_params, "model_id"
-        )
+        if "model_id" in clientside_params:
+            return None
+        if Router._deployment_sets_litellm_param(deployment_litellm_params, "model_id"):
+            return deployment_litellm_params["model_id"]
+        return inference_component_in_headers(deployment_litellm_params.get("extra_headers"))
 
     @staticmethod
     def _deployment_sets_litellm_param(deployment_litellm_params: Mapping[str, object], key: str) -> bool:
