@@ -747,3 +747,53 @@ def test_vertex_search_over_forced_ipv4_presents_the_client_certificate(
         assert asyncio.run(_avertex_search_file_ids(http2_tls_peer, search_url=search_url)) == ["answered"]
         _set_http2(monkeypatch, True)
         assert _vertex_search_file_ids(http2_tls_peer, search_url=search_url) == ["answered"]
+
+
+@pytest.mark.parametrize("proxied", [False, True], ids=["direct", "behind-http-proxy"])
+def test_an_evicted_http2_handler_is_not_closed_mid_request(monkeypatch: pytest.MonkeyPatch, proxied: bool) -> None:
+    from litellm.caching.evicted_client_closer import EvictedClientCloser
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    for name in ("http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY", "no_proxy", "NO_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+
+    async def _evict_mid_request() -> None:
+        arrived: Final = asyncio.Event()
+        release: Final = asyncio.Event()
+
+        async def _upstream(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            await reader.read(4096)
+            writer.write(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n")
+            await writer.drain()
+            arrived.set()
+            await release.wait()
+            writer.write(b"0\r\n\r\n")
+            await writer.drain()
+
+        server: Final = await asyncio.start_server(_upstream, "127.0.0.1", 0)
+        port: Final[int] = server.sockets[0].getsockname()[1]
+        if proxied:
+            monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{port}")
+        closer: Final = EvictedClientCloser(grace_seconds=0.0)
+        handler: Final = AsyncHTTPHandler(http2=True)
+        evicted: Final = handler.client
+        closer.mark_owned(handler)
+        closer.schedule(handler)
+        request: Final = asyncio.create_task(
+            handler.get("http://upstream.invalid/" if proxied else f"http://127.0.0.1:{port}/")
+        )
+
+        await arrived.wait()
+        closer.reap()
+        await asyncio.sleep(0)
+        assert evicted.is_closed is False, "closed a handler that was serving a request"
+
+        release.set()
+        assert (await request).text == "hello"
+        closer.reap()
+        await asyncio.sleep(0)
+        assert evicted.is_closed is True
+        assert handler.client.is_closed is False, "a held handler must self-heal after its evicted client is closed"
+        server.close()
+
+    asyncio.run(_evict_mid_request())
