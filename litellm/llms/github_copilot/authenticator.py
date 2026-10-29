@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Final, TypeVar
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, with_config
+from pydantic import BaseModel, ConfigDict, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
@@ -26,17 +26,18 @@ DEFAULT_GITHUB_ACCESS_TOKEN_URL: Final = "https://github.com/login/oauth/access_
 DEFAULT_GITHUB_API_KEY_URL: Final = "https://api.github.com/copilot_internal/v2/token"
 
 
+class CopilotEndpoints(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True, extra="ignore", hide_input_in_errors=True)
+
+    api: str | None = None
+
+
 class CopilotCachedKey(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True, extra="ignore", hide_input_in_errors=True)
 
     token: str
     expires_at: float
-
-
-class CopilotEndpoints(BaseModel):
-    model_config = ConfigDict(frozen=True, strict=True, extra="ignore", hide_input_in_errors=True)
-
-    api: str | None = None
+    endpoints: CopilotEndpoints | None = None
 
 
 class CopilotCachedEndpoints(BaseModel):
@@ -206,8 +207,8 @@ class Authenticator:
             verbose_logger.warning("No API key file found or error opening file")
             return None
         try:
-            return view.model_validate_json(raw)
-        except ValidationError as e:
+            return view.model_validate_json(raw.decode(json.detect_encoding(raw)))
+        except ValueError as e:
             verbose_logger.warning("Ignoring %s, not a Copilot API key file: %s", self.api_key_file, e)
             return None
 

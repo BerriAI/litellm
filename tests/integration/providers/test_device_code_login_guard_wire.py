@@ -664,9 +664,10 @@ _UNUSABLE_COPILOT_FILES: Final[Mapping[str, Mapping[str, bytes]]] = MappingProxy
         "api-key-expiry-text": MappingProxyType(
             {"api-key.json": json.dumps({"token": "copilot-text-expiry", "expires_at": "soon"}).encode()}
         ),
-        "api-key-utf-16": MappingProxyType(
-            {"api-key.json": json.dumps({"token": "copilot-utf-16", "expires_at": 9999999999}).encode("utf-16")}
+        "api-key-expired-utf-16": MappingProxyType(
+            {"api-key.json": json.dumps({"token": "copilot-utf-16", "expires_at": 1}).encode("utf-16")}
         ),
+        "api-key-truncated-utf-16": MappingProxyType({"api-key.json": b"\xff\xfe\x00\xd8"}),
     }
 )
 
