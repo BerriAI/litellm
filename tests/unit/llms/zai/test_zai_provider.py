@@ -10,6 +10,12 @@ import pytest
 import litellm
 from litellm import completion
 from litellm.cost_calculator import cost_per_token
+from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+JSON_SCHEMA_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {"name": "profile", "schema": {"type": "object", "properties": {"name": {"type": "string"}}}},
+}
 
 
 @pytest.fixture
@@ -118,6 +124,69 @@ def test_zai_sends_response_format_and_maps_max_completion_tokens(respx_mock, za
     assert body["response_format"] == {"type": "json_object"}
     assert body["max_tokens"] == 64
     assert "max_completion_tokens" not in body
+
+
+@pytest.mark.parametrize(
+    "token_limits",
+    [{"max_tokens": 300, "max_completion_tokens": 15}, {"max_completion_tokens": 15, "max_tokens": 300}],
+)
+def test_zai_max_completion_tokens_wins_over_max_tokens(respx_mock, zai_response, monkeypatch, token_limits):
+    monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
+
+    completion(model="zai/glm-5.3", messages=[{"role": "user", "content": "Count"}], **token_limits)
+
+    body = json.loads(respx_mock.calls[0].request.content)
+    assert body["max_tokens"] == 15
+
+
+def test_zai_rejects_json_schema_response_format(respx_mock, monkeypatch):
+    monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route = respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions")
+
+    with pytest.raises(litellm.UnsupportedParamsError) as error:
+        completion(
+            model="zai/glm-5v-turbo",
+            messages=[{"role": "user", "content": "Ann is 30"}],
+            response_format=JSON_SCHEMA_RESPONSE_FORMAT,
+        )
+
+    assert error.value.status_code == 400
+    assert not route.called
+
+
+def test_zai_drops_json_schema_response_format_under_drop_params(respx_mock, zai_response, monkeypatch):
+    monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
+
+    completion(
+        model="zai/glm-5v-turbo",
+        messages=[{"role": "user", "content": "Ann is 30"}],
+        response_format=JSON_SCHEMA_RESPONSE_FORMAT,
+        drop_params=True,
+    )
+
+    body = json.loads(respx_mock.calls[0].request.content)
+    assert "response_format" not in body
+
+
+def test_zai_glm_5v_turbo_bills_cached_input_at_cache_read_price(local_model_cost_map: None) -> None:
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=800),
+    )
+
+    prompt_cost, _ = cost_per_token(model="glm-5v-turbo", custom_llm_provider="zai", usage_object=usage)
+
+    entry = litellm.model_cost["zai/glm-5v-turbo"]
+    assert math.isclose(
+        prompt_cost, 200 * entry["input_cost_per_token"] + 800 * entry["cache_read_input_token_cost"]
+    )
 
 
 @pytest.mark.parametrize("model", ["glm-5v-turbo", "GLM-5V-Turbo", "GLM-5.3", "GLM-5.3-Flash"])

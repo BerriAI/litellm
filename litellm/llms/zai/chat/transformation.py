@@ -1,6 +1,8 @@
 from collections.abc import Mapping
 from typing import Final
 
+import litellm
+from litellm.exceptions import UnsupportedParamsError
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
@@ -55,8 +57,6 @@ class ZAIChatConfig(OpenAIGPTConfig):
             "tool_choice",
         ]
 
-        import litellm
-
         try:
             if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
                 base_params.append("thinking")
@@ -73,11 +73,27 @@ class ZAIChatConfig(OpenAIGPTConfig):
         drop_params: bool,
     ) -> dict[str, object]:  # mutable-ok: request pipeline adds parameters to the returned body
         supported_params: Final = self.get_supported_openai_params(model)
+        response_format: Final = non_default_params.get("response_format")
+        unsupported_response_format: Final = response_format is not None and not _is_json_mode(response_format)
+        if unsupported_response_format and not (drop_params or litellm.drop_params):
+            raise UnsupportedParamsError(
+                message=f"zai supports only response_format {{'type': 'json_object'}} for model={model}. To drop it, set `litellm.drop_params=True`",
+                llm_provider="zai",
+                model=model,
+            )
         return {
             **optional_params,
             **{
                 ("max_tokens" if param == "max_completion_tokens" else param): value
                 for param, value in non_default_params.items()
-                if param in supported_params
+                if param in supported_params and not (param == "response_format" and unsupported_response_format)
             },
         }
+
+
+def _is_json_mode(response_format: object) -> bool:
+    match response_format:
+        case {"type": "json_object" | "text"}:
+            return True
+        case _:
+            return False
