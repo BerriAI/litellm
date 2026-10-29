@@ -24,7 +24,7 @@ from litellm.constants import (
     GITHUB_COPILOT_PER_USER_AUTH_TYPE,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
-from litellm.litellm_core_utils.litellm_logging import get_masked_values
+from litellm.litellm_core_utils.litellm_logging import get_masked_values, has_sensitive_keyword
 from litellm.llms.anthropic.wif import (
     ExportedJwks,
     NotAnInternalIssuerCredential,
@@ -942,6 +942,8 @@ def _as_fields(value: object) -> Mapping[str, object] | None:
 
 
 def _kept_value(key: str, value: object, stored: Mapping[str, object], depth: int) -> tuple[str, object] | None:
+    if not has_sensitive_keyword(key):
+        return key, value
     fields: Final = _as_fields(value)
     if fields is not None and depth < _MASKED_READ_BACK_DEPTH:
         return key, _without_masked_read_backs(fields, _as_fields(stored.get(key)) or _NO_FIELDS, depth + 1)
