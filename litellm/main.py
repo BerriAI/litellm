@@ -108,6 +108,10 @@ from litellm.litellm_core_utils.mock_functions import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response as get_content_from_model_response,  # noqa: PLC0414  # public re-export
 )
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    messages_have_pdf_file_part,
+    messages_without_pdf_file_parts,
+)
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
@@ -191,11 +195,13 @@ from litellm.utils import (
     get_requester_metadata,
     get_secret,
     get_standard_openai_params,
+    is_explicitly_disabled_factory,
     mock_completion_streaming_obj,
     pre_process_non_default_params,
     read_config_args,
     should_run_mock_completion,
     supports_httpx_timeout,
+    supports_pdf_input,
     validate_and_fix_openai_messages,
     validate_and_fix_openai_tools,
     validate_and_fix_thinking_param,
@@ -391,6 +397,125 @@ def _resolve_control_options(kwargs: Mapping[str, object], model: str) -> Contro
             raise litellm.BadRequestError(message=message, model=model, llm_provider=None, body={"param": param})
         case _:
             return assert_never(control)
+
+
+PROVIDERS_WITHOUT_DOCUMENT_INPUT: Final = frozenset({"ollama", "ollama_chat"})
+PROVIDERS_DROPPING_UNDECLARED_PDF_INPUT: Final = frozenset({"azure_ai"})
+
+
+def _cost_map_pdf_input_support(model: str, custom_llm_provider: str) -> bool | None:
+    if custom_llm_provider in PROVIDERS_WITHOUT_DOCUMENT_INPUT or is_explicitly_disabled_factory(
+        model, custom_llm_provider, "supports_pdf_input"
+    ):
+        return False
+    if supports_pdf_input(model, custom_llm_provider):
+        return True
+    return None
+
+
+def _deployment_pdf_input_support(model: str, base_model: str, custom_llm_provider: str) -> bool | None:
+    supports: Final = (
+        _cost_map_pdf_input_support(model, custom_llm_provider),
+        _cost_map_pdf_input_support(base_model, custom_llm_provider),
+    )
+    if False in supports:
+        return False
+    if True in supports:
+        return True
+    return None
+
+
+def _declared_pdf_input_support(
+    model: str, custom_llm_provider: str, model_info: Mapping[str, object] | None, base_model: str | None
+) -> bool | None:
+    match model_info:
+        case {"supports_pdf_input": bool() as declared}:
+            return declared
+        case _ if base_model:
+            return _deployment_pdf_input_support(model, base_model, custom_llm_provider)
+        case _:
+            return _cost_map_pdf_input_support(model, custom_llm_provider)
+
+
+def _pdf_input_unreadable(
+    model: str,
+    custom_llm_provider: str,
+    model_info: Mapping[str, object] | None,
+    base_model: str | None,
+    drop_params: bool,
+) -> bool:
+    match _declared_pdf_input_support(model, custom_llm_provider, model_info, base_model):
+        case False:
+            return True
+        case None:
+            return drop_params and custom_llm_provider in PROVIDERS_DROPPING_UNDECLARED_PDF_INPUT
+        case True:
+            return False
+
+
+def _messages_without_unreadable_pdfs(
+    messages: Sequence[AllMessageValues],
+    model: str,
+    custom_llm_provider: str,
+    model_info: Mapping[str, object] | None,
+    base_model: str | None,
+    drop_params: bool,
+) -> tuple[AllMessageValues, ...] | None:
+    if not messages_have_pdf_file_part(messages) or not _pdf_input_unreadable(
+        model, custom_llm_provider, model_info, base_model, drop_params
+    ):
+        return None
+    if not drop_params:
+        raise litellm.BadRequestError(
+            message=(
+                f"{custom_llm_provider}/{model} does not accept PDF input. "
+                "Remove the PDF, or set drop_params=True to send the request without it"
+            ),
+            model=model,
+            llm_provider=custom_llm_provider,
+        )
+    readable_messages: Final = messages_without_pdf_file_parts(messages)
+    if not any(message["role"] == "user" for message in readable_messages):
+        raise litellm.BadRequestError(
+            message=(
+                f"{custom_llm_provider}/{model} does not accept PDF input, "
+                "and no user message is left once the PDF is dropped"
+            ),
+            model=model,
+            llm_provider=custom_llm_provider,
+        )
+    return readable_messages
+
+
+def _messages_readable_by_model(
+    messages: Sequence[AllMessageValues],
+    model: str,
+    custom_llm_provider: str,
+    model_info: Mapping[str, object] | None,
+    base_model: str | None,
+    drop_params: bool,
+    ensure_alternating_roles: bool | None,
+    user_continue_message: ChatCompletionUserMessage | None,
+    assistant_continue_message: ChatCompletionAssistantMessage | None,
+) -> tuple[AllMessageValues, ...] | None:
+    pdf_free_messages: Final = _messages_without_unreadable_pdfs(
+        messages=messages,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        model_info=model_info,
+        base_model=base_model,
+        drop_params=drop_params,
+    )
+    if pdf_free_messages is None:
+        return None
+    return tuple(
+        get_completion_messages(
+            messages=list(pdf_free_messages),
+            ensure_alternating_roles=ensure_alternating_roles or False,
+            user_continue_message=user_continue_message,
+            assistant_continue_message=assistant_continue_message,
+        )
+    )
 
 
 ####### COMPLETION ENDPOINTS ################
@@ -4234,7 +4359,6 @@ def _complete_sagemaker(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
 _ADDITIONAL_DROP_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
 _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OLLAMA_EMBEDDING_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str])
-_REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
@@ -5558,9 +5682,15 @@ def completion(
     )
     headers = kwargs.get("headers", None) or extra_headers
 
-    ensure_alternating_roles: Final[bool | None] = kwargs.get("ensure_alternating_roles", None)
-    user_continue_message: Final[ChatCompletionUserMessage | None] = kwargs.get("user_continue_message", None)
-    assistant_continue_message: ChatCompletionAssistantMessage | None = kwargs.get("assistant_continue_message", None)
+    ensure_alternating_roles: Final = cast(  # cast-ok: read from untyped kwargs
+        bool | None, kwargs.get("ensure_alternating_roles", None)
+    )
+    user_continue_message: Final = cast(  # cast-ok: read from untyped kwargs
+        ChatCompletionUserMessage | None, kwargs.get("user_continue_message", None)
+    )
+    assistant_continue_message: Final = cast(  # cast-ok: read from untyped kwargs
+        ChatCompletionAssistantMessage | None, kwargs.get("assistant_continue_message", None)
+    )
     headers = {} if headers is None else dict(headers)
     if extra_headers is not None:
         headers.update(extra_headers)
@@ -5928,15 +6058,17 @@ def completion(
         def optional_params_for_model_info(deployment_info: Mapping[str, object] | None) -> dict[str, object]:
             return get_optional_params(**mapping_args, model_info=deployment_info, **mapping_special_params)
 
-        optional_params = optional_params_for_model_info(
+        validated_model_info: Final = (
             _MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None
         )
+        deployment_base_model: Final = base_model if isinstance(base_model, str) else None
+        optional_params = optional_params_for_model_info(validated_model_info)
         fakes_stream: Final = partial(
             _completion_fakes_stream,
             model,
             custom_llm_provider,
             provider_config,
-            base_model=base_model if isinstance(base_model, str) else None,
+            base_model=deployment_base_model,
             bridges_to_responses_api=bridges_to_responses_api is True,
         )
         resolve_timeout: Final = partial(
@@ -5974,15 +6106,28 @@ def completion(
             functions_unsupported_model: Final[list[object]] = TypeAdapter(list[object]).validate_python(
                 optional_params.pop("functions_unsupported_model")
             )
-            request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
             messages = function_call_prompt(
                 messages=messages,
                 functions=functions_unsupported_model,
                 model=model,
                 llm_provider=custom_llm_provider,
-                drop_params=litellm.drop_params is True
-                or normalize_drop_params(request_kwargs.get("drop_params")) is True,
+                drop_params=drop_unsupported_reasoning,
             )
+
+        readable_messages: Final = _messages_readable_by_model(
+            messages=cast(list[AllMessageValues], messages),  # cast-ok: completion types messages as a bare List
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            model_info=validated_model_info,
+            base_model=deployment_base_model,
+            drop_params=drop_unsupported_reasoning,
+            ensure_alternating_roles=ensure_alternating_roles,
+            user_continue_message=user_continue_message,
+            assistant_continue_message=assistant_continue_message,
+        )
+        messages = (  # rebind-ok: completion() rewrites messages step by step
+            messages if readable_messages is None else list(readable_messages)
+        )
 
         # For logging - save the values of the litellm-specific params passed in
         requested_litellm_params: Final = get_litellm_params(

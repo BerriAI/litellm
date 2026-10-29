@@ -1,4 +1,5 @@
 import datetime
+from typing import Final
 import httpx
 import pytest
 import json
@@ -2164,3 +2165,32 @@ class TestOpenAIPrefixMaxTokensKey:
         chat_request = _oci_chat_request("openai.gpt-5", {"max_tokens": 64})
         assert chat_request["maxCompletionTokens"] == 64
         assert "maxTokens" not in chat_request
+
+
+def test_transform_request_sends_a_pdf_file_part_as_an_image_data_url() -> None:
+    pdf_data_url: Final = "data:application/pdf;base64,JVBERi0xLjQK"
+    transformed_request: Final = OCIChatConfig().transform_request(
+        model="google.gemini-2.5-flash",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Summarize this."},
+                    {"type": "file", "file": {"filename": "report.pdf", "file_data": pdf_data_url}},
+                ],
+            }
+        ],
+        optional_params={"oci_compartment_id": TEST_COMPARTMENT_ID},
+        litellm_params={},
+        headers={},
+    )
+
+    assert transformed_request["chatRequest"]["messages"] == [
+        {
+            "role": "USER",
+            "content": [
+                {"type": "TEXT", "text": "Summarize this."},
+                {"type": "IMAGE", "imageUrl": {"url": pdf_data_url}},
+            ],
+        }
+    ]
