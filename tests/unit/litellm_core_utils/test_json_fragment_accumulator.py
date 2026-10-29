@@ -186,15 +186,15 @@ def _popped_values(accumulator: JSONFragmentAccumulator) -> Iterator[object]:
         yield value
 
 
-def _streamed(value: str, count: int) -> JSONFragmentAccumulator:
+def _streamed(fragments: tuple[str, ...]) -> JSONFragmentAccumulator:
     accumulator: Final = JSONFragmentAccumulator()
-    for _ in range(count):
-        accumulator.append(value)
+    for fragment in fragments:
+        accumulator.append(fragment)
     return accumulator
 
 
-def _drain_peak_bytes(value: str, count: int) -> int:
-    accumulator: Final = _streamed(value, count)
+def _drain_peak_bytes(fragments: tuple[str, ...]) -> int:
+    accumulator: Final = _streamed(fragments)
     first_found, _ = accumulator.pop_next_value()
     assert first_found is True
     already_tracing: Final = tracemalloc.is_tracing()
@@ -208,17 +208,17 @@ def _drain_peak_bytes(value: str, count: int) -> int:
     finally:
         if not already_tracing:
             tracemalloc.stop()
-    assert drained == count - 1
+    assert drained == len(fragments) - 1
     return peak - baseline
 
 
 def test_draining_many_concatenated_values_never_copies_the_remainder():
     value: Final = '{"text": "' + "x" * 20 + '"}'
-    count: Final = 40_000
-    payload_bytes: Final = len(value) * count
-    peak_bytes: Final = _drain_peak_bytes(value, count)
+    fragments: Final = tuple(value if index % 2 else f" {value}" for index in range(40_000))
+    payload_bytes: Final = sum(len(fragment) for fragment in fragments)
+    peak_bytes: Final = _drain_peak_bytes(fragments)
     assert peak_bytes < payload_bytes // 4, (
-        f"draining {count} values allocated a peak of {peak_bytes} bytes over a {payload_bytes} byte payload, "
+        f"draining {len(fragments)} values allocated a peak of {peak_bytes} bytes over a {payload_bytes} byte payload, "
         "copying the remainder on every pop?"
     )
 
