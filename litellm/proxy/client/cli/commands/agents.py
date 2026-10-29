@@ -863,7 +863,7 @@ def _codex_version(
             encoding="utf-8",
             timeout=_CODEX_PREFLIGHT_TIMEOUT_SECONDS,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired, UnicodeError):
         return None
     words: Final = completed.stdout.split()
     return words[-1] if completed.returncode == 0 and words else None

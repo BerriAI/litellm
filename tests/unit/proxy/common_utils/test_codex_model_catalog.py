@@ -156,6 +156,7 @@ _ABSENT = object()
         (("low", "high", "max"), "0.137.9", ["low", "high"], "low"),
         (("low", "high", "max"), "0.138.0-alpha.2", ["low", "high"], "low"),
         (("minimal", "max"), "not-a-version", ["minimal"], "minimal"),
+        pytest.param(("minimal", "max"), "9" * 5000, ["minimal"], "minimal", id="version-past-int-digit-limit"),
         (("low", "turbo"), None, ["low"], "low"),
         (("max",), "0.137.0", [], _ABSENT),
     ],
@@ -171,14 +172,21 @@ def test_unknown_model_offers_the_group_efforts_its_codex_release_parses(efforts
     assert entry.get("default_reasoning_level", _ABSENT) == default
 
 
-def test_a_model_codex_knows_keeps_its_own_reasoning_levels():
-    stock = CodexStockModel(
-        slug="gpt-5.5",
-        display_name="GPT-5.5",
-        priority=3,
-        visibility="list",
-        default_reasoning_level="medium",
-        supported_reasoning_levels=[{"effort": "medium", "description": "Codex's own medium"}],
+@pytest.mark.parametrize(
+    "levels",
+    [[{"effort": "medium", "description": "Codex's own medium"}], [{"effort": "medium"}]],
+    ids=["described", "undescribed"],
+)
+def test_a_model_codex_knows_keeps_its_own_reasoning_levels(levels):
+    stock = CodexStockModel.model_validate(
+        {
+            "slug": "gpt-5.5",
+            "display_name": "GPT-5.5",
+            "priority": 3,
+            "visibility": "list",
+            "default_reasoning_level": "medium",
+            "supported_reasoning_levels": levels,
+        }
     )
 
     (entry,) = json.loads(
@@ -190,10 +198,7 @@ def test_a_model_codex_knows_keeps_its_own_reasoning_levels():
         ).json
     )["models"]
 
-    assert (entry["default_reasoning_level"], entry["supported_reasoning_levels"]) == (
-        "medium",
-        [{"effort": "medium", "description": "Codex's own medium"}],
-    )
+    assert (entry["default_reasoning_level"], entry["supported_reasoning_levels"]) == ("medium", levels)
 
 
 def test_known_model_keeps_codex_stock_entry_listed_under_the_served_id():

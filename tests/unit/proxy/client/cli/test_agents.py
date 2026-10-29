@@ -1056,8 +1056,9 @@ class TestCodexModelSync:
             ("codex-cli", ["low", "high"]),
             (None, ["low", "high"]),
             (OSError("codex vanished"), ["low", "high"]),
+            (UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"), ["low", "high"]),
         ],
-        ids=["current", "first-custom", "pre-custom", "pre-release", "no-number", "failed", "unrunnable"],
+        ids=["current", "first-custom", "pre-custom", "pre-release", "no-number", "failed", "unrunnable", "undecodable"],
     )
     def test_unknown_model_offers_the_group_efforts_the_installed_codex_parses(self, tmp_path, version, levels):
         _, result = self._sync(

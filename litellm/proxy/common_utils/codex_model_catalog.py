@@ -27,7 +27,7 @@ from pathlib import Path
 from types import MappingProxyType, NoneType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
 
-from packaging.version import InvalidVersion, Version
+from packaging.version import Version
 from pydantic import ConfigDict, Field, StringConstraints, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
@@ -75,10 +75,10 @@ class _ConfiguredTier(LiteLLMBaseModel):
 _CONFIGURED_TIERS: Final = TypeAdapter(tuple[_TierId | _ConfiguredTier, ...])
 
 
-class CodexReasoningLevel(LiteLLMBaseModel):
+class CodexFallbackReasoningLevel(LiteLLMBaseModel):
     """A `ReasoningEffortPreset` as Codex reads it: picking it sends `effort` as the request's reasoning effort."""
 
-    model_config = ConfigDict(frozen=True, extra="allow")
+    model_config = ConfigDict(frozen=True)
 
     effort: str
     description: str
@@ -105,7 +105,7 @@ class CodexFallbackModel(LiteLLMBaseModel):
     display_name: str
     description: NoneType = None
     default_reasoning_level: str | None = Field(default=None, exclude_if=lambda level: level is None)
-    supported_reasoning_levels: tuple[CodexReasoningLevel, ...] = ()
+    supported_reasoning_levels: tuple[CodexFallbackReasoningLevel, ...] = ()
     shell_type: Literal["unified_exec"] = "unified_exec"
     visibility: Literal["list"] = "list"
     supported_in_api: Literal[True] = True
@@ -129,6 +129,12 @@ class CodexStockUpgrade(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
 
     model: str
+
+
+class CodexReasoningLevel(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="allow")
+
+    effort: str
 
 
 class CodexStockModel(LiteLLMBaseModel):
@@ -284,13 +290,13 @@ def _codex_can_drive(model_id: str, mode: str | None) -> bool:
 def _parses_custom_efforts(client_version: str | None) -> bool:
     try:
         return client_version is not None and Version(client_version) >= _FIRST_CODEX_WITH_CUSTOM_EFFORTS
-    except InvalidVersion:
+    except ValueError:
         return False
 
 
 def codex_reasoning_levels(
     efforts: Sequence[str], client_version: str | None
-) -> tuple[tuple[CodexReasoningLevel, ...], str | None]:
+) -> tuple[tuple[CodexFallbackReasoningLevel, ...], str | None]:
     """The reasoning levels a fallback entry offers for a model group's efforts, and its default level.
 
     Codex before 0.138.0 fails the whole catalog on an effort it has no name for, so for it, and for
@@ -305,7 +311,7 @@ def codex_reasoning_levels(
         return (), None
     nearest: Final = nearest_declared_reasoning_effort(_PREFERRED_DEFAULT_EFFORT, offered, "down")
     levels: Final = tuple(
-        CodexReasoningLevel(effort=effort, description=f"Sends reasoning_effort={effort} upstream")
+        CodexFallbackReasoningLevel(effort=effort, description=f"Sends reasoning_effort={effort} upstream")
         for effort in offered
     )
     if _CODEX_UNSET_EFFORT in offered:
