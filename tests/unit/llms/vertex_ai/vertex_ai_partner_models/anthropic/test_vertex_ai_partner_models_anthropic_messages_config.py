@@ -15,10 +15,10 @@ import responses
 
 import litellm
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.main import VertexAIPartnerModels
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, ANTHROPIC_HOSTED_TOOLS
 from litellm.types.router import GenericLiteLLMParams
@@ -117,7 +117,11 @@ def _vertex_client() -> MagicMock:
 
 async def _send_to_vertex(client: MagicMock, caller_headers: Mapping[str, str], drop_params: bool) -> None:
     with responses.RequestsMock(assert_all_requests_are_fired=False) as oauth:
-        oauth.add(responses.POST, "https://oauth2.googleapis.com/token", json={"access_token": "vertex-token", "expires_in": 3600})
+        oauth.add(
+            responses.POST,
+            "https://oauth2.googleapis.com/token",
+            json={"access_token": "vertex-token", "expires_in": 3600},
+        )
         await litellm.anthropic.messages.acreate(
             model="vertex_ai/claude-sonnet-5",
             messages=[{"role": "user", "content": "hi"}],
@@ -292,7 +296,10 @@ def test_no_safeguards_leaves_dangerous_tool_use_beta_header_out():
 
 
 def _validate_vertex_headers(
-    client_headers: dict[str, str], messages: list[object], optional_params: dict[str, object] | None = None
+    client_headers: dict[str, str],
+    messages: list[object],
+    optional_params: dict[str, object] | None = None,
+    thinking: Mapping[str, object] | None = None,
 ) -> dict[str, str]:
     config = VertexAIPartnerModelsAnthropicMessagesConfig()
     litellm_params = {
@@ -309,7 +316,10 @@ def _validate_vertex_headers(
             headers=client_headers,
             model="claude-opus-5-5",
             messages=messages,
-            optional_params=optional_params or {"max_tokens": 64},
+            optional_params={
+                **(optional_params or {"max_tokens": 64}),
+                **({"thinking": thinking} if thinking is not None else {}),
+            },
             litellm_params=litellm_params,
             api_base=None,
         )
@@ -339,6 +349,25 @@ def test_per_message_output_config_reaches_vertex_with_per_turn_control_beta(cli
     )
 
     assert filtered["anthropic-beta"].split(",").count("per-turn-control-2026-07-01") == 1
+
+
+def test_block_binding_reaches_vertex_messages_with_its_beta_under_drop_params(local_beta_headers_config: None) -> None:
+    from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
+
+    thinking: Final = {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+    messages: Final = [{"role": "user", "content": "Say hi in French"}]
+    headers: Final = update_headers_with_filtered_beta(
+        headers=_validate_vertex_headers({}, messages, thinking=thinking), provider="vertex_ai"
+    )
+    request: Final = VertexAIPartnerModelsAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-opus-5-5",
+        messages=[dict(message) for message in messages],
+        anthropic_messages_optional_request_params={"max_tokens": 64, "thinking": dict(thinking)},
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers=headers,
+    )
+    assert "thinking-binding-controls-2026-08-01" in headers["anthropic-beta"].split(",")
+    assert request["thinking"] == thinking
 
 
 def test_no_per_message_output_config_leaves_per_turn_control_beta_out():
@@ -917,6 +946,20 @@ class TestVertexAnthropicMidConversationSystem:
             {"type": "text", "text": "Cite sources."},
         ]
 
+    @pytest.mark.parametrize("drop_params", (False, True))
+    def test_unsupported_model_sends_a_non_object_message_on_for_the_provider_to_reject(
+        self, local_model_cost_map, local_beta_headers_config, drop_params
+    ):
+        messages: Final = [{"role": "user", "content": "hi"}, "oops"]
+        result: Final = VertexAIPartnerModelsAnthropicMessagesConfig().transform_anthropic_messages_request(
+            model="claude-sonnet-4-6",
+            messages=list(messages),
+            anthropic_messages_optional_request_params={"max_tokens": 64},
+            litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+            headers={},
+        )
+        assert result["messages"] == messages
+
     def test_unsupported_model_converts_mid_conversation_system_in_place(self, local_model_cost_map):
         messages = [
             {"role": "user", "content": "read the file"},
@@ -1046,7 +1089,9 @@ _VERTEX_MESSAGE_RESPONSE: Final = {
 
 
 @pytest.mark.asyncio
-async def test_vertex_messages_request_sends_compact_2026_09_04_beta_on_the_wire(local_beta_headers_config: None) -> None:
+async def test_vertex_messages_request_sends_compact_2026_09_04_beta_on_the_wire(
+    local_beta_headers_config: None,
+) -> None:
     """A /v1/messages compaction request to a Vertex Claude deployment reaches Vertex with the beta in the
     anthropic-beta request header and never in the body, the shape Vertex accepts (live, 2026-10-05)."""
     mock_response: Final = MagicMock()
@@ -1087,8 +1132,11 @@ def test_messages_feature_beta_headers(feature: str, explicit_beta: bool) -> Non
     from unittest.mock import patch
 
     from google.oauth2.credentials import Credentials
+
     from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
-    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation import VertexAIPartnerModelsAnthropicMessagesConfig
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation import (
+        VertexAIPartnerModelsAnthropicMessagesConfig,
+    )
     from litellm.types.llms.anthropic import (
         ANTHROPIC_BETA_HEADER_VALUES,
         ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
@@ -1138,6 +1186,7 @@ def test_beta_detection_preserves_unrecognized_thinking(thinking: object) -> Non
     from unittest.mock import patch
 
     from google.oauth2.credentials import Credentials
+
     from litellm.types.llms.anthropic import ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER
 
     params: Final = {"thinking": thinking}
@@ -1146,9 +1195,13 @@ def test_beta_detection_preserves_unrecognized_thinking(thinking: object) -> Non
         return_value=(MagicMock(spec=Credentials, token="test-token", expired=False), "test-project"),
     ):
         headers, _ = VertexAIPartnerModelsAnthropicMessagesConfig().validate_anthropic_messages_environment(
-            headers={}, model="claude-fable-5-1", messages=[], optional_params=params,
+            headers={},
+            model="claude-fable-5-1",
+            messages=[],
+            optional_params=params,
             litellm_params={"vertex_ai_project": "test-project", "vertex_ai_location": "us-east5"},
-            api_key="test-key", api_base="https://example.com/anthropic",
+            api_key="test-key",
+            api_base="https://example.com/anthropic",
         )
 
     assert params["thinking"] == thinking

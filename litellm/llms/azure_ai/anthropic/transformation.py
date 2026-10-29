@@ -2,18 +2,13 @@
 Azure Anthropic transformation config - extends AnthropicConfig with Azure authentication
 """
 
-from collections.abc import Mapping
 from typing import Final
-
-from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
-
-_OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 def azure_anthropic_messages_url(api_base: str) -> str:
@@ -112,16 +107,11 @@ class AzureAnthropicConfig(AnthropicConfig):
             is_vertex_request=optional_params.get("is_vertex_request", False),
             user_anthropic_beta_headers=user_anthropic_beta_headers,
             mcp_server_used=mcp_server_used,
-            is_thinking_display_updates_used=self.is_thinking_display_updates_used(
-                _OPTIONAL_PARAMS.validate_python(optional_params).get("thinking")
-            ),
+            thinking=optional_params.get("thinking"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # optional_params is the base config's bare dict
         )
         # Merge headers - Azure auth (api-key or Authorization) takes precedence
-        litellm_beta: Final = _OPTIONAL_PARAMS.validate_python(anthropic_headers).get("anthropic-beta")
-        litellm_betas: Final[Mapping[str, str]] = (
-            {"anthropic-beta": litellm_beta} if isinstance(litellm_beta, str) else {}
-        )
-        headers = {**anthropic_headers, **headers, **litellm_betas}
+        merged_beta_header: Final = {k: v for k, v in anthropic_headers.items() if k == "anthropic-beta"}
+        headers = {**anthropic_headers, **headers, **merged_beta_header}
 
         # Ensure anthropic-version header is set
         if "anthropic-version" not in headers:

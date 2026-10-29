@@ -14,7 +14,6 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
     ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
-    ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
 )
 from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
@@ -221,17 +220,17 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         if requires_native_compaction_beta("vertex_ai", typed_params, messages):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value)
 
-        thinking_display_betas: Final = (
-            (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,)
-            if anthropic_model_info.is_thinking_display_updates_used(typed_params.get("thinking"))
-            else ()
-        )
         tool_change_betas: Final = (
             (ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,)
             if anthropic_model_info.is_mid_conversation_tool_change_used(messages)
             else ()
         )
-        all_beta_values: Final = beta_values.union(thinking_display_betas, tool_change_betas)
+        all_beta_values: Final = beta_values.union(
+            anthropic_model_info.thinking_betas(
+                optional_params.get("thinking"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # optional_params is the base config's bare dict
+            ),
+            tool_change_betas,
+        )
         if all_beta_values:
             request_headers["anthropic-beta"] = ",".join(sorted(all_beta_values))
 
@@ -266,7 +265,9 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             headers=headers,
         )
 
-        self._normalize_system_role_messages(anthropic_messages_request, model=model)
+        self._normalize_system_role_messages(
+            anthropic_messages_request, model=model, drop_params=getattr(litellm_params, "drop_params", None)
+        )
 
         self._remove_scope_from_cache_control(anthropic_messages_request)
 

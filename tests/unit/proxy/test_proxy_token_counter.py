@@ -280,6 +280,39 @@ async def test_token_counter_reads_an_oidc_api_key_only_when_it_calls_the_provid
 
 
 @pytest.mark.asyncio
+async def test_token_counter_answers_503_when_the_metadata_server_behind_an_oidc_google_api_key_fails(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    audience: Final = f"https://count.test/{uuid.uuid4().hex}"
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "claude",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": f"oidc/google/{audience}"},
+                }
+            ]
+        ),
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.get(url__regex=r"/computeMetadata/v1/instance/service-accounts/default/identity").respond(
+            500, text="metadata server unavailable"
+        )
+        with pytest.raises(ProxyException) as excinfo:
+            await token_counter(
+                request=TokenCountRequest(model="claude", messages=[{"role": "user", "content": "hello"}]),
+                call_endpoint=True,
+            )
+
+    assert excinfo.value.code == "503"
+    assert "oidc/google secret reference could not be resolved" in excinfo.value.message
+    assert audience.removeprefix("https://") not in excinfo.value.message
+
+
+@pytest.mark.asyncio
 async def test_native_openai_responses_count_sends_the_token_an_oidc_api_key_points_to(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -3987,6 +4020,32 @@ async def test_responses_count_on_claude_counts_the_turns_previous_response_id_r
     ]
     assert [sorted(message) for message in messages if isinstance(message, dict)] == [["content", "role"]] * 3
     spend_logs.assert_awaited_once_with("chatcmpl-stored", ("chatcmpl-stored", "resp_client_form"))
+
+
+@pytest.mark.asyncio
+async def test_token_counter_counts_a_custom_azure_deployment_name_with_its_base_models_tokenizer(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    azure_params: Final = {"api_key": "sk-test", "api_base": "https://example.openai.azure.com"}
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "named",
+                    "litellm_params": {"model": "azure/my-gpt-6", "base_model": "azure/gpt-6.1-sol", **azure_params},
+                },
+                {"model_name": "served", "litellm_params": {"model": "azure/gpt-6.1-sol", **azure_params}},
+            ]
+        ),
+    )
+    messages: Final = [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
+
+    named: Final = await token_counter(request=TokenCountRequest(model="named", messages=messages))
+    served: Final = await token_counter(request=TokenCountRequest(model="served", messages=messages))
+
+    assert named.total_tokens == served.total_tokens
 
 
 _COUNTED_HELLO: Final[Mapping[str, JsonValue]] = MappingProxyType(
