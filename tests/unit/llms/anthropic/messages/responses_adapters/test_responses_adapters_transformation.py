@@ -993,12 +993,25 @@ class TestAnthropicTypedToolsOnResponses:
         assert {"old_path", "new_path"} <= set(tool["parameters"]["properties"])
 
     @pytest.mark.parametrize(
-        ("tool_type", "has_scroll", "has_zoom"),
-        [("computer_20241022", False, False), ("computer_20250124", True, False), ("computer_20251124", True, True)],
+        ("tool_type", "enable_zoom", "has_scroll", "has_zoom"),
+        [
+            ("computer_20241022", True, False, False),
+            ("computer_20250124", True, True, False),
+            ("computer_20251124", False, True, False),
+            ("computer_20251124", True, True, True),
+        ],
     )
-    def test_computer_actions_follow_the_tool_version(self, tool_type: str, has_scroll: bool, has_zoom: bool):
+    def test_computer_actions_follow_the_tool_version(
+        self, tool_type: str, enable_zoom: bool, has_scroll: bool, has_zoom: bool
+    ):
         tool: Final = self._only_tool(
-            {"type": tool_type, "name": "computer", "display_width_px": 1280, "display_height_px": 800}
+            {
+                "type": tool_type,
+                "name": "computer",
+                "display_width_px": 1280,
+                "display_height_px": 800,
+                "enable_zoom": enable_zoom,
+            }
         )
         actions: Final = self._enum(tool, "action")
         properties: Final = tool["parameters"]["properties"]
@@ -1010,11 +1023,11 @@ class TestAnthropicTypedToolsOnResponses:
         assert ("region" in properties) is has_zoom
         assert "1280x800" in tool["description"]
 
-    def test_code_execution_runs_on_the_hosted_code_interpreter(self):
-        assert self._only_tool({"type": "code_execution_20250825", "name": "code_execution"}) == {
-            "type": "code_interpreter",
-            "container": {"type": "auto"},
-        }
+    @pytest.mark.parametrize(
+        "tool_type", ["web_search_20250305", "web_search_preview", "web_search_preview_2025_03_11", "web_search_2025_08_26"]
+    )
+    def test_every_web_search_type_runs_the_hosted_web_search(self, tool_type: str):
+        assert self._only_tool({"type": tool_type, "name": "web_search"}) == {"type": "web_search_preview"}
 
     def test_custom_tool_named_like_a_typed_tool_keeps_its_own_schema(self):
         schema: Final = {"type": "object", "properties": {"cmd": {"type": "string"}}, "required": ["cmd"]}
@@ -1028,6 +1041,9 @@ class TestAnthropicTypedToolsOnResponses:
         "tool",
         [
             {"type": "web_fetch_20250910", "name": "web_fetch"},
+            {"type": "code_execution_20250825", "name": "code_execution"},
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
             {"type": "mcp_toolset", "mcp_server_name": "docs"},
             {"type": "computer_toolset_20260801"},
         ],
@@ -1038,6 +1054,7 @@ class TestAnthropicTypedToolsOnResponses:
 
         assert error.value.status_code == 400
         assert tool["type"] in str(error.value)
+        assert "litellm_params" in str(error.value)
 
     def test_tool_with_no_responses_equivalent_drops_under_drop_params(self):
         kwargs: Final = _ADAPTER.translate_request(
@@ -1053,14 +1070,14 @@ class TestAnthropicTypedToolsOnResponses:
         kwargs: Final = _ADAPTER.translate_request(
             _make_request(
                 tools=[
-                    {"type": "code_execution_20250825", "name": "code_execution"},
+                    {"type": "bash_20250124", "name": "bash"},
                     {"type": "web_search_20250305", "name": "web_search"},
                 ],
-                tool_choice={"type": "tool", "name": "code_execution"},
+                tool_choice={"type": "tool", "name": "web_search"},
             )
         )
 
-        assert kwargs["tool_choice"] == {"type": "code_interpreter"}
+        assert kwargs["tool_choice"] == {"type": "web_search_preview"}
 
     def test_tool_choice_of_a_dropped_tool_is_dropped_with_it(self):
         kwargs: Final = _ADAPTER.translate_request(

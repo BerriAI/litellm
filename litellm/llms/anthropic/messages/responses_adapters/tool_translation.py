@@ -6,8 +6,8 @@ from typing import Final, TypeAlias
 from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.anthropic.messages.utils import json_copy_or_original
 
-_VERSIONED_TOOL_TYPE: Final = re.compile(r"(?P<family>[a-z_]+?)_(?P<version>\d{8})")
-_UNTRANSLATABLE_FAMILIES: Final = frozenset({"web_fetch", "mcp_toolset", "computer_toolset"})
+_VERSIONED_TOOL_TYPE: Final = re.compile(r"(?P<family>[a-z0-9_]+?)_(?P<version>\d{8})")
+_UNVERSIONED_SERVER_TOOL_TYPES: Final = frozenset({"mcp_toolset", "computer_toolset"})
 _TEXT_EDITOR_INSERT_TEXT_SINCE: Final = "20250429"
 _COMPUTER_MODIFIERS_SINCE: Final = "20250124"
 _COMPUTER_ZOOM_SINCE: Final = "20251124"
@@ -163,7 +163,7 @@ def _memory_tool(name: str) -> ResponsesTool:
     )
 
 
-def _computer_properties(version: str) -> Mapping[str, object]:
+def _computer_properties(version: str, zoom: bool) -> Mapping[str, object]:
     pointer: Final[Mapping[str, object]] = {
         "text": _string("Text to type for type, or keys to press for key and hold_key, such as ctrl+s."),
         "coordinate": _integers(2, "[x, y] pixel position for a click, mouse_move, or the end of left_click_drag."),
@@ -178,7 +178,7 @@ def _computer_properties(version: str) -> Mapping[str, object]:
         "duration": {"type": "number", "description": "Seconds to wait for wait, or to hold for hold_key."},
         "key": _string("Modifier key to hold during a click, such as shift."),
     }
-    if version < _COMPUTER_ZOOM_SINCE:
+    if not zoom:
         return {"action": _enum(_COMPUTER_ACTIONS_20250124), **modifiers}
     return {
         "action": _enum(_COMPUTER_ACTIONS_20251124),
@@ -197,7 +197,7 @@ def _computer_tool(name: str, version: str, tool: Mapping[str, object]) -> Respo
         name,
         f"Control {display} with the mouse and keyboard, and take screenshots to see it. Coordinates are pixels "
         "from the top left.",
-        _computer_properties(version),
+        _computer_properties(version, zoom=version >= _COMPUTER_ZOOM_SINCE and tool.get("enable_zoom") is True),
         ("action",),
     )
 
@@ -222,14 +222,11 @@ def responses_tool(tool: Mapping[str, object]) -> TranslatedTool:
     tool_type: Final = tool.get("type")
     tool_name: Final = tool.get("name")
     name: Final = tool_name if isinstance(tool_name, str) else ""
-    family, version = _family_and_version(tool_type if isinstance(tool_type, str) else "")
-    if family == "web_search" or name == "web_search":
+    type_name: Final = tool_type if isinstance(tool_type, str) else ""
+    family, version = _family_and_version(type_name)
+    if type_name.startswith("web_search") or name == "web_search":
         return _hosted(name, {"type": "web_search_preview"})
-    if family in _UNTRANSLATABLE_FAMILIES:
-        return UntranslatableTool(name=name, type=str(tool_type))
     match family:
-        case "code_execution":
-            return _hosted(name, {"type": "code_interpreter", "container": {"type": "auto"}})
         case "bash":
             return _bash_tool(name)
         case "text_editor":
@@ -238,6 +235,8 @@ def responses_tool(tool: Mapping[str, object]) -> TranslatedTool:
             return _memory_tool(name)
         case "computer":
             return _computer_tool(name, version, tool)
+        case _ if version or family in _UNVERSIONED_SERVER_TOOL_TYPES:
+            return UntranslatableTool(name=name, type=type_name)
         case _:
             return _custom_function(name, tool)
 
@@ -247,6 +246,7 @@ def untranslatable_tools_error(tools: Sequence[UntranslatableTool]) -> Unsupport
     return UnsupportedParamsError(
         message=(
             f"The Responses API has no equivalent for these Anthropic tools: {types}. To drop them, set "
-            "`litellm.drop_params=True`, or `drop_params: true` under `litellm_settings` on the proxy"
+            "`drop_params: true` in the model's `litellm_params` or under `litellm_settings` on the proxy, or "
+            "`litellm.drop_params=True` in the SDK"
         )
     )
