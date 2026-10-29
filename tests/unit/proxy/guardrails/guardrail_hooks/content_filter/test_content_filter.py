@@ -4,6 +4,7 @@ Tests for the Content Filter Guardrail
 
 import json
 import os
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -31,6 +32,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
     ContentFilterDetection,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field
+from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
 from litellm.types.utils import (
     Delta,
     ModelResponseStream,
@@ -3575,7 +3577,7 @@ async def test_streaming_hook_masks_a_word_split_across_text_completion_chunks()
 _LONG_TAIL: Final = "the quick brown fox jumps over the lazy dog and then eats a ripe persimmon"
 
 
-async def _text_completion_n2_stream_without_choice_1_finish():
+async def _text_completion_n2_stream_without_choice_1_finish() -> AsyncGenerator[TextCompletionResponse, None]:
     for index, text, finish_reason in (
         (0, "A short answer", None),
         (1, _LONG_TAIL[:30], None),
@@ -3590,7 +3592,7 @@ async def _text_completion_n2_stream_without_choice_1_finish():
         ).model_copy(update={"usage": None})
 
 
-async def _chat_n2_stream_without_choice_1_finish():
+async def _chat_n2_stream_without_choice_1_finish() -> AsyncGenerator[ModelResponseStream, None]:
     for index, content, finish_reason in (
         (0, "A short answer", None),
         (1, _LONG_TAIL[:30], None),
@@ -3617,7 +3619,9 @@ def _choice_text(choice: TextChoices | StreamingChoices) -> str:
 @pytest.mark.parametrize(
     "stream", [_text_completion_n2_stream_without_choice_1_finish, _chat_n2_stream_without_choice_1_finish]
 )
-async def test_streaming_hook_releases_the_held_tail_of_a_choice_the_stream_never_finished(stream):
+async def test_streaming_hook_releases_the_held_tail_of_a_choice_the_stream_never_finished(
+    stream: Callable[[], AsyncIterator[ModelResponseStream | TextCompletionResponse]],
+) -> None:
     delivered: Final = [
         chunk
         async for chunk in _fruit_word_filter().async_post_call_streaming_iterator_hook(
@@ -3635,7 +3639,10 @@ async def test_streaming_hook_releases_the_held_tail_of_a_choice_the_stream_neve
 _STREAM_USAGE: Final = Usage(prompt_tokens=5, completion_tokens=20, total_tokens=25)
 
 
-async def _then_usage_chunk(stream, usage_chunk):
+async def _then_usage_chunk(
+    stream: Callable[[], AsyncIterator[ModelResponseStream | TextCompletionResponse]],
+    usage_chunk: ModelResponseStream | TextCompletionResponse,
+) -> AsyncGenerator[ModelResponseStream | TextCompletionResponse, None]:
     async for chunk in stream():
         yield chunk
     yield usage_chunk
@@ -3652,7 +3659,10 @@ async def _then_usage_chunk(stream, usage_chunk):
         (_chat_n2_stream_without_choice_1_finish, ModelResponseStream(id="chatcmpl-stream", choices=[], usage=_STREAM_USAGE)),
     ],
 )
-async def test_streaming_hook_keeps_the_usage_chunk_last_after_releasing_a_held_tail(stream, usage_chunk):
+async def test_streaming_hook_keeps_the_usage_chunk_last_after_releasing_a_held_tail(
+    stream: Callable[[], AsyncIterator[ModelResponseStream | TextCompletionResponse]],
+    usage_chunk: ModelResponseStream | TextCompletionResponse,
+) -> None:
     delivered: Final = [
         chunk
         async for chunk in _fruit_word_filter().async_post_call_streaming_iterator_hook(
@@ -3664,6 +3674,29 @@ async def test_streaming_hook_keeps_the_usage_chunk_last_after_releasing_a_held_
     assert "".join(_streamed_text(chunk, 1) for chunk in delivered[:-1]) == _LONG_TAIL.replace(
         "persimmon", "[KEYWORD_REDACTED]"
     )
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_relays_each_responses_api_event_as_it_arrives() -> None:
+    timeline: Final[list[str]] = []
+
+    async def responses_api_events() -> AsyncGenerator[OutputTextDeltaEvent, None]:
+        for delta in ("first", "second"):
+            timeline.append(f"upstream sent {delta}")
+            yield OutputTextDeltaEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+                item_id="msg_1",
+                output_index=0,
+                content_index=0,
+                delta=delta,
+            )
+
+    async for event in _fruit_word_filter().async_post_call_streaming_iterator_hook(
+        user_api_key_dict=MagicMock(), response=responses_api_events(), request_data={}
+    ):
+        timeline.append(f"client got {event.delta}")
+
+    assert timeline == ["upstream sent first", "client got first", "upstream sent second", "client got second"]
 
 
 @pytest.mark.asyncio

@@ -160,6 +160,10 @@ def _streamed_choices(item: object) -> Sequence[StreamingChoices | TextChoices]:
     return ()
 
 
+def _is_choiceless_chunk(item: object) -> bool:
+    return isinstance(item, (ModelResponseStream, TextCompletionResponse)) and not item.choices
+
+
 @dataclass(frozen=True, slots=True)
 class _StreamedChoiceState:
     buffered_text: str = ""
@@ -201,7 +205,7 @@ async def _stream_then_end_of_stream_chunk(
     held_items: tuple[_StreamItemT, ...] = ()  # rebind-ok: the usage chunk must stay after the end-of-stream chunk
     async for item in response:
         last_item = item
-        if not _streamed_choices(item):
+        if _is_choiceless_chunk(item):
             held_items = (*held_items, item)
             continue
         for held_item in held_items:
