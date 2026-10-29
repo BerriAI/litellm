@@ -11,6 +11,7 @@ from pydantic import JsonValue
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountFields,
@@ -131,6 +132,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 tools=tools,
                 system=system,
                 optional_params=count_options,
+                drop_params=drops_unsupported_params(litellm_params.get("drop_params")),
             )
 
             if result is not None:

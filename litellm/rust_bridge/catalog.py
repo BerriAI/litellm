@@ -96,6 +96,8 @@ class Feature(str, Enum):
     """litellm.include_cost_in_streaming_usage, where Python adds cost to streamed usage."""
     THINKING_SIGNATURE_RETRY = "thinking_signature_retry"
     """Replayed thinking blocks, which Python strips and retries once if Anthropic rejects their signature."""
+    TOOL_CUSTOM_FIELD = "tool_custom_field"
+    """Tools carrying a non-spec custom object, which Python drops or hoists for the provider."""
     CLIENT_HEADERS = "client_headers"
     """Proxy-forwarded headers that Python merges into extra_headers."""
     DEPLOYMENT_HOOK = "deployment_hook"
@@ -176,6 +178,7 @@ MESSAGES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
     Feature.CACHE_CONTROL_INJECTION,
     Feature.STREAM_COST_INJECTION,
     Feature.THINKING_SIGNATURE_RETRY,
+    Feature.TOOL_CUSTOM_FIELD,
 }
 
 RESPONSES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {

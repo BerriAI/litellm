@@ -13,6 +13,7 @@ from pydantic import JsonValue
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.azure_ai.anthropic.count_tokens.transformation import (
     AzureAIAnthropicCountTokensConfig,
@@ -69,6 +70,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
                 tools=tools,
                 system=system,
                 optional_params=optional_params,
+                drop_params=drops_unsupported_params((litellm_params or {}).get("drop_params")),
             )
 
             verbose_logger.debug("Transformed request: %s", request_body)

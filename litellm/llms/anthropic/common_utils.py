@@ -121,6 +121,54 @@ _DECODED_JSON: Final = TypeAdapter(object)
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
 
 
+def is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
+    if custom_llm_provider == "anthropic":
+        return True
+    model_lower: Final = model.lower()
+    if custom_llm_provider == "bedrock":
+        return "claude" in model_lower or ("arn:" in model_lower and ":bedrock:" in model_lower)
+    if custom_llm_provider == "azure_ai" or custom_llm_provider == "vertex_ai":
+        return "claude" in model_lower
+    return False
+
+
+def is_claude_model_target(custom_llm_provider: str | None, model: str) -> bool:
+    return "claude" in model.lower() and is_claude_tool_target(custom_llm_provider, model)
+
+
+def _hoistable_defer_loading(tool_dict: Mapping[object, object], custom: object) -> bool | None:
+    if not isinstance(custom, dict) or "defer_loading" in tool_dict:
+        return None
+    defer_loading: Final = OBJECT_MAPPING_ADAPTER.validate_python(custom).get("defer_loading")
+    return defer_loading if isinstance(defer_loading, bool) else None
+
+
+def _tool_without_custom_field(tool: object, hoist_defer_loading: bool, drop_custom: bool) -> object:
+    if not isinstance(tool, dict):
+        return tool
+
+    if "custom" not in tool:
+        return tool
+
+    tool_dict: Final = OBJECT_MAPPING_ADAPTER.validate_python(tool)
+
+    custom: Final = tool_dict["custom"]
+    without_custom: Final = {key: value for key, value in tool_dict.items() if key != "custom"}
+    defer_loading: Final = _hoistable_defer_loading(tool_dict, custom) if hoist_defer_loading else None
+    if defer_loading is None:
+        return without_custom if drop_custom else tool_dict
+
+    unhoisted: Final = {
+        key: value for key, value in OBJECT_MAPPING_ADAPTER.validate_python(custom).items() if key != "defer_loading"
+    }
+    kept_custom: Final = {"custom": unhoisted} if unhoisted and not drop_custom else {}
+    return {**without_custom, "defer_loading": defer_loading, **kept_custom}
+
+
+def tools_without_custom_field(tools: Sequence[object], hoist_defer_loading: bool, drop_custom: bool) -> list[object]:
+    return [_tool_without_custom_field(tool, hoist_defer_loading, drop_custom) for tool in tools]
+
+
 def is_anthropic_messages_url(url: str) -> bool:
     """Check whether a URL addresses Anthropic's Messages API."""
     parsed_url: Final = urlparse(url)

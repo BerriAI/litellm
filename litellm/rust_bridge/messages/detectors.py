@@ -43,6 +43,11 @@ def thinking_signature_retry(request: NativeCall) -> bool:
     return any(_replays_thinking(message) for message in optional_sequence(request.resolved.get("messages")) or ())
 
 
+def tool_custom_field(request: NativeCall) -> bool:
+    tools: Final = optional_sequence(request.resolved.get("tools")) or ()
+    return any("custom" in (optional_mapping(tool) or {}) for tool in tools)
+
+
 def stream_cost_injection(request: NativeCall) -> bool:
     """Python adds response cost to streaming usage when the global setting is truthy."""
     return streaming(request) and bool(litellm.include_cost_in_streaming_usage)

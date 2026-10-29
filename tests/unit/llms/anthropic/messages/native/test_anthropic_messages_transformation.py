@@ -14,9 +14,13 @@ from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.anthropic.wif import get_anthropic_wif_token
+from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessagesConfig
 from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
 from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
 from litellm.llms.tencent.messages.transformation import TencentAnthropicMessagesConfig
+from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+    VertexAIPartnerModelsAnthropicMessagesConfig,
+)
 from litellm.types.llms.anthropic import AnthropicFinishReason
 from litellm.types.router import GenericLiteLLMParams
 from tests.unit.llms.anthropic.test_anthropic_wif import (
@@ -77,6 +81,84 @@ def test_native_response_defaults_stop_sequence_without_changing_other_fields(
         **upstream,
         "stop_sequence": expected_stop_sequence,
     }
+
+
+_EMPTY_SCHEMA: Final[dict[str, object]] = {"type": "object", "properties": {}}
+
+
+@pytest.mark.parametrize(
+    "config_class",
+    [AnthropicMessagesConfig, VertexAIPartnerModelsAnthropicMessagesConfig],
+)
+@pytest.mark.parametrize(
+    ("drop_params", "expected_eager_tool"),
+    [
+        (True, {"name": "A", "input_schema": _EMPTY_SCHEMA}),
+        (False, {"name": "A", "input_schema": _EMPTY_SCHEMA, "custom": {"eager_input_streaming": True}}),
+    ],
+)
+def test_messages_request_hoists_wrapped_defer_loading_and_drops_custom_only_under_drop_params(
+    config_class: type[AnthropicMessagesConfig], drop_params: bool, expected_eager_tool: dict[str, object]
+) -> None:
+    tools: Final[list[dict[str, object]]] = [
+        {"name": "A", "input_schema": _EMPTY_SCHEMA, "custom": {"eager_input_streaming": True}},
+        {"name": "B", "input_schema": _EMPTY_SCHEMA, "custom": {"defer_loading": True}},
+        {"name": "C", "input_schema": _EMPTY_SCHEMA, "custom": {"defer_loading": True, "eager_input_streaming": True}},
+        {"name": "D", "input_schema": _EMPTY_SCHEMA},
+    ]
+    optional_params: Final[dict[str, object]] = {"max_tokens": 50, "tools": tools}
+
+    request: Final = config_class().transform_anthropic_messages_request(
+        model="claude-haiku-5-5",
+        messages=[{"role": "user", "content": "Hi"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+
+    assert request["tools"] == [
+        expected_eager_tool,
+        {"name": "B", "input_schema": _EMPTY_SCHEMA, "defer_loading": True},
+        {
+            "name": "C",
+            "input_schema": _EMPTY_SCHEMA,
+            "defer_loading": True,
+            **({} if drop_params else {"custom": {"eager_input_streaming": True}}),
+        },
+        {"name": "D", "input_schema": _EMPTY_SCHEMA},
+    ]
+    assert tools[0]["custom"] == {"eager_input_streaming": True}
+    assert optional_params["tools"] is tools
+
+
+@pytest.mark.parametrize(
+    ("config", "model"),
+    [
+        (DeepSeekAnthropicMessagesConfig(), "deepseek-chat"),
+        (MinimaxMessagesConfig(), "MiniMax-M2"),
+        (AnthropicMessagesConfig(), "deepseek-chat"),
+        (OpenAILikeAnthropicMessagesConfig(), "anthropic/claude-haiku-4.5"),
+    ],
+)
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_messages_request_never_defers_tools_off_claude(
+    config: AnthropicMessagesConfig, model: str, drop_params: bool
+) -> None:
+    wrapped_tool: Final[dict[str, object]] = {
+        "name": "A",
+        "input_schema": _EMPTY_SCHEMA,
+        "custom": {"defer_loading": True},
+    }
+
+    request: Final = config.transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Hi"}],
+        anthropic_messages_optional_request_params={"max_tokens": 50, "tools": [wrapped_tool]},
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+
+    assert request["tools"] == [{"name": "A", "input_schema": _EMPTY_SCHEMA} if drop_params else wrapped_tool]
 
 
 def test_workload_identity_allowed_for_anthropic() -> None:
