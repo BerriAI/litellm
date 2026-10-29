@@ -485,7 +485,7 @@ def test_oidc_env_path_reference_is_not_resolved(tmp_path, monkeypatch):
     )
 
 
-def test_network_backed_oidc_reference_is_not_fetched_inline(monkeypatch):
+def test_oidc_google_reference_is_refused_without_a_metadata_fetch(monkeypatch):
     def fail(*args, **kwargs):
         raise AssertionError("network-backed oidc reference was resolved inside the request path")
 
@@ -494,10 +494,23 @@ def test_network_backed_oidc_reference_is_not_fetched_inline(monkeypatch):
         lambda name, *a, **k: "oidc/google/https://example.com" if name == "OPENAI_API_KEY" else fail(),
     )
 
-    assert (
+    with pytest.raises(HTTPException) as excinfo:
         _passthrough_router(None).get_credentials(custom_llm_provider="openai", region_name=None)
-        == "oidc/google/https://example.com"
+
+    assert excinfo.value.status_code == 401
+    assert "pass-through credential oidc/google" in str(excinfo.value.detail)
+    assert "example.com" not in str(excinfo.value.detail)
+
+
+def test_deployment_oidc_google_reference_is_not_sent_upstream(monkeypatch):
+    llm_router = litellm.Router(
+        model_list=[_flagged_deployment("openai/gpt-4o", api_key="oidc/google/https://vllm.example.test")]
     )
+
+    with pytest.raises(HTTPException) as excinfo:
+        _passthrough_router(llm_router).get_credentials(custom_llm_provider="openai", region_name=None)
+
+    assert excinfo.value.status_code == 401
 
 
 @pytest.fixture()
