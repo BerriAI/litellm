@@ -105,6 +105,24 @@ def test_openai_image_edit_sync_accepts_bytesio_images(respx_mock: respx.MockRou
     assert _multipart_image_parts(route.calls[0].request) == (_FIRST_IMAGE,)
 
 
+def test_openai_image_edit_without_a_model_leaves_model_out_of_the_request(
+    respx_mock: respx.MockRouter, httpx_transport: None
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/images/edits").mock(
+        return_value=httpx.Response(200, json=_EDIT_RESPONSE)
+    )
+
+    litellm.image_edit(
+        prompt="combine the reference images",
+        image=io.BytesIO(_FIRST_IMAGE),
+        custom_llm_provider="openai",
+        api_key="fake-key",
+    )
+
+    assert route.call_count == 1
+    assert b'name="model"' not in route.calls[0].request.read()
+
+
 @pytest.mark.asyncio
 async def test_openai_image_edit_accepts_bytesio_images(respx_mock: respx.MockRouter, httpx_transport: None) -> None:
     route: Final = respx_mock.post("https://api.openai.com/v1/images/edits").mock(
