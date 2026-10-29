@@ -3997,6 +3997,138 @@ class TestCLIKeyRegenerationFlow:
             )
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("browser_team_choice", [True, False])
+    async def test_cli_sso_callback_offers_a_team_picker_only_when_the_flow_chooses_the_team_in_the_browser(
+        self, browser_team_choice: bool
+    ):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            CLI_SSO_BROWSER_TEAM_CHOICE,
+            cli_sso_callback,
+        )
+
+        mock_request: Final = MagicMock(spec=Request)
+        mock_request.scope = {}
+        mock_request.base_url = "http://internal-proxy.local/"
+        mock_cache: Final = MagicMock(redis_cache=None)
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": "poll-secret-hash",
+            "user_code_hash": "user-code-hash",
+            "sso_complete": False,
+            "user_code_verified": False,
+            "session_data": None,
+            **({CLI_SSO_BROWSER_TEAM_CHOICE: True} if browser_team_choice else {}),
+        }
+        mock_prisma: Final = MagicMock()
+        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(
+            return_value=[
+                MagicMock(model_dump=lambda team_id=team_id, alias=alias: {"team_id": team_id, "team_alias": alias})
+                for team_id, alias in (("team-ops", "Ops <eu>"), ("team-claude", None), ("team-ops-us", "Ops <eu>"))
+            ]
+        )
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
+                return_value=LiteLLM_UserTable(
+                    user_id="dev-1", user_role="internal_user", teams=["team-claude", "team-ops", "team-ops-us"]
+                ),
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
+        ):
+            result: Final = await cli_sso_callback(
+                request=mock_request,
+                key="cli-session-4567890",
+                result=CustomOpenID(id="dev-1", email="dev-1@example.com", team_ids=[]),
+            )
+
+        page: Final = result.body.decode()
+        if not browser_team_choice:
+            assert 'name="team_id"' not in page
+            return
+        assert (
+            '<select id="team_id" name="team_id" required>'
+            '<option value="" disabled selected>Choose a team</option>'
+            '<option value="team-ops">Ops &lt;eu&gt; (team-ops)</option>'
+            '<option value="team-claude">team-claude</option>'
+            '<option value="team-ops-us">Ops &lt;eu&gt; (team-ops-us)</option>'
+            "</select>"
+        ) in page
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("posted_team_id", "chosen_team_id", "stored_teams"),
+        [("team-claude", "team-claude", ["team-claude", "team-ops"]), ("", None, ["team-ops", "team-claude"])],
+        ids=["chosen", "not_posted"],
+    )
+    async def test_cli_sso_complete_records_the_team_chosen_in_the_browser(
+        self, posted_team_id: str, chosen_team_id: str | None, stored_teams: list[str]
+    ):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            CLI_SSO_BROWSER_TEAM_CHOICE,
+            CLI_SSO_CHOSEN_TEAM_ID,
+            _hash_cli_sso_secret,
+            _normalize_cli_sso_user_code,
+            cli_sso_complete,
+        )
+
+        mock_request: Final = MagicMock(spec=Request)
+        mock_request.body = AsyncMock(
+            return_value=f"user_code=ABCD-EFGH&browser_complete_token=browser-token&team_id={posted_team_id}".encode()
+        )
+        mock_cache: Final = MagicMock(redis_cache=None)
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
+            "user_code_hash": _hash_cli_sso_secret(_normalize_cli_sso_user_code("ABCD-EFGH")),
+            "browser_complete_token_hash": _hash_cli_sso_secret("browser-token"),
+            "sso_complete": True,
+            "user_code_verified": False,
+            "session_data": {"user_id": "dev-1", "teams": ["team-ops", "team-claude"]},
+            CLI_SSO_BROWSER_TEAM_CHOICE: True,
+        }
+
+        with patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache):
+            result: Final = await cli_sso_complete(request=mock_request, login_id="cli-session-4567890")
+
+        assert result.status_code == 200
+        stored: Final = mock_cache.set_cache.call_args.kwargs["value"]
+        assert stored["user_code_verified"] is True
+        assert stored[CLI_SSO_CHOSEN_TEAM_ID] == chosen_team_id
+        assert stored["session_data"]["teams"] == stored_teams
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_complete_refuses_a_team_the_user_is_not_on(self):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            CLI_SSO_BROWSER_TEAM_CHOICE,
+            _hash_cli_sso_secret,
+            _normalize_cli_sso_user_code,
+            cli_sso_complete,
+        )
+
+        mock_request: Final = MagicMock(spec=Request)
+        mock_request.body = AsyncMock(
+            return_value=b"user_code=ABCD-EFGH&browser_complete_token=browser-token&team_id=team-finance"
+        )
+        mock_cache: Final = MagicMock(redis_cache=None)
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
+            "user_code_hash": _hash_cli_sso_secret(_normalize_cli_sso_user_code("ABCD-EFGH")),
+            "browser_complete_token_hash": _hash_cli_sso_secret("browser-token"),
+            "sso_complete": True,
+            "user_code_verified": False,
+            "session_data": {"user_id": "dev-1", "teams": ["team-ops", "team-claude"]},
+            CLI_SSO_BROWSER_TEAM_CHOICE: True,
+        }
+
+        with patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache):
+            with pytest.raises(HTTPException) as exc_info:
+                await cli_sso_complete(request=mock_request, login_id="cli-session-4567890")
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "Choose one of the teams you belong to"
+        mock_cache.set_cache.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_cli_poll_key_returns_teams_for_selection(self):
         """Test CLI poll endpoint returns teams for user selection when multiple teams exist"""
         from litellm.proxy.management_endpoints.ui_sso import (
