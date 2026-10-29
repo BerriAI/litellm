@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import gc
 import logging
 from types import SimpleNamespace
@@ -492,6 +493,8 @@ def _new_router_budget_limiter(
     budget_limiter._redis_increment_queue_lock = queue_lock if queue_lock is not None else asyncio.Lock()
     budget_limiter._redis_increment_flush_lock = asyncio.Lock()
     budget_limiter._detached_increment_operations = None
+    budget_limiter._retired = False
+    budget_limiter._flush_after_retire = None
     return budget_limiter
 
 
@@ -784,3 +787,57 @@ async def test_cancelled_flush_does_not_requeue_an_applied_batch(cancellations: 
     await limiter._push_in_memory_increments_to_redis()
     assert redis_cache.values[_SPEND_KEY] == 10.0
     assert limiter.redis_increment_operation_queue == []
+
+
+@pytest.mark.asyncio
+async def test_spend_queued_when_a_limiter_is_retired_reaches_redis_after_a_failed_write() -> None:
+    pipeline_started: Final = asyncio.Event()
+    pipeline_completed: Final = asyncio.Event()
+    redis_cache: Final = _MockRedisCache(
+        initial_values={},
+        pipeline_started=pipeline_started,
+        pipeline_completed=pipeline_completed,
+        should_fail_pipeline=True,
+    )
+    budget_limiter: Final = _new_router_budget_limiter(
+        redis_cache=redis_cache, redis_increment_operation_queue=[_increment(10.0)]
+    )
+    budget_limiter._sync_task = asyncio.create_task(asyncio.sleep(3600))
+
+    budget_limiter.retire()
+    await asyncio.wait_for(pipeline_started.wait(), timeout=1)
+    assert redis_cache.values == {}
+    redis_cache.should_fail_pipeline = False
+    await asyncio.wait_for(pipeline_completed.wait(), timeout=5)
+
+    assert redis_cache.values == {_SPEND_KEY: 10.0}
+    assert budget_limiter.redis_increment_operation_queue == []
+
+
+@pytest.mark.asyncio
+async def test_spend_in_flight_when_a_limiter_is_retired_reaches_redis_after_that_write_fails() -> None:
+    pipeline_started: Final = asyncio.Event()
+    allow_pipeline_to_complete: Final = asyncio.Event()
+    pipeline_completed: Final = asyncio.Event()
+    redis_cache: Final = _MockRedisCache(
+        initial_values={},
+        pipeline_started=pipeline_started,
+        allow_pipeline_to_complete=allow_pipeline_to_complete,
+        should_fail_pipeline=True,
+        pipeline_completed=pipeline_completed,
+    )
+    budget_limiter: Final = _new_router_budget_limiter(
+        redis_cache=redis_cache, redis_increment_operation_queue=[_increment(10.0)]
+    )
+    budget_limiter._sync_task = asyncio.create_task(budget_limiter.periodic_sync_in_memory_spend_with_redis())
+    await asyncio.wait_for(pipeline_started.wait(), timeout=1)
+
+    budget_limiter.retire()
+    allow_pipeline_to_complete.set()
+    with contextlib.suppress(asyncio.CancelledError):
+        await budget_limiter._sync_task
+    redis_cache.should_fail_pipeline = False
+    await asyncio.wait_for(pipeline_completed.wait(), timeout=5)
+
+    assert redis_cache.values == {_SPEND_KEY: 10.0}
+    assert budget_limiter.redis_increment_operation_queue == []

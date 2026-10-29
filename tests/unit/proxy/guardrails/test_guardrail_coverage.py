@@ -12,17 +12,19 @@ inspection by the relevant guardrail hook:
   not just ``choices[0]``.
 """
 
-from typing import Any, Dict
+from types import SimpleNamespace
+from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from httpx import Request, Response
 
 import litellm
 from litellm import DualCache
 from litellm.constants import DEFAULT_OPENAI_MODERATIONS_MODEL
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.types.utils import CallTypesLiteral, Choices, Message, ModelResponse
 
 
 @pytest.fixture
@@ -800,6 +802,66 @@ async def test_openai_moderation_reads_model_name_at_call_time(
     fake_router.amoderation.assert_awaited_once_with(model=expected_model, input="hello")
 
 
+@pytest.mark.asyncio
+async def test_openai_moderation_error_raising(monkeypatch, respx_mock):
+    from enterprise.enterprise_hooks.openai_moderation import (
+        ENTERPRISE_OpenAI_Moderation,
+    )
+    from litellm.proxy.utils import hash_token
+
+    monkeypatch.setattr(litellm, "openai_moderations_model_name", "omni-moderation-latest")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    openai_mod: Final = ENTERPRISE_OpenAI_Moderation()
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-98765"))
+
+    llm_router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "omni-moderation-latest",
+                "litellm_params": {
+                    "model": "omni-moderation-latest",
+                    "api_key": "fake-key",
+                },
+            }
+        ]
+    )
+
+    moderation_route: Final = respx_mock.post("https://api.openai.com/v1/moderations").respond(
+        200,
+        json={
+            "id": "modr-123",
+            "model": "omni-moderation-latest",
+            "results": [
+                {
+                    "flagged": True,
+                    "categories": {"harassment": True},
+                    "category_scores": {"harassment": 0.97},
+                }
+            ],
+        },
+    )
+
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", llm_router)
+
+    with pytest.raises(Exception, match="Violated content safety policy") as exc_info:
+        await openai_mod.async_moderation_hook(
+            data={
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "fuck off you're the worst",
+                    }
+                ]
+            },
+            user_api_key_dict=user_api_key_dict,
+            call_type="completion",
+        )
+    assert "Violated content safety policy" in str(exc_info.value)
+    assert moderation_route.call_count == 1
+
+
 # ── Google Text Moderation ────────────────────────────────────────────────────
 
 
@@ -845,3 +907,78 @@ async def test_google_text_moderation_inspects_multimodal_content(user_api_key):
     )
 
     assert seen_documents == ["hello world"]
+
+
+class _FinanceFlaggingLanguageClient:
+    def __init__(self) -> None:
+        self.moderated_texts: Final[list[str]] = []  # mutable-ok: records what reached Google
+
+    def moderate_text(self, request: SimpleNamespace) -> SimpleNamespace:
+        self.moderated_texts.append(request.document.content)
+        return SimpleNamespace(moderation_categories=[SimpleNamespace(name="Finance", confidence=0.885)])
+
+
+def _google_text_moderation_flagging_finance():
+    from enterprise.enterprise_hooks.google_text_moderation import (
+        ENTERPRISE_GoogleTextModeration,
+    )
+
+    guard: Final = ENTERPRISE_GoogleTextModeration.__new__(ENTERPRISE_GoogleTextModeration)
+    guard.client = _FinanceFlaggingLanguageClient()
+    guard.language_document = lambda content, type_: SimpleNamespace(content=content)
+    guard.moderate_text_request = lambda document: SimpleNamespace(document=document)
+    guard.document_type = "PLAIN_TEXT"
+    guard.finance_confidence_threshold = 0.8
+    return guard
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "data"),
+    [
+        ("aembedding", {"model": "text-embedding-ada-002", "input": "stocks"}),
+        ("embedding", {"model": "text-embedding-ada-002", "input": ["stocks", "mortgage"]}),
+        ("allm_passthrough_route", {"model": "gigachat-embeddings", "endpoint": "embeddings", "input": ["stocks"]}),
+    ],
+)
+async def test_google_text_moderation_leaves_embedding_input_unmoderated(
+    user_api_key: UserAPIKeyAuth, call_type: CallTypesLiteral, data: dict[str, object]
+):
+    guard: Final = _google_text_moderation_flagging_finance()
+
+    await guard.async_moderation_hook(data=data, user_api_key_dict=user_api_key, call_type=call_type)
+
+    assert guard.client.moderated_texts == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "data"),
+    [
+        ("acompletion", {"model": "gpt-4o", "messages": [{"role": "user", "content": "stocks"}]}),
+        ("anthropic_messages", {"model": "claude", "messages": [{"role": "user", "content": "stocks"}]}),
+        ("aresponses", {"model": "gpt-4o", "input": "stocks"}),
+        (
+            "allm_passthrough_route",
+            {"model": "gigachat", "endpoint": "chat/completions", "messages": [{"role": "user", "content": "stocks"}]},
+        ),
+        (
+            "allm_passthrough_route",
+            {
+                "model": "gigachat",
+                "endpoint": "chat/completions#embeddings",
+                "messages": [{"role": "user", "content": "stocks"}],
+            },
+        ),
+    ],
+)
+async def test_google_text_moderation_still_blocks_conversations(
+    user_api_key: UserAPIKeyAuth, call_type: CallTypesLiteral, data: dict[str, object]
+):
+    guard: Final = _google_text_moderation_flagging_finance()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guard.async_moderation_hook(data=data, user_api_key_dict=user_api_key, call_type=call_type)
+
+    assert exc_info.value.status_code == 400
+    assert guard.client.moderated_texts == ["stocks"]

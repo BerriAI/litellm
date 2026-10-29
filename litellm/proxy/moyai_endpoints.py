@@ -14,13 +14,16 @@ import json
 import os
 import secrets
 import time
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Final
 from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from litellm._internal_context import with_service_target
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
@@ -61,6 +64,14 @@ class MoyaiConnectExchangeResponse(BaseModel):
     api_key: str
     key_alias: str
     api_base: str
+
+
+@dataclass(frozen=True, slots=True)
+class _MoyaiConnectCode:
+    moyai_origin: str
+    nonce: str
+    exp: int
+    user_id: str | None
 
 
 def _b64url(data: bytes) -> str:
@@ -104,7 +115,10 @@ def _sign_connect_code(master_key: str, moyai_url: str, user_id: str | None) -> 
     return f"{_b64url(payload)}.{_b64url(signature)}"
 
 
-def _decode_connect_code(master_key: str, code: str) -> dict:
+_DECODED_CONNECT_PAYLOAD: Final = TypeAdapter(object)
+
+
+def _decode_connect_code(master_key: str, code: str) -> _MoyaiConnectCode:
     try:
         payload_b64, signature_b64 = code.split(".", 1)
         payload_raw: Final = _b64url_decode(payload_b64)
@@ -115,14 +129,25 @@ def _decode_connect_code(master_key: str, code: str) -> dict:
     if not hmac.compare_digest(signature, expected):
         raise HTTPException(status_code=400, detail="Invalid Moyai connect code")
     try:
-        payload: Final = json.loads(payload_raw)
+        payload: Final = as_str_mapping(_DECODED_CONNECT_PAYLOAD.validate_python(json.loads(payload_raw)))
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Invalid Moyai connect code")
-    if not isinstance(payload, dict) or not isinstance(payload.get("exp"), int) or payload["exp"] < int(time.time()):
+    if payload is None:
         raise HTTPException(status_code=400, detail="Invalid Moyai connect code")
-    if not isinstance(payload.get("moyai_origin"), str) or not isinstance(payload.get("nonce"), str):
+    exp: Final = payload.get("exp")
+    if not isinstance(exp, int) or exp < int(time.time()):
         raise HTTPException(status_code=400, detail="Invalid Moyai connect code")
-    return payload
+    moyai_origin: Final = payload.get("moyai_origin")
+    nonce: Final = payload.get("nonce")
+    if not isinstance(moyai_origin, str) or not isinstance(nonce, str):
+        raise HTTPException(status_code=400, detail="Invalid Moyai connect code")
+    user_id: Final = payload.get("user_id")
+    return _MoyaiConnectCode(
+        moyai_origin=moyai_origin,
+        nonce=nonce,
+        exp=exp,
+        user_id=user_id if isinstance(user_id, str) else None,
+    )
 
 
 @router.post(
@@ -178,7 +203,7 @@ async def _claim_connect_nonce(prisma_client: "PrismaClient", nonce: str, exp: i
         raise HTTPException(status_code=400, detail="Invalid Moyai connect code")
 
 
-async def _moyai_key_alias(prisma_client, moyai_url: str) -> str:
+async def _moyai_key_alias(prisma_client: "PrismaClient", moyai_url: str) -> str:
     from litellm.repositories.verification_token_repository import (
         VerificationTokenRepository,
     )
@@ -192,16 +217,14 @@ async def _moyai_key_alias(prisma_client, moyai_url: str) -> str:
 
 
 @with_service_target(CONFIG_PARAMS_TARGET)
-async def _persist_moyai_url(prisma_client, moyai_url: str) -> None:
+async def _persist_moyai_url(prisma_client: "PrismaClient", moyai_url: str) -> None:
     from litellm.proxy.proxy_server import user_api_key_cache
 
-    existing: dict = {}
     db_existing: Final = await _ui_settings_db(UISettingsRepository(prisma_client)).find_unique(
         where={"id": "ui_settings"}
     )
-    if db_existing and db_existing.ui_settings:
-        raw: Final = db_existing.ui_settings
-        existing = json.loads(raw) if isinstance(raw, str) else dict(raw)
+    raw: Final = db_existing.ui_settings if db_existing else None
+    existing: Final[Mapping[str, object]] = (json.loads(raw) if isinstance(raw, str) else dict(raw)) if raw else {}
 
     ui_settings: Final = {**existing, "moyai_url": moyai_url}
     await _ui_settings_db(UISettingsRepository(prisma_client)).upsert(
@@ -232,13 +255,13 @@ async def moyai_connect_exchange(request: Request, body: MoyaiConnectExchangeReq
         moyai_url: Final = normalize_moyai_url(body.moyai_url)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid Moyai connect code")
-    if moyai_url is None or _origin(moyai_url) != payload["moyai_origin"]:
+    if moyai_url is None or _origin(moyai_url) != payload.moyai_origin:
         raise HTTPException(status_code=400, detail="Invalid Moyai connect code")
 
     if prisma_client is None:
         raise HTTPException(status_code=400, detail="Moyai quick connect needs a database connected to the proxy")
 
-    await _claim_connect_nonce(prisma_client, payload["nonce"], payload["exp"])
+    await _claim_connect_nonce(prisma_client, payload.nonce, payload.exp)
 
     alias: Final = await _moyai_key_alias(prisma_client, moyai_url)
     key_response: Final = await generate_key_helper_fn(
@@ -248,7 +271,7 @@ async def moyai_connect_exchange(request: Request, body: MoyaiConnectExchangeReq
         metadata={
             "created_via": "moyai_quick_connect",
             "moyai_url": moyai_url,
-            "connected_by": payload.get("user_id"),
+            "connected_by": payload.user_id,
         },
         table_name="key",
         llm_router=llm_router,

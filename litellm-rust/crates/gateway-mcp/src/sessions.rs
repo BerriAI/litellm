@@ -4,7 +4,7 @@ use axum::{
     Router,
     body::{Body, to_bytes},
     extract::{Request, State},
-    http::{Method, StatusCode},
+    http::Method,
     response::IntoResponse,
     routing::any,
 };
@@ -19,7 +19,7 @@ use rmcp::{
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
-use crate::{McpServer, server::ServerScope};
+use crate::{Error, McpServer, server::ServerScope};
 
 #[derive(Clone)]
 pub struct SessionOwner(pub String);
@@ -65,7 +65,7 @@ pub(crate) fn transport(server: McpServer, config: StreamableHttpServerConfig) -
 async fn dispatch(
     State(transport): State<Transport>,
     request: Request,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, Error> {
     let owner = fingerprint(&request);
     let session = request
         .headers()
@@ -75,8 +75,8 @@ async fn dispatch(
     if let Some(session) = &session {
         match transport.owners.get(session).await {
             Some(expected) if expected == owner => (),
-            Some(_) => return Err(StatusCode::FORBIDDEN),
-            None => return Err(StatusCode::NOT_FOUND),
+            Some(_) => return Err(Error::ForeignSession),
+            None => return Err(Error::UnknownSession),
         }
     }
     let method = request.method().clone();
@@ -84,7 +84,7 @@ async fn dispatch(
         let (parts, body) = request.into_parts();
         let bytes = to_bytes(body, 4 * 1024 * 1024)
             .await
-            .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)?;
+            .map_err(Error::BodyTooLarge)?;
         let initialize = matches!(serde_json::from_slice::<ClientJsonRpcMessage>(&bytes),
             Ok(ClientJsonRpcMessage::Request(request)) if matches!(request.request, ClientRequest::InitializeRequest(_)));
         (Request::from_parts(parts, Body::from(bytes)), initialize)

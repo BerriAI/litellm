@@ -5,6 +5,7 @@ import type { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "https://example.com"),
+  getGatewayBaseUrl: vi.fn(() => "https://gateway.example.com"),
 }));
 
 const mockMessagesStream = vi.fn();

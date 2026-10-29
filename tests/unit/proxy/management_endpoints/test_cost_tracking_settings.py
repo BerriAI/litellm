@@ -167,6 +167,80 @@ class TestCostTrackingSettings:
             assert litellm.cost_discount_config == test_discount_config
 
     @pytest.mark.asyncio
+    async def test_update_cost_discount_config_model_pattern_key(self):
+        """
+        Test PATCH /config/cost_discount_config accepts <provider>/<model-pattern> keys.
+        """
+        mock_proxy_config = AsyncMock()
+        mock_proxy_config.get_config = AsyncMock(return_value={"litellm_settings": {}})
+        mock_proxy_config.save_config = AsyncMock()
+
+        mock_prisma_client = MagicMock()
+
+        test_discount_config = {"vertex_ai/claude-*": 0.2}
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch.object(litellm, "cost_discount_config", {}),
+        ):
+            response = client.patch(
+                "/config/cost_discount_config",
+                json=test_discount_config,
+                headers={"Authorization": "Bearer sk-9876"},
+            )
+
+            assert response.status_code == 200
+            assert response.json()["values"]["vertex_ai/claude-*"] == 0.2
+            mock_proxy_config.save_config.assert_called_once()
+            assert litellm.cost_discount_config == test_discount_config
+
+    @pytest.mark.asyncio
+    async def test_update_cost_discount_config_invalid_provider_with_pattern(self):
+        """
+        Test PATCH /config/cost_discount_config rejects invalid providers in pattern keys.
+        """
+        mock_proxy_config = AsyncMock()
+        mock_prisma_client = MagicMock()
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        ):
+            response = client.patch(
+                "/config/cost_discount_config",
+                json={"notaprovider/claude-*": 0.2},
+                headers={"Authorization": "Bearer sk-9876"},
+            )
+
+            assert response.status_code == 400
+            assert "notaprovider" in response.json()["detail"]["error"]
+
+    @pytest.mark.asyncio
+    async def test_update_cost_discount_config_empty_model_pattern(self):
+        """
+        Test PATCH /config/cost_discount_config rejects a key ending in a bare slash.
+        """
+        mock_proxy_config = AsyncMock()
+        mock_prisma_client = MagicMock()
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        ):
+            response = client.patch(
+                "/config/cost_discount_config",
+                json={"vertex_ai/": 0.2},
+                headers={"Authorization": "Bearer sk-9876"},
+            )
+
+            assert response.status_code == 400
+            assert "cannot be empty" in response.json()["detail"]
+
+    @pytest.mark.asyncio
     async def test_update_cost_discount_config_invalid_provider(self):
         """
         Test PATCH /config/cost_discount_config endpoint rejects invalid provider names.
