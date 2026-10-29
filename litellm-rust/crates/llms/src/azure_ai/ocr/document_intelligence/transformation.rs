@@ -407,29 +407,31 @@ fn normalize_features_param(features: Option<&Value>) -> Result<Option<String>, 
 fn requested_output_content_format(
     params: &CallArguments,
 ) -> Result<Option<OutputContentFormat>, Error> {
-    let requested = params
-        .get(OUTPUT_CONTENT_FORMAT_PARAM)
-        .or_else(|| params.get(OUTPUT_CONTENT_FORMAT_ALIAS));
-    match parse_output_content_format(requested) {
+    let requested = [OUTPUT_CONTENT_FORMAT_PARAM, OUTPUT_CONTENT_FORMAT_ALIAS]
+        .into_iter()
+        .filter_map(|name| params.get(name))
+        .find(|format| !is_unset(format));
+    match requested.map(parse_output_content_format).transpose() {
         Err(Error::OutputContentFormat) if drops_unsupported_params(params) => Ok(None),
         parsed => parsed,
     }
 }
 
-fn parse_output_content_format(
-    format: Option<&Value>,
-) -> Result<Option<OutputContentFormat>, Error> {
+fn is_unset(format: &Value) -> bool {
     match format {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(format)) => match format.trim() {
-            "" => Ok(None),
-            format => format
-                .parse()
-                .map(Some)
-                .map_err(|_| Error::OutputContentFormat),
-        },
-        Some(_) => Err(Error::OutputContentFormat),
+        Value::Null => true,
+        Value::String(format) => format.trim().is_empty(),
+        _ => false,
     }
+}
+
+fn parse_output_content_format(format: &Value) -> Result<OutputContentFormat, Error> {
+    format
+        .as_str()
+        .ok_or(Error::OutputContentFormat)?
+        .trim()
+        .parse()
+        .map_err(|_| Error::OutputContentFormat)
 }
 
 fn build_request(document: OcrDocument) -> Result<DocumentIntelligenceRequest, Error> {
@@ -1046,6 +1048,16 @@ mod tests {
         Some(OutputContentFormat::Text),
         None
     )]
+    #[case::empty_camel_case_falls_back_to_snake_case(
+        json!({"outputContentFormat": "", "output_content_format": "markdown"}),
+        Some(OutputContentFormat::Markdown),
+        Some("unicodeCodePoint")
+    )]
+    #[case::null_camel_case_falls_back_to_snake_case(
+        json!({"outputContentFormat": null, "output_content_format": "markdown"}),
+        Some(OutputContentFormat::Markdown),
+        Some("unicodeCodePoint")
+    )]
     #[case::empty(json!({"outputContentFormat": ""}), None, None)]
     #[case::blank(json!({"outputContentFormat": "  "}), None, None)]
     #[case::null(json!({"outputContentFormat": null}), None, None)]
@@ -1106,9 +1118,11 @@ mod tests {
         assert_eq!(serde_json::to_value(mapped).unwrap(), json!({"pages": "1"}));
     }
 
-    #[test]
-    fn drop_params_keeps_a_valid_output_content_format() {
-        let mapped = map(json!({"outputContentFormat": "markdown", "drop_params": true})).unwrap();
+    #[rstest]
+    #[case::camel_case(json!({"outputContentFormat": "markdown", "drop_params": true}))]
+    #[case::snake_case(json!({"output_content_format": "markdown", "drop_params": true}))]
+    fn drop_params_keeps_a_valid_output_content_format(#[case] options: Value) {
+        let mapped = map(options).unwrap();
 
         assert_eq!(
             mapped.output_content_format,

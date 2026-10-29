@@ -19,10 +19,10 @@ use crate::{
     python_settings::{PythonSettings, Snapshot},
 };
 
-/// What the host keeps after projection: the caller's token callable that answers the
-/// token operation, and the provider name the failure mapping reports.
 pub(super) const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.ocr";
 
+/// What the host keeps after projection: the caller's token callable that answers the
+/// token operation, and the provider name the failure mapping reports.
 pub(super) struct OcrHostHandles {
     pub azure_ad_token_provider: Option<CallerTokenProvider>,
     pub provider: &'static str,

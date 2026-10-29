@@ -232,6 +232,10 @@ async fn only_layout_markdown_in_litellm_format_asks_for_code_point_offsets(
 #[case::snake_case(json!({"output_content_format": "markdown"}), Some("markdown"))]
 #[case::padded(json!({"outputContentFormat": " markdown "}), Some("markdown"))]
 #[case::empty(json!({"outputContentFormat": ""}), None)]
+#[case::empty_camel_case_falls_back_to_snake_case(
+    json!({"outputContentFormat": "", "output_content_format": "markdown"}),
+    Some("markdown")
+)]
 #[case::dropped(json!({"outputContentFormat": "html", "drop_params": true}), None)]
 #[tokio::test]
 async fn the_requested_output_content_format_reaches_azure_in_its_query_spelling(
