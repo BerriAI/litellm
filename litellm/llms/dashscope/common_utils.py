@@ -20,9 +20,10 @@ if TYPE_CHECKING:
 
 DASHSCOPE_CHAT_COMPATIBLE_PATH: Final = "/compatible-mode/v1"
 DASHSCOPE_RERANK_PATH: Final = "/compatible-api/v1/reranks"
+DASHSCOPE_MULTIMODAL_GENERATION_PATH: Final = "/api/v1/services/aigc/multimodal-generation/generation"
 
 
-def _rerank_base_for_chat_shaped_base(api_base: str | None) -> str | None:
+def dashscope_service_url_on_chat_host(api_base: str | None, service_path: str) -> str | None:
     if api_base is None:
         return None
     parsed: Final = urlparse(api_base)
@@ -30,11 +31,11 @@ def _rerank_base_for_chat_shaped_base(api_base: str | None) -> str | None:
     on_aliyun_host: Final = host == "aliyuncs.com" or host.endswith(".aliyuncs.com")
     if not on_aliyun_host or parsed.path.rstrip("/") != DASHSCOPE_CHAT_COMPATIBLE_PATH:
         return None
-    return f"{parsed.scheme}://{parsed.netloc}{DASHSCOPE_RERANK_PATH}"
+    return f"{parsed.scheme}://{parsed.netloc}{service_path}"
 
 
 def resolve_dashscope_family_rerank_api_base(api_base: str | None, env_var: str, default_rerank_base: str) -> str:
-    remapped: Final = _rerank_base_for_chat_shaped_base(api_base)
+    remapped: Final = dashscope_service_url_on_chat_host(api_base, DASHSCOPE_RERANK_PATH)
     if api_base is not None and remapped is None:
         return api_base
     return get_secret_str(env_var) or remapped or default_rerank_base

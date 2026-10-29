@@ -109,7 +109,28 @@ def test_an_openai_size_reaches_dashscope_in_its_star_format(size: str, dashscop
     assert json.loads(seen[0].content)["parameters"] == {"size": dashscope_size}
 
 
-def test_a_chat_shaped_api_base_falls_back_to_the_image_endpoint_like_image_generation() -> None:
+@pytest.mark.parametrize(
+    ("api_base", "image_base", "endpoint"),
+    (
+        (
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            None,
+            "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+        ),
+        ("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/", None, INTL_ENDPOINT),
+        ("https://gw.example.com/compatible-mode/v1", None, INTL_ENDPOINT),
+        (
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "https://images.example.com/edit",
+            "https://images.example.com/edit",
+        ),
+    ),
+)
+def test_a_chat_api_base_sends_the_edit_to_the_image_endpoint_in_its_region(
+    monkeypatch: pytest.MonkeyPatch, api_base: str, image_base: str | None, endpoint: str
+) -> None:
+    if image_base is not None:
+        monkeypatch.setenv("DASHSCOPE_API_BASE_IMAGE", image_base)
     seen: Final[list[httpx.Request]] = []  # mutable-ok: request log
 
     litellm.image_edit(
@@ -117,11 +138,11 @@ def test_a_chat_shaped_api_base_falls_back_to_the_image_endpoint_like_image_gene
         image=PNG,
         prompt="p",
         api_key="k",
-        api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        api_base=api_base,
         client=_sync_client(seen),
     )
 
-    assert str(seen[0].url) == INTL_ENDPOINT
+    assert str(seen[0].url) == endpoint
 
 
 def test_a_fourth_image_is_refused_with_a_400_before_any_request_even_under_drop_params() -> None:
@@ -219,3 +240,22 @@ def test_each_edited_image_is_billed_at_the_model_output_image_price(model: str)
 
     assert cost == pytest.approx(2 * litellm.model_cost[f"dashscope/{model}"]["output_cost_per_image"])
     assert cost > 0
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_the_input_images_dashscope_reports_are_billed_on_top_of_the_edited_images() -> None:
+    def reply(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={**EDITED, "usage": {"input_image_count": 2, "output_image_count": 1}})
+
+    response: Final = litellm.image_edit(
+        model="dashscope/qwen-image-3.0", image=[PNG, PNG], prompt="p", api_key="k", client=_sync_client([], reply)
+    )
+
+    prices: Final = litellm.model_cost["dashscope/qwen-image-3.0"]
+    assert prices["input_cost_per_image"] > 0
+    assert litellm.completion_cost(
+        completion_response=response,
+        model="dashscope/qwen-image-3.0",
+        call_type="aimage_edit",
+        custom_llm_provider="dashscope",
+    ) == pytest.approx(2 * prices["input_cost_per_image"] + prices["output_cost_per_image"])

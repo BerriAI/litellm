@@ -4,7 +4,7 @@ from itertools import chain
 from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import override
 
 import litellm
@@ -24,6 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.dashscope.common_utils import (
     DASHSCOPE_CHAT_COMPATIBLE_PATH,
+    DASHSCOPE_MULTIMODAL_GENERATION_PATH,
     DashScopeError,
     missing_dashscope_family_key_message,
     resolve_dashscope_family_api_key,
@@ -38,6 +39,7 @@ if TYPE_CHECKING:
 DASHSCOPE_TTS_DEFAULT_API_BASE: Final = "https://dashscope-intl.aliyuncs.com"
 _DASHSCOPE_API_PATH: Final = "/api/v1"
 _SPEECH_SYNTHESIZER_MODEL_PREFIX: Final = "qwen-audio-"
+_TIMEOUT_PHASES: Final = TypeAdapter(dict[str, float | None])
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,7 +51,7 @@ class _TextToSpeechFamily:
 
 
 MULTIMODAL_GENERATION_FAMILY: Final = _TextToSpeechFamily(
-    path="/api/v1/services/aigc/multimodal-generation/generation",
+    path=DASHSCOPE_MULTIMODAL_GENERATION_PATH,
     response_formats=frozenset({"wav"}),
     sends_format=False,
     takes_instructions=False,
@@ -76,6 +78,7 @@ class _Usage(BaseModel):
     model_config = ConfigDict(frozen=True)
     input_tokens: int | None = None
     output_tokens: int | None = None
+    characters: int | None = None
 
 
 class _SpeechResponse(BaseModel):
@@ -129,7 +132,7 @@ def _speech_response(raw_response: httpx.Response) -> _SpeechResponse:
         ) from e
 
 
-def _audio_url(raw_response: httpx.Response) -> tuple[str, Usage | None]:
+def _audio_url(raw_response: httpx.Response) -> tuple[str, _Usage | None]:
     parsed: Final = _speech_response(raw_response)
     if parsed.output is None:
         raise DashScopeError(
@@ -137,7 +140,17 @@ def _audio_url(raw_response: httpx.Response) -> tuple[str, Usage | None]:
             message=parsed.message or parsed.code or raw_response.text,
             headers=raw_response.headers,
         )
-    return parsed.output.audio.url, _token_usage(parsed.usage)
+    return parsed.output.audio.url, parsed.usage
+
+
+def _request_timeout(raw_response: httpx.Response) -> httpx.Timeout | None:
+    extension: Final = raw_response.request.extensions.get("timeout")
+    if extension is None:
+        return None
+    phases: Final = _TIMEOUT_PHASES.validate_python(extension)
+    return httpx.Timeout(
+        connect=phases.get("connect"), read=phases.get("read"), write=phases.get("write"), pool=phases.get("pool")
+    )
 
 
 def _token_usage(usage: _Usage | None) -> Usage | None:
@@ -154,7 +167,7 @@ def _refused_audio_url(error: SSRFError) -> DashScopeError:
     return DashScopeError(status_code=502, message=f"DashScope returned an audio URL that was refused: {error}")
 
 
-def _binary_audio(audio_response: httpx.Response, usage: Usage | None) -> HttpxBinaryResponseContent:
+def _binary_audio(audio_response: httpx.Response, usage: _Usage | None) -> HttpxBinaryResponseContent:
     if audio_response.status_code != 200:
         raise DashScopeError(
             status_code=502,
@@ -162,7 +175,9 @@ def _binary_audio(audio_response: httpx.Response, usage: Usage | None) -> HttpxB
             headers=audio_response.headers,
         )
     binary: Final = HttpxBinaryResponseContent(audio_response)
-    binary.usage = usage
+    binary.usage = _token_usage(usage)
+    if usage is not None and usage.characters is not None:
+        binary.hidden_params = {**binary.hidden_params, "billed_characters": usage.characters}
     return binary
 
 
@@ -251,7 +266,7 @@ class DashScopeTextToSpeechConfig(BaseTextToSpeechConfig):
     ) -> HttpxBinaryResponseContent:
         audio_url, usage = _audio_url(raw_response)
         try:
-            audio_response: Final = safe_get(self._sync_client(), audio_url)
+            audio_response: Final = safe_get(self._sync_client(), audio_url, timeout=_request_timeout(raw_response))
         except SSRFError as e:
             raise _refused_audio_url(e) from e
         return _binary_audio(audio_response, usage)
@@ -265,7 +280,9 @@ class DashScopeTextToSpeechConfig(BaseTextToSpeechConfig):
     ) -> HttpxBinaryResponseContent:
         audio_url, usage = _audio_url(raw_response)
         try:
-            audio_response: Final = await async_safe_get(self._async_client(), audio_url)
+            audio_response: Final = await async_safe_get(
+                self._async_client(), audio_url, timeout=_request_timeout(raw_response)
+            )
         except SSRFError as e:
             raise _refused_audio_url(e) from e
         return _binary_audio(audio_response, usage)

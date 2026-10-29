@@ -26,6 +26,7 @@ _PNG_DATA_URI: Final = f"data:image/png;base64,{base64.b64encode(_PNG).decode()}
 _EDITED_URL: Final = "https://dashscope-result.example.com/edited.png"
 _PROMPT: Final = "Turn the red circle into a blue square"
 _TEXT: Final = "Hello from LiteLLM."
+_BILLED_CHARACTERS: Final = len(_TEXT)
 _WAV: Final = b"RIFF\x24\x00\x00\x00WAVEfmt " + uuid.uuid4().bytes
 _MP3: Final = b"ID3\x04\x00\x00\x00\x00\x00\x00" + uuid.uuid4().bytes
 _SIGNED_QUERY: Final = "Expires=1793316671&OSSAccessKeyId=LTAI5t&Signature=ab%2Bc%3D"
@@ -57,10 +58,12 @@ def _speech_api(request: Request) -> Reply:
     if request.method == "GET" and request.target.startswith(f"{_OSS_PATH}speech.mp3"):
         return Reply(body=_MP3, content_type="audio/mpeg")
     if (request.method, request.target) == ("POST", _MULTIMODAL_PATH):
-        return _synthesized(request, "speech.wav", {"characters": 17})
+        return _synthesized(request, "speech.wav", {"characters": _BILLED_CHARACTERS})
     assert (request.method, request.target) == ("POST", _SYNTHESIZER_PATH), (request.method, request.target)
     return _synthesized(
-        request, "speech.mp3", {"characters": 17, "input_tokens": _INPUT_TOKENS, "output_tokens": _OUTPUT_TOKENS}
+        request,
+        "speech.mp3",
+        {"characters": _BILLED_CHARACTERS, "input_tokens": _INPUT_TOKENS, "output_tokens": _OUTPUT_TOKENS},
     )
 
 
@@ -194,9 +197,7 @@ def test_qwen3_tts_returns_the_downloaded_wav_and_bills_each_input_character(
         assert json.loads(synthesis.body) == {"model": "qwen3-tts-flash", "input": {"text": _TEXT, "voice": "Cherry"}}
         assert (download.method, download.target) == ("GET", f"{_OSS_PATH}speech.wav?{_SIGNED_QUERY}")
         assert "authorization" not in download.headers
-        settled_spend(
-            key, len("".join(_TEXT.split())) * rate("dashscope", "input_cost_per_character", "qwen3-tts-flash")
-        )
+        settled_spend(key, _BILLED_CHARACTERS * rate("dashscope", "input_cost_per_character", "qwen3-tts-flash"))
 
 
 @pytest.mark.timeout(_OWNED_TIMEOUT)

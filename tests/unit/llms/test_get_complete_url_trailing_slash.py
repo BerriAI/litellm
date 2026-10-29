@@ -137,6 +137,7 @@ API_BASE_IS_THE_FULL_URL: Final[Mapping[str, str]] = MappingProxyType(
             "brave.search.transformation.BraveSearchConfig",
             "cohere.chat.v2_transformation.CohereV2ChatConfig",
             "cohere.embed.transformation.CohereEmbeddingConfig",
+            "dashscope.image_edit.transformation.DashScopeImageEditConfig",
             "dashscope.image_generation.transformation.DashScopeImageGenerationConfig",
             "dataforseo.search.transformation.DataForSEOSearchConfig",
             "datarobot.chat.transformation.DataRobotConfig",

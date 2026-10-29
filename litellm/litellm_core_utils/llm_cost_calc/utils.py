@@ -2116,6 +2116,12 @@ def _model_priced_image_cost_calculator(
             from litellm.llms.tencent.image_generation.transformation import is_tokenhub_image_model
 
             return tencent_image_cost_calculator if is_tokenhub_image_model(model) else None
+        case litellm.LlmProviders.DASHSCOPE.value:
+            from litellm.llms.dashscope.image_generation.cost_calculator import (
+                cost_calculator as dashscope_image_cost_calculator,
+            )
+
+            return dashscope_image_cost_calculator
         case _:
             return None
 

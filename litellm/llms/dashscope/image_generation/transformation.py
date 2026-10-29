@@ -23,7 +23,7 @@ Response format:
 }
 """
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -66,6 +66,24 @@ OPENAI_TO_DASHSCOPE_SIZE: Final[Mapping[str, str]] = {
 }
 
 
+def _message_image_urls(message: Mapping[str, object]) -> Iterator[str]:
+    contents: Final = _JSON_OBJECTS.validate_python(message.get("content", []))
+    return (url for url in (item.get("image") for item in contents) if isinstance(url, str) and url)
+
+
+def _image_urls(response_object: Mapping[str, object]) -> Iterator[str]:
+    output: Final = _JSON_OBJECT.validate_python(response_object.get("output", {}))
+    choices: Final = _JSON_OBJECTS.validate_python(output.get("choices", []))
+    for choice in choices:
+        yield from _message_image_urls(_JSON_OBJECT.validate_python(choice.get("message", {})))
+
+
+def _dashscope_size(size: object) -> object:
+    if not isinstance(size, str):
+        return size
+    return OPENAI_TO_DASHSCOPE_SIZE.get(size, size.replace("x", "*"))
+
+
 class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
     """
     Configuration for DashScope image generation (qwen-image-2.0, qwen-image-2.0-pro,
@@ -77,24 +95,16 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_params: Final = self.get_supported_openai_params(model)
-        mapped: Final[dict] = {}
-        for k, v in non_default_params.items():
-            if k in optional_params:
-                continue
-            if k not in supported_params:
-                continue
-            if k == "size":
-                # Convert "WxH" → "W*H"
-                mapped["size"] = OPENAI_TO_DASHSCOPE_SIZE.get(v, v.replace("x", "*"))
-            else:
-                mapped[k] = v
-        return mapped
+        requested: Final = {
+            k: v for k, v in non_default_params.items() if k in supported_params and k not in optional_params
+        }
+        return {k: _dashscope_size(v) if k == "size" else v for k, v in requested.items()}
 
     def _resolve_api_key(self, api_key: str | None) -> str:
         resolved_api_key: Final = api_key or get_secret_str("DASHSCOPE_API_KEY")
@@ -110,8 +120,8 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         image_api_base: Final = (
@@ -121,14 +131,14 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         headers["Authorization"] = f"Bearer {self._resolve_api_key(api_key)}"
         headers["Content-Type"] = "application/json"
         return headers
@@ -167,9 +177,9 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: dict[str, object],
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -206,17 +216,13 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
                 headers=raw_response.headers,
             )
 
-        if not model_response.data:
-            model_response.data = []
-
-        output: Final = _JSON_OBJECT.validate_python(response_object.get("output", {}))
-        choices: Final = _JSON_OBJECTS.validate_python(output.get("choices", []))
-        for choice in choices:
-            message = _JSON_OBJECT.validate_python(choice.get("message", {}))
-            content_list = _JSON_OBJECTS.validate_python(message.get("content", []))
-            for content_item in content_list:
-                image_url = content_item.get("image")
-                if image_url:
-                    model_response.data.append(ImageObject(url=image_url))
-
-        return model_response
+        images: Final = [*(model_response.data or ()), *(ImageObject(url=url) for url in _image_urls(response_object))]
+        image_response: Final = model_response.model_copy(update={"data": images})
+        usage: Final = _JSON_OBJECT.validate_python(response_object.get("usage", {}))
+        input_image_count: Final = usage.get("input_image_count")
+        if isinstance(input_image_count, int) and input_image_count > 0:
+            image_response.hidden_params = {
+                **model_response.hidden_params,
+                "billable_input_image_count": input_image_count,
+            }
+        return image_response

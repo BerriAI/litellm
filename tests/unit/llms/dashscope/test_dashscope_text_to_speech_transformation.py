@@ -27,6 +27,8 @@ SYNTHESIZED: Final = {
     "usage": {"characters": 6, "input_tokens": 8, "output_tokens": 30, "total_tokens": 38},
 }
 
+API_REQUEST: Final = httpx.Request("POST", f"{INTL}{MULTIMODAL_PATH}")
+
 Reply = Callable[[httpx.Request], httpx.Response]
 
 
@@ -127,9 +129,11 @@ async def test_each_family_posts_to_its_endpoint_and_the_async_handler_returns_t
     (download,) = download_seen
     assert str(download.url) == AUDIO_URL
     assert "authorization" not in download.headers
+    assert download.extensions["timeout"] == api_request.extensions["timeout"]
 
 
-def test_the_sync_handler_downloads_through_the_injected_blocking_client() -> None:
+def test_the_sync_handler_downloads_through_the_injected_blocking_client_within_the_call_timeout() -> None:
+    api_seen: Final[list[httpx.Request]] = []  # mutable-ok: request log
     download_seen: Final[list[httpx.Request]] = []  # mutable-ok: request log
     config: Final = DashScopeTextToSpeechConfig(
         sync_client=lambda: HTTPHandler(client=httpx.Client(transport=_recording(download_seen, _audio)))
@@ -145,12 +149,15 @@ def test_the_sync_handler_downloads_through_the_injected_blocking_client() -> No
         litellm_params={"api_key": "k", "api_base": None},
         logging_obj=_logging(),
         timeout=30,
-        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_api(SYNTHESIZED)))),
+        client=HTTPHandler(client=httpx.Client(transport=_recording(api_seen, _api(SYNTHESIZED)))),
     )
 
     assert isinstance(speech, HttpxBinaryResponseContent)
     assert speech.content == AUDIO
-    assert [str(request.url) for request in download_seen] == [AUDIO_URL]
+    (api_request,) = api_seen
+    (download,) = download_seen
+    assert str(download.url) == AUDIO_URL
+    assert download.extensions["timeout"] == api_request.extensions["timeout"]
 
 
 @pytest.mark.parametrize(
@@ -259,7 +266,7 @@ async def test_aspeech_uses_the_native_endpoint_on_the_caller_api_base_and_refus
             "Unexpected DashScope text-to-speech response",
         ),
         (
-            httpx.Response(200, json=SYNTHESIZED),
+            httpx.Response(200, json=SYNTHESIZED, request=API_REQUEST),
             lambda _: httpx.Response(403),
             502,
             "audio download failed with HTTP 403",
@@ -288,10 +295,37 @@ async def test_provider_token_usage_rides_on_the_audio_so_token_priced_speech_is
     )
 
     speech: Final = await config.async_transform_text_to_speech_response(
-        model="qwen-audio-3.1-tts-flash", raw_response=httpx.Response(200, json=SYNTHESIZED), logging_obj=_logging()
+        model="qwen-audio-3.1-tts-flash",
+        raw_response=httpx.Response(200, json=SYNTHESIZED, request=API_REQUEST),
+        logging_obj=_logging(),
     )
 
     assert speech.usage == Usage(prompt_tokens=8, completion_tokens=30, total_tokens=38)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_character_priced_speech_bills_the_characters_dashscope_reports() -> None:
+    text: Final = "你好 世界。"
+    reported: Final = {**SYNTHESIZED, "usage": {"characters": 10}}
+    config: Final = DashScopeTextToSpeechConfig(
+        async_client=lambda: AsyncHTTPHandler(transport=httpx.MockTransport(_audio))
+    )
+    speech: Final = await config.async_transform_text_to_speech_response(
+        model="qwen3-tts-flash",
+        raw_response=httpx.Response(200, json=reported, request=API_REQUEST),
+        logging_obj=_logging(),
+    )
+
+    cost: Final = litellm.completion_cost(
+        completion_response=speech,
+        model="dashscope/qwen3-tts-flash",
+        call_type="aspeech",
+        prompt=text,
+        custom_llm_provider="dashscope",
+    )
+
+    assert litellm.utils.count_characters(text) != 10
+    assert cost == pytest.approx(10 * litellm.model_cost["dashscope/qwen3-tts-flash"]["input_cost_per_character"])
 
 
 @pytest.mark.parametrize(
