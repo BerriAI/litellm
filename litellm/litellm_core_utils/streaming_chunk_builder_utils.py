@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import BEDROCK_TRAC
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,  # pyright: ignore[reportUnknownVariableType]  # response param accepts an untyped dict
 )
+from litellm.litellm_core_utils.token_counter import usage_tokenizer_model
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantContentValue,
@@ -51,7 +52,7 @@ from litellm.types.utils import (
     UnreportedUsage,
     Usage,
 )
-from litellm.utils import print_verbose, token_counter
+from litellm.utils import get_base_model_from_metadata, print_verbose, token_counter
 
 if TYPE_CHECKING:
     from openai.types.completion_usage import CompletionUsage
@@ -1743,6 +1744,9 @@ def stream_chunk_builder(
             return stream_chunk_builder_text_completion(chunks=chunks, messages=messages)
 
         model: Final = chunks[0]["model"]
+        usage_model: Final = usage_tokenizer_model(
+            model, get_base_model_from_metadata(logging_obj.model_call_details) if logging_obj is not None else None
+        )
         response: Final = processor.build_base_response(chunks)
         choice_streams: Final = _choice_streams(chunks)
         if len(choice_streams) > 1:
@@ -1761,7 +1765,7 @@ def stream_chunk_builder(
             completion_output = get_content_from_model_response(response)
             usage = processor.calculate_usage(
                 chunks=chunks,
-                model=model,
+                model=usage_model,
                 completion_output=completion_output,
                 messages=messages,
                 reasoning_tokens=0,
@@ -1806,7 +1810,7 @@ def stream_chunk_builder(
 
         usage = processor.calculate_usage(
             chunks=chunks,
-            model=model,
+            model=usage_model,
             completion_output=completion_output,
             messages=messages,
             reasoning_tokens=reasoning_tokens,

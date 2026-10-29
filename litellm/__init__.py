@@ -591,7 +591,7 @@ vertex_ai_safety_settings: Optional[dict] = None
 ####### COMPLETION MODELS ###################
 from typing import Set
 
-open_ai_chat_completion_models: Set = set()
+open_ai_chat_completion_models: Set[str] = set()
 open_ai_text_completion_models: Set = set()
 cohere_models: Set = set()
 cohere_chat_models: Set = set()
@@ -681,6 +681,7 @@ moonshot_models: Set = set()
 publicai_models: Set = set()
 darkbloom_models: Set = set()
 openinfer_models: Final[Set[str]] = set()
+streamlake_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
 v0_models: Set = set()
 morph_models: Set = set()
@@ -970,6 +971,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             darkbloom_models.add(key)
         elif value.get("litellm_provider") == "openinfer":
             openinfer_models.add(key)
+        elif value.get("litellm_provider") == "streamlake":
+            streamlake_models.add(key)
         elif value.get("litellm_provider") == "zerogpu":
             zerogpu_models.add(key)
         elif value.get("litellm_provider") == "v0":
@@ -1145,6 +1148,7 @@ model_list = list(
     | publicai_models
     | darkbloom_models
     | openinfer_models
+    | streamlake_models
     | zerogpu_models
     | v0_models
     | morph_models
@@ -1265,6 +1269,7 @@ def _build_models_by_provider() -> dict:
         "publicai": publicai_models,
         "darkbloom": darkbloom_models,
         "openinfer": openinfer_models,
+        "streamlake": streamlake_models,
         "zerogpu": zerogpu_models,
         "v0": v0_models,
         "morph": morph_models,
