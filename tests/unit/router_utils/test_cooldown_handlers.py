@@ -25,6 +25,7 @@ from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callba
 from litellm.router_utils.cooldown_handlers import (
     _get_deployment_cooldown_policy,
     _has_explicit_allowed_fails_policy_for_exception,
+    _has_fallback_group,
     _increment_allowed_fails,
     _is_cooldown_required,
     _resolve_allowed_fails_from_policy,
@@ -35,6 +36,7 @@ from litellm.router_utils.cooldown_handlers import (
     cast_exception_status_to_int,
     get_cooldown_deployments,
     mark_advisor_orchestration_failure,
+    set_cooldown_deployments,
     should_cooldown_based_on_allowed_fails_policy,
 )
 from litellm.router_utils.fallback_event_handlers import (
@@ -53,6 +55,40 @@ from litellm.types.router import (
 )
 from litellm.types.utils import CooldownDeploymentInfo, CredentialItem
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exception_type", "expected_cooldown"),
+    (
+        (litellm.APIConnectionError, False),
+        (litellm.UnsupportedEndpointError, False),
+        (litellm.BadRequestError, True),
+    ),
+)
+async def test_unsupported_endpoint_preserves_cooldown_exclusion_with_bad_request_policy(
+    exception_type: type[litellm.APIConnectionError | litellm.BadRequestError], expected_cooldown: bool
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": "not-needed"},
+                "model_info": {"id": "deployment", "allowed_fails_policy": {"BadRequestErrorAllowedFails": 0}},
+            }
+        ],
+    )
+    exception: Final = exception_type(message="Request failed", model="claude-sonnet-5-5", llm_provider="anthropic")
+    set_cooldown_deployments(
+        litellm_router_instance=router,
+        original_exception=exception,
+        exception_status=exception.status_code,
+        deployment="deployment",
+        time_to_cooldown=60,
+    )
+    assert await async_get_cooldown_deployments(router, parent_otel_span=None) == (
+        ["deployment"] if expected_cooldown else []
+    )
 
 
 class TestGetDeploymentCooldownPolicy:
@@ -3143,6 +3179,34 @@ async def test_router_allowed_fails_benches_a_lone_deployment_only_when_the_poli
 
     assert seen == outcomes
     assert len(route.calls) == outcomes.count(litellm.Timeout)
+
+
+@pytest.mark.parametrize(
+    ("fallbacks", "expected"),
+    [
+        ([{"test-model": "backup-model"}], True),
+        ([{"*": "backup-model"}], True),
+        ([{"test-model": ["backup-model"]}], True),
+        ([{"test-model": 5}, {"*": "backup-model"}], True),
+        ([{"test-model": 5}], False),
+        ([{"other-model": ["backup-model"]}], False),
+    ],
+    ids=[
+        "string_target",
+        "string_catch_all_from_default_fallbacks",
+        "list_target",
+        "unparseable_entry_does_not_hide_the_catch_all",
+        "unparseable_entry_alone",
+        "another_groups_chain",
+    ],
+)
+def test_has_fallback_group_reads_string_targets_and_skips_unparseable_entries(
+    fallbacks: Sequence[Mapping[str, object]], expected: bool
+) -> None:
+    router: Final = Router(model_list=[TIMED_OUT_DEPLOYMENT])
+    router.fallbacks = list(fallbacks)
+
+    assert _has_fallback_group(router, "test-model") is expected
 
 
 async def _group_call_outcome(router: Router) -> str:

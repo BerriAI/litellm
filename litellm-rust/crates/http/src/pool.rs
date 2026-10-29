@@ -9,7 +9,7 @@ use reqwest::dns::Resolve;
 use crate::{
     client::Client,
     config::{HttpClientConfig, Verify},
-    error::Error,
+    error::{Error, Repr},
     proxy::EnvironmentProxies,
 };
 
@@ -83,7 +83,8 @@ impl HttpClientPool {
         }
         let client = self
             .apply(variant, reqwest::ClientBuilder::try_from(&key.0)?)
-            .build()?;
+            .build()
+            .map_err(Repr::Client)?;
         self.lock().insert(
             key,
             PooledClient {

@@ -13,13 +13,12 @@ from openai import (
     BadRequestError,
     OpenAI,
 )
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel
 
 import litellm
-from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRIES
+from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
-from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -34,7 +33,7 @@ from litellm.types.utils import (
 from litellm.utils import (
     CustomStreamWrapper,
     convert_to_model_response_object,
-    modify_url,
+    get_base_model_from_metadata,
 )
 
 from ...types.llms.openai import HttpxBinaryResponseContent
@@ -58,8 +57,6 @@ from .image_generation import (
     get_azure_image_generation_config,
 )
 from .image_generation.http_utils import azure_deployment_image_generation_json_body
-
-_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AzureOpenAIAssistantsAPIConfig:
@@ -149,6 +146,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         azure_client: AzureOpenAI | OpenAI,
         data: dict,
         timeout: float | httpx.Timeout,
+        logging_obj: LiteLLMLoggingObj,
     ):
         """
         Helper to:
@@ -164,7 +162,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         except BadRequestError as e:
             if not is_output_token_limit_error(e):
                 raise
-            return build_output_token_limit_response(e=e, data=data, is_async=False)
+            return build_output_token_limit_response(
+                e=e,
+                data=data,
+                is_async=False,
+                base_model=get_base_model_from_metadata(logging_obj.model_call_details),
+            )
         except Exception as e:
             raise e
 
@@ -196,7 +199,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         except BadRequestError as e:
             if not is_output_token_limit_error(e):
                 raise
-            return build_output_token_limit_response(e=e, data=data, is_async=True)
+            return build_output_token_limit_response(
+                e=e,
+                data=data,
+                is_async=True,
+                base_model=get_base_model_from_metadata(logging_obj.model_call_details),
+            )
         except Exception as e:
             raise e
 
@@ -354,7 +362,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     )
 
                 headers, response = self.make_sync_azure_openai_chat_completion_request(
-                    azure_client=azure_client, data=data, timeout=timeout
+                    azure_client=azure_client, data=data, timeout=timeout, logging_obj=logging_obj
                 )
                 if not isinstance(response, BaseModel):
                     raise AzureOpenAIError(
@@ -568,7 +576,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             },
         )
         headers, response = self.make_sync_azure_openai_chat_completion_request(
-            azure_client=azure_client, data=data, timeout=timeout
+            azure_client=azure_client, data=data, timeout=timeout, logging_obj=logging_obj
         )
         logging_obj.model_call_details["response_headers"] = headers
         streamwrapper: Final = CustomStreamWrapper(
@@ -860,11 +868,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         headers: dict,
         deployment_name: str | None = None,
     ) -> httpx.Response:
-        """
-        Implemented for azure dall-e-2 image gen calls
-
-        Alternative to needing a custom transport implementation
-        """
         if client is None:
             _params: Final = {}
             if timeout is not None:
@@ -881,95 +884,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         else:
             async_handler = client
 
-        if (
-            "images/generations" in api_base
-            and api_version
-            in [  # dall-e-3 starts from `2023-12-01-preview` so we should be able to avoid conflict
-                "2023-06-01-preview",
-                "2023-07-01-preview",
-                "2023-08-01-preview",
-                "2023-09-01-preview",
-                "2023-10-01-preview",
-            ]
-        ):  # CREATE + POLL for azure dall-e-2 calls
-            api_base = modify_url(original_url=api_base, new_path="/openai/images/generations:submit")
-
-            data.pop(
-                "model", None
-            )  # REMOVE 'model' from dall-e-2 arg https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#request-a-generated-image-dall-e-2-preview
-            response = await async_handler.post(
-                url=api_base,
-                data=json.dumps(data),
-                headers=headers,
-            )
-            if "operation-location" in response.headers:
-                operation_location_url: Final = response.headers["operation-location"]
-            else:
-                raise AzureOpenAIError(status_code=500, message=response.text)
-            # Reject polling URLs that don't share an origin with ``api_base``.
-            # Without this an upstream-controlled or attacker-controlled
-            # value would receive the operator's Azure API key in the
-            # request headers below. VERIA-51.
-            try:
-                assert_same_origin(operation_location_url, api_base)
-            except SSRFError as ssrf_err:
-                raise AzureOpenAIError(
-                    status_code=502,
-                    message=f"Rejected polling URL: {ssrf_err}",
-                )
-            response = await async_handler.get(
-                url=operation_location_url,
-                headers=headers,
-            )
-
-            await response.aread()
-
-            timeout_secs: Final[int] = AZURE_OPERATION_POLLING_TIMEOUT
-            start_time: Final = time.time()
-            if "status" not in response.json():
-                # Don't reflect the raw response body — when the polling
-                # URL points at an internal JSON API (cloud metadata
-                # service etc.) reflecting it here turns Blind SSRF into
-                # Full-Read SSRF. VERIA-51.
-                raise AzureOpenAIError(
-                    status_code=502,
-                    message="Polling response missing 'status' field",
-                )
-            while response.json()["status"] not in ["succeeded", "failed"]:
-                if time.time() - start_time > timeout_secs:
-                    raise AzureOpenAIError(status_code=408, message="Operation polling timed out.")
-
-                await asyncio.sleep(int(response.headers.get("retry-after") or 10))
-                response = await async_handler.get(
-                    url=operation_location_url,
-                    headers=headers,
-                )
-                await response.aread()
-
-            if response.json()["status"] == "failed":
-                error_data: Final = response.json()
-                # Preserve Azure error details (e.g. content_policy_violation,
-                # inner_error, content_filter_results) as structured body so
-                # exception_type() can route them correctly.
-                _error_body: Final = error_data.get("error", error_data)
-                _error_msg: Final = (
-                    _error_body.get("message", "Image generation failed")
-                    if isinstance(_error_body, dict)
-                    else json.dumps(error_data)
-                )
-                raise AzureOpenAIError(
-                    status_code=400,
-                    message=_error_msg,
-                    body=error_data,
-                )
-
-            result: Final = _DECODED_JSON.validate_python(response.json()["result"])
-            return httpx.Response(
-                status_code=200,
-                headers=response.headers,
-                content=json.dumps(result).encode("utf-8"),
-                request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
-            )
         request_json: Final = azure_deployment_image_generation_json_body(api_base, data, deployment_name)
         return await async_handler.post(
             url=api_base,
@@ -988,11 +902,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         headers: dict,
         deployment_name: str | None = None,
     ) -> httpx.Response:
-        """
-        Implemented for azure dall-e-2 image gen calls
-
-        Alternative to needing a custom transport implementation
-        """
         if client is None:
             _params: Final = {}
             if timeout is not None:
@@ -1006,87 +915,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         else:
             sync_handler = client
 
-        if (
-            "images/generations" in api_base
-            and api_version
-            in [  # dall-e-3 starts from `2023-12-01-preview` so we should be able to avoid conflict
-                "2023-06-01-preview",
-                "2023-07-01-preview",
-                "2023-08-01-preview",
-                "2023-09-01-preview",
-                "2023-10-01-preview",
-            ]
-        ):  # CREATE + POLL for azure dall-e-2 calls
-            api_base = modify_url(original_url=api_base, new_path="/openai/images/generations:submit")
-
-            data.pop(
-                "model", None
-            )  # REMOVE 'model' from dall-e-2 arg https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#request-a-generated-image-dall-e-2-preview
-            response = sync_handler.post(
-                url=api_base,
-                data=json.dumps(data),
-                headers=headers,
-            )
-            if "operation-location" in response.headers:
-                operation_location_url: Final = response.headers["operation-location"]
-            else:
-                raise AzureOpenAIError(status_code=500, message=response.text)
-            try:
-                assert_same_origin(operation_location_url, api_base)
-            except SSRFError as ssrf_err:
-                raise AzureOpenAIError(
-                    status_code=502,
-                    message=f"Rejected polling URL: {ssrf_err}",
-                )
-            response = sync_handler.get(
-                url=operation_location_url,
-                headers=headers,
-            )
-
-            response.read()
-
-            timeout_secs: Final[int] = AZURE_OPERATION_POLLING_TIMEOUT
-            start_time: Final = time.time()
-            if "status" not in response.json():
-                raise AzureOpenAIError(
-                    status_code=502,
-                    message="Polling response missing 'status' field",
-                )
-            while response.json()["status"] not in ["succeeded", "failed"]:
-                if time.time() - start_time > timeout_secs:
-                    raise AzureOpenAIError(status_code=408, message="Operation polling timed out.")
-
-                time.sleep(int(response.headers.get("retry-after") or 10))
-                response = sync_handler.get(
-                    url=operation_location_url,
-                    headers=headers,
-                )
-                response.read()
-
-            if response.json()["status"] == "failed":
-                error_data: Final = response.json()
-                # Preserve Azure error details (e.g. content_policy_violation,
-                # inner_error, content_filter_results) as structured body so
-                # exception_type() can route them correctly.
-                _error_body: Final = error_data.get("error", error_data)
-                _error_msg: Final = (
-                    _error_body.get("message", "Image generation failed")
-                    if isinstance(_error_body, dict)
-                    else json.dumps(error_data)
-                )
-                raise AzureOpenAIError(
-                    status_code=400,
-                    message=_error_msg,
-                    body=error_data,
-                )
-
-            result: Final = _DECODED_JSON.validate_python(response.json()["result"])
-            return httpx.Response(
-                status_code=200,
-                headers=response.headers,
-                content=json.dumps(result).encode("utf-8"),
-                request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
-            )
         request_json: Final = azure_deployment_image_generation_json_body(api_base, data, deployment_name)
         return sync_handler.post(
             url=api_base,
@@ -1193,10 +1021,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 deployment_name=model,
             )
 
-            provider_config: Final = get_azure_image_generation_config(data.get("model", "dall-e-2"))
+            provider_config: Final = get_azure_image_generation_config(data.get("model", ""))
             if provider_config is not None:
                 return provider_config.transform_image_generation_response(
-                    model=data.get("model", "dall-e-2"),
+                    model=data.get("model", ""),
                     raw_response=httpx_response,
                     model_response=model_response or ImageResponse(),
                     logging_obj=logging_obj,
@@ -1329,10 +1157,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 headers=request_headers,
                 deployment_name=model,
             )
-            provider_config: Final = get_azure_image_generation_config(data.get("model", "dall-e-2"))
+            provider_config: Final = get_azure_image_generation_config(data.get("model", ""))
             if isinstance(provider_config, AzureFoundryMAIImageGenerationConfig):
                 return provider_config.transform_image_generation_response(
-                    model=data.get("model", "dall-e-2"),
+                    model=data.get("model", ""),
                     raw_response=httpx_response,
                     model_response=model_response or ImageResponse(),
                     logging_obj=logging_obj,

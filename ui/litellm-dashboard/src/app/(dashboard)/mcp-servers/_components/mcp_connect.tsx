@@ -5,6 +5,7 @@ import React, { useId, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Kbd } from "@/components/ui/kbd";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -369,8 +370,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           <div className="flex w-full flex-col gap-6">
             <StepCard step={1} title="Open Cursor Settings">
               <span className="text-muted-foreground">
-                Use the keyboard shortcut <code className="bg-muted px-2 py-1 rounded-sm">⇧+⌘+J</code> (Mac) or{" "}
-                <code className="bg-muted px-2 py-1 rounded-sm">Ctrl+Shift+J</code> (Windows/Linux)
+                Use the keyboard shortcut <Kbd>⇧+⌘+J</Kbd> (Mac) or <Kbd>Ctrl+Shift+J</Kbd> (Windows/Linux)
               </span>
             </StepCard>
 
@@ -380,9 +380,8 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
 
             <StepCard step={3} title="Add Configuration">
               <span className="mb-3 text-muted-foreground">
-                Copy the JSON configuration below and paste it into Cursor, then save with{" "}
-                <code className="bg-muted px-2 py-1 rounded-sm">Cmd+S</code> or{" "}
-                <code className="bg-muted px-2 py-1 rounded-sm">Ctrl+S</code>
+                Copy the JSON configuration below and paste it into Cursor, then save with <Kbd>Cmd+S</Kbd> or{" "}
+                <Kbd>Ctrl+S</Kbd>
               </span>
               <FeatureCard
                 icon={<Code className="text-purple-600 dark:text-purple-400" size={16} />}

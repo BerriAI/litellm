@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import ProxyException
 from litellm.proxy.anthropic_endpoints import gateway_endpoints
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 from litellm.proxy.management_endpoints.ui_sso import (
     _get_cli_sso_flow_cache_key,
     _hash_cli_sso_secret,
@@ -272,6 +273,33 @@ def _login_id(device_code: str) -> str:
     return device_code.partition(".")[0]
 
 
+def _request_token_after_browser_choice(
+    client: TestClient, cache: DualCache, chosen_team_id: str | None
+) -> httpx.Response:
+    device_code: Final = _start_device_flow(client)
+    _complete_flow(
+        cache,
+        device_code,
+        session_data={
+            **_COMPLETED_SESSION,
+            "teams": ["team-a", "team-b"],
+            "team_details": [
+                *_COMPLETED_SESSION["team_details"],
+                {
+                    "team_id": "team-b",
+                    "team_alias": "Team B",
+                    "team_models": ["claude-opus-4-5"],
+                    "team_model_aliases": None,
+                },
+            ],
+        },
+    )
+    flow_key: Final = _get_cli_sso_flow_cache_key(_login_id(device_code))
+    flow: Final = cache.get_cache(key=flow_key)
+    cache.set_cache(key=flow_key, value={**flow, "chosen_team_id": chosen_team_id}, ttl=600)
+    return _request_token(client, device_code)
+
+
 def _complete_flow(cache: DualCache, device_code: str, session_data: Mapping[str, object] = _COMPLETED_SESSION) -> None:
     key: Final = _get_cli_sso_flow_cache_key(_login_id(device_code))
     flow: Final = cache.get_cache(key=key)
@@ -395,6 +423,33 @@ def test_token_success_mints_bearer_and_is_single_use():
             replay = _request_token(client, device_code)
     assert replay.status_code == 400
     assert replay.json()["error"] == "expired_token"
+
+
+@pytest.mark.parametrize(
+    ("chosen_team_id", "minted_team_id", "minted_alias"),
+    [("team-b", "team-b", "Team B"), (None, "team-a", "Team A")],
+    ids=["chosen_in_browser", "no_choice_recorded"],
+)
+def test_token_mints_for_the_team_chosen_in_the_browser(
+    chosen_team_id: str | None, minted_team_id: str, minted_alias: str
+):
+    with _gateway_env() as (client, cache):
+        resp: Final = _request_token_after_browser_choice(client, cache, chosen_team_id)
+        session: Final = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(resp.json()["access_token"])
+    assert resp.status_code == 200
+    assert session is not None
+    assert (session.team_id, session.team_alias) == (minted_team_id, minted_alias)
+    assert _opened_refresh(resp.json()["refresh_token"]).team_id == minted_team_id
+
+
+def test_token_refuses_a_browser_choice_that_is_no_longer_one_of_the_session_teams():
+    with _gateway_env() as (client, cache):
+        resp: Final = _request_token_after_browser_choice(client, cache, "team-gone")
+    assert resp.status_code == 400
+    assert resp.json() == {
+        "error": "invalid_grant",
+        "error_description": "The team picked at sign-in is no longer one of your teams; sign in again",
+    }
 
 
 def test_token_teamless_user_mints_without_a_team():

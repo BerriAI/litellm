@@ -55,18 +55,24 @@ impl litellm_storage_clickhouse::Query for TypedQuery {
     const SQL: &'static str = "SELECT typed_parameters";
 }
 
+enum Expected {
+    Rows,
+    Undecodable,
+    Failed,
+}
+
 #[rstest]
 #[case::valid(
     r#"{"meta":[],"data":[{"answer":"ok"}],"rows":1,"statistics":{"elapsed":0.1}}"#,
-    true
+    Expected::Rows
 )]
-#[case::wrong_type(r#"{"data":[{"answer":1}]}"#, false)]
-#[case::missing_column(r#"{"data":[{}]}"#, false)]
-#[case::exception(r#"{"data":[],"exception":"failed"}"#, false)]
+#[case::wrong_type(r#"{"data":[{"answer":1}]}"#, Expected::Undecodable)]
+#[case::missing_column(r#"{"data":[{}]}"#, Expected::Undecodable)]
+#[case::exception(r#"{"data":[],"exception":"failed"}"#, Expected::Failed)]
 #[tokio::test]
 async fn typed_fetch_encodes_parameters_and_validates_rows(
     #[case] body: &str,
-    #[case] valid: bool,
+    #[case] expected: Expected,
 ) {
     use litellm_storage_clickhouse::{fetch, fetch_json};
     use wiremock::{
@@ -98,17 +104,24 @@ async fn typed_fetch_encodes_parameters_and_validates_rows(
     };
     let rows = fetch::<TypedQuery>(&client, &connection, &params).await;
     let envelope = fetch_json::<TypedQuery>(&client, &connection, &params).await;
-    if valid {
-        assert_eq!(
-            rows.unwrap(),
-            vec![QueryRow {
-                answer: "ok".into()
-            }]
-        );
-        assert_eq!(envelope.unwrap(), body);
-    } else {
-        assert!(matches!(rows, Err(Error::InvalidResponse)));
-        assert!(matches!(envelope, Err(Error::InvalidResponse)));
+    match expected {
+        Expected::Rows => {
+            assert_eq!(
+                rows.unwrap(),
+                vec![QueryRow {
+                    answer: "ok".into()
+                }]
+            );
+            assert_eq!(envelope.unwrap(), body);
+        }
+        Expected::Undecodable => {
+            assert!(matches!(rows, Err(Error::InvalidResponse(_))));
+            assert!(matches!(envelope, Err(Error::InvalidResponse(_))));
+        }
+        Expected::Failed => {
+            assert!(matches!(rows, Err(Error::UnexpectedResponse)));
+            assert!(matches!(envelope, Err(Error::UnexpectedResponse)));
+        }
     }
 }
 
@@ -145,21 +158,23 @@ async fn server_result_limits_allow_smaller_pages_without_retrying_other_failure
     }
 }
 
-#[test]
-fn insert_timeout_environment_controls_transport() {
-    for value in ["1", "3", "0", "invalid"] {
-        let result = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "insert_timeout_environment_child"])
-            .env("LITELLM_TEST_INSERT_TIMEOUT", value)
-            .env("CLICKHOUSE_INSERT_TIMEOUT_SECONDS", value)
-            .output()
-            .unwrap();
-        assert!(
-            result.status.success(),
-            "{}",
-            String::from_utf8_lossy(&result.stdout)
-        );
-    }
+#[rstest]
+#[case::times_out("1")]
+#[case::completes("3")]
+#[case::zero("0")]
+#[case::not_a_number("invalid")]
+fn insert_timeout_environment_controls_transport(#[case] value: &str) {
+    let result = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "insert_timeout_environment_child"])
+        .env("LITELLM_TEST_INSERT_TIMEOUT", value)
+        .env("CLICKHOUSE_INSERT_TIMEOUT_SECONDS", value)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stdout)
+    );
 }
 
 #[tokio::test]
@@ -183,11 +198,37 @@ async fn insert_timeout_environment_child() {
     )
     .await;
     match value.as_str() {
-        "1" => assert!(matches!(result, Err(Error::Transport))),
+        "1" => assert!(matches!(result, Err(Error::Transport(error)) if error.dispatched())),
         "3" => assert!(result.is_ok()),
         _ => assert!(matches!(
             result,
             Err(Error::InvalidLimit("CLICKHOUSE_INSERT_TIMEOUT_SECONDS"))
         )),
     }
+}
+
+#[rstest]
+#[tokio::test]
+async fn unreachable_server_keeps_the_transport_cause() {
+    let address = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let connection = Connection::parse(&format!("http://{address}")).unwrap();
+    let error = execute_read(
+        &Client::for_test(),
+        &connection,
+        "SELECT 1",
+        &BTreeMap::new(),
+    )
+    .await
+    .unwrap_err();
+    let cause = std::error::Error::source(&error)
+        .and_then(|cause| cause.downcast_ref::<litellm_http::Error>())
+        .expect("transport cause");
+    assert!(!cause.dispatched());
+    assert_ne!(
+        litellm_error::Report::new(&error).to_string(),
+        error.to_string()
+    );
 }
