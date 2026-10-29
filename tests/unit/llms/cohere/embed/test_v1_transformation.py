@@ -31,7 +31,7 @@ class TestCohereEmbeddingV1Transform:
         data = {"texts": input_data, "input_type": "search_query"}
         model_response = EmbeddingResponse()
 
-        result = self.config._transform_response(
+        result = self.config.transform_response(
             response=mock_response,
             api_key="test-api-key",
             logging_obj=self.logging_obj,
@@ -92,7 +92,7 @@ class TestCohereEmbeddingV1Transform:
         }
         model_response = EmbeddingResponse()
 
-        result = self.config._transform_response(
+        result = self.config.transform_response(
             response=mock_response,
             api_key="test-api-key",
             logging_obj=self.logging_obj,
@@ -152,7 +152,7 @@ class TestCohereEmbeddingV1Transform:
         data = {"images": input_data, "input_type": "image"}
         model_response = EmbeddingResponse()
 
-        result = self.config._transform_response(
+        result = self.config.transform_response(
             response=mock_response,
             api_key="test-api-key",
             logging_obj=self.logging_obj,
@@ -188,7 +188,7 @@ class TestCohereEmbeddingV1Transform:
         data = {"texts": input_data, "input_type": "search_query"}
         model_response = EmbeddingResponse()
 
-        result = self.config._transform_response(
+        result = self.config.transform_response(
             response=mock_response,
             api_key="test-api-key",
             logging_obj=self.logging_obj,

@@ -136,7 +136,7 @@ export const AutoRouterLimits = () => {
       <PopoverContent align="end" className="w-96 max-w-[calc(100vw-2rem)] gap-3">
         <PopoverTitle>Routing and customization limits</PopoverTitle>
         <p className="text-xs leading-5 text-muted-foreground">
-          Rule-based, Complexity, and Jev are unlimited with built-in settings. Choose or change tier models freely.
+          Rule-based, Complexity, and OSS are unlimited with built-in settings. Choose or change tier models freely.
           Customization allowances are shared across this proxy.
         </p>
         <dl className="space-y-2 text-xs">

@@ -105,6 +105,32 @@ describe("SearchToolView", () => {
     expect(screen.getByText("Not set")).toBeInTheDocument();
   });
 
+  it("shows the configured cost per query as a dollar amount", () => {
+    const pricedTool: SearchTool = {
+      ...mockSearchTool,
+      litellm_params: { search_provider: "perplexity", input_cost_per_query: 0.05 },
+    };
+
+    render(<SearchToolView {...defaultProps} searchTool={pricedTool} />);
+    expect(screen.getByText("$0.05")).toBeInTheDocument();
+  });
+
+  it("shows a zero cost per query as $0 rather than as the provider default", () => {
+    const freeTool: SearchTool = {
+      ...mockSearchTool,
+      litellm_params: { search_provider: "perplexity", input_cost_per_query: 0 },
+    };
+
+    render(<SearchToolView {...defaultProps} searchTool={freeTool} />);
+    expect(screen.getByText("$0")).toBeInTheDocument();
+    expect(screen.queryByText("Provider default")).not.toBeInTheDocument();
+  });
+
+  it("shows 'Provider default' when no cost per query is configured", () => {
+    render(<SearchToolView {...defaultProps} />);
+    expect(screen.getByText("Provider default")).toBeInTheDocument();
+  });
+
   it("should display formatted created_at date", () => {
     render(<SearchToolView {...defaultProps} />);
     const dateText = screen.getByText(/2024-01-15/);

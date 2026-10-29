@@ -1,6 +1,3 @@
-import os
-import signal
-import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -32,12 +29,14 @@ from integration._support.daily_activity import (
 )
 from integration._support.database import scratch_database
 from integration._support.process import OwnedProxy, group_members, owned_proxy_process
+from integration._support.timing import assert_enforced_within, timed
+from litellm.constants import SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS
 
 USER_ACTIVITY: Final = "/user/daily/activity"
 TEAM_ACTIVITY: Final = "/team/daily/activity"
 AGGREGATED_TEAM_ACTIVITY: Final = "/team/daily/activity/aggregated"
 KEYS_OF_ONE_TEAM: Final = 300
-GIVES_UP_WITHIN_SECONDS: Final = 10
+LOCKED_LOOKUP_SLACK_SECONDS: Final = 5
 READS_AFTER_THE_WORKER_IS_REPLACED: Final = 6
 
 
@@ -161,7 +160,9 @@ def test_every_key_of_a_team_is_reported_with_its_own_user(gateway: Gateway) -> 
     )
     with daily_rows(rows):
         response: Final = gateway.request(
-            "GET", AGGREGATED_TEAM_ACTIVITY, params={"start_date": DAY, "end_date": DAY, "team_ids": team}
+            "GET",
+            AGGREGATED_TEAM_ACTIVITY,
+            params={"start_date": DAY, "end_date": DAY, "team_ids": team, "api_key_limit": KEYS_OF_ONE_TEAM},
         )
     assert response.status_code == 200, response.text
     body: Final = object_value(response.json())
@@ -212,12 +213,14 @@ def test_owner_lookup_gives_up_while_daily_user_spend_is_locked_and_answers_once
         rows: Final = (user_row(owner, api_key, DAY), seeded_row(TEAM_SPEND, "team_id", team, api_key, DAY))
         with daily_rows(rows, database_url=database_url):
             with locked_table(USER_SPEND, database_url=database_url):
-                started: Final = time.monotonic()
-                locked: Final = activity_of_key(owned.gateway, TEAM_ACTIVITY, api_key, team_ids=team)
-                waited: Final = time.monotonic() - started
+                locked: Final = timed(lambda: activity_of_key(owned.gateway, TEAM_ACTIVITY, api_key, team_ids=team))
             unlocked: Final = activity_of_key(owned.gateway, TEAM_ACTIVITY, api_key, team_ids=team)
-    assert waited < GIVES_UP_WITHIN_SECONDS, waited
-    assert_key_reported(locked, api_key, DAY, key_metadata(), seeded_metrics(1))
+    assert_enforced_within(
+        locked.seconds,
+        configured=SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS / 1000,
+        slack=LOCKED_LOOKUP_SLACK_SECONDS,
+    )
+    assert_key_reported(locked.value, api_key, DAY, key_metadata(), seeded_metrics(1))
     assert_key_reported(unlocked, api_key, DAY, key_metadata(user=owner, email=email), seeded_metrics(1))
 
 
@@ -232,12 +235,11 @@ def test_owner_is_reported_while_a_worker_is_killed_and_after_it_is_replaced(gat
                 member for member in group_members(owned.process.pid) if member.pid != owned.process.pid
             )
             children: Final = tuple(member.pid for member in members)
-            workers: Final = tuple(
-                member.pid for member in members if any("spawn_main" in part for part in member.cmdline())
-            )
+            workers: Final = owned.worker_pids()
             assert len(workers) >= 2, workers
-            os.kill(workers[0], signal.SIGKILL)
-            during: Final = _read_on_a_new_connection(owned.gateway, api_key)
+            with owned.replacing_worker(min(workers)) as kill:
+                kill()
+                during: Final = _read_on_a_new_connection(owned.gateway, api_key)
             eventually(
                 lambda: _running_children(owned),
                 lambda pids: len(pids) >= len(children) and any(pid not in children for pid in pids),

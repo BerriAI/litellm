@@ -62,6 +62,8 @@ vi.mock("@/components/networking", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/components/networking")>();
   return {
     formatDate: original.formatDate,
+    getRuntimeBackendBaseUrl: original.getRuntimeBackendBaseUrl,
+    getUiPageUrl: original.getUiPageUrl,
     serverRootPath: "/",
     userGetInfoV2: (...args: unknown[]) => mockUserGetInfoV2(...args),
     dailyActivityAggregatedCall: (...args: unknown[]) => mockUserDailyActivityAggregatedCall(...args),
@@ -199,13 +201,13 @@ describe("UserInfoView add-to-team form", () => {
 
       await openEditor(user);
       await user.click(screen.getByRole("combobox", { name: "Reset Budget" }));
-      await user.click(await screen.findByRole("option", { name: "n/a" }));
+      await user.click(await screen.findByRole("option", { name: "Never resets" }));
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => expect(mockUserUpdateUserCall).toHaveBeenCalled());
       expect(mockUserUpdateUserCall.mock.calls[0][1]).toMatchObject({ budget_duration: null });
       await openEditor(user);
-      expect(screen.getByRole("combobox", { name: "Reset Budget" })).toHaveTextContent("n/a");
+      expect(screen.getByRole("combobox", { name: "Reset Budget" })).toHaveTextContent("Never resets");
     });
   });
 
@@ -347,7 +349,6 @@ const routerUsageResponse = (saved: number): AutoRouterBenchmarksResponse => ({
     saved_spend: saved,
     baseline_spend: 10 + saved,
     saved_pct: (100 * saved) / (10 + saved),
-    saved_per_session: saved / 2,
     cache: {
       coverage_pct: 100,
       hit_rate_pct: 0,

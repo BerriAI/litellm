@@ -1,16 +1,20 @@
+use litellm_auth::AwsParams;
 use litellm_auth_aws::{
     AwsCredentialSource, bedrock_model_id_and_region,
     constants::{BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE},
     resolve_bedrock_region,
 };
 use litellm_core_utils::core_helpers::json_type_name;
-use litellm_llms_types::formats::audio_transcription::AudioTranscriptionResponseData;
+use litellm_llms_types::{
+    formats::audio_transcription::AudioTranscriptionResponseData,
+    providers::bedrock::ConverseResponse,
+};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use strum::IntoStaticStr;
 
 use crate::{
-    Error,
+    Error, ErrorDetail,
     base_llm::{
         audio_transcription::transformation::{
             AudioTranscriptionRequestData, BaseAudioTranscriptionConfig, Headers,
@@ -18,7 +22,6 @@ use crate::{
         },
         auth::AuthScheme,
     },
-    bedrock::chat::converse_transformation::ConverseResponse,
 };
 
 const SUPPORTED_PARAMS: &[&str] = &["language", "prompt", "temperature", "response_format"];
@@ -30,18 +33,15 @@ pub struct BedrockAudioTranscriptionConfig;
 
 #[derive(Clone, Copy, Deserialize, IntoStaticStr)]
 #[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
 enum AudioFormat {
+    #[strum(serialize = "wav")]
     Wav,
+    #[strum(serialize = "mp3")]
     Mp3,
+    #[strum(serialize = "flac")]
     Flac,
+    #[strum(serialize = "ogg")]
     Ogg,
-}
-
-impl AudioFormat {
-    fn as_str(self) -> &'static str {
-        self.into()
-    }
 }
 
 struct AudioInput {
@@ -59,20 +59,12 @@ fn audio_fields(audio: Value) -> Result<AudioInput, Error> {
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .ok_or(Error::MissingField("audio.data"))?;
-    let format = object.get("format").cloned().ok_or_else(|| {
-        Error::InvalidRequest(
-            "audio.format must be wav, mp3, flac, or ogg"
-                .to_string()
-                .into(),
-        )
-    })?;
-    let format: AudioFormat = serde_json::from_value(format).map_err(|_| {
-        Error::InvalidRequest(
-            "audio.format must be wav, mp3, flac, or ogg"
-                .to_string()
-                .into(),
-        )
-    })?;
+    let format = object
+        .get("format")
+        .cloned()
+        .ok_or(Error::MissingField("audio.format"))?;
+    let format: AudioFormat = serde_json::from_value(format)
+        .map_err(|error| Error::InvalidRequest(ErrorDetail::invalid("audio.format", error)))?;
     Ok(AudioInput {
         data: data.to_string(),
         format,
@@ -88,7 +80,7 @@ fn optional_string<'a>(params: &'a Map<String, Value>, key: &str) -> Option<&'a 
 
 impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
     fn secret_names(&self) -> Vec<&'static str> {
-        litellm_auth_aws::constants::SECRET_NAMES.to_vec()
+        litellm_auth::AwsParams::secret_names().to_vec()
     }
 
     fn get_supported_openai_params(&self) -> &'static [&'static str] {
@@ -118,7 +110,7 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
                 "messages": [{
                     "role": "user",
                     "content": [
-                        {"audio": {"format": audio.format.as_str(), "source": {"bytes": audio.data}}},
+                        {"audio": {"format": <&'static str>::from(audio.format), "source": {"bytes": audio.data}}},
                         {"text": instruction}
                     ]
                 }],
@@ -135,14 +127,13 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
     ) -> Result<AudioTranscriptionResponseData, Error> {
         let response: ConverseResponse =
             serde_json::from_value(response_json).map_err(|error| {
-                Error::InvalidResponse(format!("invalid Converse response: {error}").into())
+                Error::InvalidResponse(ErrorDetail::invalid("Converse response", error))
             })?;
         if response.message_content_is_non_text() {
-            return Err(Error::InvalidResponse(
-                "Bedrock response contains non-text transcript content"
-                    .to_string()
-                    .into(),
-            ));
+            return Err(Error::InvalidResponse(ErrorDetail::Expected {
+                subject: "Bedrock transcript content",
+                expected: "text",
+            }));
         }
         Ok(AudioTranscriptionResponseData {
             text: response.content_text(),
@@ -157,7 +148,11 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         let (model_id, model_region) = bedrock_model_id_and_region(model);
-        let region = resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup);
+        let region = resolve_bedrock_region(
+            model_region.as_deref(),
+            &AwsParams::from_optional_params(optional_params),
+            env_lookup,
+        );
         let endpoint = optional_params
             .get("aws_bedrock_runtime_endpoint")
             .and_then(Value::as_str)
@@ -184,19 +179,13 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         let (_, model_region) = bedrock_model_id_and_region(model);
+        let params = AwsParams::from_optional_params(optional_params);
         Ok(ValidatedEnvironment {
             headers,
             auth: AuthScheme::AwsSigV4 {
-                region: resolve_bedrock_region(
-                    model_region.as_deref(),
-                    optional_params,
-                    env_lookup,
-                ),
+                region: resolve_bedrock_region(model_region.as_deref(), &params, env_lookup),
                 service: BEDROCK_SERVICE,
-                credentials: Box::new(AwsCredentialSource::from_params(
-                    optional_params,
-                    env_lookup,
-                )),
+                credentials: Box::new(AwsCredentialSource::from_params(&params, env_lookup)),
             },
         })
     }

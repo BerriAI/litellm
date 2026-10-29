@@ -17,7 +17,7 @@ This pattern can be replicated for other message formats (e.g., Anthropic).
 import json
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
@@ -25,6 +25,10 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.completion_extras.litellm_responses_transformation.transformation import (
+    replayed_tool_search_tool_names,
+)
+from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chunk_builder
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -35,6 +39,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
+    list_field,
     merge_guardrailed_scoped_messages,
     merge_returned_tools_into_request_tools,
     openai_tool_name,
@@ -45,7 +50,6 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_items,
     unappliable_request_rewrite,
 )
-from litellm.main import stream_chunk_builder
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     coerce_stream_holdback_value,
@@ -54,6 +58,7 @@ from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
     Choices,
+    Delta,
     GenericGuardrailAPIInputs,
     ModelResponse,
     ModelResponseStream,
@@ -68,7 +73,7 @@ if TYPE_CHECKING:
         ModifyResponseException,
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 class OpenAIChatCompletionsHandler(BaseTranslation):
@@ -152,7 +157,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 inputs["structured_messages"] = [structured_messages[index] for index in scoped_message_indices]
             # Pass tools (function definitions) to the guardrail
             tools: Final = data.get("tools")
-            if tools and not scan_only_tool_results:
+            if isinstance(tools, list) and tools and not scan_only_tool_results:
                 inputs["tools"] = tools
             # Include model information if available
             model: Final = data.get("model")
@@ -234,7 +239,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
     def _not_run_reason(
         self,
-        messages: Sequence[dict[str, Any]],  # mutable-ok: raw request messages consumed by _extract_inputs
+        messages: Sequence[Mapping[str, object]],
     ) -> str | None:
         """Why nothing was scanned, or None when the only unscoped content is images, which this handler never scans."""
         texts: Final[list[str]] = []  # mutable-ok: filled by _extract_inputs
@@ -254,18 +259,19 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             return "no scannable content after message scoping"
         return None if images else "no scannable content"
 
-    def extract_request_tool_names(self, data: dict) -> list[str]:
-        """Extract tool names from OpenAI chat completions request (tools[].function.name, functions[].name)."""
+    def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
+        """Extract tool names from OpenAI chat completions request (tools[].function.name, functions[].name,
+        and the tools a replayed tool_search_output loads)."""
         names: Final[list[str]] = []
-        for tool in data.get("tools") or []:
+        for tool in list_field(data, "tools"):
             if isinstance(tool, dict) and tool.get("type") == "function":
                 fn = tool.get("function")
                 if isinstance(fn, dict) and fn.get("name"):
                     names.append(str(fn["name"]))
-        for fn in data.get("functions") or []:
+        for fn in list_field(data, "functions"):
             if isinstance(fn, dict) and fn.get("name"):
                 names.append(str(fn["name"]))
-        return names
+        return [*names, *replayed_tool_search_tool_names(data)]
 
     def _extract_inputs(
         self,
@@ -837,6 +843,18 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             tool_calls_in_flight=bool(tool_call_fingerprints) and not stream_ended,
         )
 
+    def released_stream_as_ended(self, responses_so_far: Sequence[object]) -> tuple[object, ...]:
+        released_key: Final = self.get_streaming_scan_key(responses_so_far)
+        if released_key is None or not released_key.tool_calls_in_flight:
+            return tuple(responses_so_far)
+        terminator: Final = ModelResponseStream(
+            choices=[
+                StreamingChoices(index=index, delta=Delta(), finish_reason="tool_calls")
+                for index in _choice_indices_with_tool_calls(responses_so_far)
+            ]
+        )
+        return (*responses_so_far, terminator)
+
     @staticmethod
     def _streamed_tool_call_fingerprints(responses_so_far: Sequence[object]) -> tuple[str, ...]:
         return tuple(
@@ -995,7 +1013,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     tool_calls_to_check.append(tool_call_dict)
                     tool_call_task_mappings.append((choice_idx, int(tool_call_idx)))
 
-    def _convert_tool_call_to_dict(self, tool_call: dict[str, Any] | Any) -> dict[str, Any] | None:
+    def _convert_tool_call_to_dict(self, tool_call: object) -> dict[str, object] | None:
         """
         Convert a tool call object to dictionary format.
 
@@ -1005,19 +1023,16 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             return tool_call
         elif hasattr(tool_call, "id") and hasattr(tool_call, "function"):
             # Convert object to dict
-            function: Final = tool_call.function
-            function_dict: Final = {}
-            if hasattr(function, "name"):
-                function_dict["name"] = function.name
-            if hasattr(function, "arguments"):
-                function_dict["arguments"] = function.arguments
+            function: Final[object] = getattr(tool_call, "function", None)
+            function_dict: Final[Mapping[str, object]] = {
+                key: getattr(function, key, None) for key in ("name", "arguments") if hasattr(function, key)
+            }
 
-            tool_call_dict: Final = {
-                "id": tool_call.id if hasattr(tool_call, "id") else None,
-                "type": tool_call.type if hasattr(tool_call, "type") else "function",
+            return {
+                "id": getattr(tool_call, "id", None),
+                "type": getattr(tool_call, "type", "function"),
                 "function": function_dict,
             }
-            return tool_call_dict
         return None
 
     async def _apply_guardrail_responses_to_output_texts(
@@ -1386,6 +1401,20 @@ def _streamed_delta_tool_calls(delta: object) -> tuple[object, ...]:
     function_call: Final = stream_item_field(delta, "function_call")
     legacy: Final = () if function_call is None else (function_call,)
     return stream_item_items(delta, "tool_calls") + legacy
+
+
+def _released_choices(responses_so_far: Sequence[object]) -> Iterator[object]:
+    for chunk in responses_so_far:
+        yield from _stream_chunk_choices(chunk)
+
+
+def _choice_indices_with_tool_calls(responses_so_far: Sequence[object]) -> tuple[int, ...]:
+    indices: Final = (
+        index if isinstance(index := stream_item_field(choice, "index"), int) else 0
+        for choice in _released_choices(responses_so_far)
+        if _streamed_delta_tool_calls(stream_item_field(choice, "delta"))
+    )
+    return tuple(dict.fromkeys(indices))
 
 
 def _blocked_stream_identity(

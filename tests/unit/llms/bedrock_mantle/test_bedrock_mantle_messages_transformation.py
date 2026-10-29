@@ -10,6 +10,7 @@ Bearer/SigV4 auth chain, and the wire request through the public entrypoint.
 """
 
 import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -193,7 +194,8 @@ class TestEnvironment:
         assert "anthropic-version" not in merged
 
     def test_project_id_becomes_the_workspace_header(self):
-        assert self._validate({}, {"aws_bedrock_project_id": "proj_123"})["anthropic-workspace"] == "proj_123"
+        # header name from https://docs.aws.amazon.com/bedrock/latest/userguide/workspaces.html, checked 2026-10-02
+        assert self._validate({}, {"aws_bedrock_project_id": "proj_123"})["anthropic-workspace-id"] == "proj_123"
 
 
 class TestRequestBody:
@@ -451,6 +453,14 @@ class TestBetaHeadersOnTheWire:
 
         assert _sent_betas(route) == ["dangerous-tool-use-2026-09-03"]
         assert _sent_body(route)["safeguards"] == safeguards
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_client_dangerous_tool_use_beta_reaches_mantle_without_safeguards(self) -> None:
+        route: Final = await self._send(extra_headers={"anthropic-beta": "dangerous-tool-use-2026-09-03"})
+
+        assert _sent_betas(route) == ["dangerous-tool-use-2026-09-03"]
+        assert "safeguards" not in _sent_body(route)
 
     @pytest.mark.asyncio
     @respx.mock

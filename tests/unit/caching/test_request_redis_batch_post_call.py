@@ -10,7 +10,6 @@ import datetime
 import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -20,7 +19,6 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_batch import (
     active_post_call_redis_batch,
-    active_request_redis_batches,
     drain_post_call_redis_batches,
     flush_post_call_redis_batches,
     request_redis_batch_scope,
@@ -31,8 +29,8 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_RELEASE_SCRIPT,
     TOKEN_INCREMENT_SCRIPT,
     ParallelSlotAcquisition,
+    PROXY_MaxParallelRequestsHandler_v3,
     RequestRateLimiterStash,
-    _PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement
 from litellm.proxy.utils import InternalUsageCache
@@ -97,10 +95,10 @@ def _names(client: FakeClient, index: int = 0) -> list[str]:
     return [command[0] for command in client.pipelines[index].commands]
 
 
-def _limiter(redis_cache: FakeRedisCache) -> _PROXY_MaxParallelRequestsHandler_v3:
+def _limiter(redis_cache: FakeRedisCache) -> PROXY_MaxParallelRequestsHandler_v3:
     dual_cache = DualCache()
     dual_cache.attach_redis_cache(redis_cache)
-    return _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(dual_cache=dual_cache))
+    return PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(dual_cache=dual_cache))
 
 
 def _slot_stash(slot_id: str, *counter_keys: str) -> RequestRateLimiterStash:
@@ -516,115 +514,3 @@ async def test_a_cancelled_post_call_flush_keeps_the_shared_spend_counter_and_co
     assert redis_cache.alone == [], "a cancel says nothing about the shared counter, so Redis keeps it"
     assert spend_cache.in_memory_cache.get_cache("spend:key:k1") == 3.5, "the local copy counts the cancelled spend"
     assert spend_cache.in_memory_cache.get_cache("spend:team:t1") is None, "an absent local copy is not seeded"
-
-
-@pytest.mark.asyncio
-async def test_the_update_cache_read_armed_before_accounting_rides_the_pipeline_of_the_reconcile_read():
-    from litellm.proxy.proxy_server import _read_update_cache_values, arm_update_cache_read
-
-    client = FakeClient(_ok_replies)
-    redis_cache = PostCallFakeRedisCache(client)
-    cache = DualCache()
-    cache.attach_redis_cache(redis_cache)
-    keys = ["user-1", "team_id:t1"]
-
-    with request_redis_batch_scope() as request:
-        await arm_update_cache_read(keys, cache=cache)
-        assert client.pipelines == []
-        await request.batch(redis_cache).mget(["spend:key:k1"])  # the spend reconcile read of the same request
-        values = await _read_update_cache_values(keys, None, cache=cache)
-
-    assert len(client.pipelines) == 1
-    assert client.pipelines[0].commands == [("MGET", "user-1", "team_id:t1"), ("MGET", "spend:key:k1")]
-    assert values == {"user-1": {"spend": 1.0}, "team_id:t1": {"spend": 1.0}}
-    assert redis_cache.alone == []
-    assert active_request_redis_batches() is None
-
-
-@pytest.mark.asyncio
-async def test_an_update_cache_read_armed_for_other_keys_is_ignored_and_the_read_happens_as_before():
-    from litellm.proxy.proxy_server import _read_update_cache_values, arm_update_cache_read
-
-    redis_cache = PostCallFakeRedisCache(FakeClient(_ok_replies))
-    redis_cache.store["team_id:t1"] = {"spend": 2.0}
-    cache = DualCache()
-    cache.attach_redis_cache(redis_cache)
-
-    with request_redis_batch_scope():
-        await arm_update_cache_read(["user-1"], cache=cache)
-        values = await _read_update_cache_values(["team_id:t1"], None, cache=cache)
-
-    assert values == {"team_id:t1": {"spend": 2.0}}
-    assert ("MGET", ("team_id:t1",)) in redis_cache.alone
-
-
-@pytest.mark.asyncio
-async def test_the_update_cache_read_sees_a_cached_spend_written_while_the_spend_was_persisted(monkeypatch):
-    from litellm.proxy import proxy_server
-    from litellm.proxy.hooks.proxy_track_cost_callback import _update_database_and_spend_counters
-
-    cached_user_spend = {"user-1": 1.0}
-
-    def replies(command: tuple[object, ...]) -> object:
-        if command[0] == "MGET":
-            return [
-                json.dumps({"spend": cached_user_spend[key]}) if key in cached_user_spend else b"0.5"
-                for key in command[1:]
-            ]
-        return _ok_replies(command)
-
-    client = FakeClient(replies)
-    redis_cache = PostCallFakeRedisCache(client)
-    spend_cache = DualCache()
-    spend_cache.attach_redis_cache(redis_cache)
-    user_cache = DualCache()
-    user_cache.attach_redis_cache(redis_cache)
-    monkeypatch.setattr(proxy_server, "spend_counter_cache", spend_cache)
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", user_cache)
-
-    async def _read_on_the_request_pipeline_then_a_concurrent_callback_writes_the_user(**kwargs: object) -> bool:
-        request = active_request_redis_batches()
-        assert request is not None
-        await request.batch(redis_cache).mget(["key-object"])
-        cached_user_spend["user-1"] = 5.0
-        return True
-
-    proxy_logging_obj = MagicMock()
-    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(
-        side_effect=_read_on_the_request_pipeline_then_a_concurrent_callback_writes_the_user
-    )
-    reservation = {
-        "reserved_cost": 0.5,
-        "entries": [
-            {
-                "counter_key": "spend:key:k1",
-                "entity_type": "Key",
-                "entity_id": "k1",
-                "reserved_cost": 0.5,
-                "applied_adjustment": 0.0,
-            }
-        ],
-        "finalized": False,
-    }
-
-    with request_redis_batch_scope():
-        charged = await _update_database_and_spend_counters(
-            proxy_logging_obj=proxy_logging_obj,
-            increment_spend_counters=proxy_server.increment_spend_counters,
-            user_api_key="k1",
-            user_id="user-1",
-            end_user_id=None,
-            team_id=None,
-            org_id=None,
-            kwargs={},
-            completion_response=None,
-            start_time=datetime.datetime.now(),
-            end_time=datetime.datetime.now(),
-            response_cost=0.2,
-            budget_reservation=reservation,
-            update_cache_read_keys=("user-1",),
-        )
-        values = await proxy_server._read_update_cache_values(("user-1",), None)
-
-    assert charged is True
-    assert values == {"user-1": {"spend": 5.0}}, client.pipelines

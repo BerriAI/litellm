@@ -1,14 +1,17 @@
 import importlib
 import importlib.util
 from importlib.machinery import PathFinder
+import json
 import time
 import site
 import sys
+from typing import Final
 
 import pytest
 import requests
+from pydantic import JsonValue, ValidationError
 from litellm.proxy.client.chat import ChatClient
-from litellm.proxy.client.exceptions import UnauthorizedError
+from litellm.proxy.client.exceptions import StreamError, UnauthorizedError
 
 
 def _load_http_mocking_responses():
@@ -256,3 +259,106 @@ def test_completions_stream_gives_up_at_the_timeout_instead_of_hanging(hanging_s
         next(client.completions_stream(model="gpt-5.4", messages=[{"role": "user", "content": "hi"}]))
 
     assert time.monotonic() - started < 10
+
+
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        (
+            b'data: {"choices": [{"delta": {"content": "Hel"}}]}\n\n'
+            b'data: {"choices": [{"delta": {"content": "lo"}}]}\n\n'
+            b"data: [DONE]\n\n",
+            [{"choices": [{"delta": {"content": "Hel"}}]}, {"choices": [{"delta": {"content": "lo"}}]}],
+        ),
+        (
+            b': keep-alive\n\nevent: ping\n\ndata: not json\n\ndata: {"id": "caf\xc3\xa9"}\n\ndata: 7\n\n',
+            [{"id": "café"}, 7],
+        ),
+        (b'data: {"id": 1}\n\ndata:  [DONE] \n\ndata: {"id": 2}\n\n', [{"id": 1}]),
+        (b"", []),
+    ],
+)
+@responses.activate
+def test_completions_stream_yields_parsed_sse_chunks(client, base_url, sample_messages, body, expected):
+    responses.add(responses.POST, f"{base_url}/chat/completions", body=body, status=200)
+
+    assert list(client.completions_stream(model="gpt-4", messages=sample_messages)) == expected
+
+
+@pytest.mark.parametrize(
+    "error_frame, error, message",
+    [
+        (
+            b'data: {"error": {"message": "blocked by guardrail", "type": "None", "code": "400"}}',
+            {"message": "blocked by guardrail", "type": "None", "code": "400"},
+            "blocked by guardrail",
+        ),
+        (b'data: {"error": "upstream cut"}', "upstream cut", "upstream cut"),
+        (b'data: {"error": {"code": "500"}}', {"code": "500"}, "{'code': '500'}"),
+    ],
+)
+@responses.activate
+def test_completions_stream_raises_on_an_error_frame_after_partial_content(
+    client: ChatClient,
+    base_url: str,
+    sample_messages: list[dict[str, str]],
+    error_frame: bytes,
+    error: JsonValue,
+    message: str,
+) -> None:
+    body: Final = b'data: {"choices": [{"delta": {"content": "Hel"}}]}\n\n' + error_frame + b"\n\ndata: [DONE]\n\n"
+    responses.add(responses.POST, f"{base_url}/chat/completions", body=body, status=200)
+    stream: Final = client.completions_stream(model="gpt-4", messages=sample_messages)
+
+    assert next(stream) == {"choices": [{"delta": {"content": "Hel"}}]}
+    with pytest.raises(StreamError) as raised:
+        next(stream)
+    assert raised.value.error == error
+    assert str(raised.value) == message
+
+
+@pytest.mark.parametrize("error", [None, False, 0, "", {}])
+@responses.activate
+def test_completions_stream_yields_a_chunk_whose_error_is_empty(
+    client: ChatClient, base_url: str, sample_messages: list[dict[str, str]], error: JsonValue
+) -> None:
+    chunk: Final = {"choices": [{"delta": {"content": "Hel"}}], "error": error}
+    body: Final = b"data: " + json.dumps(chunk).encode() + b"\n\ndata: [DONE]\n\n"
+    responses.add(responses.POST, f"{base_url}/chat/completions", body=body, status=200)
+
+    assert list(client.completions_stream(model="gpt-4", messages=sample_messages)) == [chunk]
+
+
+def test_stream_error_redacts_a_key_in_its_message() -> None:
+    key: Final = "sk-" + "a1b2c3d4" * 4
+
+    error: Final = StreamError({"message": f"upstream rejected {key}"})
+
+    assert key not in str(error)
+    assert str(error).startswith("upstream rejected ")
+
+
+@responses.activate
+def test_completions_stream_rejects_bytes_that_are_not_utf8(client, base_url, sample_messages):
+    responses.add(responses.POST, f"{base_url}/chat/completions", body=b"data: \xff\n\n", status=200)
+
+    with pytest.raises(UnicodeDecodeError):
+        list(client.completions_stream(model="gpt-4", messages=sample_messages))
+
+
+@pytest.mark.parametrize("line", ['data: {"id": 1}', 5, memoryview(b'data: {"id": 1}')])
+@responses.activate
+def test_completions_stream_rejects_lines_that_are_not_bytes(client, base_url, sample_messages, monkeypatch, line):
+    responses.add(responses.POST, f"{base_url}/chat/completions", body=b"", status=200)
+    monkeypatch.setattr(requests.Response, "iter_lines", lambda self: iter([line]))
+
+    with pytest.raises(ValidationError):
+        list(client.completions_stream(model="gpt-4", messages=sample_messages))
+
+
+@responses.activate
+def test_completions_stream_accepts_bytearray_lines(client, base_url, sample_messages, monkeypatch):
+    responses.add(responses.POST, f"{base_url}/chat/completions", body=b"", status=200)
+    monkeypatch.setattr(requests.Response, "iter_lines", lambda self: iter([bytearray(b'data: {"id": 1}')]))
+
+    assert list(client.completions_stream(model="gpt-4", messages=sample_messages)) == [{"id": 1}]

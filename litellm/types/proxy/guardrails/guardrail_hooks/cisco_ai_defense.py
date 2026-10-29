@@ -4,7 +4,9 @@ Cisco AI Defense Guardrail Config Model
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .base import GuardrailConfigModel
 
@@ -30,7 +32,7 @@ CISCO_AI_DEFENSE_RULE_NAMES = Literal[
 CISCO_AI_DEFENSE_INSPECTION_TYPE = Literal["chat", "mcp"]
 
 
-class CiscoAIDefenseRule(BaseModel):
+class CiscoAIDefenseRule(LiteLLMBaseModel):
     """A single rule to enable for Cisco AI Defense inspection."""
 
     rule_name: CISCO_AI_DEFENSE_RULE_NAMES = Field(
@@ -45,7 +47,7 @@ class CiscoAIDefenseRule(BaseModel):
     )
 
 
-class CiscoAIDefenseGuardrailConfigModelOptionalParams(BaseModel):
+class CiscoAIDefenseGuardrailConfigModelOptionalParams(LiteLLMBaseModel):
     """Optional parameters for the Cisco AI Defense guardrail."""
 
     model_config = ConfigDict(extra="allow")

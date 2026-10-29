@@ -1,5 +1,7 @@
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { chooseSelectOption } from "@/../tests/test-utils";
+import userEvent from "@testing-library/user-event";
 import UISettings from "./UISettings";
 import { toast } from "@/lib/toast";
 
@@ -58,6 +60,34 @@ describe("UISettings", () => {
       isPending: false,
       error: null,
     });
+  });
+
+  it("saves the selected deployment default through existing UI settings", async () => {
+    const mutate = vi.fn();
+    mockUseUpdateUISettings.mockReturnValue({ mutate, isPending: false, error: null });
+    render(<UISettings />);
+    expect(screen.getByRole("combobox", { name: "Default Usage time range" })).toHaveTextContent("Last 7 days");
+    await chooseSelectOption(
+      userEvent.setup(),
+      screen.getByRole("combobox", { name: "Default Usage time range" }),
+      "Month to date",
+    );
+    expect(mutate).toHaveBeenCalledWith({ usage_default_time_range: "month_to_date" }, expect.any(Object));
+  });
+
+  it("shows configuration-owned defaults without offering an ineffective override", () => {
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({
+        data: {
+          values: { usage_default_time_range: "year_to_date" },
+          source: { usage_default_time_range: "config" },
+        },
+      }),
+    );
+    render(<UISettings />);
+    expect(screen.getByRole("combobox", { name: "Default Usage time range" })).toHaveTextContent("Year to date");
+    expect(screen.getByRole("combobox", { name: "Default Usage time range" })).toBeDisabled();
+    expect(screen.getByText("Managed by the deployment configuration.")).toBeInTheDocument();
   });
 
   it("should render", () => {
@@ -125,6 +155,45 @@ describe("UISettings", () => {
       }),
     );
     expect(toast.success).toHaveBeenCalledWith("UI settings updated successfully");
+  });
+
+  it("disconnects Moyai by patching moyai_url to null", () => {
+    const mutateMock = vi.fn((_settings, options) => {
+      options?.onSuccess?.();
+    });
+
+    mockUseUpdateUISettings.mockReturnValue({
+      mutate: mutateMock,
+      isPending: false,
+      error: null,
+    });
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({
+        data: {
+          ...buildSettingsResponse().data,
+          values: { ...buildSettingsResponse().data.values, moyai_url: "https://moyai.example.com" },
+        },
+      }),
+    );
+
+    render(<UISettings />);
+
+    expect(screen.getByText("Connected to https://moyai.example.com")).toBeInTheDocument();
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+    });
+
+    expect(mutateMock).toHaveBeenCalledWith(
+      { moyai_url: null },
+      expect.objectContaining({ onSuccess: expect.any(Function) }),
+    );
+  });
+
+  it("shows a link to the Moyai page when not connected", () => {
+    render(<UISettings />);
+
+    expect(screen.getByText("Not connected")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Connect from the Moyai page" })).toHaveAttribute("href", "/ui/moyai");
   });
 
   it("should toggle require auth for public AI Hub setting and call update", () => {

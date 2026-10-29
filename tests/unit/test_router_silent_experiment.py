@@ -63,6 +63,12 @@ async def _wait_for_shadow_successes(logger: _RecordingLogger, expected: int, ti
         await asyncio.sleep(0.05)
 
 
+async def _wait_for_all_successes(logger: _RecordingLogger, expected: int, timeout: float = 5.0) -> None:
+    deadline: Final = time.monotonic() + timeout
+    while len(logger.success_kwargs) < expected and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+
+
 def _wait_for_shadow_successes_sync(logger: _RecordingLogger, expected: int, timeout: float = 5.0) -> None:
     deadline: Final = time.monotonic() + timeout
     while len(logger.shadow_successes()) < expected and time.monotonic() < deadline:
@@ -242,6 +248,7 @@ async def test_multiple_shadow_targets_fan_out_async(recording_logger):
     )
     assert [chunk async for chunk in response]
     await _wait_for_shadow_successes(recording_logger, expected=2)
+    await _wait_for_all_successes(recording_logger, expected=3)
 
     shadow_successes = recording_logger.shadow_successes()
     model_groups = sorted(call["litellm_params"]["metadata"]["model_group"] for call in shadow_successes)

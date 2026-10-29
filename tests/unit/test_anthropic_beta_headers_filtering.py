@@ -10,14 +10,16 @@ This test validates:
 
 import json
 import os
-from typing import Dict, List
+from typing import Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import litellm
 from litellm.anthropic_beta_headers_manager import (
+    GetAnthropicBetaHeadersConfig,
     filter_and_transform_beta_headers,
+    get_beta_headers_config,
     update_headers_with_filtered_beta,
     update_request_with_filtered_beta,
 )
@@ -429,13 +431,13 @@ class TestAnthropicBetaHeadersFiltering:
         assert filtered == ["fine-grained-tool-streaming-2025-05-14"]
 
     @pytest.mark.parametrize(
-        "provider", ["anthropic", "bedrock", "bedrock_converse", "vertex_ai", "databricks"]
+        "provider", ["anthropic", "azure_ai", "bedrock", "bedrock_converse", "vertex_ai", "databricks"]
     )
     def test_thinking_binding_controls_forwarded(self, provider):
         """`thinking.block_binding` (preserved thinking, Claude Fable 5.1) is only
         accepted alongside thinking-binding-controls-2026-08-01. The body field is
         forwarded untouched, so stripping the header (previously unknown, hence
-        dropped) makes Bedrock and Vertex reject the request with
+        dropped) makes Bedrock, Vertex and Azure AI Foundry reject the request with
         "thinking.adaptive.block_binding: Extra inputs are not permitted"."""
         filtered = filter_and_transform_beta_headers(
             beta_headers=["thinking-binding-controls-2026-08-01"],
@@ -457,6 +459,20 @@ class TestAnthropicBetaHeadersFiltering:
         )
 
         assert filtered == ["dangerous-tool-use-2026-09-03"]
+
+    @pytest.mark.parametrize("provider", ["anthropic", "vertex_ai"])
+    def test_inline_tools_forwarded(self, provider: str) -> None:
+        """inline-tools-2026-09-15 lets a `tool_addition` system message carry a new tool mid-conversation.
+        Anthropic documents it for the Claude API
+        (https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages, fetched 2026-10-07),
+        and a live Vertex rawPredict call on claude-opus-5-5 honored it on 2026-10-07 while answering 400 on the
+        `tool_addition` block without it."""
+        filtered: Final = filter_and_transform_beta_headers(
+            beta_headers=["inline-tools-2026-09-15"],
+            provider=provider,
+        )
+
+        assert filtered == ["inline-tools-2026-09-15"]
 
     def test_null_value_headers_filtered(self):
         """Test that headers with null values are always filtered out."""
@@ -544,3 +560,13 @@ class TestAnthropicBetaHeadersFiltering:
         headers = {"anthropic-version": "2023-06-01"}
 
         assert update_headers_with_filtered_beta(headers, "bedrock_mantle") == {"anthropic-version": "2023-06-01"}
+
+
+@pytest.mark.parametrize("flag", ["LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "LITELLM_OFFLINE_MODE"])
+def test_local_flags_load_bundled_beta_headers_without_fetching(monkeypatch, flag):
+    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+    monkeypatch.setenv(flag, "True")
+    with patch("litellm.anthropic_beta_headers_manager.httpx.get") as remote_get:
+        config = get_beta_headers_config(url="https://example.test/anthropic_beta_headers_config.json")
+    remote_get.assert_not_called()
+    assert config == GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()

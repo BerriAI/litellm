@@ -18,10 +18,11 @@ import secrets
 from collections.abc import AsyncIterable, AsyncIterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType, ModuleType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import httpx
 import openai
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import (
@@ -36,15 +37,20 @@ from litellm.harness.context import GatewayTarget
 from litellm.harness.errors import HarnessError, HarnessInstallFailed
 from litellm.harness.types import Harness, Usage
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 if TYPE_CHECKING:
     from starlette.applications import Starlette
     from starlette.requests import Request
-    from starlette.responses import Response
+    from starlette.responses import JSONResponse, Response, StreamingResponse
+    from starlette.routing import Route
     from uvicorn import Server
 
 verbose_logger: Final = logging.getLogger("LiteLLM")
+_JSON_VALUE_ADAPTER: Final = TypeAdapter(object, config=ConfigDict(strict=True))
+_JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_PORT_ADAPTER: Final = TypeAdapter(int, config=ConfigDict(strict=True))
 
 MISSING_DEPS_MESSAGE = "litellm.harness needs starlette and uvicorn: pip install starlette uvicorn"
 
@@ -85,12 +91,31 @@ COST_HEADER = "x-litellm-response-cost"
 SSE_MEDIA_TYPE = "text/event-stream"
 
 
+class _ApplicationsModule(Protocol):
+    """The starlette.applications attributes the endpoint uses."""
+
+    Starlette: type[Starlette]
+
+
+class _RoutingModule(Protocol):
+    """The starlette.routing attributes the endpoint uses."""
+
+    Route: type[Route]
+
+
+class _ResponsesModule(Protocol):
+    """The starlette.responses attributes the endpoint uses."""
+
+    JSONResponse: type[JSONResponse]
+    StreamingResponse: type[StreamingResponse]
+
+
 @dataclass(frozen=True)
 class _ServerDeps:
     uvicorn: ModuleType
-    applications: ModuleType
-    routing: ModuleType
-    responses: ModuleType
+    applications: _ApplicationsModule
+    routing: _RoutingModule
+    responses: _ResponsesModule
 
 
 def _load_server_deps() -> _ServerDeps:
@@ -148,16 +173,57 @@ def usage_from_mapping(usage: object) -> tuple[int, int]:
     return _as_int(input_tokens), _as_int(output_tokens)
 
 
-def usage_from_body(body: object) -> tuple[int, int]:
-    """Usage from a non-streaming JSON response body."""
-    if not isinstance(body, Mapping):
-        return 0, 0
-    if isinstance(body.get("usage"), Mapping):
-        return usage_from_mapping(body["usage"])
-    response = body.get("response")
-    if isinstance(response, Mapping):
-        return usage_from_mapping(response.get("usage"))
-    return 0, 0
+@dataclass(frozen=True, slots=True)
+class PromptCache:
+    """Prompt tokens read from or written to the provider's cache. Anthropic's usage counts them outside input_tokens,
+    while OpenAI's prompt_tokens and the Responses API's input_tokens already include them."""
+
+    read_tokens: int = 0
+    creation_tokens: int = 0
+    outside_input: bool = False
+
+    def prompt_tokens(self, input_tokens: int) -> int:
+        if self.outside_input:
+            return input_tokens + self.read_tokens + self.creation_tokens
+        return input_tokens
+
+
+NO_PROMPT_CACHE: Final = PromptCache()
+
+
+def json_object(value: object) -> Mapping[str, object]:
+    try:
+        return _JSON_OBJECT_ADAPTER.validate_python(value)
+    except ValidationError:
+        return MappingProxyType({})
+
+
+def prompt_cache_from_mapping(usage: object) -> PromptCache:
+    """Cache token counts from a usage dict using OpenAI, Anthropic, or Responses field names."""
+    fields: Final = json_object(usage)
+    details: Final = json_object(fields.get("prompt_tokens_details", fields.get("input_tokens_details")))
+    return PromptCache(
+        read_tokens=_as_int(fields.get("cache_read_input_tokens") or details.get("cached_tokens")),
+        creation_tokens=_as_int(
+            fields.get("cache_creation_input_tokens")
+            or details.get("cache_write_tokens")
+            or details.get("cache_creation_tokens")
+        ),
+        outside_input="prompt_tokens" not in fields and "input_tokens_details" not in fields,
+    )
+
+
+def usage_mapping_of_body(body: object) -> Mapping[str, object]:
+    fields: Final = json_object(body)
+    usage: Final = json_object(fields.get("usage"))
+    return usage if usage else json_object(json_object(fields.get("response")).get("usage"))
+
+
+def usage_mapping_of_json(raw: bytes) -> Mapping[str, object]:
+    try:
+        return usage_mapping_of_body(_JSON_VALUE_ADAPTER.validate_python(json.loads(raw)))
+    except ValueError:
+        return MappingProxyType({})
 
 
 class SSEUsageParser:
@@ -166,6 +232,7 @@ class SSEUsageParser:
     def __init__(self) -> None:
         self.input_tokens = 0
         self.output_tokens = 0
+        self.prompt_cache = NO_PROMPT_CACHE
         self._buffer = b""
 
     def feed(self, chunk: bytes) -> None:
@@ -187,13 +254,13 @@ class SSEUsageParser:
         if not payload or payload == b"[DONE]":
             return
         try:
-            event = json.loads(payload)
+            event: Final[object] = _JSON_VALUE_ADAPTER.validate_python(json.loads(payload))
         except ValueError:
             return
         if isinstance(event, Mapping):
-            self.absorb(event)
+            self.absorb(_JSON_OBJECT_ADAPTER.validate_python(event))
 
-    def absorb(self, event: Mapping[str, Any]) -> None:
+    def absorb(self, event: Mapping[str, object]) -> None:
         event_type = event.get("type")
         if event_type == "message_start":
             self._absorb_message_start(event)
@@ -202,21 +269,23 @@ class SSEUsageParser:
         elif event_type == "response.completed":
             self._absorb_response_completed(event)
         elif isinstance(event.get("usage"), Mapping):
-            self._set(*usage_from_mapping(event["usage"]))
+            self._absorb_usage(event["usage"])
 
-    def _absorb_message_start(self, event: Mapping[str, Any]) -> None:
-        message = event.get("message")
-        if isinstance(message, Mapping):
-            self._set(*usage_from_mapping(message.get("usage")))
+    def _absorb_message_start(self, event: Mapping[str, object]) -> None:
+        self._absorb_usage(json_object(event.get("message")).get("usage"))
 
-    def _absorb_message_delta(self, event: Mapping[str, Any]) -> None:
+    def _absorb_message_delta(self, event: Mapping[str, object]) -> None:
         # message_delta output_tokens is cumulative for the whole message.
-        self._set(*usage_from_mapping(event.get("usage")))
+        self._absorb_usage(event.get("usage"))
 
-    def _absorb_response_completed(self, event: Mapping[str, Any]) -> None:
-        response = event.get("response")
-        if isinstance(response, Mapping):
-            self._set(*usage_from_mapping(response.get("usage")))
+    def _absorb_response_completed(self, event: Mapping[str, object]) -> None:
+        self._absorb_usage(json_object(event.get("response")).get("usage"))
+
+    def _absorb_usage(self, usage: object) -> None:
+        self._set(*usage_from_mapping(usage))
+        prompt_cache: Final = prompt_cache_from_mapping(usage)
+        if prompt_cache.read_tokens or prompt_cache.creation_tokens:
+            self.prompt_cache = prompt_cache
 
     def _set(self, input_tokens: int, output_tokens: int) -> None:
         if input_tokens:
@@ -225,13 +294,19 @@ class SSEUsageParser:
             self.output_tokens = output_tokens
 
 
-def compute_cost(model: str | None, input_tokens: int, output_tokens: int) -> float:
-    """Cost from LiteLLM's price map. Never raises; unknown models cost 0.0."""
+def compute_cost(
+    model: str | None, input_tokens: int, output_tokens: int, prompt_cache: PromptCache = NO_PROMPT_CACHE
+) -> float:
+    """Cost from LiteLLM's price map, cached prompt tokens at their cache prices. Never raises; unknown models cost 0.0."""
     if not model or not (input_tokens or output_tokens):
         return 0.0
     try:
         prompt_cost, completion_cost = litellm.cost_per_token(
-            model=model, prompt_tokens=input_tokens, completion_tokens=output_tokens
+            model=model,
+            prompt_tokens=prompt_cache.prompt_tokens(input_tokens),
+            completion_tokens=output_tokens,
+            cache_read_input_tokens=prompt_cache.read_tokens,
+            cache_creation_input_tokens=prompt_cache.creation_tokens,
         )
         return float(prompt_cost) + float(completion_cost)
     except Exception:  # accounting must never break a call; the price-map lookup raises bare Exception
@@ -271,7 +346,7 @@ def gateway_headers(
     incoming: Mapping[str, str],
     gateway: GatewayTarget,
     harness: Harness,
-    metadata: Mapping[str, Any] | None,
+    metadata: Mapping[str, object] | None,
 ) -> Mapping[str, str]:
     """Incoming headers minus hop-by-hop/auth/x-litellm-*, plus gateway auth, tags, metadata."""
     kept = (
@@ -309,7 +384,7 @@ def error_status(exc: BaseException) -> int:
     return 500
 
 
-def error_body(exc: BaseException, message: str) -> dict[str, Any]:  # mutable-ok: JSONResponse body
+def error_body(exc: BaseException, message: str) -> dict[str, dict[str, str]]:  # mutable-ok: JSONResponse body
     return {"error": {"type": type(exc).__name__, "message": message}}  # mutable-ok: JSONResponse body
 
 
@@ -373,7 +448,7 @@ class ModelEndpoint:
         gateway: GatewayTarget | None,
         api_key: str | None = None,
         api_base: str | None = None,
-        metadata: Mapping[str, Any] | None = None,
+        metadata: Mapping[str, object] | None = None,
         *,
         client: httpx.AsyncClient | None = None,
     ) -> None:
@@ -382,14 +457,14 @@ class ModelEndpoint:
         self.gateway = gateway
         self.api_key = api_key
         self.api_base = api_base
-        self.metadata: Mapping[str, Any] = MappingProxyType(dict(metadata or ()))
+        self.metadata: Mapping[str, object] = MappingProxyType(dict(metadata or ()))
         self.token = secrets.token_urlsafe(HARNESS_SESSION_TOKEN_BYTES)
         self.usage = UsageTracker()
         self.port = 0
         self._injected_client = client
         self._deps: _ServerDeps | None = None
         self._client: httpx.AsyncClient | None = None
-        self._server: Any = None
+        self._server: Server | None = None
         self._task: asyncio.Task[None] | None = None
 
     @property
@@ -410,11 +485,11 @@ class ModelEndpoint:
         self._server = self._build_server(self._deps)
         self._task = asyncio.create_task(self._server.serve())
         try:
-            await asyncio.wait_for(self._wait_started(), HARNESS_ENDPOINT_STARTUP_TIMEOUT_SECONDS)
+            await asyncio.wait_for(self._wait_started(self._server), HARNESS_ENDPOINT_STARTUP_TIMEOUT_SECONDS)
         except BaseException:
             await self.stop()
             raise
-        self.port = self._server.servers[0].sockets[0].getsockname()[1]
+        self.port = _PORT_ADAPTER.validate_python(self._server.servers[0].sockets[0].getsockname()[1])
 
     async def stop(self) -> None:
         if self._server is not None:
@@ -439,8 +514,8 @@ class ModelEndpoint:
         )
         return handler.client
 
-    async def _wait_started(self) -> None:
-        while not self._server.started:
+    async def _wait_started(self, server: Server) -> None:
+        while not server.started:
             if self._task is not None and self._task.done():
                 raise HarnessError("harness model endpoint failed to start")
             await asyncio.sleep(DEFAULT_POLLING_INTERVAL)
@@ -483,7 +558,7 @@ class ModelEndpoint:
         )
 
     @property
-    def _responses(self) -> ModuleType:
+    def _responses(self) -> _ResponsesModule:
         if self._deps is None:
             raise HarnessError("harness model endpoint is not started")
         return self._deps.responses
@@ -520,17 +595,18 @@ class ModelEndpoint:
         if not self._authorized(request):
             return self._unauthorized()
         try:
-            body = json.loads(await request.body())
+            parsed_body: Final[object] = _JSON_VALUE_ADAPTER.validate_python(json.loads(await request.body()))
         except ValueError as e:
             return self._error(e, 400)
-        if not isinstance(body, dict):
+        if not isinstance(parsed_body, dict):
             return self._error(ValueError("request body must be a JSON object"), 400)
+        body: Final = _JSON_OBJECT_ADAPTER.validate_python(parsed_body)
         route = route_of(request.url.path)
         if self.gateway is not None:
             return await self._forward(request, route, body)
         return await self._call_sdk(route, body)
 
-    def _cost_model(self, body: Mapping[str, Any]) -> str | None:
+    def _cost_model(self, body: Mapping[str, object]) -> str | None:
         model = self.model or body.get("model")
         return model if isinstance(model, str) else None
 
@@ -540,12 +616,13 @@ class ModelEndpoint:
         input_tokens: int,
         output_tokens: int,
         cost: float | None,
+        prompt_cache: PromptCache,
     ) -> None:
         if cost is None:
-            cost = compute_cost(model, input_tokens, output_tokens)
+            cost = compute_cost(model, input_tokens, output_tokens, prompt_cache)
         self.usage.add(input_tokens, output_tokens, cost)
 
-    async def _forward(self, request: Request, route: str, body: Mapping[str, Any]) -> Response:
+    async def _forward(self, request: Request, route: str, body: Mapping[str, object]) -> Response:
         if self._client is None or self.gateway is None:
             raise HarnessError("gateway client is not started")
         if self.model:
@@ -592,18 +669,17 @@ class ModelEndpoint:
     ) -> None:
         if is_sse:
             parser.close()
-            tokens = (parser.input_tokens, parser.output_tokens)
-        else:
-            try:
-                tokens = usage_from_body(json.loads(collected))
-            except ValueError:
-                tokens = (0, 0)
-        self._record(model, tokens[0], tokens[1], header_cost(upstream.headers))
+            self._record(
+                model, parser.input_tokens, parser.output_tokens, header_cost(upstream.headers), parser.prompt_cache
+            )
+            return
+        usage: Final = usage_mapping_of_json(collected)
+        self._record(model, *usage_from_mapping(usage), header_cost(upstream.headers), prompt_cache_from_mapping(usage))
 
     def _sdk_kwargs(
-        self, body: Mapping[str, Any]
-    ) -> dict[str, Any]:  # mutable-ok: SDK call kwargs, mutated by _invoke_sdk then splatted
-        kwargs: dict[str, Any] = {**body}  # mutable-ok: SDK call kwargs built from the JSON body, then overridden
+        self, body: Mapping[str, object]
+    ) -> dict[str, object]:  # mutable-ok: SDK call kwargs, mutated by _invoke_sdk then splatted
+        kwargs: dict[str, object] = {**body}  # mutable-ok: SDK call kwargs built from the JSON body, then overridden
         if self.model:
             kwargs["model"] = self.model
         if self.api_key:
@@ -615,21 +691,24 @@ class ModelEndpoint:
     async def _invoke_sdk(
         self,
         route: str,
-        kwargs: dict[str, Any],  # mutable-ok: injects stream_options into the SDK kwargs
+        kwargs: dict[str, Any],  # mutable-ok: SDK call kwargs built by _sdk_kwargs
     ) -> object:
         if route == ROUTE_MESSAGES:
             return await litellm.anthropic.messages.acreate(**kwargs)
         if route == ROUTE_CHAT:
-            if kwargs.get("stream"):
-                stream_options = kwargs.get("stream_options") or {}  # mutable-ok: empty default for a JSON field
-                kwargs["stream_options"] = {  # mutable-ok: JSON field sent to litellm.acompletion
-                    "include_usage": True,
-                    **stream_options,
+            if not kwargs.get("stream"):
+                return await litellm.acompletion(**kwargs)
+            stream_options = kwargs.get("stream_options") or {}  # mutable-ok: empty default for a JSON field
+            return await litellm.acompletion(
+                **{
+                    **kwargs,
+                    "stream_options": {"include_usage": True, **stream_options},
+                    STREAM_USAGE_INJECTED_FIELD: "include_usage" not in stream_options,
                 }
-            return await litellm.acompletion(**kwargs)
+            )
         return await litellm.aresponses(**kwargs)
 
-    async def _call_sdk(self, route: str, body: Mapping[str, Any]) -> Response:
+    async def _call_sdk(self, route: str, body: Mapping[str, object]) -> Response:
         kwargs = self._sdk_kwargs(body)
         model = self._cost_model(kwargs)
         try:
@@ -641,9 +720,9 @@ class ModelEndpoint:
             return self._responses.StreamingResponse(
                 self._sdk_stream(route, response, model), media_type=SSE_MEDIA_TYPE
             )
-        data = to_jsonable(response)
-        input_tokens, output_tokens = usage_from_body(data)
-        self._record(model, input_tokens, output_tokens, hidden_cost(response))
+        data: Final = to_jsonable(response)
+        usage: Final = usage_mapping_of_body(data)
+        self._record(model, *usage_from_mapping(usage), hidden_cost(response), prompt_cache_from_mapping(usage))
         return self._json(data)
 
     async def _sdk_stream(self, route: str, iterator: AsyncIterable[object], model: str | None) -> AsyncIterator[bytes]:
@@ -662,4 +741,4 @@ class ModelEndpoint:
             yield f"event: error\ndata: {json.dumps(error_body(e, message))}\n\n".encode()
         finally:
             parser.close()
-            self._record(model, parser.input_tokens, parser.output_tokens, None)
+            self._record(model, parser.input_tokens, parser.output_tokens, None, parser.prompt_cache)

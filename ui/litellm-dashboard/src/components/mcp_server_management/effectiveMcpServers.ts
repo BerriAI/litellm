@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { z } from "zod";
 import { MCPServer, MCPToolset } from "../mcp_tools/types";
 import { MCP_ALL_TOOLS_WILDCARD } from "../mcp_tools/constants";
 
@@ -48,7 +48,7 @@ interface ResolveInput {
 // Access groups come back as plain names, but older records carry `{ name }` objects.
 const accessGroupRefSchema = z.union([z.string(), z.object({ name: z.string() })]);
 
-const accessGroupNamesOf = (server: MCPServer): readonly string[] =>
+export const accessGroupNamesOf = (server: MCPServer): readonly string[] =>
   (server.mcp_access_groups ?? []).flatMap((group) => {
     const parsed = accessGroupRefSchema.safeParse(group);
     if (!parsed.success) return [];

@@ -88,7 +88,7 @@ async fn failed_read_returns_none_but_invalid_primary_json_is_an_error(
         manager
             .read_secret_for_resolver("KEY", Some("invalid"), &|_: &str| None)
             .await,
-        Err(Error::PrimarySecret)
+        Err(Error::PrimarySecret(_))
     ));
     assert!(matches!(
         manager.async_read_secret("no-string").await,
@@ -143,7 +143,7 @@ async fn trait_read_applies_the_aws_operation_timeout() {
     };
     assert!(matches!(
         BaseSecretManager::async_read_secret(&loaded_manager(&server), "key", &context).await,
-        Err(Error::Timeout)
+        Err(Error::Timeout(_))
     ));
 }
 
@@ -169,7 +169,7 @@ async fn read_timeout_is_an_error_and_cannot_be_mistaken_for_missing() {
     let manager = AwsSecretsManagerV2::new(Client::from_conf(config), Default::default());
     assert!(matches!(
         manager.async_read_secret("key").await,
-        Err(Error::Timeout)
+        Err(Error::Timeout(_))
     ));
 }
 
