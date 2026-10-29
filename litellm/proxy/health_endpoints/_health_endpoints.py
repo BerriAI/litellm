@@ -15,7 +15,7 @@ from typing import Final, Literal, TypedDict
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -35,6 +35,7 @@ from litellm.proxy._types import (
     Litellm_EntityType,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    ModelAccessDeniedProxyException,
     ProxyException,
     SpecialModelNames,
     UserAPIKeyAuth,
@@ -42,6 +43,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import (
     _resolve_key_models_for_auth_check,  # pyright: ignore[reportPrivateUsage]  # the auth layer's sentinel resolution, reused so /health scopes exactly like a request
+    agent_model_grants,
     can_agent_call_model,
     can_key_call_resolved_model,
     can_user_call_model,
@@ -264,6 +266,14 @@ router: Final = APIRouter()
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _OBJECTS: Final = TypeAdapter(tuple[object, ...])
 _DEPLOYMENTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+class _ModelGrants(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    models: tuple[object, ...] = ()
+
+
 services = (
     Literal[
         "slack_budget_alerts",
@@ -1119,7 +1129,7 @@ async def _key_may_call_model(
             user_object=owner,
             key_model_aliases=key_model_aliases_for_auth_check(user_api_key_dict),
         )
-    except ProxyException:
+    except ModelAccessDeniedProxyException:
         return False
     except HTTPException as denial:
         if denial.status_code != status.HTTP_403_FORBIDDEN:
@@ -1159,6 +1169,15 @@ def _granted_names(user_api_key_dict: UserAPIKeyAuth) -> frozenset[str]:
         *_OBJECTS.validate_python(user_api_key_dict.team_models),
     )
     return frozenset(name for name in grants if isinstance(name, str))
+
+
+async def _names_any_limit_grants(user_api_key_dict: UserAPIKeyAuth, owner: LiteLLM_UserTable | None) -> frozenset[str]:
+    owner_grants: Final = _ModelGrants.model_validate(owner).models if owner is not None else ()
+    return (
+        _granted_names(user_api_key_dict)
+        | frozenset(name for name in owner_grants if isinstance(name, str))
+        | await agent_model_grants(user_api_key_dict)
+    )
 
 
 def _served_group(model_name: str, aliases: CallerAliases, llm_router: Router | None) -> str:
@@ -1276,7 +1295,7 @@ async def _deployments_key_may_reach(
     owner: LiteLLM_UserTable | None,
     llm_router: Router | None,
 ) -> _ReachableDeployments:
-    candidate_names: Final = _granted_names(user_api_key_dict).union(
+    candidate_names: Final = (await _names_any_limit_grants(user_api_key_dict, owner)).union(
         *(_names_caller_may_request(deployment, user_api_key_dict.team_id) for deployment in llm_model_list)
     )
     admitted_names: Final = await _names_key_may_request(candidate_names, aliases, user_api_key_dict, owner, llm_router)

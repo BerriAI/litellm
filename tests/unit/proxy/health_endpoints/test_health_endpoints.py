@@ -23,7 +23,7 @@ import litellm
 import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_module
 from litellm.litellm_core_utils.health_check_helpers import TEST_IMAGE_BASE64
 from litellm.models.credentials import CredentialItem
-from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
@@ -4649,11 +4649,10 @@ def _personal_key_whose_owner_may_call(models: list[str]) -> UserAPIKeyAuth:
 def _managed_agent_key_granted(models: list[str]) -> UserAPIKeyAuth:
     from litellm.types.agents import AgentResponse
 
-    caller: Final = UserAPIKeyAuth(api_key="hashed-test-key", models=[])
-    caller.managed_agent_policy = AgentResponse(
+    policy: Final = AgentResponse(
         agent_id="managed", agent_name="Managed", agent_card_params={}, object_permission={"models": models}
     )
-    return caller
+    return UserAPIKeyAuth(api_key="hashed-test-key", models=[]).model_copy(update={"managed_agent_policy": policy})
 
 
 @pytest.mark.asyncio
@@ -4695,6 +4694,44 @@ async def test_health_endpoint_refuses_a_model_id_the_keys_owner_may_not_call():
 
     assert refused.value.status_code == 403
     probe.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "make_caller",
+    [
+        pytest.param(_personal_key_whose_owner_may_call, id="key-owner"),
+        pytest.param(_managed_agent_key_granted, id="managed-agent"),
+    ],
+)
+async def test_health_endpoint_keeps_the_wildcard_serving_a_name_the_keys_user_or_agent_may_call(
+    make_caller: Callable[[list[str]], UserAPIKeyAuth],
+):
+    model_list: Final = [_WILDCARD_DEPLOYMENT, *_PROVIDER_PREFIXED_MODEL_LIST]
+
+    probed: Final = await _live_probed_model_ids(model_list, make_caller(["openai/gpt-5.6"]))
+
+    assert probed == {"id-wild"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_fails_when_an_auth_check_errors_for_a_reason_other_than_model_access():
+    lookup_failure: Final = ProxyException(
+        message="user lookup failed", type=ProxyErrorTypes.internal_server_error, param=None, code=500
+    )
+
+    with (
+        patch(  # test-quality-ok: no real lookup raises ProxyException today; the endpoint has no seam for its checks
+            "litellm.proxy.health_endpoints._health_endpoints.can_user_call_model",
+            AsyncMock(side_effect=lookup_failure),
+        ),
+        pytest.raises(ProxyException) as failed,
+    ):
+        await _live_probed_model_ids(
+            _PROVIDER_PREFIXED_MODEL_LIST, UserAPIKeyAuth(api_key="hashed-test-key", models=["gpt-5.4-mini"])
+        )
+
+    assert failed.value.type == ProxyErrorTypes.internal_server_error
 
 
 @pytest.mark.asyncio
