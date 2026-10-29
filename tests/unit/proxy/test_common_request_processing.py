@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import anthropic
 import httpx
 import pytest
+import respx
 from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -12526,3 +12527,61 @@ def test_maybe_get_model_id_prefers_litellm_metadata_over_caller_metadata_withou
 
 def test_maybe_get_model_id_returns_none_before_the_router_picked_a_deployment():
     assert ProxyBaseLLMRequestProcessing(data={"metadata": {}}).maybe_get_model_id(None) is None
+
+
+_DOWNSTREAM_GUARDRAIL_FIELDS: Final = MappingProxyType(
+    {"guardrail_name": "block-secret-project", "guardrail_mode": "pre_call", "pattern": "secret_project_codename"}
+)
+
+
+def _downstream_proxy_rejection(route: str, call: Callable[[], object]) -> Exception:
+    body: Final = {
+        "error": {
+            "message": "Content blocked: secret_project_codename pattern detected",
+            "type": "invalid_request_error",
+            "param": None,
+            "code": "400",
+            "provider_specific_fields": dict(_DOWNSTREAM_GUARDRAIL_FIELDS),
+        }
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://downstream-proxy.example.com/{route}").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = call()
+    return caught.value
+
+
+_DOWNSTREAM: Final = MappingProxyType(
+    {"api_base": "https://downstream-proxy.example.com/", "api_key": "sk-downstream-key"}
+)
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(
+    ("route", "call"),
+    [
+        (
+            "responses",
+            lambda: litellm.responses(model="litellm_proxy/gpt-5.5", input="project bluebird", **_DOWNSTREAM),
+        ),
+        (
+            "chat/completions",
+            lambda: litellm.completion(
+                model="litellm_proxy/gpt-5.5", messages=[{"role": "user", "content": "project bluebird"}], **_DOWNSTREAM
+            ),
+        ),
+    ],
+)
+async def test_a_chained_proxy_relays_which_downstream_guardrail_blocked_the_request(
+    route: str, call: Callable[[], object]
+) -> None:
+    rejection: Final = _downstream_proxy_rejection(route, call)
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "chained"})._handle_llm_api_exception(
+            e=rejection,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    assert relayed.value.to_dict()["provider_specific_fields"] == dict(_DOWNSTREAM_GUARDRAIL_FIELDS)

@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Final
 
 from fastapi import HTTPException, status
+from pydantic import TypeAdapter
 
 from litellm.constants import STRINGIFIED_NONE
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, proxy_exception_status_code
@@ -25,6 +26,8 @@ _OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
 )
 
 _AUTH_FAILURE_STATUS_CODES: Final = frozenset({status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN})
+
+_ERROR_BODY: Final = TypeAdapter(dict[str, object])
 
 _FAILOVER_SQLSTATES: Final = frozenset({"25006", "57P01", "57P02", "57P03"})
 
@@ -75,6 +78,16 @@ def openai_error_param(exc: object) -> str | None:
     serializes as JSON ``null``."""
     carried: Final = attribute_of(exc, "param")
     return carried if isinstance(carried, str) and carried != STRINGIFIED_NONE else None
+
+
+def relayed_provider_specific_fields(
+    exc: object,
+) -> dict[str, object] | None:  # mutable-ok: ProxyException.provider_specific_fields is a dict
+    body: Final = attribute_of(exc, "body")
+    if not isinstance(body, dict):
+        return None
+    fields: Final = _ERROR_BODY.validate_python(body).get("provider_specific_fields")
+    return _ERROR_BODY.validate_python(fields) if isinstance(fields, dict) else None
 
 
 def proxy_exception_for(exc: Exception, default_status_code: int) -> ProxyException:

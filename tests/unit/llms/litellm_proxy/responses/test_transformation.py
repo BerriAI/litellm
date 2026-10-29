@@ -157,3 +157,24 @@ def test_proxy_error_without_a_json_object_body_still_raises_with_its_text() -> 
     )
     assert error.body is None
     assert "upstream proxy rejected the request" in str(error)
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+def test_proxy_error_object_without_an_error_member_is_the_body_as_sent() -> None:
+    sent: Final = {"message": "upstream proxy rejected the request", "type": "invalid_request_error"}
+    error: Final = _proxy_rejection(
+        "responses",
+        httpx.Response(400, json=sent),
+        lambda: litellm.responses(model="litellm_proxy/gpt-5.5", input="hi", **_PROXY_PARAMS),
+    )
+    assert error.body == sent
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+def test_proxy_error_whose_error_member_is_text_still_raises_with_that_text() -> None:
+    error: Final = _proxy_rejection(
+        "responses",
+        httpx.Response(400, json={"error": "upstream proxy rejected the request"}),
+        lambda: litellm.responses(model="litellm_proxy/gpt-5.5", input="hi", **_PROXY_PARAMS),
+    )
+    assert "upstream proxy rejected the request" in str(error)
