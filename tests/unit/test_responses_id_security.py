@@ -4,23 +4,29 @@ Tests for ResponsesIDSecurity hook.
 Tests the security hook that prevents user B from seeing response from user A.
 """
 
+import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.responses_id_security import (
     ResponsesIDSecurity,
     _is_responses_api_create_route,
 )
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.llms.openai import (
     GenericEvent,
+    ResponseAPIUsage,
     ResponseCompletedEvent,
     ResponseCreatedEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
-from litellm.types.utils import SpecialEnums
+from litellm.types.utils import Choices, Message, ModelResponse, SpecialEnums, Usage
 
 
 @pytest.fixture
@@ -1089,3 +1095,123 @@ class TestClientSuppliedRetainedIdCannotBypassAuthorization:
 
         assert result["response_id"] == "resp_strangerownprovideridcccccccc"
         assert result["response_id"] != victim_provider_id
+
+
+_LOGGED_MANAGED_ID = "resp_managedidlitellmbuiltbeforethehookran"
+
+
+def _streamed_response(response_id):
+    return ResponsesAPIResponse(
+        id=response_id,
+        created_at=0,
+        model="gpt-5.1",
+        object="response",
+        output=[],
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+        usage=ResponseAPIUsage(input_tokens=3, output_tokens=2, total_tokens=5),
+    )
+
+
+def _upstream_frames():
+    return (
+        ResponseCreatedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_CREATED, response=_streamed_response(_LOGGED_MANAGED_ID)
+        ),
+        ResponseCompletedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED, response=_streamed_response(_LOGGED_MANAGED_ID)
+        ),
+    )
+
+
+def _native_logged_result():
+    return ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED, response=_streamed_response(_LOGGED_MANAGED_ID)
+    )
+
+
+def _bridged_logged_result():
+    return ModelResponse(
+        id="chatcmpl-bridgedchatcompletionid",
+        model="gpt-5.1",
+        choices=[Choices(message=Message(role="assistant", content="hi"), finish_reason="stop", index=0)],
+        usage=Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+    )
+
+
+class _SpendRowRecorder(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.spend_row_ids = []
+        self.standard_logging_ids = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.spend_row_ids.append(get_logging_payload(kwargs, response_obj, start_time, end_time)["request_id"])
+        self.standard_logging_ids.append(kwargs["standard_logging_object"]["id"])
+
+
+async def _stream_logged_mid_stream(hook, route, logged_result):
+    recorder = _SpendRowRecorder()
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-5.1",
+        messages=[],
+        stream=True,
+        call_type="aresponses",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="streamed-responses-call",
+        function_id="streamed-responses-fn",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-5.1", user="", optional_params={}, litellm_params={"api_base": ""}
+    )
+    upstream = _upstream_frames()
+
+    async def frames():
+        for frame in upstream:
+            yield frame
+
+    client_stream = hook.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(user_id="owner-user", team_id="owner-team", request_route=route),
+        response=frames(),
+        request_data={"litellm_logging_obj": logging_obj},
+    )
+    first_frame = await anext(client_stream)
+    now = datetime.datetime.now()
+    await logging_obj.async_success_handler(result=logged_result, start_time=now, end_time=now, cache_hit=False)
+    client_frames = [first_frame, *[frame async for frame in client_stream]]
+    return client_frames[-1].response.id, recorder
+
+
+class TestStreamedSpendRowCarriesTheIdTheClientSaw:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("logged_result", [_native_logged_result, _bridged_logged_result], ids=["native", "bridge"])
+    @pytest.mark.parametrize("route", ["/v1/responses", "/responses", "/openai/v1/responses"])
+    async def test_spend_row_and_callbacks_log_the_encrypted_id_of_the_terminal_frame(
+        self, salt_key_env, route, logged_result
+    ):
+        hook = _hook()
+
+        client_id, recorder = await _stream_logged_mid_stream(hook, route, logged_result())
+
+        assert hook._decrypt_response_id(client_id) == (_LOGGED_MANAGED_ID, "owner-user", "owner-team")
+        assert recorder.spend_row_ids == [client_id]
+        assert recorder.standard_logging_ids == [client_id]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "hook, route",
+        [
+            (_hook(), "/chat/completions"),
+            (_hook(general_settings={"disable_responses_id_security": True}), "/v1/responses"),
+            (_hook(signing_key=None), "/v1/responses"),
+        ],
+        ids=["not-a-create-route", "security-disabled", "no-signing-key"],
+    )
+    async def test_stream_the_hook_leaves_alone_keeps_its_logged_id(self, salt_key_env, hook, route):
+        client_id, recorder = await _stream_logged_mid_stream(hook, route, _native_logged_result())
+
+        assert client_id == _LOGGED_MANAGED_ID
+        assert recorder.spend_row_ids == [_LOGGED_MANAGED_ID]
+        assert recorder.standard_logging_ids == [_LOGGED_MANAGED_ID]

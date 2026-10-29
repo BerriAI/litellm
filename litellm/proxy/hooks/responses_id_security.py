@@ -14,6 +14,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
@@ -278,6 +279,14 @@ class ResponsesIDSecurity(CustomLogger):
         user_api_key_dict: "UserAPIKeyAuth",
         request_cache: dict[str, str] | None = None,
     ) -> BaseLiteLLMOpenAIResponseObject:
+        encrypt: Final = self._response_id_encrypter(user_api_key_dict, request_cache)
+        return response if encrypt is None else _rewrite_advertised_id(response, encrypt)
+
+    def _response_id_encrypter(
+        self,
+        user_api_key_dict: "UserAPIKeyAuth",
+        request_cache: dict[str, str] | None,
+    ) -> Callable[[str], str] | None:
         signing_key: Final = self._get_signing_key()
         if signing_key is None:
             verbose_proxy_logger.debug(
@@ -286,7 +295,7 @@ class ResponsesIDSecurity(CustomLogger):
                 "Skipping response ID encryption. "
                 "See: https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key"
             )
-            return response
+            return None
 
         def encrypt(original_id: str) -> str:
             cached: Final = request_cache.get(original_id) if request_cache is not None else None
@@ -303,7 +312,28 @@ class ResponsesIDSecurity(CustomLogger):
                 request_cache[original_id] = encrypted_id
             return encrypted_id
 
-        return _rewrite_advertised_id(response, encrypt)
+        return encrypt
+
+    def _streamed_response_id_advertiser(
+        self,
+        user_api_key_dict: "UserAPIKeyAuth",
+        request_data: Mapping[str, object],
+    ) -> Callable[[str], str] | None:
+        if not _is_responses_api_create_route(user_api_key_dict.request_route):
+            return None
+        if self._general_settings_reader().get("disable_responses_id_security", False):
+            return None
+        encrypt: Final = self._response_id_encrypter(user_api_key_dict, request_cache={})
+        logging_obj: Final = request_data.get("litellm_logging_obj")
+        if encrypt is None or not isinstance(logging_obj, LiteLLMLoggingObj):
+            return encrypt
+
+        def advertise(original_id: str) -> str:
+            advertised_id: Final = encrypt(original_id)
+            logging_obj.client_facing_response_id = advertised_id
+            return advertised_id
+
+        return advertise
 
     async def async_post_call_success_hook(
         self,
@@ -329,21 +359,15 @@ class ResponsesIDSecurity(CustomLogger):
         return response
 
     async def async_post_call_streaming_iterator_hook(
-        self, user_api_key_dict: "UserAPIKeyAuth", response: Any, request_data: dict
+        self, user_api_key_dict: "UserAPIKeyAuth", response: Any, request_data: dict[str, object]
     ) -> AsyncGenerator[BaseLiteLLMOpenAIResponseObject, None]:
-        general_settings: Final = self._general_settings_reader()
-
-        # Create a request-scoped cache for consistent encryption across streaming chunks.
-        request_encryption_cache: Final[dict[str, str]] = {}
-
+        advertise: Final = self._streamed_response_id_advertiser(user_api_key_dict, request_data)
         async for chunk in response:
-            if (
-                isinstance(chunk, BaseLiteLLMOpenAIResponseObject)
-                and _is_responses_api_create_route(user_api_key_dict.request_route)
-                and not general_settings.get("disable_responses_id_security", False)
-            ):
-                chunk = self._encrypt_response_id(chunk, user_api_key_dict, request_encryption_cache)
-            yield chunk
+            yield (
+                _rewrite_advertised_id(chunk, advertise)
+                if advertise is not None and isinstance(chunk, BaseLiteLLMOpenAIResponseObject)
+                else chunk
+            )
 
 
 def decrypted_response_id(response_id: str) -> str:
