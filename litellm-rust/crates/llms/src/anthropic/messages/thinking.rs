@@ -250,7 +250,13 @@ fn translate_reasoning_effort(
         });
     }
     let Some(budget) = fit_budget_to_max_tokens(budget, request.params.max_tokens) else {
-        return Ok(request);
+        if request.params.thinking.is_some() {
+            return Ok(request);
+        }
+        return Ok(MessagesRequest {
+            params: without_thinking(request.params, context),
+            ..request
+        });
     };
     let enabled = ThinkingConfig::enabled(budget);
     Ok(MessagesRequest {
@@ -685,6 +691,20 @@ mod tests {
     #[case::reasoning_effort_high(
         haiku_4_5(),
         serde_json::json!({"max_tokens": 8192, "reasoning_effort": "high"}),
+        true
+    )]
+    #[case::reasoning_effort_budget_cannot_fit(
+        haiku_4_5(),
+        serde_json::json!({"max_tokens": 1024, "reasoning_effort": "high"}),
+        false
+    )]
+    #[case::caller_thinking_kept_when_budget_cannot_fit(
+        haiku_4_5(),
+        serde_json::json!({
+            "max_tokens": 1024,
+            "reasoning_effort": "high",
+            "thinking": {"type": "enabled", "budget_tokens": 1000}
+        }),
         true
     )]
     #[case::effort_model_drops_adaptive(opus_4_5(), claude_code_payload("high", 8192), false)]
