@@ -1,8 +1,6 @@
-import asyncio
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapping, Sequence
 from enum import Enum, auto
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, runtime_checkable
 
 import httpx
@@ -1304,23 +1302,17 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
-        texts: Final = tuple(inputs.get("texts") or ())
-        content: Final = "\n".join(text for text in texts if text)
+        content: Final = "\n".join(text for text in inputs.get("texts") or () if text)
         if not content:
             return inputs
 
         source: Final[Literal["user_prompt", "model_response"]] = (
             "user_prompt" if input_type == "request" else "model_response"
         )
-        masking: Final = self.mask_request_content if input_type == "request" else self.mask_response_content
-        scanned: Final = tuple(dict.fromkeys(text for text in texts if text)) if masking else (content,)
         start_time: Final = time.time()
         try:
-            armor_responses: Final = await asyncio.gather(
-                *(
-                    self.make_model_armor_request(content=text, source=source, request_data=request_data)
-                    for text in scanned
-                )
+            armor_response: Final = await self.make_model_armor_request(
+                content=content, source=source, request_data=request_data
             )
         except (ModelArmorAPIError, httpx.HTTPError) as e:
             error_end_time: Final = time.time()
@@ -1336,16 +1328,10 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             self._raise_if_fail_closed(e)
             return inputs
 
-        flagged: Final = tuple(
-            response for response in armor_responses if self._should_block_content(response, allow_sanitization=masking)
-        )
+        flagged: Final = self._should_block_content(armor_response, allow_sanitization=False)
         end_time: Final = time.time()
         self.add_standard_logging_guardrail_information_to_request_data(
-            guardrail_json_response=(
-                tuple(self._build_logging_response(response) for response in armor_responses)
-                if masking
-                else self._build_logging_response(armor_responses[0])
-            ),
+            guardrail_json_response=self._build_logging_response(armor_response),
             request_data=request_data,
             guardrail_status="guardrail_flagged" if flagged else "success",
             guardrail_provider="model_armor",
@@ -1353,22 +1339,15 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             end_time=end_time,
             duration=end_time - start_time,
         )
-        if self._event_hook_is_event_type(GuardrailEventHooks.logging_only):
-            return inputs
-        if flagged:
+        if flagged and not self._event_hook_is_event_type(GuardrailEventHooks.logging_only):
             raise HTTPException(
                 status_code=400,
                 detail=self._build_block_error_detail(
                     "Response blocked by Model Armor" if input_type == "response" else "Content blocked by Model Armor",
-                    flagged[0],
+                    armor_response,
                 ),
             )
-        if not masking:
-            return inputs
-        sanitized: Final = MappingProxyType(
-            {text: self._get_sanitized_content(response) or text for text, response in zip(scanned, armor_responses)}
-        )
-        return {**inputs, "texts": [sanitized.get(text, text) for text in texts]}
+        return inputs
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:

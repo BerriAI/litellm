@@ -30,7 +30,7 @@ from litellm.types.proxy.policy_engine.pipeline_types import (
     GuardrailPipeline,
     PipelineStep,
 )
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypesLiteral, GenericGuardrailAPIInputs
 
 try:
     from fastapi.exceptions import HTTPException
@@ -1139,7 +1139,7 @@ class _PolicyOptOutGuardrail(CustomGuardrail):
         self.native_pre_call_ran = False
         self.scanned = []
 
-    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+    async def apply_guardrail(self, inputs: GenericGuardrailAPIInputs, request_data, input_type, logging_obj=None):
         self.scanned.extend(inputs.get("texts", []))
         return inputs
 

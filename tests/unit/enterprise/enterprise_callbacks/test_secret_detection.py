@@ -1150,7 +1150,7 @@ def test_proxied_traffic_stays_on_native_hooks():
     ),
 )
 async def test_proxy_pre_call_hook_redacts_extraction_state_unless_the_key_opted_out(
-    monkeypatch, permissions, expected_state, listed
+    monkeypatch: pytest.MonkeyPatch, permissions: dict[str, bool], expected_state: str, listed: bool
 ):
     import litellm
     from litellm.proxy.utils import ProxyLogging

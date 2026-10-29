@@ -386,7 +386,7 @@ async def test_pangea_ai_guard_response_transformed(pangea_guardrail):
     ],
 )
 async def test_pangea_calls_pangea_and_lists_itself_only_when_the_request_has_messages(
-    respx_mock, call_type, request_fields, pangea_calls, applied
+    respx_mock, call_type, request_fields: dict[str, object], pangea_calls, applied
 ):
     guard = respx_mock.post("https://ai-guard.aws.us.pangea.cloud/v1beta/guard").respond(
         json={"result": {"blocked": False, "transformed": False}}
@@ -394,7 +394,7 @@ async def test_pangea_calls_pangea_and_lists_itself_only_when_the_request_has_me
     guardrail = PangeaHandler(
         mode="pre_call", guardrail_name="pangea-ai-guard", api_key="pts_pangeatokenid", default_on=True
     )
-    metadata = {}
+    metadata: dict[str, object] = {}
 
     await guardrail.async_pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(),

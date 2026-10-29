@@ -1,6 +1,6 @@
 import json
 from collections.abc import Iterator, Mapping
-from itertools import chain
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final
 
@@ -101,6 +101,18 @@ def _guardrailed_number(value: float, guardrailed: Mapping[str, str]) -> JsonVal
     return value if rewritten == text else rewritten
 
 
+def _occurrence_numbers(keys: tuple[str, ...]) -> Iterator[tuple[int, int]]:
+    for _, positions in groupby(sorted(range(len(keys)), key=keys.__getitem__), key=keys.__getitem__):
+        yield from ((position, number) for number, position in enumerate(positions, start=1))
+
+
+def _distinct_keys(keys: tuple[str, ...]) -> tuple[str, ...]:
+    if len(frozenset(keys)) == len(keys):
+        return keys
+    numbers: Final = MappingProxyType(dict(_occurrence_numbers(keys)))
+    return tuple(key if numbers[position] == 1 else f"{key}_{numbers[position]}" for position, key in enumerate(keys))
+
+
 def _guardrailed_json(value: JsonValue, guardrailed: Mapping[str, str], guardrail_name: str | None) -> JsonValue:
     match value:
         case bool() | None:
@@ -112,7 +124,7 @@ def _guardrailed_json(value: JsonValue, guardrailed: Mapping[str, str], guardrai
         case list():
             return [_guardrailed_json(item, guardrailed, guardrail_name) for item in value]
         case dict():
-            keys: Final = tuple(guardrailed.get(key, key) for key in value)
+            keys: Final = _distinct_keys(tuple(guardrailed.get(key, key) for key in value))
             if len(frozenset(keys)) != len(keys):
                 raise unappliable_request_rewrite(guardrail_name)
             return {

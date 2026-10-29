@@ -200,10 +200,23 @@ async def test_systemone_secret_key_and_card_number_are_masked_before_the_provid
 
 
 @pytest.mark.asyncio
-async def test_systemone_rejects_masked_keys_that_collide() -> None:
+async def test_systemone_keeps_every_state_entry_when_masked_keys_collide() -> None:
     data: Final = {
         "model": "judge",
-        "state": {"AKIAIOSFODNN7EXAMPLE": "first", "AKIAI44QH8DHBEXAMPLE": "second"},
+        "state": {"AKIAIOSFODNN7EXAMPLE": "first", "items": 2, "AKIAI44QH8DHBEXAMPLE": "second"},
+        "questions": {"q": {"type": "noul", "criteria": {}}},
+    }
+
+    result: Final = await SystemOneHandler().process_input_messages(data, _MasksSecrets(guardrail_name="mask"))
+
+    assert result["state"] == {"<AWS_KEY>": "first", "items": 2, "<AWS_KEY>_2": "second"}
+
+
+@pytest.mark.asyncio
+async def test_systemone_rejects_masked_keys_that_stay_ambiguous() -> None:
+    data: Final = {
+        "model": "judge",
+        "state": {"AKIAIOSFODNN7EXAMPLE": "first", "AKIAI44QH8DHBEXAMPLE": "second", "<AWS_KEY>_2": "third"},
         "questions": {"q": {"type": "noul", "criteria": {}}},
     }
 

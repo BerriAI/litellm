@@ -1,15 +1,24 @@
+from collections.abc import Mapping
+from itertools import chain
+from typing import Final, Literal
+
 import pytest
 from fastapi import HTTPException
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.caching import DualCache
 from litellm.exceptions import SensitiveDataRouteException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.tool_permission import ToolPermissionGuardrail
 from litellm.proxy.utils import ProxyLogging
+from litellm.types.decisions import OpenAIDecisionResponse
+from litellm.types.extraction import ExtractionResponse
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypesLiteral, GenericGuardrailAPIInputs
 
 
 def test_has_post_call_response_headers_callbacks_ignores_empty_callbacks(
@@ -1063,23 +1072,39 @@ async def test_parallel_post_call_guardrails_keep_native_hook_when_opted_out(mon
     assert routed.native_hooks_ran == []
 
 
-_SECRET = "sk-live-1234"
+_SECRET: Final = "sk-live-1234"
 
 
-def _applied_guardrails(data):
-    buckets = (data.get("metadata") or {}, data.get("litellm_metadata") or {})
-    return [*buckets[0].get("applied_guardrails", []), *buckets[1].get("applied_guardrails", [])]
+class _Metadata(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    applied_guardrails: tuple[str, ...] = ()
+
+
+def _applied_guardrails(data: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(
+        chain.from_iterable(
+            _Metadata.model_validate(data.get(bucket) or {}).applied_guardrails
+            for bucket in ("metadata", "litellm_metadata")
+        )
+    )
 
 
 class _MasksSecretWithNativeHooks(_KeepsNativeHooks):
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
-        self.scanned = []
+        self.scanned: list[tuple[str, tuple[str, ...]]] = []
 
-    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
-        texts = inputs.get("texts", [])
-        self.scanned.append((input_type, tuple(texts)))
-        return {**inputs, "texts": [text.replace(_SECRET, "[MASKED]") for text in texts]}
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        texts: Final = tuple(inputs.get("texts") or ())
+        self.scanned.append((input_type, texts))
+        return GenericGuardrailAPIInputs(texts=[text.replace(_SECRET, "[MASKED]") for text in texts])
 
 
 @pytest.mark.asyncio
@@ -1118,12 +1143,15 @@ class _MasksSecretWithNativeHooks(_KeepsNativeHooks):
     ),
 )
 async def test_pre_call_hook_scans_decision_and_extraction_text_with_a_native_hook_guardrail(
-    monkeypatch, call_type, data, expected
-):
-    guardrail = _MasksSecretWithNativeHooks(event_hook=GuardrailEventHooks.pre_call, default_on=True)
+    monkeypatch: pytest.MonkeyPatch,
+    call_type: CallTypesLiteral,
+    data: dict[str, object],
+    expected: dict[str, object],
+) -> None:
+    guardrail: Final = _MasksSecretWithNativeHooks(event_hook=GuardrailEventHooks.pre_call, default_on=True)
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
-    result = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+    result: Final[dict[str, object]] = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
         data=data,
         call_type=call_type,
@@ -1131,27 +1159,31 @@ async def test_pre_call_hook_scans_decision_and_extraction_text_with_a_native_ho
 
     assert {key: result[key] for key in expected} == expected
     assert guardrail.native_hooks_ran == []
-    assert _applied_guardrails(result) == ["keeps_native"]
+    assert _applied_guardrails(result) == ("keeps_native",)
 
 
 @pytest.mark.asyncio
-async def test_pre_call_hook_does_not_list_a_guardrail_for_a_systemone_request_without_text(monkeypatch):
-    guardrail = _MasksSecretWithNativeHooks(event_hook=GuardrailEventHooks.pre_call, default_on=True)
+async def test_pre_call_hook_does_not_list_a_guardrail_for_a_systemone_request_without_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _MasksSecretWithNativeHooks(event_hook=GuardrailEventHooks.pre_call, default_on=True)
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
-    result = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+    result: Final[dict[str, object]] = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
         data={"model": "m", "state": {}, "questions": {"routed": {"type": "choice", "criteria": {"refund": None}}}},
         call_type="asystemone",
     )
 
     assert guardrail.scanned == []
-    assert _applied_guardrails(result) == []
+    assert _applied_guardrails(result) == ()
 
 
 @pytest.mark.asyncio
-async def test_during_call_hook_scans_extraction_state_with_a_native_hook_guardrail(monkeypatch):
-    guardrail = _MasksSecretWithNativeHooks(event_hook=GuardrailEventHooks.during_call, default_on=True)
+async def test_during_call_hook_scans_extraction_state_with_a_native_hook_guardrail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _MasksSecretWithNativeHooks(event_hook=GuardrailEventHooks.during_call, default_on=True)
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     await ProxyLogging(user_api_key_cache=DualCache()).during_call_hook(
@@ -1165,8 +1197,10 @@ async def test_during_call_hook_scans_extraction_state_with_a_native_hook_guardr
 
 
 @pytest.mark.asyncio
-async def test_pre_call_hook_keeps_native_hook_guardrail_on_its_own_hook_for_chat(monkeypatch):
-    guardrail = _MasksSecretWithNativeHooks(event_hook=GuardrailEventHooks.pre_call, default_on=True)
+async def test_pre_call_hook_keeps_native_hook_guardrail_on_its_own_hook_for_chat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _MasksSecretWithNativeHooks(event_hook=GuardrailEventHooks.pre_call, default_on=True)
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
@@ -1182,15 +1216,13 @@ async def test_pre_call_hook_keeps_native_hook_guardrail_on_its_own_hook_for_cha
 @pytest.mark.asyncio
 @pytest.mark.parametrize("run_in_parallel", (False, True))
 async def test_post_call_success_hook_scans_extraction_answers_with_a_native_hook_guardrail(
-    monkeypatch, run_in_parallel
-):
-    from litellm.types.extraction import ExtractionResponse
-
-    guardrail = _MasksSecretWithNativeHooks(
+    monkeypatch: pytest.MonkeyPatch, run_in_parallel: bool
+) -> None:
+    guardrail: Final = _MasksSecretWithNativeHooks(
         event_hook=GuardrailEventHooks.post_call, default_on=True, run_in_parallel=run_in_parallel
     )
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
-    response = ExtractionResponse.model_validate(
+    response: Final = ExtractionResponse.model_validate(
         {
             "model": "m",
             "answers": {"key": {"type": "text", "value": _SECRET}},
@@ -1210,67 +1242,115 @@ async def test_post_call_success_hook_scans_extraction_answers_with_a_native_hoo
 
 
 class _ReadsNoDecisionText(CustomGuardrail):
-    def __init__(self, guardrail_name, **kwargs):
-        super().__init__(guardrail_name=guardrail_name, event_hook=GuardrailEventHooks.pre_call, **kwargs)
-        self.native_hooks_ran = []
+    def __init__(
+        self,
+        guardrail_name: str,
+        default_on: bool = False,
+        event_hook: GuardrailEventHooks = GuardrailEventHooks.pre_call,
+    ) -> None:
+        super().__init__(guardrail_name=guardrail_name, event_hook=event_hook, default_on=default_on)
+        self.native_hooks_ran: list[str] = []
 
-    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: CallTypesLiteral,
+    ) -> dict[str, object]:
         self.native_hooks_ran.append(call_type)
         return data
 
 
+_REQUEST_WITH_EVERY_TEXT_FIELD: Final = {
+    "model": "m",
+    "state": "s",
+    "input": "hi",
+    "questions": [{"type": "predicate", "instructions": "Is it a greeting?"}],
+    "messages": [{"role": "user", "content": "hi"}],
+}
+
+
+def _warning(call_type: str) -> str:
+    return (
+        "Guardrails requested-native, default-native do not implement apply_guardrail, "
+        f"so on {call_type} requests they scan only the fields their own hook reads"
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("call_type", "listed", "warning"),
-    (
-        (
-            "aextraction",
-            False,
-            "Guardrails requested-native, default-native do not implement apply_guardrail, so they cannot scan the text of aextraction requests",
-        ),
-        (
-            "adecisions",
-            False,
-            "Guardrails requested-native, default-native do not implement apply_guardrail, so they skip the question instructions of adecisions requests and see the input only where their own hook reads it",
-        ),
-        ("acompletion", True, None),
-    ),
+    ("call_type", "warning"),
+    (("aextraction", _warning("aextraction")), ("adecisions", _warning("adecisions")), ("acompletion", None)),
 )
-async def test_requested_guardrail_without_apply_guardrail_is_listed_only_where_it_reads_the_text(
-    monkeypatch, caplog, call_type, listed, warning
-):
-    requested = _ReadsNoDecisionText("requested-native")
-    default_on = _ReadsNoDecisionText("default-native", default_on=True)
-    scanner = _MasksSecretWithNativeHooks(event_hook=GuardrailEventHooks.pre_call, default_on=True)
-    monkeypatch.setattr(litellm, "callbacks", [requested, default_on, scanner])
+async def test_requested_user_guardrail_without_apply_guardrail_stays_listed_and_is_warned_about(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    call_type: CallTypesLiteral,
+    warning: str | None,
+) -> None:
+    requested: Final = _ReadsNoDecisionText("requested-native")
+    default_on: Final = _ReadsNoDecisionText("default-native", default_on=True)
+    post_call_only: Final = _ReadsNoDecisionText(
+        "post-call-native", default_on=True, event_hook=GuardrailEventHooks.post_call
+    )
+    scanner: Final = _MasksSecretWithNativeHooks(event_hook=GuardrailEventHooks.pre_call, default_on=True)
+    monkeypatch.setattr(litellm, "callbacks", [requested, default_on, post_call_only, scanner])
 
     with caplog.at_level("WARNING"):
-        result = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+        result: Final[dict[str, object]] = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
             user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
-            data={
-                "model": "m",
-                "state": "s",
-                "messages": [{"role": "user", "content": "hi"}],
-                "metadata": {"guardrails": ["requested-native"]},
-            },
+            data={**_REQUEST_WITH_EVERY_TEXT_FIELD, "metadata": {"guardrails": ["requested-native"]}},
             call_type=call_type,
         )
 
     assert requested.native_hooks_ran == [call_type]
-    assert ("requested-native" in _applied_guardrails(result)) is listed
-    warnings = [
+    assert "requested-native" in _applied_guardrails(result)
+    warnings: Final = [
         record.getMessage() for record in caplog.records if "do not implement apply_guardrail" in record.getMessage()
     ]
     assert warnings == ([] if warning is None else [warning])
 
 
+def _tool_permission_guardrail() -> ToolPermissionGuardrail:
+    return ToolPermissionGuardrail(
+        guardrail_name="tool-permission",
+        event_hook=GuardrailEventHooks.pre_call,
+        rules=[],
+        default_action="allow",
+        on_disallowed_action="block",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("call_type", "listed"), (("aextraction", False), ("adecisions", False), ("acompletion", True)))
+async def test_requested_built_in_guardrail_is_listed_only_where_its_hook_reads_the_text(
+    monkeypatch: pytest.MonkeyPatch, call_type: CallTypesLiteral, listed: bool
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_tool_permission_guardrail()])
+
+    result: Final[dict[str, object]] = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
+        data={**_REQUEST_WITH_EVERY_TEXT_FIELD, "metadata": {"guardrails": ["tool-permission"]}},
+        call_type=call_type,
+    )
+
+    assert ("tool-permission" in _applied_guardrails(result)) is listed
+
+
 class _ReroutesToPrivateModel(CustomGuardrail):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(
             guardrail_name="reroute", event_hook=GuardrailEventHooks.pre_call, default_on=True, run_in_parallel=True
         )
 
-    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: CallTypesLiteral,
+    ) -> dict[str, object]:
         raise SensitiveDataRouteException(
             route_to_model="private-model", session_id="s1", guardrail_name="reroute", sticky_session_routing=False
         )
@@ -1278,54 +1358,54 @@ class _ReroutesToPrivateModel(CustomGuardrail):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("call_type", "listed"), (("aextraction", False), ("acompletion", True)))
-async def test_rerouted_request_lists_a_requested_guardrail_only_where_it_reads_the_text(
-    monkeypatch, call_type, listed
-):
-    requested = _ReadsNoDecisionText("requested-native")
-    monkeypatch.setattr(litellm, "callbacks", [requested, _ReroutesToPrivateModel()])
+async def test_rerouted_request_lists_a_requested_built_in_guardrail_only_where_it_reads_the_text(
+    monkeypatch: pytest.MonkeyPatch, call_type: CallTypesLiteral, listed: bool
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_tool_permission_guardrail(), _ReroutesToPrivateModel()])
 
-    result = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+    result: Final[dict[str, object]] = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
-        data={
-            "model": "m",
-            "state": "s",
-            "messages": [{"role": "user", "content": "hi"}],
-            "metadata": {"guardrails": ["requested-native"]},
-        },
+        data={**_REQUEST_WITH_EVERY_TEXT_FIELD, "metadata": {"guardrails": ["tool-permission"]}},
         call_type=call_type,
     )
 
     assert result["model"] == "private-model"
-    assert ("requested-native" in _applied_guardrails(result)) is listed
+    assert ("tool-permission" in _applied_guardrails(result)) is listed
 
 
 class _RecordsScans(_AppliesGuardrail):
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
-        self.scanned = []
+        self.scanned: list[str] = []
 
-    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
         self.scanned.append(input_type)
         return inputs
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ("/v1/decisions", "/v1/systemone"))
-async def test_post_call_guardrail_leaves_decision_answers_unscanned_and_unlisted(monkeypatch, route):
-    from litellm.types.decisions import OpenAIDecisionResponse
-
-    guardrail = _RecordsScans(event_hook=GuardrailEventHooks.post_call, default_on=True)
+async def test_post_call_guardrail_leaves_decision_answers_unscanned_and_unlisted(
+    monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    guardrail: Final = _RecordsScans(event_hook=GuardrailEventHooks.post_call, default_on=True)
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
-    response = OpenAIDecisionResponse.model_validate(
+    response: Final = OpenAIDecisionResponse.model_validate(
         {
             "model": "m",
             "answers": [{"type": "refusal", "name": "q"}],
             "usage": {"input_tokens": 1, "output_tokens": 0, "total_tokens": 1},
         }
     )
-    data = {"model": "m", "metadata": {}}
+    data: Final[dict[str, object]] = {"model": "m", "metadata": {}}
 
-    result = await ProxyLogging(user_api_key_cache=DualCache()).post_call_success_hook(
+    result: Final = await ProxyLogging(user_api_key_cache=DualCache()).post_call_success_hook(
         data=data,
         response=response,
         user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route=route),
@@ -1333,4 +1413,4 @@ async def test_post_call_guardrail_leaves_decision_answers_unscanned_and_unliste
 
     assert result is response
     assert guardrail.scanned == []
-    assert _applied_guardrails(data) == []
+    assert _applied_guardrails(data) == ()

@@ -345,7 +345,8 @@ _VIEW_SETUP_GATE_TABLE: Final = '"LiteLLM_SpendLogs"'
 _VIEW_SETUP_GATE_PROBE_ROWS: Final = TypeAdapter(tuple[Mapping[str, bool], ...])
 _DELEGATED_ATTRIBUTE: Final = TypeAdapter(object)
 _REQUESTED_GUARDRAILS: Final = TypeAdapter(tuple[object, ...])
-_DECISIONS_CALL_TYPES: Final = frozenset((CallTypes.decisions.value, CallTypes.adecisions.value))
+_REQUEST_SCAN_HOOKS: Final = (GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call)
+_SHIPPED_GUARDRAIL_MODULES: Final = ("litellm.", "litellm_enterprise.")
 
 _ViewSetupOutcome: TypeAlias = Literal["ready", "timed_out"]
 _ViewSetupAttempt: TypeAlias = Literal["ready", "table_missing"] | Exception
@@ -730,28 +731,43 @@ def _partition_post_call_callbacks() -> tuple[tuple[CustomGuardrail, ...], tuple
     return (guardrails, others)
 
 
-def _warn_on_guardrails_that_cannot_scan(requested: tuple[object, ...], call_type: str) -> None:
-    requested_names: Final = frozenset(name for name in requested if isinstance(name, str))
+def _scans_requests(
+    guardrail: CustomGuardrail,
+    data: dict[str, object],  # mutable-ok: the proxy's request dict
+) -> bool:
+    return any(guardrail.should_run_guardrail(data=data, event_type=hook) is True for hook in _REQUEST_SCAN_HOOKS)
+
+
+def _warn_on_guardrails_that_cannot_scan(
+    data: dict[str, object],  # mutable-ok: the proxy's request dict
+    call_type: str,
+) -> None:
     unscannable: Final = tuple(
         callback.guardrail_name
         for callback in ProxyLogging.callback_capabilities().resolved_callbacks
         if isinstance(callback, CustomGuardrail)
         and callback.guardrail_name is not None
-        and (callback.default_on or callback.guardrail_name in requested_names)
         and "apply_guardrail" not in type(callback).__dict__
+        and _scans_requests(callback, data)
     )
     if unscannable:
         verbose_proxy_logger.warning(
-            "Guardrails %s do not implement apply_guardrail, so they %s",
+            "Guardrails %s do not implement apply_guardrail, so on %s requests they scan only the fields their own hook reads",
             ", ".join(unscannable),
-            _unscanned_request_text(call_type),
+            call_type,
         )
 
 
-def _unscanned_request_text(call_type: str) -> str:
-    if call_type in _DECISIONS_CALL_TYPES:
-        return f"skip the question instructions of {call_type} requests and see the input only where their own hook reads it"
-    return f"cannot scan the text of {call_type} requests"
+def _requested_user_defined_guardrails(requested: frozenset[str], call_type: str) -> tuple[str, ...]:
+    return tuple(
+        callback.guardrail_name
+        for callback in ProxyLogging.callback_capabilities().resolved_callbacks
+        if isinstance(callback, CustomGuardrail)
+        and callback.guardrail_name is not None
+        and callback.guardrail_name in requested
+        and not runs_through_apply_guardrail(callback, call_type)
+        and not type(callback).__module__.startswith(_SHIPPED_GUARDRAIL_MODULES)
+    )
 
 
 def _merge_pipeline_metadata_bucket(data: dict, bucket_key: str, modified_bucket_value: object) -> None:
@@ -2738,12 +2754,19 @@ class ProxyLogging:
             guardrails_in_metadata = metadata_litellm.get("guardrails", [])
 
         if call_type in APPLY_GUARDRAIL_ONLY_CALL_TYPES:
-            _warn_on_guardrails_that_cannot_scan(
-                _REQUESTED_GUARDRAILS.validate_python(guardrails_in_metadata)
-                if isinstance(guardrails_in_metadata, list)
-                else (),
-                call_type,
+            request: Final = cast("dict[str, object]", data)  # cast-ok: request bodies are str-keyed
+            _warn_on_guardrails_that_cannot_scan(request, call_type)
+            requested: Final = frozenset(
+                name
+                for name in (
+                    _REQUESTED_GUARDRAILS.validate_python(guardrails_in_metadata)
+                    if isinstance(guardrails_in_metadata, list)
+                    else ()
+                )
+                if isinstance(name, str)
             )
+            for guardrail_name in _requested_user_defined_guardrails(requested, call_type):
+                add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=guardrail_name)
             return
 
         if guardrails_in_metadata and isinstance(guardrails_in_metadata, list):

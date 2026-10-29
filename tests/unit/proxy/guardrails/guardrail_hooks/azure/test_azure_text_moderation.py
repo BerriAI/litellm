@@ -668,8 +668,7 @@ async def test_apply_guardrail_scans_every_text():
             input_type="request",
         )
 
-    assert mock_post.call_count == 2
-    assert [call.kwargs["json"]["text"] for call in mock_post.call_args_list] == ["hello there", "and again"]
+    assert [call.kwargs["json"]["text"] for call in mock_post.call_args_list] == ["hello there\nand again"]
     assert result == {"texts": ["hello there", "and again"]}
 
 
@@ -677,7 +676,7 @@ async def test_apply_guardrail_scans_every_text():
 async def test_apply_guardrail_raises_on_detection_in_any_text():
     guardrail = _moderation_guardrail()
 
-    with patch.object(guardrail.async_handler, "post", side_effect=[_moderation_response(0), _moderation_response(6)]):
+    with patch.object(guardrail.async_handler, "post", return_value=_moderation_response(6)) as mock_post:
         with pytest.raises(HTTPException) as exc_info:
             await guardrail.apply_guardrail(
                 inputs={"texts": ["hello there", "something hateful"]},
@@ -686,6 +685,7 @@ async def test_apply_guardrail_raises_on_detection_in_any_text():
             )
 
     assert exc_info.value.status_code == 400
+    assert mock_post.call_args.kwargs["json"]["text"] == "hello there\nsomething hateful"
 
 
 @pytest.mark.asyncio
