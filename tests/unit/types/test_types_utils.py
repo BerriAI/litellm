@@ -1154,3 +1154,16 @@ def test_batch_dump_applies_nested_include_and_exclude_to_both_usage_shapes() ->
     assert {"prompt_tokens_details", "input_tokens_details"}.isdisjoint(excluded)
     assert (excluded["prompt_tokens"], excluded["input_tokens"]) == (21, 21)
     assert included == {"prompt_tokens": 21, "input_tokens": 21}
+
+
+def test_batch_dump_applies_exclude_defaults_to_the_chat_usage_keys() -> None:
+    batch: Final = LiteLLMBatch.model_validate(
+        {**_BATCH_FIELDS, "usage": Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)}
+    )
+
+    python_usage: Final = batch.model_dump(exclude_defaults=True)["usage"]
+    json_usage: Final = json.loads(batch.model_dump_json(exclude_defaults=True, warnings=False))["usage"]
+
+    assert python_usage == json_usage
+    assert {"prompt_tokens_details", "completion_tokens_details"}.isdisjoint(python_usage)
+    assert (python_usage["prompt_tokens"], python_usage["input_tokens"]) == (10, 10)

@@ -4872,10 +4872,19 @@ class LiteLLMBatch(Batch):
             return usage
         return {
             **usage.model_dump(
-                mode=info.mode, include=info.include, exclude=info.exclude, exclude_none=info.exclude_none
+                mode=info.mode,
+                include=info.include,
+                exclude=info.exclude,
+                exclude_unset=info.exclude_unset,
+                exclude_defaults=info.exclude_defaults,
+                exclude_none=info.exclude_none,
             ),
             **_batch_usage_from_chat_usage(usage).model_dump(
-                mode=info.mode, include=info.include, exclude=info.exclude
+                mode=info.mode,
+                include=info.include,
+                exclude=info.exclude,
+                exclude_unset=info.exclude_unset,
+                exclude_defaults=info.exclude_defaults,
             ),
         }
 

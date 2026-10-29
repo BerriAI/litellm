@@ -2071,6 +2071,9 @@ class Logging(LiteLLMLoggingBaseClass):
             elif router_model_id is None and "model_id" in hidden_params:  # use model_id if not already set
                 router_model_id = hidden_params["model_id"]
 
+        if isinstance(priced_result, LiteLLMBatch) and not batch_cost_is_final(priced_result):
+            return 0.0
+
         # Fallback: extract router_model_id from litellm_params when not available
         # from the result object. ResponsesAPIResponse objects (used by /v1/responses
         # streaming) don't carry _hidden_params["model_id"] like ModelResponse does.

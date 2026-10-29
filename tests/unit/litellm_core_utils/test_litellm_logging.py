@@ -1519,22 +1519,33 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
             litellm_call_id="batch-call-2",
             function_id="f",
         )
-        obj.custom_llm_provider = "openai"
+        obj.update_environment_variables(
+            model="gpt-5.6-luna", user=None, optional_params={}, litellm_params={}, custom_llm_provider="openai"
+        )
         return obj
 
     @staticmethod
     def _batch(status: str, output_file_id: str | None):
         from litellm.types.utils import LiteLLMBatch
 
-        return LiteLLMBatch(
-            id="batch_6a9c99e185588190877d391f8b9d7f8a",
-            completion_window="24h",
-            created_at=1,
-            endpoint="/v1/chat/completions",
-            input_file_id="file-in",
-            object="batch",
-            status="validating",
-            output_file_id=output_file_id,
+        return LiteLLMBatch.model_validate(
+            {
+                "id": "batch_6a9c99e185588190877d391f8b9d7f8a",
+                "completion_window": "24h",
+                "created_at": 1,
+                "endpoint": "/v1/chat/completions",
+                "input_file_id": "file-in",
+                "object": "batch",
+                "status": "validating",
+                "output_file_id": output_file_id,
+                "usage": {
+                    "input_tokens": 29,
+                    "input_tokens_details": {"cached_tokens": 0},
+                    "output_tokens": 48,
+                    "output_tokens_details": {"reasoning_tokens": 0},
+                    "total_tokens": 77,
+                },
+            }
         ).model_copy(update={"status": status})
 
     @pytest.mark.asyncio
@@ -1548,11 +1559,12 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
         handle_completed_batch = AsyncMock()
         monkeypatch.setattr(logging_module, "handle_completed_batch", handle_completed_batch)
         batch = self._batch(status, output_file_id)
+        logging_obj = self._logging_obj()
 
-        await self._logging_obj()._async_success_handler_body(result=batch, start_time=None, end_time=None)
+        await logging_obj._async_success_handler_body(result=batch, start_time=None, end_time=None)
 
         handle_completed_batch.assert_not_awaited()
-        assert "response_cost" not in batch._hidden_params
+        assert logging_obj.model_call_details["response_cost"] == 0.0
 
     @pytest.mark.asyncio
     async def test_completed_batch_with_output_is_priced(self, monkeypatch) -> None:
