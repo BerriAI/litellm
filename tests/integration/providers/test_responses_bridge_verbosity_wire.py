@@ -1,12 +1,17 @@
 import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Final, Literal
 
 import httpx
 import pytest
-from integration._support.client import Gateway, Scenario
+import yaml
+from integration._support import responses_vendor as rv
+from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
 from integration._support.openai_wire import answering_model_discovery, chat_reply, responses_reply
+from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -48,7 +53,7 @@ def _answer(marker: str) -> str:
 
 def _marker_of(request: Request) -> str:
     body: Final = request.body.decode()
-    start: Final = body.find("marker-")
+    start: Final = body.rfind("marker-")
     return body[start + len("marker-") : start + len("marker-") + 32] if start >= 0 else "health"
 
 
@@ -296,3 +301,113 @@ def test_guard_native_responses_route_forwards_text_verbosity_unchanged(gateway:
             _answered(_responses(gateway, model, marker, text=text), marker)
         sent: Final = _only_post(wire, "/v1/responses")
     assert sent == {"model": _GPT, "input": _prompt(marker), "text": text, **({"stream": True} if stream else {})}, sent
+
+
+_CLIENT_TOOL_SEARCH: Final[dict[str, JsonValue]] = {"type": "tool_search", "execution": "client"}
+_CLIENT_TOOL_SEARCH_ON_THE_WIRE: Final[dict[str, JsonValue]] = {
+    "type": "function",
+    "function": {
+        "name": "tool_search",
+        "description": (
+            "Search the deferred tools by keyword. The matching tools are loaded and become callable on the next turn."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query for deferred tools."},
+                "limit": {"type": "integer", "description": "Maximum number of tools to return. Defaults to 8."},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _FollowUpWire:
+    sent: JsonValue
+    expected: dict[str, JsonValue]
+
+
+def _stored_prompts_config(directory: Path) -> Path:
+    stock: Final = _JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    general: Final = _JSON_OBJECT.validate_python(stock["general_settings"])
+    path: Final = directory / "verbosity-stored-turns.yaml"
+    path.write_text(yaml.safe_dump({**stock, "general_settings": {**general, "store_prompts_in_spend_logs": True}}))
+    return path
+
+
+@pytest.fixture(scope="module")
+def stored_turns_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[OwnedProxy, Wire]]:
+    directory: Final = tmp_path_factory.mktemp("verbosity-stored-turns")
+    with _upstream() as wire, gateway_from_environment() as gateway:
+        with owned_proxy_process(gateway, directory, {}, config=_stored_prompts_config(directory)) as owned:
+            yield owned, wire
+
+
+def _stored_first_turn(proxy: Gateway, model: str, marker: str) -> str:
+    first: Final = _responses(proxy, model, marker, tools=[_CLIENT_TOOL_SEARCH])
+    _answered(first, marker)
+    response_id: Final = str(_JSON_OBJECT.validate_json(first.text)["id"])
+    eventually(
+        lambda: proxy.rows('SELECT request_id FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,)),
+        lambda rows: any(rv.same_response(str(row["request_id"]), response_id) for row in rows),
+        seconds=70,
+    )
+    return response_id
+
+
+def _client_tool_search_follow_up(
+    stored_turns_proxy: tuple[OwnedProxy, Wire], stream: bool, **fields: JsonValue
+) -> _FollowUpWire:
+    owned, wire = stored_turns_proxy
+    proxy: Final = owned.gateway
+    first: Final = uuid.uuid4().hex
+    second: Final = uuid.uuid4().hex
+    with proxy.scenario() as scenario:
+        model: Final = _bridged_gpt(scenario, wire)
+        previous: Final = _stored_first_turn(proxy, model, first)
+        wire.drain()
+        follow_up: Final[dict[str, JsonValue]] = {
+            "previous_response_id": previous,
+            "tools": [_CLIENT_TOOL_SEARCH],
+            **fields,
+        }
+        if stream:
+            _streamed_answer(_streamed_events(proxy, model, second, **follow_up), second)
+        else:
+            _answered(_responses(proxy, model, second, **follow_up), second)
+        sent: Final = _only_post(wire, "/v1/chat/completions")
+    return _FollowUpWire(
+        sent,
+        {
+            "model": _GPT,
+            "messages": [
+                *_chat_messages(first),
+                {"role": "assistant", "content": _answer(first)},
+                *_chat_messages(second),
+            ],
+            "tools": [_CLIENT_TOOL_SEARCH_ON_THE_WIRE],
+            **({"stream": True, **_STREAM_OPTIONS} if stream else {}),
+        },
+    )
+
+
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+@pytest.mark.parametrize("verbosity", ["low", "high"])
+def test_regression_client_tool_search_follow_up_sends_text_verbosity_as_top_level_verbosity(
+    stored_turns_proxy: tuple[OwnedProxy, Wire], stream: bool, verbosity: Verbosity
+) -> None:
+    observed: Final = _client_tool_search_follow_up(stored_turns_proxy, stream, text={"verbosity": verbosity})
+    assert observed.sent == {**observed.expected, "verbosity": verbosity}, observed.sent
+
+
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+def test_guard_client_tool_search_follow_up_without_verbosity_sends_no_verbosity(
+    stored_turns_proxy: tuple[OwnedProxy, Wire], stream: bool
+) -> None:
+    observed: Final = _client_tool_search_follow_up(stored_turns_proxy, stream)
+    assert observed.sent == observed.expected, observed.sent
