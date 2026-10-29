@@ -505,7 +505,7 @@ def test_login_form_ignores_open_redirect_return_to(client, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _set_throttle_clock(monkeypatch, now: float) -> None:
+def _set_throttle_clock(monkeypatch: pytest.MonkeyPatch, now: float) -> None:
     from litellm.proxy.auth import login_throttle
 
     monkeypatch.setattr(login_throttle, "time", SimpleNamespace(time=lambda: now))

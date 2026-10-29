@@ -1613,7 +1613,13 @@ async def test_spend_logs_backlog_cannot_starve_tool_index_cleanup():
     mock_prisma_client = MagicMock()
     mock_db = MagicMock()
     _wire_tx(mock_db)
-    mock_db.execute_raw = AsyncMock(return_value=1000)
+    clock: Final = _ManualClock()
+
+    async def _delete_batch(_query: str, *_args: object) -> int:
+        clock.now += 0.1
+        return 1000
+
+    mock_db.execute_raw = AsyncMock(side_effect=_delete_batch)
     mock_prisma_client.db = mock_db
 
     cleaner = SpendLogCleanup(
@@ -1621,18 +1627,17 @@ async def test_spend_logs_backlog_cannot_starve_tool_index_cleanup():
             "maximum_spend_logs_retention_period": "7d",
             "maximum_spend_logs_cleanup_max_batches": 500,
             "maximum_spend_logs_cleanup_run_budget": "1s",
-        }
+        },
+        clock=clock,
     )
     cleaner.pod_lock_manager = None
 
-    started_at = time.monotonic()
     await cleaner.cleanup_old_spend_logs(mock_prisma_client)
-    elapsed = time.monotonic() - started_at
 
     tables = [call[0][0].split('"')[1] for call in mock_db.execute_raw.call_args_list]
     assert tables.count("LiteLLM_SpendLogs") > 0
     assert tables.count("LiteLLM_SpendLogToolIndex") > 0, "tool index cleanup was starved by the spend-log backlog"
-    assert elapsed < 2.5, f"splitting the budget must not extend the run: {elapsed}s"
+    assert clock.now < 1.15, f"splitting the budget must not extend the run: {clock.now}s"
 
 
 @pytest.mark.asyncio
