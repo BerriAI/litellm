@@ -647,48 +647,34 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         custom_llm_provider: Final = litellm_params.get("custom_llm_provider", "openai")
 
         for callback in callbacks:
+            if not isinstance(callback, CustomLogger):
+                continue
             try:
-                if isinstance(callback, CustomLogger):
-                    # Check if the callback has the chat completion agentic loop methods
-                    if not hasattr(callback, "async_should_run_chat_completion_agentic_loop"):
-                        continue
-
-                    # First: Check if agentic loop should run (using chat completion method)
-                    (
-                        should_run,
-                        tool_calls,
-                    ) = await callback.async_should_run_chat_completion_agentic_loop(
-                        response=response,
-                        model=model,
-                        messages=messages,
-                        tools=tools,
-                        stream=stream,
-                        custom_llm_provider=custom_llm_provider,
-                        kwargs=litellm_params,
-                    )
-
-                    if should_run:
-                        # Second: Execute agentic loop
-                        kwargs_with_provider = litellm_params.copy() if litellm_params else {}
-                        kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
-
-                        # For OpenAI Chat Completions, use the chat completion agentic loop method
-                        agentic_response: object = await callback.async_run_chat_completion_agentic_loop(
-                            tools=tool_calls,
-                            model=model,
-                            messages=messages,
-                            response=response,
-                            optional_params=optional_params,
-                            logging_obj=logging_obj,
-                            stream=stream,
-                            kwargs=kwargs_with_provider,
-                        )
-                        # First hook that runs agentic loop wins
-                        return agentic_response
-
+                should_run, tool_calls = await callback.async_should_run_chat_completion_agentic_loop(
+                    response=response,
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    stream=stream,
+                    custom_llm_provider=custom_llm_provider,
+                    kwargs=litellm_params,
+                )
             except Exception as e:
                 verbose_logger.exception(
-                    "LiteLLM.AgenticHookError: Exception in agentic completion hooks for OpenAI: %s", e
+                    "LiteLLM.AgenticHookError: Exception in OpenAI chat completion agentic gate: %s", e
+                )
+                continue
+
+            if should_run:
+                return await callback.async_run_chat_completion_agentic_loop(
+                    tools=tool_calls,
+                    model=model,
+                    messages=messages,
+                    response=response,
+                    optional_params=optional_params,
+                    logging_obj=logging_obj,
+                    stream=stream,
+                    kwargs={**(litellm_params or {}), "custom_llm_provider": custom_llm_provider},
                 )
 
         return None

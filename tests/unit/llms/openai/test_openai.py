@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 import litellm
 from litellm import create_thread, get_thread
 from litellm.caching.caching import Cache, LiteLLMCacheType
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.openai.openai import (
     AssistantEventHandler,
     AsyncAssistantEventHandler,
@@ -221,6 +222,91 @@ async def test_acompletion_returns_prompt_cache_details_over_injected_transport(
     assert isinstance(prompt_tokens_details, PromptTokensDetails)
     assert prompt_tokens_details.cached_tokens == 7
 
+
+
+class _FailingFollowUpChatLoop(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.runs = 0
+
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict,
+    ) -> tuple[bool, dict]:
+        return True, {"tool_calls": [{"id": "call-1"}]}
+
+    async def async_run_chat_completion_agentic_loop(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        optional_params: dict,
+        logging_obj: object,
+        stream: bool,
+        kwargs: dict,
+    ) -> object:
+        self.runs += 1
+        raise litellm.RateLimitError(message="follow-up rate limited", llm_provider="openai", model=model)
+
+
+@pytest.mark.asyncio
+async def test_acompletion_surfaces_a_failed_agentic_follow_up_instead_of_the_first_turn(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    loop: Final = _FailingFollowUpChatLoop()
+    monkeypatch.setattr(litellm, "callbacks", [loop])
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-search",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.6",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "type": "function",
+                                    "function": {"name": "litellm_web_search", "arguments": '{"query": "weather"}'},
+                                }
+                            ],
+                        },
+                    }
+                ],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        with pytest.raises(litellm.RateLimitError, match="follow-up rate limited"):
+            await asyncio.wait_for(
+                litellm.acompletion(
+                    model="openai/gpt-5.6",
+                    api_key="transport-only",
+                    client=AsyncOpenAI(api_key="transport-only", http_client=http_client),
+                    messages=[{"role": "user", "content": "search the web for the weather"}],
+                    num_retries=0,
+                    max_retries=0,
+                ),
+                timeout=10,
+            )
+
+    assert loop.runs == 1
 
 _REASONING_TOOL_CALL_REPLY: Final = {
     "id": "chatcmpl-fake-stream",
