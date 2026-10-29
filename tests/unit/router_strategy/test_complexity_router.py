@@ -24,24 +24,29 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import Router
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.utils import StandardLoggingRoutingDecision
-from litellm.router_utils.auto_router_model_naming import (
-    CUSTOMIZATION_CAPABILITY,
-    GATED_AUTO_ROUTER_CAPABILITIES,
-    HEURISTIC_V2_CAPABILITY,
-    count_capability_routers,
-)
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
     OUTPUT_TOKEN_CEILING_PARAMS,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
 )
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.router import as_output_cap, stamped_client_ceiling
+from litellm.router_strategy.auto_router.auto_router_model_naming import (
+    CUSTOMIZATION_CAPABILITY,
+    GATED_AUTO_ROUTER_CAPABILITIES,
+    HEURISTIC_V2_CAPABILITY,
+    count_capability_routers,
+)
+from litellm.router_strategy.complexity_router.capability_classifier import (
+    CAPABILITY_CLASSIFIER_SYSTEM_PROMPT,
+    CapabilityClassifierVerdict,
+)
 from litellm.router_strategy.complexity_router.complexity_router import (
     _CLASSIFICATION_CURRENT_MESSAGE_ONLY,
     _CLASSIFICATION_WITH_CONVERSATION,
@@ -57,18 +62,14 @@ from litellm.router_strategy.complexity_router.complexity_router import (
     classification_system_prompt,
     custom_tier_classification_prompt,
 )
-from litellm.router_strategy.complexity_router.capability_classifier import (
-    CAPABILITY_CLASSIFIER_SYSTEM_PROMPT,
-    CapabilityClassifierVerdict,
-)
 from litellm.router_strategy.complexity_router.config import (
-    CapabilityCalibrationConfig,
-    CapabilityClassifierConfig,
     DEFAULT_CLASSIFICATION_RUBRIC,
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     DEFAULT_COMPLEXITY_CONFIG,
     DEFAULT_TECHNICAL_KEYWORDS,
     TIER_SEVERITY_ORDER,
+    CapabilityCalibrationConfig,
+    CapabilityClassifierConfig,
     ClassificationRubric,
     ClassifierLLMConfig,
     ComplexityRouterConfig,
@@ -82,10 +83,12 @@ from litellm.router_strategy.complexity_router.jev_classifier import (
     JevUsage,
 )
 from litellm.router_strategy.complexity_router.llm_v2 import LLM_V2_PROMPT_VERSION
+from litellm.router_strategy.complexity_router.request_models import RequestComplexityRouterConfig
 from litellm.router_strategy.complexity_router.tier_predictor import (
     TierGlobalStatistic,
     TrainedTierArtifact,
 )
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import (
     Deployment,
     LiteLLM_Params,
@@ -93,10 +96,7 @@ from litellm.types.router import (
     RouterErrors,
     TaggedPreRoutingStrategy,
 )
-from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.router_strategy.complexity_router.request_models import RequestComplexityRouterConfig
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
+from litellm.types.utils import StandardLoggingRoutingDecision
 
 requires_semantic_router = pytest.mark.skipif(
     sys.version_info >= (3, 14), reason="The semantic-router extra excludes Python 3.14"
@@ -7455,35 +7455,14 @@ class TestSessionAffinity:
         assert simple.model == "gpt-4o-mini"
 
     @pytest.mark.asyncio
-    async def test_respects_ttl_seconds(self, mock_router_instance, basic_config):
-        cache: Final = AsyncMock(in_memory_cache=DualCache().in_memory_cache, redis_cache=None)
-        cache.async_get_cache = AsyncMock(return_value=None)
+    @pytest.mark.parametrize("preexisting", [False, True])
+    async def test_session_pin_ttl_slides_on_replay(
+        self, mock_router_instance: MagicMock, basic_config: dict[str, object], preexisting: bool
+    ) -> None:
+        clock: Final = MagicMock(return_value=100.0)
+        cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock))
         mock_router_instance.cache = cache
-        router = ComplexityRouter(
-            model_name="test-router",
-            litellm_router_instance=mock_router_instance,
-            complexity_router_config={
-                **basic_config,
-                "session_affinity": True,
-                "session_affinity_ttl_seconds": 120,
-            },
-        )
-        await router.async_pre_routing_hook(
-            model="test-model", request_kwargs=self._request_kwargs("session-1"), messages=self.SIMPLE_MESSAGE
-        )
-        cache.async_set_cache.assert_called_once()
-        call_kwargs = cache.async_set_cache.call_args.kwargs
-        assert call_kwargs["ttl"] == 120
-        assert call_kwargs["value"] == {"model": "gpt-4o-mini", "tier": "SIMPLE"}
-
-    @pytest.mark.asyncio
-    async def test_ttl_refreshed_on_cache_hit(self, mock_router_instance, basic_config):
-        """Regression: a pinned turn must refresh the TTL, not just the first write --
-        otherwise a session outliving session_affinity_ttl_seconds silently loses its pin."""
-        cache: Final = AsyncMock(in_memory_cache=DualCache().in_memory_cache, redis_cache=None)
-        cache.async_get_cache = AsyncMock(return_value="o1-preview")
-        mock_router_instance.cache = cache
-        router = ComplexityRouter(
+        router: Final = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
@@ -7492,14 +7471,153 @@ class TestSessionAffinity:
                 "session_affinity_ttl_seconds": 90,
             },
         )
-        result = await router.async_pre_routing_hook(
-            model="test-model", request_kwargs=self._request_kwargs("session-1"), messages=self.SIMPLE_MESSAGE
+        request_kwargs: Final = self._request_kwargs("session-1")
+        key: Final = router._get_session_affinity_cache_key("session-1", request_kwargs)
+        if preexisting:
+            cache.in_memory_cache.set_cache(key, "o1-preview", ttl=90)
+        first: Final = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
         )
-        assert result.model == "o1-preview"
-        cache.async_set_cache.assert_called_once()
-        call_kwargs = cache.async_set_cache.call_args.kwargs
-        assert call_kwargs["value"] == {"model": "o1-preview", "tier": "REASONING"}
-        assert call_kwargs["ttl"] == 90
+        assert first.model == ("o1-preview" if preexisting else "gpt-4o-mini")
+        clock.return_value = 180.0
+        replay: Final = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert replay.model == first.model
+        clock.return_value = 200.0
+        assert cache.in_memory_cache.get_cache(key) == (
+            "o1-preview" if preexisting else {"model": "gpt-4o-mini", "tier": "SIMPLE"}
+        )
+        clock.return_value = 271.0
+        assert cache.in_memory_cache.get_cache(key) is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("batch_pending", [False, True])
+    @pytest.mark.parametrize("remote_state", ["latest", "interleaved", "outage"])
+    async def test_continuation_follows_redis_and_never_republishes_a_stale_pin(
+        self, mock_router_instance: MagicMock, basic_config: dict[str, object], remote_state: str, batch_pending: bool
+    ) -> None:
+        from fakeredis import FakeRedis
+        from redis.asyncio import BlockingConnectionPool, Connection, Redis
+        from redis.asyncio.retry import Retry
+        from redis.backoff import NoBackoff
+
+        from litellm.caching.redis_batch import request_redis_batch_scope
+
+        clock: Final = MagicMock(return_value=100.0)
+        simple: Final = {"model": "gpt-4o-mini", "tier": "SIMPLE"}
+        latest: Final = {"model": "o1-preview", "tier": "REASONING"}
+        stored: Final = {"pin": json.dumps(simple if remote_state == "interleaved" else latest)}
+        available: Final = asyncio.Event()
+        read_started: Final = asyncio.Event()
+        release_read: Final = asyncio.Event()
+        if remote_state != "outage":
+            available.set()
+        if remote_state != "interleaved":
+            release_read.set()
+
+        async def execute(*args: object, **kwargs: object) -> object:
+            if args[0] in ("EVALSHA", "GET", "MGET"):
+                if not available.is_set():
+                    raise ConnectionError("Redis unavailable")
+                if args[0] == "MGET":
+                    return [json.dumps("other-value")]
+                observed: Final = stored["pin"]
+                read_started.set()
+                await release_read.wait()
+                return observed
+            if args[0] == "SET":
+                stored["pin"] = str(args[2])
+            return b"PONG" if args[0] == "PING" else b"OK"
+
+        pack_commands: Final = MagicMock(side_effect=tuple)
+
+        async def connection() -> MagicMock:
+            replies: Final[asyncio.Queue[object]] = asyncio.Queue()
+
+            async def send_command(*args: object) -> None:
+                await replies.put(await execute(*args))
+
+            async def send_packed_command(commands: Sequence[Sequence[object]]) -> None:
+                for command in commands:
+                    await send_command(*command)
+
+            return MagicMock(
+                spec=Connection,
+                retry=Retry(NoBackoff(), 0),
+                send_command=AsyncMock(side_effect=send_command),
+                pack_commands=pack_commands,
+                send_packed_command=AsyncMock(side_effect=send_packed_command),
+                read_response=AsyncMock(side_effect=replies.get),
+            )
+
+        sync_client: Final = FakeRedis()
+        pool: Final = MagicMock(
+            spec=BlockingConnectionPool,
+            connection_kwargs={"protocol": 2},
+            get_encoder=sync_client.get_encoder,
+            get_connection=AsyncMock(side_effect=connection),
+            release=AsyncMock(),
+        )
+        client: Final = Redis(connection_pool=pool)
+        redis_cache: Final = RedisCache(host="tier-pin-fixture", connection_pool=sync_client.connection_pool)
+        client_key: Final = redis_cache._get_async_client_cache_key()
+        litellm.in_memory_llm_clients_cache.set_cache(key=client_key, value=client)
+        try:
+            cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock), redis_cache=redis_cache)
+            mock_router_instance.cache = cache
+            router: Final = ComplexityRouter(
+                model_name="test-router",
+                litellm_router_instance=mock_router_instance,
+                complexity_router_config={
+                    **basic_config,
+                    "classification_mode": "user_turn",
+                    "deployment_affinity": False,
+                    "session_affinity_ttl_seconds": 10,
+                },
+            )
+            request: Final = self._request_kwargs("shared-session")
+            key: Final = router._get_session_affinity_cache_key("shared-session", request)
+            cache.in_memory_cache.set_cache(key, simple, ttl=10)
+            clock.return_value = 105.0
+            messages: Final = [*self.SIMPLE_MESSAGE, {"role": "tool", "content": "done"}]
+            with request_redis_batch_scope() as scope:
+                batch: Final = scope.batch(redis_cache)
+                unrelated: Final = batch.mget(("other",)) if batch_pending else None
+                pending: Final = asyncio.create_task(router.async_pre_routing_hook("m", request, messages))
+                if remote_state == "interleaved":
+                    await asyncio.wait_for(read_started.wait(), timeout=1)
+                    stored["pin"] = json.dumps(latest)
+                    release_read.set()
+                result: Final = await pending
+                if unrelated is not None:
+                    if remote_state == "outage":
+                        with pytest.raises(ConnectionError, match="Redis unavailable"):
+                            await unrelated
+                    else:
+                        assert await unrelated == {"other": "other-value"}
+                assert result.model == (latest["model"] if remote_state == "latest" else simple["model"])
+                assert result.routing_decision["cause"] == "user_turn_continuation"
+                assert json.loads(stored["pin"]) == latest
+                clock.return_value = 111.0
+                assert cache.in_memory_cache.get_cache(key) is not None
+                available.set()
+                recovery_read: Final = batch.mget(("other",)) if batch_pending else None
+                recovered: Final = await router.async_pre_routing_hook("m", request, messages)
+                if recovery_read is not None:
+                    assert await recovery_read == {"other": "other-value"}
+                assert recovered.model == latest["model"]
+                assert cache.in_memory_cache.get_cache(key) == latest
+                assert read_started.is_set()
+                assert tuple(
+                    tuple(args[0] for args in sent.args[0]) for sent in pack_commands.call_args_list
+                ) == (("MGET", "EVALSHA"),) * (2 if batch_pending else 0)
+        finally:
+            for cached_key in tuple(litellm.in_memory_llm_clients_cache.cache_dict):
+                if client_key in cached_key:
+                    litellm.in_memory_llm_clients_cache.delete_cache(cached_key)
+            await client.aclose()
+            sync_client.close()
 
     @pytest.mark.asyncio
     async def test_different_api_keys_do_not_share_pin(self, mock_router_instance, session_affinity_config):
@@ -7593,6 +7711,176 @@ class TestSessionAffinity:
 class _DummyPlugin:
     async def run(self, context):
         return context
+
+
+class TestChildSessionTierPins:
+    @staticmethod
+    def _router(session_affinity: bool = False) -> Router:
+        return Router(
+            model_list=[
+                {
+                    "model_name": "child-tier-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": {
+                            "tiers": {"SIMPLE": "simple", "REASONING": ["reasoning", "reasoning-peer"]},
+                            "classification_mode": "user_turn",
+                            "session_affinity": session_affinity,
+                            "keyword_tier_rules": [{"keywords": ["reason carefully"], "tier": "REASONING"}],
+                        },
+                    },
+                },
+                *[
+                    {
+                        "model_name": group,
+                        "litellm_params": {"model": "openai/test-model", "api_key": "test-only"},
+                        "model_info": {"id": f"{group}-{index}"},
+                    }
+                    for group, index in (
+                        ("simple", 0), ("simple", 1), ("reasoning", 0),
+                        ("reasoning", 1), ("reasoning-peer", 0), ("reasoning-peer", 1),
+                    )
+                ],
+            ],
+            num_retries=0,
+        )
+
+    @staticmethod
+    def _normalized_request(
+        surface: str, session_id: str | None, caller: str = "caller-a", child: bool = True
+    ) -> tuple[dict[str, object], str]:
+        from litellm.proxy.litellm_pre_call_utils import (
+            LiteLLMProxyRequestSetup,
+            metadata_variable_name_for_route,
+        )
+
+        route: Final = {
+            "chat": "/v1/chat/completions", "responses": "/v1/responses", "messages": "/v1/messages"
+        }[surface]
+        bucket: Final = metadata_variable_name_for_route(route)
+        data: Final[dict[str, object]] = {bucket: {"user_api_key_hash": caller, "user_api_key_request_route": route}}
+        LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers={
+                **({"X-Session-Id": session_id} if session_id is not None else {}),
+                **({"x-parent-session-id": "parent-session"} if child else {}),
+            },
+            data=data,
+            _metadata_variable_name=bucket,
+        )
+        return data, bucket
+
+    async def _route(
+        self, router: Router, surface: str, session_id: str | None, prompt: str | None,
+        expected_tier: str, expected_cause: str, caller: str = "caller-a", child: bool = True,
+        expected_deployment: str | None = None,
+    ) -> str:
+        from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityCheck
+
+        data, bucket = self._normalized_request(surface, session_id, caller, child)
+        turn: Final[dict[str, object]] = (
+            {"role": "user", "content": prompt} if prompt is not None else
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "done"}]}
+            if surface == "messages" else
+            {"type": "function_call_output", "call_id": "call_1", "output": "done"}
+            if surface == "responses" else
+            {"role": "tool", "tool_call_id": "call_1", "content": "done"}
+        )
+        tool_call: Final = (
+            {"type": "function_call", "call_id": "call_1", "name": "read_file", "arguments": "{}"}
+            if surface == "responses" else
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "call_1", "name": "read_file", "input": {}}]}
+            if surface == "messages" else TestClassificationMode.TOOL_CALL_1
+        )
+        turns: Final = [turn] if prompt is not None else [TestClassificationMode.SIMPLE_ASK, tool_call, turn]
+        if surface == "responses":
+            data["input"] = turns
+        selected: Final = await router.async_get_available_deployment(
+            model="child-tier-router", request_kwargs=data,
+            messages=None if surface == "responses" else turns,
+            input=turns if surface == "responses" else None,
+        )
+        metadata: Final = data[bucket]
+        assert isinstance(metadata, dict)
+        assert (metadata["session_id"], metadata["trace_id"], data["litellm_session_id"], data["litellm_trace_id"]) == (
+            "parent-session", "parent-session", "parent-session", "parent-session"
+        )
+        assert (metadata["routing_decision"]["tier"], metadata["routing_decision"]["cause"]) == (
+            expected_tier, expected_cause
+        )
+        affinity: Final = next(cb for cb in router.optional_callbacks or () if isinstance(cb, DeploymentAffinityCheck))
+        if expected_deployment is not None:
+            filtered: Final = await affinity.async_filter_deployments(
+                model=selected["model_name"], healthy_deployments=router.get_model_list(selected["model_name"]) or [],
+                messages=None, request_kwargs=data,
+            )
+            assert [deployment["model_info"]["id"] for deployment in filtered] == [expected_deployment]
+            assert selected["model_info"]["id"] == expected_deployment
+        await affinity.async_pre_call_deployment_hook(
+            kwargs={
+                **data, "model_info": selected["model_info"],
+                bucket: {**metadata, "deployment_model_name": selected["model_name"]},
+            },
+            call_type=None,
+        )
+        return str(selected["model_info"]["id"])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+    async def test_children_keep_their_tier_without_replacing_the_parent(self, surface: str) -> None:
+        router: Final = self._router()
+        try:
+            parent: Final = await self._route(
+                router, surface, "parent-session", "reason carefully", "REASONING", "literal_keyword_match", child=False
+            )
+            for session, prompt, tier, cause, caller, child in (
+                ("child-session-a", "Hello!", "SIMPLE", "heuristic_scorer", "caller-a", True),
+                ("child-session-a", None, "SIMPLE", "user_turn_continuation", "caller-a", True),
+                ("parent-session", None, "REASONING", "user_turn_continuation", "caller-a", False),
+                ("child-session-b", None, "SIMPLE", "heuristic_scorer", "caller-a", True),
+                ("child-session-b", "reason carefully", "REASONING", "literal_keyword_match", "caller-a", True),
+                ("child-session-a", None, "SIMPLE", "user_turn_continuation", "caller-a", True),
+                ("child-session-a", "reason carefully", "REASONING", "literal_keyword_match", "caller-b", True),
+                ("child-session-a", None, "SIMPLE", "user_turn_continuation", "caller-a", True),
+                (None, "Hello!", "SIMPLE", "heuristic_scorer", "caller-a", True),
+                (None, None, "SIMPLE", "heuristic_scorer", "caller-a", True),
+            ):
+                await self._route(
+                    router, surface, session, prompt, tier, cause, caller, child,
+                    expected_deployment=parent if tier == "REASONING" and caller == "caller-a" else None,
+                )
+            assert await self._route(
+                router, surface, "parent-session", None, "REASONING", "user_turn_continuation",
+                child=False, expected_deployment=parent,
+            ) == parent
+        finally:
+            router.discard()
+
+    @pytest.mark.asyncio
+    async def test_session_affinity_still_shares_the_parent_tier(self) -> None:
+        router: Final = self._router(session_affinity=True)
+        try:
+            parent: Final = await self._route(
+                router, "chat", "parent-session", "reason carefully", "REASONING", "literal_keyword_match", child=False
+            )
+            assert await self._route(
+                router, "chat", "child-session-a", "Hello!", "REASONING", "session_affinity_pin",
+                expected_deployment=parent,
+            ) == parent
+        finally:
+            router.discard()
+
+    @pytest.mark.asyncio
+    async def test_child_tier_model_affinity_keeps_using_the_parent_identity(self) -> None:
+        router: Final = self._router()
+        try:
+            strategy: Final = router.complexity_routers["child-tier-router"][0].strategy
+            parent, _ = self._normalized_request("chat", "parent-session", child=False)
+            child, _ = self._normalized_request("chat", "child-session-a")
+            candidates: Final = ("reasoning", "reasoning-peer")
+            assert await strategy._pin_model_for_tier("REASONING", "reasoning", candidates, parent) == "reasoning"
+            assert await strategy._pin_model_for_tier("REASONING", "reasoning-peer", candidates, child) == "reasoning"
+        finally:
+            router.discard()
 
 
 class TestClassificationMode:
@@ -13870,8 +14158,7 @@ async def test_session_pin_uses_recorded_tier_when_model_is_in_multiple_tiers(mo
 
 @pytest.mark.asyncio
 async def test_session_pin_survives_json_list_round_trip(mock_router_instance):
-    cache: Final = AsyncMock(in_memory_cache=DualCache().in_memory_cache, redis_cache=None)
-    cache.async_get_cache = AsyncMock(return_value=["shared", "SIMPLE"])
+    cache: Final = DualCache()
     mock_router_instance.cache = cache
     router = ComplexityRouter(
         model_name="test-router",
@@ -13885,6 +14172,8 @@ async def test_session_pin_survives_json_list_round_trip(mock_router_instance):
         },
     )
     request_kwargs = {"metadata": {"session_id": "json-round-trip-session"}}
+    key: Final = router._get_session_affinity_cache_key("json-round-trip-session", request_kwargs)
+    cache.in_memory_cache.set_cache(key, ["shared", "SIMPLE"])
 
     response = await router.async_pre_routing_hook(
         model="test-router",
@@ -13895,7 +14184,7 @@ async def test_session_pin_survives_json_list_round_trip(mock_router_instance):
     assert response is not None
     assert response.model == "shared"
     assert response.litellm_params == {"reasoning_effort": "low"}
-    assert cache.async_set_cache.call_args.kwargs["value"] == {"model": "shared", "tier": "SIMPLE"}
+    assert cache.in_memory_cache.get_cache(key) == ["shared", "SIMPLE"]
 
 
 HEURISTIC_FIRST_TIERS: dict[str, str] = {
@@ -15024,8 +15313,7 @@ class TestModalityRouting:
                 {"role": "user", "content": [{"type": "text", "text": "quick lookup: what is this?"}, IMG_PART]}
             ]
         elif path.startswith(("pin_kept", "pin_replacement", "pin_override")):
-            cache: Final = AsyncMock(in_memory_cache=DualCache().in_memory_cache, redis_cache=None)
-            cache.async_get_cache = AsyncMock(return_value={"model": "text-cheap", "tier": "SIMPLE"})
+            cache: Final = DualCache()
             mock_router_instance.cache = cache
             config["session_affinity"] = True
             request_kwargs = {"metadata": {"session_id": "s1"}}
@@ -15047,6 +15335,11 @@ class TestModalityRouting:
             mock_router_instance.model_list = []
             _answer_deployments_named(mock_router_instance)
         router = self._router(mock_router_instance, config, vision)
+        if path.startswith(("pin_kept", "pin_replacement", "pin_override")):
+            mock_router_instance.cache.in_memory_cache.set_cache(
+                router._get_session_affinity_cache_key("s1", request_kwargs),
+                {"model": "text-cheap", "tier": "SIMPLE"},
+            )
         result = await router.async_pre_routing_hook(model="m", request_kwargs=request_kwargs, messages=messages)
         assert result.model == expected_model
         assert result.routing_decision["cause"] == expected_cause
@@ -15214,8 +15507,7 @@ class TestModalityRouting:
     @pytest.mark.asyncio
     async def test_pin_override_serves_the_image_turn_without_repinning(self, mock_router_instance):
         """The override is for one request: the session keeps the model it was pinned to."""
-        cache: Final = AsyncMock(in_memory_cache=DualCache().in_memory_cache, redis_cache=None)
-        cache.async_get_cache = AsyncMock(return_value={"model": "text-cheap", "tier": "SIMPLE"})
+        cache: Final = DualCache()
         mock_router_instance.cache = cache
         router = self._router(
             mock_router_instance,
@@ -15228,6 +15520,8 @@ class TestModalityRouting:
             dict(self.BASE_VISION),
         )
         request_kwargs = {"metadata": {"session_id": "s1"}}
+        key: Final = router._get_session_affinity_cache_key("s1", request_kwargs)
+        cache.in_memory_cache.set_cache(key, {"model": "text-cheap", "tier": "SIMPLE"})
 
         image_turn = await router.async_pre_routing_hook(
             model="m", request_kwargs=request_kwargs, messages=self.IMAGE_MESSAGE
@@ -15236,7 +15530,7 @@ class TestModalityRouting:
         assert image_turn.routing_decision["cause"] == "modality_pin_override"
         assert "modality_escalated_from:SIMPLE" in image_turn.routing_decision["signals"]
 
-        assert cache.async_set_cache.await_args.kwargs["value"] == {"model": "text-cheap", "tier": "SIMPLE"}
+        assert cache.in_memory_cache.get_cache(key) == {"model": "text-cheap", "tier": "SIMPLE"}
 
         text_turn = await router.async_pre_routing_hook(
             model="m", request_kwargs={"metadata": {"session_id": "s1"}}, messages=[{"role": "user", "content": "hi"}]
@@ -15247,8 +15541,7 @@ class TestModalityRouting:
     @pytest.mark.asyncio
     async def test_pin_override_with_no_capable_model_rejects_and_keeps_the_pin(self, mock_router_instance):
         """The clear 400 replaces the provider's, and a rejected turn must not cost the session its pin."""
-        cache: Final = AsyncMock(in_memory_cache=DualCache().in_memory_cache, redis_cache=None)
-        cache.async_get_cache = AsyncMock(return_value={"model": "text-cheap", "tier": "SIMPLE"})
+        cache: Final = DualCache()
         mock_router_instance.cache = cache
         router = self._router(
             mock_router_instance,
@@ -15260,11 +15553,13 @@ class TestModalityRouting:
             },
             {"text-cheap": False, "text-big": False},
         )
+        key: Final = router._get_session_affinity_cache_key("s1", {"metadata": {"session_id": "s1"}})
+        cache.in_memory_cache.set_cache(key, {"model": "text-cheap", "tier": "SIMPLE"})
         with pytest.raises(litellm.BadRequestError, match="no model"):
             await router.async_pre_routing_hook(
                 model="m", request_kwargs={"metadata": {"session_id": "s1"}}, messages=self.IMAGE_MESSAGE
             )
-        assert cache.async_set_cache.await_args.kwargs["value"] == {"model": "text-cheap", "tier": "SIMPLE"}
+        assert cache.in_memory_cache.get_cache(key) == {"model": "text-cheap", "tier": "SIMPLE"}
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
@@ -16003,7 +16298,6 @@ class TestTierHealthFailover:
         tests can prove the probe passes a kwargs copy and forwards the prompt arguments.
         """
         import litellm as litellm_module
-
         from litellm.types.router import RouterRateLimitError
 
         probed_kwargs = []
@@ -17643,3 +17937,137 @@ class TestNonReasoningTier:
             "complex",
             "reasoning",
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "verdict, expected", [("quick", "fast"), (" CAREFUL ", "capable"), (None, "backup"), ("unknown", "backup")]
+)
+async def test_custom_classifier_infers_tiers_and_routes_fallback(verdict: str | None, expected: str) -> None:
+    router: Final = ComplexityRouter(
+        model_name="auto",
+        litellm_router_instance=litellm.Router(model_list=[]),
+        default_model="backup",
+        complexity_router_config={
+            "classifier_type": "custom",
+            "classifier_plugin": _FixedTierClassifier(verdict),
+            "classifier_fallback": "default_model",
+            "tiers": {"quick": "fast", "careful": "capable"},
+        },
+    )
+    result: Final = await router.async_pre_routing_hook(
+        model="auto", request_kwargs={}, messages=[{"role": "user", "content": "hello"}]
+    )
+    assert result is not None
+    assert result.model == expected
+
+
+@pytest.mark.asyncio
+async def test_custom_classifier_can_extend_builtin_tiers() -> None:
+    router: Final = ComplexityRouter(
+        model_name="auto",
+        litellm_router_instance=litellm.Router(model_list=[]),
+        default_model="backup",
+        complexity_router_config={
+            "classifier_type": "custom",
+            "classifier_plugin": _FixedTierClassifier("SECURITY"),
+            "classifier_fallback": "default_model",
+            "tiers": {"SIMPLE": "fast", "REASONING": "capable", "SECURITY": "security-model"},
+        },
+    )
+    result: Final = await router.async_pre_routing_hook(
+        model="auto", request_kwargs={}, messages=[{"role": "user", "content": "LITELLM ESCALATE"}]
+    )
+    assert result is not None
+    assert result.model == "security-model"
+
+
+@pytest.mark.parametrize(
+    "tiers", [{"": "fast"}, {" quick": "fast"}, {"quick": "fast", "QUICK": "capable"}, {"quick": []}]
+)
+def test_inferred_custom_tiers_reject_unusable_routes(tiers: dict[str, str | list[str]]) -> None:
+    with pytest.raises(ValidationError):
+        ComplexityRouterConfig(
+            classifier_type="custom",
+            classifier_plugin=_FixedTierClassifier("quick"),
+            classifier_fallback="default_model",
+            tiers=tiers,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_fallback", [None, "quick"])
+async def test_defined_custom_tiers_allow_default_model_fallback(explicit_fallback: str | None) -> None:
+    router: Final = ComplexityRouter(
+        model_name="auto",
+        litellm_router_instance=litellm.Router(model_list=[]),
+        default_model="backup",
+        complexity_router_config={
+            "classifier_type": "custom",
+            "classifier_plugin": _RaisingClassifier(),
+            "classifier_fallback": "default_model",
+            "tiers": {"quick": "fast", "careful": "capable"},
+            "tier_definitions": [
+                {"name": "quick", "description": "Routine work"},
+                {"name": "careful", "description": "Difficult work"},
+            ],
+            "fallback_tier": explicit_fallback,
+        },
+    )
+    result: Final = await router.async_pre_routing_hook(
+        model="auto", request_kwargs={}, messages=[{"role": "user", "content": "hello"}]
+    )
+    assert result is not None
+    assert result.model == ("fast" if explicit_fallback else "backup")
+
+
+@pytest.mark.parametrize("setting", ["adaptive", "session_affinity", "stall_escalation_enabled"])
+def test_inferred_custom_tiers_reject_order_dependent_features(setting: str) -> None:
+    with pytest.raises(ValidationError, match="severity order"):
+        ComplexityRouterConfig.model_validate(
+            {
+                "classifier_type": "custom",
+                "classifier_plugin": _FixedTierClassifier("quick"),
+                "classifier_fallback": "default_model",
+                "tiers": {"quick": "fast", "careful": "capable"},
+                setting: True,
+            }
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("defined", [False, True])
+@pytest.mark.parametrize("plan_mode", [False, True])
+@pytest.mark.parametrize(
+    "default_model,planned_model",
+    [("backup", "capable"), ("fast", "capable"), ("capable", "capable"), ("premium-model", "premium-model")],
+)
+async def test_custom_classifier_failure_preserves_plan_floor_and_direct_default(
+    defined: bool, plan_mode: bool, default_model: str, planned_model: str
+) -> None:
+    definitions: Final = (
+        [{"name": name, "description": name} for name in ("quick", "careful", "premium")] if defined else None
+    )
+    router: Final = ComplexityRouter(
+        model_name="auto",
+        litellm_router_instance=litellm.Router(model_list=[]),
+        default_model=default_model,
+        complexity_router_config={
+            "classifier_type": "custom",
+            "classifier_plugin": _RaisingClassifier(),
+            "classifier_fallback": "default_model",
+            "tiers": {"quick": "fast", "careful": "capable", "premium": "premium-model"},
+            "tier_definitions": definitions,
+            "plan_mode_min_tier": "careful",
+        },
+    )
+    prompt: Final = "<system-reminder>Plan mode is active</system-reminder> hello" if plan_mode else "hello"
+    result: Final = await router.async_pre_routing_hook(
+        model="auto", request_kwargs={}, messages=[{"role": "user", "content": prompt}]
+    )
+    assert result is not None
+    assert result.model == (planned_model if plan_mode else default_model)
+    assert result.routing_decision is not None
+    assert result.routing_decision.get("tier") == (
+        ("premium" if planned_model == "premium-model" else "careful") if plan_mode else None
+    )

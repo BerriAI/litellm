@@ -73,9 +73,6 @@ from litellm.constants import (
     MCP_UPSTREAM_SESSION_SHUTDOWN_TIMEOUT_SECONDS,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-from litellm.integrations.custom_guardrail import (
-    _sync_guardrail_info_to_logging_obj,  # pyright: ignore[reportPrivateUsage] - the same bridge @log_guardrail_information uses; reimplementing it here would fork the metadata-key logic
-)
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.mcp_client.client import (
@@ -181,10 +178,14 @@ from litellm.proxy.mcp_server.stdio_gate import (
     warn_if_mcp_stdio_blocked,
 )
 from litellm.proxy.mcp_server.tool_catalog_guard import (
+    BlockedTool,
     CatalogAlert,
     apply_description_overrides,
     pin_tool_catalog,
     scan_tool_descriptions,
+)
+from litellm.proxy.mcp_server.tool_catalog_guard import (
+    record_mcp_guardrail_evaluations as _record_mcp_guardrail_evaluations,
 )
 from litellm.proxy.mcp_server.upstream import (
     passthrough_token_from_mcp_auth_header,
@@ -222,6 +223,7 @@ from litellm.proxy.middleware.per_request_root_path_middleware import (
     get_request_root_path,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -1194,8 +1196,11 @@ def should_strip_caller_authorization(
       pass-through cold-start case (RFC 9728) the bearer in
       ``Authorization`` is the upstream OAuth token and must be
       forwarded, so we keep it.
-    - **Delegated OAuth servers**: admission always runs and there is no
-      anonymous path, so the caller's separate ``Authorization`` is
+    - **Legacy delegate servers**: forward when MCP admission marked the
+      caller's ``Authorization`` as the upstream token
+      (``mcp_forwards_caller_authorization``); otherwise follow the
+      delegated OAuth rule below.
+    - **Delegated OAuth servers**: the caller's separate ``Authorization`` is
       forwarded only when a distinct ``x-litellm-api-key`` carried
       admission. Without that header the ``Authorization`` *was* the
       admission credential — a virtual key, an IdP JWT, or an SSO / OIDC /
@@ -1204,6 +1209,12 @@ def should_strip_caller_authorization(
     - **Every other auth-enabled mode**: strip when ``Authorization`` is the
       credential admission validated.
     """
+    if (
+        user_api_key_auth is not None
+        and user_api_key_auth.mcp_forwards_caller_authorization
+        and is_legacy_upstream_delegate(mcp_server)
+    ):
+        return False
     if _authorization_is_admission_jwt(raw_headers, user_api_key_auth):
         return True
     if mcp_server.auth_type == MCPAuth.oauth2_token_exchange:
@@ -1555,6 +1566,18 @@ async def _materialize_auth_headers(auth: httpx2.Auth | None) -> dict[str, str] 
     return {header_name: header_value} if header_value else None
 
 
+def is_legacy_upstream_delegate(server: MCPServer) -> bool:
+    """True for an interactive ``auth_type=oauth2`` server with ``delegate_auth_to_upstream=true``, whose
+    caller ``Authorization`` is the upstream token. The flow is resolved, not read from the column, so an
+    unstamped M2M-shaped row stays excluded: its stored client credentials drive egress, and admitting it
+    anonymously would let any caller act as LiteLLM's service account."""
+    return (
+        server.auth_type == MCPAuth.oauth2
+        and server.delegate_auth_to_upstream is True
+        and MCPServerManager.effective_oauth2_flow(server) != "client_credentials"
+    )
+
+
 def _consumes_caller_authorization(server: MCPServer) -> bool:
     """True when this server's egress forwards the caller's request-wide ``Authorization`` upstream:
     the client-forwarded token modes, legacy OAuth pass-through, and legacy upstream-delegated
@@ -1724,18 +1747,15 @@ def _warn_overlapping_tool_policies(server: MCPServer) -> None:
 
 
 def _warn_legacy_delegate_auth_if_applicable(server: MCPServer, *, source: str) -> None:
-    """Direct legacy delegated OAuth configurations to the admitted replacement."""
-    if server.auth_type != MCPAuth.oauth2:
-        return
-    if getattr(server, "delegate_auth_to_upstream", False) is not True:
-        return
-    if server.has_client_credentials:
+    """Point legacy delegated OAuth configurations at the client-forwarded replacements."""
+    if not is_legacy_upstream_delegate(server):
         return
     label: Final = get_server_prefix(server)
     verbose_logger.warning(
         "MCP server %r (id=%s, source=%s) uses deprecated auth_type=oauth2 with "
-        "delegate_auth_to_upstream=true. LiteLLM admission is now required; migrate to "
-        "auth_type=oauth_delegate for client-forwarded OAuth.",
+        "delegate_auth_to_upstream=true. It still works: a caller without a LiteLLM credential is "
+        "admitted anonymously and its upstream token is forwarded. Migrate to auth_type=true_passthrough "
+        "or auth_type=oauth_delegate.",
         label,
         server.server_id,
         source,
@@ -1864,35 +1884,6 @@ def _create_elicitation_callback(timeout: float | None = None):
     from litellm.proxy.mcp_server.legacy_callbacks import create_elicitation_callback
 
     return create_elicitation_callback(timeout=timeout)
-
-
-def _record_mcp_guardrail_evaluations(
-    synthetic_llm_data: dict[str, object],  # mutable-ok: `_sync_guardrail_info_to_logging_obj` takes a concrete dict
-    litellm_logging_obj: "LiteLLMLoggingObj | None",
-) -> None:
-    """Bridge guardrail decision records off an MCP synthetic request onto the request's logger.
-
-    MCP guardrails run against a throwaway LLM-shaped dict from
-    ``ProxyLogging._convert_mcp_to_llm_format``, so ``@log_guardrail_information``
-    files ``standard_logging_guardrail_information`` in that dict's metadata bucket,
-    which ``get_standard_logging_object_payload`` never reads. Native (non-unified)
-    guardrails receive no ``logging_obj`` kwarg, so the decorator cannot bridge on
-    their behalf; this calls the same helper it would have.
-
-    Only the decision records move. The synthetic request's messages and tool
-    arguments stay behind: they can carry end-user data, and the monitor needs none
-    of it.
-    """
-    if litellm_logging_obj is None:
-        return
-
-    try:
-        _sync_guardrail_info_to_logging_obj(synthetic_llm_data, litellm_logging_obj)
-    except Exception as e:  # noqa: BLE001  # callers run this from a `finally` on the block path
-        # The breadth is the point. Narrowing to the knowable AttributeError/TypeError
-        # would let an unexpected type escape that ``finally`` and replace the guardrail's
-        # block with a bookkeeping error.
-        verbose_logger.warning("Failed to record MCP guardrail evaluation for logging: %s", e)
 
 
 def _mcp_discovery_cache_ttl() -> float:
@@ -3797,12 +3788,12 @@ class MCPServerManager:
 
             is_anonymous: Final = is_anonymous_mcp_caller(user_api_key_auth)
             if is_anonymous:
-                passthrough_server_ids: Final = [
+                anonymous_server_ids: Final = [
                     server.server_id
                     for server in self.get_registry().values()
-                    if server.auth_type == MCPAuth.true_passthrough
+                    if server.auth_type == MCPAuth.true_passthrough or is_legacy_upstream_delegate(server)
                 ]
-                combined_servers.update(passthrough_server_ids)
+                combined_servers.update(anonymous_server_ids)
 
             restrict_allow_all: Final = (
                 resolved_general_settings.get("mcp_allow_all_keys_respects_mcp_scope", False)
@@ -4114,6 +4105,17 @@ class MCPServerManager:
 
     _extract_subject_token = extract_subject_token
 
+    def _tool_subject_token(
+        self,
+        server: MCPServer,
+        oauth2_headers: Mapping[str, str] | None,
+        raw_headers: Mapping[str, str] | None,
+        user_api_key_auth: UserAPIKeyAuth | None,
+    ) -> str | None:
+        if server.auth_type not in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag):
+            return None
+        return self.extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
+
     def _obo_subject_token(
         self,
         server: MCPServer,
@@ -4341,12 +4343,10 @@ class MCPServerManager:
         which is what keeps the pre-flight from reaching a verdict the session would contradict.
         ``oauth2_token_exchange`` mints from the caller's inbound bearer, so without one there is
         nothing to exchange and the missing-subject case stays the preemptive challenge's job.
-        ``oauth2_id_jag`` is the mirror image: tool listing resolves it from the identity assertion
-        captured for this user at SSO login and never from the inbound bearer, so the pre-flight is
-        faithful exactly when no identity bearer was sent (a LiteLLM key in ``Authorization`` is not one),
-        and a caller that did send one is passed through
-        untouched rather than judged against a subject the listing will not use. That store-sourced
-        case is the one whose missing-assertion 412 and store-outage 503 the session cannot report.
+        ``oauth2_id_jag`` falls back to the identity assertion captured at SSO login when no caller
+        identity bearer is supplied. Pre-flight that stored assertion so its missing-assertion 412
+        and store-outage 503 reach the client. A caller-supplied identity bearer is resolved by the
+        session's list/call path; a LiteLLM key in ``Authorization`` is not an identity bearer.
         Only OBO has a discovery challenge to raise; ID-JAG's failures are plain statuses whose body
         already names what the user has to do, so they map through ``raise_public`` as at egress.
         """
@@ -4553,14 +4553,7 @@ class MCPServerManager:
 
             stdio_env: Final = self.build_stdio_env(server, raw_headers)
 
-            # token_exchange (OBO) discovery needs the caller's token too: list it with the user's own
-            # token (mirrors the call path), not v1's deleted client_credentials fallback. Other modes
-            # never read the inbound bearer, so leave subject_token None to avoid forwarding it.
-            subject_token: Final = (
-                self.extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
-                if server.auth_type == MCPAuth.oauth2_token_exchange
-                else None
-            )
+            subject_token: Final = self._tool_subject_token(server, oauth2_headers, raw_headers, user_api_key_auth)
 
             client = await self.create_mcp_client(  # rebind-ok: pre-existing rebinding on a rename-only line
                 server=server,
@@ -4705,7 +4698,7 @@ class MCPServerManager:
         ``_admission_identity``: the hashed key, user, team and organization, plus the admission
         credential of a caller admitted with neither a key nor a user (a team-only JWT). Forwarded
         headers, header-driven stdio env, the caller bearer on every server whose egress forwards it
-        (``_consumes_caller_authorization``) or exchanges it as the OBO subject, and the
+        (``_consumes_caller_authorization``) or exchanges it as the OBO or ID-JAG subject, and the
         server-specific auth header also reach upstream and split the slot further. Only unkeyed
         listings with none of those share the ``None`` slot.
         """
@@ -4717,8 +4710,8 @@ class MCPServerManager:
         stdio_env: Final = None if header_env == self.build_stdio_env(server) else header_env
         caller_bearer: Final = (
             self.extract_subject_token(caller.oauth2_headers, caller.raw_headers, auth)
-            if _consumes_caller_authorization(server) or server.auth_type == MCPAuth.oauth2_token_exchange
-            else None
+            if _consumes_caller_authorization(server)
+            else self._tool_subject_token(server, caller.oauth2_headers, caller.raw_headers, auth)
         )
         identity: Final = None if auth is None else _admission_identity(auth, caller.raw_headers)
         if not (identity or caller.mcp_auth_header or forwarded or stdio_env or caller_bearer):
@@ -6110,6 +6103,52 @@ class MCPServerManager:
                 is_error=True,
             )
 
+    async def _resolve_guarded_tool_for_call(
+        self,
+        name: str,
+        server: MCPServer,
+        context: OperationContext,
+        proxy_logging_obj: ProxyLogging,
+        guardrail_auth: UserAPIKeyAuth | None,
+        guardrail_context: Mapping[str, object] | None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
+    ) -> MCPTool | BlockedTool:
+        from litellm.proxy.mcp_server.catalog import prepare_tool_listing_headers
+
+        server_auth_header, extra_headers, catalog_auth_header = await prepare_tool_listing_headers(
+            server, context, (server,), None
+        )
+        upstream: Final = await self.get_tools_from_server(
+            server=server,
+            mcp_auth_header=dict(server_auth_header) if isinstance(server_auth_header, Mapping) else server_auth_header,
+            extra_headers=dict(extra_headers) if extra_headers is not None else None,
+            add_prefix=False,
+            raw_headers=dict(context.raw_headers) if context.raw_headers is not None else None,
+            user_api_key_auth=context.user_api_key_auth,
+            oauth2_headers=dict(context.oauth2_headers) if context.oauth2_headers is not None else None,
+            client_ip=context.client_ip,
+            catalog_auth_header=(
+                dict(catalog_auth_header) if isinstance(catalog_auth_header, Mapping) else catalog_auth_header
+            ),
+            record_listing=False,
+        )
+        selected: Final = tuple(tool for tool in upstream if tool.name == name)
+        scan: Final = await scan_tool_descriptions(
+            selected,
+            server,
+            proxy_logging_obj,
+            guardrail_auth,
+            context.raw_headers,
+            guardrail_context=guardrail_context,
+            litellm_logging_obj=litellm_logging_obj,
+        )
+        if not scan.served or scan.blocked:
+            return BlockedTool(
+                name=name,
+                reason=f"Tool {name} is unavailable after MCP guardrail checks for server {server.name}.",
+            )
+        return scan.served[0]
+
     async def pre_call_tool_check(
         self,
         name: str,
@@ -6124,6 +6163,10 @@ class MCPServerManager:
         tool: MCPTool | None = None,
         incoming_bearer_token: SecretStr | None | EllipsisType = ...,
         guardrail_auth: UserAPIKeyAuth | None = None,
+        mcp_auth_header: str | None = None,
+        mcp_server_auth_headers: Mapping[str, Mapping[str, str]] | None = None,
+        oauth2_headers: Mapping[str, str] | None = None,
+        client_ip: str | None = None,
     ) -> dict[str, Any]:
         """
         Run pre-call checks and guardrail hooks for an MCP tool call.
@@ -6232,8 +6275,47 @@ class MCPServerManager:
         # into ``apply_guardrail``, so ``@log_guardrail_information`` bridges their
         # evaluations itself; the ``finally`` below covers native guardrails, which
         # never receive it. Same seeding the pass-through routes do.
-        synthetic_llm_data: Final = proxy_logging_obj.convert_mcp_to_llm_format(mcp_request_obj, pre_hook_kwargs)
-        synthetic_llm_data["litellm_logging_obj"] = litellm_logging_obj
+        initial_data: Final = proxy_logging_obj.convert_mcp_to_llm_format(mcp_request_obj, pre_hook_kwargs)
+        checked_tool: Final = (
+            await self._resolve_guarded_tool_for_call(
+                name=name,
+                server=server,
+                context=OperationContext(
+                    _caller=user_api_key_auth,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                    client_ip=client_ip,
+                ),
+                proxy_logging_obj=proxy_logging_obj,
+                guardrail_auth=checked_auth,
+                guardrail_context=guardrail_context,
+                litellm_logging_obj=litellm_logging_obj,
+            )
+            if tool is None
+            and proxy_logging_obj.has_pre_call_guardrails(
+                TypeAdapter(Mapping[str, object]).validate_python(initial_data.get("metadata") or {}),
+                event_type=GuardrailEventHooks.pre_mcp_call,
+            )
+            else tool
+        )
+        match checked_tool:
+            case BlockedTool():
+                raise HTTPException(status_code=403, detail={"error": checked_tool.reason})
+            case MCPTool() | None:
+                pass
+            case _:
+                assert_never(checked_tool)
+        synthetic_llm_data: Final = {
+            **initial_data,
+            **(
+                {"mcp_tool_description": checked_tool.description, "mcp_input_schema": checked_tool.input_schema}
+                if checked_tool is not None
+                else {}
+            ),
+            "litellm_logging_obj": litellm_logging_obj,
+        }
 
         try:
             # Use standard pre_call_hook
@@ -6555,17 +6637,9 @@ class MCPServerManager:
         """
         server_auth_header: Final = _server_auth_header_for(mcp_server, mcp_server_auth_headers, mcp_auth_header)
 
-        # Extract subject token for OAuth2 Token Exchange (OBO) and ID-JAG flows
-        subject_token: str | None = None
+        subject_token: Final = self._tool_subject_token(mcp_server, oauth2_headers, raw_headers, user_api_key_auth)
         extra_headers: dict[str, str] | None = None
-        if mcp_server.auth_type in (
-            MCPAuth.oauth2_token_exchange,
-            MCPAuth.oauth2_id_jag,
-        ):
-            subject_token = self.extract_subject_token(  # rebind-ok: pre-existing rebinding on a rename-only line
-                oauth2_headers, raw_headers, user_api_key_auth
-            )
-        elif mcp_server.auth_type == MCPAuth.oauth2:
+        if mcp_server.auth_type == MCPAuth.oauth2:
             if mcp_server.has_client_credentials:
                 # For M2M OAuth servers, Authorization must come from token fetch.
                 extra_headers = None
@@ -7069,6 +7143,10 @@ class MCPServerManager:
             tool=self.get_listed_tool(mcp_server, name, listed_caller) if listed_tool is ... else listed_tool,
             incoming_bearer_token=incoming_bearer_token,
             guardrail_auth=effective_guardrail_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            client_ip=client_ip,
         )
         if "arguments" in hook_result:
             arguments = hook_result["arguments"]

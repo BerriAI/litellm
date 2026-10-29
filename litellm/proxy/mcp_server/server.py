@@ -589,6 +589,7 @@ if MCP_AVAILABLE:
         MCPServerManager,
         global_mcp_server_manager,
         is_anonymous_mcp_caller,
+        is_legacy_upstream_delegate,
     )
 
     ######################################################
@@ -2180,8 +2181,10 @@ if MCP_AVAILABLE:
         oauth2_headers: Mapping[str, str] | None,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         raw_headers: Mapping[str, str] | None,
+        requested_servers: Sequence[str] | None = None,
+        client_ip: str | None = None,
     ) -> None:
-        """Probe pass-through upstream servers in parallel before the MCP session starts.
+        """Probe pass-through and legacy delegate upstream servers in parallel before the MCP session starts.
 
         The caller passes the already-resolved allowed-server set so a user cannot
         trigger a probe against a server their key is not permitted for.
@@ -2196,6 +2199,17 @@ if MCP_AVAILABLE:
         if not oauth2_headers and not mcp_server_auth_headers:
             return
 
+        # A legacy delegate is probed only when the single requested name resolves to it the way admission
+        # resolves it, so neither a multi-server connect nor an access group can be failed by one rejected
+        # token; its challenge echoes the requested name, matching the tokenless challenge.
+        single_requested_name: Final = (
+            requested_servers[0] if requested_servers is not None and len(requested_servers) == 1 else None
+        )
+        requested_server: Final = (
+            operations.global_mcp_server_manager.get_mcp_server_by_name(single_requested_name, client_ip=client_ip)
+            if single_requested_name is not None
+            else None
+        )
         prepared_headers: Final = tuple(
             (
                 srv,
@@ -2211,6 +2225,11 @@ if MCP_AVAILABLE:
             )
             for srv in allowed_servers
             if srv.is_oauth_passthrough
+            or (
+                requested_server is not None
+                and srv.server_id == requested_server.server_id
+                and is_legacy_upstream_delegate(srv)
+            )
         )
         probe_headers: Final = tuple(
             (
@@ -2223,7 +2242,7 @@ if MCP_AVAILABLE:
             for srv, (auth, extra) in prepared_headers
         )
         probe_targets: Final[tuple[tuple[MCPServer, str, str], ...]] = tuple(
-            (srv, auth_header, srv.name)
+            (srv, auth_header, srv.name if srv.is_oauth_passthrough else single_requested_name or srv.name)
             for srv, headers in probe_headers
             if (
                 auth_header := next(
@@ -2320,6 +2339,8 @@ if MCP_AVAILABLE:
             if context.mcp_server_auth_headers is not None
             else None,
             raw_headers=context.raw_headers,
+            requested_servers=context.mcp_servers,
+            client_ip=context.client_ip,
         )
         return None
 
@@ -2371,6 +2392,8 @@ if MCP_AVAILABLE:
                     else None
                 ),
                 raw_headers=raw_headers,
+                requested_servers=mcp_servers,
+                client_ip=client_ip,
             )
 
     async def _targets_disabled_capability(peek: _LazyPeekedBody | None) -> bool:
@@ -2877,6 +2900,8 @@ if MCP_AVAILABLE:
                 oauth2_headers=oauth2_headers,
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 raw_headers=raw_headers,
+                requested_servers=mcp_servers,
+                client_ip=_sse_client_ip,
             )
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,

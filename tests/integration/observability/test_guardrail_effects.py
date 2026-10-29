@@ -1902,11 +1902,20 @@ def test_messages_pre_call_denial_streams_message(gateway: Gateway, tmp_path: Pa
         )
         assert response.status_code == 200, response.text
         assert response.headers["content-type"].startswith("text/event-stream"), response.text
-        lines: Final = tuple(line for line in response.text.split("\n") if line.startswith("data: "))
-        assert len(lines) == 1, response.text
-        body: Final = json.loads(lines[0].removeprefix("data: "))
-        assert body["type"] == "message" and body["role"] == "assistant", body
-        assert body["content"] == [{"type": "text", "text": _RESPONSES_DENIAL}], body
+        events: Final = tuple(
+            json.loads(line.removeprefix("data: ")) for line in response.text.split("\n") if line.startswith("data: ")
+        )
+        assert [event["type"] for event in events] == [
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "content_block_stop",
+            "message_delta",
+            "message_stop",
+        ], response.text
+        assert events[0]["message"]["role"] == "assistant", events[0]
+        assert events[2]["delta"] == {"type": "text_delta", "text": _RESPONSES_DENIAL}, events[2]
+        assert events[4]["delta"]["stop_reason"] == "end_turn", events[4]
 
 
 @pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_writes_zero_spend_row")
@@ -2578,9 +2587,15 @@ def _scanned_while_upstream_is_held(
         rig.gate.set()
 
 
-def _post_call_statuses(rig: _DisconnectRig, model: str, rows: int = 1) -> tuple[tuple[str, ...], ...]:
+def _post_call_rows(
+    rig: _DisconnectRig, model: str, rows: int = 1, call_types: frozenset[str] | None = None
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
     found: Final = eventually(
-        lambda: read_rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,)),
+        lambda: tuple(
+            row
+            for row in read_rows('SELECT call_type, metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,))
+            if call_types is None or row["call_type"] in call_types
+        ),
         lambda values: len(values) == rows,
         seconds=70,
     )
@@ -2595,7 +2610,11 @@ def _post_call_statuses(rig: _DisconnectRig, model: str, rows: int = 1) -> tuple
         )
         return tuple(str(entry["guardrail_status"]) for entry in post_call)
 
-    return tuple(statuses(row["metadata"]) for row in found)
+    return tuple((str(row["call_type"]), statuses(row["metadata"])) for row in found)
+
+
+def _post_call_statuses(rig: _DisconnectRig, model: str, rows: int = 1) -> tuple[tuple[str, ...], ...]:
+    return tuple(statuses for _, statuses in _post_call_rows(rig, model, rows))
 
 
 _ENDPOINT_CLIENTS: Final = (
@@ -2628,7 +2647,7 @@ def test_client_disconnect_mid_stream_still_scans_the_content_it_already_receive
     (
         pytest.param(_chat_httpx, id="chat-httpx"),
         pytest.param(_chat_async_openai_sdk, id="chat-async-openai-sdk"),
-        pytest.param(_responses_httpx, id="responses-httpx", marks=_NO_DISCONNECT_ROW_LIT_8603),
+        pytest.param(_responses_httpx, id="responses-httpx"),
         pytest.param(_messages_anthropic_sdk, id="messages-anthropic-sdk", marks=_NO_DISCONNECT_ROW_LIT_8603),
         pytest.param(
             _gemini_httpx,
@@ -3184,10 +3203,10 @@ def test_concurrent_disconnects_during_a_guardrail_outage_each_record_exactly_on
             seconds=20,
         )
         assert scanned == (1,) * 30, scanned
-        chat_rows: Final = _post_call_statuses(rig, rig.model, rows=10)
-        assert sorted(chat_rows) == sorted(
-            ("guardrail_failed_to_respond",) if index % 3 == 0 else ("success",) for index in range(0, 30, 3)
-        ), chat_rows
+        rows: Final = _post_call_rows(rig, rig.model, rows=20, call_types=frozenset({"acompletion", "aresponses"}))
+        assert sorted(rows) == sorted(
+            (("acompletion", ("guardrail_failed_to_respond",)),) * 10 + (("aresponses", ("success",)),) * 10
+        ), rows
 
 
 def test_disconnect_scans_keep_recording_after_a_worker_is_killed(gateway: Gateway, tmp_path: Path) -> None:

@@ -1,6 +1,7 @@
 import base64
 import copy
 import json
+import logging
 import os
 import re
 from collections.abc import Iterator, Mapping
@@ -23,9 +24,9 @@ from litellm.llms.anthropic.chat.transformation import (
     NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS,
     NATIVE_OUTPUT_MAX_UNION_PARAMETERS,
 )
-from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.bedrock import ContentBlock, ConverseTokenUsageBlock, RequestObject
 from litellm.types.llms.openai import AllMessageValues
@@ -966,7 +967,9 @@ def test_reasoning_effort_maps_to_reasoning_effort_for_openai_gpt5_converse(mode
         "us.openai.gpt-6-astra",
     ],
 )
-def test_openai_gpt5_converse_rejects_effort_level_disabled_in_model_map(model, local_model_cost_map):
+def test_openai_gpt5_converse_rejects_effort_level_disabled_in_model_map(
+    model: str, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+) -> None:
     config = AmazonConverseConfig()
     assert litellm.utils.is_explicitly_disabled_factory(
         model=model, custom_llm_provider="bedrock_converse", key="supports_minimal_reasoning_effort"
@@ -980,15 +983,19 @@ def test_openai_gpt5_converse_rejects_effort_level_disabled_in_model_map(model, 
             drop_params=False,
         )
 
-    optional_params = config.map_openai_params(
-        non_default_params={"reasoning_effort": "minimal"},
-        optional_params={},
-        model=model,
-        drop_params=True,
-    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = config.map_openai_params(
+            non_default_params={"reasoning_effort": "minimal"},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
     _, additional_request_params, _, _ = config._prepare_request_params(optional_params, model)
     assert "reasoning" not in additional_request_params
     assert "thinking" not in additional_request_params
+    dropped: Final = [r.getMessage() for r in caplog.records if "Dropping reasoning_effort='minimal'" in r.getMessage()]
+    assert len(dropped) == 1 and model in dropped[0]
+    assert "model_info" not in dropped[0]
 
 
 @pytest.mark.parametrize(
@@ -5346,7 +5353,6 @@ def test_recursive_output_config_format_follows_the_profile_native_key(
     )
 
     assert ("outputConfig" in request) is forwarded
-
 
 
 def test_sonnet_4_6_json_schema_still_uses_native_output_config(monkeypatch):
@@ -10665,7 +10671,10 @@ def test_uses_opt_in_native_output_reads_the_base_model_of_an_application_infere
 
 
 _CALLER_OUTPUT_CONFIG_WITH_A_SCHEMA_OBJECT: Final = {
-    "textFormat": {"type": "json_schema", "structure": {"jsonSchema": {"name": "capital", "schema": {"type": "object"}}}}
+    "textFormat": {
+        "type": "json_schema",
+        "structure": {"jsonSchema": {"name": "capital", "schema": {"type": "object"}}},
+    }
 }
 _BEDROCK_SCHEMA_TYPE_ERROR: Final = "outputConfig.textFormat.structure.jsonSchema.schema must be a string"
 
@@ -10789,3 +10798,121 @@ def test_a_deployment_with_a_batch_control_plane_endpoint_keeps_it_out_of_chat_r
 
     assert response.choices[0].message.content == "ok"
     assert "aws_bedrock_control_plane_endpoint" not in route.calls[0].request.content.decode()
+
+
+def _converse_bound_thinking_request(
+    headers: dict[str, str] | None, body_betas: tuple[str, ...] = (), drop_params: bool = True
+) -> dict[str, object]:
+    thinking: Final = {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+    data: Final = AmazonConverseConfig()._transform_request_helper(
+        model="anthropic.claude-opus-4-8-v1:0",
+        system_content_blocks=[],
+        optional_params={"thinking": thinking, **({"anthropic_beta": list(body_betas)} if body_betas else {})},
+        messages=[{"role": "user", "content": "hi"}],
+        headers=headers,
+        drop_params=drop_params,
+    )
+    assert thinking == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }, "the caller's thinking dict must survive for a fallback leg"
+    return data["additionalModelRequestFields"]
+
+
+def test_converse_keeps_beta_gated_thinking_fields_the_bedrock_converse_row_carries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    fields: Final = _converse_bound_thinking_request(
+        {"anthropic-beta": "thinking-binding-controls-2026-08-01,thinking-display-updates-2026-08-18"}
+    )
+    assert fields["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+
+
+def test_converse_adds_the_thinking_betas_so_gated_thinking_fields_are_kept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    fields: Final = _converse_bound_thinking_request(None)
+    assert fields["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+    assert sorted(fields["anthropic_beta"]) == [
+        "thinking-binding-controls-2026-08-01",
+        "thinking-display-updates-2026-08-18",
+    ]
+
+
+def test_converse_keeps_the_callers_body_betas_next_to_the_added_thinking_betas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    fields: Final = _converse_bound_thinking_request(None, body_betas=("context-1m-2025-08-07",))
+    assert sorted(fields["anthropic_beta"]) == [
+        "context-1m-2025-08-07",
+        "thinking-binding-controls-2026-08-01",
+        "thinking-display-updates-2026-08-18",
+    ]
+
+
+def test_converse_sends_beta_gated_thinking_fields_as_is_without_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    fields: Final = _converse_bound_thinking_request(None, drop_params=False)
+    assert fields["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+
+
+def test_converse_keeps_beta_gated_thinking_fields_the_body_anthropic_beta_carries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    fields: Final = _converse_bound_thinking_request(
+        None, body_betas=("thinking-binding-controls-2026-08-01", "thinking-display-updates-2026-08-18")
+    )
+    assert fields["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+
+
+def test_converse_drops_body_betas_the_bedrock_converse_row_rejects_when_adding_thinking_betas(
+    local_beta_headers_config: None,
+) -> None:
+    fields: Final = _converse_bound_thinking_request(
+        None, body_betas=("per-turn-control-2026-07-01", "context-1m-2025-08-07")
+    )
+    assert sorted(fields["anthropic_beta"]) == [
+        "context-1m-2025-08-07",
+        "thinking-binding-controls-2026-08-01",
+        "thinking-display-updates-2026-08-18",
+    ]
+
+
+def test_converse_sends_only_the_header_betas_when_header_and_body_both_carry_betas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    fields: Final = _converse_bound_thinking_request(
+        {"anthropic-beta": "context-1m-2025-08-07"}, body_betas=("not-a-real-beta-2099",)
+    )
+    assert sorted(fields["anthropic_beta"]) == [
+        "context-1m-2025-08-07",
+        "thinking-binding-controls-2026-08-01",
+        "thinking-display-updates-2026-08-18",
+    ]

@@ -146,24 +146,21 @@ const compareVersion = (left: readonly number[], right: readonly number[]): numb
 const compareRelease = (left: ModelIdentity, right: ModelIdentity): number =>
   compareVersion(left.version, right.version) || left.snapshot - right.snapshot;
 
+export const routingModelGroups = (groups: readonly ModelGroup[]): ModelGroup[] =>
+  groups.filter((group) => group.mode !== "embedding");
+
 export const deployedRouterModels = (
   groups: readonly ModelGroup[],
   deployments: readonly AutoRouterDeployment[],
 ): SolverModel[] =>
-  groups
-    .flatMap((group) => {
-      if (group.mode && group.mode !== "chat") return [];
+  routingModelGroups(groups)
+    .map((group) => {
       const rows = deployments.filter((row) => row.model_name === group.model_group);
-      if (
-        rows.some(isAutoRouterDeployment) ||
-        group.model_group.includes("*") ||
-        group.model_group.startsWith("auto_router/")
-      )
-        return [];
       const active = rows.filter((row) => !row.model_info?.blocked);
-      if (rows.length > 0 && active.length === 0) return [];
-      if (active.some((row) => row.model_info?.mode && row.model_info.mode !== "chat")) return [];
-      if (active.some((row) => row.litellm_params?.model?.includes("*"))) return [];
+      const isRouter = rows.some(isAutoRouterDeployment) || group.model_group.startsWith("auto_router/");
+      const hasWildcard =
+        group.model_group.includes("*") || active.some((row) => row.litellm_params?.model?.includes("*"));
+      const manualOnly = isRouter || hasWildcard || (rows.length > 0 && active.length === 0);
       const identities = active.length > 0 ? active.map(identityOf) : [parseModel(group.model_group)];
       const first = identities[0];
       const homogeneous =
@@ -173,19 +170,17 @@ export const deployedRouterModels = (
           const sameLine = identity.family === first.family && identity.line === first.line;
           return sameLine && compareRelease(identity, first) === 0;
         });
-      const identity = homogeneous ? first : undefined;
+      const identity = homogeneous && !manualOnly ? first : undefined;
       const providers =
         active.length > 0
           ? active.map((row) => providerOf(row, group, identity?.family))
           : [providerOf({}, group, identity?.family)];
-      return [
-        {
-          ...identity,
-          name: group.model_group,
-          model: identity?.model ?? group.model_group,
-          provider: [...new Set(providers)].toSorted().join(", "),
-        },
-      ];
+      return {
+        ...identity,
+        name: group.model_group,
+        model: identity?.model ?? group.model_group,
+        provider: [...new Set(providers)].toSorted().join(", "),
+      };
     })
     .toSorted((a, b) => a.name.localeCompare(b.name));
 

@@ -36,7 +36,11 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
-from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
+from litellm.llms.base_llm.base_utils import (
+    BaseLLMModelInfo,
+    hoist_developer_messages_into_leading_system_message,
+    map_developer_role_to_system_role,
+)
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -58,7 +62,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     chat_completion_tool_call_from_dict,
 )
-from litellm.utils import convert_to_model_response_object
+from litellm.utils import convert_to_model_response_object, declared_mid_conversation_system_support
 
 from ..common_utils import OpenAIError
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
@@ -75,7 +79,47 @@ else:
 
 
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def targets_openai_hosted_endpoint(custom_llm_provider: str | None, api_base: str | None) -> bool:
+    if custom_llm_provider != "openai":
+        return False
+    resolved_api_base: Final = (
+        api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
+    )
+    if not resolved_api_base:
+        return True
+    hostname: Final = urlparse(resolved_api_base).hostname
+    if hostname is None:
+        return True
+    return hostname == "openai.com" or hostname.endswith(".openai.com")
+
+
+def _roles(messages: Sequence[AllMessageValues]) -> tuple[str, ...]:
+    return tuple(message["role"] for message in messages)
+
+
+def translate_developer_role_for_openai_compatible_endpoint(
+    messages: Sequence[AllMessageValues],
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+    api_base: str | None,
+    model_info: object,
+) -> Sequence[AllMessageValues]:
+    in_place: Final = map_developer_role_to_system_role(messages=messages)
+    if targets_openai_hosted_endpoint(custom_llm_provider, api_base):
+        return in_place
+    placed: Final = hoist_developer_messages_into_leading_system_message(messages=messages)
+    if _roles(placed) == _roles(in_place):
+        return in_place
+    if declared_mid_conversation_system_support(model, custom_llm_provider, model_info) is not False:
+        return in_place
+    return placed
+
+
 _OBJECT_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_CHOICE_MAPPINGS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
@@ -286,7 +330,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         self,
         content_item: OpenAIMessageContentListBlock,
     ) -> OpenAIMessageContentListBlock:
-        litellm_specific_params: Final = {"format"}
+        litellm_specific_params: Final = {"format", "detail", "video_metadata"}
         if content_item.get("type") == "image_url":
             content_item = cast(ChatCompletionImageObject, content_item)
             if isinstance(content_item["image_url"], str):
@@ -294,8 +338,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                     "url": content_item["image_url"],
                 }
             elif isinstance(content_item["image_url"], dict):
-                new_image_url_obj: Final = ChatCompletionImageUrlObject(
-                    **{k: v for k, v in content_item["image_url"].items() if k not in litellm_specific_params}
+                new_image_url_obj: Final = cast(
+                    ChatCompletionImageUrlObject,
+                    {k: v for k, v in content_item["image_url"].items() if k not in {"format", "video_metadata"}},
                 )
                 content_item["image_url"] = new_image_url_obj
         elif content_item.get("type") == "file":
@@ -435,20 +480,30 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 )
         return messages, tools
 
+    def translate_developer_role_to_system_role(
+        self,
+        messages: Sequence[AllMessageValues],
+        *,
+        model: str,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+        model_info: object,
+    ) -> Sequence[AllMessageValues]:
+        """
+        A developer message only changes role, except on a model whose deployment or cost
+        map declares `supports_mid_conversation_system` false, where the instructions are
+        placed in one leading system message for its chat template.
+        """
+        return translate_developer_role_for_openai_compatible_endpoint(
+            messages, model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, model_info=model_info
+        )
+
     def _targets_openai_hosted_endpoint(
         self,
         custom_llm_provider: str | None,
         api_base: str | None,
     ) -> bool:
-        if custom_llm_provider != "openai":
-            return False
-        resolved_api_base = api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
-        if not resolved_api_base:
-            return True
-        hostname: Final = urlparse(resolved_api_base).hostname
-        if hostname is None:
-            return True
-        return hostname == "openai.com" or hostname.endswith(".openai.com")
+        return targets_openai_hosted_endpoint(custom_llm_provider, api_base)
 
     def _should_preserve_cache_control_for_endpoint(
         self,
@@ -957,8 +1012,13 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
                     status_code=error_status_code,
                     message=error_message,
                 )
-            choices = chunk.get("choices", [])
-            choices = self._map_reasoning_to_reasoning_content(choices)
+            raw_choices: Final = chunk.get("choices") or []
+            if any(choice.get("finish_reason") == "abort" for choice in _CHOICE_MAPPINGS.validate_python(raw_choices)):
+                raise OpenAIError(
+                    status_code=500,
+                    message="Upstream generation aborted (finish_reason=abort)",
+                )
+            choices: Final = self._map_reasoning_to_reasoning_content(raw_choices)
             fingerprint: Final = _OBJECT_MAPPING.validate_python(chunk).get("system_fingerprint")
 
             kwargs: Final[dict[str, Any]] = {
