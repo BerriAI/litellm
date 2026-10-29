@@ -95,6 +95,36 @@ def test_gpt5_unsupported_params_drop(config: OpenAIConfig):
     assert "top_p" not in params
 
 
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model"),
+    [
+        ("openai", "chat-latest"),
+        ("azure", "chat-latest"),
+        ("azure", "gpt-chat-latest"),
+        ("azure", "gpt-chat-latest-gs"),
+        ("azure_ai", "gpt-chat-latest"),
+    ],
+)
+def test_chat_latest_aliases_take_the_gpt5_request_shape(custom_llm_provider: str, model: str):
+    function_tool: Final = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+    }
+    params: Final = litellm.get_optional_params(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        max_tokens=50,
+        temperature=0.2,
+        tools=[function_tool],
+        tool_choice="auto",
+        drop_params=True,
+    )
+    assert params["max_completion_tokens"] == 50
+    assert "max_tokens" not in params
+    assert "temperature" not in params
+    assert params["tool_choice"] == "auto"
+
+
 # GPT-5-Codex specific tests
 def test_gpt5_codex_model_detection(gpt5_config: OpenAIGPT5Config):
     """Test that GPT-5-Codex models are correctly detected as GPT-5 models."""

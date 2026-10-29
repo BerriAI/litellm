@@ -186,6 +186,16 @@ def test_azure_max_tokens_rename_covers_gpt_5_chat_family(model: str, emitted_ke
     assert absent_key not in mapped
 
 
+@pytest.mark.parametrize("model", ["chat-latest", "gpt-chat-latest", "us/gpt-chat-latest", "gpt-chat-latest-gs"])
+def test_azure_base_config_renames_max_tokens_for_chat_latest_deployments(model: str) -> None:
+    mapped: Final = _MAPPED_PARAMS.validate_python(
+        AzureOpenAIConfig().map_openai_params(
+            non_default_params={"max_tokens": 5}, optional_params={}, model=model, drop_params=False
+        )
+    )
+    assert mapped == {"max_completion_tokens": 5}
+
+
 @pytest.mark.parametrize("model", ["gpt-5-chat", "gpt-5-chat-latest"])
 def test_azure_gpt_5_chat_stays_off_the_reasoning_path(model: str) -> None:
     """https://github.com/BerriAI/litellm/issues/13781: gpt-5-chat* is a regular chat model."""

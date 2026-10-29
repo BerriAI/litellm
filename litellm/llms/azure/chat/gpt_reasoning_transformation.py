@@ -12,6 +12,8 @@ from litellm.types.llms.openai import AllMessageValues
 
 from .gpt_transformation import AzureOpenAIConfig
 
+AZURE_GPT5_DEPLOYMENT_PARAMS: Final = ("tool_choice", "user")
+
 
 class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
     """Azure specific handling for gpt-5 models.
@@ -65,10 +67,10 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         """
         params = OpenAIGPT5Config.get_supported_openai_params(self, model=model)
 
-        # Azure supports tool_choice for GPT-5 deployments, but the base GPT-5 config
-        # can drop it when the deployment name isn't in the OpenAI model registry.
-        if "tool_choice" not in params:
-            params.append("tool_choice")
+        # Azure supports tool_choice and user for GPT-5 deployments, but the base GPT-5 config
+        # can drop them when the deployment name isn't in the OpenAI model registry.
+        dropped_deployment_params: Final = tuple(param for param in AZURE_GPT5_DEPLOYMENT_PARAMS if param not in params)
+        params.extend(dropped_deployment_params)
 
         # Only gpt-5.2+ has been verified to support logprobs on Azure.
         # The base OpenAI class includes logprobs for gpt-5.1+, but Azure

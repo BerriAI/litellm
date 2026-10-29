@@ -91,15 +91,26 @@ def get_effort_level(value: str | dict | None) -> str | None:
 _get_effort_level = get_effort_level
 
 GPT_REASONING_SERIES_MARKERS: Final = ("gpt-5", "gpt-6")
+OPENAI_CHAT_LATEST_ALIAS: Final = "chat-latest"
+GPT_CHAT_LATEST_DEPLOYMENT_MARKER: Final = "gpt-chat-latest"
 
 
 def unsupported_reasoning_effort_message(param: str, level: str, model: str) -> str:
     return f"{param}={level} is not supported for {model}. To drop unsupported params set `litellm.drop_params = True`"
 
 
+def is_gpt_series_family_name(model: str) -> bool:
+    normalized: Final = model.split("/")[-1]
+    return (
+        any(marker in model for marker in GPT_REASONING_SERIES_MARKERS)
+        or normalized == OPENAI_CHAT_LATEST_ALIAS
+        or GPT_CHAT_LATEST_DEPLOYMENT_MARKER in normalized
+    )
+
+
 def is_gpt_reasoning_series_name(model: str) -> bool:
     normalized: Final = model.split("/")[-1]
-    return any(marker in model for marker in GPT_REASONING_SERIES_MARKERS) and "gpt-5-chat" not in normalized
+    return is_gpt_series_family_name(model) and "gpt-5-chat" not in normalized
 
 
 class OpenAIGPT5Config(OpenAIGPTConfig):
@@ -302,7 +313,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         base_gpt_series_params: Final = super().get_supported_openai_params(model=model)
         gpt_5_only_params: Final = ["reasoning_effort", "verbosity"]
         base_gpt_series_params.extend(gpt_5_only_params)
-        if not supports_tool_choice(model=model):
+        if not supports_tool_choice(model=self._model_map_lookup_name(model)):
             base_gpt_series_params.remove("tool_choice")
 
         non_supported_params: Final = [

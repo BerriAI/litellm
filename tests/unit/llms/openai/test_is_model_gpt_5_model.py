@@ -70,6 +70,13 @@ GPT5_MODELS = [
     "gpt-5-nano",
     "gpt-5-mini",
     "gpt-5-codex",
+    "chat-latest",
+    "openai/chat-latest",
+    "gpt-chat-latest",
+    "azure/chat-latest",
+    "azure/us/gpt-chat-latest",
+    "azure_ai/gpt-chat-latest",
+    "gpt-chat-latest-gs",
 ]
 
 # Models that must NOT be classified as GPT-5 (regular chat path)
@@ -169,6 +176,8 @@ GPT5_PRE_5_4_MODELS = [
     "gpt-5.3",
     "gpt-5.3-chat",
     "gpt-4o",
+    "chat-latest",
+    "gpt-chat-latest",
 ]
 
 

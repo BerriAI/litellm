@@ -41,6 +41,15 @@ def test_azure_gpt5_allows_tool_choice_for_deployment_names():
     assert "temperature" in supported_params
 
 
+@pytest.mark.parametrize("model", ["gpt-chat-latest", "my-gpt-5-deployment"])
+def test_azure_gpt5_family_deployment_off_the_openai_catalog_keeps_user(model: str):
+    params: Final = litellm.get_optional_params(
+        model=model, custom_llm_provider="azure", max_tokens=5, user="end-user-1"
+    )
+    assert params["user"] == "end-user-1"
+    assert params["max_completion_tokens"] == 5
+
+
 def test_azure_gpt5_maps_max_tokens(config: AzureOpenAIGPT5Config):
     params = config.map_openai_params(
         non_default_params={"max_tokens": 5},
