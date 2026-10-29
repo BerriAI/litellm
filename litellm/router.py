@@ -358,6 +358,7 @@ from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check impor
     EncryptedContentAffinityCheck,
 )
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
+    async_io_token_refund_failure,
     build_io_token_rate_limit_headers,
     deployment_has_io_token_limits,
     refund_stale_reservation_before_retry,
@@ -9309,17 +9310,26 @@ class Router:
 
             raise original_exception
 
-    async def make_call(self, original_function: Any, *args, **kwargs):
+    async def make_call(self, original_function: Any, *args: object, **kwargs: object):
         """
         Handler for making a call to the .completion()/.embeddings()/etc. functions.
         """
         model_group: Final = kwargs.get("model")
-        response = original_function(*args, **kwargs)
-        if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
-            response = await response
+        try:
+            response = original_function(*args, **kwargs)
+            if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
+                response = await response
+        except Exception:
+            with contextlib.suppress(Exception):
+                await async_io_token_refund_failure(
+                    self.cache, kwargs, parent_otel_span=get_parent_otel_span_from_kwargs(kwargs)
+                )
+            raise
         await self.increment_deployment_usage_for_response(response=response, request_kwargs=kwargs)
         ## PROCESS RESPONSE HEADERS
-        response = await self.set_response_headers(response=response, model_group=model_group, request_kwargs=kwargs)
+        response = await self.set_response_headers(
+            response=response, model_group=model_group if isinstance(model_group, str) else None, request_kwargs=kwargs
+        )
 
         return response
 

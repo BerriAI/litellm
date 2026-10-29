@@ -4,6 +4,7 @@ Tests for separate ITPM/OTPM deployment rate limits (enforce_model_rate_limits).
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from typing import Final
 
 import pytest
@@ -12,6 +13,7 @@ import litellm
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import NO_MAX_TOKENS_TPM_RESERVATION_FRACTION
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     ITPM_CACHE_KEY,
@@ -1228,6 +1230,64 @@ async def _proxy_messages(router: Router, mock_response: str | Exception) -> tup
     return response["usage"]["input_tokens"], response["usage"]["output_tokens"]
 
 
+ProxyCallSharingLogging = Callable[[Router, str | Exception, LiteLLMLoggingObject], Awaitable[object]]
+PROXY_MESSAGES: Final = [{"role": "user", "content": "hello there"}]
+
+
+def _logging_obj_shared_across_attempts(original_function: str) -> LiteLLMLoggingObject:
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function,
+        litellm.utils.Rules(),
+        datetime.now(),
+        model="limited",
+        messages=PROXY_MESSAGES,
+        litellm_call_id="proxy-call",
+    )
+    return logging_obj
+
+
+async def _proxy_chat_sharing_logging(
+    router: Router, mock_error: str | Exception, logging_obj: LiteLLMLoggingObject
+) -> object:
+    return await router.acompletion(
+        model="limited",
+        messages=PROXY_MESSAGES,
+        max_tokens=100,
+        metadata={"user_api_key_hash": "hashed-key"},
+        mock_response=mock_error,
+        litellm_call_id="proxy-call",
+        litellm_logging_obj=logging_obj,
+    )
+
+
+async def _proxy_responses_sharing_logging(
+    router: Router, mock_error: str | Exception, logging_obj: LiteLLMLoggingObject
+) -> object:
+    return await router.aresponses(
+        model="limited",
+        input="hello there",
+        max_output_tokens=100,
+        litellm_metadata={"user_api_key_hash": "hashed-key"},
+        mock_response=mock_error,
+        litellm_call_id="proxy-call",
+        litellm_logging_obj=logging_obj,
+    )
+
+
+async def _proxy_messages_sharing_logging(
+    router: Router, mock_error: str | Exception, logging_obj: LiteLLMLoggingObject
+) -> object:
+    return await router.aanthropic_messages(
+        model="limited",
+        messages=PROXY_MESSAGES,
+        max_tokens=100,
+        litellm_metadata={"user_api_key_hash": "hashed-key"},
+        mock_response=mock_error,
+        litellm_call_id="proxy-call",
+        litellm_logging_obj=logging_obj,
+    )
+
+
 class TestRouterIOTokenIntegration:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1263,6 +1323,32 @@ class TestRouterIOTokenIntegration:
 
         with pytest.raises(litellm.InternalServerError):
             await call(router, mock_error)
+
+        assert await _io_counters_since(router, first_minute) == (0, 0)
+
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("call", "original_function", "mock_error"),
+        [
+            (_proxy_chat_sharing_logging, "acompletion", "litellm.InternalServerError"),
+            (
+                _proxy_responses_sharing_logging,
+                "aresponses",
+                litellm.InternalServerError(message="mock 500", llm_provider="anthropic", model=ROUTER_IO_MODEL),
+            ),
+            (_proxy_messages_sharing_logging, "anthropic_messages", "litellm.InternalServerError"),
+        ],
+        ids=["proxy_chat", "proxy_responses", "proxy_messages"],
+    )
+    async def test_retried_failure_sharing_one_logging_object_refunds_every_attempt(
+        self, call: ProxyCallSharingLogging, original_function: str, mock_error: str | Exception
+    ):
+        router: Final = _router_with_io_limits()
+        first_minute: Final = _current_minute()
+
+        with pytest.raises(litellm.InternalServerError):
+            await call(router, mock_error, _logging_obj_shared_across_attempts(original_function))
 
         assert await _io_counters_since(router, first_minute) == (0, 0)
 
