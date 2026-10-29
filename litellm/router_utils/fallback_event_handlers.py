@@ -457,6 +457,12 @@ def carry_superseded_attempt_usage(kwargs: Mapping[str, object]) -> None:
         logging_obj.carry_failed_attempt_usage()
 
 
+def reopen_success_logging_for_next_attempt(kwargs: Mapping[str, object]) -> None:
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
+    if isinstance(logging_obj, Logging):
+        logging_obj.reopen_success_logging_for_next_attempt()
+
+
 def _failure_callbacks_blocked_logging_object(kwargs: Mapping[str, object]) -> Logging | None:
     logging_obj: Final = kwargs.get("litellm_logging_obj")
     if not isinstance(logging_obj, Logging):
@@ -889,6 +895,7 @@ async def run_async_fallback(
             if include_fallback_errors:
                 kwargs["include_fallback_errors"] = include_fallback_errors
             carry_superseded_attempt_usage(_FALLBACK_KWARGS_ADAPTER.validate_python(kwargs))
+            reopen_success_logging_for_next_attempt(_FALLBACK_KWARGS_ADAPTER.validate_python(kwargs))
             response = await ctx.with_fallbacks(*args, **kwargs)
             verbose_router_logger.info("Successful fallback b/w models.")
             response = add_fallback_headers_to_response(
