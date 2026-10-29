@@ -618,6 +618,18 @@ class StandardBuiltInToolCostTracking:
                     for annotation in annotations:
                         if annotation.get("type", None) == annotation_type:
                             return True
+                # Non-url_citation annotations (e.g. file_citation) are moved to
+                # provider_specific_fields["annotations"] by partition_annotations.
+                provider_specific_fields: object = getattr(message, "provider_specific_fields", None)
+                if isinstance(provider_specific_fields, dict):
+                    provider_annotations: object = provider_specific_fields.get("annotations")
+                    if isinstance(provider_annotations, list):
+                        for provider_annotation in provider_annotations:
+                            if (
+                                isinstance(provider_annotation, dict)
+                                and provider_annotation.get("type") == annotation_type
+                            ):
+                                return True
         return False
 
     @staticmethod
