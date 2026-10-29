@@ -11,6 +11,7 @@ from unittest.mock import ANY, MagicMock, patch
 
 import httpx
 import pytest
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 
 import litellm
 from litellm.llms.azure.common_utils import (
@@ -31,6 +32,17 @@ from litellm.types.secret_managers.get_azure_ad_token_provider import (
     AzureCredentialType,
 )
 from litellm.types.utils import CallTypes
+
+AzureSdkClient = AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI
+
+
+async def _send_chat_completion(client: AzureSdkClient | None, is_async: bool) -> None:
+    assert client is not None
+    response: Final = client.chat.completions.create(
+        model="test-deployment", messages=[{"role": "user", "content": "hi"}]
+    )
+    if is_async:
+        await response
 
 
 # Mock the necessary dependencies
@@ -2502,8 +2514,10 @@ async def test_azure_client_cache_respects_retry_limit(
     monkeypatch, is_async, api_version, first_retries
 ):
     import httpx
-    from openai import DEFAULT_MAX_RETRIES, RateLimitError
+    from openai import RateLimitError
+
     from litellm.caching.llm_caching_handler import LLMClientCache
+    from litellm.constants import DEFAULT_MAX_RETRIES
 
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
     requests = []
@@ -2545,11 +2559,7 @@ async def test_azure_client_cache_respects_retry_limit(
                 **kwargs, litellm_params={"max_retries": DEFAULT_MAX_RETRIES}
             ) is initial
         with pytest.raises(RateLimitError):
-            response = no_retry.chat.completions.create(
-                model="test-deployment", messages=[{"role": "user", "content": "hi"}]
-            )
-            if is_async:
-                await response
+            await _send_chat_completion(no_retry, is_async)
         assert len(requests) == 1
         assert no_retry is not initial
         assert (
@@ -2562,6 +2572,66 @@ async def test_azure_client_cache_respects_retry_limit(
             )
             is initial
         )
+    finally:
+        sync_http.close()
+        await async_http.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("api_version", ["2024-02-01", "v1"])
+async def test_azure_client_cache_keeps_each_timeout_on_its_own_client(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool, api_version: str
+) -> None:
+    from litellm.caching.llm_caching_handler import LLMClientCache
+
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    sent_read_timeouts: list[float | None] = []
+
+    def completes(request: httpx.Request) -> httpx.Response:
+        sent_read_timeouts.append(request.extensions["timeout"]["read"])
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-timeout-cache",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "test-deployment",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}
+                ],
+            },
+        )
+
+    sync_http: Final = httpx.Client(transport=httpx.MockTransport(completes))
+    async_http: Final = httpx.AsyncClient(transport=httpx.MockTransport(completes))
+    monkeypatch.setattr(litellm, "client_session", sync_http)
+    monkeypatch.setattr(litellm, "aclient_session", async_http)
+    llm: Final = BaseAzureLLM()
+
+    def client_for(litellm_params: dict[str, float]) -> AzureSdkClient | None:
+        return llm.get_azure_openai_client(
+            api_key="test-key",
+            api_base="https://timeout-cache-test.openai.azure.com",
+            api_version=api_version,
+            _is_async=is_async,
+            model="test-deployment",
+            litellm_params=litellm_params,
+        )
+
+    try:
+        short_client: Final = client_for({"timeout": 0.1})
+        long_client: Final = client_for({"timeout": 30.0})
+        default_client: Final = client_for({})
+        await _send_chat_completion(short_client, is_async)
+        await _send_chat_completion(long_client, is_async)
+
+        assert sent_read_timeouts == [0.1, 30.0]
+        assert default_client is not short_client
+        assert default_client is not long_client
+        assert client_for({"timeout": 0.1}) is short_client
+        assert client_for({"timeout": 30.0}) is long_client
+        assert client_for({}) is default_client
     finally:
         sync_http.close()
         await async_http.aclose()

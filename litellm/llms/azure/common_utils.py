@@ -54,6 +54,14 @@ class _AsyncAzureClientParams(TypedDict, total=False, extra_items=object):
 _ASYNC_AZURE_CLIENT_PARAMS_ADAPTER: Final = TypeAdapter(_AsyncAzureClientParams)
 
 
+class _AzureClientLimits(TypedDict, total=False):
+    max_retries: ReadOnly[object]
+    timeout: ReadOnly[object]
+
+
+_AZURE_CLIENT_LIMITS_ADAPTER: Final = TypeAdapter(_AzureClientLimits)
+
+
 class _AzureGatewayClientParams(TypedDict, total=False, extra_items=object):
     api_version: ReadOnly[str]
     base_url: ReadOnly[str]
@@ -568,10 +576,12 @@ class BaseAzureLLM(BaseOpenAILLM):
         client_initialization_params: Final[dict] = locals()
         client_initialization_params["is_async"] = _is_async
         _lp: Final = litellm_params or {}
-        configured_max_retries: Final = _lp.get("max_retries")
+        client_limits: Final = _AZURE_CLIENT_LIMITS_ADAPTER.validate_python(_lp)
+        configured_max_retries: Final = client_limits.get("max_retries")
         client_initialization_params["max_retries"] = (
             DEFAULT_MAX_RETRIES if configured_max_retries is None else configured_max_retries
         )
+        client_initialization_params["timeout"] = client_limits.get("timeout")
         _ad_provider: Final = _lp.get("azure_ad_token_provider")
         _ad_token: Final = _lp.get("azure_ad_token")
         _client_secret: Final = _lp.get("client_secret")
