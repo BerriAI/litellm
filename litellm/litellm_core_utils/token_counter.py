@@ -758,8 +758,10 @@ def pdf_page_pricing(model: str | None) -> PdfPagePricing:
 
 
 def reads_pdf_pages(model: str) -> bool:
-    entry: Final = _cost_map_entry(model) or _cost_map_entry(model.partition("/")[2])
-    return entry.get("supports_pdf_input") is True
+    segments: Final = model.split("/")
+    names: Final = ("/".join(segments[start:]) for start in range(len(segments)))
+    stated: Final = (_cost_map_entry(name).get("supports_pdf_input") for name in names)
+    return next((support for support in stated if support is not None), False) is True
 
 
 def token_counter(

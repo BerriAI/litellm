@@ -75,8 +75,18 @@ def _router(*deployments: tuple[str, str]) -> Router:
 
 @pytest.mark.parametrize(
     ("group", "deployment_model"),
-    [("gpt-4o", "anthropic/claude-haiku-5-5"), ("pdf-reports", "azure/gpt-5.6-sol")],
-    ids=["gpt-named-group-served-by-claude", "custom-group-served-by-azure-gpt"],
+    [
+        ("gpt-4o", "anthropic/claude-haiku-5-5"),
+        ("pdf-reports", "azure/gpt-5.6-sol"),
+        ("pdf-reports", "azure/responses/gpt-5.6-sol"),
+        ("pdf-reports", "openrouter/openai/gpt-5.6-sol"),
+    ],
+    ids=[
+        "gpt-named-group-served-by-claude",
+        "custom-group-served-by-azure-gpt",
+        "custom-group-served-by-azure-responses-gpt",
+        "custom-group-served-by-openrouter-gpt",
+    ],
 )
 def test_a_model_group_counts_like_the_deployment_that_serves_it(group: str, deployment_model: str) -> None:
     request_body: Final = {"model": group, "messages": _one_page_pdf_message()}
