@@ -17,6 +17,7 @@ from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import read_raw_json_body
+from litellm.proxy.route_llm_request import JSON_OBJECT_ADAPTER
 from litellm.proxy.utils import jsonify_object
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_proxy_admin_for_vector_store_index_management,
@@ -24,6 +25,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     get_litellm_managed_vector_store,
 )
 from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
+from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
 from litellm.vector_stores.utils import VectorStoreWriteBody, callers_metadata_snapshot
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
@@ -48,6 +50,24 @@ def reject_caller_embedding_selection_params(payload: Mapping[str, object], sour
             detail={
                 "error": f"'{blocked[0]}' cannot be set in {source}. "
                 "Embedding configuration comes from the vector store's server-side registration."
+            },
+        )
+
+
+def reject_caller_opensearch_index_name(
+    caller_body: Mapping[str, object], request_fields: Mapping[str, object], source: str
+) -> None:
+    provider: Final = request_fields.get("custom_llm_provider")
+    if (
+        isinstance(provider, str)
+        and provider.split("/", 1)[0] == LlmProviders.OPENSEARCH.value
+        and "opensearch_index_name" in caller_body
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"'opensearch_index_name' cannot be set in {source}. "
+                "The index comes from the vector store's server-side registration."
             },
         )
 
@@ -138,10 +158,16 @@ async def vector_store_search(
     data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
     reject_caller_embedding_selection_params(payload=data, source="the search request body")
     data["vector_store_id"] = vector_store_id
+    caller_body: Final = JSON_OBJECT_ADAPTER.validate_python(data)
 
     # Check for legacy vector store registry (non-managed vector stores)
     data = await _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
+    )
+    reject_caller_opensearch_index_name(
+        caller_body=caller_body,
+        request_fields=JSON_OBJECT_ADAPTER.validate_python(data),
+        source="the search request body",
     )
 
     # The managed_vector_stores pre-call hook will handle:
