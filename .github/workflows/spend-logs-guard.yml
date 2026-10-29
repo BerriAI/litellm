@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - main
+      - "litellm_qa_guards_**"
 
 permissions:
   contents: read
