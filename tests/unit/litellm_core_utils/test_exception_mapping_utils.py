@@ -1491,6 +1491,53 @@ def test_bedrock_mantle_context_overflow_maps_to_context_window_exceeded():
     assert "prompt is too long: 1055489 tokens > 1050000 maximum" in excinfo.value.message
 
 
+_GPT_OSS_OVERFLOW_EVENT: Final = (
+    'ErrorEvent { error: APIError { type: "BadRequestError", code: Some(400), '
+    "message: \"Input length (360068) exceeds model's maximum context length (131072).\", param: None } }"
+)
+
+
+@pytest.mark.parametrize(
+    "original_exception",
+    [
+        pytest.param(
+            BaseLLMException(
+                status_code=400,
+                message=json.dumps(
+                    {
+                        "error": {
+                            "code": "validation_error",
+                            "message": _GPT_OSS_OVERFLOW_EVENT,
+                            "param": None,
+                            "type": "invalid_request_error",
+                        }
+                    }
+                ),
+            ),
+            id="400-body",
+        ),
+        pytest.param(OpenAIError(status_code=503, message=_GPT_OSS_OVERFLOW_EVENT), id="streamed-event"),
+        pytest.param(
+            BaseLLMException(
+                status_code=400, message=f"Error code: 400 - {repr({'error': {'message': _GPT_OSS_OVERFLOW_EVENT}})}"
+            ),
+            id="python-repr",
+        ),
+    ],
+)
+def test_bedrock_mantle_gpt_oss_input_length_overflow_maps_to_context_window_exceeded(original_exception):
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="openai.gpt-oss-20b",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.response.status_code == 400
+    assert "prompt is too long: 360068 tokens > 131072 maximum" in excinfo.value.message
+
+
 def test_bedrock_mantle_openai_envelope_context_overflow_maps_to_context_window_exceeded():
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 

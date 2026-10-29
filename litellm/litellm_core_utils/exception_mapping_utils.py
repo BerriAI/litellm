@@ -892,7 +892,10 @@ def _map_openai_like_exception(
             )
 
 
-_BEDROCK_MANTLE_CONTEXT_WINDOW_PATTERN: Final = re.compile(r"prompt tokens \((\d+)\) exceed model maximum \((\d+)\)")
+_BEDROCK_MANTLE_CONTEXT_WINDOW_PATTERNS: Final = (
+    re.compile(r"prompt tokens \((\d+)\) exceed model maximum \((\d+)\)"),
+    re.compile(r"Input length \((\d+)\) exceeds model\\?'s maximum context length \((\d+)\)"),
+)
 _BEDROCK_MANTLE_CONTEXT_LENGTH_EXCEEDED_CODE_PATTERN: Final = re.compile(
     r"""\\?["']code\\?["']\s*:\s*\\?["']context_length_exceeded\\?["']"""
 )
@@ -912,12 +915,13 @@ def _bedrock_mantle_context_window_response(original_exception: _ProviderHTTPExc
 
 def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
     """
-    Mantle reports context overflow as a validation_error carrying the token counts, or as
-    OpenAI's context_length_exceeded code, either in a 400 body or in a streamed error event
-    with no error type. Clients such as Claude Code only treat "prompt is too long" as
-    overflow (litellm/litellm#36546).
+    Mantle reports context overflow as a validation_error carrying the token counts (worded
+    differently for gpt-oss), or as OpenAI's context_length_exceeded code, either in a 400 body
+    or in a streamed error event with no error type. Clients such as Claude Code only treat
+    "prompt is too long" as overflow (litellm/litellm#36546).
     """
-    match = _BEDROCK_MANTLE_CONTEXT_WINDOW_PATTERN.search(error_str)
+    matches: Final = (pattern.search(error_str) for pattern in _BEDROCK_MANTLE_CONTEXT_WINDOW_PATTERNS)
+    match: Final = next((found for found in matches if found is not None), None)
     if match is not None:
         prompt_tokens, max_tokens = match.groups()
         return f"prompt is too long: {prompt_tokens} tokens > {max_tokens} maximum"
