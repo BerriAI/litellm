@@ -189,6 +189,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
 )
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.router_utils.routing_groups import parse_routing_groups
+from litellm.rust_bridge.catalog import Target
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
@@ -377,6 +378,12 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
     mask_sensitive_keys,
 )
+from litellm.llms.anthropic.messages.context_management.inference_view import (
+    InferenceRequestView,
+    InferenceRequestViewError,
+    count_context_edits,
+    inference_request_view,
+)
 from litellm.llms.anthropic.messages.convertible_blocks import (
     deployment_drops_params,
     drop_non_string_tool_result_texts,
@@ -386,6 +393,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.live import parse_live_session_start
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.messages.dispatch import messages_target
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import CeilingResolver, resolve_agent_access_group_ceiling
@@ -14805,7 +14813,7 @@ async def _try_provider_token_count(
     deployment: Mapping[str, object] | None,
     request_model: str,
     tools: list | None = None,
-    system: str | None = None,
+    system: object | None = None,
     messages_format: TokenCountMessagesFormat = "openai",
     output_format: JsonValue = None,
     context_management: CountContextManagement | None = None,
@@ -15160,6 +15168,9 @@ class _TokenCountDeployment(TypedDict, total=False):
 
 
 _TOKEN_COUNT_DEPLOYMENT: Final = TypeAdapter(_TokenCountDeployment)
+_COUNT_TOOLS: Final[TypeAdapter[tuple[Mapping[str, object], ...] | None]] = TypeAdapter(
+    tuple[Mapping[str, object], ...] | None
+)
 _ROUTED_DEPLOYMENT: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 
@@ -15237,6 +15248,41 @@ def _count_context_management(
         drop_invalid_edits=litellm.drop_params is True
         or any(normalize_drop_params(params.get("drop_params")) is True for params in sent_params),
     )
+
+
+def _applies_context_edits_in_gateway(deployment: _TokenCountDeployment, request_model: str) -> bool:
+    params: Final = deployment.get("litellm_params", {})
+    route: Final = messages_target(
+        _non_empty_str(params.get("model")) or request_model,
+        _non_empty_str(params.get("custom_llm_provider")),
+        deployment.get("model_info"),
+        _deployment_api_base(deployment),
+    )
+    return route is Target.CHAT_COMPLETIONS
+
+
+async def _gateway_edited_request(
+    messages: Sequence[Mapping[str, object]],
+    system: object,
+    tools: Sequence[Mapping[str, object]] | None,
+    messages_format: TokenCountMessagesFormat,
+    edits: CountContextManagement,
+    deployment: _TokenCountDeployment,
+    fallback_model: str,
+) -> InferenceRequestView:
+    view: Final = await inference_request_view(
+        messages,
+        system,
+        messages_format,
+        count_context_edits(edits, tools, deployment.get("litellm_params", {}), fallback_model),
+    )
+    match view:
+        case InferenceRequestViewError(error_message=message, status_code=status_code):
+            raise ProviderCountFailure(
+                status_code=status_code, message=message, rejected_before_provider_call=True
+            ).to_proxy_exception()
+        case InferenceRequestView():
+            return view
 
 
 def _responses_routing_kwargs(responses_request: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -15434,6 +15480,37 @@ async def _count_request_tokens(
         )
     prompt_only: Final = bool(prompt) and conversation_empty
     request_messages: Final = _counted_request_messages(messages, messages_format, count_deployment)
+    local_count_error: Final = malformed_tool_result_count_error(request_messages, messages_format, count_deployment)
+    malformed_messages: Final = (
+        None
+        if local_count_error is None
+        else ProxyException(message=local_count_error, type="token_counting_error", param="messages", code=400)
+    )
+    context_edits: Final = _count_context_management(context_management, request.model, request_litellm_params)
+    gateway_edits: Final = (
+        context_edits
+        if context_edits is not None and _applies_context_edits_in_gateway(deployment_view, request.model)
+        else None
+    )
+    if gateway_edits is not None and malformed_messages is not None:
+        raise malformed_messages
+    edited_request: Final = (
+        None
+        if gateway_edits is None or request_messages is None
+        else await _gateway_edited_request(
+            request_messages,
+            system,
+            _COUNT_TOOLS.validate_python(tools),
+            messages_format,
+            gateway_edits,
+            deployment_view,
+            model_to_use,
+        )
+    )
+    inference_messages: Final = (
+        request_messages if edited_request is None else [dict(message) for message in edited_request.messages]
+    )
+    inference_system: Final = system if edited_request is None else edited_request.system
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
     prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
     routed_deployment: Final = _ROUTED_DEPLOYMENT.validate_python(deployment)
@@ -15473,16 +15550,16 @@ async def _count_request_tokens(
                     if chat_count is not None
                     else [{"role": "user", "content": prompt}]
                     if prompt_as_message
-                    else request_messages
+                    else inference_messages
                 ),
                 contents=None if prompt_as_message else contents,
                 deployment=count_deployment,
                 request_model=request.model,
                 tools=tools if chat_count is None else [dict(tool) for tool in chat_count.tools or ()] or None,
-                system=system,
+                system=inference_system,
                 messages_format=messages_format,
                 output_format=output_format,
-                context_management=_count_context_management(context_management, request.model, request_litellm_params),
+                context_management=None if edited_request is not None else context_edits,
                 chat_params=MappingProxyType({}) if chat_count is None else chat_count.params,
             ),
             model_to_use=model_to_use,
@@ -15494,9 +15571,8 @@ async def _count_request_tokens(
     if isinstance(ladder, TokenCountResponse):
         return ladder
 
-    local_count_error: Final = malformed_tool_result_count_error(request_messages, messages_format, count_deployment)
-    if local_count_error is not None:
-        raise ProxyException(message=local_count_error, type="token_counting_error", param="messages", code=400)
+    if malformed_messages is not None:
+        raise malformed_messages
 
     # Check if token counter is disabled before fallback
     if litellm.disable_token_counter is True:
@@ -15514,11 +15590,11 @@ async def _count_request_tokens(
             CustomHuggingfaceTokenizer | None,
             model_info.get("custom_tokenizer", None),
         )
-    system_message: Final = _system_message(system)
+    system_message: Final = _system_message(inference_system)
     prompt_turn: Final = prompt_only and not (system_message is None and not tools)
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
         Sequence[AllMessageValues] | None,
-        [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else request_messages),
+        [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else inference_messages),
     )
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)
@@ -15529,7 +15605,15 @@ async def _count_request_tokens(
     framing: Final = settings.framing if counted_messages is not None and settings.framing is not None else 0
     kimi_k3_messages: Final = counted_messages if settings.tokenizer == "kimi_k3" else None
     exact: Final = (
-        await _kimi_k3_count(request, messages_format, model_to_use, kimi_k3_messages, counted_tools)
+        await _kimi_k3_count(
+            request
+            if edited_request is None
+            else request.model_copy(update={"messages": inference_messages, "system": inference_system}),
+            messages_format,
+            model_to_use,
+            kimi_k3_messages,
+            counted_tools,
+        )
         if kimi_k3_messages is not None and custom_tokenizer is None
         else None
     )

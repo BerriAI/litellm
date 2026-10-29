@@ -25,7 +25,7 @@ import pytest
 import respx
 import tiktoken
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
@@ -3434,6 +3434,293 @@ async def test_gemini_messages_count_tokens_rejects_an_invalid_edit_without_drop
     assert isinstance(response, JSONResponse)
     assert response.status_code == 400
     assert sent_bodies == ()
+
+
+_MISTRAL_MODEL: Final = "mistral/mistral-large-latest"
+
+
+def _mistral_router(
+    litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
+    router_defaults: Mapping[str, JsonValue] = MappingProxyType({}),
+) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "mistral-agent",
+                "litellm_params": {"model": _MISTRAL_MODEL, "api_key": "test-key", **litellm_params},
+            }
+        ],
+        default_litellm_params=dict(router_defaults),
+    )
+
+
+async def _messages_endpoint_count(router: Router, request_body: Mapping[str, JsonValue]) -> object:
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    import litellm.proxy.proxy_server as proxy_server
+
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.headers = {}
+    with (
+        patch.object(proxy_server, "llm_router", router),
+        patch.object(anthropic_endpoints, "read_request_body", AsyncMock(return_value=dict(request_body))),
+    ):
+        return await anthropic_count_tokens(mock_request, MagicMock())
+
+
+async def _input_tokens(router: Router, request_body: Mapping[str, JsonValue]) -> int:
+    response: Final = await _messages_endpoint_count(router, request_body)
+    assert isinstance(response, dict)
+    input_tokens: Final = response["input_tokens"]
+    assert isinstance(input_tokens, int)
+    return input_tokens
+
+
+async def _messages_the_inference_polyfill_sends(model: str) -> list[dict[str, JsonValue]]:
+    from litellm.llms.anthropic.messages.adapters.handler import prepare_context_managed_request
+
+    prepared: Final = await prepare_context_managed_request(
+        model=model,
+        messages=[dict(message) for message in _agent_turns_with_tool_results(3)],
+        tools=[dict(_READ_FILE_TOOL)],
+        system=None,
+        context_management_spec=dict(_CLEAR_TOOL_USES),
+        litellm_metadata=None,
+        additional_drop_params=None,
+        llm_router=None,
+    )
+    assert prepared is not None
+    return TypeAdapter(list[dict[str, JsonValue]]).validate_python(prepared.messages)
+
+
+@pytest.mark.asyncio
+async def test_messages_count_tokens_counts_the_body_the_inference_polyfill_sends_on_a_bridged_provider() -> None:
+    router: Final = _mistral_router()
+    unedited_body: Final[dict[str, JsonValue]] = {
+        "model": "mistral-agent",
+        "messages": _agent_turns_with_tool_results(3),
+        "tools": [_READ_FILE_TOOL],
+    }
+
+    edited: Final = await _input_tokens(router, {**unedited_body, "context_management": _CLEAR_TOOL_USES})
+    unedited: Final = await _input_tokens(router, unedited_body)
+    polyfilled: Final = await _input_tokens(
+        router, {**unedited_body, "messages": await _messages_the_inference_polyfill_sends(_MISTRAL_MODEL)}
+    )
+
+    assert edited < unedited
+    assert edited == polyfilled
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_params", "router_defaults", "request_options"),
+    (
+        ({"additional_drop_params": ["context_management"]}, {}, {}),
+        ({}, {"additional_drop_params": ["context_management"]}, {}),
+        ({}, {}, {"additional_drop_params": ["context_management"]}),
+    ),
+    ids=("deployment-drops", "router-default-drops", "request-drops"),
+)
+async def test_messages_count_tokens_on_a_bridged_provider_keeps_the_unedited_count_when_context_management_is_dropped(
+    deployment_params: dict[str, JsonValue],
+    router_defaults: dict[str, JsonValue],
+    request_options: dict[str, JsonValue],
+) -> None:
+    router: Final = _mistral_router(deployment_params, router_defaults)
+    unedited_body: Final[dict[str, JsonValue]] = {
+        "model": "mistral-agent",
+        "messages": _agent_turns_with_tool_results(3),
+        "tools": [_READ_FILE_TOOL],
+        **request_options,
+    }
+
+    edited: Final = await _input_tokens(router, {**unedited_body, "context_management": _CLEAR_TOOL_USES})
+
+    assert edited == await _input_tokens(router, unedited_body)
+
+
+@pytest.mark.asyncio
+async def test_messages_count_tokens_on_a_bridged_provider_rejects_an_invalid_edit_without_drop_params() -> None:
+    with patch.object(litellm, "drop_params", False):
+        response: Final = await _messages_endpoint_count(
+            _mistral_router(),
+            {
+                "model": "mistral-agent",
+                "messages": _agent_turns_with_tool_results(3),
+                "tools": [_READ_FILE_TOOL],
+                "context_management": _INVALID_COMPACT_EDIT,
+            },
+        )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_messages_count_tokens_on_a_bridged_provider_counts_without_an_invalid_edit_under_drop_params() -> None:
+    router: Final = _mistral_router()
+    unedited_body: Final[dict[str, JsonValue]] = {
+        "model": "mistral-agent",
+        "messages": _agent_turns_with_tool_results(3),
+        "tools": [_READ_FILE_TOOL],
+        "drop_params": True,
+    }
+
+    with patch.object(litellm, "drop_params", False):
+        edited: Final = await _input_tokens(router, {**unedited_body, "context_management": _INVALID_COMPACT_EDIT})
+        unedited: Final = await _input_tokens(router, unedited_body)
+
+    assert edited == unedited
+
+
+class _CountTokensPeer:
+    def __init__(self, reply: Mapping[str, JsonValue]) -> None:
+        self._reply: Final = reply
+        self.request_bodies: tuple[bytes, ...] = ()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.request_bodies = (*self.request_bodies, request.content)
+        return httpx.Response(200, json=dict(self._reply), request=request)
+
+
+class _BedrockInvokeModel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    body: str
+
+
+class _BedrockCountTokensInput(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    invoke_model: _BedrockInvokeModel = Field(alias="invokeModel")
+
+
+class _BedrockCountTokensBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    input: _BedrockCountTokensInput
+
+
+def _bedrock_counted_request(request_body: bytes) -> str:
+    invoke_model: Final = _BedrockCountTokensBody.model_validate_json(request_body).input.invoke_model
+    return base64.b64decode(invoke_model.body).decode()
+
+
+async def _count_on_a_bridged_provider_count_api(
+    request_body: Mapping[str, JsonValue], monkeypatch: pytest.MonkeyPatch
+) -> tuple[object, tuple[bytes, ...]]:
+    from litellm.llms.bedrock.count_tokens import handler as bedrock_count_tokens_handler
+
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    peer: Final = _CountTokensPeer({"inputTokens": 57})
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "nova-agent",
+                "litellm_params": {
+                    "model": "bedrock/us.amazon.nova-2-lite-v1:0",
+                    "aws_access_key_id": "AKIATESTACCESSKEY",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-east-1",
+                },
+            }
+        ]
+    )
+    with patch.object(
+        bedrock_count_tokens_handler,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+    ):
+        response: Final = await _messages_endpoint_count(router, {**request_body, "model": "nova-agent"})
+    return response, peer.request_bodies
+
+
+@pytest.mark.asyncio
+async def test_messages_count_tokens_sends_the_edited_messages_to_a_bridged_provider_count_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response, sent_bodies = await _count_on_a_bridged_provider_count_api(
+        {
+            "messages": _agent_turns_with_tool_results(3),
+            "tools": [_READ_FILE_TOOL],
+            "context_management": _CLEAR_TOOL_USES,
+        },
+        monkeypatch,
+    )
+
+    assert response == {"input_tokens": 57, "litellm_count_source": "provider"}
+    assert len(sent_bodies) == 1
+    assert _bedrock_counted_request(sent_bodies[0]).count(_GEMINI_TOOL_OUTPUT) == 1
+
+
+@pytest.mark.asyncio
+async def test_messages_count_tokens_rejects_a_non_string_tool_result_text_before_a_bridged_provider_applies_edits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response, sent_bodies = await _count_on_a_bridged_provider_count_api(
+        {"messages": _build_log_messages(5), "context_management": _CLEAR_TOOL_USES}, monkeypatch
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert "tool_result toolu_log content.1.text" in json.loads(bytes(response.body))["error"]["message"]
+    assert sent_bodies == ()
+
+
+@pytest.mark.asyncio
+async def test_messages_count_tokens_leaves_the_edits_to_a_responses_api_deployment() -> None:
+    peer: Final = _CountTokensPeer({"object": "response.input_tokens", "input_tokens": 71})
+    router: Final = Router(
+        model_list=[{"model_name": "gpt-agent", "litellm_params": {"model": "openai/gpt-5.5", "api_key": "test-key"}}]
+    )
+
+    with patch.object(
+        openai_count_tokens_http,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+    ):
+        response: Final = await _messages_endpoint_count(
+            router,
+            {
+                "model": "gpt-agent",
+                "messages": _agent_turns_with_tool_results(3),
+                "tools": [_READ_FILE_TOOL],
+                "context_management": _CLEAR_TOOL_USES,
+            },
+        )
+
+    assert response == {"input_tokens": 71, "litellm_count_source": "provider"}
+    assert len(peer.request_bodies) == 1
+    assert peer.request_bodies[0].decode().count(_GEMINI_TOOL_OUTPUT) == 3
+
+
+@pytest.mark.asyncio
+async def test_messages_count_tokens_leaves_the_edits_to_a_native_messages_deployment() -> None:
+    peer: Final = _CountTokensPeer({"input_tokens": 63})
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude-agent",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": "test-key"},
+            }
+        ]
+    )
+
+    with patch.object(
+        anthropic_count_tokens_handler,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+    ):
+        response: Final = await _messages_endpoint_count(
+            router,
+            {
+                "model": "claude-agent",
+                "messages": _agent_turns_with_tool_results(3),
+                "tools": [_READ_FILE_TOOL],
+                "context_management": _CLEAR_TOOL_USES,
+            },
+        )
+
+    assert response == {"input_tokens": 63, "litellm_count_source": "provider"}
+    assert len(peer.request_bodies) == 1
+    assert peer.request_bodies[0].decode().count(_GEMINI_TOOL_OUTPUT) == 3
 
 
 @pytest.mark.asyncio
