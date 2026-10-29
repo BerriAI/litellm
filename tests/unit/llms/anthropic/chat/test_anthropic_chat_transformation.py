@@ -7477,23 +7477,22 @@ def test_process_anthropic_headers_with_no_matching_headers():
 @pytest.mark.parametrize(
     "computer_tool_used, prompt_caching_set, expected_beta_header",
     [
-        (True, False, True),
-        (False, True, False),
-        (True, True, True),
-        (False, False, False),
+        ("computer_20250124", False, "computer-use-2025-01-24"),
+        (None, True, None),
+        ("computer_20251124", True, "computer-use-2025-11-24"),
+        (None, False, None),
     ],
 )
-def test_anthropic_beta_header(computer_tool_used, prompt_caching_set, expected_beta_header):
-    headers = litellm.AnthropicConfig().get_anthropic_headers(
+def test_anthropic_beta_header(
+    computer_tool_used: str | None, prompt_caching_set: bool, expected_beta_header: str | None
+) -> None:
+    headers: Final = litellm.AnthropicConfig().get_anthropic_headers(
         api_key="fake-api-key",
         computer_tool_used=computer_tool_used,
         prompt_caching_set=prompt_caching_set,
     )
 
-    if expected_beta_header:
-        assert "anthropic-beta" in headers
-    else:
-        assert "anthropic-beta" not in headers
+    assert headers.get("anthropic-beta") == expected_beta_header
 
 
 @pytest.mark.parametrize(

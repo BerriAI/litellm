@@ -4559,3 +4559,88 @@ def test_shared_legacy_thinking_translation_drops_a_non_numeric_budget_under_dro
 )
 def test_is_claude_tool_target(custom_llm_provider: str, model: str, expected: bool):
     assert is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model) is expected
+
+
+COMPUTER_20251124_TOOL: Final = {
+    "type": "computer_20251124",
+    "function": {"name": "computer", "parameters": {"display_width_px": 1024, "display_height_px": 768}},
+}
+
+
+@pytest.mark.parametrize(
+    ("computer_tool_version", "expected_beta"),
+    [
+        ("computer_20241022", "computer-use-2024-10-22"),
+        ("computer_20250124", "computer-use-2025-01-24"),
+        ("computer_20251124", "computer-use-2025-11-24"),
+        ("computer_20991231", "computer-use-2099-12-31"),
+        ("computer_use_preview", None),
+    ],
+)
+def test_computer_tool_beta_is_named_after_the_tool_version(computer_tool_version: str, expected_beta: str | None):
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    betas: Final = AnthropicModelInfo().get_anthropic_beta_list(
+        model="claude-opus-4-5", computer_tool_used=computer_tool_version, custom_llm_provider="anthropic"
+    )
+
+    assert [beta for beta in betas if beta.startswith("computer-use-")] == ([expected_beta] if expected_beta else [])
+
+
+def test_anthropic_chat_sends_the_computer_use_2025_11_24_beta_for_computer_20251124(
+    respx_mock: respx.MockRouter, local_beta_headers_config: None
+):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_computer",
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_1", "name": "computer", "input": {"action": "screenshot"}}
+                ],
+                "model": "claude-opus-4-5-20251101",
+                "stop_reason": "tool_use",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 12, "output_tokens": 2},
+            },
+        )
+    )
+
+    litellm.completion(
+        model="anthropic/claude-opus-4-5",
+        api_key="mock_api_key",
+        messages=[{"role": "user", "content": "Take a screenshot of the screen."}],
+        tools=[COMPUTER_20251124_TOOL],
+    )
+
+    sent_betas: Final = route.calls.last.request.headers["anthropic-beta"].split(",")
+    assert [beta for beta in sent_betas if beta.startswith("computer-use-")] == ["computer-use-2025-11-24"]
+
+
+def test_vertex_ai_chat_sends_the_computer_use_2025_11_24_beta_for_computer_20251124(
+    local_beta_headers_config: None,
+):
+    from litellm.anthropic_beta_headers_manager import update_request_with_filtered_beta
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
+
+    config: Final = VertexAIAnthropicConfig()
+    messages: Final = [{"role": "user", "content": "Take a screenshot of the screen."}]
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"tools": [COMPUTER_20251124_TOOL]},
+        optional_params={"max_tokens": 100, "is_vertex_request": True},
+        model="claude-opus-4-5",
+        drop_params=False,
+    )
+    headers: Final[dict[str, str]] = {}
+    request_data: Final = config.transform_request(
+        model="claude-opus-4-5", messages=messages, optional_params=optional_params, litellm_params={}, headers=headers
+    )
+
+    filtered_headers, _ = update_request_with_filtered_beta(
+        headers=headers, request_data=request_data, provider="vertex_ai"
+    )
+
+    sent_betas: Final = filtered_headers["anthropic-beta"].split(",")
+    assert [beta for beta in sent_betas if beta.startswith("computer-use-")] == ["computer-use-2025-11-24"]

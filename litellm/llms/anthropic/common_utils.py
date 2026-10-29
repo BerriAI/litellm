@@ -113,6 +113,7 @@ _BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
 _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")
 _DATED_RELEASE_SUFFIX_RE: Final = re.compile(r"-\d{8}$")
 _DOTTED_VERSION_RE: Final = re.compile(r"(\d)\.(\d)")
+_COMPUTER_TOOL_VERSION_RE: Final = re.compile(r"computer_(\d{4})(\d{2})(\d{2})")
 _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
 OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
@@ -1165,24 +1166,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             return None
         return anthropic_beta_header.split(",")
 
-    def get_computer_tool_beta_header(self, computer_tool_version: str) -> str:
-        """
-        Get the appropriate beta header for a given computer tool version.
-
-        Args:
-            computer_tool_version: The computer tool version (e.g., 'computer_20250124', 'computer_20241022')
-
-        Returns:
-            The corresponding beta header string
-        """
-        computer_tool_beta_mapping: Final = {
-            "computer_20250124": "computer-use-2025-01-24",
-            "computer_20241022": "computer-use-2024-10-22",
-        }
-        return computer_tool_beta_mapping.get(
-            computer_tool_version,
-            "computer-use-2024-10-22",  # Default fallback
-        )
+    def get_computer_tool_beta_header(self, computer_tool_version: str) -> str | None:
+        """Anthropic names each computer tool's beta after its date: computer_20251124 needs computer-use-2025-11-24."""
+        version: Final = _COMPUTER_TOOL_VERSION_RE.fullmatch(computer_tool_version)
+        if version is None:
+            return None
+        year, month, day = version.groups()
+        return f"computer-use-{year}-{month}-{day}"
 
     def get_anthropic_beta_list(
         self,
@@ -1214,9 +1204,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if effort_used:
             betas.append(ANTHROPIC_EFFORT_BETA_HEADER)  # effort-2025-11-24
 
-        if computer_tool_used:
-            beta_header: Final = self.get_computer_tool_beta_header(computer_tool_used)
-            betas.append(beta_header)
+        computer_beta: Final = self.get_computer_tool_beta_header(computer_tool_used) if computer_tool_used else None
+        if computer_beta is not None:
+            betas.append(computer_beta)
 
         # Anthropic no longer requires the prompt-caching beta header
         # Prompt caching now works automatically when cache_control is used in messages
@@ -1305,9 +1295,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         # Anthropic no longer requires the prompt-caching beta header
         # Prompt caching now works automatically when cache_control is used in messages
         # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
-        if computer_tool_used:
-            beta_header: Final = self.get_computer_tool_beta_header(computer_tool_used)
-            betas.add(beta_header)
+        computer_beta: Final = self.get_computer_tool_beta_header(computer_tool_used) if computer_tool_used else None
+        if computer_beta is not None:
+            betas.add(computer_beta)
         # if pdf_used:
         #     betas.add("pdfs-2024-09-25")
         if file_id_used:
