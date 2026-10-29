@@ -2137,7 +2137,10 @@ def _responses_ws_frame_guard(
     # a blocked frame is billed as its own failed request; only the first turn settles the admission reservation
     rejected_frame_auth: Final = user_api_key_dict.model_copy(update={"budget_reservation": None})
 
-    async def rejection(exception: Exception, data: dict[str, object]) -> ResponsesWsFrameRejection:  # mutable-ok: billed
+    async def rejection(
+        exception: Exception,
+        data: dict[str, object],  # mutable-ok: billed
+    ) -> ResponsesWsFrameRejection:
         await _bill_rejected_frame(rejected_frame_auth, exception, data)
         proxy_exception: Final = proxy_exception_from_route_error(exception)
         return ResponsesWsFrameRejection(proxy_exception.message, proxy_exception.provider_specific_fields)
@@ -2211,7 +2214,9 @@ def _responses_ws_frame_guard(
 def _reject_guarded_field_beside_nested_response(frame: Mapping[str, object], nested: object) -> None:
     """Only the nested ``response`` body runs through the guardrails, so a guarded field beside it would go upstream
     unguarded"""
-    stray: Final = next((key for key in _GUARDED_FRAME_FIELDS if key in frame), None) if isinstance(nested, dict) else None
+    stray: Final = (
+        next((key for key in _GUARDED_FRAME_FIELDS if key in frame), None) if isinstance(nested, dict) else None
+    )
     if stray is not None:
         raise ValueError(f"response.create sends {stray} at the top level next to response; send it inside response")
 

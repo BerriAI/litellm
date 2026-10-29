@@ -74,9 +74,10 @@ class TestPassthroughGuardrailHandlerGetGuardrailNames:
 
 
 class TestPassthroughGuardrailHandlerCollectGuardrails:
-    def test_inherits_a_key_guardrail_listed_with_settings_by_its_name(self):
+    def test_inherits_a_key_guardrail_listed_with_settings_by_its_name(self, monkeypatch):
         from litellm.proxy._types import UserAPIKeyAuth
 
+        monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
         key = UserAPIKeyAuth(
             api_key="hashed", metadata={"guardrails": [{"pii": {"extra_body": {"threshold": 1}}}, "toxic"]}
         )
