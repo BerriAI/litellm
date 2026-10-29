@@ -215,14 +215,31 @@ def test_every_system_instruction_text_part_reaches_the_system_message(
 @pytest.mark.parametrize(
     ("system_parts", "expected_messages"),
     [
-        (
-            [{"text": "Answer tersely"}, {"text": None}, {"text": 3}, "text", {"text": "Use British spelling"}],
+        pytest.param(
+            [
+                {"text": "Answer tersely"},
+                {"text": None},
+                {"text": 3},
+                {"text": ["x"]},
+                {"text": "Use British spelling"},
+            ],
             [{"role": "system", "content": "Answer tersely\nUse British spelling"}, {"role": "user", "content": "hi"}],
+            id="malformed_parts_skipped_like_contents",
         ),
-        (None, [{"role": "user", "content": "hi"}]),
+        pytest.param(
+            {"text": "Answer tersely"},
+            [{"role": "system", "content": "Answer tersely"}, {"role": "user", "content": "hi"}],
+            id="single_object_parts",
+        ),
+        pytest.param(
+            ["Answer tersely", {"text": "Use British spelling"}],
+            [{"role": "system", "content": "Answer tersely\nUse British spelling"}, {"role": "user", "content": "hi"}],
+            id="bare_string_part_read_like_contents",
+        ),
+        pytest.param(None, [{"role": "user", "content": "hi"}], id="no_parts"),
     ],
 )
-def test_a_system_instruction_part_without_string_text_is_skipped(
+def test_system_instruction_parts_follow_the_contents_part_rules(
     system_parts: object, expected_messages: list[dict[str, str]]
 ) -> None:
     request: Final = GoogleGenAIAdapter().translate_generate_content_to_completion(

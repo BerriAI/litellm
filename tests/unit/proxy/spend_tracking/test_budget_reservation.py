@@ -254,6 +254,7 @@ def _gemini_hold(body: dict[str, object], input_tokens: int | None = None) -> fl
     (
         {"contents": [{"role": "user", "parts": [{"text": GEMINI_PROMPT}, GEMINI_AUDIO_PART]}]},
         {"contents": [{"role": "user", "parts": [{"fileData": {"mimeType": "video/mp4", "fileUri": "gs://b/v.mp4"}}]}]},
+        {"contents": [{"role": "user", "parts": {"fileData": {"mimeType": "video/mp4", "fileUri": "gs://b/v.mp4"}}}]},
         {"contents": [{"role": "user", "parts": [{"inline_data": {"mime_type": "image/png", "data": "iVBORw0K"}}]}]},
         {"contents": [{"role": "model", "parts": [{"executableCode": {"language": "PYTHON", "code": "print(1)"}}]}]},
         {"contents": [GEMINI_TEXT_CONTENT, {"role": "function", "parts": [{"text": GEMINI_PROMPT * 500}]}]},
@@ -266,6 +267,7 @@ def _gemini_hold(body: dict[str, object], input_tokens: int | None = None) -> fl
             ]
         },
         {"systemInstruction": {"parts": [GEMINI_AUDIO_PART]}, "contents": [GEMINI_TEXT_CONTENT]},
+        {"systemInstruction": {"parts": GEMINI_AUDIO_PART}, "contents": [GEMINI_TEXT_CONTENT]},
         {"tools": [{"function_declarations": [{"name": "lookup"}]}], "contents": [GEMINI_TEXT_CONTENT]},
         {"tools": [{"googleSearch": {}}], "contents": [GEMINI_TEXT_CONTENT]},
         {"cachedContent": "cachedContents/abc", "contents": [GEMINI_TEXT_CONTENT]},
@@ -333,6 +335,26 @@ def test_a_gemini_output_cap_of_zero_or_below_holds_the_default_output(cap: int)
         _gemini_hold({"contents": [GEMINI_TEXT_CONTENT], "generationConfig": {"maxOutputTokens": cap}})
         == uncapped_hold
     )
+
+
+UNPRICEABLE_COUNTS: Final = (10**400, "9" * 400, 1e308, math.inf)
+
+
+@pytest.mark.parametrize("count", UNPRICEABLE_COUNTS)
+def test_a_candidate_count_too_large_to_price_holds_one_candidate(count: object) -> None:
+    one_candidate_hold: Final = _gemini_hold({"contents": [GEMINI_TEXT_CONTENT]})
+    assert one_candidate_hold is not None
+    assert (
+        _gemini_hold({"contents": [GEMINI_TEXT_CONTENT], "generationConfig": {"candidateCount": count}})
+        == one_candidate_hold
+    )
+
+
+@pytest.mark.parametrize("count", UNPRICEABLE_COUNTS)
+def test_an_n_too_large_to_price_holds_one_choice(count: object) -> None:
+    one_choice_hold: Final = _chat_hold(GEMINI_CHAT_BODY)
+    assert one_choice_hold is not None
+    assert _chat_hold({**GEMINI_CHAT_BODY, "n": count}) == one_choice_hold
 
 
 def test_a_negative_max_tokens_holds_the_default_output() -> None:

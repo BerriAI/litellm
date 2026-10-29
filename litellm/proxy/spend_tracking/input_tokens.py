@@ -266,7 +266,9 @@ def _gemini_content_is_countable(content: Mapping[str, object]) -> bool:
 
 
 def _gemini_parts_are_countable(parts: object, fields: frozenset[str]) -> bool:
-    return all(_gemini_part_is_countable(part, fields) for part in iter_items(parts))
+    single_part: Final = as_str_mapping(parts)
+    items: Final = (single_part,) if single_part is not None else iter_items(parts)
+    return all(_gemini_part_is_countable(part, fields) for part in items)
 
 
 def _gemini_part_is_countable(part: object, fields: frozenset[str]) -> bool:

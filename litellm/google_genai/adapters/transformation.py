@@ -9,7 +9,6 @@ from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm import verbose_logger
 from litellm.exceptions import BadRequestError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types, normalize_tool_schema
@@ -250,16 +249,8 @@ def _genai_tool_call(part: object) -> ChatCompletionAssistantToolCall | None:
     )
 
 
-def _system_part_text(part: object) -> str | None:
-    fields: Final = as_str_mapping(part)
-    text: Final = fields.get("text") if fields is not None else None
-    return text if isinstance(text, str) else None
-
-
 def _system_texts(parts: object) -> tuple[str, ...]:
-    return tuple(
-        text for text in map(_system_part_text, parts if isinstance(parts, Sequence) else ()) if text is not None
-    )
+    return tuple(part["text"] for part in _genai_message_parts(_genai_content_parts(parts)) if part["type"] == "text")
 
 
 def _genai_content_messages(content: object) -> tuple[AllMessageValues, ...]:

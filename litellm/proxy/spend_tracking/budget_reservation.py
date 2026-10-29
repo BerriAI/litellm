@@ -1449,8 +1449,8 @@ def _max_cost_for_cost_info(
                 tier_rate(tier, "output_cost_per_token"),
                 tier_rate(tier, "output_cost_per_reasoning_token"),
             )
-            return (estimated_input_tokens * tier_rate(tier, "input_cost_per_token")) + (
-                output_tokens * output_multiplier * output_rate
+            return (estimated_input_tokens * tier_rate(tier, "input_cost_per_token")) + _output_cost(
+                output_tokens, output_multiplier, output_rate
             )
 
     input_cost_per_token: Final = _to_float(model_info.get("input_cost_per_token"))
@@ -1467,7 +1467,7 @@ def _max_cost_for_cost_info(
     # under-reserving reasoning-heavy requests.
     output_rate = max(output_cost_per_token or 0.0, output_cost_per_reasoning_token or 0.0)
     if output_cost_per_token is not None or output_cost_per_reasoning_token is not None:
-        cost += output_tokens * output_multiplier * output_rate
+        cost += _output_cost(output_tokens, output_multiplier, output_rate)
     elif output_tokens > 0:
         return None
 
@@ -1706,6 +1706,13 @@ def _get_output_multiplier(request_body: Mapping[str, object], route: str) -> in
     return max((1, *(count for count in map(_to_int, candidates) if count is not None)))
 
 
+def _output_cost(output_tokens: int, output_multiplier: int, output_rate: float) -> float:
+    try:
+        return output_tokens * output_multiplier * output_rate
+    except OverflowError:
+        return output_tokens * output_rate
+
+
 def _is_input_only_route(route: str) -> bool:
     return any(
         route_part in route
@@ -1731,7 +1738,7 @@ def _to_int(value: object) -> int | None:
         return None
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
