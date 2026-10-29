@@ -37,3 +37,12 @@ together with its dedicated job, and list a new dedicated GitHub workflow with t
 `DEDICATED_INTEGRATION_WORKFLOWS` in `.github/scripts/assert_ci_coverage.py`. The `ci-coverage` check
 fails a file here that a GitHub workflow runs unless it is in `GITHUB_FILES` and that workflow owns its
 directory (#46780)
+
+## Fixtures that boot a proxy
+
+Scope them to the module or class, never the session, and request them as arguments, never through
+`request.getfixturevalue`. The harness puts the tests that share a module or class fixture on one xdist
+worker, so the proxy boots once and stops when its tests finish. A session fixture boots a copy on every
+worker that runs one of its tests and keeps them all until the node ends, and those copies ran CircleCI
+integration-extensions nodes out of memory. `session_gateway` in `conftest.py` is the one proxy each
+worker keeps on purpose
