@@ -388,6 +388,25 @@ def test_vertex_gemini_flash_rows_carry_the_documented_retirement_date(prices: d
     assert prices[f"{prefix}{model}"]["deprecation_date"] == VERTEX_GEMINI_FLASH_RETIREMENT_DATES[model]
 
 
+# https://developers.openai.com/api/docs/deprecations, the 2026-10-14 GPT-4 series notice
+OPENAI_GPT_4_SERIES_SNAPSHOTS: Final = MappingProxyType(
+    {
+        "gpt-4o": ("gpt-4o-2024-08-06", "gpt-4o-2024-11-20"),
+        "gpt-4o-mini": ("gpt-4o-mini-2024-07-18",),
+        "gpt-4.1": ("gpt-4.1-2025-04-14",),
+        "gpt-4.1-mini": ("gpt-4.1-mini-2025-04-14",),
+    }
+)
+
+
+@pytest.mark.parametrize("alias", sorted(OPENAI_GPT_4_SERIES_SNAPSHOTS))
+def test_openai_gpt_4_series_aliases_retire_with_their_snapshots(prices: dict, alias: str):
+    snapshot_dates: Final = frozenset(
+        prices[snapshot].get("deprecation_date") for snapshot in OPENAI_GPT_4_SERIES_SNAPSHOTS[alias]
+    )
+    assert snapshot_dates == {prices[alias].get("deprecation_date")}
+
+
 def _sampling_flags_across_provider_twins(prices: Mapping[str, Mapping[str, object]], key: str) -> frozenset[object]:
     bare: Final = key.split("/")[-1]
     twins: Final = tuple(twin for twin in (bare, f"vertex_ai/{bare}", f"gemini/{bare}") if twin in prices)
