@@ -2246,7 +2246,7 @@ class JWTAuthManager:
                     check_db_only=True,
                     team_id_upsert=True,
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001  # fail-safe: a lost create race or a create error must not fail auth, the join below still runs
                 verbose_proxy_logger.debug(
                     "JWT auth could not create team %s, trying to join it anyway: %s", team_id, e
                 )
