@@ -7738,7 +7738,7 @@ async def test_vertex_live_setup_frame_with_an_escaped_key_is_still_gated():
         '{setup: {model: "totally-unlisted-model-abc"}}',
     ],
 )
-async def test_vertex_live_setup_frame_only_vertex_can_parse_is_refused(lenient_setup, frame_kind):
+async def test_vertex_live_setup_frame_only_vertex_can_parse_is_refused(lenient_setup: str, frame_kind: str):
     """Vertex reads trailing commas, single quotes and bare keys, which strict JSON refuses to parse"""
     websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
         [
@@ -7796,7 +7796,7 @@ async def test_vertex_live_setup_frame_only_vertex_can_parse_still_reaches_verte
         '{"setup": {"model": "gemini-3-pro-live"}, "setup": null}',
     ],
 )
-async def test_vertex_live_setup_frame_repeating_a_key_as_null_is_refused(repeated_key_setup):
+async def test_vertex_live_setup_frame_repeating_a_key_as_null_is_refused(repeated_key_setup: str):
     """
     Vertex keeps the first of two keys when the second is null, while ``json.loads`` keeps the last, so the
     proxy would read no model where Vertex runs the first one
@@ -7822,7 +7822,7 @@ async def test_vertex_live_setup_frame_repeating_a_key_as_null_is_refused(repeat
     ],
     ids=["litellm-wildcard", "vertex-wildcard", "team", "agent", "end-user"],
 )
-async def test_vertex_live_setup_frame_only_vertex_can_parse_is_refused_for_any_limited_caller(limited_token):
+async def test_vertex_live_setup_frame_only_vertex_can_parse_is_refused_for_any_limited_caller(limited_token: UserAPIKeyAuth):
     """A wildcard can match any name the proxy might test the caller with, so only a caller with no model limit
     anywhere may send a frame the proxy cannot read"""
     websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
@@ -7877,7 +7877,7 @@ async def test_vertex_live_non_setup_frames_are_forwarded_without_a_model_check(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("addressing", VERTEX_LIVE_GROUP_ADDRESSINGS)
 @pytest.mark.parametrize("group", [VERTEX_LIVE_GROUP, VERTEX_LIVE_ALIAS_GROUP])
-async def test_vertex_live_setup_frame_authorizes_a_permitted_group_in_every_addressing(addressing, group):
+async def test_vertex_live_setup_frame_authorizes_a_permitted_group_in_every_addressing(addressing: str, group: str):
     """
     The Live SDK wraps the caller's model as ``models/<name>``, so a key holding the group has to work
     whichever addressing its client actually sends
@@ -7895,7 +7895,7 @@ async def test_vertex_live_setup_frame_authorizes_a_permitted_group_in_every_add
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("addressing", VERTEX_LIVE_CLIENT_ADDRESSINGS)
-async def test_vertex_live_setup_frame_refuses_an_unpermitted_group_in_every_addressing(addressing):
+async def test_vertex_live_setup_frame_refuses_an_unpermitted_group_in_every_addressing(addressing: str):
     """Normalizing the addressing must not become a way to reach a group the key does not hold"""
     websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
         [_setup_frame(addressing.format(model="gemini-3-pro-live"))],
@@ -7909,7 +7909,7 @@ async def test_vertex_live_setup_frame_refuses_an_unpermitted_group_in_every_add
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("addressing", VERTEX_LIVE_CLIENT_ADDRESSINGS)
-async def test_vertex_live_setup_frame_naming_no_group_at_all_is_refused_in_every_addressing(addressing):
+async def test_vertex_live_setup_frame_naming_no_group_at_all_is_refused_in_every_addressing(addressing: str):
     """A name that resolves to no group is authorized as it arrived, so an unknown model cannot ride a prefix in"""
     websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
         [_setup_frame(addressing.format(model="totally-unlisted-model-abc"))],
@@ -7923,7 +7923,7 @@ async def test_vertex_live_setup_frame_naming_no_group_at_all_is_refused_in_ever
 @pytest.mark.asyncio
 @pytest.mark.parametrize("addressing", VERTEX_LIVE_CLIENT_ADDRESSINGS)
 @pytest.mark.parametrize("key_model", ["gemini-4-pro-live-unserved", "vertex_ai/gemini-4-pro-live-unserved"])
-async def test_vertex_live_setup_frame_authorizes_a_model_no_group_serves_by_its_publisher_id(addressing, key_model):
+async def test_vertex_live_setup_frame_authorizes_a_model_no_group_serves_by_its_publisher_id(addressing: str, key_model: str):
     """
     With no group to resolve, the setup rewriter sends Vertex the last path segment, so a key holding that
     publisher model, bare or as a LiteLLM ``vertex_ai/`` id, can open it whichever addressing its client sends
@@ -7974,7 +7974,7 @@ async def test_vertex_live_setup_frame_prefers_the_group_its_whole_name_matches(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("group", [VERTEX_LIVE_GROUP, VERTEX_LIVE_ALIAS_GROUP])
-async def test_vertex_live_full_path_is_authorized_by_any_group_serving_its_publisher_model(group):
+async def test_vertex_live_full_path_is_authorized_by_any_group_serving_its_publisher_model(group: str):
     """The docs tell callers to send the full resource path, which Vertex runs as sent, so every group serving
     that publisher model grants it, whatever the group is called"""
     full_path = VERTEX_LIVE_FULL_PATH.format(model=VERTEX_LIVE_GROUP)
@@ -8198,7 +8198,7 @@ async def test_vertex_live_setup_frame_never_reads_the_secret_manager_for_anothe
     ],
     ids=["key-alias", "team-alias"],
 )
-async def test_vertex_live_setup_frame_naming_an_alias_cannot_open_the_model_the_alias_shadows(valid_token):
+async def test_vertex_live_setup_frame_naming_an_alias_cannot_open_the_model_the_alias_shadows(valid_token: UserAPIKeyAuth):
     """
     An alias passes the access check by its target, while the setup rewriter sends the name as written, so a
     key that could set an alias would open the model the alias name belongs to
@@ -8274,7 +8274,7 @@ async def test_vertex_live_setup_frame_naming_a_router_alias_named_like_a_group_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("addressing", VERTEX_LIVE_CLIENT_ADDRESSINGS)
-async def test_vertex_live_setup_frame_is_authorized_by_the_litellm_model_id_in_every_addressing(addressing):
+async def test_vertex_live_setup_frame_is_authorized_by_the_litellm_model_id_in_every_addressing(addressing: str):
     """A request naming a deployment's ``vertex_ai/`` id reaches that deployment, so a key holding the id runs the
     model it names on Live whichever addressing the setup frame uses"""
     websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
@@ -8313,7 +8313,7 @@ async def test_vertex_live_setup_frame_is_checked_against_the_owner_of_a_persona
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("addressing", VERTEX_LIVE_CLIENT_ADDRESSINGS)
-async def test_vertex_live_setup_frame_is_checked_against_the_team_in_every_addressing(addressing):
+async def test_vertex_live_setup_frame_is_checked_against_the_team_in_every_addressing(addressing: str):
     """The team allowlist is keyed by group too, so the addressing must not decide whether the team is checked"""
     websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
         [_setup_frame(addressing.format(model="gemini-3-pro-live"))],
@@ -8395,7 +8395,7 @@ async def test_vertex_live_setup_frame_naming_a_router_alias_is_authorized_by_it
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("addressing", VERTEX_LIVE_CLIENT_ADDRESSINGS)
-async def test_vertex_live_setup_frame_resolves_an_access_group_grant_in_every_addressing(addressing):
+async def test_vertex_live_setup_frame_resolves_an_access_group_grant_in_every_addressing(addressing: str):
     """
     ``get_model_access_groups`` is keyed by group as well, and returns nothing for a prefixed name, so a key
     entitled through an access group rather than a model name needs the same normalization
@@ -8569,7 +8569,7 @@ async def test_vertex_live_setup_group_the_key_may_call_but_fails_budget_is_not_
 
 
 @pytest.mark.asyncio
-async def test_vertex_live_route_keeps_the_key_allowlist_out_of_the_close_reason_and_in_the_proxy_log(caplog):
+async def test_vertex_live_route_keeps_the_key_allowlist_out_of_the_close_reason_and_in_the_proxy_log(caplog: pytest.LogCaptureFixture):
     """The client learns which model was refused, while only the proxy log names the models the key may reach"""
     with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
         websocket, _, _ = await _run_vertex_live_route(
@@ -8697,7 +8697,7 @@ class StreamingUpstreamWebSocket(ScriptedUpstreamWebSocket):
         return json.dumps({"serverContent": {"modelTurn": {"parts": [{"text": "still talking"}]}}})
 
 
-def _client_websocket_with_a_close_handshake(receive) -> MagicMock:
+def _client_websocket_with_a_close_handshake(receive: Callable[[], Awaitable[Mapping[str, str | bytes]]]) -> MagicMock:
     """A client socket that, like Starlette's, refuses sends once its close starts and yields while closing"""
     from starlette.websockets import WebSocketState
 
