@@ -35,6 +35,7 @@ from litellm.repositories.managed_batch_repository import ManagedBatchRepository
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest, OpenAIFileObject, OpenAIFilesPurpose
 from litellm.types.utils import LITELLM_EXECUTED_BATCH_PROVIDERS, ExtractedFileData, LiteLLMBatch, LlmProviders
+from litellm.utils import resolve_api_key_secret_reference
 
 if TYPE_CHECKING:
     from prisma import types as prisma_types
@@ -241,7 +242,11 @@ def _upstream_of(credentials: Mapping[str, object], provider: str) -> tuple[str,
         )
     except Exception:  # noqa: BLE001  # get_llm_provider raises on a model it cannot map, which means nothing to probe
         return None
-    return None if resolved_api_base is None else (resolved_api_base, resolved_api_key)
+    if resolved_api_base is None:
+        return None
+    return resolved_api_base, resolve_api_key_secret_reference(
+        resolved_api_key, model=model, llm_provider=provider, upstream=credentials
+    )
 
 
 async def litellm_executed_provider_for(
@@ -656,6 +661,7 @@ class LiteLLMExecutedBatchRunner:
             "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(run.user_api_key_dict),
             "user_api_end_user_max_budget": run.user_api_key_dict.end_user_max_budget,
             "tags": list(run.request_tags),
+            "inherited_tags": LiteLLMProxyRequestSetup.get_inherited_tags(run.user_api_key_dict),
             "batch_id": run.unified_batch_id,
         }
 

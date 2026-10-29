@@ -13,6 +13,8 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 
 @pytest.mark.covers(
     "other.routing.retries.several_attempts_reach_success_without_hidden_retries",
@@ -45,7 +47,7 @@ def test_retry_counts_and_public_errors_match_actual_provider_attempts(gateway: 
                 gateway.post("/config/update", {"router_settings": {"num_retries": retries}})
                 assert object_value(gateway.get("/router/settings")["current_values"])["num_retries"] == retries
                 upstream.post(f"/__scripts/{provider_model}", json={"statuses": statuses}).raise_for_status()
-                upstream.get("/__observations").raise_for_status()
+                upstream.delete("/__observations").raise_for_status()
                 response: Final = gateway.request(
                     "POST",
                     "/v1/chat/completions",
@@ -177,7 +179,7 @@ def test_saved_deployment_target_update_changes_wire_and_preserves_control(gatew
                     {"litellm_params": {"model": "openai/" + prefix + "-second"}},
                 )
                 assert response.status_code == 200, response.text
-            upstream.get("/__observations").raise_for_status()
+            upstream.delete("/__observations").raise_for_status()
             for alias in (model, other):
                 assert gateway.chat(alias, text=f"{prefix} generation {generation}")["usage"]["total_tokens"] == 40
             requests: Final = upstream.get("/__observations").json()["requests"]

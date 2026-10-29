@@ -15,6 +15,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.health_check_latest import LatestHealthCheckRow
 from litellm.proxy.public_endpoints import router
 from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -360,6 +361,26 @@ def test_cognition_provider_fields():
 
     assert fields_by_key["api_base"]["field_type"] == "text"
     assert fields_by_key["api_base"]["required"] is False
+
+
+def test_zerogpu_add_model_form_defaults_resolve_to_a_priced_zerogpu_model():
+    import litellm
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    app_instance: Final = FastAPI()
+    app_instance.include_router(router)
+    providers: Final = TestClient(app_instance).get("/public/providers/fields").json()
+
+    zerogpu: Final = next(p for p in providers if p["litellm_provider"] == "zerogpu")
+    fields_by_key: Final = {f["key"]: f for f in zerogpu["credential_fields"]}
+    placeholder: Final = zerogpu["default_model_placeholder"]
+    _, provider, _, api_base = get_llm_provider(model=placeholder)
+
+    assert provider == "zerogpu"
+    assert api_base == fields_by_key["api_base"]["placeholder"]
+    assert litellm.model_cost[placeholder]["litellm_provider"] == "zerogpu"
+    assert fields_by_key["api_key"]["required"] is True
+    assert fields_by_key["api_key"]["field_type"] == "password"
 
 
 def test_qwen_mainland_provider_fields_carry_the_qianwen_brand():
@@ -852,6 +873,46 @@ def test_public_model_hub_mixed_health_statuses():
     app.dependency_overrides.clear()
 
 
+def _stored_health_check(model_id: str | None, status: str, checked_at: datetime) -> LatestHealthCheckRow:
+    return LatestHealthCheckRow(
+        health_check_id=f"hc-{model_id}",
+        model_name="gpt-4",
+        model_id=model_id,
+        status=status,
+        checked_at=checked_at,
+        created_at=checked_at,
+        updated_at=checked_at,
+    )
+
+
+def test_public_model_hub_reports_the_newest_check_of_a_group_not_the_last_row_read():
+    """Rows come back in model_id order with NULL last, so a stale name-probe row used to overwrite the fresh one."""
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    client = TestClient(app)
+    fresh = _stored_health_check("deployment-a", "healthy", datetime(2026, 10, 16, 11, 10, tzinfo=timezone.utc))
+    stale = _stored_health_check(None, "unhealthy", datetime(2026, 9, 4, 11, 20, tzinfo=timezone.utc))
+    mock_prisma = MagicMock()
+    mock_prisma.get_all_latest_health_checks = AsyncMock(return_value=(fresh, stale))
+
+    with (
+        patch("litellm.public_model_groups", ["gpt-4"]),
+        patch("litellm.proxy.proxy_server.get_model_group_info") as mock_get_info,
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+    ):
+        mock_get_info.return_value = [
+            ModelGroupInfoProxy(model_group="gpt-4", providers=["openai"], is_public_model_group=True)
+        ]
+        response = client.get("/public/model_hub", headers={"Authorization": "Bearer test-key"})
+
+    assert response.status_code == 200
+    assert response.json()[0]["health_status"] == "healthy"
+    assert response.json()[0]["health_checked_at"] == "2026-10-16T11:10:00+00:00"
+    app.dependency_overrides.clear()
+
+
 # ---------------------------------------------------------------------------
 # /public/agent_hub
 # ---------------------------------------------------------------------------
@@ -1080,6 +1141,25 @@ def test_get_supported_endpoints_chat_completions_present(reset_endpoints_cache)
     assert len(chat["providers"]) > 0
 
 
+def test_get_supported_endpoints_lists_streamlake_on_chat_messages_and_responses(
+    reset_endpoints_cache: None,
+) -> None:
+    app: Final[FastAPI] = FastAPI()
+    app.include_router(router)
+    client: Final[TestClient] = TestClient(app)
+    with client:
+        response: Final = client.get("/public/endpoints")
+    assert response.status_code == 200, response.text
+
+    streamlake_endpoints: Final = {
+        endpoint["key"]
+        for endpoint in response.json()["endpoints"]
+        if any(provider["slug"] == "streamlake" for provider in endpoint["providers"])
+    }
+    assert {"chat_completions", "messages", "responses"} <= streamlake_endpoints
+    assert "embeddings" not in streamlake_endpoints
+
+
 def test_get_supported_endpoints_display_names_have_no_slug_suffix(
     reset_endpoints_cache,
 ):
@@ -1194,8 +1274,8 @@ def test_public_mcp_hub_derives_publication_metadata_without_mutating_registry(
     expected_listed: bool,
     stored_public: bool | None,
 ) -> None:
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
     from litellm.proxy._types import MCPTransport
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     app: Final = FastAPI()
@@ -1234,7 +1314,7 @@ def test_public_mcp_hub_derives_publication_metadata_without_mutating_registry(
         patch("litellm.public_mcp_servers", [server.server_id] if explicit else []),
         patch("litellm.public_mcp_hub_strict_whitelist", strict),
         patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
             manager,
         ),
     ):
@@ -1266,7 +1346,7 @@ def test_public_mcp_hub_returns_empty_when_whitelist_unset():
     with (
         patch("litellm.public_mcp_servers", None),
         patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
             mock_manager,
         ),
     ):
@@ -1304,7 +1384,7 @@ def test_public_mcp_hub_does_not_expose_upstream_url():
     with (
         patch("litellm.public_mcp_servers", ["listed"]),
         patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
             mock_manager,
         ),
     ):
@@ -1387,6 +1467,30 @@ async def test_get_autorouter_presets_fetches_once_per_process(monkeypatch, rese
     assert first == remote
     assert second == remote
     assert calls == ["https://example.test/presets.json"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag", ["LITELLM_LOCAL_AUTOROUTER_PRESETS", "LITELLM_OFFLINE_MODE"])
+async def test_get_autorouter_presets_local_flags_serve_bundled_without_fetching(
+    monkeypatch, reset_autorouter_presets_cache, flag
+):
+    from litellm.proxy.public_endpoints.public_endpoints import (
+        _load_bundled_autorouter_presets,
+        get_autorouter_presets,
+    )
+
+    monkeypatch.delenv("LITELLM_LOCAL_AUTOROUTER_PRESETS", raising=False)
+    monkeypatch.setenv(flag, "True")
+    calls = []
+
+    async def fake_fetch(url):
+        calls.append(url)
+        raise AssertionError("no fetch when the bundled catalog is forced")
+
+    presets = await get_autorouter_presets(url="https://example.test/presets.json", fetch=fake_fetch)
+
+    assert presets == _load_bundled_autorouter_presets()
+    assert calls == []
 
 
 @pytest.mark.asyncio

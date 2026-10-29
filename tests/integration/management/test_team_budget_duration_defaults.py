@@ -10,6 +10,8 @@ from tests.integration._support.client import Gateway, string_value
 from tests.integration._support.database import read_rows
 from tests.integration._support.process import owned_proxy
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 
 def _budget_row(team_id: str) -> dict[str, JsonValue]:
     rows: Final = read_rows(

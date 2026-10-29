@@ -1,5 +1,5 @@
 import unittest.mock as mock
-from typing import cast
+from typing import Final, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -196,6 +196,17 @@ class TestEnterpriseCallbackControls:
             "langfuse", litellm_params, standard_callback_dynamic_params
         )
         assert result is False
+
+    def test_no_disable_request_logs_nothing(self, caplog: pytest.LogCaptureFixture) -> None:
+        litellm_params: Final = {"proxy_server_request": {"url": "test", "headers": {"user-agent": "codex"}}}
+
+        with caplog.at_level("DEBUG", logger="LiteLLM"):
+            result: Final = EnterpriseCallbackControls.is_callback_disabled_dynamically(
+                DataDogLogger.__new__(DataDogLogger), litellm_params, StandardCallbackDynamicParams()
+            )
+
+        assert result is False
+        assert caplog.records == []
 
     def test_callback_not_disabled_when_header_none(
         self, mock_premium_user, mock_request_headers

@@ -23,14 +23,15 @@ from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
 from openai.types.completion_usage import CompletionUsage
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
 
 import litellm
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
-from litellm.litellm_core_utils.token_counter import token_counter
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
+from litellm.litellm_core_utils.token_counter import token_counter, usage_tokenizer_model
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
@@ -134,6 +135,9 @@ class OpenAIError(BaseLLMException):
         )
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 ####### Error Handling Utils for OpenAI API #######################
 ###################################################################
 def drop_params_from_unprocessable_entity_error(
@@ -152,19 +156,20 @@ def drop_params_from_unprocessable_entity_error(
     """
     invalid_params: Final[list[str]] = []
     if isinstance(e, httpx.HTTPStatusError):
-        error_json: Final = e.response.json()
+        error_json: Final = decoded_json_object(_DECODED_JSON.validate_python(e.response.json()))
         error_message: Final = error_json.get("error", {})
         error_body = error_message
     else:
         error_body = e.body
-    if error_body is not None and isinstance(error_body, dict) and error_body.get("message"):
-        message = error_body.get("message", {})
+    error_mapping: Final = as_str_mapping(error_body)
+    if isinstance(error_mapping, dict) and error_mapping.get("message"):
+        message = error_mapping.get("message", {})
         if isinstance(message, str):
             try:
-                message = json.loads(message)
+                message = _DECODED_JSON.validate_python(json.loads(message))
             except json.JSONDecodeError:
                 message = {"detail": message}
-        detail: Final = message.get("detail")
+        detail: Final = decoded_json_object(message).get("detail")
 
         if isinstance(detail, list) and len(detail) > 0 and isinstance(detail[0], dict):
             for error_dict in detail:
@@ -237,7 +242,7 @@ async def _aiter_once(chunk: ChatCompletionChunk) -> AsyncIterator[ChatCompletio
 
 
 def build_output_token_limit_response(
-    e: openai.BadRequestError, data: Mapping[str, object], is_async: bool
+    e: openai.BadRequestError, data: Mapping[str, object], is_async: bool, base_model: str | None
 ) -> tuple[httpx.Headers, ChatCompletion | Iterator[ChatCompletionChunk] | AsyncIterator[ChatCompletionChunk]]:
     """Synthesize the length-truncated response the provider itself returns for slightly larger output budgets.
 
@@ -246,7 +251,11 @@ def build_output_token_limit_response(
     """
     model: Final[str] = str(data.get("model", ""))
     messages: Final = data.get("messages")
-    prompt_tokens: Final = token_counter(model=model, messages=messages) if isinstance(messages, list) else 0
+    prompt_tokens: Final = (
+        token_counter(model=usage_tokenizer_model(model, base_model), messages=messages)
+        if isinstance(messages, list)
+        else 0
+    )
     if not data.get("stream"):
         return e.response.headers, _output_token_limit_completion(model, prompt_tokens)
     chunk: Final = _output_token_limit_chunk(model)

@@ -19,7 +19,7 @@ from litellm.anthropic_interface.exceptions import (
 )
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.tool_fields import first_validation_error
-from litellm.llms.anthropic.pass_through.context_management import (
+from litellm.llms.anthropic.messages.context_management import (
     AnthropicContextManagementError,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
@@ -48,7 +48,12 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_type,
     with_litellm_call_id,
 )
-from litellm.proxy.litellm_pre_call_utils import should_auto_drop_params_for_agentic_cli
+from litellm.proxy.common_utils.token_count_log import rejected_token_count
+from litellm.proxy.common_utils.token_count_settings import count_source_fields
+from litellm.proxy.litellm_pre_call_utils import (
+    forwarded_anthropic_oauth_token,
+    should_auto_drop_params_for_agentic_cli,
+)
 from litellm.router import Router
 
 router: Final = APIRouter()
@@ -389,12 +394,17 @@ async def count_tokens(
         # Extract required fields
         model_name: Final = data.get("model")
         messages: Final = data.get("messages", [])
+        request_model: Final = model_name if isinstance(model_name, str) else None
 
         if not model_name:
-            raise HTTPException(status_code=400, detail="model parameter is required")
+            raise rejected_token_count(
+                HTTPException(status_code=400, detail="model parameter is required"), litellm_call_id, request_model
+            )
 
         if not messages:
-            raise HTTPException(status_code=400, detail="messages parameter is required")
+            raise rejected_token_count(
+                HTTPException(status_code=400, detail="messages parameter is required"), litellm_call_id, request_model
+            )
 
         auto_drop_params: Final = should_auto_drop_params_for_agentic_cli(
             request.headers.get("user-agent", ""), "drop_params" in data, proxy_config
@@ -404,12 +414,16 @@ async def count_tokens(
             token_fields if isinstance(token_fields, ProxyException) else _token_count_request(token_fields)
         )
         if isinstance(token_request, ProxyException):
-            return _anthropic_error_json_response(token_request, request)
+            return rejected_token_count(
+                _anthropic_error_json_response(token_request, request), litellm_call_id, request_model
+            )
 
         token_response: Final = await count_request_tokens(
             request=token_request,
             call_endpoint=True,
             messages_format="anthropic",
+            litellm_call_id=litellm_call_id,
+            client_oauth_token=forwarded_anthropic_oauth_token(request.headers),
             **_count_tokens_body_options(data, auto_drop_params),
         )
     except HTTPException as e:
@@ -420,7 +434,7 @@ async def count_tokens(
         log_llm_api_exception(e, litellm_call_id)
         return _anthropic_error_json_response(proxy_exception_from_route_error(e), request)
     else:
-        return {"input_tokens": token_response.total_tokens}
+        return {"input_tokens": token_response.total_tokens, **count_source_fields(token_response)}
 
 
 @router.post(

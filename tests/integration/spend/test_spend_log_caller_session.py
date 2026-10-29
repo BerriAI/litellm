@@ -38,7 +38,10 @@ from integration._support.process import OwnedProxy, graceful_stop_seconds, owne
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
-pytestmark: Final = pytest.mark.timeout(2 * readiness_seconds(2) + 2 * graceful_stop_seconds() + 240)
+pytestmark: Final = [
+    pytest.mark.timeout(2 * readiness_seconds(2) + 2 * graceful_stop_seconds() + 240),
+    pytest.mark.shares_worker_state,
+]
 
 MARKER: Final = re.compile(rb"callersess-[0-9a-f]{32}")
 CALLER_SESSION_KEY: Final = "litellm_caller_session_id"
