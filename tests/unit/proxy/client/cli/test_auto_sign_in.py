@@ -1,6 +1,8 @@
 import json
+import os
 import webbrowser
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -23,6 +25,9 @@ BASE_URL: Final = "https://proxy.example.com"
 SIGNED_IN_KEY: Final = "sk-signed-in"
 GENERATED: Final = {"key": "sk-generated", "key_alias": "experiment-1"}
 REJECTED: Final = {"error": {"message": "Authentication Error, No api key passed in.", "type": "auth_error"}}
+INVALID_KEY: Final = {
+    "error": {"message": "Authentication Error, Invalid API key provided", "type": "token_not_found_in_db"}
+}
 SIGNED_IN_AT: Final = 1_790_000_000.0
 EXPIRES_AT: Final = 4_102_444_800.0
 
@@ -151,6 +156,28 @@ def test_a_stored_login_the_proxy_rejects_is_replaced_by_one_sign_in_with_only_j
     assert get_stored_api_key(BASE_URL, vault=vault) == SIGNED_IN_KEY
 
 
+def test_an_expired_login_whose_renewal_the_proxy_refuses_is_renewed_once_and_then_signs_in(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    vault: Final = secret_vault_factory()
+    save_token(pkce_token_record(BASE_URL, replace(_credential("sk-expired"), expires_at=SIGNED_IN_AT)), vault=vault)
+    renewal: Final = requests_mock.post(f"{BASE_URL}/v1/cli/token", status_code=400, json={"error": "invalid_grant"})
+    requests_mock.post(f"{BASE_URL}/v1/cli/revoke", status_code=200)
+    route: Final = requests_mock.post(
+        f"{BASE_URL}/key/generate", [{"status_code": 401, "json": REJECTED}, {"status_code": 200, "json": GENERATED}]
+    )
+    sign_in: Final = FakeBrowserSignIn(_credential())
+
+    result: Final = _lite(["keys", "generate"], vault, sign_in)
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == GENERATED
+    assert renewal.call_count == 1
+    assert result.stderr.count("Could not renew the key") == 1
+    assert sign_in.calls == [BASE_URL]
+    assert _bearers(route) == [None, f"Bearer {SIGNED_IN_KEY}"]
+
+
 def test_a_login_for_another_proxy_is_never_replaced_by_an_automatic_sign_in(
     requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
 ) -> None:
@@ -172,7 +199,7 @@ def test_a_login_for_another_proxy_is_never_replaced_by_an_automatic_sign_in(
 
 
 def test_the_browser_sign_in_fails_at_once_on_a_machine_without_a_browser(requests_mock: Mocker) -> None:
-    def no_browser() -> webbrowser.BaseBrowser:
+    def no_browser(_name: str | None) -> webbrowser.BaseBrowser:
         raise webbrowser.Error("could not locate runnable browser")
 
     outcome: Final = PkceBrowserSignIn(find_browser=no_browser, environ={}).unavailable_because()
@@ -183,7 +210,7 @@ def test_the_browser_sign_in_fails_at_once_on_a_machine_without_a_browser(reques
 
 @pytest.mark.parametrize("ci", ["true", "1", "True"])
 def test_the_browser_sign_in_never_looks_for_a_browser_in_ci(requests_mock: Mocker, ci: str) -> None:
-    def browser_lookup() -> webbrowser.BaseBrowser:
+    def browser_lookup(_name: str | None) -> webbrowser.BaseBrowser:
         raise AssertionError("looked for a browser while CI is set")
 
     outcome: Final = PkceBrowserSignIn(find_browser=browser_lookup, environ={"CI": ci}).unavailable_because()
@@ -202,13 +229,14 @@ def test_the_browser_sign_in_never_looks_for_a_browser_in_ci(requests_mock: Mock
         ("w3m", {"TERM": "xterm"}),
         ("lynx", {"BROWSER": "lynx"}),
         ("/usr/bin/w3m", {"BROWSER": "/usr/bin/w3m"}),
+        ("lynx", {"BROWSER": f"lynx{os.pathsep}/usr/bin/w3m"}),
     ],
 )
 def test_a_text_mode_browser_fails_at_once_even_when_browser_picks_it(
     requests_mock: Mocker, name: str, environ: dict[str, str]
 ) -> None:
     outcome: Final = PkceBrowserSignIn(
-        find_browser=lambda: webbrowser.GenericBrowser(name), environ=environ
+        find_browser=lambda listed: webbrowser.GenericBrowser(listed or name), environ=environ
     ).unavailable_because()
 
     assert outcome == PkceFailure("the web browser is a text-mode one, which lite cannot show while a command waits")
@@ -219,7 +247,7 @@ def test_a_text_mode_browser_fails_at_once_even_when_browser_picks_it(
 def test_an_ssh_session_without_a_display_never_opens_a_browser_on_the_remote_screen(
     requests_mock: Mocker, ssh_variable: str
 ) -> None:
-    def browser_lookup() -> webbrowser.BaseBrowser:
+    def browser_lookup(_name: str | None) -> webbrowser.BaseBrowser:
         raise AssertionError("looked for a browser in an SSH session without a display")
 
     outcome: Final = PkceBrowserSignIn(
@@ -248,7 +276,9 @@ def test_a_browser_the_user_picked_starts_the_sign_in_and_names_how_long_it_wait
 ) -> None:
     discovery: Final = requests_mock.get(f"{BASE_URL}/.well-known/litellm-cli-auth", status_code=404)
     echoed: list[str] = []
-    sign_in: Final = PkceBrowserSignIn(find_browser=lambda: webbrowser.GenericBrowser("firefox"), environ=environ)
+    sign_in: Final = PkceBrowserSignIn(
+        find_browser=lambda _name: webbrowser.GenericBrowser("firefox"), environ=environ
+    )
 
     assert sign_in.unavailable_because() is None
     outcome: Final = sign_in(BASE_URL, echoed.append)
@@ -260,6 +290,46 @@ def test_a_browser_the_user_picked_starts_the_sign_in_and_names_how_long_it_wait
         "A shell or agent that stops commands sooner should run this one with a longer timeout."
     ]
 
+
+
+def test_a_browser_list_hands_the_launcher_every_listed_browser_with_a_window_in_order(
+    requests_mock: Mocker,
+) -> None:
+    requests_mock.get(f"{BASE_URL}/.well-known/litellm-cli-auth", json=_cli_auth_contract())
+    requests_mock.post(f"{BASE_URL}/register", status_code=201, json={"client_id": "cli-client"})
+    launched: list[tuple[str, Sequence[str]]] = []
+
+    def launch(url: str, browsers: Sequence[str]) -> PkceFailure:
+        launched.append((url, browsers))
+        return PkceFailure("the web browser did not open")
+
+    sign_in: Final = PkceBrowserSignIn(
+        find_browser=lambda name: webbrowser.GenericBrowser(name or "xdg-open"),
+        environ={"BROWSER": os.pathsep.join(("lynx", "firefox", "/usr/bin/w3m", "chromium"))},
+        open_browser=launch,
+    )
+
+    assert sign_in.unavailable_because() is None
+    assert sign_in(BASE_URL, lambda _line: None) == PkceFailure("the web browser did not open")
+    assert [browsers for _url, browsers in launched] == [("firefox", "chromium")]
+    assert launched[0][0].startswith(f"{BASE_URL}/authorize?")
+
+
+def _cli_auth_contract() -> dict[str, object]:
+    return {
+        "contract_version": 1,
+        "issuer": BASE_URL,
+        "authorization_endpoint": f"{BASE_URL}/authorize",
+        "token_endpoint": f"{BASE_URL}/token",
+        "registration_endpoint": f"{BASE_URL}/register",
+        "revocation_endpoint": f"{BASE_URL}/revoke",
+        "resource": BASE_URL,
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": ["none"],
+        "revocation_endpoint_auth_methods_supported": ["none"],
+    }
 
 
 def _browser_script(path: Path, ran: Path, exit_code: int) -> Path:
@@ -286,8 +356,34 @@ def test_the_browser_launcher_opens_only_the_browser_lite_picked_and_never_a_hid
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
 
-    assert open_browser_detached(f"{BASE_URL}/v1/cli/authorize?state=abc") == expected
+    assert open_browser_detached(f"{BASE_URL}/v1/cli/authorize?state=abc", ()) == expected
     assert picked_ran.exists()
+    assert not console_ran.exists()
+
+
+@pytest.mark.parametrize(
+    ("second_exit_code", "expected"),
+    [(0, None), (1, PkceFailure("the web browser did not open"))],
+    ids=["second-browser-opens", "every-browser-fails"],
+)
+def test_the_browser_launcher_tries_each_listed_browser_in_order_and_never_a_console_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, second_exit_code: int, expected: PkceFailure | None
+) -> None:
+    first_ran: Final = tmp_path / "first-browser-ran"
+    second_ran: Final = tmp_path / "second-browser-ran"
+    console_ran: Final = tmp_path / "console-browser-ran"
+    first: Final = str(_browser_script(tmp_path / "first-browser", first_ran, 1))
+    second: Final = str(_browser_script(tmp_path / "second-browser", second_ran, second_exit_code))
+    _browser_script(tmp_path / "www-browser", console_ran, 0)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("TERM", "xterm")
+    monkeypatch.setenv("BROWSER", os.pathsep.join((first, second)))
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+    assert open_browser_detached(f"{BASE_URL}/v1/cli/authorize?state=abc", (first, second)) == expected
+    assert first_ran.exists()
+    assert second_ran.exists()
     assert not console_ran.exists()
 
 @pytest.mark.parametrize(
@@ -339,6 +435,37 @@ def test_models_import_signs_in_instead_of_reporting_models_it_never_added(
     assert result.exit_code == 0, result.output
     assert sign_in.calls == [BASE_URL]
     assert _bearers(route) == [None, f"Bearer {SIGNED_IN_KEY}"]
+
+
+def _rejected_once_it_is_read(models_file: Path):
+    def respond(request, context):
+        models_file.unlink()
+        context.status_code = 401
+        return REJECTED
+
+    return respond
+
+
+def test_models_import_reads_its_file_once_so_a_piped_file_still_imports_after_the_sign_in(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault], tmp_path: Path
+) -> None:
+    models_file: Final = tmp_path / "models.yaml"
+    models_file.write_text(
+        "model_list:\n  - model_name: gpt-5.4-mini\n    litellm_params:\n      model: openai/gpt-5.4-mini\n"
+    )
+    route: Final = requests_mock.post(
+        f"{BASE_URL}/model/new",
+        [{"json": _rejected_once_it_is_read(models_file)}, {"status_code": 200, "json": {}}],
+    )
+    sign_in: Final = FakeBrowserSignIn(_credential())
+
+    result: Final = _lite(["models", "import", str(models_file)], secret_vault_factory(), sign_in)
+
+    assert result.exit_code == 0, result.output
+    assert sign_in.calls == [BASE_URL]
+    assert [request.json()["model_name"] for request in route.request_history] == ["gpt-5.4-mini", "gpt-5.4-mini"]
+    assert _bearers(route) == [None, f"Bearer {SIGNED_IN_KEY}"]
+    assert "gpt-5.4-mini" in result.stdout
 
 
 def test_a_401_partway_through_models_import_stops_without_signing_in_or_adding_models_twice(
@@ -412,6 +539,33 @@ def test_a_rejected_explicit_key_fails_cleanly_without_opening_a_browser(
     assert vault.writes == []
 
 
+@pytest.mark.parametrize(
+    ("command", "method", "path"),
+    [(["users", "list"], "GET", "/user/list"), (["keys", "generate"], "POST", "/key/generate")],
+    ids=["users", "keys"],
+)
+def test_a_rejected_explicit_key_names_the_reason_the_proxy_gave_without_echoing_the_key(
+    requests_mock: Mocker,
+    secret_vault_factory: type[FakeSecretVault],
+    command: list[str],
+    method: str,
+    path: str,
+) -> None:
+    passed_key: Final = "sk-" + "x" * 48
+    echoed_key: Final = {"error": {**INVALID_KEY["error"], "param": f"Received API Key = {passed_key}"}}
+    requests_mock.request(method, f"{BASE_URL}{path}", status_code=401, json=echoed_key)
+    sign_in: Final = FakeBrowserSignIn(_credential())
+
+    result: Final = _lite(command, secret_vault_factory(), sign_in, ["--api-key", passed_key])
+
+    assert result.exit_code == 1
+    assert "for the API key from --api-key or LITELLM_PROXY_API_KEY" in result.stderr
+    assert "Authentication Error, Invalid API key provided" in result.stderr
+    assert "token_not_found_in_db" in result.stderr
+    assert passed_key not in result.output
+    assert sign_in.calls == []
+
+
 def test_a_failed_sign_in_names_the_reason_and_points_at_lite_login(
     requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
 ) -> None:
@@ -445,7 +599,7 @@ def test_a_proxy_without_browser_sign_in_is_named_as_too_old_instead_of_pointing
     requests_mock.get(f"{BASE_URL}/.well-known/litellm-cli-auth", status_code=discovery_status)
 
     sign_in_with_a_picked_browser: Final = PkceBrowserSignIn(
-        find_browser=lambda: webbrowser.GenericBrowser("firefox"), environ={"BROWSER": "firefox"}
+        find_browser=lambda _name: webbrowser.GenericBrowser("firefox"), environ={"BROWSER": "firefox"}
     )
 
     result: Final = CliRunner().invoke(
@@ -469,6 +623,7 @@ def test_a_signed_in_key_the_proxy_also_rejects_is_not_followed_by_another_sign_
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
     assert "refused `cli keys generate` with HTTP 401 again after the browser sign-in" in result.stderr
+    assert REJECTED["error"]["message"] in result.stderr
     assert sign_in.calls == [BASE_URL]
     assert _bearers(route) == [None, f"Bearer {SIGNED_IN_KEY}"]
 
@@ -544,6 +699,7 @@ def test_a_stored_login_the_proxy_accepts_but_a_command_refuses_reports_a_missin
     assert isinstance(result.exception, SystemExit)
     assert "accepts your stored login but refused `cli credentials list` with HTTP 401" in result.stderr
     assert "Set LITELLM_PROXY_API_KEY to a key that has it" in result.stderr
+    assert REJECTED["error"]["message"] in result.stderr
     assert sign_in.calls == []
     assert route.call_count == 1
     assert _bearers(key_check) == ["Bearer sk-member"]

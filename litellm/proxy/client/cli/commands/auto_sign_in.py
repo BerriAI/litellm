@@ -1,8 +1,9 @@
 import os
 import subprocess
 import sys
+import time
 import webbrowser
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http import HTTPStatus
@@ -15,9 +16,10 @@ from filelock import FileLock, Timeout
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.cli_token_utils import get_cli_token_file_path, load_cli_token
+from litellm.litellm_core_utils.secret_redaction import redact_string
 
 from ...exceptions import UnauthorizedError
-from .auth import context_secret_vault, get_stored_api_key, replace_stored_token, storage_notice
+from .auth import context_secret_vault, replace_stored_token, storage_notice
 from .pkce_login import LOGIN_TIMEOUT_SECONDS, PkceCredential, PkceFailure, pkce_token_record, run_pkce_login
 
 
@@ -49,12 +51,15 @@ def _ssh_session_without_a_display(environ: Mapping[str, str]) -> bool:
     return over_ssh and not any(environ.get(name) for name in _DISPLAY_VARIABLES)
 
 
-_OPEN_URL_IN_BROWSER: Final = "import sys, webbrowser; sys.exit(0 if webbrowser.get().open(sys.argv[1]) else 1)"
+_OPEN_URL_IN_BROWSER: Final = (
+    "import sys, webbrowser; "
+    "sys.exit(0 if any(webbrowser.get(name).open(sys.argv[1]) for name in sys.argv[2:] or [None]) else 1)"
+)
 
 
-def open_browser_detached(url: str) -> PkceFailure | None:
+def open_browser_detached(url: str, browsers: Sequence[str]) -> PkceFailure | None:
     launcher: Final = subprocess.run(
-        (sys.executable, "-I", "-c", _OPEN_URL_IN_BROWSER, url),
+        (sys.executable, "-I", "-c", _OPEN_URL_IN_BROWSER, url, *browsers),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -67,11 +72,40 @@ def _live_environ() -> Mapping[str, str]:
     return os.environ
 
 
+def _listed_browsers(environ: Mapping[str, str]) -> tuple[str, ...]:
+    return tuple(name for name in environ.get("BROWSER", "").split(os.pathsep) if name)
+
+
+def _locate_browser(
+    find_browser: Callable[[str | None], webbrowser.BaseBrowser], name: str | None
+) -> webbrowser.BaseBrowser | None:
+    try:
+        return find_browser(name)
+    except webbrowser.Error:
+        return None
+
+
+def _shows_a_window(browser: webbrowser.BaseBrowser) -> bool:
+    return Path(browser.name).name not in _TEXT_MODE_BROWSERS
+
+
 @dataclass(frozen=True, slots=True)
 class PkceBrowserSignIn:
-    find_browser: Callable[[], webbrowser.BaseBrowser] = webbrowser.get
+    find_browser: Callable[[str | None], webbrowser.BaseBrowser] = webbrowser.get
     environ: Mapping[str, str] = field(default_factory=_live_environ)
-    open_browser: Callable[[str], object] = open_browser_detached
+    open_browser: Callable[[str, Sequence[str]], object] = open_browser_detached
+
+    def _browsers_to_open(self) -> tuple[str, ...] | PkceFailure:
+        names: Final = _listed_browsers(self.environ) or (None,)
+        located: Final = tuple(
+            (name, browser) for name in names if (browser := _locate_browser(self.find_browser, name)) is not None
+        )
+        if not located:
+            return PkceFailure("no web browser is available on this machine")
+        windowed: Final = tuple(name for name, browser in located if _shows_a_window(browser))
+        if not windowed:
+            return PkceFailure("the web browser is a text-mode one, which lite cannot show while a command waits")
+        return tuple(name for name in windowed if name is not None)
 
     def unavailable_because(self) -> PkceFailure | None:
         if _runs_in_ci(self.environ):
@@ -80,21 +114,21 @@ class PkceBrowserSignIn:
             return PkceFailure(
                 "this is an SSH session without a display, so a browser would open where you cannot see it"
             )
-        try:
-            browser: Final = self.find_browser()
-        except webbrowser.Error:
-            return PkceFailure("no web browser is available on this machine")
-        if Path(browser.name).name in _TEXT_MODE_BROWSERS:
-            return PkceFailure("the web browser is a text-mode one, which lite cannot show while a command waits")
-        return None
+        browsers: Final = self._browsers_to_open()
+        return browsers if isinstance(browsers, PkceFailure) else None
 
     def __call__(self, base_url: str, echo: Callable[[str], None]) -> PkceCredential | PkceFailure:
+        browsers: Final = self._browsers_to_open()
+        if isinstance(browsers, PkceFailure):
+            return browsers
         echo(
             f"lite is opening your browser to sign in and waits up to {LOGIN_TIMEOUT_SECONDS // 60} minutes "
             "for you to approve it. "
             "A shell or agent that stops commands sooner should run this one with a longer timeout."
         )
-        return run_pkce_login(base_url, requests.Session(), open_browser=self.open_browser, echo=echo)
+        return run_pkce_login(
+            base_url, requests.Session(), open_browser=lambda url: self.open_browser(url, browsers), echo=echo
+        )
 
 
 class _SignInContext(TypedDict):
@@ -156,13 +190,28 @@ def _echo_to_stderr(message: str) -> None:
     click.echo(message, err=True)
 
 
+def _newer_stored_key(ctx: click.Context, base_url: str, rejected_key: str | None) -> str | None:
+    login: Final = load_cli_token(vault=context_secret_vault(ctx))
+    if login is None or login.base_url != base_url.rstrip("/") or not login.key or login.key == rejected_key:
+        return None
+    expired: Final = login.expires_at is not None and time.time() >= login.expires_at
+    return None if expired else login.key
+
+
 def _attempt_with_newer_stored_key(
     run: Callable[[click.Context], object], ctx: click.Context, base_url: str, rejected_key: str | None
 ) -> _Completed | _Unauthorized | None:
-    stored_key: Final = get_stored_api_key(expected_base_url=base_url, vault=context_secret_vault(ctx))
-    if stored_key is None or stored_key == rejected_key:
+    stored_key: Final = _newer_stored_key(ctx, base_url, rejected_key)
+    if stored_key is None:
         return None
     return _attempt_with_key(run, ctx, stored_key)
+
+
+def _proxy_reason(error: UnauthorizedError) -> str:
+    original: Final = error.orig_exception
+    response: Final = original.response if isinstance(original, requests.HTTPError) else None
+    body: Final = response.text.strip() if response is not None else ""
+    return redact_string(body) if body else str(error)
 
 
 def _sign_in_failure(base_url: str, failure: PkceFailure) -> str:
@@ -254,13 +303,15 @@ def _login_for_another_proxy(ctx: click.Context, base_url: str) -> str | None:
     return login.base_url
 
 
-def _rerun_after_sign_in(run: Callable[[click.Context], object], ctx: click.Context, context: _SignInContext) -> object:
+def _rerun_after_sign_in(
+    run: Callable[[click.Context], object], ctx: click.Context, context: _SignInContext, error: UnauthorizedError
+) -> object:
     base_url: Final = context["base_url"]
     if not context.get("api_key_from_token_file", False):
         raise click.ClickException(
             f"The proxy at {base_url} refused `{ctx.command_path}` with HTTP 401 for the API key from --api-key "
             "or LITELLM_PROXY_API_KEY. Check that the key is valid and has the role this command needs, "
-            "or unset both to sign in through your browser instead."
+            f"or unset both to sign in through your browser instead. The proxy said: {_proxy_reason(error)}"
         )
     sign_in: Final = context.get("browser_sign_in") or PkceBrowserSignIn()
     unavailable: Final = sign_in.unavailable_because()
@@ -271,7 +322,8 @@ def _rerun_after_sign_in(run: Callable[[click.Context], object], ctx: click.Cont
     if rejected_key is not None and _proxy_accepts(base_url, rejected_key):
         raise click.ClickException(
             f"The proxy at {base_url} accepts your stored login but refused `{ctx.command_path}` with HTTP 401, "
-            "so it likely lacks the role this command needs. Set LITELLM_PROXY_API_KEY to a key that has it."
+            "so it likely lacks the role this command needs. Set LITELLM_PROXY_API_KEY to a key that has it. "
+            f"The proxy said: {_proxy_reason(error)}"
         )
     with _sign_in_lock_held(context.get("sign_in_lock", _sign_in_lock)()) as waited_for_another_sign_in:
         return _rerun_once_signed_in(run, ctx, base_url, sign_in, rejected_key, waited_for_another_sign_in)
@@ -304,11 +356,11 @@ def _rerun_once_signed_in(
     match _attempt_with_key(run, ctx, _sign_in(ctx, base_url, sign_in)):
         case _Completed(value=value):
             return value
-        case _Unauthorized():
+        case _Unauthorized(error=error):
             raise click.ClickException(
                 f"The proxy at {base_url} refused `{ctx.command_path}` with HTTP 401 again after the browser sign-in, "
                 "so the signed-in user likely lacks the role this command needs. "
-                "Set LITELLM_PROXY_API_KEY to a key that has it."
+                f"Set LITELLM_PROXY_API_KEY to a key that has it. The proxy said: {_proxy_reason(error)}"
             )
 
 
@@ -322,7 +374,7 @@ class SignInOnUnauthorizedCommand(click.Command):
                 context: Final = _sign_in_context(ctx)
                 if context is None:
                     raise error
-                return _rerun_after_sign_in(run, ctx, context)
+                return _rerun_after_sign_in(run, ctx, context, error)
 
 
 class SignInOnUnauthorizedGroup(click.Group):
