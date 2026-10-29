@@ -600,9 +600,8 @@ def anthropic_messages_handler(
         presanitized=bool(kwargs.pop("_litellm_messages_presanitized", False)),
     )
 
-    metadata = validate_anthropic_api_metadata(metadata)
-
     local_vars: Final = locals()
+    anthropic_metadata: Final = validate_anthropic_api_metadata(metadata)
     is_async: Final = kwargs.pop("is_async", False)
     # Use provided client or create a new one
     litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
@@ -667,7 +666,7 @@ def anthropic_messages_handler(
             max_tokens=max_tokens,
             messages=messages,
             model=model,
-            metadata=metadata,
+            metadata=anthropic_metadata,
             stop_sequences=stop_sequences,
             stream=stream,
             system=cast(  # cast-ok: anthropic accepts list system blocks; handler signature is narrower
@@ -699,7 +698,7 @@ def anthropic_messages_handler(
                 max_tokens=max_tokens,
                 messages=messages,
                 model=original_model,
-                metadata=metadata,
+                metadata=anthropic_metadata,
                 stop_sequences=stop_sequences,
                 stream=stream,
                 system=cast(  # cast-ok: anthropic accepts list system blocks; handler signature is narrower
@@ -729,7 +728,7 @@ def anthropic_messages_handler(
             max_tokens=max_tokens,
             messages=messages,
             model=original_model,
-            metadata=metadata,
+            metadata=anthropic_metadata,
             stop_sequences=stop_sequences,
             stream=stream,
             system=cast(  # cast-ok: anthropic accepts list system blocks; handler signature is narrower
@@ -760,10 +759,16 @@ def anthropic_messages_handler(
     )
     if marked_tools is not None:
         AnthropicCacheControlHook.record_gateway_injection(request_kwargs, 1)
-    local_vars.update({**request_kwargs, **({"tools": list(marked_tools)} if marked_tools is not None else {})})
+    request_metadata: Final = anthropic_messages_provider_config.request_metadata(metadata)
+    request_params: Final = {
+        **local_vars,
+        **request_kwargs,
+        **({"tools": list(marked_tools)} if marked_tools is not None else {}),
+        "metadata": request_metadata,
+    }
     anthropic_messages_optional_request_params: Final = (
         AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
-            params=local_vars,
+            params=request_params,
             model=model,
             drop_params=litellm_params.get("drop_params") is True,
             custom_llm_provider=custom_llm_provider,

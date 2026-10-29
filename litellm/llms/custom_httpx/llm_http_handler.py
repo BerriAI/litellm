@@ -2605,14 +2605,14 @@ class BaseLLMHTTPHandler:
         logging_obj.update_from_kwargs(
             kwargs=kwargs,
             model=model,
-            optional_params=dict(anthropic_messages_optional_request_params),
+            optional_params=dict(request_params),
             litellm_params={
                 "preset_cache_key": None,
                 "stream_response": {},
                 "model_info": kwargs.get("model_info"),
                 **litellm_params.per_second_pricing(),
                 **vertex_location_params,
-                **anthropic_messages_optional_request_params,
+                **request_params,
             },
             custom_llm_provider=custom_llm_provider,
         )

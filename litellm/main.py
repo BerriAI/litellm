@@ -180,6 +180,7 @@ from litellm.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
+    add_openai_metadata,
     add_provider_specific_params_to_optional_params,
     async_mock_completion_streaming_obj,
     convert_to_model_response_object,
@@ -5487,6 +5488,20 @@ def _complete_databricks_agent(ctx: CompletionDispatchContext) -> _CompletionDis
     )
 
 
+def _caller_metadata_param(custom_llm_provider: str | None, metadata: object) -> Mapping[str, object]:
+    """Sail reads the completion window from request metadata, so a Sail chat
+    request carries the caller's own body metadata (the proxy's
+    ``requester_metadata`` copy, string values only). Kept out of
+    ``completion`` because that function is at basedpyright's complexity limit."""
+    if custom_llm_provider != "sail":
+        return MappingProxyType({})
+    metadata_mapping: Final = as_str_mapping(metadata)
+    requester_metadata: Final = (
+        as_str_mapping(metadata_mapping.get("requester_metadata")) if metadata_mapping is not None else None
+    )
+    return MappingProxyType({"metadata": add_openai_metadata(requester_metadata)})
+
+
 @tracer.wrap()
 @client
 def completion(
@@ -6044,6 +6059,7 @@ def completion(
             "prompt_cache_retention": prompt_cache_retention,
             "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
+            **_caller_metadata_param(custom_llm_provider, metadata),
         }
         provider_reasoning_effort: Final = reasoning_effort_with_summary_alias(
             resolved_reasoning_effort,
