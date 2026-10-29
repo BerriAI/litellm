@@ -263,10 +263,10 @@ class AgenticLoopParams(TypedDict, total=False):
     """
 
     model: str
-    """The model string with provider prefix (e.g., 'bedrock/invoke/...')"""
+    """The model as the caller requested it, usually with its provider prefix (e.g., 'bedrock/invoke/...')"""
 
     custom_llm_provider: str
-    """The LLM provider name (e.g., 'bedrock', 'anthropic')"""
+    """The LLM provider name (e.g., 'bedrock', 'anthropic'), when the recorder resolved one"""
 
 
 class OffPeakWindow(TypedDict, total=False):
@@ -3374,6 +3374,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     team_alias: str | None
     team_id: str | None
     used_client_oauth_token: ReadOnly[bool | None]
+    is_silent_experiment: ReadOnly[NotRequired[bool]]
 
 
 class AzureSpillover(TypedDict):
@@ -4599,6 +4600,7 @@ class LlmProviders(str, Enum):
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
     GDC = "gdc"
+    KYMA = "kyma"
 
 
 # Create a set of all provider values for quick lookup

@@ -545,3 +545,94 @@ def test_device_authorization_polls_complete_sso_and_mints_a_model_restricted_be
             assert set(token_form) == {"code", "code_verifier", "grant_type", "redirect_uri"}, token_form
             assert userinfo_request.method == "GET" and urlsplit(userinfo_request.target).path == "/userinfo"
             assert user_id == _USER_ID
+
+
+_TEAM_OPTION: Final = re.compile(r'<option value="([^"]+)">')
+
+
+def _device_code_grant(gateway: Gateway, device_code: str) -> httpx.Response:
+    return gateway.client.post(
+        "/claude_code_gateway/oauth/token",
+        data={
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            "device_code": device_code,
+            "client_id": _CLIENT_ID,
+        },
+    )
+
+
+@pytest.mark.timeout(300)
+def test_device_flow_mints_the_session_for_the_team_the_developer_picks_in_the_browser(
+    enabled_gateway: Gateway, identity_provider: Wire
+) -> None:
+    with enabled_gateway.scenario() as scenario:
+        user_id: Final = scenario.user(user_id=_USER_ID, user_email=_USER_EMAIL, user_role="internal_user")
+        team_models: Final = {
+            scenario.team(models=[model]): model
+            for model in (
+                scenario.model(model=f"anthropic/{_BACKEND}", api_key=_API_KEY),
+                scenario.model(model=f"anthropic/{_BACKEND}", api_key=_API_KEY),
+            )
+        }
+        for team_id in team_models:
+            enabled_gateway.post(
+                "/team/member_add", {"team_id": team_id, "member": {"role": "user", "user_id": user_id}}
+            )
+
+        authorization_response: Final = enabled_gateway.client.post(
+            "/claude_code_gateway/oauth/device_authorization",
+            data={"client_id": _CLIENT_ID},
+        )
+        assert authorization_response.status_code == 200, authorization_response.text
+        authorization: Final = _DeviceAuthorization.model_validate_json(authorization_response.content)
+        login_id: Final = authorization.device_code.partition(".")[0]
+        verification_response: Final = enabled_gateway.client.get(
+            authorization.verification_uri, follow_redirects=False
+        )
+        assert verification_response.status_code == 303, verification_response.text
+        identity_provider_response: Final = enabled_gateway.client.get(
+            verification_response.headers["location"], follow_redirects=False
+        )
+        assert identity_provider_response.status_code == 302, identity_provider_response.text
+        callback_response: Final = enabled_gateway.client.get(
+            identity_provider_response.headers["location"], follow_redirects=False
+        )
+        assert callback_response.status_code == 200, callback_response.text
+        offered_teams: Final = tuple(_TEAM_OPTION.findall(callback_response.text))
+        assert sorted(offered_teams) == sorted(team_models), callback_response.text
+        browser_token_match: Final = _BROWSER_TOKEN.search(callback_response.text)
+        assert browser_token_match is not None, callback_response.text
+        completion_form: Final = {
+            "user_code": authorization.user_code,
+            "browser_complete_token": html.unescape(browser_token_match.group(1)),
+        }
+
+        foreign_team: Final = enabled_gateway.client.post(
+            f"/sso/cli/complete/{login_id}",
+            data={**completion_form, "team_id": f"integration-{uuid.uuid4().hex}"},
+        )
+        assert foreign_team.status_code == 400, foreign_team.text
+        assert _JSON_OBJECT.validate_json(foreign_team.content) == {
+            "detail": "Choose one of the teams you belong to"
+        }, foreign_team.text
+        pending: Final = _device_code_grant(enabled_gateway, authorization.device_code)
+        assert pending.status_code == 400, pending.text
+        assert _JSON_OBJECT.validate_json(pending.content) == {"error": "authorization_pending"}, pending.text
+
+        chosen_team: Final = offered_teams[-1]
+        chosen: Final = enabled_gateway.client.post(
+            f"/sso/cli/complete/{login_id}", data={**completion_form, "team_id": chosen_team}
+        )
+        assert chosen.status_code == 200, chosen.text
+        token_response: Final = _device_code_grant(enabled_gateway, authorization.device_code)
+        assert token_response.status_code == 200, token_response.text
+        access_token: Final = _AccessToken.model_validate_json(token_response.content)
+        assert (access_token.user_id, access_token.team_id) == (user_id, chosen_team), token_response.text
+
+        with Anthropic(
+            base_url=f"{str(enabled_gateway.client.base_url).rstrip('/')}/claude_code_gateway",
+            auth_token=access_token.access_token,
+        ) as sdk:
+            served_models: Final = {model.id for model in sdk.models.list()}
+        assert served_models == {team_models[chosen_team]}
+        assert len(identity_provider.drain()) == 3
