@@ -4638,6 +4638,7 @@ class LlmProviders(str, Enum):
     META = "meta"
     SAIL = "sail"
     REKA = "reka"
+    STREAMLAKE = "streamlake"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"

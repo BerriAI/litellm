@@ -69,7 +69,7 @@ class AzureAudioTranscription(AzureChatCompletion):
             )
 
         azure_client: Final = self.get_azure_openai_client(
-            api_version=None if self._is_azure_v1_api_version(api_version) else api_version,
+            api_version=None if self.is_azure_v1_api_version(api_version) else api_version,
             api_base=api_base,
             api_key=api_key,
             model=model,
