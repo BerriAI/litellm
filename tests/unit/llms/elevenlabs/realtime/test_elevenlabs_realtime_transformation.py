@@ -1,12 +1,20 @@
+import base64
 import itertools
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final, get_args
+from unittest.mock import MagicMock
 from urllib.parse import parse_qs
 
 import pytest
 
+from litellm.llms.base_llm.realtime.transformation import RealtimeBackend
 from litellm.llms.elevenlabs.realtime.transformation import (
+    DEFAULT_ELEVENLABS_REALTIME_URL,
+    MAX_AUDIO_CHUNK_BYTES,
+    ElevenLabsRealtimeConfig,
+    build_elevenlabs_realtime_url,
+    elevenlabs_realtime_config,
     SCRIBE_REALTIME_MODEL,
     SUPPORTED_SAMPLE_RATES,
     ElevenLabsEventTransformer,
@@ -19,7 +27,10 @@ from litellm.llms.elevenlabs.realtime.transformation import (
     realtime_options_from_params,
     session_created_event,
 )
-from litellm.types.llms.elevenlabs import ElevenLabsErrorType, ElevenLabsRealtimeOptions
+from litellm.types.llms.elevenlabs import ElevenLabsErrorType, ElevenLabsRealtimeConfigure, ElevenLabsRealtimeOptions
+from litellm.types.realtime import RealtimeResponseTransformInput
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
 NO_OPTIONS: Final = ElevenLabsRealtimeOptions()
 
@@ -339,3 +350,175 @@ def test_malformed_server_messages_raise_the_protocol_error(payload: str | bytes
 
 def test_bytes_payloads_are_decoded():
     assert parse_server_message(_frame("partial_transcript", text="hi").encode()) is not None
+
+EMPTY_TRANSFORM_INPUT: Final[RealtimeResponseTransformInput] = {
+    "session_configuration_request": None,
+    "current_output_item_id": None,
+    "current_response_id": None,
+    "current_delta_chunks": None,
+    "current_item_chunks": None,
+    "current_conversation_id": None,
+    "current_delta_type": None,
+}
+
+
+def _append(audio: bytes) -> str:
+    return json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(audio).decode()})
+
+
+def _configured(update: str | None = None) -> ElevenLabsRealtimeConfig:
+    config: Final = ElevenLabsRealtimeConfig()
+    config.transform_realtime_request(update or _session_update(), SCRIBE_REALTIME_MODEL)
+    return config
+
+
+def _response(config: ElevenLabsRealtimeConfig, payload: str) -> list[dict[str, object]]:
+    response: Final = config.transform_realtime_response(payload, SCRIBE_REALTIME_MODEL, MagicMock(), EMPTY_TRANSFORM_INPUT)
+    events: Final = response["response"]
+    assert isinstance(events, list)
+    return [dict(event) for event in events]
+
+
+def test_session_update_becomes_one_configure_message_and_later_updates_are_ignored():
+    config: Final = ElevenLabsRealtimeConfig(options=ElevenLabsRealtimeOptions(keyterms=("keyword",)))
+    sent: Final = config.transform_realtime_request(_session_update(rate=16_000, turn_detection=None), SCRIBE_REALTIME_MODEL)
+
+    assert len(sent) == 1
+    assert isinstance(sent[0], str)
+    configure: Final = ElevenLabsRealtimeConfigure.model_validate_json(sent[0])
+    assert config.is_setup_message(json.loads(sent[0]))
+    query: Final = parse_qs(configure.query)
+    assert query["audio_format"] == ["pcm_16000"]
+    assert query["commit_strategy"] == ["manual"]
+    assert query["keyterms"] == ["keyword"]
+    assert config.transform_realtime_request(_session_update(rate=48_000), SCRIBE_REALTIME_MODEL) == ()
+
+
+def test_audio_before_session_update_is_rejected():
+    with pytest.raises(ElevenLabsProtocolError, match=r"session\.update"):
+        ElevenLabsRealtimeConfig().transform_realtime_request(_append(b"\x00\x00"), SCRIBE_REALTIME_MODEL)
+
+
+def test_append_becomes_input_audio_chunks_that_reassemble_the_audio():
+    config: Final = _configured(_session_update(rate=16_000))
+    audio: Final = bytes(range(256)) * ((MAX_AUDIO_CHUNK_BYTES // 256) + 1)
+    chunks: Final = [json.loads(sent) for sent in config.transform_realtime_request(_append(audio), SCRIBE_REALTIME_MODEL)]
+
+    assert len(chunks) == 2
+    assert all(chunk["message_type"] == "input_audio_chunk" for chunk in chunks)
+    assert all(chunk["commit"] is False and chunk["sample_rate"] == 16_000 for chunk in chunks)
+    assert all(len(base64.b64decode(chunk["audio_base_64"])) <= MAX_AUDIO_CHUNK_BYTES for chunk in chunks)
+    assert b"".join(base64.b64decode(chunk["audio_base_64"]) for chunk in chunks) == audio
+
+
+@pytest.mark.parametrize("event_type", ["input_audio_buffer.commit", "input_audio_buffer.end"])
+def test_commit_and_end_send_an_empty_committing_chunk(event_type: str):
+    config: Final = _configured(_session_update(rate=24_000))
+    sent: Final = config.transform_realtime_request(json.dumps({"type": event_type}), SCRIBE_REALTIME_MODEL)
+
+    assert [json.loads(message) for message in sent] == [
+        {"message_type": "input_audio_chunk", "audio_base_64": "", "commit": True, "sample_rate": 24_000}
+    ]
+
+
+@pytest.mark.parametrize("event_type", ["input_audio_buffer.clear", "response.create"])
+def test_events_without_an_elevenlabs_equivalent_are_dropped(event_type: str):
+    assert _configured().transform_realtime_request(json.dumps({"type": event_type}), SCRIBE_REALTIME_MODEL) == ()
+
+
+@pytest.mark.parametrize("rate", [16_000, 48_000])
+def test_completed_transcripts_bill_the_seconds_of_audio_sent(rate: int):
+    config: Final = _configured(_session_update(rate=rate))
+    config.transform_realtime_request(_append(b"\x00\x00" * rate), SCRIBE_REALTIME_MODEL)
+    config.transform_realtime_request(_append(b"\x00\x00" * (rate // 2)), SCRIBE_REALTIME_MODEL)
+    events: Final = _response(config, _frame("committed_transcript", text="hello"))
+
+    assert events[-1]["usage"] == {"type": "duration", "seconds": 1.5}
+    assert config.unbilled_usage_on_session_close(SCRIBE_REALTIME_MODEL) is None
+
+
+def test_audio_without_a_transcript_is_billed_at_close():
+    config: Final = _configured(_session_update(rate=24_000))
+    config.transform_realtime_request(_append(b"\x00\x00" * 12_000), SCRIBE_REALTIME_MODEL)
+
+    assert config.unbilled_usage_on_session_close(SCRIBE_REALTIME_MODEL) == {"type": "duration", "seconds": 0.5}
+
+
+def test_session_started_reports_the_configured_session():
+    config: Final = _configured(_session_update(rate=16_000, language="es"))
+    events: Final = _response(config, _frame("session_started", session_id="el_sess_1"))
+
+    session: Final = events[0]["session"]
+    assert isinstance(session, dict)
+    assert session["id"] == "el_sess_1"
+    assert session["audio"]["input"]["format"] == {"type": "audio/pcm", "rate": 16_000}
+    assert session["audio"]["input"]["transcription"] == {"model": SCRIBE_REALTIME_MODEL, "language": "es"}
+
+
+def test_synthetic_session_created_uses_the_defaults():
+    event: Final = ElevenLabsRealtimeConfig().transform_session_created_event(SCRIBE_REALTIME_MODEL, "trace_1")
+
+    assert event["session"]["id"] == "trace_1"
+    assert event["session"]["audio"]["input"]["format"] == {"type": "audio/pcm", "rate": 24_000}
+
+
+def test_api_key_travels_only_in_the_xi_api_key_header():
+    config: Final = ElevenLabsRealtimeConfig()
+    headers: Final = config.validate_environment({"x-existing": "1"}, SCRIBE_REALTIME_MODEL, api_key=" secret ")
+    url: Final = config.get_complete_url(None, SCRIBE_REALTIME_MODEL)
+
+    assert headers == {"x-existing": "1", "xi-api-key": "secret"}
+    assert "secret" not in url
+
+
+def test_missing_api_key_is_rejected(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+
+    with pytest.raises(ValueError, match="ELEVENLABS_API_KEY"):
+        ElevenLabsRealtimeConfig().validate_environment({}, SCRIBE_REALTIME_MODEL)
+
+
+def test_api_base_selects_a_regional_host_and_unsupported_models_are_rejected(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("ELEVENLABS_API_BASE", raising=False)
+    config: Final = ElevenLabsRealtimeConfig()
+
+    assert config.get_complete_url(None, f"elevenlabs/{SCRIBE_REALTIME_MODEL}") == DEFAULT_ELEVENLABS_REALTIME_URL
+    assert (
+        config.get_complete_url("https://api.eu.residency.elevenlabs.io", SCRIBE_REALTIME_MODEL)
+        == "wss://api.eu.residency.elevenlabs.io/v1/speech-to-text/realtime"
+    )
+    with pytest.raises(ValueError, match="Unsupported ElevenLabs realtime model"):
+        config.get_complete_url(None, "scribe_v2")
+
+
+def test_build_url_defaults_to_the_global_endpoint():
+    assert build_elevenlabs_realtime_url(None) == DEFAULT_ELEVENLABS_REALTIME_URL
+
+
+async def test_open_backend_returns_the_injected_backend_for_the_url_and_headers():
+    calls: Final[list[tuple[str, Mapping[str, str]]]] = []
+    sentinel: Final = MagicMock(spec=RealtimeBackend)
+
+    def factory(url: str, headers: Mapping[str, str]) -> RealtimeBackend:
+        calls.append((url, headers))
+        return sentinel
+
+    backend: Final = await ElevenLabsRealtimeConfig(backend_factory=factory).open_backend("wss://h/p", {"xi-api-key": "k"})
+
+    assert backend is sentinel
+    assert calls == [("wss://h/p", {"xi-api-key": "k"})]
+
+
+def test_config_built_from_litellm_params_applies_the_options():
+    config: Final = elevenlabs_realtime_config({"api_key": "k", "keyterms": ["keyword"]}, drop_params=False)
+    sent: Final = config.transform_realtime_request(_session_update(), SCRIBE_REALTIME_MODEL)
+
+    assert parse_qs(ElevenLabsRealtimeConfigure.model_validate_json(sent[0]).query)["keyterms"] == ["keyword"]
+
+
+def test_provider_config_manager_returns_the_elevenlabs_realtime_config():
+    config: Final = ProviderConfigManager.get_provider_realtime_config(
+        model=SCRIBE_REALTIME_MODEL, provider=LlmProviders.ELEVENLABS
+    )
+
+    assert isinstance(config, ElevenLabsRealtimeConfig)

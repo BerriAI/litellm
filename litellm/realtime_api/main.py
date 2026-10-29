@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
 
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
@@ -533,7 +534,12 @@ async def _arealtime(
 
     drop_params: Final = litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
     provider_config: BaseRealtimeConfig | None = None
-    if _custom_llm_provider in LlmProviders._member_map_.values():
+    if _custom_llm_provider == LlmProviders.ELEVENLABS.value:
+        from ..llms.elevenlabs.realtime.transformation import elevenlabs_realtime_config
+
+        elevenlabs_params: Final = TypeAdapter(dict[str, object]).validate_python(kwargs)
+        provider_config = elevenlabs_realtime_config(elevenlabs_params, drop_params=drop_params)
+    elif _custom_llm_provider in LlmProviders._member_map_.values():
         provider_config = ProviderConfigManager.get_provider_realtime_config(
             model=model,
             provider=LlmProviders(_custom_llm_provider),

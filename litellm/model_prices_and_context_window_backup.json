@@ -66674,6 +66674,27 @@
             "/v1/audio/transcriptions"
         ]
     },
+    "elevenlabs/scribe_v2_realtime": {
+        "input_cost_per_second": 0.000108333,
+        "litellm_provider": "elevenlabs",
+        "metadata": {
+            "calculation": "$0.39/hour = $0.0065/minute = $0.000108333 per second",
+            "original_pricing_per_hour": 0.39
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://elevenlabs.io/pricing/api",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
     "scaleway/glm-5.2": {
         "deprecation_date": "2026-11-16",
         "input_cost_per_token": 1.8e-06,
