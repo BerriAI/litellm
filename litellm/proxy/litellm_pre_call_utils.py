@@ -4255,10 +4255,20 @@ def _apply_resolved_guardrails_to_metadata(
         return
 
     existing_guardrails: Final = data[metadata_variable_name].get("guardrails", [])
-    existing_guardrails_list: Final = existing_guardrails if isinstance(existing_guardrails, list) else []
+    existing_guardrails_list: Final = (
+        _REQUEST_ENTRIES.validate_python(existing_guardrails) if isinstance(existing_guardrails, list) else ()
+    )
 
-    # Combine existing guardrails with policy-resolved guardrails (no duplicates)
-    combined: Final = list(dict.fromkeys((*existing_guardrails_list, *resolved_guardrails)))
+    selected_names: Final = frozenset(
+        itertools.chain.from_iterable(
+            _REQUEST_FIELDS.validate_python(entry).keys() if isinstance(entry, dict) else (entry,)
+            for entry in existing_guardrails_list
+        )
+    )
+    combined: Final = [
+        *existing_guardrails_list,
+        *(name for name in dict.fromkeys(resolved_guardrails) if name not in selected_names),
+    ]
     data[metadata_variable_name]["guardrails"] = combined
 
     verbose_proxy_logger.debug("Policy engine: added guardrails to request metadata: %s", combined)

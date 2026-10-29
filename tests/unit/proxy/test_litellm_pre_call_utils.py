@@ -5293,6 +5293,42 @@ async def test_add_guardrails_from_policy_engine_keeps_a_policy_added_guardrail_
 
 
 @pytest.mark.asyncio
+async def test_add_guardrails_from_policy_engine_keeps_configured_guardrails_and_skips_ones_already_selected():
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyAttachment, PolicyGuardrails
+
+    configured = {"pii_blocker": {"extra_body": {"threshold": 0.9}}}
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {"guardrails": [configured, "audit"]},
+    }
+    policy_registry = get_policy_registry()
+    policy_registry._policies = {
+        "baseline": Policy(guardrails=PolicyGuardrails(add=["pii_blocker", "audit", "hipaa_audit"])),
+    }
+    policy_registry._initialized = True
+    attachment_registry = get_attachment_registry()
+    attachment_registry._attachments = [PolicyAttachment(policy="baseline", scope="*")]
+    attachment_registry._initialized = True
+
+    try:
+        await add_guardrails_from_policy_engine(
+            data=data,
+            metadata_variable_name="metadata",
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        )
+    finally:
+        policy_registry._policies = {}
+        policy_registry._initialized = False
+        attachment_registry._attachments = []
+        attachment_registry._initialized = False
+
+    assert data["metadata"]["guardrails"] == [configured, "audit", "hipaa_audit"]
+
+
+@pytest.mark.asyncio
 async def test_add_guardrails_from_policy_engine_applies_inherited_parent_guardrail_when_child_condition_misses():
     from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry

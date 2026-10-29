@@ -29,6 +29,7 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.router import RouterErrors
+from litellm.types.utils import CallTypesLiteral
 from tests._master_key import MASTER_KEY
 
 
@@ -1983,15 +1984,23 @@ class _FrameGuardrail(CustomGuardrail):
         self.rewrites = rewrites
         self.blocks = blocks
 
-    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: CallTypesLiteral,
+    ) -> dict[str, object]:
         return self._scan(data)
 
-    async def async_moderation_hook(self, data, user_api_key_dict, call_type):
+    async def async_moderation_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, call_type: CallTypesLiteral
+    ) -> None:
         self._scan(data)
 
-    def _scan(self, data):
+    def _scan(self, data: dict[str, object]) -> dict[str, object]:
         self.inputs.append(data["input"])
-        self.configs.append(data["litellm_metadata"].get("guardrail_config"))
+        self.configs.append(cast(dict[str, object], data["litellm_metadata"]).get("guardrail_config"))
         if self.blocks:
             raise HTTPException(status_code=400, detail={"error": f"Content blocked by {self.guardrail_name}"})
         return {**data, "input": f"{data['input']} [{self.guardrail_name}]"} if self.rewrites else data
