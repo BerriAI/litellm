@@ -70,8 +70,22 @@ def is_vertex_embedding_batch_output_response(response_body: Mapping[str, object
     return isinstance(response_body.get("embedding"), dict)
 
 
+def is_vertex_anthropic_batch_output_row(vertex_output_row: Mapping[str, object]) -> bool:
+    """
+    Whether a Vertex batch output row came from a Claude (Anthropic Messages) request. Vertex echoes only the
+    request's top-level `custom_id` on these rows, with an Anthropic `message` response on success and an empty
+    response plus a `status` on failure, so a Claude input file read back is never mistaken for output
+    """
+    if not ("custom_id" in vertex_output_row and "processed_time" in vertex_output_row):
+        return False
+    response: Final = as_json_object(vertex_output_row.get("response"))
+    return (response is not None and is_vertex_anthropic_batch_output_response(response)) or bool(
+        vertex_output_row.get("status")
+    )
+
+
 def is_native_vertex_batch_output_row(row: Mapping[str, object]) -> bool:
-    return isinstance(row.get("request"), dict)
+    return isinstance(row.get("request"), dict) or is_vertex_anthropic_batch_output_row(row)
 
 
 class NativeVertexBatchCostCalculator(Protocol):

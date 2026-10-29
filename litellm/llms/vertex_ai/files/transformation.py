@@ -21,7 +21,7 @@ from typing_extensions import ReadOnly, Required
 
 import litellm
 from litellm._uuid import uuid
-from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES
+from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES, RESPONSE_FORMAT_TOOL_NAME
 from litellm.files.types import FileContentStreamingResult
 from litellm.files.utils import FilesAPIUtils
 from litellm.litellm_core_utils.cloud_storage_security import (
@@ -33,7 +33,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     split_configured_cloud_bucket_name,
     validate_managed_cloud_file_id,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, iter_items
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_data,
@@ -54,6 +54,7 @@ from litellm.llms.vertex_ai.batches.transformation import (
     as_json_object,
     is_vertex_anthropic_batch_model,
     is_vertex_anthropic_batch_output_response,
+    is_vertex_anthropic_batch_output_row,
     vertex_embedding_prompt_token_count,
 )
 from litellm.llms.vertex_ai.common_utils import (
@@ -304,22 +305,8 @@ def _is_vertex_generate_content_batch_output_row(vertex_output_row: Mapping[str,
     )
 
 
-def _is_vertex_anthropic_batch_output_row(vertex_output_row: Mapping[str, object]) -> bool:
-    """
-    Whether a Vertex batch output row came from a Claude (Anthropic Messages) request. Vertex echoes only the
-    request's top-level `custom_id` on these rows, with an Anthropic `message` response on success and an empty
-    response plus a `status` on failure, so a Claude input file read back is never mistaken for output
-    """
-    if not ("custom_id" in vertex_output_row and "processed_time" in vertex_output_row):
-        return False
-    response: Final = as_json_object(vertex_output_row.get("response"))
-    return (response is not None and is_vertex_anthropic_batch_output_response(response)) or bool(
-        vertex_output_row.get("status")
-    )
-
-
 def _is_vertex_chat_batch_output_row(vertex_output_row: Mapping[str, object]) -> bool:
-    return _is_vertex_generate_content_batch_output_row(vertex_output_row) or _is_vertex_anthropic_batch_output_row(
+    return _is_vertex_generate_content_batch_output_row(vertex_output_row) or is_vertex_anthropic_batch_output_row(
         vertex_output_row
     )
 
@@ -750,8 +737,18 @@ def _openai_batch_jsonl_entry_to_vertex_embeddings_rows(
     )
 
 
-_CLAUDE_BATCH_ROW_FIXED_PARAMS: Final = frozenset(("model", "messages", "custom_llm_provider", "drop_params"))
+_CLAUDE_BATCH_ROW_FIXED_PARAMS: Final = frozenset(
+    ("model", "messages", "custom_llm_provider", "drop_params", "stream", "stream_options")
+)
 _CLAUDE_BATCH_OPENAI_PARAMS: Final = frozenset(DEFAULT_CHAT_COMPLETION_PARAM_VALUES) - {"metadata"}
+
+
+def _names_the_response_format_tool(tool: object) -> bool:
+    match tool:
+        case {"function": {"name": str(name)}}:
+            return name == RESPONSE_FORMAT_TOOL_NAME
+        case _:
+            return False
 
 
 def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
@@ -772,6 +769,11 @@ def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
         **get_non_default_completion_params(request_params),
         **{key: value for key, value in request_params.items() if key in _CLAUDE_BATCH_OPENAI_PARAMS},
     }
+    if any(map(_names_the_response_format_tool, iter_items(chat_params.get("tools") or ()))):
+        raise ValueError(
+            f"tool name {RESPONSE_FORMAT_TOOL_NAME!r} is reserved for response_format on Claude, "
+            "and batch output cannot tell a user tool by that name apart, so rename it"
+        )
     optional_params: Final[Mapping[str, object]] = get_optional_params(
         model=bare_model,
         custom_llm_provider="vertex_ai",
@@ -1103,7 +1105,9 @@ def _publisher_model_path(raw_model: str) -> str:
 def _managed_batch_object_name(raw_model: str, *, passthrough: bool) -> str:
     endpoint_id: Final = get_vertex_ai_fine_tuned_endpoint_id(raw_model)
     model_path: Final = f"endpoints/{endpoint_id}" if endpoint_id is not None else _publisher_model_path(raw_model)
-    safe_model_path: Final = sanitize_cloud_object_path(model_path, fallback="model")
+    safe_model_path: Final = "@".join(
+        sanitize_cloud_object_path(version_part, fallback="model") for version_part in model_path.split("@")
+    )
     prefix: Final = _PASSTHROUGH_MANAGED_GCS_PREFIX if passthrough else VERTEX_AI_MANAGED_GCS_PREFIX
     return f"{prefix}{safe_model_path}/{uuid.uuid4()}"
 
@@ -1731,7 +1735,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 error_message=status,
             )
 
-        if _is_vertex_anthropic_batch_output_row(vertex_output):
+        if is_vertex_anthropic_batch_output_row(vertex_output):
             return _vertex_anthropic_batch_output_row_to_openai(
                 custom_id=custom_id,
                 response=vertex_output.get("response"),

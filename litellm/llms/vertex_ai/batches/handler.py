@@ -85,6 +85,7 @@ def _vertex_batch_create_error(error: httpx.HTTPStatusError) -> VertexAIError:
     return VertexAIError(
         status_code=error.response.status_code,
         message=f"Vertex AI batch create failed: {error.response.text}",
+        headers=dict(error.response.headers),
     )
 
 

@@ -2046,7 +2046,8 @@ class TestVertexClaudeBatch:
     """Claude on Vertex batches only as `publishers/anthropic/models/<model>` with Anthropic Messages rows
     (https://github.com/BerriAI/litellm/issues/45671)"""
 
-    def test_claude_upload_creates_a_batch_job_for_the_anthropic_publisher_model(self, config):
+    @pytest.mark.parametrize("claude_model", ["claude-sonnet-4-6", "claude-haiku-4-5@20251001"])
+    def test_claude_upload_creates_a_batch_job_for_the_anthropic_publisher_model(self, config, claude_model):
         from litellm.llms.vertex_ai.batches.transformation import VertexAIBatchTransformation
 
         url = config.get_complete_file_url(
@@ -2054,7 +2055,7 @@ class TestVertexClaudeBatch:
             api_key=None,
             model="",
             optional_params={},
-            litellm_params=dict(CLAUDE_DEPLOYMENT),
+            litellm_params={**CLAUDE_DEPLOYMENT, "model": f"vertex_ai/{claude_model}"},
             data={"file": ("batch.jsonl", json.dumps(_claude_chat_entry("r1", "hi")).encode()), "purpose": "batch"},
         )
         object_name = parse_qs(urlparse(url).query)["name"][0]
@@ -2063,7 +2064,7 @@ class TestVertexClaudeBatch:
             {"input_file_id": f"gs://my-bucket/{object_name}"}, vertex_project="p", vertex_location="us-east5"
         )
 
-        assert job["model"] == "publishers/anthropic/models/claude-sonnet-4-6", object_name
+        assert job["model"] == f"publishers/anthropic/models/{claude_model}", object_name
 
     def test_claude_body_model_without_deployment_is_filed_under_anthropic_publisher(self, config):
         object_name = config._get_gcs_object_name_from_batch_jsonl([{"body": {"model": "claude-haiku-4-5"}}])
@@ -2249,6 +2250,25 @@ class TestVertexClaudeBatch:
 
         assert exc_info.value.status_code == 400
         assert [t["name"] for t in row["request"]["tools"]] == ["get_weather"]
+
+    def test_claude_row_refuses_a_user_tool_named_like_the_response_format_tool(self, config):
+        from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+        tool = {"type": "function", "function": {"name": "json_tool_call", "parameters": {"type": "object"}}}
+        entry = _claude_chat_entry("r1", "hi", max_tokens=10, tools=[tool])
+
+        with pytest.raises(VertexAIError, match=r"line 1 .*json_tool_call") as exc_info:
+            _uploaded_rows(config, CLAUDE_DEPLOYMENT, [entry])
+
+        assert exc_info.value.status_code == 400
+
+    def test_claude_row_leaves_out_stream(self, config):
+        entry = _claude_chat_entry("r1", "hi", max_tokens=10, stream=True, stream_options={"include_usage": True})
+
+        (row,) = _uploaded_rows(config, CLAUDE_DEPLOYMENT, [entry])
+
+        assert "stream" not in row["request"]
+        assert "stream_options" not in row["request"]
 
     def test_claude_row_merges_extra_body_into_the_request(self, config):
         (row,) = _uploaded_rows(

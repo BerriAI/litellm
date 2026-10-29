@@ -374,7 +374,9 @@ def test_create_batch_sync_http_error_surfaces_vertex_status_and_body():
     h = _make_handler()
     client = MagicMock()
     request = httpx.Request("POST", "https://x/batchPredictionJobs")
-    err_response = httpx.Response(status_code=500, request=request, text="boom")
+    err_response = httpx.Response(
+        status_code=429, request=request, text="boom", headers={"retry-after": "30"}
+    )
     client.post.side_effect = httpx.HTTPStatusError(
         "boom", request=request, response=err_response
     )
@@ -391,7 +393,8 @@ def test_create_batch_sync_http_error_surfaces_vertex_status_and_body():
                 timeout=600.0,
                 max_retries=None,
             )
-    assert exc_info.value.status_code == 500
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.headers["retry-after"] == "30"
 
 
 def test_create_batch_input_file_id_without_model_raises_400_before_post():
@@ -803,7 +806,9 @@ def test_create_batch_async_http_error_surfaces_vertex_status_and_body():
     h = _make_handler()
     async_client = MagicMock()
     request = httpx.Request("POST", "https://x/batchPredictionJobs")
-    err_response = httpx.Response(status_code=500, request=request, text="boom")
+    err_response = httpx.Response(
+        status_code=429, request=request, text="boom", headers={"retry-after": "30"}
+    )
     async_client.post = AsyncMock(
         side_effect=httpx.HTTPStatusError(
             "boom", request=request, response=err_response
@@ -826,7 +831,8 @@ def test_create_batch_async_http_error_surfaces_vertex_status_and_body():
         )
         with pytest.raises(VertexAIError, match="boom") as exc_info:
             _run(coro)
-    assert exc_info.value.status_code == 500
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.headers["retry-after"] == "30"
 
 
 def test_async_retrieve_batch_non_200_raises():
