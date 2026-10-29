@@ -1,4 +1,5 @@
 import asyncio
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1322,7 +1323,7 @@ def test_text_completion_reads_a_custom_provider_dict_reply(monkeypatch: pytest.
     monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "dictreply"])
     monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "dictreply"])
 
-    response = text_completion(model="dictreply/x", prompt="hi")
+    response: Final = text_completion(model="dictreply/x", prompt="hi")
 
     assert response.choices[0].text == "hi from a dict reply"
     assert response.choices[0].finish_reason == "stop"
