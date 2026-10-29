@@ -145,7 +145,7 @@ def drop_params_from_unprocessable_entity_error(
     e: openai.UnprocessableEntityError | httpx.HTTPStatusError,
     data: Mapping[str, object],
     *,
-    model: object,
+    model: str | None,
     drop_params_gated: bool,
 ) -> dict[str, object]:
     """Return a copy of ``data`` without the params a 422 response names as invalid."""

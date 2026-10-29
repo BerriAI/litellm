@@ -707,10 +707,16 @@ def test_with_max_completion_tokens_leaves_other_params_alone():
 
 
 @pytest.mark.parametrize(
-    "model",
-    ["us.xai.grok-4.6", "bedrock/us-gov-west-1/us.xai.grok-4.6"],
+    ("model", "logged_model"),
+    [
+        ("us.xai.grok-4.6", "us.xai.grok-4.6"),
+        ("chat_completions/us.xai.grok-4.6", "us.xai.grok-4.6"),
+        ("bedrock/us-gov-west-1/us.xai.grok-4.6", "us-gov-west-1/us.xai.grok-4.6"),
+    ],
 )
-def test_map_openai_params_drops_reasoning_effort_none_for_grok_with_one_warning(model, caplog):
+def test_map_openai_params_drops_reasoning_effort_none_for_grok_with_one_warning(
+    model: str, logged_model: str, caplog: pytest.LogCaptureFixture
+) -> None:
     cfg = AmazonBedrockRuntimeChatCompletionsConfig()
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         mapped = cfg.map_openai_params(
@@ -723,7 +729,7 @@ def test_map_openai_params_drops_reasoning_effort_none_for_grok_with_one_warning
     assert "reasoning_effort" not in mapped
     assert len(drop_warnings) == 1
     assert "reasoning_effort='none'" in drop_warnings[0]
-    assert repr(model) in drop_warnings[0]
+    assert f"model={logged_model!r}" in drop_warnings[0]
     assert "drop_params" not in drop_warnings[0]
 
 

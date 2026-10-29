@@ -83,6 +83,7 @@ def _ensure_stop_sequence(response: AnthropicMessagesResponse) -> AnthropicMessa
 
 class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     _workload_identity_eligible: ClassVar[bool] = True
+    _report_reasoning_drops: ClassVar[bool] = True
 
     @property
     def custom_llm_provider(self) -> str | None:
@@ -653,12 +654,14 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             custom_llm_provider=self._resolved_provider,
         )
 
-        AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+        dropped_budget: Final = AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model_silently(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
             custom_llm_provider=self._resolved_provider,
             drop_params=getattr(litellm_params, "drop_params", None) is True,
         )
+        if dropped_budget is not None and self._report_reasoning_drops:
+            dropped_budget.warn(model)
 
         self._translate_adaptive_effort_for_non_adaptive_model(
             model=model,

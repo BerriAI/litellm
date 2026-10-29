@@ -43,6 +43,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_rejects_stop_sequences,
     bedrock_runtime_chat_completions_serves_reasoning_inline,
     split_bedrock_region_path,
+    strip_bedrock_routing_prefix,
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
@@ -125,7 +126,7 @@ def without_refused_reasoning_effort(model: str, params: Mapping[str, object]) -
     warn_dropped_reasoning(
         "reasoning_effort",
         effort,
-        model,
+        strip_bedrock_routing_prefix(model),
         "AWS's Chat Completions endpoint rejects that level for this model family, so AWS applies its default effort.",
         drop_params_gated=False,
     )
@@ -457,7 +458,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
             warn_dropped_reasoning(
                 "reasoning_effort",
                 raw_params["reasoning_effort"],
-                model,
+                strip_bedrock_routing_prefix(model),
                 "Bedrock's Chat Completions endpoint takes it only as a string, so AWS applies its default effort.",
                 drop_params_gated=True,
             )

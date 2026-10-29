@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import Mapping
 from datetime import datetime
 from types import SimpleNamespace
@@ -26,6 +27,7 @@ from litellm.llms.anthropic.prompt_cache_prediction import (
     parse_cache_plan,
     parse_observed_cache,
     parse_prompt,
+    prepare_native_baseline_body,
     resolve_baseline_prediction_target,
     resolve_prediction_target,
     supported_prediction_headers,
@@ -452,3 +454,23 @@ async def test_native_count_preserves_settings_and_requires_every_prefix(
         assert tuple(marker.prefix_tokens for marker in result.breakpoints) == (5000, 5800)
     assert tuple(route.call_count for route in routes) == (1, 1, 1)
     assert unexpected.call_count == 0
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_native_baseline_body_drops_a_non_numeric_budget_without_logging_a_drop(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    request: Final = {
+        "model": "claude-opus-5",
+        "max_tokens": 64,
+        "messages": [{"role": "user", "content": "hi"}],
+        "thinking": {"type": "enabled", "budget_tokens": "high"},
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        body: Final = prepare_native_baseline_body(request, "anthropic/claude-opus-5")
+
+    assert body is not None
+    assert body["thinking"] == {"type": "adaptive"}
+    assert [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()] == []

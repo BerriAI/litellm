@@ -11,7 +11,11 @@ import respx
 
 import litellm
 from litellm.litellm_core_utils.token_counter import token_counter
-from litellm.llms.openai.common_utils import BaseOpenAILLM, is_openai_backed_api_base
+from litellm.llms.openai.common_utils import (
+    BaseOpenAILLM,
+    drop_params_from_unprocessable_entity_error,
+    is_openai_backed_api_base,
+)
 
 # Test parameters for different API functions
 API_FUNCTION_PARAMS = [
@@ -647,3 +651,24 @@ async def test_azure_gateway_and_image_variations_use_the_callers_async_session(
         )
         assert response.data[0].url == "https://example.com/image.png"
         assert not session.is_closed
+
+
+
+def test_reasoning_drop_warning_caps_a_large_caller_value(caplog: pytest.LogCaptureFixture) -> None:
+    error: Final = httpx.HTTPStatusError(
+        message="422",
+        request=httpx.Request("POST", "https://example.invalid/v1/chat/completions"),
+        response=httpx.Response(422, json=_REASONING_EFFORT_422),
+    )
+    data: Final[dict[str, object]] = {"model": "gpt-6.1-sol", "messages": [], "reasoning_effort": "x" * 5000}
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        retried: Final = drop_params_from_unprocessable_entity_error(
+            error, data, model="gpt-6.1-sol", drop_params_gated=True
+        )
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+
+    assert "reasoning_effort" not in retried
+    assert len(drop_warnings) == 1
+    assert len(drop_warnings[0]) < 300
+    assert all(fragment in drop_warnings[0] for fragment in ("reasoning_effort='xxx", "'gpt-6.1-sol'", "422"))

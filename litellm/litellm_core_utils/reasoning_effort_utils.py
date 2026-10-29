@@ -1,3 +1,4 @@
+import reprlib
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import Final, Literal
@@ -14,20 +15,27 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
 OpenAIStyleReasoningEffort = Literal["minimal", "low", "medium", "high"]
 
-_DROP_WARNING: Final = "Dropping %s=%r for model=%r because %s"
-_DROP_PARAMS_DROP_WARNING: Final = "Dropping %s=%r for model=%r (drop_params=True) because %s"
+_DROP_WARNING: Final = "Dropping %s=%s for model=%r because %s"
+_DROP_PARAMS_DROP_WARNING: Final = "Dropping %s=%s for model=%r (drop_params=True) because %s"
 _NON_NUMERIC_BUDGET_REASON: Final = "it is not a number. Send budget_tokens as an integer to set a reasoning level."
 _REASONING_PARAMS: Final = ("reasoning", "reasoning_effort", "thinking")
 
 
-def warn_dropped_reasoning(param: str, value: object, model: object, reason: str, *, drop_params_gated: bool) -> None:
+def warn_dropped_reasoning(
+    param: str, value: object, model: str | None, reason: str, *, drop_params_gated: bool
+) -> None:
     verbose_logger.warning(
-        _DROP_PARAMS_DROP_WARNING if drop_params_gated else _DROP_WARNING, param, value, model, reason
+        _DROP_PARAMS_DROP_WARNING if drop_params_gated else _DROP_WARNING, param, reprlib.repr(value), model, reason
     )
 
 
 def warn_dropped_reasoning_params(
-    dropped: Collection[object], request: Mapping[str, object], model: object, reason: str, *, drop_params_gated: bool
+    dropped: Collection[object],
+    request: Mapping[str, object],
+    model: str | None,
+    reason: str,
+    *,
+    drop_params_gated: bool,
 ) -> None:
     for param in _REASONING_PARAMS:
         if param in dropped and param in request:

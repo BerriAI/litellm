@@ -1,7 +1,7 @@
 import copy
 import enum
 import re
-from collections.abc import AsyncIterator, Collection, Iterator
+from collections.abc import AsyncIterator, Collection, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
@@ -38,6 +38,11 @@ if TYPE_CHECKING:
 
 
 _REQUEST_BODY: Final = TypeAdapter(dict[str, object])
+
+
+def _request_model(request: Mapping[str, object]) -> str | None:
+    model: Final = request.get("model")
+    return model if isinstance(model, str) else None
 
 
 class AzureFoundryErrorStrings(str, enum.Enum):
@@ -401,8 +406,9 @@ class AzureAIStudioConfig(OpenAIConfig):
         data: Final = drop_params_from_unprocessable_entity_error(
             e=e,
             data=request_data,
-            model=_REQUEST_BODY.validate_python(request_data).get("model"),
-            drop_params_gated=False,
+            model=_request_model(_REQUEST_BODY.validate_python(request_data)),
+            drop_params_gated="Extra inputs are not permitted" in error_text
+            and not self._error_has_tool_level_extra_fields(error_text),
         )
         return data
 
@@ -423,7 +429,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             warn_dropped_reasoning_params(
                 params_to_drop,
                 request,
-                request.get("model"),
+                _request_model(request),
                 "Azure AI rejected it as an extra parameter its deployment does not pass through.",
                 drop_params_gated=False,
             )
