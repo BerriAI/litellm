@@ -56,6 +56,7 @@ from litellm.integrations.otel.model.config import (
     OpenTelemetryV2Config,
     capture_message_content_from_env,
     captures_span_content,
+    is_unconfigured_placeholder,
 )
 from litellm.integrations.otel.model.semconv import (
     DB,
@@ -1551,6 +1552,7 @@ def build_tracer_provider(
     use_simple_processor: bool | None = None,
     tenant_overrides: bool = False,
     strip_message_content: bool = False,
+    console_default: bool = False,
 ) -> TracerProvider:
     """Build the shared :class:`TracerProvider`.
 
@@ -1575,6 +1577,10 @@ def build_tracer_provider(
     ``strip_message_content`` removes prompt and response content before every
     exporter, for a routed provider whose spans can carry content another
     destination asked for.
+
+    The console spec ``config._normalize`` folds in when nothing was configured
+    prints only under ``console_default``, which the ``otel`` callback passes: a
+    vendor preset or the proxy's background global logger was never asked to print.
     """
     provider: Final = TracerProvider(resource=build_resource(config))
     provider.sampler = _RequestExclusionSampler(provider.sampler)
@@ -1591,6 +1597,8 @@ def build_tracer_provider(
     # ``exporter``/``endpoint``/``headers`` fields in when ``exporters`` is empty).
     for spec in config.exporters:
         if spec.requires_headers and not spec.headers:
+            continue
+        if is_unconfigured_placeholder(spec) and not console_default:
             continue
         processor = _spec_processor(
             spec,
