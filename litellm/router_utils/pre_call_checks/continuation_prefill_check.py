@@ -1,12 +1,13 @@
 """Keeps a mid-stream continuation on deployments whose model supports assistant prefill and whose own params leave
-the output unconstrained."""
+the output unconstrained, and shapes a Responses API continuation for the deployment that serves it."""
 
-from collections.abc import AsyncIterable, AsyncIterator, Mapping, Sequence
+import json
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import accumulate
 from os.path import commonprefix
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -14,7 +15,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.rules import Rules
 from litellm.router_utils.common_utils import MID_STREAM_CONTINUATION_KWARG
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, OutputTextDeltaEvent
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 from litellm.utils import supports_assistant_prefill
 
@@ -28,7 +29,9 @@ MID_STREAM_CONTINUATION_MARKER: Final = _ContinuationMarker()
 _STR_KEYED_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
 _UNCONSTRAINED_RESPONSE_FORMAT: Final[Mapping[str, str]] = MappingProxyType({"type": "text"})
-_OUTPUT_CEILING_KEYS: Final = ("max_tokens", "max_completion_tokens")
+_OUTPUT_CEILING_KEYS: Final = ("max_tokens", "max_completion_tokens", "max_output_tokens")
+_QUOTED_ENDING_CHARS: Final = 100
+RESPONSES_CONTINUATION_KWARG: Final = "_responses_continuation"
 
 
 def _str_keyed(value: object) -> Mapping[str, object]:
@@ -38,30 +41,53 @@ def _str_keyed(value: object) -> Mapping[str, object]:
         return _NO_FIELDS
 
 
-def deployment_supports_prefill(deployment: object) -> bool:
+def _underlying_model(deployment: object) -> str | None:
     deployment_map: Final = _str_keyed(deployment)
     model_info: Final = _str_keyed(deployment_map.get("model_info"))
-    declared: Final = model_info.get("supports_assistant_prefill")
-    if isinstance(declared, bool):
-        return declared
     litellm_params: Final = _str_keyed(deployment_map.get("litellm_params"))
     candidates: Final = (model_info.get("base_model"), litellm_params.get("base_model"), litellm_params.get("model"))
-    model: Final = next((candidate for candidate in candidates if isinstance(candidate, str) and candidate), None)
+    return next((candidate for candidate in candidates if isinstance(candidate, str) and candidate), None)
+
+
+def deployment_supports_prefill(deployment: object) -> bool:
+    declared: Final = _str_keyed(_str_keyed(deployment).get("model_info")).get("supports_assistant_prefill")
+    if isinstance(declared, bool):
+        return declared
+    model: Final = _underlying_model(deployment)
     return model is not None and supports_assistant_prefill(model=model)
 
 
-def constrains_continuation(params: Mapping[str, object]) -> bool:
+def _forces_tool_call(tool_choice: object) -> bool:
+    return tool_choice == "required" or isinstance(tool_choice, Mapping)
+
+
+def _forces_responses_tool_call(tool_choice: object) -> bool:
+    choice: Final = _str_keyed(tool_choice)
+    leaves_text_open: Final = choice.get("type") == "allowed_tools" and choice.get("mode") == "auto"
+    return _forces_tool_call(tool_choice) and not leaves_text_open
+
+
+def _constrains(params: Mapping[str, object], forces_tool_call: Callable[[object], bool]) -> bool:
     sent: Final = {**params, **_str_keyed(params.get("extra_body"))}
     choice_count: Final = sent.get("n")
     response_format: Final = sent.get("response_format")
-    tool_choice: Final = sent.get("tool_choice")
+    text_format: Final = _str_keyed(sent.get("text")).get("format")
     return (
         (isinstance(choice_count, int) and choice_count > 1)
         or (response_format is not None and response_format != _UNCONSTRAINED_RESPONSE_FORMAT)
-        or tool_choice == "required"
-        or isinstance(tool_choice, Mapping)
+        or (text_format is not None and text_format != _UNCONSTRAINED_RESPONSE_FORMAT)
+        or sent.get("text_format") is not None
+        or forces_tool_call(sent.get("tool_choice"))
         or sent.get("merge_reasoning_content_in_choices") is True
     )
+
+
+def constrains_continuation(params: Mapping[str, object]) -> bool:
+    return _constrains(params, _forces_tool_call)
+
+
+def constrains_responses_continuation(params: Mapping[str, object]) -> bool:
+    return _constrains(params, _forces_responses_tool_call)
 
 
 def deployment_can_continue(deployment: object) -> bool:
@@ -99,6 +125,7 @@ def _delta_text(chunk: ModelResponseStream) -> str:
 
 
 _CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
+_INPUT_ITEMS_ADAPTER: Final = TypeAdapter(list[object])
 
 
 def _prefill_text(prefill_message: Mapping[str, object]) -> str:
@@ -114,7 +141,7 @@ def _prefill_text(prefill_message: Mapping[str, object]) -> str:
     )
 
 
-def _resendable_whitespace(prefill: str) -> str:
+def resendable_whitespace(prefill: str) -> str:
     return prefill[len(prefill.rstrip()) :] if prefill.strip() else ""
 
 
@@ -124,7 +151,7 @@ def continued_text(prefill_message: Mapping[str, object], generated_content: str
         return None
     echo: Final = len(prefill) if prefill and generated_content.startswith(prefill) else 0
     after_echo: Final = generated_content[echo:]
-    return after_echo[len(commonprefix((after_echo, _resendable_whitespace(prefill)))) :]
+    return after_echo[len(commonprefix((after_echo, resendable_whitespace(prefill)))) :]
 
 
 def _reduced_ceilings(params: Mapping[str, object], emitted_tokens: int) -> Mapping[str, int]:
@@ -211,7 +238,7 @@ class ContinuationOutput:
         self._rules: Final = Rules()
         self._held: tuple[ModelResponseStream, ...] = ()
         self._echo_settled = not self._prefill_text
-        self._seam = _resendable_whitespace(self._prefill_text)
+        self._seam = resendable_whitespace(self._prefill_text)
 
     async def splice(self, stream: AsyncIterable[object]) -> AsyncIterator[object]:
         async for item in stream:
@@ -262,3 +289,91 @@ class ContinuationOutput:
             self._text += _delta_text(chunk)
             self._rules.post_call_rules(input=self._text, model=self._model)
         return chunks
+
+
+@dataclass(frozen=True, slots=True)
+class ResponsesContinuation:
+    prior_input: object
+    emitted_text: str
+
+    def extended(self, generated_content: str) -> "ResponsesContinuation":
+        return ResponsesContinuation(self.prior_input, f"{self.emitted_text}{generated_content}")
+
+
+def deployment_takes_responses_prefill(deployment: object) -> bool:
+    """Claude takes a trailing assistant turn as prefill with no `prefix` flag, which a Responses input item cannot
+    carry."""
+    model: Final = _underlying_model(deployment)
+    return model is not None and "claude" in model.lower() and deployment_supports_prefill(deployment)
+
+
+def _continuation_request(emitted_text: str) -> Mapping[str, object]:
+    seam: Final = (
+        "It already ends with whitespace, so do not add another space before your first word."
+        if emitted_text[-1:].isspace()
+        else "It ends without trailing whitespace, so begin with a space if your first word starts a new word."
+    )
+    ending: Final = json.dumps(emitted_text[-_QUOTED_ENDING_CHARS:], ensure_ascii=False)
+    instruction: Final = (
+        f"The previous assistant response was interrupted mid-stream. It ended with {ending}. Continue exactly where "
+        "it stopped, so your first characters are the ones that would have come right after it, and do not repeat "
+        f"any of its content. {seam} Your response must read as a seamless continuation."
+    )
+    return {"type": "message", "role": "user", "content": [{"type": "input_text", "text": instruction}]}
+
+
+def _input_items(request_input: object) -> tuple[object, ...]:
+    if isinstance(request_input, str):
+        return ({"type": "message", "role": "user", "content": [{"type": "input_text", "text": request_input}]},)
+    try:
+        return tuple(_INPUT_ITEMS_ADAPTER.validate_python(request_input))
+    except ValidationError:
+        return ()
+
+
+def responses_continuation_input(continuation: ResponsesContinuation) -> Sequence[object]:
+    """The prior input, the partial response as assistant history, and a user request to continue it."""
+    partial: Final = {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": continuation.emitted_text}],
+    }
+    return [*_input_items(continuation.prior_input), partial, _continuation_request(continuation.emitted_text)]
+
+
+def responses_continuation_input_for(request_kwargs: Mapping[str, object], deployment: Mapping[str, object]) -> object:
+    """The continuation input as the deployment receives it, without the request to continue where the deployment
+    takes the partial response as prefill. It reads the input the router already stripped of reasoning this
+    deployment cannot decrypt, never the continuation's prior input."""
+    request_input: Final = request_kwargs.get("input")
+    continuation: Final = request_kwargs.get(RESPONSES_CONTINUATION_KWARG)
+    if not isinstance(continuation, ResponsesContinuation):
+        return request_input
+    items: Final = _input_items(request_input)
+    if items[-1:] != (_continuation_request(continuation.emitted_text),) or not deployment_takes_responses_prefill(
+        deployment
+    ):
+        return request_input
+    return list(items[:-1])
+
+
+_StreamItem = TypeVar("_StreamItem")
+
+
+class ResponsesContinuationSeam:
+    """Drops whitespace a fallback sends again at the start of its text when the client already has it, since
+    Anthropic strips a prefill's trailing whitespace and the model then writes it back."""
+
+    def __init__(self, emitted_text: str) -> None:
+        self._seam = resendable_whitespace(emitted_text)
+
+    async def splice(self, stream: AsyncIterable[_StreamItem]) -> AsyncIterator[_StreamItem]:
+        async for item in stream:
+            yield self._past(item)
+
+    def _past(self, item: _StreamItem) -> _StreamItem:
+        if not self._seam or not isinstance(item, OutputTextDeltaEvent):
+            return item
+        matched: Final = len(commonprefix((item.delta, self._seam)))
+        self._seam = self._seam[matched:] if matched == len(item.delta) else ""
+        return item.model_copy(update={"delta": item.delta[matched:]}) if matched else item

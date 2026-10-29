@@ -10,8 +10,11 @@ import json
 import os
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, TypeAlias, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional, TypeAlias, cast
 from urllib.parse import urlparse
+
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -25,7 +28,6 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy.guardrails.guardrail_hooks.noma.noma import NomaBlockedMessage
-from litellm.types.guardrail_base_init import GuardrailBaseInitKwargs
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.noma import NomaV2StreamingParams
 from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
@@ -39,6 +41,7 @@ _DEFAULT_API_BASE: Final = "https://api.noma.security/"
 _AIDR_SCAN_ENDPOINT: Final = "/litellm/guardrail"
 _INTERVENED_INPUT_FIELDS: Final = ("texts", "images", "tools", "tool_calls")
 _DEFAULT_API_BASE_HOSTNAME: Final = urlparse(_DEFAULT_API_BASE).hostname
+_DECODED_JSON: Final = TypeAdapter(object)
 
 _GuardrailJsonResponse: TypeAlias = Exception | str | dict[str, object]
 
@@ -48,6 +51,10 @@ _LOGGING_KEYS_DUPLICATING_SCAN_INPUTS: Final = _KEYS_DUPLICATING_SCAN_INPUTS + (
     "standard_logging_object",
     "original_response",
 )
+
+
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class _Action(str, enum.Enum):
@@ -74,7 +81,7 @@ class NomaV2Guardrail(CustomGuardrail):
         streaming_end_of_stream_only: bool | None = None,
         streaming_sampling_rate: int | None = None,
         streaming_buffer_release_on_scan: bool | None = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
@@ -115,10 +122,11 @@ class NomaV2Guardrail(CustomGuardrail):
         if streaming.streaming_buffer_release_on_scan is not None:
             self.streaming_buffer_release_on_scan: bool = streaming.streaming_buffer_release_on_scan
 
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
-
-        base_kwargs: Final[GuardrailBaseInitKwargs] = kwargs
-        super().__init__(**base_kwargs)
+        options: Final[_CustomGuardrailOptions] = {
+            "supported_event_hooks": list(self.get_supported_event_hooks()),
+            **kwargs,
+        }
+        super().__init__(**options)
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:
@@ -219,7 +227,7 @@ class NomaV2Guardrail(CustomGuardrail):
         except (ValueError, TypeError):
             json_str = safe_dumps(payload)
 
-        safe_payload: Final[object] = safe_json_loads(json_str, default={})
+        safe_payload: Final = _DECODED_JSON.validate_python(safe_json_loads(json_str, default={}))
         if safe_payload == {} and payload:
             verbose_proxy_logger.warning(
                 "Noma v2 guardrail: payload serialization failed, falling back to empty payload"

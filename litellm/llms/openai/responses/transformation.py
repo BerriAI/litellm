@@ -25,7 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-from litellm.llms.openai.chat.gpt_5_transformation import (
+from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     is_gpt_reasoning_series_name,
     unsupported_reasoning_effort_message,
 )
@@ -66,6 +66,29 @@ _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS: Final = frozenset({LlmProviders.AZURE,
 _PROVIDERS_REPLAYING_ONLY_THEIR_OWN_REASONING: Final = _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS
 _ROLES_READING_PROMPT_CACHE_BREAKPOINTS: Final = frozenset({"system", "developer", "user"})
 _PART_TYPES_READING_PROMPT_CACHE_BREAKPOINTS: Final = frozenset({"input_text", "input_image", "input_file"})
+_COMPACT_TRACKING_PARAMS: Final = frozenset({"metadata", "user"})
+_COMPACT_REJECTED_PARAMS: Final = frozenset(
+    {
+        "background",
+        "context_management",
+        "max_output_tokens",
+        "max_tool_calls",
+        "moderation",
+        "partial_images",
+        "prompt",
+        "safety_identifier",
+        "store",
+        "stream_options",
+        "temperature",
+        "tool_choice",
+        "top_logprobs",
+        "top_p",
+        "truncation",
+    }
+)
+_PROVIDERS_WITH_STRICT_COMPACT_PARAMS: Final = frozenset(
+    {LlmProviders.OPENAI, LlmProviders.AZURE, LlmProviders.AZURE_AI}
+)
 _INPUT_ITEM: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _CONTENT_PARTS: Final[TypeAdapter[Sequence[Mapping[str, object]]]] = TypeAdapter(Sequence[Mapping[str, object]])
 
@@ -291,7 +314,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         level the row cannot gate because the same model takes it here and refuses it on chat.
         Azure overrides this so a bare deployment name reads the azure/ entry.
         """
-        from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+        from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 
         return OpenAIGPT5Config.row_disables_reasoning_effort_level(model, level)
 
@@ -305,7 +328,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         copy of the rule here is what let this surface keep forwarding temperature after the
         chat surface stopped.
         """
-        from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+        from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 
         return OpenAIGPT5Config.effort_resolves_to_none(model, effort)
 
@@ -499,8 +522,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         )
         if sanitized_tools is not None:
             response_api_optional_request_params["tools"] = sanitized_tools
-        final_request_params: Final = dict(
-            ResponsesAPIRequestParams(model=model, input=replay_safe_input, **response_api_optional_request_params)
+        final_request_params: Final = cast(  # cast-ok: typed dict spread is inferred as Unknown by basedpyright
+            dict[str, object],
+            {
+                "model": model,
+                "input": replay_safe_input,
+                **response_api_optional_request_params,
+            },
         )
 
         return final_request_params
@@ -1177,6 +1205,17 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     #########################################################
     ########## COMPACT RESPONSE API TRANSFORMATION ##########
     #########################################################
+    def compact_url(self, api_base: str) -> str:
+        parsed_url: Final = httpx.URL(api_base)
+        return str(parsed_url.copy_with(path=parsed_url.path.rstrip("/") + "/compact"))
+
+    def compact_dropped_params(self, litellm_params: GenericLiteLLMParams) -> frozenset[str]:
+        if self.custom_llm_provider not in _PROVIDERS_WITH_STRICT_COMPACT_PARAMS:
+            return frozenset()
+        if _drops_params(litellm_params):
+            return _COMPACT_TRACKING_PARAMS | _COMPACT_REJECTED_PARAMS
+        return _COMPACT_TRACKING_PARAMS
+
     def transform_compact_response_api_request(
         self,
         model: str,
@@ -1192,10 +1231,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         OpenAI API expects the following request
         - POST /v1/responses/compact
         """
-        # Preserve query params (e.g., api-version) while appending /compact.
-        parsed_url: Final = httpx.URL(api_base)
-        compact_path: Final = parsed_url.path.rstrip("/") + "/compact"
-        url: Final = str(parsed_url.copy_with(path=compact_path))
+        url: Final = self.compact_url(api_base)
+        dropped_params: Final = self.compact_dropped_params(litellm_params)
 
         request_params: Final = cast(  # cast-ok: the base signature leaves the params bag untyped
             "Mapping[str, object]", response_api_optional_request_params
@@ -1209,9 +1246,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         )
         if sanitized_tools is not None:
             response_api_optional_request_params["tools"] = sanitized_tools
-        data: Final = dict(
-            ResponsesAPIRequestParams(model=model, input=replay_safe_input, **response_api_optional_request_params)
-        )
+        data: Final = {
+            "model": model,
+            "input": replay_safe_input,
+            **{key: value for key, value in request_params.items() if key not in dropped_params},
+        }
 
         return url, data
 

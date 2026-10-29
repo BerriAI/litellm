@@ -2304,7 +2304,15 @@ async def test_model_connection(
                 )
 
         selected_by_id: Final = deployment_by_id is not None
-        reject_server_owned_wif_fields(request_litellm_params)
+        reject_server_owned_wif_fields(
+            MappingProxyType(
+                {
+                    key: value
+                    for key, value in _OBJECT_MAPPING.validate_python(request_litellm_params).items()
+                    if key != "chatgpt_auth_file"
+                }
+            )
+        )
         # Merge: config params (from proxy config) as base, request params override
         litellm_params = {
             **_config_base_for_health_check(
@@ -2322,9 +2330,11 @@ async def test_model_connection(
             stored_params=_OBJECT_MAPPING.validate_python(config_litellm_params),
             request_params=_OBJECT_MAPPING.validate_python(request_litellm_params),
         )
+        stored_model: Final = _OBJECT_MAPPING.validate_python(config_litellm_params).get("model")
         litellm_params = update_litellm_params_for_health_check(
             model_info=dict(probe_model_info),
             litellm_params=litellm_params,
+            deployment_model=stored_model if isinstance(stored_model, str) else None,
         )
 
         ## Auth check, on the final probe params so health_check_params cannot retarget it afterwards
