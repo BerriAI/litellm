@@ -16,6 +16,7 @@ import json
 import os
 import re
 import secrets
+from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from html import escape
@@ -42,7 +43,7 @@ if TYPE_CHECKING:
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator
+from pydantic import AliasPath, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -106,6 +107,7 @@ from litellm.proxy.common_utils.html_forms.default_credentials_hint import shoul
 from litellm.proxy.common_utils.html_forms.jwt_display_template import (
     jwt_display_template,
 )
+from litellm.proxy.common_utils.html_forms.native_client_consent import team_select_field
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -184,6 +186,8 @@ _CLI_SSO_START_RATE_LIMIT_WINDOW_SECONDS: Final = 60
 _CLI_SSO_START_RATE_LIMIT_MAX_ATTEMPTS: Final = 30
 _CLI_SSO_USER_CODE_ALPHABET: Final = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _CLI_SSO_LOGIN_ID_RE: Final = re.compile(r"^cli-[A-Za-z0-9_-]{12,124}$")
+CLI_SSO_BROWSER_TEAM_CHOICE: Final = "browser_team_choice"
+CLI_SSO_CHOSEN_TEAM_ID: Final = "chosen_team_id"
 _CLI_SSO_USER_CODE_RE = re.compile(rf"^[{_CLI_SSO_USER_CODE_ALPHABET}]{{4}}-[{_CLI_SSO_USER_CODE_ALPHABET}]{{4}}$")
 _CLI_SSO_SCALAR_TYPES: Final = (str, int, float, bool)
 _CLI_SSO_DEST_KEY_RE: Final = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -670,6 +674,7 @@ def _render_cli_sso_verification_page(
     verify_url: str,
     browser_complete_token: str,
     prefill_user_code: str | None = None,
+    team_choices: Sequence[tuple[str, str]] = (),
 ) -> str:
     escaped_verify_url: Final = escape(verify_url, quote=True)
     escaped_browser_complete_token: Final = escape(browser_complete_token, quote=True)
@@ -716,6 +721,15 @@ def _render_cli_sso_verification_page(
             letter-spacing: 0.08em;
             text-transform: uppercase;
           }}
+          select {{
+            box-sizing: border-box;
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 18px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            font-size: 16px;
+          }}
           button {{
             margin-top: 16px;
             width: 100%;
@@ -735,6 +749,7 @@ def _render_cli_sso_verification_page(
           <p>{instructions}</p>
           <form method="post" action="{escaped_verify_url}">
             <input type="hidden" name="browser_complete_token" value="{escaped_browser_complete_token}" />
+            {team_select_field(team_choices, require_choice=True)}
             <label for="user_code">Verification code</label>
             <input id="user_code" name="user_code" autocomplete="one-time-code"{user_code_value_attr} required autofocus />
             <button type="submit">Continue</button>
@@ -823,11 +838,44 @@ async def cli_sso_complete(request: Request, login_id: str):
     ):
         raise HTTPException(status_code=400, detail="Invalid verification code")
 
-    flow["user_code_verified"] = True
-    _set_cli_sso_flow(login_id=login_id, cache=cli_sso_session_cache, flow=flow)
+    team_choice_flow: Final = _CliSsoTeamChoiceFlow.model_validate(flow)
+    chosen_team_id: Final = _browser_chosen_team_id(team_choice_flow, form_values)
+    if chosen_team_id is not None and chosen_team_id not in team_choice_flow.teams:
+        raise HTTPException(status_code=400, detail="Choose one of the teams you belong to")
+
+    _set_cli_sso_flow(
+        login_id=login_id,
+        cache=cli_sso_session_cache,
+        flow={
+            **flow,
+            "user_code_verified": True,
+            CLI_SSO_CHOSEN_TEAM_ID: chosen_team_id,
+            "session_data": (
+                flow["session_data"]
+                if chosen_team_id is None
+                else {
+                    **flow["session_data"],
+                    "teams": [chosen_team_id, *(team for team in team_choice_flow.teams if team != chosen_team_id)],
+                }
+            ),
+        },
+    )
 
     html_content: Final = render_cli_sso_success_page()
     return HTMLResponse(content=html_content, status_code=200)
+
+
+class _CliSsoTeamChoiceFlow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    browser_team_choice: bool = Field(default=False, validation_alias=CLI_SSO_BROWSER_TEAM_CHOICE)
+    teams: tuple[str, ...] = Field(default=(), validation_alias=AliasPath("session_data", "teams"))
+
+
+def _browser_chosen_team_id(flow: _CliSsoTeamChoiceFlow, form_values: Mapping[str, Sequence[str]]) -> str | None:
+    if not flow.browser_team_choice:
+        return None
+    return (form_values.get("team_id") or [""])[0] or None
 
 
 def normalize_email(email: str | None) -> str | None:
@@ -2416,6 +2464,18 @@ def _cli_sso_session_teams(team_details: Sequence[CliSsoTeamDetail]) -> list[str
     return [detail.team_id for detail in team_details if detail.team_id is not None]
 
 
+def _browser_team_choices(
+    flow: _CliSsoTeamChoiceFlow, team_details: Sequence[CliSsoTeamDetail]
+) -> tuple[tuple[str, str], ...]:
+    if not flow.browser_team_choice:
+        return ()
+    labeled: Final = tuple(
+        (detail.team_id, detail.team_alias or detail.team_id) for detail in team_details if detail.team_id is not None
+    )
+    label_counts: Final = Counter(label for _, label in labeled)
+    return tuple((team_id, label if label_counts[label] == 1 else f"{label} ({team_id})") for team_id, label in labeled)
+
+
 def selected_cli_sso_team_detail(team_details: object, team_id: str | None) -> CliSsoTeamDetail | None:
     """``None`` means the team's grants are unknown. An empty grant is a real value meaning unrestricted,
     so an unknown one must not be minted as empty."""
@@ -2484,6 +2544,7 @@ async def _complete_cli_sso_callback_session(
         request.scope.get("litellm_microsoft_interactive_subject"), resolved_user_id, prisma_client
     )
     resolved_teams: Final = _cli_sso_session_teams(team_details)
+    team_choices: Final = _browser_team_choices(_CliSsoTeamChoiceFlow.model_validate(flow), team_details)
     attribution_metadata: Final = build_cli_sso_attribution_metadata(result=result)
     if attribution_metadata:
         await _persist_cli_sso_user_metadata(
@@ -2521,6 +2582,7 @@ async def _complete_cli_sso_callback_session(
             verify_url=verify_url,
             browser_complete_token=browser_complete_token,
             prefill_user_code=prefill_user_code,
+            team_choices=team_choices,
         ),
         status_code=200,
     )
