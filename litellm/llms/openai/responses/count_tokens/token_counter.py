@@ -35,6 +35,7 @@ from litellm.llms.openai.workload_identity import (
     openai_static_api_key,
     resolve_openai_workload_identity_config,
 )
+from litellm.router_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
@@ -218,7 +219,15 @@ class OpenAITokenCounter(BaseTokenCounter):
         resolved: Final = _count_credential(deployment, request_model or model_to_use)
         if isinstance(resolved, OpenAIError):
             return _count_error(model_to_use, request_model, resolved.message, resolved.status_code)
-        body: Final = native_count_request(request, model_to_use, policy)
+        body: Final = native_count_request(
+            request,
+            model_to_use,
+            policy,
+            declared_reasoning_efforts=deployment_reasoning_effort_levels(
+                None if deployment is None else deployment.get("model_info")
+            )
+            or (),
+        )
         return await self._counted(
             resolved,
             lambda api_key, api_base: openai_count_tokens_handler.post_count_request(body, api_key, api_base),

@@ -60,19 +60,19 @@ class AzureOpenAIOSeriesResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
         """
         Map OpenAI parameters for Azure OpenAI O-series Responses API.
 
-        Drops temperature parameter if drop_params is True since O-series models
+        Drops temperature and malformed values if drop_params is True since O-series models
         don't support temperature in the responses API.
         """
-        mapped_params: Final = dict(response_api_optional_params)
-
-        # If drop_params is enabled, remove temperature parameter for O-series models
-        if drop_params and "temperature" in mapped_params:
+        if not drop_params:
+            return dict(response_api_optional_params)
+        kept: Final = self.params_dropped_for_deployment(
+            response_api_optional_params, model, declared_reasoning_efforts=()
+        )
+        if "temperature" in kept:
             verbose_logger.debug(
                 "Dropping unsupported parameter 'temperature' for Azure OpenAI O-series responses API model %s", model
             )
-            mapped_params.pop("temperature", None)
-
-        return mapped_params
+        return {name: value for name, value in kept.items() if name != "temperature"}
 
     def is_o_series_model(self, model: str) -> bool:
         """

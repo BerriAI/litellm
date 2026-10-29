@@ -1425,12 +1425,9 @@ def _declared_values(values: Sequence[str] | None) -> frozenset[str | None] | No
     return None if values is None else frozenset(values)
 
 
-def _openai_reasoning_field_values(model: str) -> Mapping[str, frozenset[str | None] | None]:
-    model_info: Final = _openai_model_info(model)
+def _openai_declared_reasoning_field_values(model_info: ModelInfo | None) -> Mapping[str, frozenset[str | None] | None]:
     if model_info is None:
         return MappingProxyType({"summary": _SUMMARY_VALUES, "mode": None, "context": None})
-    if not model_info.get("supports_reasoning"):
-        return MappingProxyType({})
     return MappingProxyType(
         {
             "summary": _SUMMARY_VALUES,
@@ -1438,6 +1435,13 @@ def _openai_reasoning_field_values(model: str) -> Mapping[str, frozenset[str | N
             "context": _declared_values(model_info.get("reasoning_contexts")),
         }
     )
+
+
+def _openai_reasoning_field_values(model: str) -> Mapping[str, frozenset[str | None] | None]:
+    model_info: Final = _openai_model_info(model)
+    if model_info is not None and not model_info.get("supports_reasoning"):
+        return MappingProxyType({})
+    return _openai_declared_reasoning_field_values(model_info)
 
 
 def _openai_accepts_reasoning_field(
@@ -1451,11 +1455,22 @@ def _openai_accepts_reasoning_field(
     return allowed is None or (isinstance(value, str | None) and value in allowed)
 
 
-def _openai_accepted_reasoning(reasoning: Mapping[str, object], model: str) -> Mapping[str, object]:
-    values_by_field: Final = _openai_reasoning_field_values(model)
+def _reasoning_with_accepted_fields(
+    reasoning: Mapping[str, object], values_by_field: Mapping[str, frozenset[str | None] | None]
+) -> Mapping[str, object]:
     return {
         key: value for key, value in reasoning.items() if _openai_accepts_reasoning_field(key, value, values_by_field)
     }
+
+
+def _openai_accepted_reasoning(reasoning: Mapping[str, object], model: str) -> Mapping[str, object]:
+    return _reasoning_with_accepted_fields(reasoning, _openai_reasoning_field_values(model))
+
+
+def openai_well_formed_reasoning(reasoning: Mapping[str, object], model: str) -> Mapping[str, object]:
+    return _reasoning_with_accepted_fields(
+        reasoning, _openai_declared_reasoning_field_values(_openai_model_info(model))
+    )
 
 
 def _additional_drop_paths(additional_drop_params: object) -> tuple[str, ...]:

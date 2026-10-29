@@ -12,6 +12,7 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.azure.responses.o_series_transformation import AzureOpenAIOSeriesResponsesAPIConfig
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
@@ -3199,6 +3200,100 @@ class TestReasoningFollowsModelSupport:
             drop_params=True,
         )
         assert mapped["reasoning"] == {"effort": "medium"}
+
+
+_WEATHER_TOOL: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}}
+
+
+class TestMalformedParamsFollowDropParams:
+    @pytest.mark.parametrize(
+        "config",
+        [OpenAIResponsesAPIConfig(), AzureOpenAIResponsesAPIConfig(), AzureOpenAIOSeriesResponsesAPIConfig()],
+        ids=["openai", "azure", "azure-o-series"],
+    )
+    @pytest.mark.parametrize(
+        "params",
+        [
+            pytest.param({"tool_choice": "required"}, id="required-without-tools"),
+            pytest.param({"tool_choice": "required", "tools": []}, id="required-with-empty-tools"),
+            pytest.param({"tool_choice": {"type": "function", "name": "get_weather"}}, id="function-without-tools"),
+            pytest.param({"parallel_tool_calls": "true"}, id="parallel-tool-calls-string"),
+            pytest.param({"previous_response_id": 12}, id="previous-response-id-int"),
+            pytest.param({"previous_response_id": ""}, id="previous-response-id-empty"),
+        ],
+    )
+    def test_a_malformed_value_is_dropped_under_drop_params_and_sent_as_is_without(
+        self, local_model_cost_map, monkeypatch, config, params
+    ):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        malformed: Final = next(name for name in params if name != "tools")
+
+        dropped: Final = config.map_openai_params(dict(params), "gpt-6.1-sol", True)
+        sent: Final = config.map_openai_params(dict(params), "gpt-6.1-sol", False)
+
+        assert malformed not in dropped
+        assert sent == params
+
+    @pytest.mark.parametrize(
+        "params",
+        [
+            pytest.param({"tool_choice": "auto"}, id="auto-without-tools"),
+            pytest.param({"tool_choice": "none"}, id="none-without-tools"),
+            pytest.param({"tool_choice": "required", "tools": [_WEATHER_TOOL]}, id="required-with-tools"),
+            pytest.param(
+                {"tool_choice": {"type": "function", "name": "get_weather"}, "tools": [_WEATHER_TOOL]},
+                id="function-with-tools",
+            ),
+            pytest.param({"parallel_tool_calls": False}, id="parallel-tool-calls-bool"),
+            pytest.param({"parallel_tool_calls": None}, id="parallel-tool-calls-null"),
+            pytest.param({"previous_response_id": "resp_abc"}, id="previous-response-id-string"),
+            pytest.param({"tool_choice": "required", "prompt": {"id": "pmpt_abc"}}, id="required-with-stored-prompt"),
+        ],
+    )
+    def test_a_well_formed_value_is_kept_under_drop_params(self, local_model_cost_map, params):
+        assert OpenAIResponsesAPIConfig().map_openai_params(dict(params), "gpt-6.1-sol", True) == params
+
+    def test_providers_outside_openai_and_azure_keep_these_values_as_sent(self, local_model_cost_map):
+        params: Final = {"tool_choice": "required", "parallel_tool_calls": "true", "previous_response_id": 12}
+
+        assert HostedVLLMResponsesAPIConfig().map_openai_params(dict(params), "my-vllm-model", True) == params
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [("mode", "turbo"), ("context", "forever"), ("summary", "sometimes"), ("generate_summary", "auto")],
+    )
+    def test_a_reasoning_value_the_model_row_does_not_declare_is_dropped_under_drop_params(
+        self, local_model_cost_map, monkeypatch, field, value
+    ):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        row: Final = litellm.model_cost["gpt-6.1-sol"]
+        declared: Final = {
+            "effort": "high",
+            "mode": row["reasoning_modes"][0],
+            "context": row["reasoning_contexts"][0],
+            "summary": "auto",
+        }
+        reasoning: Final = {**declared, field: value}
+
+        dropped: Final = OpenAIResponsesAPIConfig().map_openai_params({"reasoning": reasoning}, "gpt-6.1-sol", True)
+        sent: Final = OpenAIResponsesAPIConfig().map_openai_params({"reasoning": reasoning}, "gpt-6.1-sol", False)
+
+        assert dropped["reasoning"] == {key: kept for key, kept in declared.items() if key != field}
+        assert sent["reasoning"] == reasoning
+
+    @pytest.mark.parametrize(
+        ("config", "model"),
+        [(AzureOpenAIResponsesAPIConfig(), "gpt-6.1-sol"), (OpenAIResponsesAPIConfig(), "my-fine-tuned-model")],
+        ids=["azure", "outside-openai-catalog"],
+    )
+    def test_reasoning_fields_pass_through_where_the_openai_catalog_does_not_apply(
+        self, local_model_cost_map, config, model
+    ):
+        reasoning: Final = {"effort": "high", "mode": "turbo", "generate_summary": "auto"}
+
+        mapped: Final = config.map_openai_params({"reasoning": dict(reasoning)}, model, True)
+
+        assert mapped["reasoning"] == reasoning
 
 
 @pytest.mark.asyncio

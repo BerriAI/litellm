@@ -5,7 +5,7 @@ This module handles the transformation of requests to OpenAI's /v1/responses/inp
 """
 
 import copy
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from typing import Final, Literal, Protocol, TypeAlias
 
 from openai.types.responses.input_token_count_params import InputTokenCountParams
@@ -20,6 +20,7 @@ from litellm.llms.anthropic.messages.native.utils import normalize_native_messag
 from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.anthropic import AnthropicMessagesRequest, AnthropicOutputSchema
 from litellm.types.llms.openai import ResponsesAPIRequestParams, replayable_responses_input
@@ -400,8 +401,21 @@ def _restored(field: str, value: object, policy: DropPolicy) -> object:
             return value
 
 
-def native_count_request(request: Mapping[str, object], model: str, policy: DropPolicy) -> Mapping[str, object]:
+def native_count_request(
+    request: Mapping[str, object],
+    model: str,
+    policy: DropPolicy,
+    *,
+    declared_reasoning_efforts: Collection[str],
+) -> Mapping[str, object]:
     forwarded: Final = {
         field: _restored(field, value, policy) for field, value in request.items() if _forwards(field, policy)
     }
-    return {**forwarded, "model": model}
+    kept: Final = (
+        OpenAIResponsesAPIConfig().params_dropped_for_deployment(
+            forwarded, model, declared_reasoning_efforts=declared_reasoning_efforts
+        )
+        if policy.drop_params
+        else forwarded
+    )
+    return {**kept, "model": model}
