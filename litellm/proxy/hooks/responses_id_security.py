@@ -335,27 +335,35 @@ class ResponsesIDSecurity(CustomLogger):
 
         return advertise
 
+    def _id_the_client_holds(self, response_id: str, addressed_id: object) -> str | None:
+        if not isinstance(addressed_id, str) or not self._is_encrypted_response_id(addressed_id):
+            return None
+        original_response_id, _, _ = self._decrypt_response_id(addressed_id)
+        return addressed_id if original_response_id == response_id else None
+
+    def _advertised_response(
+        self,
+        response: ResponsesAPIResponse,
+        user_api_key_dict: "UserAPIKeyAuth",
+        request_data: Mapping[str, object],
+    ) -> BaseLiteLLMOpenAIResponseObject:
+        held_id: Final = self._id_the_client_holds(response.id, request_data.get(ADDRESSED_RESPONSE_ID_FIELD))
+        if held_id is None:
+            return self._encrypt_response_id(response, user_api_key_dict, request_cache=None)
+        return _rewrite_advertised_id(response, lambda _: held_id)
+
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: "UserAPIKeyAuth",
         response: LLMResponseTypes,
     ) -> LLMResponseTypes:
-        """
-        Queue response IDs for batch processing instead of writing directly to DB.
-
-        This method adds response IDs to an in-memory queue, which are then
-        batch-processed by the DBSpendUpdateWriter during regular database update cycles.
-        """
         general_settings: Final = self._general_settings_reader()
 
         if general_settings.get("disable_responses_id_security", False):
             return response
         if isinstance(response, ResponsesAPIResponse):
-            response = cast(
-                ResponsesAPIResponse,
-                self._encrypt_response_id(response, user_api_key_dict, request_cache=None),
-            )
+            response = cast(ResponsesAPIResponse, self._advertised_response(response, user_api_key_dict, data))
         return response
 
     async def async_post_call_streaming_iterator_hook(

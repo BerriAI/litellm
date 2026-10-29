@@ -1097,6 +1097,79 @@ class TestClientSuppliedRetainedIdCannotBypassAuthorization:
         assert result["response_id"] != victim_provider_id
 
 
+def _admin():
+    from litellm.proxy._types import LitellmUserRoles
+
+    return _auth(user_id="admin-user", team_id="admin-team", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+
+def _provider_answer(response_id):
+    return ResponsesAPIResponse(id=response_id, created_at=1234567890, output=[], status="completed")
+
+
+class TestReadsAnswerWithTheIdTheClientHolds:
+    """A follow-up looks its history up by the id the client holds, so a read must not hand out a new one."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("call_type", ["aget_responses", "acancel_responses"])
+    @pytest.mark.parametrize("caller", [_auth, _admin], ids=["owner", "proxy-admin"])
+    async def test_a_read_or_cancel_answers_with_the_exact_id_the_client_sent(
+        self, mock_cache, salt_key_env, call_type, caller
+    ):
+        hook = _hook()
+        issued_id = _issue_managed_id(hook, _auth())
+        data = await hook.async_pre_call_hook(
+            user_api_key_dict=caller(), cache=mock_cache, data={"response_id": issued_id}, call_type=call_type
+        )
+
+        result = await hook.async_post_call_success_hook(
+            data=data, user_api_key_dict=caller(), response=_provider_answer(data["response_id"])
+        )
+
+        assert result.id == issued_id
+
+    @pytest.mark.asyncio
+    async def test_a_follow_up_gets_an_id_for_its_own_response_never_the_previous_one(self, mock_cache, salt_key_env):
+        hook = _hook()
+        owner = _auth()
+        previous_id = _issue_managed_id(hook, owner)
+        data = await hook.async_pre_call_hook(
+            user_api_key_dict=owner,
+            cache=mock_cache,
+            data={"model": "gpt-fake", "previous_response_id": previous_id},
+            call_type="aresponses",
+        )
+
+        result = await hook.async_post_call_success_hook(
+            data=data, user_api_key_dict=owner, response=_provider_answer("resp_followupprovideridzzzzzzzzzzzzzzz")
+        )
+
+        assert result.id != previous_id
+        assert hook._decrypt_response_id(result.id) == (
+            "resp_followupprovideridzzzzzzzzzzzzzzz",
+            "owner-user",
+            "owner-team",
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_admin_read_by_a_raw_provider_id_gets_a_managed_id_back(self, mock_cache, salt_key_env):
+        hook = _hook()
+        admin = _admin()
+        data = await hook.async_pre_call_hook(
+            user_api_key_dict=admin,
+            cache=mock_cache,
+            data={"response_id": _FABRICATED_UNMANAGED_ID},
+            call_type="aget_responses",
+        )
+
+        result = await hook.async_post_call_success_hook(
+            data=data, user_api_key_dict=admin, response=_provider_answer(_FABRICATED_UNMANAGED_ID)
+        )
+
+        assert hook._is_encrypted_response_id(result.id)
+        assert hook._decrypt_response_id(result.id) == (_FABRICATED_UNMANAGED_ID, "admin-user", "admin-team")
+
+
 _LOGGED_MANAGED_ID = "resp_managedidlitellmbuiltbeforethehookran"
 
 

@@ -344,14 +344,29 @@ def _cost_row_request_id_suffix(
     return ""
 
 
+_RESPONSE_LIFECYCLE_ROW_LABELS: Final[Mapping[str, str]] = MappingProxyType(
+    {"aget_responses": "retrieve", "acancel_responses": "cancel"}
+)
+
+
+def _response_lifecycle_row_suffix(
+    call_type: str, metadata: Mapping[str, object], resolved_id: str, litellm_call_id: object
+) -> str:
+    label: Final = _RESPONSE_LIFECYCLE_ROW_LABELS.get(call_type)
+    if label is None or metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) or litellm_call_id == resolved_id:
+        return ""
+    return f"_{label}_{litellm_call_id}"
+
+
 def get_spend_logs_id(
     call_type: str, response_obj: dict, kwargs: Mapping[str, object], metadata: Mapping[str, object] = EMPTY_MAPPING
 ) -> str | None:
     standard_logging_payload = kwargs.get("standard_logging_object")
+    litellm_call_id: Final = kwargs.get("litellm_call_id")
     candidate_ids: Final = (
         response_obj.get("id"),
         standard_logging_payload.get("id") if isinstance(standard_logging_payload, dict) else None,
-        kwargs.get("litellm_call_id"),
+        litellm_call_id,
     )
     resolved_id: Final = next(
         (candidate for candidate in candidate_ids if isinstance(candidate, str) and candidate), None
@@ -361,7 +376,10 @@ def get_spend_logs_id(
     settles_background_response: Final = (
         kwargs.get(SETTLES_BACKGROUND_RESPONSE_KWARG) is BackgroundResponseSettlement.SETTLES
     )
-    return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata, settles_background_response)}"
+    suffix: Final = _cost_row_request_id_suffix(
+        call_type, metadata, settles_background_response
+    ) or _response_lifecycle_row_suffix(call_type, metadata, resolved_id, litellm_call_id)
+    return f"{resolved_id}{suffix}"
 
 
 _MISSING_ATTRIBUTE: Final = object()
