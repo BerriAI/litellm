@@ -535,10 +535,12 @@ def _fold_choices_into_one(
     )
 
 
-def _with_replay_fields(choice: "Choices", output_items: Sequence[object], *, completed: bool) -> "Choices":
+def _with_replay_fields(
+    choice: "Choices", output_items: Sequence[object], *, completed: bool, structured_output: bool
+) -> "Choices":
     fields: Final = {
         **(choice.message.provider_specific_fields or {}),
-        **replay_fields(output_items, choice.message, completed=completed),
+        **replay_fields(output_items, choice.message, completed=completed, first_message_only=structured_output),
     }
     message: Final = choice.message.model_copy(update={"provider_specific_fields": fields or None})
     return choice.model_copy(update={"message": message})
@@ -565,7 +567,10 @@ def completed_stream_history(
         "reasoning_items": list(_reasoning_items_from_output_items(items)),
         "provider_specific_fields": tool_search_fields,
     }
-    fields: Final = {**(tool_search_fields or {}), **replay_fields(items, streamed_message, completed=completed)}
+    fields: Final = {
+        **(tool_search_fields or {}),
+        **replay_fields(items, streamed_message, completed=completed, first_message_only=structured_output),
+    }
     return fields or None
 
 
@@ -1385,7 +1390,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             tool_search_items=tool_search_items,
             structured_output=structured_output,
         )
-        return [_with_replay_fields(folded, output_items, completed=completed) if replay_openai_history else folded]
+        if not replay_openai_history:
+            return [folded]
+        return [_with_replay_fields(folded, output_items, completed=completed, structured_output=structured_output)]
 
     @staticmethod
     def _build_empty_choice(

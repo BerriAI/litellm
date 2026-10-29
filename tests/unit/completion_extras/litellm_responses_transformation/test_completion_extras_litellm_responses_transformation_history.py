@@ -190,10 +190,14 @@ def _assistant_turn(
     model: str = f"openai/responses/{MODEL}",
     terminal_event: str | None = "response.completed",
     status: str = "completed",
+    response_format: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
+    reply: Final = httpx.Response(
+        200, content=json.dumps(_response(output, status)), headers={"content-type": "application/json"}
+    )
     with respx.mock(assert_all_called=True) as router:
         router.post(url__startswith=OPENAI_RESPONSES_URL if model.startswith("openai/") else AZURE_API_BASE).mock(
-            return_value=_sse(output, terminal_event) if stream else httpx.Response(200, json=_response(output, status))
+            return_value=_sse(output, terminal_event) if stream else reply
         )
         response: Final = litellm.completion(
             model=model,
@@ -203,6 +207,7 @@ def _assistant_turn(
             api_base=None if model.startswith("openai/") else AZURE_API_BASE,
             api_version=None if model.startswith("openai/") else "2025-04-01-preview",
             stream=stream,
+            response_format=response_format,
         )
         message: Final = (
             (litellm.stream_chunk_builder(list(response), messages=[USER]) if stream else response).choices[0].message
@@ -339,6 +344,27 @@ def test_an_unphased_answer_after_commentary_is_never_labeled_commentary(stream:
     assert "phase" not in _replayed_fields(assistant)
     assert _types(sent[1:-1]) == ["message", "function_call"]
     assert "phase" not in sent[1]
+
+
+def _with_text(item: Mapping[str, object], text: str) -> Mapping[str, object]:
+    return {**item, "content": [{"type": "output_text", "text": text, "annotations": []}]}
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+def test_a_structured_output_turn_carries_the_phase_of_the_message_it_returns(stream: bool) -> None:
+    output: Final = (_with_text(COMMENTARY, '{"city":"Paris"}'), _with_text(FINAL_ANSWER, '{"city":"Lyon"}'))
+
+    assistant: Final = _assistant_turn(output, stream=stream, response_format={"type": "json_object"})
+
+    assert assistant["content"] == '{"city":"Paris"}'
+    assert _replayed_fields(assistant)["phase"] == "commentary"
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+def test_a_lone_surrogate_in_the_reply_still_gets_a_record(stream: bool) -> None:
+    assistant: Final = _assistant_turn((_with_text(COMMENTARY, "Checking \ud83d"), WEATHER_CALL), stream=stream)
+
+    assert "openai_responses_replay" in _replayed_fields(assistant)
 
 
 def test_a_phase_openai_does_not_define_is_dropped_under_drop_params() -> None:

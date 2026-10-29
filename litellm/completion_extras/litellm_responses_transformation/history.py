@@ -222,7 +222,7 @@ def _checksum(message: _ChatMessage, entries: Sequence[_MessageEntry | _IndexedE
         "items": [entry.model_dump(mode="json", exclude_none=True) for entry in entries],
     }
     encoded: Final = json.dumps(bound, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return hashlib.sha256(encoded.encode()).hexdigest()
+    return hashlib.sha256(encoded.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def _kind(item: _OutputItem) -> str:
@@ -263,9 +263,11 @@ def _matches(items: Sequence[_OutputItem], message: _ChatMessage) -> bool:
     )
 
 
-def _last_phase(items: Sequence[_OutputItem | None]) -> Phase | None:
+def _content_phase(items: Sequence[_OutputItem | None], *, first_message_only: bool) -> Phase | None:
     messages: Final = tuple(item for item in items if isinstance(item, _OutputMessage))
-    return messages[-1].phase if messages else None
+    if not messages:
+        return None
+    return messages[0].phase if first_message_only else messages[-1].phase
 
 
 def _with_phase(message: _ChatMessage, phase: Phase | None) -> _ChatMessage:
@@ -275,9 +277,11 @@ def _with_phase(message: _ChatMessage, phase: Phase | None) -> _ChatMessage:
     return message.model_copy(update={"provider_specific_fields": fields})
 
 
-def replay_fields(output_items: Sequence[object], message: object, *, completed: bool) -> Mapping[str, object]:
+def replay_fields(
+    output_items: Sequence[object], message: object, *, completed: bool, first_message_only: bool
+) -> Mapping[str, object]:
     parsed: Final = tuple(map(_parsed_output_item, output_items))
-    phase: Final = _last_phase(parsed)
+    phase: Final = _content_phase(parsed, first_message_only=first_message_only)
     phase_fields: Final[Mapping[str, object]] = MappingProxyType({PHASE_FIELD: phase} if phase else {})
     items: Final = tuple(item for item in parsed if item is not None)
     parsed_message: Final = _chat_message(message)
