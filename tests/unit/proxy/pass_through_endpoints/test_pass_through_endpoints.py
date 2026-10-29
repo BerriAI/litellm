@@ -12,6 +12,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
+from pathlib import Path
 from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import Final, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -8053,6 +8054,35 @@ async def test_vertex_live_full_path_whose_every_name_is_taken_by_another_model_
 
     assert upstream_ws.send.await_count == (1 if reaches_vertex else 0)
     assert (_policy_close_reason(websocket) is None) is reaches_vertex
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_setup_frame_never_refreshes_the_token_of_a_chatgpt_group_on_the_same_proxy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    (tmp_path / "auth.json").write_text(
+        json.dumps({"access_token": "expired", "refresh_token": "refresh", "expires_at": 0})
+    )
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+    llm_router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "codex", "litellm_params": {"model": "chatgpt/gpt-5.4"}},
+            {"model_name": "native-audio", "litellm_params": {"model": f"vertex_ai/{VERTEX_LIVE_GROUP}"}},
+        ]
+    )
+
+    with respx.mock(assert_all_called=False) as transport:
+        outbound: Final = transport.route().respond(500)
+        websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+            [_setup_frame("native-audio")],
+            UserAPIKeyAuth(token="hashed", models=["native-audio"]),
+            llm_router=llm_router,
+        )
+
+    assert not outbound.called
+    upstream_ws.send.assert_awaited_once()
+    assert _policy_close_reason(websocket) is None
 
 
 @pytest.mark.asyncio

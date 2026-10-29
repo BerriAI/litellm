@@ -50,6 +50,7 @@ from litellm.constants import (
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming, is_guardrail_intervention
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, merge_anthropic_beta_headers
 from litellm.llms.azure.passthrough.transformation import (
     foreign_azure_deployment,
@@ -3927,7 +3928,7 @@ def _vertex_upstream_model(deployment: DeploymentTypedDict) -> str | None:
         return None
     upstream: Final = litellm_params["model"]
     try:
-        _, provider, _, _ = litellm.get_llm_provider(
+        _, provider = resolve_model_and_provider_for_metadata(
             model=upstream, custom_llm_provider=litellm_params.get("custom_llm_provider")
         )
     except litellm.exceptions.BadRequestError:
