@@ -786,8 +786,8 @@ def get_or_create_request_stash() -> RequestRateLimiterStash:
     return stash
 
 
-def hold_request_slot_for_tool_loop() -> RequestRateLimiterStash | None:
-    stash: Final = get_request_stash()
+def hold_request_slot_for_tool_loop(litellm_call_id: str | None) -> RequestRateLimiterStash | None:
+    stash: Final = get_request_stash_for_call(litellm_call_id)
     if stash is None or stash.parallel_slot is None:
         return None
     stash.parallel_slot_held_by_tool_loop = True
@@ -795,8 +795,8 @@ def hold_request_slot_for_tool_loop() -> RequestRateLimiterStash | None:
 
 
 @contextmanager
-def request_slot_held_by_tool_loop() -> Generator[None, None, None]:
-    held_stash: Final = hold_request_slot_for_tool_loop()
+def request_slot_held_by_tool_loop(litellm_call_id: str | None) -> Generator[None, None, None]:
+    held_stash: Final = hold_request_slot_for_tool_loop(litellm_call_id)
     try:
         yield
     finally:

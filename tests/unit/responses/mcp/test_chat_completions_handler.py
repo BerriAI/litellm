@@ -1732,8 +1732,13 @@ async def _hang_up_after_the_first_follow_up_chunk(stream: CustomStreamWrapper) 
     [(_read_the_whole_stream, "Sunny."), (_hang_up_after_the_first_follow_up_chunk, "Sunny")],
     ids=["stream_ends", "client_hangs_up"],
 )
+@pytest.mark.parametrize(
+    ("stream_call_id", "status_after_stream"),
+    [("chat-owner", 200), ("silent-shadow", 429)],
+    ids=["requests_own_stream", "silent_model_shadow_stream"],
+)
 async def test_streamed_mcp_auto_exec_keeps_the_requests_parallel_slot_until_the_stream_ends_or_closes(
-    monkeypatch, end_stream, expected_text
+    monkeypatch, end_stream, expected_text, stream_call_id: str, status_after_stream: int
 ):
     import contextvars
     from unittest.mock import MagicMock
@@ -1795,7 +1800,7 @@ async def test_streamed_mcp_auto_exec_keeps_the_requests_parallel_slot_until_the
 
     async def run_tool_after_the_first_round_logs(**_):
         await limiter.async_log_success_event(
-            kwargs={"litellm_call_id": "chat-owner", "stream": True},
+            kwargs={"litellm_call_id": stream_call_id, "stream": True},
             response_obj=None,
             start_time=None,
             end_time=datetime.now(),
@@ -1837,10 +1842,16 @@ async def test_streamed_mcp_auto_exec_keeps_the_requests_parallel_slot_until_the
     await admit({"model": "gpt-x", "messages": [{"role": "user", "content": "hi"}], "litellm_call_id": "chat-owner"})
     with patch("litellm.acompletion", acompletion):
         stream = await acompletion_with_mcp(
-            model="gpt-x", messages=[{"role": "user", "content": "hi"}], tools=tools, stream=True
+            model="gpt-x",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=tools,
+            stream=True,
+            litellm_call_id=stream_call_id,
         )
         streamed_text: Final = await end_stream(stream)
 
-        assert await second_request_status() == 200, "The request's slot must be freed once its stream ends or closes"
+        assert (
+            await second_request_status() == status_after_stream
+        ), "Only the request's own stream may free its slot, once that stream ends or closes"
 
     assert streamed_text == expected_text

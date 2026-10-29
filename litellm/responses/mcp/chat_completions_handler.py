@@ -259,7 +259,7 @@ async def acompletion_with_mcp(
                 self.follow_up_stream = None
                 self.follow_up_iterator = None
                 self.follow_up_exhausted = False
-                self.holds_request_slot = hold_request_slot_for_tool_loop() is not None
+                self.holds_request_slot = hold_request_slot_for_tool_loop(context.litellm_call_id) is not None
 
             def __aiter__(self):
                 return self

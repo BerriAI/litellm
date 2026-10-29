@@ -146,7 +146,7 @@ async def anthropic_messages_with_mcp(
         else base_call_args
     )
     working_messages: Sequence[Mapping[str, object]] = tuple(messages)
-    with request_slot_held_by_tool_loop():
+    with request_slot_held_by_tool_loop(context.litellm_call_id):
         response: AnthropicMessagesResponse = await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
             messages=list(working_messages), stream=False, **loop_call_args
         )

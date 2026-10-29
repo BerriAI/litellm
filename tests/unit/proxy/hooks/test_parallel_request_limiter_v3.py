@@ -4363,7 +4363,9 @@ async def test_round_logged_while_a_tool_loop_holds_the_slot_keeps_it_until_the_
     await pre_call(
         {"model": "claude-x", "messages": [{"role": "user", "content": "hi"}], "litellm_call_id": owner_call_id}
     )
-    with request_slot_held_by_tool_loop():
+    with request_slot_held_by_tool_loop(owner_call_id):
+        with request_slot_held_by_tool_loop(f"{owner_call_id}-silent-shadow"):
+            pass
         await handler.async_post_call_failure_hook(
             request_data={"call_type": CallTypes.call_mcp_tool.value, "litellm_call_id": f"{owner_call_id}_toolu_1"},
             original_exception=KeyError("lookup_order"),
