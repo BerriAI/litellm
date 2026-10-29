@@ -3212,7 +3212,11 @@ async def vertex_proxy_route(
 _OPENAI_WS_TOKEN_EXCHANGE_FAILED_REASON: Final = "OpenAI workload identity token exchange failed"
 
 
-async def _openai_passthrough_credential(base_target_url: str) -> str | None:
+def openai_passthrough_base_url() -> str:
+    return os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
+
+
+async def openai_passthrough_credential(base_target_url: str) -> str | None:
     static_api_key: Final = normalize_nonempty_secret_str(
         passthrough_endpoint_router.get_credentials(
             custom_llm_provider=litellm.LlmProviders.OPENAI.value,
@@ -3258,8 +3262,8 @@ async def openai_proxy_route(
 
     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
     """
-    base_target_url: Final = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
-    openai_api_key: Final = await _openai_passthrough_credential(base_target_url)
+    base_target_url: Final = openai_passthrough_base_url()
+    openai_api_key: Final = await openai_passthrough_credential(base_target_url)
     if openai_api_key is None:
         raise Exception("Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.")
 
@@ -3426,9 +3430,9 @@ async def openai_websocket_proxy_route(
         await websocket.close(code=1008, reason=refusal.close_reason)
         return
 
-    base_target_url: Final = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
+    base_target_url: Final = openai_passthrough_base_url()
     try:
-        openai_api_key: Final = await _openai_passthrough_credential(base_target_url)
+        openai_api_key: Final = await openai_passthrough_credential(base_target_url)
     except (openai.OpenAIError, httpx.HTTPError, LiteLLMOpenAIError):
         verbose_proxy_logger.exception("OpenAI workload identity token exchange failed for websocket passthrough")
         await websocket.close(code=1011, reason=_OPENAI_WS_TOKEN_EXCHANGE_FAILED_REASON)

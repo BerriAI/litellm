@@ -1,10 +1,12 @@
 import json
+from collections.abc import Mapping
 from datetime import datetime
 from types import MappingProxyType
 from typing import Any, Final
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.constants import AZURE_SPEECH_CUSTOM_LLM_PROVIDER
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -36,6 +38,14 @@ from .llm_provider_handlers.fal_ai_passthrough_logging_handler import (
 from .llm_provider_handlers.gemini_passthrough_logging_handler import (
     GeminiPassthroughLoggingHandler,
 )
+from .llm_provider_handlers.openai_agents_turn_billing import (
+    AgentsTurnStart,
+    DeferredAgentsRow,
+    OpenAIAgentsTurnBiller,
+    agents_turn_start_from_response,
+    openai_agents_sessions_call,
+    openai_agents_turn_biller,
+)
 from .llm_provider_handlers.tinyfish_passthrough_logging_handler import (
     TinyFishPassthroughLoggingHandler,
     is_tinyfish_agent_url,
@@ -51,6 +61,7 @@ from .llm_provider_handlers.vertex_passthrough_logging_handler import (
 from .upstream_usage_headers import has_upstream_reported_usage
 
 cohere_passthrough_logging_handler: Final = CoherePassthroughLoggingHandler()
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 
 
 def _safe_response_text(httpx_response: httpx.Response) -> str:
@@ -70,11 +81,15 @@ class PassThroughEndpointLogging:
         self,
         transcribe_handler: TranscribePassthroughLoggingHandler | None = None,
         log_dispatch: PassThroughLogDispatch | None = None,
+        agents_turn_biller: OpenAIAgentsTurnBiller | None = None,
     ):
         self.transcribe_passthrough_logging_handler: Final = (
             transcribe_handler if transcribe_handler is not None else TranscribePassthroughLoggingHandler()
         )
         self._injected_log_dispatch: Final = log_dispatch
+        self._agents_turn_biller: Final = (
+            agents_turn_biller if agents_turn_biller is not None else openai_agents_turn_biller
+        )
         self.TRACKED_VERTEX_METHOD_ROUTES = (
             "generateContent",
             "streamGenerateContent",
@@ -119,6 +134,31 @@ class PassThroughEndpointLogging:
     @property
     def _log_dispatch(self) -> PassThroughLogDispatch:
         return self._injected_log_dispatch if self._injected_log_dispatch is not None else self.handle_logging
+
+    def defer_agents_turn_logging(
+        self,
+        turn_start: AgentsTurnStart,
+        logging_obj: LiteLLMLoggingObj,
+        standard_logging_response_object: PassThroughEndpointLoggingResultValues,
+        result: str,
+        start_time: datetime,
+        end_time: datetime,
+        cache_hit: bool,
+        kwargs: Mapping[str, object],
+    ) -> None:
+        _ = self._agents_turn_biller.schedule(
+            turn_start,
+            DeferredAgentsRow(
+                logging_obj=logging_obj,
+                response_object=standard_logging_response_object,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                kwargs=kwargs,
+                log=self._log_dispatch,
+            ),
+        )
 
     async def handle_logging(
         self,
@@ -512,6 +552,31 @@ class PassThroughEndpointLogging:
             kwargs=kwargs,
         )
 
+        agents_call: Final = openai_agents_sessions_call(url_route, custom_llm_provider)
+        agents_turn_start: Final = (
+            None
+            if agents_call is None
+            else agents_turn_start_from_response(
+                call=agents_call,
+                httpx_response=httpx_response,
+                request_body=_JSON_OBJECT.validate_python(request_body),
+                response_body=_JSON_OBJECT.validate_python(response_body) if isinstance(response_body, dict) else None,
+                start_time=start_time,
+            )
+        )
+        if agents_turn_start is not None:
+            self.defer_agents_turn_logging(
+                turn_start=agents_turn_start,
+                logging_obj=logging_obj,
+                standard_logging_response_object=standard_logging_response_object,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                kwargs={**kwargs, "standard_pass_through_logging_payload": passthrough_logging_payload},
+            )
+            return
+
         await self._log_dispatch(
             logging_obj=logging_obj,
             standard_logging_response_object=standard_logging_response_object,
@@ -647,8 +712,8 @@ class PassThroughEndpointLogging:
         self,
         logging_obj: LiteLLMLoggingObj,
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
-        kwargs: dict,
-    ):
+        kwargs: Mapping[str, object],
+    ) -> Mapping[str, object]:
         """
         Helper function to set the cost per request in the logging object
 
@@ -668,8 +733,8 @@ class PassThroughEndpointLogging:
         if has_upstream_reported_usage(logging_obj):
             return kwargs
 
-        if passthrough_logging_payload.get("cost_per_request") is not None:
-            kwargs["response_cost"] = passthrough_logging_payload.get("cost_per_request")
-            logging_obj.model_call_details["response_cost"] = passthrough_logging_payload.get("cost_per_request")
-
-        return kwargs
+        cost_per_request: Final = passthrough_logging_payload.get("cost_per_request")
+        if cost_per_request is None:
+            return kwargs
+        logging_obj.model_call_details["response_cost"] = cost_per_request
+        return {**kwargs, "response_cost": cost_per_request}

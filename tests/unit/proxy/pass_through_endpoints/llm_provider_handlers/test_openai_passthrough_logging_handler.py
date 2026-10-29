@@ -2413,7 +2413,7 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
             await self._logged_call(
                 "POST",
                 "",
-                {"environment": {"type": "none"}, "input": "Say hi in one word", **request_agent},
+                {"environment": {"type": "none"}, **request_agent},
                 _agent_session(response_agent_model),
                 "2f7c9e1a-4b3d-4a6e-8c5f-1d0e9b7a3c62",
                 AGENTS_SESSIONS_URL,
