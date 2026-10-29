@@ -20,9 +20,10 @@ use crate::base_llm::ocr::{
     handler::{CallHooks, OcrClient, read_json_response},
     settings::OcrSettings,
     transformation::{
-        BaseOcrConfig, DecodedOcrResponse, OCR_INLINE_MAX_BYTES, OCR_POLL_RETRY_SECS,
-        OcrConnection, OcrCredentialInputs, OcrResponseContext, PreparedOcrRequest,
-        ResolvedOcrCredentials, decode_and_normalize_response, decode_response, response_format,
+        BaseOcrConfig, DROP_PARAMS_PARAM, DecodedOcrResponse, OCR_INLINE_MAX_BYTES,
+        OCR_POLL_RETRY_SECS, OcrConnection, OcrCredentialInputs, OcrResponseContext,
+        PreparedOcrRequest, ResolvedOcrCredentials, decode_and_normalize_response, decode_response,
+        drops_unsupported_params, response_format,
     },
 };
 use litellm_llms_types::formats::ocr::{
@@ -36,6 +37,7 @@ const AZURE_DI_DEFAULT_HEIGHT: f64 = 11.0;
 const AZURE_DI_API_KEY_ENV: &str = "AZURE_DOCUMENT_INTELLIGENCE_API_KEY";
 const AZURE_DI_ENDPOINT_ENV: &str = "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT";
 const OUTPUT_CONTENT_FORMAT_PARAM: &str = "outputContentFormat";
+const OUTPUT_CONTENT_FORMAT_ALIAS: &str = "output_content_format";
 const CODE_POINT_STRING_INDEX: &str = "unicodeCodePoint";
 const STRING_INDEX_TYPE_FIELD: &str = "stringIndexType";
 const MARKDOWN_MODEL_ID: &str = "prebuilt-layout";
@@ -172,7 +174,9 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
             "pages",
             "features",
             OUTPUT_CONTENT_FORMAT_PARAM,
+            OUTPUT_CONTENT_FORMAT_ALIAS,
             "req_format",
+            DROP_PARAMS_PARAM,
         ]
     }
 
@@ -213,8 +217,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         non_default_params: &CallArguments,
         model: &str,
     ) -> Result<DocumentIntelligenceParams, Error> {
-        let output_content_format =
-            parse_output_content_format(non_default_params.get(OUTPUT_CONTENT_FORMAT_PARAM))?;
+        let output_content_format = requested_output_content_format(non_default_params)?;
         let slices_markdown_pages = output_content_format == Some(OutputContentFormat::Markdown)
             && response_format(non_default_params)? != OcrResponseFormat::Native
             && model_id(model).is_ok_and(|id| id == MARKDOWN_MODEL_ID);
@@ -401,15 +404,30 @@ fn normalize_features_param(features: Option<&Value>) -> Result<Option<String>, 
     Ok(Some(normalized.join(",")))
 }
 
+fn requested_output_content_format(
+    params: &CallArguments,
+) -> Result<Option<OutputContentFormat>, Error> {
+    let requested = params
+        .get(OUTPUT_CONTENT_FORMAT_PARAM)
+        .or_else(|| params.get(OUTPUT_CONTENT_FORMAT_ALIAS));
+    match parse_output_content_format(requested) {
+        Err(Error::OutputContentFormat) if drops_unsupported_params(params) => Ok(None),
+        parsed => parsed,
+    }
+}
+
 fn parse_output_content_format(
     format: Option<&Value>,
 ) -> Result<Option<OutputContentFormat>, Error> {
     match format {
         None | Some(Value::Null) => Ok(None),
-        Some(Value::String(format)) => format
-            .parse()
-            .map(Some)
-            .map_err(|_| Error::OutputContentFormat),
+        Some(Value::String(format)) => match format.trim() {
+            "" => Ok(None),
+            format => format
+                .parse()
+                .map(Some)
+                .map_err(|_| Error::OutputContentFormat),
+        },
         Some(_) => Err(Error::OutputContentFormat),
     }
 }
@@ -1013,6 +1031,23 @@ mod tests {
     )]
     #[case::text(json!({"outputContentFormat": "text"}), Some(OutputContentFormat::Text), None)]
     #[case::upper_case_text(json!({"outputContentFormat": "TEXT"}), Some(OutputContentFormat::Text), None)]
+    #[case::padded_markdown(
+        json!({"outputContentFormat": " markdown\n"}),
+        Some(OutputContentFormat::Markdown),
+        Some("unicodeCodePoint")
+    )]
+    #[case::snake_case_markdown(
+        json!({"output_content_format": "markdown"}),
+        Some(OutputContentFormat::Markdown),
+        Some("unicodeCodePoint")
+    )]
+    #[case::camel_case_wins_over_snake_case(
+        json!({"outputContentFormat": "text", "output_content_format": "markdown"}),
+        Some(OutputContentFormat::Text),
+        None
+    )]
+    #[case::empty(json!({"outputContentFormat": ""}), None, None)]
+    #[case::blank(json!({"outputContentFormat": "  "}), None, None)]
     #[case::null(json!({"outputContentFormat": null}), None, None)]
     #[case::omitted(json!({}), None, None)]
     fn output_content_format_maps_to_query_fields(
@@ -1046,16 +1081,39 @@ mod tests {
     }
 
     #[rstest]
-    #[case::unknown(json!("html"))]
-    #[case::empty(json!(""))]
-    #[case::number(json!(1))]
-    #[case::boolean(json!(true))]
-    #[case::list(json!(["markdown"]))]
-    fn invalid_output_content_format_is_a_request_error(#[case] format: Value) {
-        let error = map(json!({"outputContentFormat": format})).unwrap_err();
+    #[case::unknown(json!({"outputContentFormat": "html"}))]
+    #[case::number(json!({"outputContentFormat": 1}))]
+    #[case::boolean(json!({"outputContentFormat": true}))]
+    #[case::list(json!({"outputContentFormat": ["markdown"]}))]
+    #[case::snake_case_unknown(json!({"output_content_format": "html"}))]
+    #[case::drop_params_off(json!({"outputContentFormat": "html", "drop_params": false}))]
+    fn invalid_output_content_format_is_a_request_error(#[case] options: Value) {
+        let error = map(options).unwrap_err();
 
         assert!(matches!(error, Error::OutputContentFormat), "{error:?}");
         assert_eq!(error.http_status_code(), Some(400));
+    }
+
+    #[rstest]
+    #[case::unknown(json!({"outputContentFormat": "html", "drop_params": true, "pages": [0]}))]
+    #[case::number(json!({"outputContentFormat": 1, "drop_params": true, "pages": [0]}))]
+    #[case::snake_case_unknown(
+        json!({"output_content_format": "html", "drop_params": true, "pages": [0]})
+    )]
+    fn drop_params_drops_an_invalid_output_content_format(#[case] options: Value) {
+        let mapped = map(options).unwrap();
+
+        assert_eq!(serde_json::to_value(mapped).unwrap(), json!({"pages": "1"}));
+    }
+
+    #[test]
+    fn drop_params_keeps_a_valid_output_content_format() {
+        let mapped = map(json!({"outputContentFormat": "markdown", "drop_params": true})).unwrap();
+
+        assert_eq!(
+            mapped.output_content_format,
+            Some(OutputContentFormat::Markdown)
+        );
     }
 
     fn markdown_pages(analyze_result: Value) -> Vec<String> {

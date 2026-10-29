@@ -59,7 +59,9 @@ pub enum Error {
     Pages(PagesFault),
     #[error("invalid OCR features")]
     Features,
-    #[error("invalid OCR outputContentFormat, expected text or markdown")]
+    #[error(
+        "invalid OCR outputContentFormat, expected text or markdown. To drop unsupported params, set `litellm.drop_params = True`."
+    )]
     OutputContentFormat,
     #[error("OCR model cannot be a dot segment")]
     DotModel,

@@ -228,6 +228,37 @@ async fn only_layout_markdown_in_litellm_format_asks_for_code_point_offsets(
     assert_eq!(response.extra_fields.get("stringIndexType"), None);
 }
 
+#[rstest]
+#[case::snake_case(json!({"output_content_format": "markdown"}), Some("markdown"))]
+#[case::padded(json!({"outputContentFormat": " markdown "}), Some("markdown"))]
+#[case::empty(json!({"outputContentFormat": ""}), None)]
+#[case::dropped(json!({"outputContentFormat": "html", "drop_params": true}), None)]
+#[tokio::test]
+async fn the_requested_output_content_format_reaches_azure_in_its_query_spelling(
+    #[case] options: Value,
+    #[case] output_content_format: Option<&str>,
+) {
+    let upstream = upstream([json_response(json!({
+        "status": "succeeded",
+        "analyzeResult": {"pages": [{"pageNumber": 1, "lines": [{"content": "hello"}]}]}
+    }))])
+    .await;
+
+    let response = perform(ocr_request(MODEL, &upstream.uri(), options))
+        .await
+        .unwrap();
+
+    let sent = only_request(&upstream).await;
+    assert_eq!(
+        sent.query("outputContentFormat").as_deref(),
+        output_content_format
+    );
+    assert_eq!(sent.query("output_content_format"), None);
+    assert_eq!(sent.query("drop_params"), None);
+    assert_eq!(sent.json(), json!({"base64Source": "YWJj"}));
+    assert_eq!(response.pages[0].markdown, "hello");
+}
+
 #[tokio::test]
 async fn native_format_normalizes_pages_and_keeps_the_provider_response() {
     let operation = json!({
