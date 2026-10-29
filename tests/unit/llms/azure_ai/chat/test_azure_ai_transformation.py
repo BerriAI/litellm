@@ -885,7 +885,7 @@ def test_azure_ai_keeps_prompt_cache_breakpoint_for_a_model_that_supports_it(_lo
     counts on a content part, so a system message carrying one must reach the request body as
     the content-part list it arrived in while the Anthropic-only fields are still stripped.
     """
-    request = AzureAIStudioConfig().transform_request(
+    request: Final = AzureAIStudioConfig().transform_request(
         model="gpt-6-astra",
         messages=[
             {
@@ -914,7 +914,7 @@ def test_azure_ai_keeps_prompt_cache_breakpoint_for_a_model_that_supports_it(_lo
 
 
 def test_azure_ai_still_flattens_list_content_for_a_model_without_the_breakpoint_flag(_local_model_cost_map):
-    request = AzureAIStudioConfig().transform_request(
+    request: Final = AzureAIStudioConfig().transform_request(
         model="gpt-4o",
         messages=[
             {
@@ -942,7 +942,7 @@ def test_azure_ai_drops_thinking_parts_from_history_while_keeping_the_breakpoint
     list. Foundry rejects those parts, and the string conversion always dropped them, so a model
     that keeps content parts must still drop them while the text parts and the breakpoint stay.
     """
-    request = AzureAIStudioConfig().transform_request(
+    request: Final = AzureAIStudioConfig().transform_request(
         model="gpt-6-astra",
         messages=[
             {
@@ -978,7 +978,7 @@ def test_azure_ai_drops_thinking_parts_from_history_while_keeping_the_breakpoint
 
 
 def test_azure_ai_renames_a_cache_control_mark_to_a_breakpoint_for_a_model_that_reads_them(_local_model_cost_map):
-    request = AzureAIStudioConfig().transform_request(
+    request: Final = AzureAIStudioConfig().transform_request(
         model="gpt-6-astra",
         messages=[
             {
@@ -1039,7 +1039,7 @@ def test_azure_ai_keeps_parts_only_when_the_azure_ai_entry_reads_breakpoints(
     litellm.register_model(model_cost=registered, add_to_provider_model_sets=False)
     breakpoint_part: Final = {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}}
 
-    request = AzureAIStudioConfig().transform_request(
+    request: Final = AzureAIStudioConfig().transform_request(
         model="qa-foundry-alias",
         messages=[{"role": "system", "content": [breakpoint_part]}],
         optional_params={},

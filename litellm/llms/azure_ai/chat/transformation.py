@@ -289,8 +289,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             if audio_or_image_in_message_content(message):
                 continue
 
-            text_parts = _text_parts(message) if reads_breakpoints else ()
-            if text_parts:
+            if reads_breakpoints and (text_parts := _text_parts(message)):
                 message_dict["content"] = list(text_parts)
                 continue
 
