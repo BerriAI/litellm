@@ -81,11 +81,9 @@ def _vertex_batch_list_payload(response: _VertexBatchListJsonSource) -> dict[str
     return response.json()
 
 
-def _vertex_batch_create_error(error: httpx.HTTPStatusError) -> VertexAIError:
-    return VertexAIError(
-        status_code=error.response.status_code,
-        message=f"Vertex AI batch create failed: {error.response.text}",
-        headers=dict(error.response.headers),
+def _vertex_batch_create_error(error: httpx.HTTPStatusError) -> httpx.HTTPStatusError:
+    return httpx.HTTPStatusError(
+        f"Vertex AI batch create failed: {error.response.text}", request=error.request, response=error.response
     )
 
 

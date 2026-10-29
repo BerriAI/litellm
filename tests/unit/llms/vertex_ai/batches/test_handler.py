@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -370,11 +371,11 @@ def test_create_batch_sync_endpoint_without_deployed_model_raises_400():
     client.post.assert_not_called()
 
 
-def test_create_batch_sync_http_error_surfaces_vertex_status_and_body():
+def test_create_batch_sync_httpstatuserror_carries_vertex_status_body_and_headers():
     h = _make_handler()
     client = MagicMock()
     request = httpx.Request("POST", "https://x/batchPredictionJobs")
-    err_response = httpx.Response(
+    err_response: Final = httpx.Response(
         status_code=429, request=request, text="boom", headers={"retry-after": "30"}
     )
     client.post.side_effect = httpx.HTTPStatusError(
@@ -382,7 +383,7 @@ def test_create_batch_sync_http_error_surfaces_vertex_status_and_body():
     )
 
     with patch(f"{HMOD}.get_httpx_client", return_value=client):
-        with pytest.raises(VertexAIError, match="boom") as exc_info:
+        with pytest.raises(httpx.HTTPStatusError, match="Vertex AI batch create failed: boom") as exc_info:
             h.create_batch(
                 _is_async=False,
                 create_batch_data=CREATE_DATA,
@@ -393,8 +394,8 @@ def test_create_batch_sync_http_error_surfaces_vertex_status_and_body():
                 timeout=600.0,
                 max_retries=None,
             )
-    assert exc_info.value.status_code == 429
-    assert exc_info.value.headers["retry-after"] == "30"
+    assert exc_info.value.response.status_code == 429
+    assert exc_info.value.response.headers["retry-after"] == "30"
 
 
 def test_create_batch_input_file_id_without_model_raises_400_before_post():
@@ -802,11 +803,11 @@ def test_cancel_batch_sync_httpstatuserror_logged_and_reraised():
     client.get.assert_not_called()
 
 
-def test_create_batch_async_http_error_surfaces_vertex_status_and_body():
+def test_create_batch_async_httpstatuserror_carries_vertex_status_body_and_headers():
     h = _make_handler()
     async_client = MagicMock()
     request = httpx.Request("POST", "https://x/batchPredictionJobs")
-    err_response = httpx.Response(
+    err_response: Final = httpx.Response(
         status_code=429, request=request, text="boom", headers={"retry-after": "30"}
     )
     async_client.post = AsyncMock(
@@ -829,10 +830,10 @@ def test_create_batch_async_http_error_surfaces_vertex_status_and_body():
             timeout=600.0,
             max_retries=None,
         )
-        with pytest.raises(VertexAIError, match="boom") as exc_info:
+        with pytest.raises(httpx.HTTPStatusError, match="Vertex AI batch create failed: boom") as exc_info:
             _run(coro)
-    assert exc_info.value.status_code == 429
-    assert exc_info.value.headers["retry-after"] == "30"
+    assert exc_info.value.response.status_code == 429
+    assert exc_info.value.response.headers["retry-after"] == "30"
 
 
 def test_async_retrieve_batch_non_200_raises():
@@ -1049,7 +1050,7 @@ async def test_vertex_list_batches(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_vertex_async_create_batch_error_carries_vertex_error_body():
+async def test_vertex_async_create_batch_httpstatuserror_carries_vertex_error_body():
     from litellm.llms.vertex_ai.batches.handler import VertexAIBatchPrediction
 
     handler = VertexAIBatchPrediction(gcs_bucket_name="test-bucket")
@@ -1071,12 +1072,12 @@ async def test_vertex_async_create_batch_error_carries_vertex_error_body():
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         side_effect=http_error,
     ):
-        with pytest.raises(VertexAIError) as exc_info:
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
             await handler._async_create_batch(
                 vertex_batch_request={},
                 api_base="https://us-central1-aiplatform.googleapis.com/v1/projects/test/locations/us-central1/batchPredictionJobs",
                 headers={"Authorization": "Bearer fake-token"},
             )
 
-        assert exc_info.value.status_code == 400
-        assert "Do not support publisher model gemini-2.0-flash" in exc_info.value.message
+        assert exc_info.value.response.status_code == 400
+        assert "Do not support publisher model gemini-2.0-flash" in str(exc_info.value)

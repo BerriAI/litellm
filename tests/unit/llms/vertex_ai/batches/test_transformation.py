@@ -503,7 +503,7 @@ CLAUDE_INPUT_FILE = (
 
 
 def test_claude_batch_job_targets_the_anthropic_publisher_model():
-    job = T.transform_openai_batch_request_to_vertex_ai_batch_request(
+    job: Final = T.transform_openai_batch_request_to_vertex_ai_batch_request(
         {"input_file_id": CLAUDE_INPUT_FILE}, vertex_project="p", vertex_location="us-east5"
     )
     assert job["model"] == "publishers/anthropic/models/claude-sonnet-4-6"
@@ -529,7 +529,7 @@ def test_claude_output_row_is_costed_from_anthropic_usage_and_its_own_model():
             return 0.0, 0.0
         return usage.prompt_tokens * 0.001, usage.completion_tokens * 0.002
 
-    stats = native_vertex_batch_row_stats(
+    stats: Final = native_vertex_batch_row_stats(
         {
             "custom_id": "r1",
             "request": {"messages": [{"role": "user", "content": "hi"}], "anthropic_version": "vertex-2023-10-16"},

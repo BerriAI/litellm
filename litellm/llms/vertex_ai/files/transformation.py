@@ -741,6 +741,15 @@ _CLAUDE_BATCH_ROW_FIXED_PARAMS: Final = frozenset(
     ("model", "messages", "custom_llm_provider", "drop_params", "stream", "stream_options")
 )
 _CLAUDE_BATCH_OPENAI_PARAMS: Final = frozenset(DEFAULT_CHAT_COMPLETION_PARAM_VALUES) - {"metadata"}
+_CLAUDE_BATCH_DEPLOYMENT_PARAMS: Final = (
+    _CLAUDE_BATCH_OPENAI_PARAMS - _CLAUDE_BATCH_ROW_FIXED_PARAMS - {"extra_headers"}
+) | {"drop_params"}
+
+
+def _claude_batch_deployment_params(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {key: value for key, value in litellm_params.items() if key in _CLAUDE_BATCH_DEPLOYMENT_PARAMS}
+    )
 
 
 def _names_the_response_format_tool(tool: object) -> bool:
@@ -756,7 +765,7 @@ def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
     messages: list[AllMessageValues],
     request_params: Mapping[str, object],
     model: str,
-    deployment_drop_params: object,
+    deployment_params: Mapping[str, object],
 ) -> Mapping[str, object]:
     """
     Transforms an OpenAI chat batch entry into the Anthropic Messages row Vertex batches Claude with,
@@ -764,10 +773,11 @@ def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
     """
     config: Final = VertexAIAnthropicConfig()
     bare_model: Final = model.rsplit("/", 1)[-1]
-    drop_params: Final = drops_unsupported_params(request_params.get("drop_params", deployment_drop_params))
+    params: Final = {**deployment_params, **request_params}
+    drop_params: Final = drops_unsupported_params(params.get("drop_params"))
     chat_params: Final = {
-        **get_non_default_completion_params(request_params),
-        **{key: value for key, value in request_params.items() if key in _CLAUDE_BATCH_OPENAI_PARAMS},
+        **get_non_default_completion_params(params),
+        **{key: value for key, value in params.items() if key in _CLAUDE_BATCH_OPENAI_PARAMS},
     }
     if any(map(_names_the_response_format_tool, iter_items(chat_params.get("tools") or ()))):
         raise ValueError(
@@ -820,7 +830,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
     openai_entry: dict[str, Any],
     map_openai_to_vertex_params: Callable[[dict[str, object]], dict[str, object]],
     batch_model: str | None = None,
-    deployment_drop_params: object = None,
+    deployment_params: Mapping[str, object] = MappingProxyType({}),
 ) -> tuple[Mapping[str, object], ...]:
     """
     Transforms a single OpenAI JSONL batch entry into the Vertex rows it maps to.
@@ -861,7 +871,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
                     key: value for key, value in chat_request_body.items() if key not in ("model", "messages")
                 },
                 model=model,
-                deployment_drop_params=deployment_drop_params,
+                deployment_params=deployment_params,
             ),
         )
     vertex_request_body: Final = transform_request_body(
@@ -1018,12 +1028,12 @@ class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
         openai_file_content: FileTypes,
         map_openai_to_vertex_params: Callable[[dict[str, object]], dict[str, object]],
         batch_model: str | None = None,
-        deployment_drop_params: object = None,
+        deployment_params: Mapping[str, object] = MappingProxyType({}),
     ) -> None:
         self._openai_file_content = openai_file_content
         self._map_openai_to_vertex_params = map_openai_to_vertex_params
         self._batch_model = batch_model
-        self._deployment_drop_params = deployment_drop_params
+        self._deployment_params = deployment_params
 
     def _iter_vertex_jsonl_chunks(self) -> Iterator[bytes]:
         first = True
@@ -1033,7 +1043,7 @@ class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
                     entry,
                     self._map_openai_to_vertex_params,
                     batch_model=self._batch_model,
-                    deployment_drop_params=self._deployment_drop_params,
+                    deployment_params=self._deployment_params,
                 )
             except Exception as e:
                 raise VertexAIError(
@@ -1347,7 +1357,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                         file_data,
                         partial(self._map_openai_to_vertex_params, deployment_drop_params=deployment_drop_params),
                         batch_model=_deployment_batch_model(litellm_params),
-                        deployment_drop_params=deployment_drop_params,
+                        deployment_params=_claude_batch_deployment_params(litellm_params),
                     ),
                     content_type="application/json",
                 )

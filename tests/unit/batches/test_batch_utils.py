@@ -2312,7 +2312,7 @@ async def test_native_vertex_rows_route_to_vertex_cost_path_without_flag(monkeyp
 
 @pytest.mark.asyncio
 async def test_raw_vertex_claude_rows_are_priced_like_with_the_native_output_flag(monkeypatch):
-    claude_message = {
+    claude_message: Final = {
         "id": "msg_1",
         "type": "message",
         "role": "assistant",
@@ -2321,7 +2321,7 @@ async def test_raw_vertex_claude_rows_are_priced_like_with_the_native_output_fla
         "stop_reason": "end_turn",
         "usage": {"input_tokens": 12, "output_tokens": 5},
     }
-    rows = [
+    rows: Final = [
         {"custom_id": "ok", "processed_time": "2026-10-29T03:00:00Z", "response": claude_message, "status": ""},
         {"custom_id": "bad", "processed_time": "2026-10-29T03:00:00Z", "response": {}, "status": "Bad Request"},
     ]
@@ -2332,8 +2332,8 @@ async def test_raw_vertex_claude_rows_are_priced_like_with_the_native_output_fla
             file_content_dictionary=rows, custom_llm_provider="vertex_ai", model_name="vertex_ai/claude-sonnet-4-6"
         )
 
-    unflagged = await cost_with_flag(False)
-    flagged = await cost_with_flag(True)
+    unflagged: Final = await cost_with_flag(False)
+    flagged: Final = await cost_with_flag(True)
 
     assert unflagged.cost > 0
     assert (unflagged.successful_requests, unflagged.failed_requests) == (1, 1)
