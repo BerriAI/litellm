@@ -8575,6 +8575,36 @@ async def test_vertex_live_turns_served_before_a_refused_frame_are_still_billed(
     environment.proxy_logging.post_call_failure_hook.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_vertex_live_session_opened_with_a_binary_setup_frame_is_billed_at_its_setup_model():
+    """
+    A setup frame sent as binary is gated and relayed like a text one, so the session it opens must be priced at
+    the setup model too instead of logging as model unknown with no spend
+    """
+    upstream_ws = ScriptedUpstreamWebSocket(
+        (
+            json.dumps({"setupComplete": {}}),
+            json.dumps({"serverContent": {"turnComplete": True}, "usageMetadata": {"totalTokenCount": 60}}),
+        )
+    )
+
+    async def client_frames() -> AsyncIterator[dict[str, str | bytes]]:
+        yield {"type": "websocket.receive", "bytes": json.dumps({"setup": {"model": "gemini-live-2.5-flash"}}).encode()}
+        await upstream_ws.sent_every_frame.wait()
+        yield {"type": "websocket.disconnect"}
+
+    _, environment = await _run_vertex_live_gated_session(
+        _client_websocket(client_frames().__anext__),
+        upstream_ws,
+        UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"]),
+        _vertex_live_router(),
+    )
+
+    upstream_ws.send.assert_awaited_once()
+    environment.logging_worker.ensure_initialized_and_enqueue.assert_called_once()
+    assert environment.enqueued_handler.call_args.kwargs["logging_obj"].model == "gemini-live-2.5-flash"
+
+
 class StreamingUpstreamWebSocket(ScriptedUpstreamWebSocket):
     """An upstream that sends the given frames in order, then keeps streaming model output until it is closed"""
 

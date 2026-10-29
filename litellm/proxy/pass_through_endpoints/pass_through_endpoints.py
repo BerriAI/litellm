@@ -2430,6 +2430,16 @@ def _rewrite_vertex_live_setup_model(
     return rewritten_frame if isinstance(frame_data, str) else rewritten_frame.encode("utf-8")
 
 
+def _vertex_live_client_setup_model(
+    frame_data: str | bytes, setup_model_rewriter: Callable[[str], str] | None
+) -> str | None:
+    message: Final = _json_object_frame(frame_data)
+    setup: Final = None if message is None else message.get("setup")
+    if not isinstance(setup, dict) or "model" not in setup:
+        return None
+    return _extract_model_from_vertex_ai_setup(_resolved_vertex_live_setup(setup, setup_model_rewriter))
+
+
 def _resolved_vertex_live_setup(
     setup_data: Mapping[str, object], setup_model_rewriter: Callable[[str], str] | None
 ) -> Mapping[str, object]:
@@ -2721,6 +2731,20 @@ async def websocket_passthrough_request(
                 "WebSocket passthrough (%s): Upstream connection established successfully", endpoint
             )
 
+            is_vertex_live: Final = bool(endpoint and "/vertex_ai/live" in endpoint)
+
+            def record_client_setup_model(frame_data: str | bytes) -> None:
+                if not is_vertex_live:
+                    return
+                extracted_model: Final = _vertex_live_client_setup_model(frame_data, setup_model_rewriter)
+                if not extracted_model:
+                    return
+                kwargs["model"] = extracted_model
+                kwargs["custom_llm_provider"] = "vertex_ai-language-models"
+                logging_obj.model = extracted_model
+                logging_obj.model_call_details["model"] = extracted_model
+                logging_obj.model_call_details["custom_llm_provider"] = "vertex_ai"
+
             async def forward_client_to_upstream() -> ClientFrameRefusal | None:
                 """Forward messages from client to upstream WebSocket, returning any denial that ended it"""
                 try:
@@ -2745,62 +2769,7 @@ async def websocket_passthrough_request(
                                 )
                             ) is not None:
                                 return text_refusal
-                            # Try to extract model from client setup message for Vertex AI Live
-                            if endpoint and "/vertex_ai/live" in endpoint:
-                                verbose_proxy_logger.debug(
-                                    "WebSocket passthrough (%s): Processing client message for model extraction",
-                                    endpoint,
-                                )
-                                try:
-                                    client_message = _DECODED_JSON.validate_python(json.loads(text_data))
-                                    if isinstance(client_message, dict) and "setup" in client_message:
-                                        setup_data = client_message["setup"]
-                                        verbose_proxy_logger.debug(
-                                            "WebSocket passthrough (%s): Found setup data in client message: %s",
-                                            endpoint,
-                                            setup_data,
-                                        )
-                                        if isinstance(setup_data, dict) and "model" in setup_data:
-                                            extracted_model = _extract_model_from_vertex_ai_setup(
-                                                _resolved_vertex_live_setup(setup_data, setup_model_rewriter)
-                                            )
-                                            if extracted_model:
-                                                kwargs["model"] = extracted_model
-                                                kwargs["custom_llm_provider"] = "vertex_ai-language-models"
-                                                # Update logging object with correct model
-                                                logging_obj.model = extracted_model
-                                                logging_obj.model_call_details["model"] = extracted_model
-                                                logging_obj.model_call_details["custom_llm_provider"] = "vertex_ai"
-                                                verbose_proxy_logger.info(
-                                                    "WebSocket passthrough (%s): Successfully extracted model '%s' and set provider to 'vertex_ai' from client setup message",
-                                                    endpoint,
-                                                    extracted_model,
-                                                )
-                                            else:
-                                                verbose_proxy_logger.warning(
-                                                    "WebSocket passthrough (%s): Failed to extract model from client setup data: %s",
-                                                    endpoint,
-                                                    setup_data,
-                                                )
-                                        else:
-                                            verbose_proxy_logger.debug(
-                                                "WebSocket passthrough (%s): Setup data does not contain model field: %s",
-                                                endpoint,
-                                                setup_data,
-                                            )
-                                    else:
-                                        verbose_proxy_logger.debug(
-                                            "WebSocket passthrough (%s): Client message does not contain setup data",
-                                            endpoint,
-                                        )
-                                except (json.JSONDecodeError, KeyError, TypeError) as e:
-                                    verbose_proxy_logger.debug(
-                                        "WebSocket passthrough (%s): Client message is not a valid setup message: %s",
-                                        endpoint,
-                                        e,
-                                    )
-                                    # Not a JSON message or doesn't contain setup data
-
+                            record_client_setup_model(text_data)
                         elif bytes_data is not None:
                             if (
                                 bytes_refusal := await _relay_client_frame(
@@ -2812,6 +2781,7 @@ async def websocket_passthrough_request(
                                 )
                             ) is not None:
                                 return bytes_refusal
+                            record_client_setup_model(bytes_data)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -2835,7 +2805,6 @@ async def websocket_passthrough_request(
                 logging_obj.model_call_details["model"] = extracted_model
                 logging_obj.model_call_details["custom_llm_provider"] = "vertex_ai_language_models"
 
-            is_vertex_live: Final = bool(endpoint and "/vertex_ai/live" in endpoint)
             json_frame_ordinal: Final = count()
 
             async def relay_upstream_frame(upstream_message: str | bytes) -> None:
