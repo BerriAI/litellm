@@ -3,6 +3,7 @@ import json
 import logging
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
@@ -3062,10 +3063,10 @@ async def _no_fallback(line: bytes) -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_log_success_event_hands_the_sidecar_a_compact_event_and_skips_the_pipeline(tmp_path):
+async def test_async_log_success_event_hands_the_sidecar_a_compact_event_and_skips_the_pipeline(socket_path: Path):
     handler = _RecordingHandler()
     consumer = SpendEventConsumer(handler)
-    address = UnixAddress(path=str(tmp_path / "spend.sock"))
+    address = UnixAddress(path=str(socket_path))
     server = await consumer.serve(address)
     producer = SpendEventProducer(
         address=address, on_unavailable="fallback", buffer_size=10, connect_timeout=1.0, fallback=_no_fallback
