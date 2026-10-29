@@ -69,6 +69,9 @@ class BaseResponsesAPIConfig(ABC):
     def supports_encrypted_agent_messages(self) -> bool:
         return False
 
+    def supports_streamed_retrieval(self) -> bool:
+        return self.custom_llm_provider in (LlmProviders.OPENAI, LlmProviders.AZURE, LlmProviders.AZURE_AI)
+
     def sign_request(
         self,
         headers: dict,
@@ -209,7 +212,7 @@ class BaseResponsesAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         pass
 
     @abstractmethod
@@ -266,6 +269,9 @@ class BaseResponsesAPIConfig(ABC):
         custom_llm_provider: str | None = None,
     ) -> bool:
         """Returns True if litellm should fake a stream for the given model and stream value"""
+        return False
+
+    def may_answer_stream_with_json(self) -> bool:
         return False
 
     def supports_native_websocket(self) -> bool:
