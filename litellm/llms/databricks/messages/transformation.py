@@ -8,7 +8,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.anthropic.pass_through.messages.transformation import (
+from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.databricks.common_utils import (
@@ -144,7 +144,7 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
             ("content-type" if key.lower() == "content-type" else key): value
             for key, value in {**auth_headers, **client_anthropic_headers}.items()
         }
-        finalized_headers: Final[dict[str, str]] = self._finalize_messages_headers(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the shared helper returns a bare dict  # mutable-ok: becomes the outbound headers
+        finalized_headers: Final[dict[str, str]] = self.finalize_messages_headers(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the shared helper returns a bare dict  # mutable-ok: becomes the outbound headers
             headers=normalized_headers,
             optional_params=optional_params,
             messages=messages,
@@ -191,6 +191,8 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
             litellm_params=litellm_params,
             headers=headers,
         )
-        self._normalize_system_role_messages(anthropic_messages_request, model=model)  # pyright: ignore[reportUnknownMemberType]  # the shared helper takes a bare dict
+        self._normalize_system_role_messages(  # pyright: ignore[reportUnknownMemberType]  # the shared helper takes a bare dict
+            anthropic_messages_request, model=model, drop_params=getattr(litellm_params, "drop_params", None)
+        )
         self._remove_scope_from_cache_control(anthropic_messages_request)  # pyright: ignore[reportUnknownMemberType]  # the shared helper takes a bare dict
         return anthropic_messages_request
