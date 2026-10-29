@@ -4,6 +4,8 @@ Tests for Vertex AI partner models count_tokens location resolution.
 Ref: https://github.com/BerriAI/litellm/issues/23872
 """
 
+from typing import Final
+
 import pytest
 
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import (
@@ -299,14 +301,14 @@ class TestCountTokensVersionSuffixStripping:
 
 @pytest.mark.parametrize("drop_params", [True, False])
 def test_count_tokens_counts_tools_the_way_vertex_messages_sends_them(drop_params):
-    schema = {"type": "object", "properties": {}}
-    eager_tool = {"name": "write", "input_schema": schema, "custom": {"eager_input_streaming": True}}
-    request_data = {
+    schema: Final = {"type": "object", "properties": {}}
+    eager_tool: Final = {"name": "write", "input_schema": schema, "custom": {"eager_input_streaming": True}}
+    request_data: Final = {
         "messages": [{"role": "user", "content": "hi"}],
         "tools": [{"name": "read", "input_schema": schema, "custom": {"defer_loading": True}}, eager_tool],
     }
 
-    body = count_tokens_request_body(request_data, "claude-sonnet-4-6", drop_params)
+    body: Final = count_tokens_request_body(request_data, "claude-sonnet-4-6", drop_params)
 
     assert body["messages"] == request_data["messages"]
     assert body["tools"] == [
