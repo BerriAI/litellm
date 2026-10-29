@@ -275,25 +275,25 @@ _WEB_SEARCH_FUNCTION_CALL: Final = {
 
 async def _responses_followup_model(model: str, custom_llm_provider: str, logging_obj: Logging | None) -> str | None:
     logger: Final = WebSearchInterceptionLogger()
-    with patch.object(logger, "_execute_search", new=AsyncMock(return_value=("AI news", None))):
-        plan: Final = await logger.async_build_responses_agentic_loop_plan(
-            tools={**_WEB_SEARCH_FUNCTION_CALL, "provider": custom_llm_provider},
-            model=model,
-            messages=[{"role": "user", "content": "What's the latest AI news?"}],
-            response=_responses_output_with_web_search(),
-            optional_params={"tools": [{"type": "function", "name": "litellm_web_search"}]},
-            logging_obj=logging_obj,
-            stream=False,
-            kwargs={
-                "custom_llm_provider": custom_llm_provider,
-                "_agentic_loop_api_surface": RESPONSES_AGENTIC_SURFACE,
-            },
-        )
+    plan: Final = await logger.async_build_responses_agentic_loop_plan(
+        tools={**_WEB_SEARCH_FUNCTION_CALL, "provider": custom_llm_provider},
+        model=model,
+        messages=[{"role": "user", "content": "What's the latest AI news?"}],
+        response=_responses_output_with_web_search(),
+        optional_params={"tools": [{"type": "function", "name": "litellm_web_search"}]},
+        logging_obj=logging_obj,
+        stream=False,
+        kwargs={
+            "custom_llm_provider": custom_llm_provider,
+            "_agentic_loop_api_surface": RESPONSES_AGENTIC_SURFACE,
+        },
+    )
     assert plan.request_patch is not None
     return plan.request_patch.model
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("perplexity_search")
 async def test_build_responses_plan_keeps_the_provider_on_a_sub_path_model() -> None:
     """#38829 on the Responses surface: a provider-stripped model whose remainder still holds a
     slash was left unqualified, so the follow-up could not resolve a provider."""
@@ -303,6 +303,7 @@ async def test_build_responses_plan_keeps_the_provider_on_a_sub_path_model() -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("perplexity_search")
 async def test_responses_followup_reuses_the_model_the_caller_requested() -> None:
     """An OpenRouter model whose own id starts with "openrouter/" reaches the handler as
     "openrouter/free", which re-qualifying alone cannot tell apart from a request for model "free"."""
@@ -329,6 +330,7 @@ async def test_responses_followup_reuses_the_model_the_caller_requested() -> Non
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("perplexity_search")
 async def test_responses_followup_keeps_the_caller_model_across_the_chat_completions_bridge() -> None:
     """A Responses request bridged to chat completions re-enters completion() with the stripped model."""
     requested_model: Final = "openrouter/openrouter/free"

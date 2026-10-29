@@ -10,6 +10,7 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import respx
 
 import litellm
 from litellm.integrations.websearch_interception.handler import (
@@ -381,7 +382,6 @@ async def test_execute_chat_completion_agentic_loop_strips_tool_choice():
     optional_params into the follow-up params without explicit removal causes the
     model to call the search tool again instead of synthesizing an answer.
     """
-    from unittest.mock import patch
 
     websearch_logger = WebSearchInterceptionLogger(enabled_providers=[LlmProviders.OPENAI])
 
@@ -436,7 +436,7 @@ if __name__ == "__main__":
     ],
 )
 async def test_chat_followup_reuses_the_model_the_caller_requested(
-    requested_model: str, handler_model: str, custom_llm_provider: str
+    requested_model: str, handler_model: str, custom_llm_provider: str, perplexity_search: respx.Route
 ) -> None:
     """The provider handler sees the model after its routing prefixes are stripped, which
     re-qualifying with the provider alone cannot restore."""
@@ -457,22 +457,22 @@ async def test_chat_followup_reuses_the_model_the_caller_requested(
     )
     logger: Final = WebSearchInterceptionLogger()
 
-    with patch.object(logger, "_execute_search", new=AsyncMock(return_value=("AI news", None))):
-        plan: Final = await logger.async_build_chat_completion_agentic_loop_plan(
-            tools={
-                "tool_calls": [{"id": "call_abc", "name": "litellm_web_search", "input": {"query": "latest ai news"}}],
-                "tool_type": "websearch",
-                "provider": custom_llm_provider,
-                "response_format": "openai",
-            },
-            model=handler_model,
-            messages=[{"role": "user", "content": "What's the latest AI news?"}],
-            response=MagicMock(),
-            optional_params={},
-            logging_obj=logging_obj,
-            stream=False,
-            kwargs={"custom_llm_provider": custom_llm_provider},
-        )
+    plan: Final = await logger.async_build_chat_completion_agentic_loop_plan(
+        tools={
+            "tool_calls": [{"id": "call_abc", "name": "litellm_web_search", "input": {"query": "latest ai news"}}],
+            "tool_type": "websearch",
+            "provider": custom_llm_provider,
+            "response_format": "openai",
+        },
+        model=handler_model,
+        messages=[{"role": "user", "content": "What's the latest AI news?"}],
+        response=MagicMock(),
+        optional_params={},
+        logging_obj=logging_obj,
+        stream=False,
+        kwargs={"custom_llm_provider": custom_llm_provider},
+    )
 
     assert plan.request_patch is not None
     assert plan.request_patch.model == requested_model
+    assert perplexity_search.call_count == 1
