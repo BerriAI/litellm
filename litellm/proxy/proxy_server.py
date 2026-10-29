@@ -104,6 +104,7 @@ from litellm.litellm_core_utils.token_counter import (
     UnsupportedContentTypeError,
     deployment_openai_model,
     offload_token_count,
+    sends_function_tools,
 )
 from litellm.llms.bedrock.count_tokens.kimi_k3 import (
     HUGGING_FACE_SOURCE,
@@ -14911,7 +14912,7 @@ async def _provider_token_count(
     framing_can_stand_in: Final = (count_model is None or not count_model.configured) and (
         failure.cannot_count_model or (pinned_count_model is not None and failure.denied_in_region)
     )
-    if not (framing_can_stand_in and settings.framing is not None and local_estimate_allowed):
+    if not (framing_can_stand_in and settings.frames_counts and local_estimate_allowed):
         raise failure.to_proxy_exception()
     if pinned_count_model is not None:
         verbose_proxy_logger.warning(
@@ -15287,6 +15288,18 @@ def _deployment_api_base(deployment: _TokenCountDeployment) -> str | None:
     return _non_empty_str(deployment.get("litellm_params", {}).get("api_base"))
 
 
+def _deployment_provider(deployment: _TokenCountDeployment, request_model: str) -> str | None:
+    params: Final = deployment.get("litellm_params", {})
+    try:
+        return litellm.get_llm_provider(
+            model=_non_empty_str(params.get("model")) or request_model,
+            custom_llm_provider=_non_empty_str(params.get("custom_llm_provider")),
+            api_base=_deployment_api_base(deployment),
+        )[1]
+    except litellm.BadRequestError:
+        return None
+
+
 def _serves_native_responses(deployment: _TokenCountDeployment, request_model: str) -> bool:
     params: Final = deployment.get("litellm_params", {})
     try:
@@ -15301,6 +15314,13 @@ def _serves_native_responses(deployment: _TokenCountDeployment, request_model: s
         )
     except litellm.BadRequestError:
         return False
+
+
+def _with_strict_by_default(tools: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        {**tool, "strict": True} if tool.get("type") == "function" and tool.get("strict") is None else tool
+        for tool in tools
+    )
 
 
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:
@@ -15550,15 +15570,22 @@ async def _count_request_tokens(
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)
     )
-    counted_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
+    native_responses: Final = responses_request is not None and _serves_native_responses(deployment_view, request.model)
+    sent_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
         list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
+    )
+    counted_tools: Final = (
+        cast(list[ChatCompletionToolParam], list(_with_strict_by_default(sent_tools)))  # cast-ok: strict added
+        if sent_tools is not None
+        and native_responses
+        and _deployment_provider(deployment_view, request.model) == litellm.LlmProviders.AZURE_AI.value
+        else sent_tools
     )
     framing: Final = (
         0
         if counted_messages is None
         else settings.hidden_prompt_tokens(
-            carries_tools=bool(counted_tools),
-            responses_api=responses_request is not None and _serves_native_responses(deployment_view, request.model),
+            carries_tools=sends_function_tools(counted_tools), responses_api=native_responses
         )
     )
     kimi_k3_messages: Final = counted_messages if settings.tokenizer == "kimi_k3" else None

@@ -1850,6 +1850,23 @@ async def test_uncountable_model_without_framing_raises():
 
 
 @pytest.mark.parametrize(
+    "settings",
+    [
+        TokenCountSettings(framing=None, count_model=None, tool_framing=300),
+        TokenCountSettings(framing=None, count_model=None, responses_framing=145),
+        TokenCountSettings(framing=None, count_model=None, responses_tool_framing=100),
+    ],
+)
+@pytest.mark.asyncio
+async def test_uncountable_model_with_only_a_request_kind_framing_falls_through_to_the_local_estimate(
+    settings: TokenCountSettings,
+):
+    counter: Final = _ScriptedCounter({"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=404)})
+
+    assert isinstance(await _ladder(counter, settings), ProviderCountFailure)
+
+
+@pytest.mark.parametrize(
     ("count_model", "counted_as"),
     [
         (None, "us.anthropic.claude-sonnet-5-5"),
@@ -2758,6 +2775,20 @@ _NATIVE_RESPONSES_BASE: Final = {
 }
 
 
+def _responses_function(tool: Mapping[str, object], **strict: bool) -> dict[str, object]:
+    return {
+        "type": "function",
+        "name": tool["name"],
+        "description": tool["description"],
+        "parameters": tool["input_schema"],
+        **strict,
+    }
+
+
+def _get_weather_copies(count: int) -> tuple[dict[str, object], ...]:
+    return tuple({**_GET_WEATHER, "name": f"get_weather_{index}"} for index in range(count))
+
+
 # usage.input_tokens plus cache_read_input_tokens that POST /v1/messages billed for these requests with the user turn
 # "What is the weather in Paris?" through Azure AI Foundry grok-4-1-fast-reasoning, Fireworks deepseek-v4p1-flash and
 # xAI grok-4.3 on 2026-10-29
@@ -2854,7 +2885,7 @@ async def test_responses_estimate_matches_the_billed_responses_prompt_with_the_s
         request=TokenCountRequest(
             model="billed",
             messages=[{"role": "user", "content": "What is the weather in Paris?"}],
-            tools=list(tools) or None,
+            tools=[_responses_function(tool) for tool in tools] or None,
             system=system,
         ),
         responses_request={"model": "billed", "input": "What is the weather in Paris?"},
@@ -2905,6 +2936,70 @@ async def test_a_custom_deployment_name_counts_like_the_base_model_it_names(
 
     assert await _count_with_router(monkeypatch, custom_name, tools, responses) == await _count_with_router(
         monkeypatch, row_name, tools, responses
+    )
+
+
+# usage.input_tokens that POST /v1/responses billed through Azure AI Foundry grok-4-1-fast-reasoning on 2026-10-29 for
+# the input "What is the weather in Paris?" with these function tools, strict left unset or sent as false
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tools", "strict", "billed_prompt_tokens"),
+    [
+        ((_GET_WEATHER,), {}, 159),
+        ((_GET_WEATHER,), {"strict": False}, 155),
+        (_THREE_TOOLS, {}, 257),
+        (_get_weather_copies(5), {}, 345),
+        (_get_weather_copies(10), {}, 575),
+        (_get_weather_copies(10), {"strict": False}, 535),
+    ],
+)
+async def test_azure_responses_estimate_stays_at_or_just_over_the_billed_prompt_as_function_tools_are_added(
+    monkeypatch: pytest.MonkeyPatch,
+    tools: tuple[dict[str, object], ...],
+    strict: dict[str, bool],
+    billed_prompt_tokens: int,
+):
+    router: Final = _single_deployment_router(
+        {"model": _AZURE_GROK_4_1, "api_base": _NATIVE_RESPONSES_BASE[_AZURE_GROK_4_1]}, {}
+    )
+
+    counted: Final = await _count_with_router(
+        monkeypatch, router, tuple(_responses_function(tool, **strict) for tool in tools), responses=True
+    )
+
+    assert billed_prompt_tokens <= counted <= billed_prompt_tokens * 1.02
+
+
+# POST /v1/responses billed the same usage.input_tokens with strict unset and false on 2026-10-29, 283 for one tool
+# through xAI grok-4.3 and 304 through Fireworks deepseek-v4p1-flash
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [_XAI_GROK_4_3, _FIREWORKS_DEEPSEEK_V4_1])
+async def test_a_responses_host_that_bills_an_unset_strict_like_false_counts_them_alike(
+    monkeypatch: pytest.MonkeyPatch, model: str
+):
+    router: Final = _single_deployment_router({"model": model, "api_base": _NATIVE_RESPONSES_BASE[model]}, {})
+
+    unset: Final = await _count_with_router(monkeypatch, router, (_responses_function(_GET_WEATHER),), responses=True)
+
+    assert unset == await _count_with_router(
+        monkeypatch, router, (_responses_function(_GET_WEATHER, strict=False),), responses=True
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("built_in_tool", "responses"),
+    [({"type": "web_search"}, True), ({"type": "web_search_20250305", "name": "web_search"}, False)],
+)
+async def test_a_request_whose_only_tools_are_built_in_counts_like_one_without_tools(
+    monkeypatch: pytest.MonkeyPatch, built_in_tool: dict[str, object], responses: bool
+):
+    router: Final = _single_deployment_router(
+        {"model": _AZURE_GROK_4_1, "api_base": _NATIVE_RESPONSES_BASE[_AZURE_GROK_4_1]}, {}
+    )
+
+    assert await _count_with_router(monkeypatch, router, (built_in_tool,), responses) == await _count_with_router(
+        monkeypatch, router, (), responses
     )
 
 

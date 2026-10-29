@@ -135,7 +135,12 @@ _ABSENT: Final = object()
 
 
 @pytest.mark.parametrize(
-    "key", ["token_count_tool_framing", "token_count_responses_framing", "token_count_responses_tool_framing"]
+    ("key", "field"),
+    [
+        ("token_count_tool_framing", "tool_framing"),
+        ("token_count_responses_framing", "responses_framing"),
+        ("token_count_responses_tool_framing", "responses_tool_framing"),
+    ],
 )
 @pytest.mark.parametrize(
     ("configured", "default", "expected"),
@@ -149,52 +154,51 @@ _ABSENT: Final = object()
         ("40", _ABSENT, None),
     ],
 )
-def test_each_request_kind_framing_resolves_like_framing_and_apart_from_the_others(
-    key: str, configured: object, default: object, expected: int | None
+def test_each_request_kind_framing_reads_its_value_like_framing(
+    key: str, field: str, configured: object, default: object, expected: int | None
 ) -> None:
     settings: Final = resolve_token_count_settings(
         configured={} if configured is _ABSENT else {key: configured},
-        default={"token_count_framing": 97, **({} if default is _ABSENT else {key: default})},
+        default={} if default is _ABSENT else {key: default},
         deployment_region=_in_us_west_2,
     )
-    resolved: Final = {
-        "token_count_tool_framing": settings.tool_framing,
-        "token_count_responses_framing": settings.responses_framing,
-        "token_count_responses_tool_framing": settings.responses_tool_framing,
-    }
-    assert settings.framing == 97
-    assert resolved == {name: expected if name == key else None for name in resolved}
+    assert getattr(settings, field) == expected
 
 
-_CHAT_ONLY: Final = TokenCountSettings(framing=185, count_model=None, tool_framing=214)
-_PER_API: Final = TokenCountSettings(
-    framing=149, count_model=None, tool_framing=300, responses_framing=145, responses_tool_framing=104
-)
+def _hidden_prompts(settings: TokenCountSettings) -> tuple[int, int, int, int]:
+    return (
+        settings.hidden_prompt_tokens(carries_tools=False, responses_api=False),
+        settings.hidden_prompt_tokens(carries_tools=True, responses_api=False),
+        settings.hidden_prompt_tokens(carries_tools=False, responses_api=True),
+        settings.hidden_prompt_tokens(carries_tools=True, responses_api=True),
+    )
 
 
 @pytest.mark.parametrize(
-    ("settings", "carries_tools", "responses_api", "expected"),
+    ("default", "expected"),
     [
-        (TokenCountSettings(framing=None, count_model=None), True, True, 0),
-        (TokenCountSettings(framing=23, count_model=None), True, False, 23),
-        (TokenCountSettings(framing=23, count_model=None), True, True, 23),
-        (_CHAT_ONLY, False, False, 185),
-        (_CHAT_ONLY, True, False, 214),
-        (_CHAT_ONLY, False, True, 185),
-        (_CHAT_ONLY, True, True, 214),
-        (_PER_API, False, False, 149),
-        (_PER_API, True, False, 300),
-        (_PER_API, False, True, 145),
-        (_PER_API, True, True, 104),
-        (TokenCountSettings(framing=149, count_model=None, tool_framing=0), True, False, 0),
-        (TokenCountSettings(framing=149, count_model=None, responses_tool_framing=0), True, True, 0),
-        (TokenCountSettings(framing=149, count_model=None, responses_framing=145), True, True, 149),
+        ({}, (0, 0, 0, 0)),
+        ({"token_count_framing": 23}, (23, 23, 23, 23)),
+        ({"token_count_framing": 185, "token_count_tool_framing": 214}, (185, 214, 185, 214)),
+        (
+            {
+                "token_count_framing": 149,
+                "token_count_tool_framing": 300,
+                "token_count_responses_framing": 145,
+                "token_count_responses_tool_framing": 104,
+            },
+            (149, 300, 145, 104),
+        ),
+        ({"token_count_framing": 149, "token_count_tool_framing": 0}, (149, 0, 149, 0)),
+        ({"token_count_framing": 149, "token_count_responses_tool_framing": 0}, (149, 149, 149, 0)),
+        ({"token_count_framing": 149, "token_count_responses_framing": 145}, (149, 149, 145, 145)),
     ],
 )
-def test_hidden_prompt_is_the_framing_set_for_the_request_api_and_tools_falling_back_to_chat(
-    settings: TokenCountSettings, carries_tools: bool, responses_api: bool, expected: int
+def test_hidden_prompt_is_the_most_specific_framing_set_for_the_request_api_and_tools(
+    default: dict[str, object], expected: tuple[int, int, int, int]
 ) -> None:
-    assert settings.hidden_prompt_tokens(carries_tools=carries_tools, responses_api=responses_api) == expected
+    settings: Final = resolve_token_count_settings(configured={}, default=default, deployment_region=_in_us_west_2)
+    assert _hidden_prompts(settings) == expected
 
 
 _PER_API_COST_MAP: Final = {
@@ -213,7 +217,9 @@ _PER_API_COST_MAP: Final = {
         ({"token_count_framing": 0}, (0, 0, 0, 0)),
         ({"token_count_tool_framing": 250}, (149, 250, 145, 250)),
         ({"token_count_framing": 500, "token_count_tool_framing": 250}, (500, 250, 500, 250)),
-        ({"token_count_responses_framing": 120}, (149, 300, 120, 104)),
+        ({"token_count_responses_framing": 120}, (149, 300, 120, 120)),
+        ({"token_count_tool_framing": 250, "token_count_responses_framing": 120}, (149, 250, 120, 120)),
+        ({"token_count_responses_tool_framing": 90}, (149, 300, 145, 90)),
         ({"token_count_framing": -1}, (149, 300, 145, 104)),
     ],
 )
@@ -223,12 +229,7 @@ def test_an_operator_framing_applies_to_every_request_kind_the_cost_map_splits_m
     settings: Final = resolve_token_count_settings(
         configured=configured, default=_PER_API_COST_MAP, deployment_region=_in_us_west_2
     )
-    assert (
-        settings.hidden_prompt_tokens(carries_tools=False, responses_api=False),
-        settings.hidden_prompt_tokens(carries_tools=True, responses_api=False),
-        settings.hidden_prompt_tokens(carries_tools=False, responses_api=True),
-        settings.hidden_prompt_tokens(carries_tools=True, responses_api=True),
-    ) == expected
+    assert _hidden_prompts(settings) == expected
 
 
 def test_no_setting_anywhere_means_the_model_counts_itself_without_framing() -> None:

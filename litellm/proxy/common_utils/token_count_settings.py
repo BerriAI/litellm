@@ -60,10 +60,18 @@ class TokenCountSettings:
     responses_framing: int | None = None
     responses_tool_framing: int | None = None
 
+    @property
+    def frames_counts(self) -> bool:
+        return any(
+            framing is not None
+            for framing in (self.framing, self.tool_framing, self.responses_framing, self.responses_tool_framing)
+        )
+
     def hidden_prompt_tokens(self, carries_tools: bool, responses_api: bool) -> int:
-        chat: Final = self.tool_framing if carries_tools and self.tool_framing is not None else self.framing
+        chat: Final = self.tool_framing if carries_tools else None
         responses: Final = self.responses_tool_framing if carries_tools else self.responses_framing
-        return (responses if responses_api and responses is not None else chat) or 0
+        narrower: Final = responses if responses_api else chat
+        return (narrower if narrower is not None else self.framing) or 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,15 +121,13 @@ def _framing(value: object) -> int | None:
             return None
 
 
-def _configured_framing(
-    configured: Mapping[str, object], default: Mapping[str, object], key: str, *broader_keys: str
-) -> int | None:
-    framing: Final = _framing(configured.get(key))
-    if framing is not None:
-        return framing
-    if any(_framing(configured.get(broader)) is not None for broader in broader_keys):
-        return None
-    return _framing(default.get(key))
+def _first_framing(source: Mapping[str, object], keys: tuple[str, ...]) -> int | None:
+    return next((framing for framing in map(_framing, map(source.get, keys)) if framing is not None), None)
+
+
+def _configured_framing(configured: Mapping[str, object], default: Mapping[str, object], *keys: str) -> int | None:
+    operator_sets_one: Final = _first_framing(configured, (*keys, "token_count_framing")) is not None
+    return _first_framing(configured if operator_sets_one else default, keys)
 
 
 def _non_blank(value: object) -> str | None:
@@ -200,12 +206,14 @@ def resolve_token_count_settings(
             configured.get("token_count_model"), default.get("token_count_model"), deployment_region
         ),
         tokenizer=_tokenizer(default.get("token_count_tokenizer")),
-        tool_framing=_configured_framing(configured, default, "token_count_tool_framing", "token_count_framing"),
-        responses_framing=_configured_framing(
-            configured, default, "token_count_responses_framing", "token_count_framing"
-        ),
+        tool_framing=_configured_framing(configured, default, "token_count_tool_framing"),
+        responses_framing=_configured_framing(configured, default, "token_count_responses_framing"),
         responses_tool_framing=_configured_framing(
-            configured, default, "token_count_responses_tool_framing", "token_count_tool_framing", "token_count_framing"
+            configured,
+            default,
+            "token_count_responses_tool_framing",
+            "token_count_responses_framing",
+            "token_count_tool_framing",
         ),
     )
 

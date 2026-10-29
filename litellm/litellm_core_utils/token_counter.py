@@ -916,15 +916,25 @@ def _count_tool_choice(
             return 0
 
 
+def _named_function_definitions(tools: Sequence[object]) -> Iterable[Mapping[str, object]]:
+    return (function for function in _function_definitions(_tools_sent_as_functions(tools)) if function.get("name"))
+
+
+def sends_function_tools(tools: Sequence[object] | None) -> bool:
+    return tools is not None and any(_named_function_definitions(tools))
+
+
+def _without_false_strict(function: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in function.items() if key != "strict" or value}
+
+
 def _count_chat_template_tools(
     count_function: TokenCounterFunction,
     tools: Sequence[object],
     includes_system_message: bool,
     tool_section: ChatTemplateToolSection,
 ) -> int:
-    functions: Final = tuple(
-        function for function in _function_definitions(_tools_sent_as_functions(tools)) if function.get("name")
-    )
+    functions: Final = tuple(map(_without_false_strict, _named_function_definitions(tools)))
     if not functions:
         return 0
     system_turn_tokens: Final = 0 if includes_system_message else tool_section.implicit_system_turn_tokens

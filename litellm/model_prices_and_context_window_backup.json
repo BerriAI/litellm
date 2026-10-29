@@ -13407,7 +13407,7 @@
         "token_count_framing": 149,
         "token_count_tool_framing": 300,
         "token_count_responses_framing": 145,
-        "token_count_responses_tool_framing": 104,
+        "token_count_responses_tool_framing": 100,
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
         "mode": "chat",
