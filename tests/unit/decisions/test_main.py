@@ -2515,6 +2515,29 @@ async def test_logging_callbacks_get_only_the_images_left_after_an_oversized_one
     assert recording_logger.inputs == [json.loads(route.calls.last.request.content)]
 
 
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_account")
+async def test_logging_callbacks_get_the_caller_url_of_a_remote_image_kept_after_an_oversized_one_drops(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, async_only_image_fetch
+) -> None:
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+    recording_logger: Final = _InputRecordingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recording_logger])
+
+    await litellm.asystemone(
+        model="cloudflare/clef",
+        state=_SCREEN_TEXT,
+        questions=_SYSTEMONE_PREDICATE,
+        images=[_png_data_url(4 * _MIB + 1), _REMOTE_IMAGE_URL],
+        drop_params=True,
+    )
+    await _drain_logging_worker()
+
+    wire_body: Final = json.loads(route.calls.last.request.content)
+    assert wire_body["images"] == [async_only_image_fetch.data_url]
+    assert recording_logger.inputs == [{**wire_body, "images": [_REMOTE_IMAGE_URL]}]
+
+
 @pytest.mark.usefixtures("cloudflare_account")
 def test_images_past_cloudflares_limit_are_dropped_under_drop_params(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)

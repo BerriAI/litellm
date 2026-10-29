@@ -585,9 +585,9 @@ def _remote_image_urls(call: DecisionsCall) -> tuple[str, ...]:
     return remote_image_urls(call.ir_request.input)
 
 
-def _with_data_urls(call: DecisionsCall, data_urls: Mapping[str, str]) -> DecisionsCall:
+def _with_images_replaced(call: DecisionsCall, replacements: Mapping[str, str]) -> DecisionsCall:
     return replace(
-        call, ir_request=replace(call.ir_request, input=with_inlined_images(call.ir_request.input, data_urls))
+        call, ir_request=replace(call.ir_request, input=with_inlined_images(call.ir_request.input, replacements))
     )
 
 
@@ -595,7 +595,7 @@ def _with_remote_images_inlined(call: DecisionsCall) -> DecisionsCall:
     remote_urls: Final = _remote_image_urls(call)
     if not remote_urls:
         return call
-    return _with_data_urls(
+    return _with_images_replaced(
         call, MappingProxyType({url: convert_url_to_base64(url, timeout=call.timeout) for url in remote_urls})
     )
 
@@ -605,7 +605,7 @@ async def _async_with_remote_images_inlined(call: DecisionsCall) -> DecisionsCal
     if not remote_urls:
         return call
     data_urls: Final = await async_convert_urls_to_base64(remote_urls, timeout=call.timeout)
-    return _with_data_urls(call, MappingProxyType(dict(zip(remote_urls, data_urls, strict=True))))
+    return _with_images_replaced(call, MappingProxyType(dict(zip(remote_urls, data_urls, strict=True))))
 
 
 def _has_media_type_in(media_types: frozenset[str], image: DecisionsImage) -> bool:
@@ -717,14 +717,20 @@ def _request_body(call: DecisionsCall) -> Mapping[str, object]:
     return body
 
 
-def _image_count(call: DecisionsCall) -> int:
-    return len(input_images(call.ir_request.input))
+def _with_caller_urls(sent: DecisionsCall, supported: DecisionsCall, fetched: DecisionsCall) -> DecisionsCall:
+    pairs: Final = zip(input_images(fetched.ir_request.input), input_images(supported.ir_request.input), strict=True)
+    caller_urls: Final = MappingProxyType(
+        {data_url: url for data_url, url in pairs if isinstance(data_url, str) and isinstance(url, str)}
+    )
+    return _with_images_replaced(sent, caller_urls)
 
 
-def _logged_body(supported: DecisionsCall, inlined: DecisionsCall, body: Mapping[str, object]) -> Mapping[str, object]:
-    if inlined is supported or _image_count(inlined) < _image_count(supported):
+def _logged_body(
+    supported: DecisionsCall, fetched: DecisionsCall, sent: DecisionsCall, body: Mapping[str, object]
+) -> Mapping[str, object]:
+    if fetched is supported:
         return body
-    return _request_body(supported)
+    return _request_body(_with_caller_urls(sent, supported, fetched))
 
 
 def _pricing_model(response: DecisionsIRResponse, call: DecisionsCall) -> str:
@@ -790,7 +796,8 @@ def _map_upstream_exception(error: Exception, call: DecisionsCall) -> Exception:
 
 async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
     supported: Final = _checked_image_count(_checked_image_types(call))
-    inlined: Final = _checked_image_sizes(_checked_image_types(await _async_with_remote_images_inlined(supported)))
+    fetched: Final = await _async_with_remote_images_inlined(supported)
+    inlined: Final = _checked_image_sizes(_checked_image_types(fetched))
     body: Final = _request_body(inlined)
     try:
         response: Final = await _HANDLER.adecisions(
@@ -800,7 +807,7 @@ async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionRespon
             provider_config=inlined.provider_config,
             request=inlined.ir_request,
             body=body,
-            logged_body=_logged_body(supported, inlined, body),
+            logged_body=_logged_body(supported, fetched, inlined, body),
             api_base=inlined.api_base,
             api_key=inlined.api_key,
             headers=inlined.headers,
@@ -814,7 +821,8 @@ async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionRespon
 
 def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
     supported: Final = _checked_image_count(_checked_image_types(call))
-    inlined: Final = _checked_image_sizes(_checked_image_types(_with_remote_images_inlined(supported)))
+    fetched: Final = _with_remote_images_inlined(supported)
+    inlined: Final = _checked_image_sizes(_checked_image_types(fetched))
     body: Final = _request_body(inlined)
     try:
         response: Final = _HANDLER.decisions(
@@ -824,7 +832,7 @@ def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
             provider_config=inlined.provider_config,
             request=inlined.ir_request,
             body=body,
-            logged_body=_logged_body(supported, inlined, body),
+            logged_body=_logged_body(supported, fetched, inlined, body),
             api_base=inlined.api_base,
             api_key=inlined.api_key,
             headers=inlined.headers,
