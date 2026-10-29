@@ -3479,8 +3479,7 @@ async def test_logging_guardrail_screens_original_content_while_loggers_honor_re
     logger_content: Final = logged.get_nowait()
     assert ("screen-this-input" in logger_content) is not redact
     assert ("screen-this-output" in logger_content) is not redact
-    if not stream:
-        assert response.choices[0].message.content == "screen-this-output"
+    assert response.choices[0].message.content == "screen-this-output"
 
 
 @pytest.mark.asyncio
@@ -3559,6 +3558,67 @@ async def test_logging_guardrail_verdict_survives_message_redaction(
     assert "screen-this-input" not in payload
     assert "screen-this-output" not in payload
     assert "guardrail_intervened" in payload
+
+
+def test_sync_logging_guardrail_failure_still_redacts_and_delivers_logs(monkeypatch: pytest.MonkeyPatch) -> None:
+    from queue import SimpleQueue
+
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    payloads: Final[SimpleQueue[str]] = SimpleQueue()
+
+    class FailingGuardrail(CustomGuardrail):
+        def logging_hook(
+            self, kwargs: dict[str, object], result: object, call_type: str
+        ) -> tuple[dict[str, object], object]:
+            payload: Final = kwargs["standard_logging_object"]
+            assert isinstance(payload, dict)
+            payload["guardrail_information"] = [
+                {"guardrail_status": "guardrail_failed", "guardrail_response": {"text": "private-verdict"}}
+            ]
+            raise RuntimeError("synthetic guardrail failure")
+
+    class RecordingLogger(CustomLogger):
+        def log_success_event(
+            self,
+            kwargs: dict[str, object],
+            response_obj: object,
+            start_time: datetime.datetime,
+            end_time: datetime.datetime,
+        ) -> None:
+            payloads.put(json.dumps([kwargs["messages"], kwargs["standard_logging_object"], str(response_obj)]))
+
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+    logging_obj: Final = LitellmLogging(
+        model="openai/gpt-6.1-sol",
+        messages=[{"role": "user", "content": "private-input"}],
+        stream=False,
+        call_type="completion",
+        start_time=now,
+        litellm_call_id="guardrail-failure",
+        function_id="guardrail-failure",
+        dynamic_success_callbacks=[
+            FailingGuardrail(default_on=True, event_hook=GuardrailEventHooks.logging_only),
+            RecordingLogger(),
+        ],
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={"metadata": {"headers": {"x-litellm-enable-message-redaction": True}}},
+        optional_params={},
+    )
+    response: Final = ModelResponse(choices=[{"message": {"role": "assistant", "content": "private-output"}}])
+    logging_obj.success_handler(result=response, start_time=now, end_time=now)
+
+    assert payloads.qsize() == 1
+    payload: Final = payloads.get_nowait()
+    assert "private-input" not in payload
+    assert "private-output" not in payload
+    assert "private-verdict" not in payload
+    assert "guardrail_failed" in payload
+    assert "private-input" not in json.dumps(logging_obj.model_call_details["messages"])
 
 
 def test_get_user_agent_tags():

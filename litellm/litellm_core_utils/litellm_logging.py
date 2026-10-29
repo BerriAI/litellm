@@ -1800,7 +1800,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     verbose_logger.exception(
                         "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", e
                     )
-            post_call_details: Final = self._logging_details_copy()
+            post_call_details: Final = self._logging_details_copy(self.model_call_details)
             redact_message_input_output_from_logging(
                 model_call_details=post_call_details,
                 result=original_response,
@@ -2842,16 +2842,14 @@ class Logging(LiteLLMLoggingBaseClass):
 
         await invalidate_baseline_cache(self, reason, completed=completed)
 
-    def _logging_details_copy(self) -> dict[str, object]:  # mutable-ok: legacy redaction mutates its isolated payload
+    def _logging_details_copy(
+        self, details: Mapping[str, object]
+    ) -> dict[str, object]:  # mutable-ok: legacy redaction mutates its isolated payload
         streaming_keys: Final = ("complete_streaming_response", "async_complete_streaming_response")
         redact: Final = should_redact_message_logging(self.model_call_details)
         return {
-            **self.model_call_details,
-            **{
-                key: copy.deepcopy(self.model_call_details[key])
-                for key in streaming_keys
-                if redact and key in self.model_call_details
-            },
+            **details,
+            **{key: copy.deepcopy(details[key]) for key in streaming_keys if redact and key in details},
         }
 
     def _build_standard_logging_payload(
@@ -2863,7 +2861,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """Build StandardLoggingPayload and accumulate its construction time."""
         _start: Final = time.time()
         payload: Final = get_standard_logging_object_payload(
-            kwargs=self._logging_details_copy(),
+            kwargs=self._logging_details_copy(self.model_call_details),
             init_response_obj=init_response_obj,
             start_time=start_time,
             end_time=end_time,
@@ -3376,29 +3374,33 @@ class Logging(LiteLLMLoggingBaseClass):
                 isinstance(callback, CustomGuardrail) for callback in hook_callbacks
             ):
                 call_details = {  # rebind-ok: logging hooks consume and replace this isolated legacy payload
-                    **call_details,
+                    **self._logging_details_copy(call_details),
                     "messages": copy.deepcopy(call_details.get("messages")),
                 }
                 result = copy.deepcopy(result)  # rebind-ok: preserve the client response before mutable logging hooks
             for callback in hook_callbacks:
-                if isinstance(callback, CustomGuardrail):
-                    from litellm.types.guardrails import GuardrailEventHooks
+                try:
+                    if isinstance(callback, CustomGuardrail):
+                        from litellm.types.guardrails import GuardrailEventHooks
 
-                    if (
-                        callback.should_run_guardrail(
-                            data=call_details,
-                            event_type=GuardrailEventHooks.logging_only,
+                        if (
+                            callback.should_run_guardrail(
+                                data=call_details,
+                                event_type=GuardrailEventHooks.logging_only,
+                            )
+                            is not True
+                        ):
+                            continue
+
+                        self.shadow_eval_request_snapshot = None
+                        call_details, result = callback.logging_hook(  # pyright: ignore[reportUnknownVariableType]  # logging_hook is typed with a bare dict
+                            kwargs=call_details,
+                            result=result,
+                            call_type=self.call_type,
                         )
-                        is not True
-                    ):
-                        continue
-
-                    self.shadow_eval_request_snapshot = None
-                    call_details, result = callback.logging_hook(  # pyright: ignore[reportUnknownVariableType]  # logging_hook is typed with a bare dict
-                        kwargs=call_details,
-                        result=result,
-                        call_type=self.call_type,
-                    )
+                except Exception:  # noqa: BLE001  # a failed guardrail must not skip redaction or later logging callbacks
+                    verbose_logger.exception("LiteLLM.LoggingError: Exception in guardrail logging_hook")
+                    self._handle_callback_failure(callback=callback)
                 if not for_async_request:
                     self.model_call_details = call_details
 
@@ -3979,7 +3981,7 @@ class Logging(LiteLLMLoggingBaseClass):
             isinstance(callback, CustomGuardrail) for callback in hook_callbacks
         ):
             self.model_call_details = {
-                **self.model_call_details,
+                **self._logging_details_copy(self.model_call_details),
                 "messages": copy.deepcopy(self.model_call_details.get("messages")),
             }
             result = copy.deepcopy(result)  # rebind-ok: preserve the client response before mutable logging hooks
