@@ -55,7 +55,7 @@ from litellm.types.utils import (
 from litellm.types.utils import GenericStreamingChunk as GChunk
 
 from ..exceptions import OpenAIError, Timeout
-from .core_helpers import map_finish_reason, process_response_headers
+from .core_helpers import map_finish_reason, process_response_headers, upstream_non_openai_attributes
 from .exception_mapping_utils import exception_type, with_deployment_api_base
 from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
@@ -123,6 +123,24 @@ def _prepend_upstream_choice_extras(
     upstream_extras: Final[Mapping[str, object]] = upstream_choice.model_dump(include=set(extra_keys))
     choice.__pydantic_extra__ = {**upstream_extras, **(choice.__pydantic_extra__ or {})}  # rebind-ok: reuse choice
     choice.__pydantic_fields_set__.update(upstream_extras)
+
+
+def _keep_single_upstream_choice_extras(
+    model_response: ModelResponseStream, response_obj: Mapping[str, object]
+) -> None:
+    original_chunk: Final = response_obj.get("original_chunk")
+    if (
+        not isinstance(original_chunk, ChatCompletionChunk)
+        or len(original_chunk.choices) != 1
+        or len(model_response.choices) != 1
+    ):
+        return
+    upstream_choice: Final = original_chunk.choices[0]
+    _prepend_upstream_choice_extras(
+        model_response.choices[0],
+        upstream_choice,
+        frozenset(upstream_choice.__pydantic_extra__ or {}) - {"message"},
+    )
 
 
 def _holds_only_scalars(fields: Iterable[tuple[str, object]]) -> bool:
@@ -333,6 +351,7 @@ class CustomStreamWrapper:
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
         self.sent_last_chunk = False
+        self._attributes_before_first_choice: tuple[tuple[str, object], ...] = ()
         self._openai_handler_receives_chat_chunks = False
         self._failure_logging: asyncio.Task[None] | None = None
         self._closed = False
@@ -1273,6 +1292,7 @@ class CustomStreamWrapper:
                     model_response=model_response,
                     original_chunk=_original_chunk,
                 )
+                _keep_single_upstream_choice_extras(model_response, response_obj)
 
             if _is_delta_empty:
                 model_response.choices[0].delta = Delta(content=self._close_open_think_block())
@@ -1717,8 +1737,12 @@ class CustomStreamWrapper:
                         model_response.choices[0].delta = plain_delta if plain_delta is not None else Delta()
                         plain_delta_created = plain_delta is not None  # rebind-ok: the first chunk builds its delta
                 else:
+                    if not self.sent_first_chunk and isinstance(original_chunk, BaseModel):
+                        self._hold_attributes_before_first_choice(original_chunk)
                     if self.send_stream_usage is True:
                         model_response.choices = []
+                        if self.caller_requested_stream_usage:
+                            self._release_attributes_before_first_choice(model_response)
                         return model_response
                     self._record_usage_only_chunk(model_response=model_response)
                     return
@@ -1746,6 +1770,8 @@ class CustomStreamWrapper:
                 response_obj=response_obj,
                 plain_delta_created=plain_delta_created,
             )
+            if result is not None:
+                self._release_attributes_before_first_choice(result)
             return result
 
         except StopIteration:
@@ -1971,6 +1997,24 @@ class CustomStreamWrapper:
             return None
         return processed_chunk.model_copy(
             update={"choices": [processed_chunk.choices[0].model_copy(update={"finish_reason": None})]}
+        )
+
+    def _hold_attributes_before_first_choice(self, original_chunk: BaseModel) -> None:
+        held: Final = tuple(
+            (key, value)
+            for key, value in upstream_non_openai_attributes(ModelResponseStream, original_chunk)
+            if value is not None
+        )
+        self._attributes_before_first_choice = (*self._attributes_before_first_choice, *held)
+
+    def _release_attributes_before_first_choice(self, model_response: ModelResponseStream) -> None:
+        held: Final = self._attributes_before_first_choice
+        if not held:
+            return
+        self._attributes_before_first_choice = ()
+        _apply_provider_fields(
+            model_response,
+            {key: value for key, value in held if getattr(model_response, key, None) is None},
         )
 
     def _record_usage_only_chunk(self, model_response: "ModelResponseStream") -> None:

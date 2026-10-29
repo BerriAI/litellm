@@ -6176,6 +6176,64 @@ def _wire_dump(chunk: ModelResponseStream) -> dict[str, object]:
     return chunk.model_dump(exclude_none=True, exclude_unset=True)
 
 
+_AZURE_PROMPT_FILTER_RESULTS: Final = [
+    {"prompt_index": 0, "content_filter_results": {"hate": {"filtered": False, "severity": "safe"}}}
+]
+_AZURE_FINISH_FILTER_RESULTS: Final = {"protected_material_text": {"detected": False, "filtered": False}}
+
+
+def _azure_stream_chunks() -> tuple[ChatCompletionChunk, ...]:
+    def chunk(choices: list[dict[str, object]], **extras: object) -> ChatCompletionChunk:
+        return ChatCompletionChunk.model_validate(
+            {"id": "c1", "created": 1, "model": "gpt-4o", "object": "chat.completion.chunk", "choices": choices, **extras}
+        )
+
+    return (
+        chunk([], prompt_filter_results=_AZURE_PROMPT_FILTER_RESULTS, obfuscation="held"),
+        chunk([{"index": 0, "delta": {"role": "assistant", "content": ""}, "content_filter_results": {}}], obfuscation="own"),
+        chunk([{"index": 0, "delta": {"content": "Red"}, "content_filter_results": {}}]),
+        chunk([{"index": 0, "delta": {}, "finish_reason": "stop", "content_filter_results": _AZURE_FINISH_FILTER_RESULTS}]),
+    )
+
+
+@pytest.mark.parametrize(
+    ("caller_stream_options", "stream_usage_injected", "wrapper_stream_options", "prompt_filter_frame"),
+    [
+        (None, False, None, 0),
+        ({"include_usage": True}, False, {"include_usage": True}, 0),
+        (None, False, {"include_usage": True}, 1),
+        ({"include_usage": True}, True, {"include_usage": True}, 1),
+    ],
+    ids=["no-usage", "caller-asked", "provider-handler-injected", "proxy-injected"],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_azure_stream_passes_on_prompt_filter_results_and_finish_content_filter_results(
+    sync_mode: bool,
+    caller_stream_options: dict[str, bool] | None,
+    stream_usage_injected: bool,
+    wrapper_stream_options: dict[str, bool] | None,
+    prompt_filter_frame: int,
+) -> None:
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(_azure_stream_chunks()),
+        model="gpt-4o",
+        custom_llm_provider="azure",
+        logging_obj=_usage_test_logging(caller_stream_options, stream_usage_injected),
+        stream_options=wrapper_stream_options,
+    )
+
+    chunks: Final = list(wrapper) if sync_mode else [chunk async for chunk in wrapper]
+    frames: Final = [_wire_dump(chunk) for chunk in chunks]
+    first_choice_frame: Final = next(frame for frame in frames if frame["choices"])
+    finish_frame: Final = next(frame for frame in frames if frame["choices"] and frame["choices"][0].get("finish_reason"))
+
+    assert [index for index, frame in enumerate(frames) if "prompt_filter_results" in frame] == [prompt_filter_frame]
+    assert frames[prompt_filter_frame]["prompt_filter_results"] == _AZURE_PROMPT_FILTER_RESULTS
+    assert first_choice_frame["obfuscation"] == "own"
+    assert finish_frame["choices"][0]["content_filter_results"] == _AZURE_FINISH_FILTER_RESULTS
+
+
 def test_openai_chunk_creator_keeps_single_choice_logprobs_on_later_chunks(logging_obj: Logging) -> None:
     logprobs: Final = {"content": [{"token": "hello", "logprob": -0.25, "bytes": [104], "top_logprobs": []}]}
     chunk: Final = ChatCompletionChunk(
