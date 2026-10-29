@@ -625,6 +625,22 @@ class TestFailedFollowUpCallReachesTheClient:
                 kwargs={"_agentic_loop_depth": 0, "max_agentic_loops": 3, WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: True},
             )
 
+    @pytest.mark.asyncio
+    async def test_responses_follow_up_rate_limit_is_raised_to_the_caller(self, monkeypatch):
+        monkeypatch.setattr(litellm, "aresponses", self._rate_limited_follow_up)
+        callback = _ResponsesInterceptingCallback()
+
+        with pytest.raises(RateLimitError, match="UserByModelByMinuteUncachedInputTokens"):
+            await _run_hooks(
+                self.handler,
+                callback,
+                kwargs={"_agentic_loop_depth": 0, "max_agentic_loops": 3},
+                response=_responses_turn(("call_search", INTERNAL_TOOL_NAME)),
+                api_surface="responses",
+            )
+
+        assert callback.plan_calls == 1
+
 
 class TestFailedSearchEndsTheTurn:
     """

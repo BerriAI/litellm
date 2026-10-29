@@ -224,7 +224,7 @@ async def test_acompletion_returns_prompt_cache_details_over_injected_transport(
 
 
 
-class _FailingFollowUpChatLoop(CustomLogger):
+class _SearchingChatGate(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.runs = 0
@@ -241,6 +241,12 @@ class _FailingFollowUpChatLoop(CustomLogger):
     ) -> tuple[bool, dict]:
         return True, {"tool_calls": [{"id": "call-1"}]}
 
+
+class _FailingFollowUpChatLoop(_SearchingChatGate):
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self.error = error
+
     async def async_run_chat_completion_agentic_loop(
         self,
         tools: dict,
@@ -253,7 +259,7 @@ class _FailingFollowUpChatLoop(CustomLogger):
         kwargs: dict,
     ) -> object:
         self.runs += 1
-        raise litellm.RateLimitError(message="follow-up rate limited", llm_provider="openai", model=model)
+        raise self.error
 
 
 class _RaisingAgenticGate(CustomLogger):
@@ -270,7 +276,7 @@ class _RaisingAgenticGate(CustomLogger):
         raise ValueError("gate bug")
 
 
-class _AnsweringChatLoop(_FailingFollowUpChatLoop):
+class _AnsweringChatLoop(_SearchingChatGate):
     async def async_run_chat_completion_agentic_loop(
         self,
         tools: dict,
@@ -338,14 +344,105 @@ async def _acompletion_through(http_client: httpx.AsyncClient) -> object:
 async def test_acompletion_surfaces_a_failed_agentic_follow_up_instead_of_the_first_turn(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    loop: Final = _FailingFollowUpChatLoop()
+    follow_up_error: Final = litellm.RateLimitError(
+        message="follow-up rate limited", llm_provider="openai", model="gpt-5.6"
+    )
+    loop: Final = _FailingFollowUpChatLoop(follow_up_error)
     monkeypatch.setattr(litellm, "callbacks", [loop])
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(_respond_with_a_search_tool_call)) as http_client:
-        with pytest.raises(litellm.RateLimitError, match="follow-up rate limited"):
+        with pytest.raises(litellm.RateLimitError) as raised:
             await _acompletion_through(http_client)
 
+    assert raised.value.message == follow_up_error.message
     assert loop.runs == 1
+
+
+@pytest.mark.asyncio
+async def test_acompletion_does_not_resend_the_first_call_when_the_agentic_follow_up_answers_422(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    follow_up_error: Final = litellm.UnprocessableEntityError(
+        message="follow-up rejected",
+        model="gpt-5.6",
+        llm_provider="openai",
+        response=httpx.Response(422, request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions")),
+    )
+    loop: Final = _FailingFollowUpChatLoop(follow_up_error)
+    monkeypatch.setattr(litellm, "callbacks", [loop])
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_respond_with_a_search_tool_call)) as http_client:
+        with pytest.raises(litellm.UnprocessableEntityError) as raised:
+            await _acompletion_through(http_client)
+
+    assert raised.value.message == follow_up_error.message
+    assert loop.runs == 1
+
+
+def _rejecting_the_user_param(outbound: asyncio.Queue[dict[str, object]]) -> httpx.MockTransport:
+    def respond(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        outbound.put_nowait(body)
+        if "user" in body:
+            rejection: Final = json.dumps({"detail": [{"loc": ["body", "user"], "msg": "extra fields not permitted"}]})
+            return httpx.Response(422, json={"error": {"message": rejection}})
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-resent",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.6",
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}],
+            },
+        )
+
+    return httpx.MockTransport(respond)
+
+
+async def _acompletion_with_a_user_param(http_client: httpx.AsyncClient) -> object:
+    return await asyncio.wait_for(
+        litellm.acompletion(
+            model="openai/gpt-5.6",
+            api_key="transport-only",
+            client=AsyncOpenAI(api_key="transport-only", http_client=http_client),
+            messages=[{"role": "user", "content": "hi"}],
+            user="end-user-1",
+            num_retries=0,
+            max_retries=0,
+        ),
+        timeout=10,
+    )
+
+
+@pytest.mark.asyncio
+async def test_acompletion_resends_without_the_param_a_422_rejects_when_drop_params_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "drop_params", True)
+    outbound: Final[asyncio.Queue[dict[str, object]]] = asyncio.Queue()
+
+    async with httpx.AsyncClient(transport=_rejecting_the_user_param(outbound)) as http_client:
+        response: Final = await _acompletion_with_a_user_param(http_client)
+
+    assert response.choices[0].message.content == "done"
+    assert outbound.get_nowait()["user"] == "end-user-1"
+    assert "user" not in outbound.get_nowait()
+    assert outbound.empty()
+
+
+@pytest.mark.asyncio
+async def test_acompletion_raises_a_422_without_resending_when_drop_params_is_off(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    outbound: Final[asyncio.Queue[dict[str, object]]] = asyncio.Queue()
+
+    async with httpx.AsyncClient(transport=_rejecting_the_user_param(outbound)) as http_client:
+        with pytest.raises(litellm.BadRequestError, match="extra fields not permitted"):
+            await _acompletion_with_a_user_param(http_client)
+
+    assert outbound.get_nowait()["user"] == "end-user-1"
+    assert outbound.empty()
 
 
 @pytest.mark.asyncio

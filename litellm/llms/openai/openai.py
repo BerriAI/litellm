@@ -1024,30 +1024,6 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     hidden_params={"headers": headers},
                     _response_headers=headers,
                 )
-
-                # Call agentic completion hooks (e.g., for websearch_interception)
-                agentic_response = await self._call_agentic_completion_hooks_openai(
-                    response=final_response_obj,
-                    model=model,
-                    messages=messages,
-                    optional_params=optional_params,
-                    logging_obj=logging_obj,
-                    stream=False,
-                    litellm_params=litellm_params,
-                )
-
-                if agentic_response is not None:
-                    final_response_obj = agentic_response
-
-                if fake_stream is True:
-                    return self.mock_streaming(
-                        response=cast(ModelResponse, final_response_obj),
-                        logging_obj=logging_obj,
-                        model=model,
-                        stream_options=stream_options,
-                    )
-
-                return final_response_obj
             except openai.UnprocessableEntityError as e:
                 ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                 if litellm.drop_params is True or drop_params is True:
@@ -1070,6 +1046,29 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     headers=error_headers,
                     body=exception_body,
                 )
+            else:
+                agentic_response = await self._call_agentic_completion_hooks_openai(
+                    response=final_response_obj,
+                    model=model,
+                    messages=messages,
+                    optional_params=optional_params,
+                    logging_obj=logging_obj,
+                    stream=False,
+                    litellm_params=litellm_params,
+                )
+
+                if agentic_response is not None:
+                    final_response_obj = agentic_response
+
+                if fake_stream is True:
+                    return self.mock_streaming(
+                        response=cast(ModelResponse, final_response_obj),
+                        logging_obj=logging_obj,
+                        model=model,
+                        stream_options=stream_options,
+                    )
+
+                return final_response_obj
 
     def streaming(
         self,
