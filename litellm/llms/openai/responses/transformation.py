@@ -38,6 +38,7 @@ from litellm.responses.litellm_completion_transformation.tool_search import (
     tools_with_anthropic_tool_search_mapped,
     tools_without_anthropic_tool_search,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import *
@@ -531,7 +532,25 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             },
         )
 
-        return final_request_params
+        return dict(self._with_original_comparison_response_id(final_request_params))
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object]:
+        return self._with_original_comparison_response_id(
+            super().transform_extra_body(
+                extra_body=extra_body, request=request, model=model, litellm_params=litellm_params
+            )
+        )
+
+    def _with_original_comparison_response_id(self, body: Mapping[str, object]) -> Mapping[str, object]:
+        return ResponsesAPIRequestUtils.with_original_comparison_response_id(
+            body, _provider_name(self.custom_llm_provider)
+        )
 
     def _prepared_input_and_tools(
         self,

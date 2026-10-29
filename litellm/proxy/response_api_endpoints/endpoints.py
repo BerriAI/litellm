@@ -86,6 +86,7 @@ from litellm.proxy.utils import count_request_input_tokens, handle_exception_on_
 from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
 from litellm.responses.litellm_completion_transformation.count_request import MODEL_FILE_ID_MAPPING_FIELD
 from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard, spawn_logging_task
+from litellm.responses.utils import COMPARISON_RESPONSE_ID_ROUTING_HINT, ComparisonRoutingHint
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
@@ -1497,6 +1498,33 @@ def _with_authorized_previous_response(
     return {**data, "previous_response_id": authorized_id, ADDRESSED_RESPONSE_ID_FIELD: previous_response_id}
 
 
+def _with_authorized_comparison_id(
+    request: Mapping[str, object], security: ResponsesIDSecurity | None, user_api_key_dict: UserAPIKeyAuth
+) -> Mapping[str, object]:
+    options: Final = as_str_mapping(request.get("prompt_cache_options"))
+    comparison_id: Final = None if options is None else options.get("comparison_response_id")
+    if security is None or options is None or not isinstance(comparison_id, str) or not comparison_id:
+        return request
+    try:
+        authorized_id: Final = security.authorize_comparison_id(comparison_id, user_api_key_dict)
+    except HTTPException as e:
+        raise ProxyException(message=str(e.detail), type="permission_error", param=None, code=e.status_code) from e
+    return {**request, "prompt_cache_options": {**options, "comparison_response_id": authorized_id}}
+
+
+def _with_routable_comparison_id(
+    hints: Mapping[str, object], security: ResponsesIDSecurity | None, user_api_key_dict: UserAPIKeyAuth
+) -> Mapping[str, object]:
+    routing_hint: Final = hints.get(COMPARISON_RESPONSE_ID_ROUTING_HINT)
+    if security is None or not isinstance(routing_hint, ComparisonRoutingHint):
+        return hints
+    try:
+        authorized_id: Final = security.authorize_comparison_id(routing_hint.response_id, user_api_key_dict)
+    except HTTPException:
+        return {key: value for key, value in hints.items() if key != COMPARISON_RESPONSE_ID_ROUTING_HINT}
+    return {**hints, COMPARISON_RESPONSE_ID_ROUTING_HINT: ComparisonRoutingHint(authorized_id)}
+
+
 def _responses_invalid_request_response(message: str, param: str | None, code: str | None) -> JSONResponse:
     body: Final[_ResponsesApiErrorBody] = {
         "error": {
@@ -1972,6 +2000,7 @@ class _ResponseCreateRoutingHints(LiteLLMBaseModel):
 
     input: str | Sequence[object] | None = None
     previous_response_id: str | None = None
+    prompt_cache_options: object = None
     response: "_ResponseCreateRoutingHints | None" = None
 
 
@@ -1981,10 +2010,17 @@ def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, objec
     except ValidationError:
         return EMPTY_MAPPING
     nested: Final = frame.response or frame
+    cache_options: Final = as_str_mapping(
+        frame.prompt_cache_options if nested.prompt_cache_options is None else nested.prompt_cache_options
+    )
+    comparison_id: Final = None if cache_options is None else cache_options.get("comparison_response_id")
     hints: Final = {
         "input": frame.input if nested.input is None else nested.input,
         "previous_response_id": (
             frame.previous_response_id if nested.previous_response_id is None else nested.previous_response_id
+        ),
+        COMPARISON_RESPONSE_ID_ROUTING_HINT: (
+            ComparisonRoutingHint(comparison_id) if isinstance(comparison_id, str) else None
         ),
     }
     return MappingProxyType({key: value for key, value in hints.items() if value is not None})
@@ -2070,6 +2106,7 @@ def _responses_ws_frame_guard(
     user_api_key_dict: UserAPIKeyAuth,
     proxy_logging_obj: _PreCallGuardrailWalk,
     record_refused_turn: Callable[[tuple[Mapping[str, object], ...], Exception], None],
+    response_id_security: ResponsesIDSecurity | None = None,
 ) -> ResponsesWsFrameGuard:
     """Socket admission skips guardrails (the first frame's ``input`` is not part of the admitted request), so every
     ``response.create`` frame gets the pre_call guardrail walk the HTTP ``/v1/responses`` path runs on its body."""
@@ -2107,6 +2144,7 @@ def _responses_ws_frame_guard(
             metadata_key: {**bucket},
         }
         try:
+            authorized_body: Final = _with_authorized_comparison_id(body, response_id_security, user_api_key_dict)
             guarded_data: Final = await proxy_logging_obj.pre_call_hook(
                 user_api_key_dict=user_api_key_dict, data=frame_data, call_type="aresponses", guardrails_only=True
             )
@@ -2122,7 +2160,7 @@ def _responses_ws_frame_guard(
             raise rerouted
         # a guardrail may delete a field (the Responses translation pops ``instructions``), so start without them
         guarded_fields: Final = {key: guarded_data[key] for key in _GUARDED_FRAME_FIELDS if key in guarded_data}
-        kept: Final = {key: value for key, value in body.items() if key not in _GUARDED_FRAME_FIELDS}
+        kept: Final = {key: value for key, value in authorized_body.items() if key not in _GUARDED_FRAME_FIELDS}
         rewritten: Final = (
             {**frame_obj, "response": {**kept, **guarded_fields}}
             if isinstance(nested, dict)
@@ -2217,6 +2255,7 @@ async def _responses_websocket_session(
     websocket: WebSocket,
     model: str | None,
     user_api_key_dict: UserAPIKeyAuth,
+    response_id_security: ResponsesIDSecurity | None,
 ) -> None:
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -2314,9 +2353,11 @@ async def _responses_websocket_session(
         data,
         user_api_key_dict=user_api_key_dict,
         responses_ws_frame_guard=_responses_ws_frame_guard(
-            data, user_api_key_dict, proxy_logging_obj, refused_turns.add
+            data, user_api_key_dict, proxy_logging_obj, refused_turns.add, response_id_security
         ),
-        **_routing_hints_from_first_ws_frame(first_message),
+        **_with_routable_comparison_id(
+            _routing_hints_from_first_ws_frame(first_message), response_id_security, user_api_key_dict
+        ),
     )
 
     async def write_failure_row(exception: Exception) -> None:
@@ -2369,6 +2410,7 @@ async def responses_websocket_endpoint(
     websocket: WebSocket,
     model: str | None = fastapi.Query(None, description="The model to use for the responses WebSocket session."),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
+    response_id_security: ResponsesIDSecurity | None = _response_id_security_dep,
 ):
     """
     Responses API WebSocket mode endpoint.
@@ -2399,7 +2441,12 @@ async def responses_websocket_endpoint(
 
     limit_seconds: Final = _resolve_responses_ws_session_limit_seconds()
     session_task: Final = asyncio.ensure_future(
-        _responses_websocket_session(websocket=websocket, model=model, user_api_key_dict=user_api_key_dict)
+        _responses_websocket_session(
+            websocket=websocket,
+            model=model,
+            user_api_key_dict=user_api_key_dict,
+            response_id_security=response_id_security,
+        )
     )
     try:
         await asyncio.wait_for(asyncio.shield(session_task), timeout=limit_seconds)

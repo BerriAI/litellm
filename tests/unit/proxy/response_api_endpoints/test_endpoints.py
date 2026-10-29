@@ -21,6 +21,7 @@ from httpx import Response
 import litellm
 from litellm.constants import EMPTY_MAPPING
 from litellm.proxy._types import ProxyException
+from litellm.responses.utils import COMPARISON_RESPONSE_ID_ROUTING_HINT, ComparisonRoutingHint
 from litellm.proxy.proxy_server import app
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.router import RouterErrors
@@ -1964,6 +1965,24 @@ class TestResponsesWSFirstFrameValidation:
         ws.close.assert_awaited_once_with(code=1011, reason="Internal server error")
 
 
+_COMPARISON_ID_SALT: Final = "comparison-id-unit-test-salt"
+
+
+def _comparison_id_security_and_owners_id(monkeypatch: pytest.MonkeyPatch, original_id: str):
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", _COMPARISON_ID_SALT)
+    security: Final = ResponsesIDSecurity(
+        general_settings_reader=lambda: {}, signing_key_reader=lambda: _COMPARISON_ID_SALT
+    )
+    issued: Final = security._encrypt_response_id(
+        ResponsesAPIResponse(id=original_id, object="response", status="completed", created_at=1, output=[]),
+        UserAPIKeyAuth(user_id="owner"),
+    )
+    return security, issued.id
+
+
 class TestResponsesWSFirstFrameModelAuth:
     @pytest.mark.asyncio
     async def test_endpoint_enforces_auth_after_model_from_first_frame(self):
@@ -2020,15 +2039,24 @@ class TestResponsesWSFirstFrameModelAuth:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("nested", [False, True])
     @pytest.mark.parametrize("query_model", [None, "gpt-4o-mini"])
+    @pytest.mark.parametrize(
+        "cache_options",
+        [{}, {"prompt_cache_options": "comparison"}, {"prompt_cache_options": ["resp_compared"]}],
+    )
     async def test_endpoint_routes_on_first_frame_input_and_previous_response_id(
-        self, nested: bool, query_model: str | None
+        self, nested: bool, query_model: str | None, cache_options: dict[str, object]
     ):
         from litellm.proxy.response_api_endpoints.endpoints import (
             responses_websocket_endpoint,
         )
 
         replayed_input = [{"type": "reasoning", "id": "encitem_abc", "encrypted_content": "litellm_enc:abc;blob"}]
-        payload = {"model": "gpt-4o-mini", "input": replayed_input, "previous_response_id": "resp_prev"}
+        payload = {
+            "model": "gpt-4o-mini",
+            "input": replayed_input,
+            "previous_response_id": "resp_prev",
+            **cache_options,
+        }
         first_frame = (
             {"type": "response.create", "response": payload} if nested else {"type": "response.create", **payload}
         )
@@ -2082,6 +2110,79 @@ class TestResponsesWSFirstFrameModelAuth:
         assert callable(routed["responses_ws_frame_guard"])
         assert mock_route_request.await_args.kwargs["route_type"] == "_aresponses_websocket"
         ws.close.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("nested", [False, True])
+    @pytest.mark.parametrize(
+        "caller_id, routed_comparison_id",
+        [
+            ("owner", ComparisonRoutingHint("resp_compared")),
+            ("stranger", None),
+        ],
+    )
+    async def test_endpoint_routes_a_first_frame_comparison_id_only_for_its_owner(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        nested: bool,
+        caller_id: str,
+        routed_comparison_id: ComparisonRoutingHint | None,
+    ):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
+
+        security, issued_id = _comparison_id_security_and_owners_id(monkeypatch, "resp_compared")
+        payload: Final = {
+            "model": "gpt-4o-mini",
+            "input": "hi",
+            "prompt_cache_options": {"ttl": "12h", "comparison_response_id": issued_id},
+        }
+        first_frame: Final = (
+            {"type": "response.create", "response": payload} if nested else {"type": "response.create", **payload}
+        )
+
+        ws: Final = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(return_value=json.dumps(first_frame))
+        ws.close = AsyncMock()
+
+        processor: Final = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(
+            return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
+        )
+
+        async def fake_llm_call():
+            return None
+
+        with (
+            patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: the pre-call processor needs a live proxy; the routed payload is under test
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(  # test-quality-ok: routing is the seam where the first frame's comparison id becomes observable
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                return_value=fake_llm_call(),
+            ) as mock_route_request,
+        ):
+            await responses_websocket_endpoint(
+                websocket=ws,
+                model=None,
+                user_api_key_dict=UserAPIKeyAuth(user_id=caller_id),
+                response_id_security=security,
+            )
+
+        routed: Final = mock_route_request.await_args.kwargs["data"]
+        assert routed.get(COMPARISON_RESPONSE_ID_ROUTING_HINT) == routed_comparison_id
+        assert "prompt_cache_options" not in routed
+        assert routed["input"] == "hi"
 
     @pytest.mark.asyncio
     async def test_frame_guard_runs_the_guardrail_walk_on_the_frame_body_and_returns_its_records(self):
@@ -2178,6 +2279,75 @@ class TestResponsesWSFirstFrameModelAuth:
             "type": "response.create",
             "response": {"input": "hi [guarded]", "tools": tools[:1]},
         }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("nested", [False, True])
+    @pytest.mark.parametrize("sent_id, forwarded_id", [(None, "resp_compared"), ("resp_raw_provider_id", None)])
+    async def test_frame_guard_forwards_the_compared_response_id_the_provider_issued(
+        self, monkeypatch: pytest.MonkeyPatch, nested: bool, sent_id: str | None, forwarded_id: str | None
+    ):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        security, issued_id = _comparison_id_security_and_owners_id(monkeypatch, "resp_compared")
+        comparison_id: Final = sent_id or issued_id
+        proxy_logging_obj: Final = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+        guard: Final = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}},
+            UserAPIKeyAuth(user_id="owner"),
+            proxy_logging_obj,
+            MagicMock(),
+            security,
+        )
+        body: Final = {"input": "hi", "prompt_cache_options": {"ttl": "12h", "comparison_response_id": comparison_id}}
+        frame: Final = {"type": "response.create", "response": body} if nested else {"type": "response.create", **body}
+
+        guarded: Final = await guard(json.dumps(frame))
+
+        sent: Final = json.loads(guarded.frame)
+        assert (sent["response"] if nested else sent)["prompt_cache_options"] == {
+            "ttl": "12h",
+            "comparison_response_id": forwarded_id or comparison_id,
+        }
+
+    @pytest.mark.asyncio
+    async def test_frame_guard_refuses_and_bills_a_comparison_id_issued_to_another_user(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import litellm
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        security, issued_id = _comparison_id_security_and_owners_id(monkeypatch, "resp_compared")
+        proxy_logging_obj: Final = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+        spend_logger: Final = MagicMock(spec=ProxyDBLogger)
+        spend_logger.async_post_call_failure_hook = AsyncMock()
+        guard: Final = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}},
+            UserAPIKeyAuth(user_id="stranger"),
+            proxy_logging_obj,
+            MagicMock(),
+            security,
+        )
+
+        with patch.object(litellm, "callbacks", [spend_logger]), pytest.raises(ProxyException) as refused:
+            await guard(
+                json.dumps(
+                    {
+                        "type": "response.create",
+                        "input": "hi",
+                        "prompt_cache_options": {"comparison_response_id": issued_id},
+                    }
+                )
+            )
+
+        assert (refused.value.type, refused.value.code) == ("permission_error", "403")
+        proxy_logging_obj.pre_call_hook.assert_not_awaited()
+        spend_logger.async_post_call_failure_hook.assert_awaited_once()
+        assert spend_logger.async_post_call_failure_hook.await_args.kwargs["original_exception"] is refused.value
 
     @pytest.mark.asyncio
     async def test_frame_guard_strips_the_proxy_owned_metadata_keys_a_client_sends(self):

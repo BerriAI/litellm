@@ -2,6 +2,7 @@ import base64
 import os
 import re
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from functools import reduce
 from types import MappingProxyType
 from typing import Any, Final, Optional, TypeVar, Union, cast, get_args, get_type_hints, overload
@@ -39,6 +40,14 @@ from litellm.types.utils import (
     Usage,
     text_tokens_without_nested_reasoning,
 )
+
+COMPARISON_RESPONSE_ID_ROUTING_HINT: Final = "comparison_response_id_routing_hint"
+
+
+@dataclass(frozen=True, slots=True)
+class ComparisonRoutingHint:
+    response_id: str
+
 
 _PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
     TypeAdapter[ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None]
@@ -781,6 +790,61 @@ class ResponsesAPIRequestUtils:
             )
 
     _decode_responses_api_response_id = decode_responses_api_response_id
+
+    @staticmethod
+    def decode_exact_responses_api_response_id(response_id: str) -> DecodedResponseId | None:
+        decoded: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id)
+        rebuilt: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider=decoded.get("custom_llm_provider"),
+            model_id=decoded.get("model_id"),
+            response_id=decoded.get("response_id", response_id),
+        )
+        return decoded if rebuilt == response_id else None
+
+    @staticmethod
+    def with_original_comparison_response_id(
+        body: Mapping[str, object], custom_llm_provider: str | None
+    ) -> Mapping[str, object]:
+        options: Final = as_str_mapping(body.get("prompt_cache_options"))
+        comparison_id: Final = None if options is None else options.get("comparison_response_id")
+        decoded: Final = (
+            ResponsesAPIRequestUtils.decode_exact_responses_api_response_id(comparison_id)
+            if isinstance(comparison_id, str)
+            else None
+        )
+        original_id: Final = (
+            decoded.get("response_id")
+            if decoded is not None and decoded.get("custom_llm_provider") == custom_llm_provider
+            else None
+        )
+        if options is None or original_id is None:
+            return body
+        return {**body, "prompt_cache_options": {**options, "comparison_response_id": original_id}}
+
+    @staticmethod
+    def comparison_response_id(request: Mapping[str, object]) -> str | None:
+        routing_hint: Final = request.get(COMPARISON_RESPONSE_ID_ROUTING_HINT)
+        if isinstance(routing_hint, ComparisonRoutingHint) and routing_hint.response_id:
+            return routing_hint.response_id
+        extra_body: Final = as_str_mapping(request.get("extra_body"))
+        container: Final = extra_body if extra_body is not None and "prompt_cache_options" in extra_body else request
+        options: Final = as_str_mapping(container.get("prompt_cache_options"))
+        comparison_id: Final = None if options is None else options.get("comparison_response_id")
+        return comparison_id if isinstance(comparison_id, str) and comparison_id else None
+
+    @staticmethod
+    def pinned_response_model_id(request: Mapping[str, object], failed_deployment_ids: frozenset[str]) -> str | None:
+        previous_response_id: Final = request.get("previous_response_id")
+        if previous_response_id is not None:
+            return ResponsesAPIRequestUtils.get_model_id_from_response_id(str(previous_response_id))
+        comparison_id: Final = ResponsesAPIRequestUtils.comparison_response_id(request)
+        decoded: Final = (
+            None
+            if comparison_id is None
+            else ResponsesAPIRequestUtils.decode_exact_responses_api_response_id(comparison_id)
+        )
+        compared_model_id: Final = None if decoded is None else decoded.get("model_id") or None
+        return None if compared_model_id in failed_deployment_ids else compared_model_id
 
     @staticmethod
     def _is_litellm_encoded_response_id(response_id: str) -> bool:
