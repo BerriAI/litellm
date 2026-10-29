@@ -363,11 +363,12 @@ CLEAR_TOOL_USES_EDIT: Final = {"type": "clear_tool_uses_20250919"}
         pytest.param("claude-sonnet-4-6", _claude_code_payload(effort="high"), True, id="adaptive-model"),
         pytest.param("claude-3-5-haiku-latest", _claude_code_payload(), False, id="non-reasoning-model"),
         pytest.param("claude-haiku-4-5", _claude_code_payload(), True, id="legacy-thinking-model"),
+        pytest.param(
+            "claude-opus-4-8", {"reasoning_effort": "none"}, False, id="adaptive-model-without-default-thinking"
+        ),
     ],
 )
 def test_clear_thinking_edit_dropped_exactly_when_thinking_is(model, params, keeps_thinking):
-    """Anthropic rejects a clear_thinking edit without thinking, so every path that drops
-    thinking must drop the edit too, and leave other edits alone"""
     result = _transform(
         model,
         {
@@ -382,10 +383,10 @@ def test_clear_thinking_edit_dropped_exactly_when_thinking_is(model, params, kee
     assert result["context_management"] == {"edits": expected_edits}
 
 
-def test_clear_thinking_edit_kept_for_always_on_thinking_model_without_thinking():
-    """An always-on model keeps thinking adaptively after reasoning_effort='none' drops the param"""
+@pytest.mark.parametrize("model", ["claude-fable-5", "claude-sonnet-5", "claude-opus-5", "claude-haiku-5-5"])
+def test_clear_thinking_edit_kept_when_model_thinks_without_thinking_param(model):
     result = _transform(
-        "claude-fable-5",
+        model,
         {"max_tokens": 8192, "reasoning_effort": "none", "context_management": {"edits": [CLEAR_THINKING_EDIT]}},
     )
 

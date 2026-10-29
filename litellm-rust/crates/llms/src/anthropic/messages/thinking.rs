@@ -184,7 +184,9 @@ fn without_thinking(
     params: MessagesOptionalParams,
     context: &ThinkingContext,
 ) -> MessagesOptionalParams {
-    let context_management = if context.capabilities.thinking_always_on {
+    let thinks_without_thinking_param =
+        context.capabilities.thinking_always_on || context.capabilities.thinking_on_by_default;
+    let context_management = if thinks_without_thinking_param {
         params.context_management
     } else {
         without_clear_thinking_edits(params.context_management)
@@ -516,6 +518,14 @@ mod tests {
     }
 
     #[fixture]
+    fn sonnet_5() -> MessagesModelCapabilities {
+        MessagesModelCapabilities {
+            thinking_on_by_default: true,
+            ..opus_4_7()
+        }
+    }
+
+    #[fixture]
     fn newfamily_6() -> MessagesModelCapabilities {
         MessagesModelCapabilities {
             supports_reasoning: true,
@@ -716,7 +726,17 @@ mod tests {
         serde_json::json!({"max_tokens": 8192, "reasoning_effort": "none"}),
         true
     )]
-    fn clear_thinking_edit_is_dropped_with_thinking_except_on_always_on_models(
+    #[case::default_thinking_model_keeps_edit(
+        sonnet_5(),
+        serde_json::json!({"max_tokens": 8192, "reasoning_effort": "none"}),
+        true
+    )]
+    #[case::adaptive_model_without_default_thinking_drops_edit(
+        opus_4_7(),
+        serde_json::json!({"max_tokens": 8192, "reasoning_effort": "none"}),
+        false
+    )]
+    fn clear_thinking_edit_is_dropped_with_thinking_except_on_models_that_think_by_default(
         #[case] capabilities: MessagesModelCapabilities,
         #[case] fields: Value,
         #[case] keeps_edit: bool,
@@ -726,7 +746,8 @@ mod tests {
             "context_management".into(),
             serde_json::json!({"edits": [{"type": "clear_thinking_20251015", "keep": "all"}, {"type": "clear_tool_uses_20250919"}]}),
         );
-        let always_on = capabilities.thinking_always_on;
+        let thinks_without_thinking_param =
+            capabilities.thinking_always_on || capabilities.thinking_on_by_default;
         let translated = serde_json::to_value(translate(capabilities, fields).unwrap()).unwrap();
         let edit_types: Vec<&str> = translated["context_management"]["edits"]
             .as_array()
@@ -742,7 +763,7 @@ mod tests {
         assert_eq!(edit_types, expected);
         assert_eq!(
             translated.get("thinking").is_some(),
-            keeps_edit && !always_on
+            keeps_edit && !thinks_without_thinking_param
         );
     }
 

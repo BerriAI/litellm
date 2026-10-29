@@ -562,6 +562,8 @@ pub struct ModelInfo {
     pub supports_xhigh_reasoning_effort: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_always_on: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_on_by_default: Option<bool>,
     /// Context-length or result-count tiered rates; each tier's costs apply within its range.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tiered_pricing: Option<Vec<TieredRate>>,
