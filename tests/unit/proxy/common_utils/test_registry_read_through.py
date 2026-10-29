@@ -938,6 +938,40 @@ async def test_resync_model_deployments_by_ids_reads_the_writer_not_a_lagging_re
 
 
 @pytest.mark.asyncio
+async def test_unknown_model_name_read_through_reads_the_replica_without_waiting_for_a_reload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import _resync_model_deployments
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    writer: Final = MagicMock(name="writer_prisma")
+    writer.litellm_proxymodeltable = SimpleNamespace(find_many=AsyncMock(return_value=[]), create=AsyncMock())
+    replica: Final = MagicMock(name="replica_prisma")
+    replica.litellm_proxymodeltable = SimpleNamespace(find_many=AsyncMock(return_value=[]), create=AsyncMock())
+    prisma_client: Final = MagicMock()
+    prisma_client.db = RoutingPrismaWrapper(
+        writer=PrismaWrapper(original_prisma=writer, iam_token_db_auth=False),
+        reader=PrismaWrapper(original_prisma=replica, iam_token_db_auth=False),
+    )
+    reload_in_progress: Final = asyncio.Lock()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+    monkeypatch.setattr(proxy_server, "MODEL_RECONCILE_LOCK", reload_in_progress)
+
+    async with reload_in_progress:
+        found: Final = await asyncio.wait_for(_resync_model_deployments("no-such-model"), timeout=2)
+
+    assert found is False
+    writer.litellm_proxymodeltable.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_resync_model_deployments_by_ids_installs_the_row_a_concurrent_reload_left_current(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -961,7 +995,10 @@ async def test_resync_model_deployments_by_ids_installs_the_row_a_concurrent_rel
     monkeypatch.setattr(proxy_server.proxy_config, "get_credentials", AsyncMock())
     monkeypatch.setattr(proxy_server.proxy_config, "_add_deployment", lambda db_models: installed.append(db_models))
 
-    async with proxy_server.MODEL_RECONCILE_LOCK:
+    reload_in_progress: Final = asyncio.Lock()
+    monkeypatch.setattr(proxy_server, "MODEL_RECONCILE_LOCK", reload_in_progress)
+
+    async with reload_in_progress:
         targeted_load: Final = asyncio.create_task(resync_model_deployments_by_ids(("m-1",)))
         for _ in range(5):
             await asyncio.sleep(0)

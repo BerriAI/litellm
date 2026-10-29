@@ -15,7 +15,6 @@ or the first routed request on this replica would pick a tier it has not loaded.
 import asyncio
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from functools import partial
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
@@ -124,18 +123,36 @@ def _db_backed_registries_enabled(object_type: str) -> bool:
 
 
 async def _resync_model_deployments(model_name: str) -> bool:
+    from litellm.proxy import proxy_server
+    from litellm.repositories.model_repository import ModelRepository
+
     if not _db_backed_registries_enabled("models"):
         return False
-    outcome: Final = await _load_model_rows(partial(_find_rows_by_name_or_id, model_name), _always)
+    prisma_client: Final = proxy_server.prisma_client
+    assert prisma_client is not None
+    rows: Final = await _find_rows_by_name_or_id(model_name, ModelRepository(prisma_client).table)
+    if not rows:
+        return False
+    async with proxy_server.MODEL_RECONCILE_LOCK:
+        outcome: Final = await _install_model_rows(rows, _always)
     if outcome in ("no_router", "auto_router"):
         await _reload_every_model()
     return outcome == "loaded" or _model_is_loaded(model_name)
 
 
 async def resync_model_deployments_by_ids(model_ids: tuple[str, ...]) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+    from litellm.repositories.model_repository import ModelRepository
+
     if not _db_backed_registries_enabled("models"):
         return
-    outcome: Final = await _load_model_rows(partial(_find_rows_by_ids, model_ids), _names_an_unloaded_credential)
+    prisma_client: Final = proxy_server.prisma_client
+    assert prisma_client is not None
+    writer_table: Final = ModelRepository(WriterPinnedClient(prisma_client.db)).table
+    async with proxy_server.MODEL_RECONCILE_LOCK:
+        rows: Final = await _find_rows_by_ids(model_ids, writer_table)
+        outcome: Final = await _install_model_rows(rows, _names_an_unloaded_credential)
     if outcome == "no_router":
         await _reload_every_model()
 
@@ -152,31 +169,26 @@ async def _find_rows_by_ids(model_ids: tuple[str, ...], table: "_ModelTable") ->
     return list(await find_many_in(table, "model_id", model_ids))
 
 
-async def _load_model_rows(
-    find_rows: Callable[["_ModelTable"], Awaitable["_ModelRows"]],
+async def _install_model_rows(
+    rows: "_ModelRows",
     needs_credentials: Callable[["_ModelRows"], bool],
 ) -> ModelLoadOutcome:
     from litellm.proxy import proxy_server
-    from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
-    from litellm.repositories.model_repository import ModelRepository
 
-    prisma_client: Final = proxy_server.prisma_client
-    assert prisma_client is not None
-    table: Final = ModelRepository(WriterPinnedClient(prisma_client.db)).table
-    async with proxy_server.MODEL_RECONCILE_LOCK:
-        rows: Final = await find_rows(table)
-        router: Final = proxy_server.llm_router
-        if not rows:
-            return "missing"
-        if router is None:
-            return "no_router"
-        if _holds_an_auto_router(rows):
-            return "auto_router"
-        if needs_credentials(rows):
-            await proxy_server.proxy_config.get_credentials(prisma_client=prisma_client)
-        proxy_server.proxy_config._add_deployment(db_models=rows)
-        proxy_server.llm_model_list = router.get_model_list()
-        return "loaded"
+    router: Final = proxy_server.llm_router
+    if not rows:
+        return "missing"
+    if router is None:
+        return "no_router"
+    if _holds_an_auto_router(rows):
+        return "auto_router"
+    if needs_credentials(rows):
+        prisma_client: Final = proxy_server.prisma_client
+        assert prisma_client is not None
+        await proxy_server.proxy_config.get_credentials(prisma_client=prisma_client)
+    proxy_server.proxy_config._add_deployment(db_models=rows)
+    proxy_server.llm_model_list = router.get_model_list()
+    return "loaded"
 
 
 async def _reload_every_model() -> None:
