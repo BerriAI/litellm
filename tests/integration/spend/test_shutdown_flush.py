@@ -137,10 +137,12 @@ def test_tagged_request_survives_shutdown_before_the_tag_timer(
 
 
 @pytest.mark.parametrize("redis_buffer", [False, True])
+@pytest.mark.parametrize("overflow", [False, True])
 def test_callback_backlog_is_accounted_before_shutdown_disconnects(
-    gateway: Gateway, tmp_path: Path, redis_buffer: bool
+    gateway: Gateway, tmp_path: Path, redis_buffer: bool, overflow: bool
 ) -> None:
     release: Final = threading.Event()
+    requests: Final = 6 if overflow else 3
     tags: Final = (f"backlog-a-{uuid.uuid4().hex}", f"backlog-b-{uuid.uuid4().hex}")
     with (
         wire_server(_provider) as wire,
@@ -153,6 +155,7 @@ def test_callback_backlog_is_accounted_before_shutdown_disconnects(
             {
                 "DATABASE_URL": os.environ["DATABASE_URL"],
                 "LOGGING_WORKER_CONCURRENCY": "2",
+                "LOGGING_WORKER_MAX_QUEUE_SIZE": "2" if overflow else "50000",
                 "SHUTDOWN_CALLBACK_URL": logger.url,
                 "GRACEFUL_SHUTDOWN_TIMEOUT": "15",
                 "LITELLM_LOG": "DEBUG",
@@ -163,9 +166,9 @@ def test_callback_backlog_is_accounted_before_shutdown_disconnects(
                 owned.gateway.post("/key/generate", {"user_id": f"backlog-{uuid.uuid4().hex}"})["key"]
             )
             try:
-                for _ in range(3):
+                for _ in range(requests):
                     _tagged_chat(owned.gateway, key, tags)
-                eventually(logger.received.qsize, lambda count: count == 2, seconds=10)
+                eventually(logger.received.qsize, lambda count: count >= 2, seconds=10)
                 owned.begin_shutdown()
                 eventually(
                     lambda: (
@@ -177,7 +180,7 @@ def test_callback_backlog_is_accounted_before_shutdown_disconnects(
                 )
                 release.set()
                 owned.process.wait(timeout=90)
-                _assert_shutdown_accounting(key, tags, 3)
+                _assert_shutdown_accounting(key, tags, requests)
             finally:
                 release.set()
 

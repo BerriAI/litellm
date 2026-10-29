@@ -197,6 +197,137 @@ async def test_overflow_callback_does_not_undercount_the_unfinished_queue() -> N
     await worker.stop()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_size", (1, 2))
+async def test_flush_waits_for_delayed_overflow_and_preserves_callback_context(queue_size: int) -> None:
+    retry_started: Final = asyncio.Event()
+    release_retry: Final = asyncio.Event()
+    completed: Final[asyncio.Queue[tuple[int, str]]] = asyncio.Queue()
+    identity: Final = contextvars.ContextVar("overflow_identity", default="outside")
+
+    async def retry_sleep(delay: float) -> None:
+        retry_started.set()
+        await release_retry.wait()
+
+    worker: Final = LoggingWorker(max_queue_size=queue_size, concurrency=1, retry_sleep=retry_sleep)
+
+    async def callback(index: int) -> None:
+        completed.put_nowait((index, identity.get()))
+
+    worker.start()
+    token: Final = identity.set("request")
+    for index in range(4):
+        worker.enqueue(callback(index))
+    identity.reset(token)
+    flushing: Final = asyncio.create_task(worker.flush())
+    try:
+        await asyncio.wait_for(retry_started.wait(), timeout=2)
+        assert worker._queue is not None
+        await asyncio.wait_for(worker._queue.join(), timeout=2)
+        await asyncio.sleep(0)
+        assert not flushing.done(), "Queue completion must not hide delayed overflow callbacks"
+        assert worker.pending_count > 0
+        release_retry.set()
+        await asyncio.wait_for(flushing, timeout=2)
+        assert sorted(completed.get_nowait() for _ in range(completed.qsize())) == [
+            (index, "request") for index in range(4)
+        ]
+        assert worker.pending_count == 0
+    finally:
+        release_retry.set()
+        await worker.stop(discard_pending=True)
+        await asyncio.gather(flushing, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("start_retry", (False, True))
+async def test_shutdown_discards_overflow_without_late_enqueue_or_replay(start_retry: bool) -> None:
+    import inspect
+
+    retry_started: Final = asyncio.Event()
+    release_retry: Final = asyncio.Event()
+    executed: Final[asyncio.Queue[int]] = asyncio.Queue()
+
+    async def retry_sleep(delay: float) -> None:
+        retry_started.set()
+        await release_retry.wait()
+
+    worker: Final = LoggingWorker(max_queue_size=2, concurrency=1, retry_sleep=retry_sleep)
+
+    async def callback(index: int) -> None:
+        executed.put_nowait(index)
+
+    callbacks: Final = tuple(callback(index) for index in range(4))
+    worker._ensure_queue()
+    for callback_coro in callbacks:
+        worker.enqueue(callback_coro)
+    if start_retry:
+        await asyncio.wait_for(retry_started.wait(), timeout=2)
+    await worker.stop(discard_pending=True, timeout=1)
+    completed_at_stop: Final = executed.qsize()
+    release_retry.set()
+    await worker.flush()
+    try:
+        assert executed.qsize() == completed_at_stop, "Discarded overflow must not run when the worker restarts"
+        assert worker.pending_count == 0
+        assert all(inspect.getcoroutinestate(coro) == inspect.CORO_CLOSED for coro in callbacks)
+    finally:
+        await worker.stop(discard_pending=True)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_aggressive_clear_callbacks_before_returning() -> None:
+    started: Final = asyncio.Event()
+    cancelled: Final = asyncio.Event()
+    worker: Final = LoggingWorker(max_queue_size=2, concurrency=1)
+
+    async def blocked() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    async def noop() -> None:
+        pass
+
+    worker._ensure_queue()
+    worker.enqueue(blocked())
+    worker.enqueue(noop())
+    worker.enqueue(noop())
+    await asyncio.wait_for(started.wait(), timeout=2)
+    await worker.stop(discard_pending=True, timeout=1)
+    assert cancelled.is_set(), "Overflow execution must participate in shutdown cancellation"
+    assert worker.pending_count == 0
+    assert worker._queue is not None
+    await asyncio.wait_for(worker._queue.join(), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_stopped_overflow_can_be_flushed_when_not_discarded() -> None:
+    release_retry: Final = asyncio.Event()
+    completed: Final[asyncio.Queue[int]] = asyncio.Queue()
+
+    async def retry_sleep(delay: float) -> None:
+        await release_retry.wait()
+
+    worker: Final = LoggingWorker(max_queue_size=2, concurrency=1, retry_sleep=retry_sleep)
+
+    async def callback(index: int) -> None:
+        completed.put_nowait(index)
+
+    worker._ensure_queue()
+    for index in range(4):
+        worker.enqueue(callback(index))
+    await worker.stop()
+    release_retry.set()
+    try:
+        await asyncio.wait_for(worker.flush(), timeout=2)
+        assert sorted(completed.get_nowait() for _ in range(completed.qsize())) == list(range(4))
+    finally:
+        await worker.stop(discard_pending=True)
+
+
 class TestLoggingWorker:
     """Test cases for LoggingWorker functionality."""
 

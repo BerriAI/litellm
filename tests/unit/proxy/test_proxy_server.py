@@ -409,13 +409,14 @@ async def test_shutdown_preserves_persistence_reserve_after_partial_http_drain(
     monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "30")
     worker: Final = LoggingWorker()
     persisted: Final = asyncio.Event()
+    drain_budgets: Final[asyncio.Queue[float]] = asyncio.Queue()
     GracefulShutdownManager.start_shutdown(clock=lambda: 100.0)
 
     async def flush_spend() -> None:
         persisted.set()
 
     async def drain_tasks(timeout: float) -> None:
-        assert timeout == 5.0
+        drain_budgets.put_nowait(timeout)
 
     try:
         with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
@@ -424,6 +425,7 @@ async def test_shutdown_preserves_persistence_reserve_after_partial_http_drain(
             )
         assert "remaining_s=24.000 callback_timeout_s=14.000" in caplog.text
         assert persisted.is_set()
+        assert tuple(drain_budgets.get_nowait() for _ in range(drain_budgets.qsize())) == (14.0, 5.0)
     finally:
         await worker.stop()
         GracefulShutdownManager.reset()
@@ -4225,3 +4227,34 @@ def test_detailed_debug_logs_request_body_only_as_received_and_as_sent(
     assert len(body_dumps) == 2, [message[:120] for message in body_dumps]
     assert body_dumps[0].startswith("Request received by LiteLLM:")
     assert "POST Request Sent from LiteLLM" in body_dumps[1]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_waits_for_enqueue_producers_before_stopping_worker() -> None:
+    from litellm.litellm_core_utils.logging_worker import LoggingWorker
+    from litellm.responses.streaming_iterator import spawn_logging_task
+
+    worker: Final = LoggingWorker()
+    persisted: Final[asyncio.Queue[str]] = asyncio.Queue()
+    accounting: Final[asyncio.Queue[str]] = asyncio.Queue()
+
+    async def callback() -> None:
+        accounting.put_nowait("completed request")
+
+    async def producer() -> None:
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        worker.ensure_initialized_and_enqueue(callback())
+
+    async def flush_spend() -> None:
+        while not accounting.empty():
+            persisted.put_nowait(accounting.get_nowait())
+
+    spawn_logging_task(asyncio.get_running_loop(), producer(), task_name="success enqueue")
+    try:
+        await litellm.proxy.proxy_server._flush_spend_around_logging_drain_on_shutdown(flush_spend, worker=worker)
+        assert persisted.qsize() == 1, "An enqueue producer must finish before callback draining stops"
+        assert persisted.get_nowait() == "completed request"
+        assert worker.pending_count == 0
+    finally:
+        await worker.stop(discard_pending=True)

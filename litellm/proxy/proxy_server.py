@@ -1294,8 +1294,13 @@ async def _flush_spend_around_logging_drain_on_shutdown(
         remaining,
         callback_timeout,
     )
+
+    async def drain_callbacks() -> None:
+        await drain_tasks(callback_timeout)
+        await worker.flush()
+
     try:
-        await asyncio.wait_for(worker.flush(), timeout=callback_timeout)
+        await asyncio.wait_for(drain_callbacks(), timeout=callback_timeout)
     except asyncio.TimeoutError:
         verbose_proxy_logger.warning(
             "Success callback shutdown budget exhausted with %d unfinished callbacks; accounting may be incomplete",
