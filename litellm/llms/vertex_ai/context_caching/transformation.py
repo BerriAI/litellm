@@ -15,6 +15,7 @@ from litellm.types.llms.vertex_ai import CachedContentRequestBody
 from litellm.utils import is_cached_message
 
 from ..common_utils import get_supports_system_message
+from .storage_pricing import cap_cache_ttl
 from ..gemini.transformation import (
     gemini_convert_messages_with_history,
     transform_system_message,
@@ -167,7 +168,8 @@ def transform_openai_messages_to_gemini_context_caching(
     vertex_location: str | None,
 ) -> CachedContentRequestBody:
     # Extract TTL from cached messages BEFORE system message transformation
-    ttl: Final = extract_ttl_from_cached_messages(messages)
+    # Google bills storage per token-hour for the whole TTL; keep the client's TTL within the operator's cap.
+    ttl: Final = cap_cache_ttl(extract_ttl_from_cached_messages(messages))
 
     supports_system_message: Final = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
 

@@ -52,6 +52,13 @@ class TestContextCachingEndpoints:
             return_value=True,
         )
         self._token_check_patcher.start()
+        # Storage pricing is covered by test_context_cache_storage_pricing.py; these tests use
+        # models without a storage rate in the cost map, so give every model one here.
+        self._storage_price_patcher = patch(
+            "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.cache_storage_price",
+            return_value=4.5e-06,
+        )
+        self._storage_price_patcher.start()
 
         # Sample messages for testing
         self.sample_messages = [
@@ -83,6 +90,7 @@ class TestContextCachingEndpoints:
     def teardown_method(self):
         """Teardown for each test method"""
         self._token_check_patcher.stop()
+        self._storage_price_patcher.stop()
 
     @pytest.mark.parametrize(
         "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
