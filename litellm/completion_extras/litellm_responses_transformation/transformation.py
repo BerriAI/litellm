@@ -26,7 +26,9 @@ from litellm import ModelResponse
 from litellm._logging import verbose_logger
 from litellm.completion_extras.litellm_responses_transformation.history import (
     PHASE_FIELD,
+    Phase,
     UnknownPhase,
+    message_item_phase,
     output_message_text,
     reasoning_input_item,
     replay_fields,
@@ -67,7 +69,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
-from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
+from litellm.types.utils import Delta, GenericStreamingChunk, ModelResponseStream
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseInputImageParam, ResponseOutputItem
@@ -202,6 +204,13 @@ def _effort_with_requested_summary(nested_effort: object, top_level_effort: obje
 def _served_provider(litellm_params: Mapping[str, object]) -> str | None:
     custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
     return custom_llm_provider if isinstance(custom_llm_provider, str) else None
+
+
+_HISTORY_REPLAY_PROVIDERS: Final = frozenset({"openai", "azure"})
+
+
+def replays_responses_history(provider: str | None) -> bool:
+    return provider in _HISTORY_REPLAY_PROVIDERS
 
 
 def _supports_audio_input(model: str, litellm_params: Mapping[str, object]) -> bool:
@@ -557,6 +566,7 @@ def completed_stream_history(
     *,
     completed: bool,
     structured_output: bool,
+    streamed_phases: bool,
 ) -> dict[str, object] | None:  # mutable-ok: Delta.provider_specific_fields is typed as a dict
     items: Final = _STREAMED_OUTPUT_ITEMS.validate_python(output_payload)
     calls: Final = tuple(item for item in items if item.get("type") in ("function_call", "custom_tool_call"))
@@ -568,10 +578,17 @@ def completed_stream_history(
         "provider_specific_fields": tool_search_fields,
     }
     fields: Final = {
+        **({PHASE_FIELD: None} if streamed_phases else {}),
         **(tool_search_fields or {}),
         **replay_fields(items, streamed_message, completed=completed, first_message_only=structured_output),
     }
     return fields or None
+
+
+def _text_delta(content: object, phase: Phase | None) -> Delta:
+    if phase is None:
+        return Delta(content=content)
+    return Delta(content=content, provider_specific_fields={PHASE_FIELD: phase})
 
 
 def _assistant_phase_field(msg: object, replay_openai_history: bool, drop_params: bool) -> Mapping[str, object]:
@@ -1138,7 +1155,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
             replay_tool_search=_requests_tool_search(cast(object, optional_params)),  # cast-ok: upcast
             include_namespace=True,
-            replay_openai_history=provider == "openai",
+            replay_openai_history=replays_responses_history(provider),
         )
         # OpenAI's Responses API rejects an empty input. For a system-only
         # request, carry the system message as a system-role input item instead
@@ -1513,10 +1530,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             structured_output=is_structured_output_request(
                 cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
             ),
-            replay_openai_history=_served_provider(
-                cast("Mapping[str, object]", litellm_params)  # cast-ok: litellm_params is an untyped dict
-            )
-            == "openai",
+            replay_openai_history=replays_responses_history(
+                _served_provider(
+                    cast("Mapping[str, object]", litellm_params)  # cast-ok: litellm_params is an untyped dict
+                )
+            ),
             completed=raw_response.status == "completed",
         )
 
@@ -1979,6 +1997,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
         self._structured_output: Final = structured_output
         self._first_message_item_done: bool = False
+        self._message_phases: Mapping[int, Phase] = MappingProxyType({})
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -2021,6 +2040,8 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         tool_call_index_map: dict[int, int] | None = None,  # mutable-ok: per-stream state, remapped in place
         replays_openai_history: bool = False,
         structured_output: bool = False,
+        item_phase: Phase | None = None,
+        streamed_phases: bool = False,
     ) -> "ModelResponseStream":
         """
         Translate a Responses API streaming chunk to OpenAI chat completion streaming format.
@@ -2030,6 +2051,8 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             tool_call_index_map: Per-stream output_index -> sequential tool_call index map
             replays_openai_history: Record the completed output's item sequence for the next turn
             structured_output: Only the first message item became content
+            item_phase: Phase of the message item this chunk belongs to
+            streamed_phases: An earlier text delta of this stream carried a phase
 
         Returns:
             ModelResponseStream: OpenAI-formatted streaming chunk
@@ -2203,7 +2226,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     choices=[
                         StreamingChoices(
                             index=0,
-                            delta=Delta(content=content_part),
+                            delta=_text_delta(content_part, item_phase),
                             finish_reason=None,
                         )
                     ]
@@ -2265,6 +2288,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                                     tool_search_fields,
                                     completed=event_type == "response.completed",
                                     structured_output=structured_output,
+                                    streamed_phases=streamed_phases,
                                 )
                                 if replays_openai_history
                                 else tool_search_fields
@@ -2309,6 +2333,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         """
         verbose_logger.debug("Chat provider: transform_streaming_response called with chunk: %s", chunk)
         self._remember_served_service_tier(chunk)
+        self._remember_message_phase(chunk)
         translated: Final = (
             self._empty_content_chunk()
             if self._is_text_delta_after_structured_answer(chunk)
@@ -2317,6 +2342,8 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 tool_call_index_map=self._tool_call_index_map,
                 replays_openai_history=self._replays_openai_history,
                 structured_output=self._structured_output,
+                item_phase=self._item_phase(chunk),
+                streamed_phases=bool(self._message_phases),
             )
         )
         if self._structured_output and _is_message_item_done(chunk):
@@ -2337,6 +2364,21 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
         return ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason=None)])
+
+    def _remember_message_phase(self, chunk: Mapping[str, object]) -> None:
+        if (
+            not self._replays_openai_history
+            or _responses_event_type(chunk) != ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED.value
+        ):
+            return
+        output_index: Final = chunk.get("output_index")
+        phase: Final = message_item_phase(chunk.get("item"))
+        if isinstance(output_index, int) and phase is not None:
+            self._message_phases = MappingProxyType({**self._message_phases, output_index: phase})
+
+    def _item_phase(self, chunk: Mapping[str, object]) -> Phase | None:
+        output_index: Final = chunk.get("output_index")
+        return self._message_phases.get(output_index) if isinstance(output_index, int) else None
 
     def _remember_served_service_tier(self, chunk: dict[str, object]) -> None:
         response_payload: Final = chunk.get("response")

@@ -159,6 +159,11 @@ def _parsed_output_item(item: object) -> _OutputItem | None:
         return None
 
 
+def message_item_phase(item: object) -> Phase | None:
+    parsed: Final = _parsed_output_item(item)
+    return parsed.phase if isinstance(parsed, _OutputMessage) else None
+
+
 def _is_message(item: object) -> bool:
     try:
         _AnyMessage.model_validate(_as_json(item))

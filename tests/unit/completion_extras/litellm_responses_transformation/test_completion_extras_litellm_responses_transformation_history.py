@@ -1,5 +1,6 @@
 import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -12,7 +13,21 @@ from litellm.exceptions import MidStreamFallbackError
 
 OPENAI_RESPONSES_URL: Final = "https://api.openai.com/v1/responses"
 AZURE_API_BASE: Final = "https://litellm-history-test.openai.azure.com"
+XAI_API_BASE: Final = "https://api.x.ai/v1"
 MODEL: Final = "gpt-5.6"
+OPENAI_MODEL: Final = f"openai/responses/{MODEL}"
+AZURE_MODEL: Final = f"azure/responses/{MODEL}"
+XAI_MODEL: Final = "xai/responses/grok-4.7"
+ROUTES: Final = MappingProxyType(
+    {
+        "openai": (OPENAI_RESPONSES_URL, MappingProxyType({})),
+        "azure": (
+            AZURE_API_BASE,
+            MappingProxyType({"api_base": AZURE_API_BASE, "api_version": "2025-04-01-preview"}),
+        ),
+        "xai": (XAI_API_BASE, MappingProxyType({"api_base": XAI_API_BASE})),
+    }
+)
 TOOLS: Final = (
     {
         "type": "function",
@@ -183,11 +198,15 @@ def _sse(output: Sequence[Mapping[str, object]], terminal_event: str | None = "r
     return httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
 
 
+def _route(model: str) -> tuple[str, Mapping[str, str]]:
+    return ROUTES[model.split("/", 1)[0]]
+
+
 def _assistant_turn(
     output: Sequence[Mapping[str, object]],
     *,
     stream: bool,
-    model: str = f"openai/responses/{MODEL}",
+    model: str = OPENAI_MODEL,
     terminal_event: str | None = "response.completed",
     status: str = "completed",
     response_format: Mapping[str, object] | None = None,
@@ -195,19 +214,17 @@ def _assistant_turn(
     reply: Final = httpx.Response(
         200, content=json.dumps(_response(output, status)), headers={"content-type": "application/json"}
     )
+    upstream_url, route_params = _route(model)
     with respx.mock(assert_all_called=True) as router:
-        router.post(url__startswith=OPENAI_RESPONSES_URL if model.startswith("openai/") else AZURE_API_BASE).mock(
-            return_value=_sse(output, terminal_event) if stream else reply
-        )
+        router.post(url__startswith=upstream_url).mock(return_value=_sse(output, terminal_event) if stream else reply)
         response: Final = litellm.completion(
             model=model,
             messages=[USER],
             tools=list(TOOLS),
             api_key="sk-test",
-            api_base=None if model.startswith("openai/") else AZURE_API_BASE,
-            api_version=None if model.startswith("openai/") else "2025-04-01-preview",
             stream=stream,
             response_format=response_format,
+            **route_params,
         )
         message: Final = (
             (litellm.stream_chunk_builder(list(response), messages=[USER]) if stream else response).choices[0].message
@@ -217,22 +234,22 @@ def _assistant_turn(
 
 def _next_turn_input(
     assistant: Mapping[str, object],
-    model: str = f"openai/responses/{MODEL}",
+    model: str = OPENAI_MODEL,
     tools: Sequence[Mapping[str, object]] = TOOLS,
     drop_params: bool = False,
 ) -> list[Mapping[str, object]]:
+    upstream_url, route_params = _route(model)
     with respx.mock(assert_all_called=True) as router:
-        upstream: Final = router.post(
-            url__startswith=OPENAI_RESPONSES_URL if model.startswith("openai/") else AZURE_API_BASE
-        ).mock(return_value=httpx.Response(200, json=_response((FOLLOW_UP,))))
+        upstream: Final = router.post(url__startswith=upstream_url).mock(
+            return_value=httpx.Response(200, json=_response((FOLLOW_UP,)))
+        )
         litellm.completion(
             model=model,
             messages=[USER, dict(assistant), TOOL_RESULT],
             tools=list(tools),
             api_key="sk-test",
-            api_base=None if model.startswith("openai/") else AZURE_API_BASE,
-            api_version=None if model.startswith("openai/") else "2025-04-01-preview",
             drop_params=drop_params,
+            **route_params,
         )
     return json.loads(upstream.calls[0].request.content)["input"]
 
@@ -246,11 +263,12 @@ def _types(items: Sequence[Mapping[str, object]]) -> list[object]:
     return [item.get("type") for item in items]
 
 
+@pytest.mark.parametrize("model", [OPENAI_MODEL, AZURE_MODEL], ids=["openai", "azure"])
 @pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
-def test_next_turn_replays_every_item_phase_and_boundary_once_in_order(stream: bool) -> None:
-    assistant: Final = _assistant_turn(OUTPUT, stream=stream)
+def test_next_turn_replays_every_item_phase_and_boundary_once_in_order(stream: bool, model: str) -> None:
+    assistant: Final = _assistant_turn(OUTPUT, stream=stream, model=model)
 
-    sent: Final = _next_turn_input(assistant)
+    sent: Final = _next_turn_input(assistant, model=model)
 
     assert assistant["content"] == "Checking the weather.Paris: light rain."
     assert _replayed_fields(assistant)["phase"] == "final_answer"
@@ -341,7 +359,7 @@ def test_an_unphased_answer_after_commentary_is_never_labeled_commentary(stream:
 
     sent: Final = _next_turn_input(_edit_content(assistant))
 
-    assert "phase" not in _replayed_fields(assistant)
+    assert _replayed_fields(assistant).get("phase") is None
     assert _types(sent[1:-1]) == ["message", "function_call"]
     assert "phase" not in sent[1]
 
@@ -372,7 +390,7 @@ def test_a_last_message_the_bridge_cannot_read_leaves_the_turn_without_a_phase(s
     unreadable: Final = {**_with_text(FINAL_ANSWER, "It is raining in Paris."), "phase": "summary"}
     assistant: Final = _assistant_turn((COMMENTARY, WEATHER_CALL, unreadable), stream=stream)
 
-    assert "phase" not in _replayed_fields(assistant)
+    assert _replayed_fields(assistant).get("phase") is None
 
 
 def test_a_phase_openai_does_not_define_is_dropped_under_drop_params() -> None:
@@ -393,7 +411,7 @@ def test_a_phase_openai_does_not_define_is_rejected_without_drop_params() -> Non
         )
         with pytest.raises(litellm.BadRequestError, match="'analysis'"):
             litellm.completion(
-                model=f"openai/responses/{MODEL}",
+                model=OPENAI_MODEL,
                 messages=[USER, {**assistant, "phase": "analysis"}, TOOL_RESULT],
                 tools=list(TOOLS),
                 api_key="sk-test",
@@ -486,28 +504,71 @@ def _chunks_before_error(stream: Iterator[object]) -> Iterator[object]:
         return
 
 
-def test_an_interrupted_stream_records_no_replay() -> None:
+def _streamed_chunks(model: str, terminal_event: str | None = "response.completed") -> tuple[object, ...]:
+    upstream_url, route_params = _route(model)
     with respx.mock(assert_all_called=True) as router:
-        router.post(OPENAI_RESPONSES_URL).mock(return_value=_sse(OUTPUT, terminal_event=None))
+        router.post(url__startswith=upstream_url).mock(return_value=_sse(OUTPUT, terminal_event))
         stream: Final = litellm.completion(
-            model=f"openai/responses/{MODEL}", messages=[USER], tools=list(TOOLS), api_key="sk-test", stream=True
+            model=model, messages=[USER], tools=list(TOOLS), api_key="sk-test", stream=True, **route_params
         )
-        received: Final = tuple(_chunks_before_error(iter(stream)))
+        return tuple(_chunks_before_error(iter(stream)))
+
+
+async def _async_streamed_chunks(model: str) -> tuple[object, ...]:
+    upstream_url, route_params = _route(model)
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith=upstream_url).mock(return_value=_sse(OUTPUT))
+        stream: Final = await litellm.acompletion(
+            model=model, messages=[USER], tools=list(TOOLS), api_key="sk-test", stream=True, **route_params
+        )
+        return tuple([chunk async for chunk in stream])
+
+
+def test_an_interrupted_stream_records_no_replay() -> None:
+    received: Final = _streamed_chunks(OPENAI_MODEL, terminal_event=None)
     assistant: Final = litellm.stream_chunk_builder(list(received), messages=[USER]).choices[0].message.model_dump()
 
     assert assistant["content"] == "Checking the weather.Paris: light rain."
-    assert _replayed_fields(assistant) == {}
+    assert _replayed_fields(assistant) == {"phase": "final_answer"}
+
+
+def _text_delta_phases(chunks: Sequence[object]) -> list[tuple[object, object]]:
+    deltas: Final = tuple(chunk.choices[0].delta for chunk in chunks if chunk.choices and chunk.choices[0].delta.content)
+    return [(delta.content, (delta.provider_specific_fields or {}).get("phase")) for delta in deltas]
+
+
+@pytest.mark.parametrize(
+    ("model", "commentary_phase", "answer_phase"),
+    [
+        (OPENAI_MODEL, "commentary", "final_answer"),
+        (AZURE_MODEL, "commentary", "final_answer"),
+        (XAI_MODEL, None, None),
+    ],
+    ids=["openai", "azure", "xai"],
+)
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_each_streamed_text_delta_carries_the_phase_of_its_message(
+    model: str, commentary_phase: str | None, answer_phase: str | None, use_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    chunks: Final = await _async_streamed_chunks(model) if use_async else _streamed_chunks(model)
+
+    assert _text_delta_phases(chunks) == [
+        ("Checking the weather.", commentary_phase),
+        ("Paris: ", answer_phase),
+        ("light rain.", answer_phase),
+    ]
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
-def test_a_non_openai_route_records_no_phase_or_replay(stream: bool) -> None:
-    assistant: Final = _assistant_turn(OUTPUT, stream=stream, model=f"azure/responses/{MODEL}")
+def test_a_route_without_replay_records_no_phase_or_replay(stream: bool) -> None:
+    assistant: Final = _assistant_turn(OUTPUT, stream=stream, model=XAI_MODEL)
 
     assert _replayed_fields(assistant) == {}
 
 
-def test_a_non_openai_route_ignores_a_recorded_replay() -> None:
-    sent: Final = _next_turn_input(_assistant_turn(OUTPUT, stream=False), model=f"azure/responses/{MODEL}")
+def test_a_route_without_replay_ignores_a_recorded_replay() -> None:
+    sent: Final = _next_turn_input(_assistant_turn(OUTPUT, stream=False), model=XAI_MODEL)
 
     assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "function_call"]
     assert all("phase" not in item for item in sent)
@@ -520,12 +581,13 @@ LYON_CALL: Final = {**WEATHER_CALL, "id": "fc_lyon", "call_id": "call_weather_ly
 @pytest.mark.parametrize(
     ("model", "expected_ids", "expected_text"),
     [
-        (f"openai/responses/{MODEL}", ["rs_first", "rs_second"], "Paris is likely wet. Lyon is likely dry."),
-        (f"azure/responses/{MODEL}", ["rs_second"], "Lyon is likely dry."),
+        (OPENAI_MODEL, ["rs_first", "rs_second"], "Paris is likely wet. Lyon is likely dry."),
+        (AZURE_MODEL, ["rs_first", "rs_second"], "Paris is likely wet. Lyon is likely dry."),
+        (XAI_MODEL, ["rs_second"], "Lyon is likely dry."),
     ],
-    ids=["openai", "azure"],
+    ids=["openai", "azure", "xai"],
 )
-def test_only_the_openai_route_keeps_every_reasoning_item_of_a_tool_call_turn(
+def test_only_replaying_routes_keep_every_reasoning_item_of_a_tool_call_turn(
     model: str, expected_ids: list[str], expected_text: str
 ) -> None:
     assistant: Final = _assistant_turn(
@@ -540,10 +602,10 @@ def test_only_the_openai_route_keeps_every_reasoning_item_of_a_tool_call_turn(
 
 @pytest.mark.parametrize(
     ("model", "expected_content"),
-    [(f"openai/responses/{MODEL}", None), (f"azure/responses/{MODEL}", "")],
-    ids=["openai", "azure"],
+    [(OPENAI_MODEL, None), (AZURE_MODEL, None), (XAI_MODEL, "")],
+    ids=["openai", "azure", "xai"],
 )
-def test_only_the_openai_route_ends_a_streamed_tool_call_turn_with_null_content(
+def test_only_replaying_routes_end_a_streamed_tool_call_turn_with_null_content(
     model: str, expected_content: str | None
 ) -> None:
     assistant: Final = _assistant_turn((FIRST_REASONING, WEATHER_CALL), stream=True, model=model)
@@ -603,7 +665,7 @@ def test_a_custom_tool_call_replays_with_its_custom_output(stream: bool) -> None
             return_value=httpx.Response(200, json=_response((FOLLOW_UP,)))
         )
         litellm.completion(
-            model=f"openai/responses/{MODEL}",
+            model=OPENAI_MODEL,
             messages=[USER, assistant, {"role": "tool", "tool_call_id": "call_patch_readme", "content": "applied"}],
             tools=[{"type": "custom", "custom": {"name": "apply_patch"}}],
             api_key="sk-test",
