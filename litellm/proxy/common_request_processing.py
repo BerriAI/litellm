@@ -724,7 +724,7 @@ def _router_defaults(llm_router: Router | None) -> Mapping[str, object]:
     return {name: value for name, value in _REQUEST_FIELDS.validate_python(configured).items() if value is not None}
 
 
-def _counted_drop_policies(
+def counted_drop_policies(
     data: Mapping[str, object], llm_router: Router | None, team_id: str | None
 ) -> tuple[DropPolicy, ...]:
     requested: Final = {**_router_defaults(llm_router), **data}
@@ -740,7 +740,7 @@ def _counted_drop_policies(
 def resolve_counted_tool_fields(
     data: Mapping[str, object], llm_router: Router | None, team_id: str | None
 ) -> Mapping[str, object] | ProxyException:
-    resolved: Final = resolve_tool_fields(data, lambda: _counted_drop_policies(data, llm_router, team_id))
+    resolved: Final = resolve_tool_fields(data, lambda: counted_drop_policies(data, llm_router, team_id))
     if isinstance(resolved, MalformedField):
         return ProxyException(
             message=resolved.message,
@@ -2581,7 +2581,6 @@ class ProxyBaseLLMRequestProcessing:
         # have mutated `self.data` in place, and the audit-trail snapshot taken in
         # add_litellm_data_to_request predates that mutation.
         refresh_proxy_server_request_body_snapshot(self.data, guardrails_applied=True)
-        verbose_proxy_logger.debug("receiving data: %s", self.data)
 
         if "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])
