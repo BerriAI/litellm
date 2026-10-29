@@ -21,6 +21,7 @@ from litellm.llms.base_llm.realtime.transcription_protocol import (
     duration_usage,
     error_event,
     json_object,
+    normalize_transcript_word,
     parse_transcription_session_update,
     speech_event,
     transcription_session,
@@ -228,7 +229,7 @@ def _new_item_id() -> str:
 @dataclass(frozen=True, slots=True)
 class _Turn:
     item_id: str
-    emitted: str
+    emitted: tuple[str, ...]
 
 
 class ElevenLabsEventTransformer:
@@ -269,17 +270,21 @@ class ElevenLabsEventTransformer:
         if not text:
             return ()
         turn: Final = self._turn
+        current: Final = turn if turn is not None else _Turn(item_id=self._new_item_id(), emitted=())
+        started: Final[tuple[OpenAIRealtimeEvents, ...]] = (
+            (speech_event("input_audio_buffer.speech_started", current.item_id),) if turn is None else ()
+        )
         if turn is None:
-            started: Final = _Turn(item_id=self._new_item_id(), emitted=text)
-            self._turn = started
-            return (
-                speech_event("input_audio_buffer.speech_started", started.item_id),
-                delta_event(started.item_id, text),
-            )
-        if text == turn.emitted or not text.startswith(turn.emitted):
-            return ()
-        self._turn = _Turn(item_id=turn.item_id, emitted=text)
-        return (delta_event(turn.item_id, text[len(turn.emitted) :]),)
+            self._turn = current
+        stable: Final = tuple(text.split()[:-1])
+        if len(stable) <= len(current.emitted) or tuple(
+            normalize_transcript_word(word) for word in stable[: len(current.emitted)]
+        ) != tuple(normalize_transcript_word(word) for word in current.emitted):
+            return started
+        new_words: Final = " ".join(stable[len(current.emitted) :])
+        delta: Final = f" {new_words}" if current.emitted else new_words
+        self._turn = _Turn(item_id=current.item_id, emitted=stable)
+        return (*started, delta_event(current.item_id, delta))
 
     def _committed(self, text: str) -> tuple[OpenAIRealtimeEvents, ...]:
         turn: Final = self._turn

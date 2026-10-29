@@ -231,37 +231,74 @@ def _summary(events: list[dict[str, object]]) -> list[tuple[object, ...]]:
     return [(event["type"], event.get("item_id"), event.get("delta", event.get("transcript"))) for event in events]
 
 
-def test_cumulative_partials_start_the_turn_once_and_emit_only_new_text():
+def test_live_partials_with_trailing_word_revisions_continue_emitting_stable_words():
+    # Captured from the live ElevenLabs realtime API on 2026-10-28.
+    partials: Final = (
+        "The quick brown-",
+        "The quick brown fox jumps",
+        "The quick brown fox jumps over the lazy dog.",
+        "The quick brown fox jumps over the lazy dog.",
+        "The quick brown fox jumps over the lazy dog. Light LLM.",
+        "The quick brown fox jumps over the lazy dog. Light LLM now streams-",
+        "The quick brown fox jumps over the lazy dog. Light LLM now streams audio to ElevenLabs.",
+        "The quick brown fox jumps over the lazy dog. Light LLM now streams audio to ElevenLabs Scribe.",
+    )
+    committed: Final = "The quick brown fox jumps over the lazy dog. Light LLM now streams audio to ElevenLabs Scribe."
     events: Final = _events(
         ElevenLabsEventTransformer(new_item_id=_item_ids()),
-        _frame("partial_transcript", text="Hello"),
-        _frame("partial_transcript", text="Hello wor"),
-        _frame("partial_transcript", text="Hello world"),
+        *(_frame("partial_transcript", text=text) for text in partials),
+        _frame("committed_transcript", text=committed),
     )
 
     assert _summary(events) == [
         ("input_audio_buffer.speech_started", "item_0", None),
+        ("conversation.item.input_audio_transcription.delta", "item_0", "The quick"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", " brown fox"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", " jumps over the lazy"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", " dog. Light"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", " LLM now"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", " streams audio to"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", " ElevenLabs"),
+        ("input_audio_buffer.speech_stopped", "item_0", None),
+        ("conversation.item.input_audio_transcription.completed", "item_0", committed),
+    ]
+
+
+def test_cumulative_partials_start_the_turn_once_and_emit_only_new_text():
+    transformer: Final = ElevenLabsEventTransformer(new_item_id=_item_ids())
+    first: Final = _events(transformer, _frame("partial_transcript", text="Hello"))
+    later: Final = _events(
+        transformer,
+        _frame("partial_transcript", text="Hello wor"),
+        _frame("partial_transcript", text="Hello world"),
+        _frame("partial_transcript", text="Hello world again"),
+    )
+
+    assert _summary(first) == [("input_audio_buffer.speech_started", "item_0", None)]
+    assert _summary([*first, *later]) == [
+        ("input_audio_buffer.speech_started", "item_0", None),
         ("conversation.item.input_audio_transcription.delta", "item_0", "Hello"),
-        ("conversation.item.input_audio_transcription.delta", "item_0", " wor"),
-        ("conversation.item.input_audio_transcription.delta", "item_0", "ld"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", " world"),
     ]
 
 
 def test_revised_partial_emits_nothing_and_the_commit_carries_the_final_text():
-    events: Final = _events(
-        ElevenLabsEventTransformer(new_item_id=_item_ids()),
-        _frame("partial_transcript", text="Hello wor"),
-        _frame("partial_transcript", text="Hello war"),
-        _frame("partial_transcript", text="Hello world"),
-        _frame("committed_transcript", text="Hello world."),
+    transformer: Final = ElevenLabsEventTransformer(new_item_id=_item_ids())
+    first: Final = _events(transformer, _frame("partial_transcript", text="Hello world today"))
+    revised: Final = _events(transformer, _frame("partial_transcript", text="Hallo world tomorrow"))
+    resumed: Final = _events(
+        transformer,
+        _frame("partial_transcript", text="Hello world tomorrow soon"),
+        _frame("committed_transcript", text="Hello world tomorrow soon."),
     )
 
-    assert _summary(events) == [
+    assert revised == []
+    assert _summary([*first, *resumed]) == [
         ("input_audio_buffer.speech_started", "item_0", None),
-        ("conversation.item.input_audio_transcription.delta", "item_0", "Hello wor"),
-        ("conversation.item.input_audio_transcription.delta", "item_0", "ld"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", "Hello world"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", " tomorrow"),
         ("input_audio_buffer.speech_stopped", "item_0", None),
-        ("conversation.item.input_audio_transcription.completed", "item_0", "Hello world."),
+        ("conversation.item.input_audio_transcription.completed", "item_0", "Hello world tomorrow soon."),
     ]
 
 

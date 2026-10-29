@@ -117,6 +117,10 @@ def new_event_id() -> str:
     return f"event_{uuid.uuid4().hex}"
 
 
+def normalize_transcript_word(word: str) -> str:
+    return "".join(char for char in word if char.isalnum()).casefold()
+
+
 def parse_transcription_session_update(
     payload: str, error: ProtocolErrorType = RealtimeTranscriptionProtocolError
 ) -> TranscriptionSessionUpdate:
