@@ -862,7 +862,7 @@ def test_azure_realtime_specialized_models_follow_openai_modes(prices: dict, mod
 
     assert openai["mode"] == azure["mode"] == mode
     assert azure["supports_audio_input"] is True
-    assert azure["supported_endpoints"]
+    assert set(openai.get("supported_endpoints", ())) <= set(azure.get("supported_endpoints", ()))
 
 
 _DATED_SNAPSHOT: Final = re.compile(r"(?P<alias>.+)-\d{4}-\d{2}-\d{2}")

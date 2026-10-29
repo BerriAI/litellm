@@ -37144,10 +37144,10 @@ export interface components {
             on_disallowed_action: "block" | "rewrite";
             /**
              * On Flagged
-             * @description Action to take when content is flagged: 'block' (raise exception), 'monitor' (log only), or 'inject_system_message' (append an advisory system message and let the LLM decide)
+             * @description Action to take when content is flagged: 'block' (raise exception), 'mask' (mask PII-only detections and allow, block anything else), 'monitor' (log only), or 'inject_system_message' (append an advisory system message and let the LLM decide)
              * @default block
              */
-            on_flagged: ("block" | "monitor" | "inject_system_message") | null;
+            on_flagged: ("block" | "mask" | "monitor" | "inject_system_message") | null;
             /**
              * On Flagged Action
              * @description Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)

@@ -345,10 +345,6 @@ def test_audio_transcription_forwards_nested_and_repeated_bracket_fields_verbati
 
 
 def test_audio_transcription_stream_returns_server_sent_events(gateway: Gateway) -> None:
-    pytest.skip(
-        "BUG: stream=true transcriptions reach the upstream but its SSE body comes back as application/json "
-        '{"text": "data: ..."}, so OpenAI SDK stream=True callers get no transcript events'
-    )
     wav: Final = _WAV_BYTES + uuid.uuid4().bytes
 
     def respond(request: Request) -> Reply:
