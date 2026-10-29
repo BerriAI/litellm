@@ -1,7 +1,10 @@
 import asyncio
+import contextlib
 import json
 import logging
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 
 import httpx
@@ -539,6 +542,61 @@ def test_a_request_started_through_another_selector_of_the_router_releases_the_r
 
     assert picker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_B
     assert picker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+
+
+class _StoreWhereThreadsReadBeforeWriting:
+    def __init__(self) -> None:
+        self._store: Final = InMemoryCache()
+        self._first_reads: Final = threading.Barrier(2, timeout=0.5)
+        self._thread_state: Final = threading.local()
+        self._meeting: Final = threading.Event()
+
+    @contextlib.contextmanager
+    def first_reads_meet(self) -> Iterator[None]:
+        self._meeting.set()
+        yield
+        self._meeting.clear()
+
+    def get_cache(self, key: str) -> object:
+        value: Final = self._store.get_cache(key)
+        if self._meeting.is_set() and not getattr(self._thread_state, "has_read", False):
+            self._thread_state.has_read = True
+            with contextlib.suppress(threading.BrokenBarrierError):
+                self._first_reads.wait()
+        return value
+
+    def set_cache(self, key: str, value: tuple[float, ...], *, ttl: float) -> None:
+        self._store.set_cache(key, value, ttl=ttl)
+
+    def delete_cache(self, key: str) -> None:
+        self._store.delete_cache(key)
+
+
+def test_two_threads_picking_at_once_reserve_different_deployments() -> None:
+    store: Final = _StoreWhereThreadsReadBeforeWriting()
+    worker: Final = LeastBusyLoggingHandler(router_cache=DualCache(), reservation_store=store)
+
+    with store.first_reads_meet(), ThreadPoolExecutor(max_workers=2) as pool:
+        picks: Final = tuple(pool.map(lambda _: worker.get_available_deployments(GROUP, HEALTHY, reserve=True), range(2)))
+
+    assert sorted(pick["model_info"]["id"] for pick in picks if pick is not None) == ["dep-a", "dep-b"]
+
+
+def test_a_reservation_and_a_release_on_one_deployment_at_once_both_count() -> None:
+    store: Final = _StoreWhereThreadsReadBeforeWriting()
+    worker: Final = LeastBusyLoggingHandler(router_cache=DualCache(), reservation_store=store)
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-b"))
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-b"))
+
+    with store.first_reads_meet(), ThreadPoolExecutor(max_workers=2) as pool:
+        reserved: Final = pool.submit(worker.get_available_deployments, GROUP, HEALTHY, True)
+        started: Final = pool.submit(worker.log_pre_api_call, "m", [], _call_kwargs("dep-a"))
+        assert reserved.result() is DEPLOYMENT_A
+        started.result()
+
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_B
 
 
 def _router_pick(router: Router) -> str:

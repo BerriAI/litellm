@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final, Protocol
@@ -17,6 +18,7 @@ from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
 IN_FLIGHT_COUNT_TTL_SECONDS: Final = 60 * 60
 SELECTION_RESERVATION_TTL_SECONDS: Final = 30.0
 SELECTION_RESERVATION_MAX_KEYS: Final = 10_000
+_RESERVATIONS_LOCK: Final = threading.Lock()
 
 
 class _ModelInfo(TypedDict, total=False):
@@ -190,11 +192,12 @@ class LeastBusyLoggingHandler(CustomLogger):
     ) -> Mapping[str, object] | None:
         if not healthy_deployments:
             return None
-        now: Final = self._clock()
-        live: Final = tuple(self._live_reservations(key, now) for key in keys)
-        index: Final = _least_busy_index(tuple(count + len(r) for count, r in zip(counts, live, strict=True)))
-        if reserve:
-            self._store_reservations(keys[index], (*live[index], now))
+        with _RESERVATIONS_LOCK:
+            now: Final = self._clock()
+            live: Final = tuple(self._live_reservations(key, now) for key in keys)
+            index: Final = _least_busy_index(tuple(count + len(r) for count, r in zip(counts, live, strict=True)))
+            if reserve:
+                self._store_reservations(keys[index], (*live[index], now))
         return healthy_deployments[index]
 
     def _release_reservation(self, kwargs: Mapping[str, object]) -> None:
@@ -202,8 +205,9 @@ class LeastBusyLoggingHandler(CustomLogger):
         if ref is None:
             return
         key: Final = _request_count_key(*ref)
-        now: Final = self._clock()
-        self._store_reservations(key, self._live_reservations(key, now)[1:])
+        with _RESERVATIONS_LOCK:
+            now: Final = self._clock()
+            self._store_reservations(key, self._live_reservations(key, now)[1:])
 
     @with_service_target("router_usage")
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
