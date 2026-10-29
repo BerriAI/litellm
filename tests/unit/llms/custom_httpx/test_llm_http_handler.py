@@ -66,7 +66,13 @@ from litellm.responses.streaming_iterator import (
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import ImageObject, ImageResponse, ModelResponse, TranscriptionResponse
+from litellm.types.utils import (
+    ImageObject,
+    ImageResponse,
+    ModelResponse,
+    ProviderSpecificHeader,
+    TranscriptionResponse,
+)
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
@@ -1605,6 +1611,89 @@ async def test_async_anthropic_messages_handler_header_priority():
         assert captured_headers["X-Forwarded-Only"] == "keep"
         assert captured_headers["X-Extra-Only"] == "also-keep"
         assert captured_headers["X-Provider-Only"] == "keep-this-too"
+
+
+class _AnthropicMessagesUpstream:
+    def __init__(self) -> None:
+        self.anthropic_beta: tuple[str, ...] = ()
+
+    def respond(self, request: httpx.Request) -> httpx.Response:
+        self.anthropic_beta = tuple(request.headers.get_list("anthropic-beta"))
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "hi"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+
+_BOTH_FOUNDRY_BETAS: Final = ("context-1m-2025-08-07,context-management-2025-06-27",)
+
+
+@pytest.mark.parametrize(
+    ("forwarded_headers", "deployment_headers", "client_beta", "expected"),
+    [
+        pytest.param(
+            None,
+            {"anthropic-beta": "context-1m-2025-08-07"},
+            "context-management-2025-06-27",
+            _BOTH_FOUNDRY_BETAS,
+            id="deployment-and-client-betas-are-unioned",
+        ),
+        pytest.param(
+            None,
+            {"anthropic-beta": ["context-1m-2025-08-07"]},
+            "context-management-2025-06-27",
+            _BOTH_FOUNDRY_BETAS,
+            id="deployment-list-and-client-string-are-unioned",
+        ),
+        pytest.param(
+            {"anthropic-beta": "interleaved-thinking-2025-05-14"},
+            {"anthropic-beta": "context-1m-2025-08-07"},
+            "context-management-2025-06-27",
+            ("context-1m-2025-08-07,context-management-2025-06-27,interleaved-thinking-2025-05-14",),
+            id="forwarded-deployment-and-client-betas-are-unioned",
+        ),
+        pytest.param(
+            None,
+            {"anthropic-beta": "context-1m-2025-08-07"},
+            "claude-code-20250219",
+            ("context-1m-2025-08-07",),
+            id="unsupported-client-beta-is-dropped-and-deployment-beta-kept",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_messages_sends_deployment_and_client_anthropic_betas_upstream(
+    forwarded_headers: dict[str, str] | None,
+    deployment_headers: dict[str, str | list[str]],
+    client_beta: str,
+    expected: tuple[str, ...],
+) -> None:
+    upstream: Final = _AnthropicMessagesUpstream()
+
+    await litellm.anthropic.messages.acreate(
+        model="azure_ai/claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        max_tokens=16,
+        api_base="https://test.services.ai.azure.com/anthropic",
+        api_key="test-key",
+        headers=forwarded_headers,
+        extra_headers=deployment_headers,
+        provider_specific_header=ProviderSpecificHeader(
+            custom_llm_provider="azure_ai", extra_headers={"anthropic-beta": client_beta}
+        ),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(upstream.respond)),
+    )
+
+    assert upstream.anthropic_beta == expected
 
 
 @pytest.mark.asyncio
@@ -5545,6 +5634,63 @@ async def test_anthropic_messages_dropped_safeguards_send_neither_the_field_nor_
     assert "dangerous-tool-use-2026-09-03" not in sent.headers.get("anthropic-beta", ""), dict(sent.headers)
 
 
+class TestAgenticFollowUpKeepsTheProviderPrefix:
+    @staticmethod
+    async def _run_followup(
+        model: str, custom_llm_provider: str, patched_model: str | None = None
+    ) -> ModelResponse:
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+        from litellm.types.integrations.custom_logger import (
+            AgenticLoopPlan,
+            AgenticLoopRequestPatch,
+        )
+
+        response: Final = await BaseLLMHTTPHandler()._execute_chat_completion_agentic_plan(
+            plan=AgenticLoopPlan(
+                run_agentic_loop=True,
+                request_patch=AgenticLoopRequestPatch(
+                    messages=[{"role": "user", "content": "hi"}], model=patched_model
+                ),
+            ),
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"mock_response": "ok from followup"},
+            kwargs={},
+            custom_llm_provider=custom_llm_provider,
+            depth=0,
+            max_loops=2,
+            fingerprints=[],
+            fingerprint="fp",
+        )
+        assert isinstance(response, ModelResponse)
+        return response
+
+    @pytest.mark.asyncio
+    async def test_a_sub_path_model_still_resolves_a_provider(self) -> None:
+        response: Final = await self._run_followup("mantle/anthropic.claude-sonnet-5", "bedrock")
+
+        assert response.choices[0].message.content == "ok from followup"
+
+    @pytest.mark.asyncio
+    async def test_an_ordinary_model_still_resolves_a_provider(self) -> None:
+        response: Final = await self._run_followup("gpt-4o-mini", "openai")
+
+        assert response.choices[0].message.content == "ok from followup"
+
+    @pytest.mark.asyncio
+    async def test_a_hook_that_patches_another_providers_model_reaches_that_provider(self) -> None:
+        response: Final = await self._run_followup("gpt-4o", "openai", patched_model="anthropic/claude-sonnet-4-5")
+
+        assert response.model == "claude-sonnet-4-5"
+        assert response._hidden_params["custom_llm_provider"] == "anthropic"
+
+    @pytest.mark.asyncio
+    async def test_a_hook_echoing_an_org_style_model_stays_on_the_request_provider(self) -> None:
+        response: Final = await self._run_followup("openai/gpt-4o", "openrouter", patched_model="openai/gpt-4o")
+
+        assert response._hidden_params["custom_llm_provider"] == "openrouter"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("environment_base", [None, "ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"])
@@ -5695,3 +5841,16 @@ async def test_non_chatgpt_responses_preserves_caller_headers_after_validation(
             await client.close()
         else:
             client.client.close()
+
+
+@pytest.mark.asyncio
+async def test_a_stream_answered_with_one_json_body_is_not_replayed_for_a_provider_that_does_not_opt_in(
+    httpx_transport: None,
+) -> None:
+    with respx.mock(assert_all_called=True) as router:
+        router.post("https://api.openai.com/v1/responses").respond(json={"error": {"message": "quota exceeded"}})
+        stream: Final = await litellm.aresponses(
+            model="openai/gpt-5.5", input="Hello", api_key="fake-key", stream=True
+        )
+        with pytest.raises(litellm.exceptions.MidStreamFallbackError, match="before any terminal event"):
+            _ = tuple([event async for event in stream])
