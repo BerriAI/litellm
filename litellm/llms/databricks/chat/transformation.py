@@ -28,6 +28,7 @@ from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import (
     type_to_response_format_param,  # pyright: ignore[reportUnknownVariableType]  # base_utils helper returns an untyped dict
 )
+from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.databricks import (
     AllDatabricksContentValues,
@@ -476,7 +477,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             if _tool is not None:
                 self._add_tools_to_optional_params(optional_params=optional_params, tools=[_tool])
                 optional_params["json_mode"] = True
-                if not is_thinking_enabled:
+                if AnthropicConfig.response_format_tool_can_be_forced(
+                    model, "databricks", REQUEST_PARAMS.validate_python(non_default_params)
+                ):
                     _tool_choice: Final = ChatCompletionToolChoiceObjectParam(
                         type="function",
                         function=ChatCompletionToolChoiceFunctionParam(name=RESPONSE_FORMAT_TOOL_NAME),

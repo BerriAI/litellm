@@ -1058,7 +1058,6 @@ class AmazonConverseConfig(BaseConfig):
         drop_params: bool,
         model_info: Mapping[str, object] | None = None,
     ) -> dict:
-        is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params)
         base_model: Final = BedrockModelInfo.get_base_model(model)
         drop_thinking_param: Final = self._is_deepseek_model(model=model, base_model=base_model)
         drop_reasoning_effort_param: Final = self._model_rejects_reasoning_effort_param(
@@ -1072,7 +1071,6 @@ class AmazonConverseConfig(BaseConfig):
                     model=model,
                     optional_params=optional_params,
                     non_default_params=non_default_params,
-                    is_thinking_enabled=is_thinking_enabled,
                     model_info=model_info,
                 )
             if param == "max_tokens" or param == "max_completion_tokens":
@@ -1281,7 +1279,6 @@ class AmazonConverseConfig(BaseConfig):
         model: str,
         optional_params: dict,
         non_default_params: dict,
-        is_thinking_enabled: bool,
         model_info: Mapping[str, object] | None = None,
     ) -> dict:
         """
@@ -1306,13 +1303,9 @@ class AmazonConverseConfig(BaseConfig):
         if "type" in value and value["type"] == "text":
             return optional_params
 
+        request_params: Final = REQUEST_PARAMS.validate_python(non_default_params)
         native_schema: Final = (
-            self._native_output_schema(
-                model,
-                json_schema,
-                self.is_thinking_requested(REQUEST_PARAMS.validate_python(non_default_params)),
-                model_info,
-            )
+            self._native_output_schema(model, json_schema, self.is_thinking_requested(request_params), model_info)
             if json_schema is not None
             else None
         )
@@ -1336,11 +1329,9 @@ class AmazonConverseConfig(BaseConfig):
             )
             optional_params = self._add_tools_to_optional_params(optional_params=optional_params, tools=[_tool])
 
-            if (
-                litellm.utils.supports_tool_choice(model=model, custom_llm_provider=self.custom_llm_provider)
-                and not is_thinking_enabled
-                and not AnthropicModelInfo.forced_tool_use_unsupported(model)
-            ):
+            if litellm.utils.supports_tool_choice(
+                model=model, custom_llm_provider=self.custom_llm_provider
+            ) and AnthropicModelInfo.response_format_tool_can_be_forced(model, "bedrock", request_params):
                 optional_params["tool_choice"] = ToolChoiceValuesBlock(
                     tool=SpecificToolChoiceBlock(name=RESPONSE_FORMAT_TOOL_NAME)
                 )

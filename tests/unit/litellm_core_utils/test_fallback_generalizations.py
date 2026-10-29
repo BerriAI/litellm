@@ -563,6 +563,23 @@ def test_shipped_rules_flag_unmapped_fable_as_always_on_thinking(shipped_cost_ma
 
 
 @pytest.mark.parametrize(
+    ("model", "provider", "on_by_default"),
+    [
+        ("claude-opus-5-9", "anthropic", True),
+        ("claude-newfamily-6", "anthropic", True),
+        ("us.anthropic.claude-sonnet-5-9", "bedrock", True),
+        ("claude-opus-4-9", "anthropic", None),
+    ],
+)
+def test_shipped_rules_flag_unmapped_claude_5_and_later_as_thinking_by_default(
+    shipped_cost_map, model, provider, on_by_default
+):
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model, custom_llm_provider=provider)
+    assert info.get("thinking_on_by_default") is on_by_default
+
+
+@pytest.mark.parametrize(
     "model,provider",
     [
         ("claude-opus-4-9@20260101", "vertex_ai"),

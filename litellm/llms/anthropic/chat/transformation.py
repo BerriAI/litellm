@@ -1688,10 +1688,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         open_object_takes_forced_json_tool: Final = (
             json_schema is not None
             and schema_has_open_object(json_schema)
-            and not self.is_thinking_requested(request_params)
-            and not self.is_thinking_enabled(dict(request_params))
             and not request_params.get("tools")
-            and not AnthropicModelInfo.forced_tool_use_unsupported(model)
+            and AnthropicModelInfo.response_format_tool_can_be_forced(model, self._resolved_provider, request_params)
         )
         return self.uses_native_structured_output(model) and not open_object_takes_forced_json_tool
 
@@ -1884,7 +1882,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     _tool = self.map_response_format_to_anthropic_tool(value, optional_params, is_thinking_enabled)
                     if _tool is None:
                         continue
-                    if not is_thinking_enabled and not AnthropicModelInfo.forced_tool_use_unsupported(model):
+                    if AnthropicModelInfo.response_format_tool_can_be_forced(
+                        model, self._resolved_provider, REQUEST_PARAMS.validate_python(non_default_params)
+                    ):
                         _tool_choice = {
                             "name": RESPONSE_FORMAT_TOOL_NAME,
                             "type": "tool",

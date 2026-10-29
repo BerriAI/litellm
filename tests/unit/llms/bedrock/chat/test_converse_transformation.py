@@ -4843,7 +4843,6 @@ def test_translate_response_format_native_output_config(monkeypatch):
             model="anthropic.claude-sonnet-4-5-20250929-v1:0",
             optional_params=optional_params,
             non_default_params={"response_format": response_format},
-            is_thinking_enabled=False,
         )
 
         # Should have outputConfig, NOT tools
@@ -4932,8 +4931,66 @@ def test_json_schema_shape_follows_each_inference_profile_own_native_output_flag
     assert "fake_stream" not in native_params
     assert "outputConfig" not in tool_request
     assert [tool["toolSpec"]["name"] for tool in tool_request["toolConfig"]["tools"]] == ["json_tool_call"]
-    assert tool_request["toolConfig"]["toolChoice"] == {"tool": {"name": "json_tool_call"}}
+    assert "toolChoice" not in tool_request["toolConfig"]
     assert tool_params.get("fake_stream", False) is stream
+
+
+_JSON_TOOL_CHOICE: Final = {"tool": {"name": "json_tool_call"}}
+
+
+@pytest.mark.parametrize(
+    ("model", "native_key", "model_info", "thinking_params", "forced"),
+    [
+        (
+            "us.anthropic.claude-opus-4-8",
+            "bedrock",
+            {"supports_bedrock_native_structured_output": False},
+            {"thinking": ADAPTIVE_THINKING},
+            False,
+        ),
+        ("us.anthropic.claude-opus-5", None, None, {}, False),
+        ("global.anthropic.claude-sonnet-5", None, None, {}, False),
+        ("us.anthropic.claude-haiku-5-5", None, None, {}, False),
+        ("us.anthropic.claude-fable-5", None, None, {}, False),
+        ("us.anthropic.claude-opus-4-8", None, None, {}, True),
+        ("us.anthropic.claude-opus-5", None, None, {"thinking": {"type": "disabled"}}, True),
+        ("us.anthropic.claude-haiku-5-5", None, None, {"reasoning_effort": "none"}, True),
+    ],
+    ids=[
+        "opus-4-8-adaptive-native-output-fallback",
+        "opus-5-default-thinking",
+        "sonnet-5-default-thinking",
+        "haiku-5-5-default-thinking",
+        "fable-5-always-on",
+        "opus-4-8-default-off",
+        "opus-5-thinking-disabled",
+        "haiku-5-5-reasoning-effort-none",
+    ],
+)
+def test_json_tool_is_forced_only_when_the_model_will_not_think(
+    set_native_structured_output, model, native_key, model_info, thinking_params, forced
+):
+    set_native_structured_output(model, native_key)
+    config: Final = AmazonConverseConfig()
+
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"response_format": CAPITAL_RESPONSE_FORMAT, **thinking_params},
+        optional_params={},
+        model=model,
+        drop_params=False,
+        model_info=model_info,
+    )
+    request: Final = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "outputConfig" not in request
+    assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["json_tool_call"]
+    assert (request["toolConfig"].get("toolChoice") == _JSON_TOOL_CHOICE) is forced
 
 
 @pytest.mark.parametrize(
@@ -5389,7 +5446,6 @@ def test_translate_response_format_fallback_tool_call():
         model="anthropic.claude-3-haiku-20240307-v1:0",
         optional_params=optional_params,
         non_default_params={"response_format": response_format},
-        is_thinking_enabled=False,
     )
 
     # Should use tool-call approach, NOT outputConfig (model doesn't support native structured outputs)
@@ -5426,7 +5482,6 @@ def test_native_structured_output_no_fake_stream(monkeypatch):
             model="anthropic.claude-sonnet-4-5-20250929-v1:0",
             optional_params=optional_params,
             non_default_params={"response_format": response_format, "stream": True},
-            is_thinking_enabled=False,
         )
 
         assert "outputConfig" in result
@@ -5747,7 +5802,6 @@ def test_json_object_no_schema_skips_tool_injection(monkeypatch):
             model="anthropic.claude-sonnet-4-5-20250929-v1:0",
             optional_params=optional_params,
             non_default_params=non_default_params,
-            is_thinking_enabled=False,
         )
 
         # Should NOT use native outputConfig (no schema provided)

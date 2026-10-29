@@ -1012,6 +1012,28 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return AnthropicModelInfo._supports_model_capability(model, "thinking_always_on", custom_llm_provider)
 
     @staticmethod
+    def _will_think(model: str, custom_llm_provider: str, request_params: Mapping[str, object]) -> bool:
+        match request_params:
+            case {"thinking": True | {"type": "enabled" | "adaptive"}}:
+                return True
+            case {"reasoning_effort": effort} if effort is not None and effort != "none":
+                return True
+            case {"thinking": {"type": "disabled"}} | {"reasoning_effort": "none"}:
+                return False
+            case _:
+                return AnthropicModelInfo._is_always_on_thinking_model(
+                    model, custom_llm_provider
+                ) or AnthropicModelInfo._supports_model_capability(model, "thinking_on_by_default", custom_llm_provider)
+
+    @staticmethod
+    def response_format_tool_can_be_forced(
+        model: str, custom_llm_provider: str, request_params: Mapping[str, object]
+    ) -> bool:
+        return not AnthropicModelInfo.forced_tool_use_unsupported(model) and not AnthropicModelInfo._will_think(
+            model, custom_llm_provider, request_params
+        )
+
+    @staticmethod
     def _supports_legacy_thinking(model: str, custom_llm_provider: str) -> bool:
         """Whether ``model`` is an adaptive-thinking model that still accepts legacy
         ``thinking.type=enabled`` with ``budget_tokens`` (the Claude 4.6 family).

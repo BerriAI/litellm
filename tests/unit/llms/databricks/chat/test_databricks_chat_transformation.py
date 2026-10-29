@@ -2320,6 +2320,47 @@ def test_databricks_claude_json_schema_preserves_refs_in_tool_parameters() -> No
     ]
 
 
+@pytest.mark.parametrize(
+    ("model", "thinking_params", "forced"),
+    (
+        ("databricks-claude-opus-5", {}, False),
+        ("databricks-claude-opus-4-8", {"thinking": {"type": "adaptive"}}, False),
+        ("databricks-claude-opus-5-5", {}, False),
+        ("databricks-claude-opus-4-8", {}, True),
+        ("databricks-claude-opus-5", {"thinking": {"type": "disabled"}}, True),
+    ),
+    ids=(
+        "opus-5-default-thinking",
+        "opus-4-8-adaptive",
+        "opus-5-5-without-forced-tools",
+        "opus-4-8-default-off",
+        "opus-5-thinking-disabled",
+    ),
+)
+def test_databricks_claude_json_tool_is_forced_only_when_the_model_will_not_think(
+    local_model_cost_map: None, model: str, thinking_params: dict[str, object], forced: bool
+) -> None:
+    optional_params: Final = litellm.utils.get_optional_params(
+        model=model,
+        custom_llm_provider="databricks",
+        response_format=copy.deepcopy(JSON_SCHEMA_RESPONSE_FORMAT),
+        **thinking_params,
+    )
+    request: Final[dict[str, object]] = TypeAdapter(dict[str, object]).validate_python(
+        DatabricksConfig().transform_request(  # pyright: ignore[reportUnknownMemberType]  # inherited hook is untyped
+            model=model,
+            messages=[{"role": "user", "content": "Name the capital of France."}],
+            optional_params=dict(optional_params),
+            litellm_params={},
+            headers={},
+        )
+    )
+
+    assert (
+        request.get("tool_choice") == {"type": "function", "function": {"name": "json_tool_call"}}
+    ) is forced
+
+
 def test_databricks_pydantic_json_schema_preserves_nested_refs() -> None:
     class Person(BaseModel):
         model_config = ConfigDict(frozen=True)
