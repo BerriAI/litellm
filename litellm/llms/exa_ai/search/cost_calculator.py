@@ -73,7 +73,9 @@ def exa_ai_price_fields(model: str, entry: object) -> frozenset[str]:
     if not isinstance(entry, Mapping):
         return frozenset()
     fields: Final = _ENTRY.validate_python(entry)
-    registered: Final = entry.registered_fields & _PRICE_FIELDS if isinstance(entry, AliasedCostEntry) else frozenset()
+    registered: Final[frozenset[str]] = (
+        entry.registered_fields & _PRICE_FIELDS if isinstance(entry, AliasedCostEntry) else frozenset()
+    )
     if registered:
         return registered
     source: Final = get_model_cost_map_source_info()
@@ -108,11 +110,14 @@ def _non_negative_int(value: object) -> int | None:
 
 
 def exa_ai_requested_results(optional_params: Mapping[str, object]) -> int:
-    for key in ("max_results", "numResults"):
-        requested: Final = _non_negative_int(optional_params.get(key))
-        if requested is not None:
-            return requested
-    return EXA_AI_INCLUDED_RESULTS
+    return next(
+        (
+            requested
+            for key in ("max_results", "numResults")
+            if (requested := _non_negative_int(optional_params.get(key))) is not None
+        ),
+        EXA_AI_INCLUDED_RESULTS,
+    )
 
 
 def _requests_summaries(optional_params: Mapping[str, object]) -> bool:

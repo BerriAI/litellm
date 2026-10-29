@@ -1914,7 +1914,7 @@ def completion_cost(
                             model=search_model,
                             custom_llm_provider=custom_llm_provider,
                             number_of_queries=number_of_queries,
-                            response=completion_response,
+                            response=_ATTRIBUTE_VALUE.validate_python(completion_response),
                             optional_params={
                                 **(get_hidden_params(completion_response) or {}),
                                 **(optional_params or {}),

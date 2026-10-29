@@ -3516,7 +3516,7 @@ def _replace_cost_map_entry(
         current.registered_fields if isinstance(current, AliasedCostEntry) else frozenset()
     )
     supplied_fields: Final = frozenset(name for name, value in registration.items() if value is not None)
-    replaced_fields: Final = (
+    replaced_fields: Final[frozenset[str]] = (
         frozenset({"input_cost_per_query", "tiered_pricing"})
         if merged.get("litellm_provider") == "exa_ai" and supplied_fields & {"input_cost_per_query", "tiered_pricing"}
         else frozenset()

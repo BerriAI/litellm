@@ -104,6 +104,7 @@ def search_provider_cost_per_query(
         custom_llm_provider: Provider name (e.g., "exa_ai", "tavily")
         number_of_queries: Number of search queries performed (default: 1)
         optional_params: Optional parameters including max_results for tiered pricing
+        response: Search response carrying Exa's reported cost
 
     Returns:
         Tuple of (input_cost, output_cost) where output_cost is always 0.0
@@ -122,7 +123,7 @@ def search_provider_cost_per_query(
 
     pricing_model: Final = _pricing_model(model, custom_llm_provider, optional_params)
     params: Final = optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS
-    exa_price_fields: Final = (
+    exa_price_fields: Final[frozenset[str]] = (
         exa_ai_price_fields(
             _generic_search_entry(pricing_model, custom_llm_provider),
             _live_entry(_generic_search_entry(pricing_model, custom_llm_provider)),

@@ -4,7 +4,7 @@ Calls Exa AI's /search endpoint to search the web.
 Exa AI API Reference: https://docs.exa.ai/reference/search
 """
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from typing import Final
 
 import httpx
