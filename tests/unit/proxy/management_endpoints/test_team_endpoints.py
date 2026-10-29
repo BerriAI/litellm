@@ -19372,3 +19372,48 @@ async def test_default_budget_cache_eviction_does_not_fail_after_redis_error() -
     )
 
     user_api_key_cache.async_delete_cache.assert_awaited_once_with(key="team_member_default_budget:budget_456")
+
+
+@pytest.mark.asyncio
+async def test_team_info_reports_a_missing_team_as_a_request_error_not_an_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import Request
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request),
+            team_id="no-such-team",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("404", "invalid_request_error")
+    assert "Authentication Error" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_team_info_keeps_the_auth_label_for_a_caller_outside_the_team(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import Request
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    other_team: Final = MagicMock()
+    other_team.model_dump.return_value = {"team_id": "team-a", "members_with_roles": []}
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=other_team)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request),
+            team_id="team-a",
+            user_api_key_dict=UserAPIKeyAuth(user_id="outsider", user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("403", "auth_error")

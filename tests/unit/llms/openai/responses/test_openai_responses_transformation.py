@@ -7,13 +7,17 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import pytest
 import respx
+from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.types.llms.openai import (
     ImageGenerationPartialImageEvent,
@@ -1373,12 +1377,99 @@ class TestOpenAIResponsesAPIConfig:
 
         assert request["input"] == [expected, {"role": "user", "content": "And Berlin?"}]
 
+    @pytest.mark.parametrize(
+        ("item", "expected"),
+        [
+            (
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA", "created_by": None},
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA"},
+            ),
+            (
+                {
+                    "type": "shell_call_output",
+                    "call_id": "call_1",
+                    "created_by": None,
+                    "output": [{"stdout": "a.py", "stderr": "", "created_by": None}],
+                },
+                {"type": "shell_call_output", "call_id": "call_1", "output": [{"stdout": "a.py", "stderr": ""}]},
+            ),
+            (
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA", "created_by": "user_1"},
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA", "created_by": "user_1"},
+            ),
+        ],
+        ids=("compaction", "shell-call-output-entries", "sent-created-by"),
+    )
+    def test_an_input_item_saved_with_a_null_created_by_replays_without_it(
+        self, item: dict[str, object], expected: dict[str, object]
+    ):
+        request: Final = self.config.transform_responses_api_request(
+            model="gpt-5.6",
+            input=[item, {"role": "user", "content": "And Berlin?"}],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == [expected, {"role": "user", "content": "And Berlin?"}]
+
+    @pytest.mark.parametrize(
+        ("item", "expected"),
+        [
+            (
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA", "created_by": "user_1"},
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA"},
+            ),
+            (
+                ResponseCompactionItem(id="cmp_1", type="compaction", encrypted_content="gAAAA", created_by="user_1"),
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA"},
+            ),
+            (
+                {
+                    "type": "shell_call_output",
+                    "call_id": "call_1",
+                    "created_by": "user_1",
+                    "output": [{"stdout": "a.py", "stderr": "", "created_by": "user_1"}],
+                },
+                {"type": "shell_call_output", "call_id": "call_1", "output": [{"stdout": "a.py", "stderr": ""}]},
+            ),
+            (
+                {"id": "rs_1", "type": "reasoning", "summary": [], "created_by": "user_1"},
+                {"id": "rs_1", "type": "reasoning", "summary": []},
+            ),
+        ],
+        ids=("compaction", "sdk-compaction-item", "shell-call-output-entries", "reasoning"),
+    )
+    def test_a_set_created_by_is_dropped_under_drop_params(self, item: object, expected: dict[str, object]):
+        request: Final = self.config.transform_responses_api_request(
+            model="gpt-5.6",
+            input=cast("list[dict[str, object]]", [item]),  # cast-ok: an SDK item stands in for its JSON shape
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(drop_params=True),
+            headers={},
+        )
+
+        assert request["input"] == [expected]
+
 
 class TestAzureResponsesAPIConfig:
     def setup_method(self):
         self.config = AzureOpenAIResponsesAPIConfig()
         self.model = "gpt-4o"
         self.logging_obj = MagicMock()
+
+    def test_azure_drops_a_set_created_by_under_drop_params(self):
+        compaction: Final = {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA"}
+
+        request: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input=[{**compaction, "created_by": "user_1"}],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(drop_params=True),
+            headers={},
+        )
+
+        assert request["input"] == [compaction]
 
     def test_azure_decodes_json_string_tool_parameters(self):
         """Azure reaches the same wire through `super()`, after un-nesting a chat-shaped tool."""
@@ -4277,3 +4368,116 @@ def test_dict_responses_input_filters_unset_reasoning_fields() -> None:
     function_call_item: Final = validated_input[2]
     assert function_call_item["type"] == "function_call"
     assert function_call_item["status"] == "completed"
+
+
+_COMPACT_CONFIGS: Final = (
+    pytest.param(OpenAIResponsesAPIConfig(), "https://api.openai.com/v1/responses", id="openai"),
+    pytest.param(
+        AzureOpenAIResponsesAPIConfig(),
+        "https://x.openai.azure.com/openai/responses?api-version=2025-04-01-preview",
+        id="azure",
+    ),
+    pytest.param(AzureAIResponsesAPIConfig(), "https://x.services.ai.azure.com/openai/v1/responses", id="azure_ai"),
+)
+
+
+@pytest.mark.parametrize(("config", "api_base"), _COMPACT_CONFIGS)
+def test_compact_request_omits_metadata_and_user_and_keeps_the_rest_without_drop_params(
+    config: OpenAIResponsesAPIConfig, api_base: str
+) -> None:
+    _, data = config.transform_compact_response_api_request(
+        model="gpt-5.4-mini",
+        input="hi",
+        response_api_optional_request_params={
+            "metadata": {"ticket": "qa-1"},
+            "user": "end-user-1",
+            "instructions": "be brief",
+            "previous_response_id": "resp_1",
+            "reasoning": {"effort": "low"},
+            "temperature": 0.2,
+        },
+        api_base=api_base,
+        litellm_params=GenericLiteLLMParams(drop_params=False),
+        headers={},
+    )
+
+    assert {key: data[key] for key in data if key != "input"} == {
+        "model": "gpt-5.4-mini",
+        "instructions": "be brief",
+        "previous_response_id": "resp_1",
+        "reasoning": {"effort": "low"},
+        "temperature": 0.2,
+    }
+
+
+@pytest.mark.parametrize(("config", "api_base"), _COMPACT_CONFIGS)
+def test_compact_request_drops_params_compact_rejects_under_drop_params(
+    config: OpenAIResponsesAPIConfig, api_base: str
+) -> None:
+    _, data = config.transform_compact_response_api_request(
+        model="gpt-5.4-mini",
+        input="hi",
+        response_api_optional_request_params={
+            "metadata": {"ticket": "qa-1"},
+            "user": "end-user-1",
+            "temperature": 0.2,
+            "store": False,
+            "truncation": "auto",
+            "max_output_tokens": 100,
+            "tool_choice": "auto",
+            "reasoning": {"effort": "low"},
+            "include": ["reasoning.encrypted_content"],
+            "text": {"format": {"type": "text"}},
+        },
+        api_base=api_base,
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+
+    assert {key: data[key] for key in data if key != "input"} == {
+        "model": "gpt-5.4-mini",
+        "reasoning": {"effort": "low"},
+        "include": ["reasoning.encrypted_content"],
+        "text": {"format": {"type": "text"}},
+    }
+
+
+@pytest.mark.parametrize(
+    ("config", "api_base"),
+    (
+        pytest.param(XAIResponsesAPIConfig(), "https://api.x.ai/v1/responses", id="xai"),
+        pytest.param(HostedVLLMResponsesAPIConfig(), "http://vllm.example.com/v1/responses", id="hosted_vllm"),
+    ),
+)
+def test_compact_request_forwards_every_param_for_providers_not_known_to_reject_them(
+    config: OpenAIResponsesAPIConfig, api_base: str
+) -> None:
+    _, data = config.transform_compact_response_api_request(
+        model="some-model",
+        input="hi",
+        response_api_optional_request_params={"metadata": {"ticket": "qa-1"}, "user": "end-user-1", "temperature": 0.2},
+        api_base=api_base,
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+
+    assert {key: data[key] for key in data if key != "input"} == {
+        "model": "some-model",
+        "metadata": {"ticket": "qa-1"},
+        "user": "end-user-1",
+        "temperature": 0.2,
+    }
+
+
+@pytest.mark.parametrize(("config", "api_base"), _COMPACT_CONFIGS)
+def test_compact_request_keeps_stream_under_drop_params(config: OpenAIResponsesAPIConfig, api_base: str) -> None:
+    _, data = config.transform_compact_response_api_request(
+        model="gpt-5.4-mini",
+        input="hi",
+        response_api_optional_request_params={"stream": True, "stream_options": {"include_obfuscation": False}},
+        api_base=api_base,
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+
+    assert {key: data[key] for key in data if key != "input"} == {"model": "gpt-5.4-mini", "stream": True}
