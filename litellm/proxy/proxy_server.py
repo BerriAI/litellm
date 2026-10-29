@@ -1470,21 +1470,21 @@ async def _connect_to_count_stored_values(resources: AsyncExitStack) -> Supports
         database_url=str(get_secret("DATABASE_URL")), proxy_logging_obj=proxy_logging_obj
     )
     if prisma_client is None:
-        _own_database(resources, client)
+        resources.push_async_callback(client.aclose)
     await client.connect()
     return client.writer_db
 
 
-def _own_database(resources: AsyncExitStack, client: PrismaClient | None) -> database_runtime.Database | None:
+async def _own_database(resources: AsyncExitStack, client: PrismaClient | None) -> database_runtime.Database | None:
     if client is None:
         return None
-    database: Final = database_runtime.Database(prisma=client)
+    database: Final = await database_runtime.Database.open(client)
     resources.push_async_callback(database.aclose)
     return database
 
 
 def _forget_prisma_client() -> None:
-    global prisma_client  # noqa: PLW0603  # routes still read this global until they move to DatabaseDependency
+    global prisma_client  # noqa: PLW0603  # routes still read this global until they move to DatabaseDep
     prisma_client = None  # rebind-ok: a closed client must not survive into the next lifespan entry
 
 
@@ -1516,7 +1516,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
     import json
 
     resources.callback(_forget_prisma_client)
-    existing_database: Final = _own_database(resources, prisma_client)
+    existing_database: Final = await _own_database(resources, prisma_client)
 
     init_verbose_loggers()
 
@@ -1626,7 +1626,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
             )
         )
 
-    database: Final = existing_database or _own_database(resources, prisma_client)
+    database: Final = existing_database or await _own_database(resources, prisma_client)
 
     await migrate_if_requested(
         environ=os.environ,
@@ -12089,7 +12089,7 @@ class ProxyStartupEvent:
             return None
         client: Final = PrismaClient(database_url=database_url, proxy_logging_obj=proxy_logging_obj)
         async with AsyncExitStack() as setup_resources:
-            setup_resources.push_async_callback(database_runtime.Database(prisma=client).aclose)
+            setup_resources.push_async_callback(client.aclose)
             connected: Final = await cls._initialize_prisma_client(client)
             if connected is not None:
                 setup_resources.pop_all()

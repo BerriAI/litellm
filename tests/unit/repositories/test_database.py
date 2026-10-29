@@ -1,4 +1,3 @@
-import logging
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -8,29 +7,12 @@ from litellm.repositories.database import Database
 
 
 @pytest.mark.asyncio
-async def test_database_disconnects_and_logs_when_stopping_background_tasks_fails(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+async def test_closing_the_database_closes_prisma() -> None:
     prisma: Final = MagicMock()
-    prisma.stop_background_tasks = AsyncMock(side_effect=RuntimeError("watchdog failed"))
-    prisma.disconnect = AsyncMock()
+    prisma.aclose = AsyncMock()
+    database: Final = await Database.open(prisma)
 
-    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
-        await Database(prisma=prisma).aclose()
+    prisma.aclose.assert_not_awaited()
+    await database.aclose()
 
-    prisma.disconnect.assert_awaited_once()
-    assert "watchdog failed" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_database_aclose_returns_and_logs_when_disconnect_fails(caplog: pytest.LogCaptureFixture) -> None:
-    prisma: Final = MagicMock()
-    prisma.stop_background_tasks = AsyncMock()
-    prisma.disconnect = AsyncMock(side_effect=RuntimeError("engine hung"))
-
-    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
-        await Database(prisma=prisma).aclose()
-
-    prisma.stop_background_tasks.assert_awaited_once()
-    prisma.disconnect.assert_awaited_once()
-    assert "engine hung" in caplog.text
+    prisma.aclose.assert_awaited_once()

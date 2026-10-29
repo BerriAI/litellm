@@ -563,6 +563,7 @@ jobs:
               tests/unit/proxy/rerank_endpoints
               tests/unit/proxy/realtime_endpoints
               tests/unit/proxy/ui_crud_endpoints
+              tests/unit/proxy/deps
               tests/unit/proxy/config_resolvers
               tests/unit/proxy/utils
             python-version: "3.12"
