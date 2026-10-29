@@ -6,11 +6,11 @@ import re
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import closing
 from types import MappingProxyType
-from typing import Final, Literal, NamedTuple, cast
+from typing import Annotated, Final, Literal, NamedTuple, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
-from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from pydantic import ConfigDict, Field, NonNegativeInt, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -60,7 +60,8 @@ class _AzureClientLimits(TypedDict, total=False):
 
 
 _AZURE_CLIENT_LIMITS_ADAPTER: Final = TypeAdapter(_AzureClientLimits)
-_AZURE_CLIENT_MAX_RETRIES_ADAPTER: Final = TypeAdapter(int)
+_AZURE_CLIENT_MAX_RETRIES_ADAPTER: Final = TypeAdapter(NonNegativeInt)
+_AZURE_CLIENT_TIMEOUT_ADAPTER: Final = TypeAdapter(Annotated[float, Field(gt=0, allow_inf_nan=False)])
 
 
 def _azure_client_max_retries(configured: object) -> int:
@@ -70,6 +71,15 @@ def _azure_client_max_retries(configured: object) -> int:
         return _AZURE_CLIENT_MAX_RETRIES_ADAPTER.validate_python(configured)
     except ValidationError:
         return DEFAULT_MAX_RETRIES
+
+
+def _azure_client_timeout(configured: object) -> float | httpx.Timeout | None:
+    if configured is None or isinstance(configured, httpx.Timeout):
+        return configured
+    try:
+        return _AZURE_CLIENT_TIMEOUT_ADAPTER.validate_python(configured)
+    except ValidationError:
+        return None
 
 
 class _AzureGatewayClientParams(TypedDict, total=False, extra_items=object):
@@ -594,7 +604,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             **call_args,
             "is_async": _is_async,
             "max_retries": _azure_client_max_retries(client_limits.get("max_retries")),
-            "timeout": client_limits.get("timeout"),
+            "timeout": _azure_client_timeout(client_limits.get("timeout")),
             "azure_ad_token": (hashlib.sha256(_ad_token.encode()).hexdigest() if isinstance(_ad_token, str) else None),
             "azure_ad_token_provider": (
                 f"provider_id={id(_ad_provider) if callable(_ad_provider) else None}"
@@ -733,8 +743,9 @@ class BaseAzureLLM(BaseOpenAILLM):
         if scope is None:
             scope = "https://cognitiveservices.azure.com/.default"
 
-        max_retries: Final = _azure_client_max_retries(litellm_params.get("max_retries"))
-        timeout: Final = litellm_params.get("timeout")
+        client_limits: Final = _AZURE_CLIENT_LIMITS_ADAPTER.validate_python(litellm_params)
+        max_retries: Final = _azure_client_max_retries(client_limits.get("max_retries"))
+        timeout: Final = _azure_client_timeout(client_limits.get("timeout"))
         if not api_key and azure_ad_token_provider is None and tenant_id and client_id and client_secret:
             verbose_logger.debug("Using Azure AD Token Provider from Entra ID for Azure Auth")
             azure_ad_token_provider = get_azure_ad_token_from_entra_id(

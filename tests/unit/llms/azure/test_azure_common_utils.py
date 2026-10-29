@@ -500,15 +500,17 @@ def test_default_max_retries_setting_reaches_azure_audio_clients(monkeypatch: py
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["transcription", "speech"])
 @pytest.mark.parametrize(
-    ("form_max_retries", "expected_first_call_attempts"),
+    "caller_max_retries",
     [
-        pytest.param("0", 1, id="numeric-string-means-no-retries"),
-        pytest.param("abc", litellm.constants.DEFAULT_MAX_RETRIES + 1, id="malformed-string-keeps-default-retries"),
+        pytest.param("abc", id="malformed"),
+        pytest.param(-1, id="negative"),
+        pytest.param(12, id="large"),
     ],
 )
-async def test_azure_transcription_form_string_max_retries_works_and_does_not_break_later_calls(
-    monkeypatch: pytest.MonkeyPatch, form_max_retries: str, expected_first_call_attempts: int
+async def test_routed_azure_audio_leaves_retries_to_the_router_whatever_max_retries_the_caller_sends(
+    monkeypatch: pytest.MonkeyPatch, endpoint: str, caller_max_retries: object
 ) -> None:
     from litellm.caching.llm_caching_handler import LLMClientCache
 
@@ -519,34 +521,115 @@ async def test_azure_transcription_form_string_max_retries_works_and_does_not_br
     )
     async_http: Final = httpx.AsyncClient(transport=httpx.MockTransport(upstream.handler))
     monkeypatch.setattr(litellm, "aclient_session", async_http)
+    deployment_params: Final = {
+        "api_key": "test-key",
+        "api_base": "https://routed-retry-test.openai.azure.com",
+        "api_version": "2024-02-01",
+    }
     router: Final = litellm.Router(
         model_list=[
-            {
-                "model_name": "whisper",
-                "litellm_params": {
-                    "model": "azure/whisper",
-                    "api_key": "test-key",
-                    "api_base": "https://form-retry-test.openai.azure.com",
-                    "api_version": "2024-02-01",
-                },
-            }
+            {"model_name": "whisper", "litellm_params": {"model": "azure/whisper", **deployment_params}},
+            {"model_name": "tts", "litellm_params": {"model": "azure/tts", **deployment_params}},
         ],
         num_retries=0,
         disable_cooldowns=True,
     )
-    audio: Final = ("hello.wav", b"RIFF0000WAVEfmt ", "audio/wav")
 
+    routed_call: Final = (
+        router.atranscription(
+            file=("hello.wav", b"RIFF0000WAVEfmt ", "audio/wav"),
+            model="whisper",
+            max_retries=caller_max_retries,
+        )
+        if endpoint == "transcription"
+        else router.aspeech(model="tts", input="hi", voice="alloy", max_retries=caller_max_retries)
+    )
     try:
         with pytest.raises(litellm.RateLimitError):
-            await router.atranscription(file=audio, model="whisper", max_retries=form_max_retries)
-        attempts_with_form_value: Final = rate_limited.call_count
-        with pytest.raises(litellm.RateLimitError):
-            await router.atranscription(file=audio, model="whisper")
+            await routed_call
     finally:
         await async_http.aclose()
 
-    assert attempts_with_form_value == expected_first_call_attempts
-    assert rate_limited.call_count - attempts_with_form_value == 1
+    assert rate_limited.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("max_retries", "expected_first_call_attempts"),
+    [
+        pytest.param("0", 1, id="numeric-string-means-no-retries"),
+        pytest.param("abc", litellm.constants.DEFAULT_MAX_RETRIES + 1, id="malformed-keeps-default-retries"),
+        pytest.param(-1, litellm.constants.DEFAULT_MAX_RETRIES + 1, id="negative-keeps-default-retries"),
+    ],
+)
+async def test_azure_transcription_reads_max_retries_as_a_non_negative_number_and_falls_back_otherwise(
+    monkeypatch: pytest.MonkeyPatch, max_retries: object, expected_first_call_attempts: int
+) -> None:
+    from litellm.caching.llm_caching_handler import LLMClientCache
+
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    upstream: Final = respx.Router(assert_all_mocked=True)
+    rate_limited: Final = upstream.route().respond(
+        429, json={"error": {"message": "rate limited"}}, headers={"retry-after-ms": "1"}
+    )
+    async_http: Final = httpx.AsyncClient(transport=httpx.MockTransport(upstream.handler))
+    monkeypatch.setattr(litellm, "aclient_session", async_http)
+    call_params: Final = {
+        "model": "azure/whisper",
+        "file": ("hello.wav", b"RIFF0000WAVEfmt ", "audio/wav"),
+        "api_key": "test-key",
+        "api_base": "https://sdk-retry-test.openai.azure.com",
+        "api_version": "2024-02-01",
+    }
+
+    try:
+        with pytest.raises(litellm.RateLimitError):
+            await litellm.atranscription(**call_params, max_retries=max_retries)
+        attempts_with_value: Final = rate_limited.call_count
+        with pytest.raises(litellm.RateLimitError):
+            await litellm.atranscription(**call_params)
+    finally:
+        await async_http.aclose()
+
+    assert attempts_with_value == expected_first_call_attempts
+    assert rate_limited.call_count - attempts_with_value == litellm.constants.DEFAULT_MAX_RETRIES + 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_timeout",
+    [
+        pytest.param("abc", id="non-numeric"),
+        pytest.param([1, 2], id="list"),
+        pytest.param("1" * 400, id="not-finite"),
+    ],
+)
+async def test_azure_speech_with_an_unusable_timeout_keeps_the_sdk_default(
+    monkeypatch: pytest.MonkeyPatch, call_timeout: object
+) -> None:
+    from litellm.caching.llm_caching_handler import LLMClientCache
+
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    upstream: Final = respx.Router(assert_all_mocked=True)
+    speech_route: Final = upstream.route().respond(200, content=b"audio")
+    async_http: Final = httpx.AsyncClient(transport=httpx.MockTransport(upstream.handler))
+    monkeypatch.setattr(litellm, "aclient_session", async_http)
+
+    try:
+        response: Final = await litellm.aspeech(
+            model="azure/tts",
+            input="hi",
+            voice="alloy",
+            api_key="test-key",
+            api_base="https://speech-bad-timeout-test.openai.azure.com",
+            api_version="2024-02-01",
+            timeout=call_timeout,
+        )
+    finally:
+        await async_http.aclose()
+
+    assert response.content == b"audio"
+    assert speech_route.calls.last.request.extensions["timeout"]["read"] == DEFAULT_TIMEOUT.read
 
 
 @pytest.mark.parametrize(

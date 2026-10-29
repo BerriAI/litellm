@@ -8314,6 +8314,10 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         )
 
 
+def _is_router_call(call_kwargs: Mapping[str, object]) -> bool:
+    return model_group_from_metadata(call_kwargs.get("metadata"), call_kwargs.get("litellm_metadata")) is not None
+
+
 @client
 def transcription(
     model: str,
@@ -8436,7 +8440,7 @@ def transcription(
             api_key=api_key,
             api_version=api_version,
             azure_ad_token=azure_ad_token,
-            max_retries=max_retries,
+            max_retries=0 if _is_router_call(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs)) else max_retries,
             litellm_params=litellm_params_dict,
             custom_llm_provider=custom_llm_provider,
         )
@@ -8860,7 +8864,11 @@ def speech(
                 azure_ad_token=azure_ad_token,
                 azure_ad_token_provider=azure_ad_token_provider,
                 organization=organization,
-                max_retries=max_retries,
+                max_retries=(
+                    0
+                    if _is_router_call(_REQUEST_KWARGS_ADAPTER.validate_python({**kwargs, "metadata": metadata}))
+                    else max_retries
+                ),
                 timeout=http_timeout if timeout is not None or get_configured_request_timeout() is not None else None,
                 logging_obj=logging_obj,
                 client=client,  # pass AsyncOpenAI, OpenAI client
