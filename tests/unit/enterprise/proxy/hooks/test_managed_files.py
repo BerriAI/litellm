@@ -337,9 +337,11 @@ def test_get_file_ids_from_messages_leaves_malformed_file_parts_to_request_valid
         DualCache(), prisma_client=MagicMock()
     )
     messages = [
+        "not-a-message",
         {
             "role": "user",
             "content": [
+                "not-a-part",
                 {"type": "file"},
                 {"type": "file", "file": "file-raw"},
                 {"type": "file", "file": None},
