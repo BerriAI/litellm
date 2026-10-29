@@ -489,16 +489,47 @@ def deployment_drop_params(
     return MappingProxyType({}) if drop_params is None else MappingProxyType({"drop_params": drop_params})
 
 
-def _key_allowlist_covers(public_model_name: str, key_model_allowlist: Sequence[str]) -> bool:
+def _key_allowlist_covers(public_model_name: str, key_model_allowlist: Sequence[str], custom_llm_provider: str) -> bool:
     from litellm.proxy.auth.auth_checks import model_matches_any_wildcard_pattern_in_list
 
     if public_model_name in key_model_allowlist:
         return True
     if model_matches_any_wildcard_pattern_in_list(model=public_model_name, allowed_model_list=key_model_allowlist):
         return True
-    return any(
+    if any(
         model_matches_any_wildcard_pattern_in_list(model=key_model, allowed_model_list=(public_model_name,))
         for key_model in key_model_allowlist
+    ):
+        return True
+    return "*" in public_model_name and any(
+        _wildcards_share_a_known_model(key_model, public_model_name, custom_llm_provider)
+        for key_model in key_model_allowlist
+        if "*" in key_model
+    )
+
+
+def _bare_or_provider_prefixed_name_matches(
+    pattern_regex: re.Pattern[str], model: str, custom_llm_provider: str
+) -> bool:
+    return bool(pattern_regex.match(model) or pattern_regex.match(f"{custom_llm_provider}/{model}"))
+
+
+def _wildcards_share_a_known_model(key_pattern: str, public_model_name: str, custom_llm_provider: str) -> bool:
+    import litellm
+    from litellm.proxy.auth.auth_checks import model_matches_any_wildcard_pattern_in_list, wildcard_pattern_regex
+
+    key_regex: Final = wildcard_pattern_regex(key_pattern)
+    public_regex: Final = wildcard_pattern_regex(public_model_name)
+    models_spelled_like_both: Final = (
+        model
+        for model in litellm.models_by_provider.get(custom_llm_provider, ())
+        if _bare_or_provider_prefixed_name_matches(key_regex, model, custom_llm_provider)
+        and _bare_or_provider_prefixed_name_matches(public_regex, model, custom_llm_provider)
+    )
+    return any(
+        model_matches_any_wildcard_pattern_in_list(model=model, allowed_model_list=(key_pattern,))
+        and model_matches_any_wildcard_pattern_in_list(model=model, allowed_model_list=(public_model_name,))
+        for model in models_spelled_like_both
     )
 
 
@@ -550,8 +581,11 @@ def get_team_provider_credentials(
     it isn't authorized to use. A key restricted to an explicit model list
     only narrows the team scope, matching a wildcard on either side the way
     request authorization does (a key allowed ``gpt-4o`` may use the team's
-    ``openai/*`` deployment); sentinel-bearing keys (all-proxy-models /
-    all-team-models) defer to the team scope instead of widening past it.
+    ``openai/*`` deployment), and a wildcard against a wildcard when some
+    model litellm knows for the provider matches both (a ``gpt-*`` key may
+    use it too, a ``claude-*`` key may not); sentinel-bearing keys
+    (all-proxy-models / all-team-models) defer to the team scope instead of
+    widening past it.
     Returns None when the router is unavailable or no authorized deployment
     matches, so the caller can fall back to default credential resolution.
     """
@@ -590,7 +624,9 @@ def get_team_provider_credentials(
     def _key_may_use(public_model_name: object) -> bool:
         if not key_model_allowlist:
             return True
-        return isinstance(public_model_name, str) and _key_allowlist_covers(public_model_name, key_model_allowlist)
+        return isinstance(public_model_name, str) and _key_allowlist_covers(
+            public_model_name, key_model_allowlist, custom_llm_provider
+        )
 
     def _provider_credentials(model_id: str) -> dict[str, object] | None:
         credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)

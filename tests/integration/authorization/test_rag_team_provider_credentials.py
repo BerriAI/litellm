@@ -50,6 +50,7 @@ AZURE_API_KEY: Final = "integration-rag-azure-key"
 JWT_KEY_ID: Final = "integration-rag-team-provider-jwt"
 WILDCARD_MODEL: Final = "openai/gpt-4o-mini"
 BARE_WILDCARD_MODEL: Final = "gpt-4o-mini"
+FAMILY_WILDCARD_MODEL: Final = "gpt-*"
 OPENAI: Final[Mapping[str, JsonValue]] = MappingProxyType({"custom_llm_provider": "openai"})
 DOCUMENT: Final = ("document.txt", b"team provider credentials", "text/plain")
 BATCH_INPUT_ROW: Final[Mapping[str, JsonValue]] = MappingProxyType(
@@ -122,6 +123,7 @@ class Tenants:
     team_w_key: str
     wildcard_bare_key: str
     wildcard_prefixed_key: str
+    wildcard_family_key: str
     wildcard_global_key: str
     team_s: str
     team_s_key: str
@@ -695,6 +697,7 @@ def _tenants(gateway: Gateway, scenario: Scenario, upstream: str) -> Tenants:
         team_w_key=scenario.key(team_id=team_w),
         wildcard_bare_key=scenario.key(team_id=team_w, models=[BARE_WILDCARD_MODEL]),
         wildcard_prefixed_key=scenario.key(team_id=team_w, models=[WILDCARD_MODEL]),
+        wildcard_family_key=scenario.key(team_id=team_w, models=[FAMILY_WILDCARD_MODEL]),
         wildcard_global_key=scenario.key(team_id=team_w, models=[global_model]),
         team_s=team_s,
         team_s_key=scenario.key(team_id=team_s),
@@ -1007,11 +1010,17 @@ def test_files_upload_keeps_the_accessible_deployment_fallback(
 
 @pytest.mark.parametrize(
     ("caller", "model"),
-    (("wildcard_bare_key", BARE_WILDCARD_MODEL), ("wildcard_prefixed_key", WILDCARD_MODEL)),
-    ids=("bare_model", "prefixed_model"),
+    (
+        ("wildcard_bare_key", BARE_WILDCARD_MODEL),
+        ("wildcard_prefixed_key", WILDCARD_MODEL),
+        ("wildcard_family_key", BARE_WILDCARD_MODEL),
+    ),
+    ids=("bare_model", "prefixed_model", "family_wildcard"),
 )
 def test_key_restricted_to_a_model_under_the_team_wildcard_uses_the_team_deployment(
-    rag_rig: RagRig, caller: Literal["wildcard_bare_key", "wildcard_prefixed_key"], model: str
+    rag_rig: RagRig,
+    caller: Literal["wildcard_bare_key", "wildcard_prefixed_key", "wildcard_family_key"],
+    model: str,
 ) -> None:
     key: Final = getattr(rag_rig.tenants, caller)
 
@@ -1047,9 +1056,12 @@ def test_key_restricted_to_a_global_model_under_the_team_wildcard_splits_rag_and
     )
 
 
-def test_files_upload_by_a_key_restricted_under_the_team_wildcard_uses_the_team_deployment(rag_rig: RagRig) -> None:
+@pytest.mark.parametrize("caller", ("wildcard_bare_key", "wildcard_family_key"), ids=("bare_model", "family_wildcard"))
+def test_files_upload_by_a_key_restricted_under_the_team_wildcard_uses_the_team_deployment(
+    rag_rig: RagRig, caller: Literal["wildcard_bare_key", "wildcard_family_key"]
+) -> None:
     response: Final = rag_rig.gateway.request_multipart(
-        "/v1/files", {"purpose": "assistants"}, {"file": DOCUMENT}, key=rag_rig.tenants.wildcard_bare_key
+        "/v1/files", {"purpose": "assistants"}, {"file": DOCUMENT}, key=getattr(rag_rig.tenants, caller)
     )
 
     assert response.status_code == 200, response.text
@@ -1059,12 +1071,16 @@ def test_files_upload_by_a_key_restricted_under_the_team_wildcard_uses_the_team_
 @pytest.mark.parametrize("batch_options", ({}, {"litellm_credential_name": "no-such-credential"}), ids=("plain", "credential_name"))
 @pytest.mark.parametrize(
     ("caller", "prefix", "api_key", "reads_input"),
-    (("team_a_key", "team", TEAM_API_KEY, False), ("wildcard_bare_key", "wildcard", WILDCARD_API_KEY, True)),
-    ids=("team_key", "restricted_wildcard_key"),
+    (
+        ("team_a_key", "team", TEAM_API_KEY, False),
+        ("wildcard_bare_key", "wildcard", WILDCARD_API_KEY, True),
+        ("wildcard_family_key", "wildcard", WILDCARD_API_KEY, True),
+    ),
+    ids=("team_key", "restricted_wildcard_key", "family_wildcard_key"),
 )
 def test_batch_create_reads_the_input_and_creates_the_batch_through_the_team_deployment(
     rag_rig: RagRig,
-    caller: Literal["team_a_key", "wildcard_bare_key"],
+    caller: Literal["team_a_key", "wildcard_bare_key", "wildcard_family_key"],
     prefix: str,
     api_key: str,
     reads_input: bool,
@@ -1941,11 +1957,12 @@ def _bearer(key: str) -> Mapping[str, str]:
     return MappingProxyType({"Authorization": f"Bearer {key}"})
 
 
+@pytest.mark.parametrize("caller", ("wildcard_bare_key", "wildcard_family_key"), ids=("bare_model", "family_wildcard"))
 @pytest.mark.parametrize(("method", "path", "route"), FOLLOW_UP_CALLS, ids=FOLLOW_UP_CALL_IDS)
 def test_files_and_batches_calls_by_a_key_restricted_under_the_team_wildcard_use_the_team_deployment(
-    rag_rig: RagRig, method: str, path: str, route: str
+    rag_rig: RagRig, method: str, path: str, route: str, caller: Literal["wildcard_bare_key", "wildcard_family_key"]
 ) -> None:
-    key: Final = rag_rig.tenants.wildcard_bare_key
+    key: Final = getattr(rag_rig.tenants, caller)
     file_id, batch_id = _batch_for(rag_rig, _bearer(key))
 
     response: Final = rag_rig.gateway.request(method, path.format(file_id=file_id, batch_id=batch_id), key=key)

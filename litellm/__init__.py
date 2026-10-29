@@ -9,7 +9,7 @@ import threading
 import os
 import datetime
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from typing import (
     Any,
     Callable,
@@ -1179,7 +1179,7 @@ model_list_set = set(model_list)
 # provider_list is lazy-loaded via __getattr__ to avoid importing LlmProviders at import time
 
 
-def _build_models_by_provider() -> dict:
+def _build_models_by_provider() -> dict[str, Collection[str]]:
     return {
         "openai": open_ai_chat_completion_models | open_ai_text_completion_models,
         "text-completion-openai": open_ai_text_completion_models,
@@ -1303,7 +1303,7 @@ def _build_models_by_provider() -> dict:
     }
 
 
-models_by_provider: dict = _build_models_by_provider()
+models_by_provider: dict[str, Collection[str]] = _build_models_by_provider()
 
 # mapping for those models which have larger equivalents
 longer_context_model_fallback_dict: dict = {

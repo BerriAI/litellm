@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
+import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
@@ -715,6 +716,50 @@ def test_a_restricted_key_resolves_the_team_deployment_its_wildcard_or_model_cov
 @pytest.mark.parametrize("key_models", [["claude-opus-4-6"], ["anthropic/*"]])
 def test_a_restricted_key_outside_the_team_wildcard_never_resolves_its_credentials(key_models: list[str]):
     assert _team_only_openai_credentials("openai/*", "openai/*", key_models) is None
+
+
+def _family_wildcard_of_a_model_in(known_models: set[str]) -> str:
+    family, _, _ = min(model for model in known_models if "-" in model and "/" not in model).partition("-")
+    return f"{family}-*"
+
+
+def _team_wildcard_credentials(custom_llm_provider: str, key_wildcard: str) -> dict | None:
+    team_wildcard: Final = f"{custom_llm_provider}/*"
+    return get_team_provider_credentials(
+        llm_router=Router(
+            model_list=[
+                {
+                    "model_name": team_wildcard,
+                    "litellm_params": {"model": team_wildcard, "api_key": f"team-{custom_llm_provider}-key"},
+                    "model_info": {"id": "team-a-wildcard", "team_id": "team-a", "team_public_model_name": team_wildcard},
+                }
+            ]
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="test-key", user_id="test-user", team_id="team-a", team_models=[team_wildcard], models=[key_wildcard]
+        ),
+        custom_llm_provider=custom_llm_provider,
+        include_accessible_deployments=False,
+    )
+
+
+def test_a_wildcard_key_resolves_the_team_wildcard_deployment_serving_a_model_both_cover():
+    key_wildcard: Final = _family_wildcard_of_a_model_in(litellm.open_ai_chat_completion_models)
+
+    credentials: Final = _team_wildcard_credentials("openai", key_wildcard)
+
+    assert credentials is not None
+    assert credentials["api_key"] == "team-openai-key"
+
+
+@pytest.mark.parametrize(
+    "key_provider_models, team_provider",
+    [(litellm.anthropic_models, "openai"), (litellm.open_ai_chat_completion_models, "anthropic")],
+)
+def test_a_wildcard_key_never_resolves_a_team_wildcard_deployment_of_another_provider(
+    key_provider_models: set[str], team_provider: str
+):
+    assert _team_wildcard_credentials(team_provider, _family_wildcard_of_a_model_in(key_provider_models)) is None
 
 
 @pytest.mark.parametrize(

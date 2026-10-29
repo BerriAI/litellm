@@ -7772,10 +7772,13 @@ def is_model_allowed_by_pattern(model: str, allowed_model_pattern: str) -> bool:
         bool: True if model matches the pattern, False otherwise
     """
     if "*" in allowed_model_pattern:
-        pattern: Final = f"^{allowed_model_pattern.replace('*', '.*')}$"
-        return bool(re.match(pattern, model))
+        return bool(wildcard_pattern_regex(allowed_model_pattern).match(model))
 
     return False
+
+
+def wildcard_pattern_regex(allowed_model_pattern: str) -> re.Pattern[str]:
+    return re.compile(f"^{allowed_model_pattern.replace('*', '.*')}$")
 
 
 def model_matches_any_wildcard_pattern_in_list(model: str, allowed_model_list: Sequence[str]) -> bool:
