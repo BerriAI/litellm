@@ -3586,7 +3586,7 @@ async def _text_completion_n2_stream_without_choice_1_finish():
             model="gpt-3.5-turbo-instruct",
             object="text_completion",
             choices=[TextChoices(index=index, text=text, finish_reason=finish_reason)],
-        )
+        ).model_copy(update={"usage": None})
 
 
 async def _chat_n2_stream_without_choice_1_finish():
@@ -3628,6 +3628,7 @@ async def test_streaming_hook_releases_the_held_tail_of_a_choice_the_stream_neve
     assert "".join(_streamed_text(chunk, 1) for chunk in delivered) == _LONG_TAIL.replace(
         "persimmon", "[KEYWORD_REDACTED]"
     )
+    assert all(getattr(chunk, "usage", None) is None for chunk in delivered)
 
 
 @pytest.mark.asyncio

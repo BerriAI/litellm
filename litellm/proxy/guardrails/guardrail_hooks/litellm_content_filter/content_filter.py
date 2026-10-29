@@ -183,7 +183,7 @@ def _end_of_stream_chunk(
             model=last_item.model,
             object="text_completion",
             choices=[TextChoices(index=index, text="") for index in unfinished],
-        )
+        ).model_copy(update={"usage": None})
     if isinstance(last_item, ModelResponseStream):
         return ModelResponseStream(
             id=last_item.id,
