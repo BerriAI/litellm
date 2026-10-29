@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Final
 
 from litellm.llms.chatgpt.authenticator import Authenticator, get_cached_authenticator, get_chatgpt_auth_file
+from litellm.secret_managers.main import UnresolvableSecretReference, resolve_local_oidc_reference
 from litellm.utils import with_named_credential
 
 
@@ -17,7 +18,13 @@ def _chatgpt_account_id(litellm_params: Mapping[str, object]) -> str | None:
     if auth_file:
         return get_cached_authenticator(auth_file).read_account_id()
     api_key: Final = params.get("api_key")
-    return Authenticator().read_account_id(api_key if isinstance(api_key, str) and api_key else None)
+    if not isinstance(api_key, str) or not api_key:
+        return Authenticator().read_account_id()
+    match resolve_local_oidc_reference(api_key):
+        case UnresolvableSecretReference():
+            return None
+        case str() as access_token:
+            return Authenticator().read_account_id(access_token)
 
 
 SUBSCRIPTION_ACCOUNT_ID_RESOLVERS: Final[Mapping[str, Callable[[Mapping[str, object]], str | None]]] = MappingProxyType(

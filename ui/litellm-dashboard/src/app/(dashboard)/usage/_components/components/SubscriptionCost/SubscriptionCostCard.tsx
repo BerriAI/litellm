@@ -206,7 +206,9 @@ const SubscriptionCostCard: React.FC<SubscriptionCostCardProps> = ({
                   </span>
                 ))
               )}
-              <span data-testid="metered-spend">Metered spend: ${formatNumberWithCommas(meteredSpend, 2)}</span>
+              <span data-testid="metered-spend">
+                Usage-billed spend in range, all providers: ${formatNumberWithCommas(meteredSpend, 2)}
+              </span>
             </div>
             <p className="text-xs text-muted-foreground">{ATTRIBUTION_RULE}</p>
           </div>

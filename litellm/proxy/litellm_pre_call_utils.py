@@ -118,6 +118,9 @@ _SESSION_ID_VALUE_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
 
 _SHA256_HEX_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 
+SCHEDULER_PRIORITY_HEADER: Final = "x-litellm-priority"
+ROUTER_SCHEDULED_ROUTE_TYPES: Final = frozenset({"acompletion", "atext_completion"})
+
 # W3C Trace Context traceparent header: https://www.w3.org/TR/trace-context/
 # e.g. "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 _TRACEPARENT_RE: Final = re.compile(r"^[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$", re.IGNORECASE)
@@ -688,7 +691,7 @@ def _metadata_string_tags(metadata_objects: Iterable[Mapping[str, object]]) -> t
 
 
 def _strip_untrusted_request_header_controls(
-    headers: Any,
+    headers: object,
     *,
     allow_client_message_redaction_opt_out: bool = False,
 ) -> None:
@@ -1692,7 +1695,7 @@ class LiteLLMProxyRequestSetup:
 
     @staticmethod
     def add_internal_user_from_user_mapping(
-        general_settings: dict | None,
+        general_settings: Mapping[str, object] | None,
         user_api_key_dict: UserAPIKeyAuth,
         headers: dict,
     ) -> UserAPIKeyAuth:
@@ -1711,7 +1714,7 @@ class LiteLLMProxyRequestSetup:
         return user_api_key_dict
 
     @staticmethod
-    def get_user_from_headers(headers: dict, general_settings: dict | None = None) -> str | None:
+    def get_user_from_headers(headers: dict, general_settings: Mapping[str, object] | None = None) -> str | None:
         """
         Get the user from the specified header if `general_settings.user_header_name` is set.
         """
@@ -1732,7 +1735,9 @@ class LiteLLMProxyRequestSetup:
         return user
 
     @staticmethod
-    def get_openai_org_id_from_headers(headers: dict, general_settings: dict | None = None) -> str | None:
+    def get_openai_org_id_from_headers(
+        headers: dict, general_settings: Mapping[str, object] | None = None
+    ) -> str | None:
         """
         Get the OpenAI Org ID from the headers.
         """
@@ -1823,7 +1828,7 @@ class LiteLLMProxyRequestSetup:
         headers: dict,
         request_data: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth,
-        general_settings: dict[str, object] | None = None,
+        general_settings: Mapping[str, object] | None = None,
     ) -> LitellmDataForBackendLLMCall:
         """
         - Adds user from headers
@@ -3019,13 +3024,7 @@ async def add_litellm_data_to_request(
         getattr(request.state, "litellm_roi_estimator", False) is True
     )
 
-    verbose_proxy_logger.debug(
-        "[PROXY] returned data from litellm_pre_call_utils: %s",
-        data,
-    )
-
     # Team/Project credential overrides from model_config
-    # Placed after the debug log to avoid leaking credential secrets in logs
     _apply_credential_overrides_from_model_config(
         data=data,
         user_api_key_dict=user_api_key_dict,
@@ -3143,10 +3142,11 @@ def _fallback_lists(
     key/team ``router_settings.fallbacks`` the proxy prefers over router-level
     fallbacks in ``_configured_fallbacks``."""
     lists: Final[list[Sequence[object]]] = []  # mutable-ok: accumulates each fallback list found
+    configured: Final = llm_router.settings()
     for router_list in (
-        cast("object", llm_router.fallbacks),  # cast-ok: router fallback attrs are untyped
-        cast("object", llm_router.context_window_fallbacks),  # cast-ok: router fallback attrs are untyped
-        cast("object", llm_router.content_policy_fallbacks),  # cast-ok: router fallback attrs are untyped
+        cast("object", configured.fallbacks),  # cast-ok: router fallback attrs are untyped
+        cast("object", configured.context_window_fallbacks),  # cast-ok: router fallback attrs are untyped
+        cast("object", configured.content_policy_fallbacks),  # cast-ok: router fallback attrs are untyped
     ):
         if isinstance(router_list, list):
             lists.append(cast("Sequence[object]", router_list))  # cast-ok: fallback lists hold mixed entry shapes
@@ -3285,12 +3285,13 @@ def _per_user_credential_names_for_groups(
         GITHUB_COPILOT_AUTH_TYPE_KEY,
         GITHUB_COPILOT_PER_USER_AUTH_TYPE,
     )
-    from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model
+    from litellm.router_strategy.auto_router.auto_router_model_naming import classify_strategy_router_model
 
+    registry: Final = llm_router.registry()
     names: Final[list[str]] = []  # mutable-ok: accumulates one name per per-user deployment
     for group in model_groups:
-        by_name = llm_router.get_model_list(model_name=group, team_id=team_id) or ()
-        deployment_id_match = llm_router.get_deployment(model_id=group)
+        by_name = registry.deployments(model_name=group, team_id=team_id) or ()
+        deployment_id_match = registry.deployment(group)
         deployments: Sequence[object] = (
             *by_name,
             *((deployment_id_match,) if deployment_id_match is not None else ()),
@@ -3531,7 +3532,7 @@ def _update_model_if_team_alias_exists(
     # (format: "model_name_{team_id}_{uuid}")
     is_stale_team_alias: Final = aliased_target.startswith(f"model_name_{user_api_key_dict.team_id}_")
     if is_stale_team_alias and llm_router:
-        if aliased_target not in llm_router.model_name_to_deployment_indices:
+        if aliased_target not in llm_router.registry().index("model_name"):
             _warn_stale_team_alias_once(
                 f"deleted:{user_api_key_dict.team_id}:{_model}:{aliased_target}",
                 "Team model alias for model='%s', team_id='%s' targets '%s', which has no live "
@@ -3545,7 +3546,7 @@ def _update_model_if_team_alias_exists(
         # This is a stale alias from pre-PR deployments.
         # Check if current team deployments exist for the public name.
         key: Final = (user_api_key_dict.team_id, _model)
-        if key in llm_router.team_model_to_deployment_indices:
+        if key in llm_router.registry().index("team_model"):
             if enable_stale_alias_bypass:
                 # Team deployments exist; skip stale alias
                 return
@@ -3695,7 +3696,7 @@ def _resolve_provider_from_deployment(
 
     for name in candidates:
         try:
-            deployment = llm_router.get_deployment_by_model_group_name(model_group_name=name)
+            deployment = llm_router.registry().deployments(name, source="first_in_group")
         except Exception:
             deployment = None
         if deployment is None:

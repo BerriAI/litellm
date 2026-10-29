@@ -6,6 +6,7 @@ import re
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
@@ -4323,6 +4324,36 @@ async def test_insert_spend_log_asks_for_an_immediate_flush_only_on_rows_the_bri
 
     assert prisma.spend_log_transactions == [payload]
     assert prisma.spend_log_flush_requested.is_set() is expects_flush
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(30)
+async def test_a_chatgpt_responses_row_queues_without_a_default_chatgpt_login(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "no-default-login"))
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+    own_login: Final = tmp_path / "team" / "auth.json"
+    own_login.parent.mkdir()
+    own_login.write_text(json.dumps({"access_token": "at-team", "account_id": "acct-team"}))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chatgpt-team",
+                "litellm_params": {"model": "chatgpt/gpt-5.6-terra", "chatgpt_auth_file": str(own_login)},
+                "model_info": {"id": "dep-chatgpt"},
+            }
+        ]
+    )
+    prisma: Final = _tool_usage_prisma()
+    prisma.spend_log_flush_requested = asyncio.Event()
+    payload: Final = {"request_id": "req-1", "call_type": "aresponses", "model_id": "dep-chatgpt"}
+
+    await DBSpendUpdateWriter()._insert_spend_log_to_db(payload=payload, prisma_client=prisma, llm_router=router)
+
+    assert prisma.spend_log_transactions == [payload]
+    assert prisma.spend_log_flush_requested.is_set() is False
 
 
 def _batch_cost_payload() -> dict:

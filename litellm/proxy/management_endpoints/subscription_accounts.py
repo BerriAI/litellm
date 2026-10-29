@@ -102,8 +102,9 @@ def subscription_deployments_of_router(
 ) -> tuple[SubscriptionDeployment, ...]:
     if llm_router is None:
         return ()
-    indexed_names: Final = tuple(llm_router.model_name_to_deployment_indices)
-    deployments: Final = chain.from_iterable(llm_router.deployments_named(name) or () for name in indexed_names)
+    registry: Final = llm_router.registry()
+    indexed_names: Final = tuple(registry.index("model_name"))
+    deployments: Final = chain.from_iterable(registry.deployments(name, source="named") or () for name in indexed_names)
     return subscription_deployments_from_model_list(deployments, account_id_resolver)
 
 

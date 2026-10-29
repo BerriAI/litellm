@@ -94,3 +94,17 @@ def test_a_named_credential_resolves_to_the_account_it_signs_in_as(
     litellm_params: Final = {"model": "chatgpt/gpt-5.6-terra", "litellm_credential_name": "chatgpt-team"}
 
     assert resolve_subscription_account_id("chatgpt", litellm_params) == "acct-named-credential"
+
+
+@pytest.mark.parametrize(
+    ("api_key", "expected_account"),
+    [("oidc/env/CHATGPT_TEAM_TOKEN", "acct-from-oidc-env"), ("oidc/env/CHATGPT_UNSET_TOKEN", None)],
+)
+def test_an_oidc_env_api_key_resolves_to_the_account_of_the_token_it_points_to(
+    api_key: str, expected_account: str | None, signed_in_chatgpt_token_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CHATGPT_TEAM_TOKEN", _access_token_for("acct-from-oidc-env"))
+    monkeypatch.delenv("CHATGPT_UNSET_TOKEN", raising=False)
+    litellm_params: Final = {"model": "chatgpt/gpt-5.6-terra", "api_key": api_key}
+
+    assert resolve_subscription_account_id("chatgpt", litellm_params) == expected_account

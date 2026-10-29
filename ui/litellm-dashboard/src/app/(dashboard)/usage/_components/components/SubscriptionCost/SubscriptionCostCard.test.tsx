@@ -98,7 +98,7 @@ describe("SubscriptionCostCard", () => {
     expect(screen.getByText("Team workspace")).toBeInTheDocument();
     expect(screen.getByText("Oct 1 - Oct 31, 2026")).toBeInTheDocument();
     expect(screen.getByTestId("fixed-cost-total")).toHaveTextContent("Fixed cost in range: 25.00 USD");
-    expect(screen.getByTestId("metered-spend")).toHaveTextContent("Metered spend: $0.08");
+    expect(screen.getByTestId("metered-spend")).toHaveTextContent("Usage-billed spend in range, all providers: $0.08");
     expect(screen.queryByText(/25\.08/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
