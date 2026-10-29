@@ -1587,15 +1587,27 @@ def test_catch_all_lists_no_id_a_more_specific_sibling_wildcard_routes_elsewhere
     assert routed_models(model_info_names) == {"unshadowed-route-org/model-d": unshadowed_id}
 
 
-def test_catch_all_lists_an_id_an_explicit_deployment_also_serves_once() -> None:
+@pytest.mark.parametrize(
+    ("deployments", "listed_id"),
+    [
+        pytest.param(
+            ((_ROUTE_OPENAI_ID, f"openai/{_ROUTE_OPENAI_ID}"), ("*", "openai/*")),
+            _ROUTE_OPENAI_ID,
+            id="explicit-deployment-and-catch-all",
+        ),
+        pytest.param(
+            (("openai/*", "openai/*"), ("openai/*", "openai/*")),
+            f"openai/{_ROUTE_OPENAI_ID}",
+            id="two-deployments-behind-one-provider-wildcard",
+        ),
+    ],
+)
+def test_an_id_two_deployments_serve_is_listed_once(deployments: tuple[tuple[str, str], ...], listed_id: str) -> None:
     from litellm import Router
     from litellm.proxy.auth.model_checks import get_complete_model_list
 
     router: Final = Router(
-        model_list=[
-            {"model_name": _ROUTE_OPENAI_ID, "litellm_params": {"model": f"openai/{_ROUTE_OPENAI_ID}"}},
-            {"model_name": "*", "litellm_params": {"model": "openai/*"}},
-        ]
+        model_list=[{"model_name": name, "litellm_params": {"model": model}} for name, model in deployments]
     )
     with _registered_chat_models({_ROUTE_OPENAI_ID: "openai"}):
         v1_models: Final = get_complete_model_list(
@@ -1607,7 +1619,7 @@ def test_catch_all_lists_an_id_an_explicit_deployment_also_serves_once() -> None
             llm_router=router,
         )
 
-    assert [listed_id for listed_id in v1_models if _ROUTE_OPENAI_ID in listed_id] == [_ROUTE_OPENAI_ID]
+    assert [model for model in v1_models if _ROUTE_OPENAI_ID in model] == [listed_id]
 
 
 def test_wildcard_lists_an_id_a_more_specific_sibling_serves_with_the_same_model() -> None:
