@@ -318,6 +318,20 @@ def map_stream_error_to_exception(
     return _mapped_exception(provider_exception, model, custom_llm_provider, logging_obj)
 
 
+def failed_response_exception(
+    response: ResponsesAPIResponse,
+    model: str,
+    custom_llm_provider: str,
+    headers: httpx.Headers | None,
+    logging_obj: LiteLLMLoggingObj,
+) -> Exception | None:
+    if response.status != "failed":
+        return None
+    return map_stream_error_to_exception(
+        _event_field(response, "error"), model, custom_llm_provider, headers=headers, logging_obj=logging_obj
+    )
+
+
 def _mapped_exception(
     original_exception: Exception,
     model: str,

@@ -60,6 +60,7 @@ from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
+from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.litellm_core_utils.realtime_errors import (
     close_after_upstream_handshake_refusal,
@@ -131,6 +132,7 @@ from litellm.responses.streaming_iterator import (
     ResponsesAPIStreamingIterator,
     ResponsesWebSocketStreaming,
     SyncResponsesAPIStreamingIterator,
+    failed_response_exception,
 )
 from litellm.types.containers.main import (
     ContainerFileListResponse,
@@ -3144,6 +3146,11 @@ class BaseLLMHTTPHandler:
             raw_response=response,
             logging_obj=logging_obj,
         )
+        failure: Final = failed_response_exception(
+            initial_response, model, custom_llm_provider, provider_request_id_headers(response.headers), logging_obj
+        )
+        if failure is not None:
+            raise failure
 
         if self._has_agentic_completion_hook(logging_obj):
             agentic_kwargs: Final = dict(litellm_params)
@@ -3358,6 +3365,11 @@ class BaseLLMHTTPHandler:
             raw_response=response,
             logging_obj=logging_obj,
         )
+        failure: Final = failed_response_exception(
+            initial_response, model, custom_llm_provider, provider_request_id_headers(response.headers), logging_obj
+        )
+        if failure is not None:
+            raise failure
 
         agentic_kwargs: Final = dict(litellm_params)
         final_response: Final = await self._call_agentic_completion_hooks(

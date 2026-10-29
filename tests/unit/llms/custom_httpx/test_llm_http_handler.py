@@ -6061,3 +6061,94 @@ async def test_a_stream_answered_with_one_json_body_is_not_replayed_for_a_provid
         )
         with pytest.raises(litellm.exceptions.MidStreamFallbackError, match="before any terminal event"):
             _ = tuple([event async for event in stream])
+
+
+_MANTLE_OVERFLOW_MESSAGE: Final = (
+    'ErrorEvent { error: APIError { type: "invalid_request_error", code: Some(400), message: '
+    '"prompt tokens (165072) exceed model maximum (131072)", param: Some("input") } }'
+)
+
+
+def _responses_body(status: str, **fields: object) -> dict[str, object]:
+    return {
+        "id": f"resp_{status}",
+        "object": "response",
+        "created_at": 0,
+        "status": status,
+        "model": "openai.gpt-oss-20b",
+        "output": [],
+        **fields,
+    }
+
+
+def _mantle_overflow(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json=_responses_body("failed", error={"code": "invalid_prompt", "message": _MANTLE_OVERFLOW_MESSAGE}),
+        headers={"x-amzn-requestid": "req_mantle_overflow"},
+    )
+
+
+def _openai_answer(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json=_responses_body(
+            "completed", model="gpt-5.4-nano", usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+        ),
+    )
+
+
+_MANTLE_GPT_OSS_PARAMS: Final = MappingProxyType(
+    {"model": "bedrock_mantle/openai.gpt-oss-20b", "api_key": "mantle-test-key", "aws_region_name": "us-east-1"}
+)
+
+
+@pytest.mark.asyncio
+async def test_router_context_window_fallback_answers_a_non_streamed_response_the_provider_failed(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    mantle: Final = respx_mock.route(host="bedrock-mantle.us-east-1.api.aws").mock(side_effect=_mantle_overflow)
+    openai: Final = respx_mock.route(host="api.openai.com").mock(side_effect=_openai_answer)
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "gpt-oss-20b", "litellm_params": dict(_MANTLE_GPT_OSS_PARAMS)},
+            {"model_name": "gpt-5.4-nano", "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "sk-test"}},
+        ],
+        context_window_fallbacks=[{"gpt-oss-20b": ["gpt-5.4-nano"]}],
+    )
+
+    response: Final = await router.aresponses(model="gpt-oss-20b", input="hello")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # Router.aresponses kwargs are untyped
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert response.status == "completed"
+    assert mantle.call_count == 1
+    assert openai.call_count == 1
+
+
+def test_responses_raises_context_window_error_when_the_provider_answers_status_failed():
+    with pytest.raises(litellm.ContextWindowExceededError) as raised:
+        litellm.responses(
+            input="hello",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_mantle_overflow))),
+            **_MANTLE_GPT_OSS_PARAMS,
+        )
+
+    assert "prompt is too long: 165072 tokens > 131072 maximum" in str(raised.value)
+    response_headers: Final[object] = getattr(raised.value, "litellm_response_headers", None)
+    assert isinstance(response_headers, httpx.Headers)
+    assert response_headers.get("x-amzn-requestid") == "req_mantle_overflow"
+
+
+def test_responses_returns_an_incomplete_response_without_raising():
+    def answer_incomplete(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_responses_body("incomplete", incomplete_details={"reason": "max_output_tokens"}))
+
+    response: Final = litellm.responses(
+        input="hello",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(answer_incomplete))),
+        **_MANTLE_GPT_OSS_PARAMS,
+    )
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert response.status == "incomplete"
