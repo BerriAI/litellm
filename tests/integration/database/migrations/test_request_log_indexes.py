@@ -1173,7 +1173,11 @@ def test_the_dry_run_applies_every_pending_migration_in_order_and_rolls_all_of_i
     assert len(result.applied) > 1
     assert _ledger(scratch_database) == ledger_before, "a dry run must leave the ledger alone"
     assert _index_validity(scratch_database, "api_key_startTime_idx") == {}, "a dry run must leave no index behind"
-    assert "pending migration(s) applied in a dry run and rolled back" in migration_dry_run.report(result)
+    names: Final = tuple(name for name, _ in pending)
+    assert all(set(applied.replayed) <= set(names[: names.index(applied.name)]) for applied in result.applied), (
+        "a migration is only ever replayed behind a later one that depends on it"
+    )
+    assert "applied one at a time in a dry run" in migration_dry_run.report(result)
 
 
 @requires_db
@@ -1218,8 +1222,61 @@ def test_the_cli_summary_turns_from_postgres_error_to_timings_once_the_rows_are_
         conn.execute('UPDATE "LiteLLM_TeamTable" SET "team_alias" = \'filled\' WHERE "team_alias" IS NULL')
     ok_after, summary_after = ProxyExtrasDBManager.migration_dry_run_summary(use_migrate=True)
     assert ok_after is True
-    assert summary_after.startswith("1 pending migration(s) applied in a dry run and rolled back, nothing changed:"), (
-        summary_after
-    )
+    assert summary_after.startswith("1 pending migration(s) applied one at a time in a dry run"), summary_after
     assert f"\n  {REQUIRE_TEAM_ALIAS}: " in summary_after
     assert _team_alias_is_nullable(scratch_database)
+
+
+@requires_db
+@pytest.mark.parametrize("release", (CURRENT_RELEASE,), ids=("current",))
+def test_a_migration_that_depends_on_the_one_before_it_is_replayed_with_it_while_independent_ones_run_alone(
+    scratch_database: str, tmp_path: Path
+) -> None:
+    extras: Final = _extras_with_scratch_migration(
+        tmp_path, "20991231000000_add_team_region", 'ALTER TABLE "LiteLLM_TeamTable" ADD COLUMN "region" TEXT;\n'
+    )
+    (extras / "migrations" / "20991231000001_index_team_region").mkdir()
+    (extras / "migrations" / "20991231000001_index_team_region" / "migration.sql").write_text(
+        'CREATE INDEX CONCURRENTLY "LiteLLM_TeamTable_region_idx" ON "LiteLLM_TeamTable"("region");\n'
+    )
+    (extras / "migrations" / "20991231000002_index_team_alias").mkdir()
+    (extras / "migrations" / "20991231000002_index_team_alias" / "migration.sql").write_text(
+        'CREATE INDEX "LiteLLM_TeamTable_alias_idx" ON "LiteLLM_TeamTable"("team_alias");\n'
+    )
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        result: Final = migration_dry_run.dry_run(conn, "public", extras / "migrations")
+        region: Final = conn.execute(
+            "SELECT 1 FROM information_schema.columns WHERE table_name = 'LiteLLM_TeamTable' AND column_name = 'region'"
+        ).fetchone()
+
+    assert result.rejected is None, result
+    assert tuple((applied.name, applied.replayed) for applied in result.applied) == (
+        ("20991231000000_add_team_region", ()),
+        ("20991231000001_index_team_region", ("20991231000000_add_team_region",)),
+        ("20991231000002_index_team_alias", ()),
+    )
+    assert region is None, "every transaction must have been rolled back"
+    assert (
+        _index_validity(scratch_database, "region_idx") == {} and _index_validity(scratch_database, "alias_idx") == {}
+    )
+
+
+@requires_db
+@pytest.mark.parametrize("release", (CURRENT_RELEASE,), ids=("current",))
+def test_a_database_with_tables_but_no_ledger_is_judged_by_the_schema_diff_instead_of_replaying_history(
+    scratch_database: str,
+) -> None:
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        conn.execute("DROP TABLE _prisma_migrations")
+        matching: Final = migration_dry_run.dry_run(conn, "public", PACKAGE / "migrations", schema_diff=lambda: None)
+        differing: Final = migration_dry_run.dry_run(
+            conn,
+            "public",
+            PACKAGE / "migrations",
+            schema_diff=lambda: "-- AlterTable\nALTER TABLE x ADD COLUMN y TEXT;",
+        )
+
+    assert matching.ok is True and matching.applied == ()
+    assert "nothing to dry-run" in migration_dry_run.report(matching)
+    assert differing.ok is False
+    assert "ALTER TABLE x ADD COLUMN y TEXT;" in migration_dry_run.report(differing)

@@ -1426,6 +1426,33 @@ class ProxyExtrasDBManager:
         return True
 
     @staticmethod
+    def _schema_diff_against_build(prisma_dir: Path) -> str | None:
+        """`prisma migrate diff` between the live database and this build's schema.prisma, the
+        same check `baseline_current_schema` runs at boot: None when they match, the diff otherwise."""
+        from litellm_proxy_extras.migration_lock import migration_environment
+
+        try:
+            prisma_toolchain.run_prisma(
+                (
+                    _get_prisma_command(),
+                    "migrate",
+                    "diff",
+                    "--from-schema-datasource",
+                    str(prisma_dir / "schema.prisma"),
+                    "--to-schema-datamodel",
+                    str(prisma_dir / "schema.prisma"),
+                    "--exit-code",
+                ),
+                timeout=prisma_toolchain.prisma_command_timeout(),
+                env=migration_environment(_get_prisma_env()),
+            )
+        except subprocess.CalledProcessError as exc:
+            return str(exc.stdout or exc.stderr or exc).strip()
+        except subprocess.TimeoutExpired as exc:
+            return f"prisma migrate diff did not finish within {exc.timeout} s"
+        return None
+
+    @staticmethod
     def migration_dry_run_summary(use_migrate: bool = True) -> tuple[bool, str]:
         """`--check_migrations_against_existing_data`: the pending migrations applied for real on
         DIRECT_URL or DATABASE_URL inside one transaction that is rolled back, so Postgres reports
@@ -1442,10 +1469,15 @@ class ProxyExtrasDBManager:
             os.environ.get("DIRECT_URL") or database_url
         )
         schema: Final = ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"
-        migrations_dir: Final = Path(ProxyExtrasDBManager._get_prisma_dir()) / "migrations"
+        prisma_dir: Final = Path(ProxyExtrasDBManager._get_prisma_dir())
         try:
             with psycopg.connect(direct_url, connect_timeout=10, autocommit=True) as connection:
-                result: Final = dry_run(connection, schema, migrations_dir)
+                result: Final = dry_run(
+                    connection,
+                    schema,
+                    prisma_dir / "migrations",
+                    schema_diff=lambda: ProxyExtrasDBManager._schema_diff_against_build(prisma_dir),
+                )
         except psycopg.OperationalError as exc:
             return (False, f"Could not reach the database: {_redact_credentials(str(exc))}")
         return (result.ok, dry_run_report(result))
