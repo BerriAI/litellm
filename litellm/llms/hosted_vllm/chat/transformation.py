@@ -3,7 +3,7 @@ Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
 import json
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine, Mapping, Sequence
 from typing import Final, Literal, cast, overload
 
 from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
@@ -32,11 +32,34 @@ def _is_str_keyed_mapping(value: object) -> TypeIs[Mapping[str, object]]:  # gua
     return isinstance(value, Mapping)
 
 
-def _strict_only_when_true(tool: Mapping[str, object]) -> Mapping[str, object]:
+def _is_strict(tool: object) -> bool:
+    function: Final = tool.get("function") if _is_str_keyed_mapping(tool) else None
+    return _is_str_keyed_mapping(function) and function.get("strict") is True
+
+
+def _str_keyed(value: object) -> Mapping[str, object]:
+    return value if _is_str_keyed_mapping(value) else {}
+
+
+def _forces_a_tool_call(tool_choice: object) -> bool:
+    return tool_choice == "required" or _is_str_keyed_mapping(tool_choice)
+
+
+def _with_forwardable_strict(tool: object, keep_strict_false: bool) -> object:
+    if not _is_str_keyed_mapping(tool):
+        return tool
     function: Final = tool.get("function")
-    if not _is_str_keyed_mapping(function) or function.get("strict", True) is True:
+    if not _is_str_keyed_mapping(function):
+        return tool
+    strict: Final = function.get("strict", True)
+    if strict is True or (keep_strict_false and strict is False):
         return tool
     return {**tool, "function": {key: value for key, value in function.items() if key != "strict"}}
+
+
+def _tools_with_forwardable_strict(tools: Sequence[object], tool_choice: object) -> Sequence[object]:
+    keep_strict_false: Final = not _forces_a_tool_call(tool_choice) and any(_is_strict(tool) for tool in tools)
+    return [_with_forwardable_strict(tool, keep_strict_false) for tool in tools]
 
 
 class HostedVLLMChatConfig(OpenAIGPTConfig):
@@ -98,20 +121,23 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        params: Final = _str_keyed(non_default_params)
+        thinking_effort: Final = (
+            None
+            if "reasoning_effort" in params
+            else reasoning_effort_from_thinking(params.get("thinking"), drop_params=drop_params)
+        )
         tools: Final = non_default_params.pop("tools", None)
         if tools is not None:
             non_default_params["tools"] = (
-                [_strict_only_when_true(tool) for tool in self._convert_custom_tools_to_function_tools(tools)]
+                _tools_with_forwardable_strict(
+                    self._convert_custom_tools_to_function_tools(tools), params.get("tool_choice")
+                )
                 if isinstance(tools, list)
                 else tools
             )
 
-        thinking: Final = non_default_params.pop("thinking", None)
-        thinking_effort: Final = (
-            None
-            if "reasoning_effort" in non_default_params
-            else reasoning_effort_from_thinking(thinking, drop_params=drop_params)
-        )
+        non_default_params.pop("thinking", None)
         if thinking_effort is not None:
             non_default_params["reasoning_effort"] = thinking_effort
 
