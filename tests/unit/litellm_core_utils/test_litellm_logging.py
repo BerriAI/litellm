@@ -13829,3 +13829,35 @@ def test_record_native_bedrock_guardrail_bills_nothing_for_a_response_served_fro
     logging_obj.record_native_bedrock_guardrail({"trace": trace})
 
     assert "standard_logging_guardrail_information" not in logging_obj.model_call_details["litellm_params"]["metadata"]
+
+
+def test_record_native_bedrock_guardrail_bills_each_call_its_own_trace_when_calls_share_one_metadata_dict() -> None:
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
+
+    shared_metadata = {"tag": "x"}
+    traces = tuple(
+        {"guardrail": {"inputAssessment": {"gid": {"invocationMetrics": {"usage": {"contentPolicyUnits": units}}}}}}
+        for units in (1, 2)
+    )
+    costs = []
+    for call_index, trace in enumerate(traces):
+        logging_obj = Logging(
+            model="bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
+            messages=[{"role": "user", "content": "hello"}],
+            stream=False,
+            call_type="completion",
+            start_time=datetime.datetime.now(),
+            litellm_call_id=f"call-shared-metadata-{call_index}",
+            function_id="fn",
+        )
+        logging_obj.model_call_details["litellm_params"] = {"metadata": shared_metadata}
+        logging_obj.record_native_bedrock_guardrail({"trace": trace})
+        recorded = logging_obj.model_call_details["litellm_params"]["metadata"]["standard_logging_guardrail_information"]
+        costs.append(guardrail_information_cost(recorded))
+
+    (first_cost, second_cost) = costs
+    assert second_cost == pytest.approx(2 * first_cost)
+    assert shared_metadata == {"tag": "x"}
