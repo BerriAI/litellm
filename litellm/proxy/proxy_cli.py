@@ -1,7 +1,8 @@
 # ruff: noqa: T201
 import functools
-import importlib
+import importlib.metadata
 import json
+import logging.config
 import os
 import random
 import re
@@ -10,6 +11,7 @@ import sys
 import urllib.parse as urlparse
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final
 
 import click
@@ -258,6 +260,12 @@ def _apply_config_logging_settings(litellm_settings: StartupOutputSettings | Non
     litellm.turn_on_json()
 
 
+WORKER_APP: Final = "litellm_cli.main:proxy_worker_app"
+WORKER_LOG_CONFIG_ENV: Final = "LITELLM_WORKER_LOG_CONFIG"
+_LOG_CONFIG: Final = TypeAdapter[str | Mapping[str, object]](str | Mapping[str, object])
+_LOG_CONFIG_FILE: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object])
+
+
 class ProxyInitializationHelpers:
     @staticmethod
     def echo_litellm_version():
@@ -276,18 +284,19 @@ class ProxyInitializationHelpers:
 
     @staticmethod
     def run_migration_data_check(use_migrate: bool) -> int:
-        """`--check_migrations_against_existing_data`: the pre-migration row check against DATABASE_URL, nothing applied.
-        0 when the pending schema changes fit the rows, 2 with the refusal when they do not."""
+        """`--check_migrations_against_existing_data`: the pending migrations applied to DATABASE_URL inside one
+        transaction that is rolled back, so Postgres reports what the upgrade would hit. 0 when they all apply,
+        2 with Postgres's error when one does not."""
         if os.getenv("DATABASE_URL") is None:
             raise click.UsageError("--check_migrations_against_existing_data requires DATABASE_URL")
         from litellm.proxy.db.prisma_client import PrismaManager
 
-        refusal: Final[str | None] = PrismaManager.migration_data_check_report(use_migrate=use_migrate)  # pyright: ignore[reportUnknownVariableType]  # litellm-proxy-extras is an optional install
-        if refusal is None:
-            print("LiteLLM Proxy: the pending migrations and indexes can be applied to the rows this database has.")
+        ok, summary = PrismaManager.migration_dry_run_summary(use_migrate=use_migrate)
+        if ok:
+            print(f"LiteLLM Proxy: {summary}")
             return 0
         print(
-            f"\033[1;31mLiteLLM Proxy: Database migration cannot proceed. {refusal}\033[0m", file=sys.stderr, flush=True
+            f"\033[1;31mLiteLLM Proxy: Database migration cannot proceed. {summary}\033[0m", file=sys.stderr, flush=True
         )
         return 2
 
@@ -363,6 +372,35 @@ class ProxyInitializationHelpers:
         print(completion_response)
 
     _run_test_chat_completion = run_test_chat_completion
+
+    @staticmethod
+    def apply_log_config(log_config: str | Mapping[str, object]) -> None:
+        if not isinstance(log_config, str):
+            logging.config.dictConfig(dict(log_config))
+        elif log_config.endswith(".json"):
+            logging.config.dictConfig(dict(_LOG_CONFIG_FILE.validate_json(Path(log_config).read_bytes())))
+        elif log_config.endswith((".yaml", ".yml")):
+            import yaml
+
+            logging.config.dictConfig(
+                dict(_LOG_CONFIG_FILE.validate_python(yaml.safe_load(Path(log_config).read_text())))
+            )
+        else:
+            logging.config.fileConfig(log_config, disable_existing_loggers=False)
+
+    @staticmethod
+    def child_process_uvicorn_overrides(log_config: object) -> Mapping[str, object]:
+        if log_config is None:
+            return MappingProxyType({"app": WORKER_APP, "factory": True})
+        ProxyInitializationHelpers.apply_log_config(_LOG_CONFIG.validate_python(log_config))
+        os.environ[WORKER_LOG_CONFIG_ENV] = json.dumps(log_config)
+        return MappingProxyType({"app": WORKER_APP, "factory": True, "log_config": None})
+
+    @staticmethod
+    def apply_worker_log_config(environ: Mapping[str, str]) -> None:
+        log_config: Final = environ.get(WORKER_LOG_CONFIG_ENV)
+        if log_config is not None:
+            ProxyInitializationHelpers.apply_log_config(_LOG_CONFIG.validate_json(log_config))
 
     @staticmethod
     def get_default_unvicorn_init_args(
@@ -464,7 +502,7 @@ class ProxyInitializationHelpers:
         )
 
     @staticmethod
-    def _get_reload_options(config_path: str | None) -> dict:
+    def _get_reload_options(config_path: str | None) -> Mapping[str, object]:
         """Build uvicorn reload kwargs so --reload also reacts to .env and YAML edits."""
         cwd: Final = os.path.abspath(os.getcwd())
         reload_dirs: Final = [cwd]
@@ -513,7 +551,7 @@ class ProxyInitializationHelpers:
             original_iter: Final = StatReload.iter_py_files
             patched_paths = set()
 
-            def _iter_with_extra(self):
+            def _iter_with_extra(self: StatReload):
                 yield from original_iter(self)
                 for path in StatReload._litellm_patched_config_paths:
                     if path.exists():
@@ -1059,8 +1097,9 @@ class ProxyInitializationHelpers:
     "--check_migrations_against_existing_data",
     is_flag=True,
     default=False,
-    help="Check, read-only, that the rows in DATABASE_URL can take this version's pending migrations and indexes, "
-    "print what would block them, then exit without applying anything. Exit code 2 when something blocks.",
+    help="Dry-run this version's pending migrations on DATABASE_URL: the real SQL inside one transaction that is "
+    "rolled back, so Postgres reports the row or schema that would make the upgrade fail, then exit. Holds the same "
+    "locks the upgrade will. Exit code 2 when a migration fails.",
 )
 @click.option(
     "--keepalive_timeout",
@@ -1745,6 +1784,10 @@ def run_server(
 
             if num_workers > 1:
                 start_query_engine_reaper()
+            if num_workers > 1 or reload:
+                uvicorn_args.update(
+                    ProxyInitializationHelpers.child_process_uvicorn_overrides(uvicorn_args.get("log_config"))
+                )
             uvicorn.run(
                 **uvicorn_args,
                 workers=num_workers,

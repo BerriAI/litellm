@@ -31,7 +31,6 @@ from litellm.router_strategy.complexity_router.config import ContextCompactionCo
 
 if TYPE_CHECKING:
     from litellm.router import Router
-    from litellm.router_utils.context_window_fit import PreCallTokenCount
 
 Surface: TypeAlias = Literal["chat", "messages", "responses"]
 _SURFACES: Final[Mapping[str, Surface]] = MappingProxyType(
@@ -382,26 +381,13 @@ async def _check_client_managed_admission(
 ) -> None:
     if not router.enable_pre_call_checks:
         return
-    router._pre_call_checks(  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # restore legacy admission after deployment defaults
+    await asyncio.to_thread(
+        router._pre_call_checks,  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # restore legacy admission after deployment defaults
         model=str(payload["model"]),
         healthy_deployments=_ITEMS.validate_python((deployment,)),
         messages=_ITEMS.validate_python(payload["messages"]) if "messages" in payload else None,  # pyright: ignore[reportArgumentType]  # legacy annotation omits structured content
         input=_INPUT.validate_python(payload.get("input")),
         request_kwargs=_DICT.validate_python(payload),
-        input_token_counts=await _admission_token_counts(router, deployment, payload),
-        skip_inline_token_count=True,
-    )
-
-
-async def _admission_token_counts(
-    router: Router, deployment: Mapping[str, object], payload: Mapping[str, object]
-) -> Mapping[str, PreCallTokenCount]:
-    return await asyncio.to_thread(
-        router._pre_call_check_token_counts,  # pyright: ignore[reportPrivateUsage]  # shared Router admission counter
-        tokenizer_models=router._pre_call_check_tokenizer_models(str(payload["model"]), (deployment,)),  # pyright: ignore[reportPrivateUsage]  # shared Router admission counter
-        messages=_ITEMS.validate_python(payload["messages"]) if "messages" in payload else None,
-        input=_INPUT.validate_python(payload.get("input")),
-        request_kwargs=payload,
     )
 
 
