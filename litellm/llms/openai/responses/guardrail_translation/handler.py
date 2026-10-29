@@ -32,11 +32,11 @@ import copy
 import json
 import time
 import uuid
-from collections.abc import Mapping, MutableSequence, Sequence
+from collections.abc import Iterable, Mapping, MutableSequence, Sequence
 from dataclasses import dataclass
-from itertools import accumulate, chain, repeat
+from itertools import accumulate, chain, groupby, repeat
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, Union, cast
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeVar, Union, cast
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
@@ -558,36 +558,52 @@ def tool_output_texts(item: object) -> tuple[tuple[int | None, str], ...]:
     return ((None, tool_content),) if isinstance(tool_content, str) and tool_content else ()
 
 
-def _multi_part_texts_by_call_id(input_data: "str | ResponseInputParam") -> Mapping[str, tuple[str, ...]]:
+_Grouped: Final = TypeVar("_Grouped")
+
+
+def _pair_call_id(pair: tuple[str, object]) -> str:
+    return pair[0]
+
+
+def _grouped_by_call_id(pairs: Iterable[tuple[str, _Grouped]]) -> Mapping[str, tuple[_Grouped, ...]]:
+    ordered: Final = sorted(pairs, key=_pair_call_id)
+    return MappingProxyType(
+        {call_id: tuple(value for _, value in group) for call_id, group in groupby(ordered, key=_pair_call_id)}
+    )
+
+
+def _texts_by_tool_row(
+    messages: Sequence[Mapping[str, object]], input_data: "str | ResponseInputParam"
+) -> Mapping[int, tuple[str, ...]]:
     if isinstance(input_data, str):
         return MappingProxyType({})
-    texted_outputs: Final = tuple(
-        (str(stream_item_field(item, "call_id")), texts)
+    output_texts_by_call_id: Final = _grouped_by_call_id(
+        (str(stream_item_field(item, "call_id")), tuple(text for _, text in tool_output_texts(item)))
         for item in input_data
-        if stream_item_field(item, "type") in TOOL_CALL_OUTPUT_ITEM_TYPES and (texts := tool_output_texts(item))
+        if stream_item_field(item, "type") in TOOL_CALL_OUTPUT_ITEM_TYPES
     )
-    call_ids: Final = tuple(call_id for call_id, _ in texted_outputs)
+    row_indices_by_call_id: Final = _grouped_by_call_id(
+        (str(message.get("tool_call_id")), index)
+        for index, message in enumerate(messages)
+        if message.get("role") == "tool"
+    )
     return MappingProxyType(
-        {
-            call_id: tuple(text for _, text in texts)
-            for call_id, texts in texted_outputs
-            if len(texts) > 1 and call_ids.count(call_id) == 1
-        }
+        dict(
+            chain.from_iterable(
+                zip(indices, output_texts_by_call_id[call_id], strict=True)
+                for call_id, indices in row_indices_by_call_id.items()
+                if len(indices) == len(output_texts_by_call_id.get(call_id, ()))
+            )
+        )
     )
 
 
-def _string_tool_row_call_id(message: Mapping[str, object]) -> str | None:
-    if message.get("role") != "tool" or not isinstance(message.get("content"), str):
-        return None
-    return str(message.get("tool_call_id"))
+def _is_string_tool_row(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "tool" and isinstance(message.get("content"), str)
 
 
-def _split_into_text_parts(
-    message: AllMessageValues, texts_by_call_id: Mapping[str, tuple[str, ...]]
-) -> AllMessageValues:
-    call_id: Final = _string_tool_row_call_id(message)
-    texts: Final = None if call_id is None else texts_by_call_id.get(call_id)
-    if texts is None:
+def _split_into_text_parts(message: AllMessageValues, texts: tuple[str, ...]) -> AllMessageValues:
+    if not _is_string_tool_row(message) or len(texts) < 2:
         return message
     return cast(  # cast-ok: a tool row whose content is its text parts as chat text blocks
         "AllMessageValues", {**message, "content": [{"type": "text", "text": text} for text in texts]}
@@ -602,28 +618,8 @@ def _with_split_rows_restored(
     return [next((original for split, original in split_rows if row == split), row) for row in rows]
 
 
-def _textless_tool_call_ids(input_data: "str | ResponseInputParam") -> frozenset[str]:
-    if isinstance(input_data, str):
-        return frozenset()
-    tool_outputs: Final = tuple(
-        item for item in input_data if stream_item_field(item, "type") in TOOL_CALL_OUTPUT_ITEM_TYPES
-    )
-    texted_call_ids: Final = frozenset(
-        str(stream_item_field(item, "call_id")) for item in tool_outputs if tool_output_texts(item)
-    )
-    return (
-        frozenset(str(stream_item_field(item, "call_id")) for item in tool_outputs if not tool_output_texts(item))
-        - texted_call_ids
-    )
-
-
-def _is_textless_tool_row(message: Mapping[str, object], textless_call_ids: frozenset[str]) -> bool:
-    content: Final = message.get("content")
-    return (
-        message.get("role") == "tool"
-        and isinstance(content, str)
-        and (not content or message.get("tool_call_id") in textless_call_ids)
-    )
+def _is_textless_tool_row(message: Mapping[str, object], texts: tuple[str, ...] | None) -> bool:
+    return _is_string_tool_row(message) and (not message.get("content") or texts == ())
 
 
 def _rewritten_whole_text(item: object, field: str, guardrail_response: str) -> object | None:
@@ -756,17 +752,16 @@ class OpenAIResponsesHandler(BaseTranslation):
         scan_only: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
         structured_messages: Final = self.get_structured_messages(data)
         all_messages: Final = structured_messages or []
-        textless_call_ids: Final = _textless_tool_call_ids(input_data)
+        texts_by_tool_row: Final = _texts_by_tool_row(all_messages, input_data)
         scoped_indices: Final = tuple(
             index
             for index in scoped_structured_message_indices(
                 all_messages, scan_only_tool_results=scan_only, skip_system=skip_system, skip_tool=skip_tool
             )
-            if not _is_textless_tool_row(all_messages[index], textless_call_ids)
+            if not _is_textless_tool_row(all_messages[index], texts_by_tool_row.get(index))
         )
-        texts_by_call_id: Final = _multi_part_texts_by_call_id(input_data)
         split_rows: Final = tuple(
-            (_split_into_text_parts(all_messages[index], texts_by_call_id), all_messages[index])
+            (_split_into_text_parts(all_messages[index], texts_by_tool_row.get(index, ())), all_messages[index])
             for index in scoped_indices
         )
         scoped_structured_messages: Final = [split for split, _ in split_rows] if structured_messages else None

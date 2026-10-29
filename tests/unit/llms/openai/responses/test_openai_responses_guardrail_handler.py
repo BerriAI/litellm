@@ -975,10 +975,17 @@ class TestToolResultItemsReachTextsGuardrails:
             }
         )
 
-        await OpenAIResponsesHandler().process_input_messages(request, guardrail)
+        result: Final = await OpenAIResponsesHandler().process_input_messages(request, guardrail)
 
-        assert "first output" in guardrail.seen_message_contents[0]
-        assert "second output" in guardrail.seen_message_contents[0]
+        assert guardrail.seen_texts == [["Weather?", "first ", "output", "second ", "output"]]
+        assert guardrail.seen_message_contents[0][2:] == [
+            [{"type": "text", "text": "first "}, {"type": "text", "text": "output"}],
+            [{"type": "text", "text": "second "}, {"type": "text", "text": "output"}],
+        ]
+        assert [part["text"] for part in result["input"][3]["output"]] == [
+            "second  [GUARDRAILED]",
+            "output [GUARDRAILED]",
+        ]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1009,9 +1016,8 @@ class TestToolResultItemsReachTextsGuardrails:
         await OpenAIResponsesHandler().process_input_messages(request, guardrail)
 
         assert guardrail.seen_texts == [["Weather?", "first ", "output"]]
-        assert guardrail.seen_message_contents[0][2] == [
-            {"type": "text", "text": "first "},
-            {"type": "text", "text": "output"},
+        assert guardrail.seen_message_contents[0][2:] == [
+            [{"type": "text", "text": "first "}, {"type": "text", "text": "output"}],
         ]
 
     @pytest.mark.asyncio
