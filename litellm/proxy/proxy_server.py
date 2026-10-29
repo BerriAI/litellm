@@ -919,6 +919,7 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
     PendingSpendIncrement,
     active_spend_counter_batch,
     forget_spend_counter,
+    is_team_key_exempt_from_user_budget,
     post_call_counter_keys,
     read_batched_spend_counter,
     record_spend_counter_value,
@@ -3724,6 +3725,12 @@ async def _increment_spend_counters_batched(
         )
 
     async def _user_scope(scope_user_id: str) -> tuple[PendingSpendIncrement | BaseException, ...]:
+        # apply_user_budget_to_team_keys off: a team key's spend must not feed the user
+        # counter — the user budget check already skips team keys (auth_checks.py) and
+        # budget_reservation.py reserves nothing against spend:user: for them either, so
+        # counting here would fill the owner's personal envelope with the team's spend.
+        if is_team_key_exempt_from_user_budget(team_id):
+            return ()
         user_counter_key: Final = f"spend:user:{scope_user_id}"
         if user_counter_key in reserved_counter_keys:
             return ()

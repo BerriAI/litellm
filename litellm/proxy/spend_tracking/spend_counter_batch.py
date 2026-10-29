@@ -180,6 +180,20 @@ def release_spend_counter_batch() -> None:
         batch.close()
 
 
+def is_team_key_exempt_from_user_budget(team_id: object) -> bool:
+    """True when a team key's spend must stay off the user budget accounting.
+
+    The user budget check already skips team keys unless ``general_settings.
+    apply_user_budget_to_team_keys`` is True (auth_checks.py), so measuring a team key's
+    spend against the owner's ``spend:user:`` counter would fill their personal envelope
+    with their team's spend. Same convention as budget_reservation.py."""
+    if team_id is None:
+        return False
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings.get("apply_user_budget_to_team_keys") is not True
+
+
 def _iter_entity_counter_keys(
     token: object,
     team_id: object,
@@ -189,14 +203,15 @@ def _iter_entity_counter_keys(
     end_user_id: object,
 ) -> Iterator[str]:
     """Only string ids name a counter; anything else (None, or an unresolved placeholder in synthetic
-    logging payloads) simply has no counter to bind."""
+    logging payloads) simply has no counter to bind. ``spend:user:`` is skipped for team keys unless
+    ``apply_user_budget_to_team_keys`` opts in, matching the user budget check."""
     if isinstance(token, str):
         yield f"spend:key:{token}"
     if isinstance(team_id, str):
         yield f"spend:team:{team_id}"
         if isinstance(user_id, str):
             yield f"spend:team_member:{user_id}:{team_id}"
-    if isinstance(user_id, str):
+    if isinstance(user_id, str) and not is_team_key_exempt_from_user_budget(team_id):
         yield f"spend:user:{user_id}"
     if isinstance(end_user_id, str):
         yield f"spend:end_user:{end_user_id}"

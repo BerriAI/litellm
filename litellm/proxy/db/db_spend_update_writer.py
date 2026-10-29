@@ -87,6 +87,7 @@ from litellm.proxy.spend_tracking.savings import (
     extract_cache_read_tokens,
     marks_gateway_injection,
 )
+from litellm.proxy.spend_tracking.spend_counter_batch import is_team_key_exempt_from_user_budget
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.repositories.prisma_protocols import BatchTable
 from litellm.responses.streaming_iterator import spawn_logging_task
@@ -1144,6 +1145,7 @@ class DBSpendUpdateWriter:
                 prisma_client=prisma_client,
                 litellm_proxy_budget_name=litellm_proxy_budget_name,
                 end_user_id=end_user_id,
+                team_id=team_id,
             ),
             payload=payload_copy,
         )
@@ -1269,14 +1271,18 @@ class DBSpendUpdateWriter:
         prisma_client: PrismaClient | None,
         litellm_proxy_budget_name: str | None,
         end_user_id: str | None = None,
+        team_id: str | None = None,
     ):
         """
-        - Update that user's row
+        - Update that user's row (skipped for team keys unless
+          ``apply_user_budget_to_team_keys`` is True: the Redis ``spend:user:`` counter applies
+          the same exemption, so a reseed of the counter from this row cannot reintroduce the
+          team's spend)
         - Update litellm-proxy-budget row (global proxy spend)
         """
         try:
             if prisma_client is not None:  # update
-                user_ids: Final = [user_id]
+                user_ids: Final = [user_id if not is_team_key_exempt_from_user_budget(team_id) else None]
                 if litellm.max_budget > 0:  # track global proxy budget, if user set max budget
                     user_ids.append(litellm_proxy_budget_name)
 
