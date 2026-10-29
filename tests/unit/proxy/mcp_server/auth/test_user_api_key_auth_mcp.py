@@ -2975,22 +2975,28 @@ class TestMCPDelegateAuthToUpstream:
         assert oauth2_headers == {"Authorization": "Bearer opaque-idp-token"}
 
     @pytest.mark.parametrize(
-        "active, allowed_server_ids, expected_user_id",
-        [(True, ["test-server-id"], "idp-user"), (True, [], None), (False, ["test-server-id"], None)],
-        ids=["granted-user", "user-not-granted", "token-inactive"],
+        "provider_status, active, allowed_server_ids, expected_user_id",
+        [
+            (200, True, ["test-server-id"], "idp-user"),
+            (200, True, [], None),
+            (200, False, ["test-server-id"], None),
+            (401, True, ["test-server-id"], None),
+        ],
+        ids=["granted-user", "user-not-granted", "token-inactive", "provider-rejects-token"],
     )
     async def test_delegate_oauth2_introspects_once_and_follows_the_jwt_rules(
-        self, active: bool, allowed_server_ids: Sequence[str], expected_user_id: str | None
+        self, provider_status: int, active: bool, allowed_server_ids: Sequence[str], expected_user_id: str | None
     ) -> None:
         """The provider is asked about the token once per request. A token it vouches for admits a granted
-        user by name, and one it reports inactive is forwarded anonymously instead of failing the request."""
+        user by name, and one it reports inactive or rejects outright is forwarded anonymously instead of
+        failing the request."""
         import httpx
 
         from litellm.proxy import proxy_server
         from litellm.types.mcp import MCPAuth
 
         async def introspect(outbound: httpx.Request, **kwargs: object) -> httpx.Response:
-            return httpx.Response(200, request=outbound, json={"active": active, "sub": "idp-user"})
+            return httpx.Response(provider_status, request=outbound, json={"active": active, "sub": "idp-user"})
 
         with (
             patch.dict(proxy_server.general_settings, {"enable_oauth2_auth": True}),
