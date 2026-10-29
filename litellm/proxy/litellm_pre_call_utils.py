@@ -2421,6 +2421,29 @@ class LiteLLMProxyRequestSetup:
         )
 
     @staticmethod
+    def merge_caller_body_tags(
+        request_data: MutableMapping[str, object],  # mutable-ok: the request body the tag merges write into
+        metadata_variable_name: str | None = None,
+    ) -> None:
+        slot: Final = (
+            metadata_variable_name
+            if metadata_variable_name is not None
+            else get_metadata_variable_name_from_kwargs(request_data)
+        )
+        if slot == "metadata":
+            return
+        caller_metadata: Final = request_data.get("metadata")
+        caller_tags: Final = caller_metadata.get("tags") if isinstance(caller_metadata, dict) else None
+        if not isinstance(caller_tags, list) or not caller_tags:
+            return
+        metadata: Final = _normalized_metadata_slot(request_data, slot)
+        existing_tags: Final = metadata.get("tags")
+        metadata["tags"] = LiteLLMProxyRequestSetup.merge_tags(
+            request_tags=existing_tags if isinstance(existing_tags, list) else None,
+            tags_to_add=caller_tags,
+        )
+
+    @staticmethod
     def apply_key_tags_pre_auth(
         request_data: dict,
         user_api_key_dict: UserAPIKeyAuth,
@@ -3000,17 +3023,7 @@ async def add_litellm_data_to_request(
             tags_to_add=tags,
         )
 
-    _caller_body_metadata: Final = data.get("metadata") if _metadata_variable_name != "metadata" else None
-    _caller_body_tags: Final = (
-        _caller_body_metadata.get("tags")
-        if isinstance(_caller_body_metadata, dict) and isinstance(_caller_body_metadata.get("tags"), list)
-        else None
-    )
-    if _caller_body_tags:
-        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup.merge_tags(  # rebind-ok: matches file idiom
-            request_tags=data[_metadata_variable_name].get("tags"),
-            tags_to_add=_caller_body_tags,
-        )
+    LiteLLMProxyRequestSetup.merge_caller_body_tags(request_data=data, metadata_variable_name=_metadata_variable_name)
 
     # caller_tags: the tags the request's headers and body carry (x-litellm-tags, body "tags", and body
     # "metadata.tags" / "litellm_metadata.tags" read before the mapped tags are added below),

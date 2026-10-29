@@ -518,14 +518,20 @@ def test_cursor_messages_body_uses_chat_completions_wire(
         assert _REQUEST_TAG in list_value(row["request_tags"]), row
 
 
-def test_cursor_messages_body_keeps_client_and_key_tags_and_enforces_the_client_tag_budget(gateway: Gateway) -> None:
+@pytest.mark.parametrize("body_shape", ("messages", "input"))
+def test_cursor_body_keeps_client_and_key_tags_and_enforces_the_client_tag_budget(
+    gateway: Gateway, body_shape: str
+) -> None:
     chat_id: Final = f"chat_cursor_{uuid.uuid4().hex}"
+    response_id: Final = f"resp_cursor_tags_{uuid.uuid4().hex}"
     budget_tag: Final = f"cursor-tag-budget-{uuid.uuid4().hex}"
     key_tag: Final = f"cursor-key-tag-{uuid.uuid4().hex}"
 
     def respond(request: Request) -> Reply:
         if request.method == "GET" and request.target == "/v1/models":
             return model_discovery_reply(_MODEL)
+        if request.target == "/v1/responses":
+            return Reply(body=json.dumps(_response(response_id)).encode())
         completion: Final = _chat_completion(False, chat_id)
         return Reply(body=completion if isinstance(completion, bytes) else b"")
 
@@ -544,7 +550,7 @@ def test_cursor_messages_body_keeps_client_and_key_tags_and_enforces_the_client_
                 "/cursor/chat/completions",
                 {
                     "model": model,
-                    "messages": [{"role": "user", "content": text}],
+                    body_shape: [{"role": "user", "content": text}],
                     "metadata": {"tags": [budget_tag]},
                 },
                 key=key,
