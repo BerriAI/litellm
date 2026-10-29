@@ -806,7 +806,7 @@ async def test_a_hung_wildcard_listing_during_a_credential_lookup_leaves_the_eve
                 ]
             ),
             user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
-            custom_llm_provider="hosted_vllm",
+            custom_llm_provider="openai",
         )
     )
     assert await asyncio.to_thread(listing_started.wait, 3)
@@ -814,7 +814,46 @@ async def test_a_hung_wildcard_listing_during_a_credential_lookup_leaves_the_eve
     await lookup
 
     assert listing_answered.is_set()
-    assert data.get("api_base") == "http://vllm-credential-lookup.test:8000/v1"
+    assert data == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "custom_llm_provider, vllm_api_base, applied_credential",
+    [
+        ("openai", "http://vllm-beside-openai.test:8000/v1", ("api_key", "openai-key")),
+        ("hosted_vllm", "http://vllm-route-match.test:8000/v1", ("api_base", "http://vllm-route-match.test:8000/v1")),
+    ],
+)
+async def test_a_credential_lookup_a_configured_model_answers_never_lists_the_wildcard_server(
+    monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, vllm_api_base: str, applied_credential: tuple[str, str]
+) -> None:
+    import litellm
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    data: Final[dict[str, object]] = {}
+
+    with respx.mock(assert_all_called=False) as vllm_server:
+        listing: Final = vllm_server.get(f"{vllm_api_base}/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
+        )
+        await apply_team_provider_credentials(
+            data=data,
+            llm_router=Router(
+                model_list=[
+                    {
+                        "model_name": "hosted_vllm/*",
+                        "litellm_params": {"model": "hosted_vllm/*", "api_base": vllm_api_base},
+                    },
+                    {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o", "api_key": "openai-key"}},
+                ]
+            ),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    assert not listing.called
+    assert data.get(applied_credential[0]) == applied_credential[1]
 
 
 def _apply_team_a_openai_credentials(data: dict[str, object]) -> None:

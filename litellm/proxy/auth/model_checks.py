@@ -6,7 +6,7 @@ import copy
 import functools
 import itertools
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import Final, ParamSpec, TypeVar
 
@@ -240,46 +240,85 @@ def get_complete_model_list(
     If list contains wildcard -> return known provider models
     """
 
-    unique_models: Final = []
-
-    def append_unique(models):
-        for model in models:
-            if model not in unique_models and model != SpecialModelNames.no_default_models.value:
-                unique_models.append(model)
-
-    if key_models:
-        append_unique(key_models)
-    elif team_models:
-        append_unique(team_models)
-    else:
-        append_unique(proxy_model_list)
-        if include_model_access_groups:
-            append_unique(list(model_access_groups.keys()))  # TODO: keys order
-
-        if user_model:
-            append_unique([user_model])
-
-        if infer_model_from_keys:
-            valid_models: Final = get_valid_models()
-            append_unique(valid_models)
-
     if only_model_access_groups:
-        model_access_groups_to_return: Final[list[str]] = []
-        for model in unique_models:
-            if model in model_access_groups:
-                model_access_groups_to_return.append(model)
-        return model_access_groups_to_return
-
-    all_wildcard_models: Final = _get_wildcard_models(
-        unique_models=unique_models,
-        return_wildcard_routes=return_wildcard_routes,
-        llm_router=llm_router,
-        team_id=team_id,
+        return [
+            model
+            for model in _unexpanded_model_list(
+                key_models=key_models,
+                team_models=team_models,
+                proxy_model_list=proxy_model_list,
+                user_model=user_model,
+                infer_model_from_keys=infer_model_from_keys,
+                model_access_groups=model_access_groups,
+                include_model_access_groups=include_model_access_groups,
+            )
+            if model in model_access_groups
+        ]
+    return list(
+        iter_complete_model_list(
+            key_models=key_models,
+            team_models=team_models,
+            proxy_model_list=proxy_model_list,
+            user_model=user_model,
+            infer_model_from_keys=infer_model_from_keys,
+            return_wildcard_routes=return_wildcard_routes,
+            llm_router=llm_router,
+            model_access_groups=model_access_groups,
+            include_model_access_groups=include_model_access_groups,
+            team_id=team_id,
+        )
     )
 
-    complete_model_list: Final = unique_models + all_wildcard_models
 
-    return complete_model_list
+def _unexpanded_model_list(
+    key_models: Sequence[str],
+    team_models: Sequence[str],
+    proxy_model_list: Sequence[str],
+    user_model: str | None,
+    infer_model_from_keys: bool | None,
+    model_access_groups: Mapping[str, Sequence[str]],
+    include_model_access_groups: bool | None,
+) -> list[str]:
+    granted_model_names: Final = (
+        key_models
+        or team_models
+        or (
+            *proxy_model_list,
+            *(model_access_groups if include_model_access_groups else ()),
+            *((user_model,) if user_model else ()),
+            *(get_valid_models() if infer_model_from_keys else ()),
+        )
+    )
+    return [model for model in dict.fromkeys(granted_model_names) if model != SpecialModelNames.no_default_models.value]
+
+
+def iter_complete_model_list(
+    key_models: Sequence[str],
+    team_models: Sequence[str],
+    proxy_model_list: Sequence[str],
+    user_model: str | None,
+    infer_model_from_keys: bool | None,
+    return_wildcard_routes: bool | None,
+    llm_router: Router | None,
+    model_access_groups: Mapping[str, Sequence[str]],
+    include_model_access_groups: bool | None,
+    team_id: str | None,
+) -> Iterator[str]:
+    unexpanded_models: Final = _unexpanded_model_list(
+        key_models=key_models,
+        team_models=team_models,
+        proxy_model_list=proxy_model_list,
+        user_model=user_model,
+        infer_model_from_keys=infer_model_from_keys,
+        model_access_groups=model_access_groups,
+        include_model_access_groups=include_model_access_groups,
+    )
+    yield from (model for model in unexpanded_models if not _check_wildcard_routing(model=model))
+    routes_to_model: Final = _routes_to_model(_cached_wildcard_routing(llm_router), team_id)
+    for wildcard_route in (model for model in unexpanded_models if _check_wildcard_routing(model=model)):
+        if return_wildcard_routes:
+            yield wildcard_route
+        yield from _wildcard_route_models(wildcard_route, llm_router, team_id, routes_to_model)
 
 
 def _hydrate_litellm_credential_name(
@@ -558,36 +597,22 @@ def expand_wildcard_deployments_for_model_info(
     return expanded
 
 
-def _get_wildcard_models(
-    unique_models: list[str],
-    return_wildcard_routes: bool | None = False,
-    llm_router: Router | None = None,
-    team_id: str | None = None,
-) -> list[str]:
-    wildcard_routes: Final = tuple(model for model in unique_models if _check_wildcard_routing(model=model))
-    routes_to_model: Final = _routes_to_model(_cached_wildcard_routing(llm_router), team_id)
-    all_wildcard_models: Final = []
-    for model in wildcard_routes:
-        if return_wildcard_routes:
-            all_wildcard_models.append(model)
-
-        model_list = llm_router.get_model_list(model_name=model, team_id=team_id) if llm_router else None
-        if model_list:
-            for router_model in model_list:
-                all_wildcard_models.extend(
-                    get_known_models_from_wildcard(
-                        wildcard_model=model,
-                        litellm_params=LiteLLM_Params(**router_model["litellm_params"]),
-                        routes_to_model=routes_to_model,
-                    )
-                )
-        else:
-            all_wildcard_models.extend(get_known_models_from_wildcard(wildcard_model=model, litellm_params=None))
-
-    for model in frozenset(wildcard_routes):
-        unique_models.remove(model)
-
-    return all_wildcard_models
+def _wildcard_route_models(
+    wildcard_route: str,
+    llm_router: Router | None,
+    team_id: str | None,
+    routes_to_model: Callable[[str, str], bool],
+) -> Iterator[str]:
+    router_models: Final = llm_router.get_model_list(model_name=wildcard_route, team_id=team_id) if llm_router else None
+    if not router_models:
+        yield from get_known_models_from_wildcard(wildcard_model=wildcard_route, litellm_params=None)
+        return
+    for router_model in router_models:
+        yield from get_known_models_from_wildcard(
+            wildcard_model=wildcard_route,
+            litellm_params=LiteLLM_Params(**router_model["litellm_params"]),
+            routes_to_model=routes_to_model,
+        )
 
 
 def get_all_fallbacks(

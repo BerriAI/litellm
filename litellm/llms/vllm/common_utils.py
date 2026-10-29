@@ -56,8 +56,7 @@ class VLLMModelInfo(BaseLLMModelInfo):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        headers.update(_auth_headers(api_key))
-        return headers
+        return {**headers, **_auth_headers(api_key)}
 
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str:

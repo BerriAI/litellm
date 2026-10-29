@@ -559,7 +559,7 @@ def get_team_provider_credentials(
         return None
 
     from litellm.proxy._types import SpecialModelNames
-    from litellm.proxy.auth.model_checks import get_complete_model_list, get_key_models
+    from litellm.proxy.auth.model_checks import get_key_models, iter_complete_model_list
 
     team_id: Final = user_api_key_dict.team_id
     team_models: Final = user_api_key_dict.team_models or []
@@ -637,35 +637,29 @@ def get_team_provider_credentials(
     #    effective allowlist (sentinels and access groups already expanded by
     #    get_key_models) wins when set; otherwise the team's allowlist applies.
     #    The all-proxy-models sentinel isn't expanded by
-    #    get_complete_model_list, so normalize it to an empty allowlist, which
+    #    iter_complete_model_list, so normalize it to an empty allowlist, which
     #    defers to the team-scoped proxy model list. A team or key with a
     #    restricted allowlist (e.g. anthropic only) therefore never resolves
     #    another provider's key.
     grants_all_models: Final = SpecialModelNames.all_proxy_models.value in team_models
     effective_team_models: Final = [] if grants_all_models else team_models
 
-    models_to_try: Final = list(
-        dict.fromkeys(
-            get_complete_model_list(
-                key_models=list(key_model_allowlist),
-                team_models=effective_team_models,
-                proxy_model_list=proxy_model_list,
-                user_model=None,
-                infer_model_from_keys=False,
-                return_wildcard_routes=True,
-                llm_router=llm_router,
-                model_access_groups=model_access_groups,
-                include_model_access_groups=True,
-                team_id=team_id,
-            )
-        )
+    models_to_try: Final = iter_complete_model_list(
+        key_models=key_model_allowlist,
+        team_models=effective_team_models,
+        proxy_model_list=proxy_model_list,
+        user_model=None,
+        infer_model_from_keys=False,
+        return_wildcard_routes=True,
+        llm_router=llm_router,
+        model_access_groups=model_access_groups,
+        include_model_access_groups=True,
+        team_id=team_id,
     )
-    for model_name in models_to_try:
-        credentials = _provider_credentials(model_name)
-        if credentials is not None:
-            return credentials
-
-    return None
+    return next(
+        (credentials for credentials in map(_provider_credentials, models_to_try) if credentials is not None),
+        None,
+    )
 
 
 HTTP_HEADER_VALUE: Final = re.compile(r"[\x21-\x7e]+(?:[ \t]+[\x21-\x7e]+)*")
