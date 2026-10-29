@@ -1147,6 +1147,7 @@ async def pass_through_request(
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
     operation: GenAIOperation | None = None,
+    keep_target_query: bool = False,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -1169,6 +1170,7 @@ async def pass_through_request(
             general_settings.pass_through_request_timeout, then 600s.
         upstream_headers_filter: Optional last rewrite of the headers sent upstream, after x-pass- expansion
         operation: Optional GenAI operation the route reports, unless the upstream names its own
+        keep_target_query: Send the target URL's query exactly as given, merging no caller or default query params
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1206,7 +1208,9 @@ async def pass_through_request(
             parent_span=user_api_key_dict.parent_otel_span,
         )
 
-        requested_query_params: dict | None = query_params or dict(request.query_params) or None
+        requested_query_params: dict | None = (
+            None if keep_target_query else query_params or dict(request.query_params) or None
+        )
 
         endpoint_type: Final[EndpointType] = HttpPassThroughEndpointHelpers.get_endpoint_type(
             str(url), custom_llm_provider
@@ -1443,7 +1447,7 @@ async def pass_through_request(
                 )
 
         # Apply default query parameters if provided, regardless of merge_query_params setting
-        if default_query_params or merge_query_params:
+        if not keep_target_query and (default_query_params or merge_query_params):
             # Create a new URL with the merged query params
             url = url.copy_with(
                 query=urlencode(
@@ -2180,6 +2184,7 @@ def create_pass_through_route(
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
     operation: GenAIOperation | None = None,
+    keep_target_query: bool = False,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -2323,6 +2328,7 @@ def create_pass_through_route(
                         timeout=cast(float | None, param_timeout),
                         upstream_headers_filter=upstream_headers_filter,
                         operation=operation,
+                        keep_target_query=keep_target_query,
                     )
                 finally:
                     if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):

@@ -18,7 +18,8 @@ from litellm.llms.base_llm.vector_store.transformation import (
     BaseQueryEmbeddingVectorStoreConfig,
     VectorStoreEmbeddingExecutor,
 )
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS, sign_aws_json_post
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS, sign_aws_request
+from litellm.llms.opensearch.vector_stores.index_passthrough import index_endpoints
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AwsAuthParams
 from litellm.types.router import GenericLiteLLMParams
@@ -34,6 +35,7 @@ from litellm.types.vector_stores import (
 )
 
 if TYPE_CHECKING:
+    from botocore.awsrequest import AWSPreparedRequest
     from botocore.credentials import Credentials
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -216,7 +218,7 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         return BaseVectorStoreAuthCredentials()
 
     def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
-        return VectorStoreIndexEndpoints(read=[], write=[])
+        return index_endpoints()
 
     def validate_environment(
         self, headers: Mapping[str, object], litellm_params: GenericLiteLLMParams | None
@@ -363,25 +365,28 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         api_base: str,
         api_key: str | None = None,
     ) -> tuple[dict[str, str], bytes]:  # mutable-ok: the shared HTTP handler requires writable headers
-        region: Final = self._signing_region(optional_params, api_base)
-        body: Final = json.dumps(request_data)
-        signed: Final = sign_aws_json_post(
-            get_credentials=partial(self._signing_credentials, optional_params, region),
-            service_name=aws_signing_target(api_base)[0],
-            aws_region_name=region,
-            url=api_base,
-            body=body,
-            headers={
-                "Content-Type": "application/json",
-                "x-amz-content-sha256": hashlib.sha256(body.encode()).hexdigest(),
-            },
-        )
+        body: Final = json.dumps(request_data).encode()
+        signed: Final = self.sign_http_request("POST", api_base, body, "application/json", optional_params)
         signed_headers: Final = dict(signed.headers.items())
         signed_names: Final = frozenset(name.lower() for name in signed_headers)
         return {
             **{name: value for name, value in headers.items() if name.lower() not in signed_names},
             **signed_headers,
-        }, body.encode()
+        }, body
+
+    def sign_http_request(
+        self, method: str, url: str, body: bytes, content_type: str, litellm_params: Mapping[str, object]
+    ) -> "AWSPreparedRequest":
+        region: Final = self._signing_region(litellm_params, url)
+        return sign_aws_request(
+            method=method,
+            get_credentials=partial(self._signing_credentials, litellm_params, region),
+            service_name=aws_signing_target(url)[0],
+            aws_region_name=region,
+            url=url,
+            body=body,
+            headers={"Content-Type": content_type, "x-amz-content-sha256": hashlib.sha256(body).hexdigest()},
+        )
 
     def transform_search_vector_store_response(
         self, response: httpx.Response, litellm_logging_obj: "LiteLLMLoggingObj"

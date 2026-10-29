@@ -125,11 +125,14 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 )
 from litellm.proxy.utils import ProxyLogging as ProxyLoggingType
 from litellm.proxy.utils import is_known_model
+from litellm.proxy.vector_store_endpoints.endpoints import build_request_data_from_managed_vector_store
 from litellm.proxy.vector_store_endpoints.utils import (
+    assert_proxy_admin_for_unlisted_vector_store_endpoint,
     assert_proxy_admin_for_vector_store_index_management,
     assert_user_can_access_vector_store,
     get_litellm_managed_vector_store,
     is_allowed_to_call_vector_store_endpoint,
+    normalize_litellm_params,
 )
 from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str, str_to_bool
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -146,8 +149,8 @@ from litellm.types.passthrough_endpoints.tinyfish import (
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from litellm.types.router import LiteLLMParamsTypedDict
 from litellm.types.utils import LlmProviders
-from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
-from litellm.utils import ProviderConfigManager
+from litellm.types.vector_stores import LiteLLM_ManagedVectorStore, LiteLLM_ManagedVectorStoreIndex
+from litellm.utils import ProviderConfigManager, with_named_credential
 
 from .passthrough_endpoint_router import PassthroughEndpointRouter
 
@@ -936,6 +939,130 @@ async def milvus_proxy_route(
     )
 
     return received_value
+
+
+def _registered_vector_store_index(index_name: str) -> LiteLLM_ManagedVectorStoreIndex:
+    registry: Final = litellm.vector_store_index_registry
+    index_object: Final = registry.get_vector_store_index_by_name(index_name) if registry is not None else None
+    if index_object is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Index {index_name} is not a litellm managed vector store index. "
+            "Only litellm managed vector store indexes are supported.",
+        )
+    return index_object
+
+
+async def _opensearch_store_params(
+    index_object: LiteLLM_ManagedVectorStoreIndex, user_api_key_dict: UserAPIKeyAuth
+) -> Mapping[str, object]:
+    registry: Final = litellm.vector_store_registry
+    store_name: Final = index_object.litellm_params.vector_store_name
+    vector_store: Final = (
+        registry.get_litellm_managed_vector_store_from_registry_by_name(vector_store_name=store_name)
+        if registry is not None
+        else None
+    )
+    if vector_store is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Vector store {store_name} of index {index_object.index_name} is not registered.",
+        )
+    params: Final = with_named_credential(
+        build_request_data_from_managed_vector_store(normalize_litellm_params(vector_store))
+    )
+    provider: Final = params.get("custom_llm_provider")
+    if not isinstance(provider, str) or provider.split("/", 1)[0] != LlmProviders.OPENSEARCH.value:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Index {index_object.index_name} is on vector store {store_name}, "
+            "which is not an OpenSearch vector store.",
+        )
+    await assert_user_can_access_vector_store(vector_store=vector_store, user_api_key_dict=user_api_key_dict)
+    return params
+
+
+@router.api_route(
+    "/opensearch/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["OpenSearch Pass-through", "pass-through"],
+    openapi_extra={
+        "requestBody": {
+            "required": False,
+            "content": {
+                "application/json": {"schema": {"type": "object", "additionalProperties": True}},
+                "application/x-ndjson": {"schema": {"type": "string"}},
+            },
+        }
+    },
+    responses={
+        200: {
+            "description": "OpenSearch's response, unmodified",
+            "content": {"application/json": {"schema": {"type": "object", "additionalProperties": True}}},
+        }
+    },
+)
+async def opensearch_proxy_route(  # noqa: ANN201  # returns create_pass_through_route's untyped handler result
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """
+    Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.
+
+    `<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or
+    `write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.
+    """
+    from litellm.llms.opensearch.vector_stores.index_passthrough import (
+        NDJSON_CONTENT_TYPE,
+        IndexRefusal,
+        index_operation,
+        parse_index_path,
+        prepare_index_request,
+    )
+    from litellm.llms.opensearch.vector_stores.transformation import OpenSearchVectorStoreConfig
+
+    path: Final = parse_index_path(endpoint)
+    if isinstance(path, IndexRefusal):
+        raise HTTPException(status_code=path.status_code, detail=path.message)
+    operation: Final = index_operation(request.method, path.api)
+    if operation is None:
+        assert_proxy_admin_for_unlisted_vector_store_endpoint(user_api_key_dict, path.index_name)
+    is_allowed_to_call_vector_store_endpoint(
+        provider=LlmProviders.OPENSEARCH,
+        index_name=path.index_name,
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+    )
+    index_object: Final = _registered_vector_store_index(path.index_name)
+    store_params: Final = await _opensearch_store_params(index_object, user_api_key_dict)
+    prepared: Final = await prepare_index_request(
+        config=OpenSearchVectorStoreConfig(),
+        method=request.method,
+        path=path,
+        operation=operation,
+        provider_index=index_object.litellm_params.vector_store_index,
+        content_type=request.headers.get("content-type"),
+        query=tuple(request.query_params.multi_items()),
+        body=await request.body(),
+        store_params=store_params,
+    )
+    if isinstance(prepared, IndexRefusal):
+        raise HTTPException(status_code=prepared.status_code, detail=prepared.message)
+    endpoint_func: Final = create_pass_through_route(
+        endpoint=endpoint,
+        target=prepared.url,
+        custom_headers=prepared.headers,
+        custom_llm_provider=LlmProviders.OPENSEARCH.value,
+        keep_target_query=True,
+        upstream_headers_filter=lambda _forwarded: prepared.headers,
+    )
+    setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, prepared.body)
+    setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, {})
+    if prepared.media_type == NDJSON_CONTENT_TYPE:
+        safe_set_request_parsed_body(request, {})
+    return await endpoint_func(request, fastapi_response, user_api_key_dict)
 
 
 async def is_streaming_request_fn(request: Request) -> bool:

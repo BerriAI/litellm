@@ -11531,6 +11531,57 @@ export interface paths {
         patch: operations["openrouter_proxy_route_openrouter__endpoint__patch"];
         trace?: never;
     };
+    "/opensearch/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Opensearch Proxy Route
+         * @description Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.
+         *
+         *     `<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or
+         *     `write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.
+         */
+        get: operations["opensearch_proxy_route_opensearch__endpoint__get"];
+        /**
+         * Opensearch Proxy Route
+         * @description Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.
+         *
+         *     `<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or
+         *     `write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.
+         */
+        put: operations["opensearch_proxy_route_opensearch__endpoint__put"];
+        /**
+         * Opensearch Proxy Route
+         * @description Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.
+         *
+         *     `<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or
+         *     `write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.
+         */
+        post: operations["opensearch_proxy_route_opensearch__endpoint__post"];
+        /**
+         * Opensearch Proxy Route
+         * @description Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.
+         *
+         *     `<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or
+         *     `write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.
+         */
+        delete: operations["opensearch_proxy_route_opensearch__endpoint__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Opensearch Proxy Route
+         * @description Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.
+         *
+         *     `<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or
+         *     `write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.
+         */
+        patch: operations["opensearch_proxy_route_opensearch__endpoint__patch"];
+        trace?: never;
+    };
     "/organization/daily/activity": {
         parameters: {
             query?: never;
@@ -67740,6 +67791,206 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    opensearch_proxy_route_opensearch__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+                "application/x-ndjson": string;
+            };
+        };
+        responses: {
+            /** @description OpenSearch's response, unmodified */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    opensearch_proxy_route_opensearch__endpoint__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+                "application/x-ndjson": string;
+            };
+        };
+        responses: {
+            /** @description OpenSearch's response, unmodified */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    opensearch_proxy_route_opensearch__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+                "application/x-ndjson": string;
+            };
+        };
+        responses: {
+            /** @description OpenSearch's response, unmodified */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    opensearch_proxy_route_opensearch__endpoint__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+                "application/x-ndjson": string;
+            };
+        };
+        responses: {
+            /** @description OpenSearch's response, unmodified */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    opensearch_proxy_route_opensearch__endpoint__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+                "application/x-ndjson": string;
+            };
+        };
+        responses: {
+            /** @description OpenSearch's response, unmodified */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

@@ -34486,6 +34486,323 @@
           ]
         }
       },
+      "/opensearch/{endpoint}": {
+        "delete": {
+          "description": "Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.\n\n`<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or\n`write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.",
+          "operationId": "opensearch_proxy_route_opensearch__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": false
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "OpenSearch's response, unmodified"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Opensearch Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.\n\n`<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or\n`write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.",
+          "operationId": "opensearch_proxy_route_opensearch__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": false
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "OpenSearch's response, unmodified"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Opensearch Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.\n\n`<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or\n`write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.",
+          "operationId": "opensearch_proxy_route_opensearch__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": false
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "OpenSearch's response, unmodified"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Opensearch Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.\n\n`<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or\n`write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.",
+          "operationId": "opensearch_proxy_route_opensearch__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": false
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "OpenSearch's response, unmodified"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Opensearch Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.\n\n`<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or\n`write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.",
+          "operationId": "opensearch_proxy_route_opensearch__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": false
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "OpenSearch's response, unmodified"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Opensearch Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
       "/tinyfish/{endpoint}": {
         "get": {
           "description": "Pass-through for the TinyFish Agent API (goal-based web automation).\n\nForwarded endpoints:\n- POST /v1/automation/run        \u2014 run to completion (blocking)\n- POST /v1/automation/run-async  \u2014 submit a run, poll GET /v1/runs/{id} for the result\n- POST /v1/automation/run-sse    \u2014 run with SSE progress events\n- GET  /v1/runs/{id}             \u2014 run status / result\n- POST /v1/runs/{id}/cancel      \u2014 cancel a run\n\nEvery other Agent API endpoint (vault, wallet, browser profiles, and the GET /v1/runs\nlisting, which would let any caller discover other callers' run ids) returns 403: all\nproxy callers share one upstream key.\n\nCredential lookup order:\n1. passthrough_endpoint_router (config.yaml deployments with use_in_pass_through)\n2. TINYFISH_API_KEY environment variable\n\n[Docs](https://docs.litellm.ai/docs/pass_through/tinyfish)",

@@ -25,7 +25,7 @@ from litellm.utils import ProviderConfigManager
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
-def _normalize_litellm_params(
+def normalize_litellm_params(
     vector_store: LiteLLM_ManagedVectorStore,
 ) -> LiteLLM_ManagedVectorStore:
     litellm_params: Final = vector_store.get("litellm_params")
@@ -278,7 +278,7 @@ async def get_litellm_managed_vector_store(
                 vector_store_id=vector_store_id
             )
             if vector_store is not None:
-                return _normalize_litellm_params(vector_store)
+                return normalize_litellm_params(vector_store)
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Failed to resolve vector store id=%s from registry: %s",
@@ -310,7 +310,7 @@ async def get_litellm_managed_vector_store(
         )
         if not rows:
             return None
-        return _normalize_litellm_params(LiteLLM_ManagedVectorStore(**rows[0].model_dump()))
+        return normalize_litellm_params(LiteLLM_ManagedVectorStore(**rows[0].model_dump()))
     except Exception as e:
         verbose_proxy_logger.warning(
             "Failed to resolve vector store id=%s from shared cache: %s",
@@ -413,6 +413,21 @@ def check_vector_store_permission(
     return False
 
 
+def vector_store_endpoint_forbidden(index_name: str) -> HTTPException:
+    return HTTPException(
+        status_code=403,
+        detail=(
+            f"User does not have permission to call vector store endpoint {index_name}. "
+            "Ask your administrator to add the necessary permissions to your API key/Team."
+        ),
+    )
+
+
+def assert_proxy_admin_for_unlisted_vector_store_endpoint(user_api_key_dict: UserAPIKeyAuth, index_name: str) -> None:
+    if not _is_proxy_admin(user_api_key_dict):
+        raise vector_store_endpoint_forbidden(index_name)
+
+
 def is_allowed_to_call_vector_store_endpoint(
     provider: LlmProviders,
     index_name: str,
@@ -478,14 +493,7 @@ def is_allowed_to_call_vector_store_endpoint(
                 break
 
     if permission_type is None:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"User does not have permission to call vector store endpoint "
-                f"{index_name}. Ask your administrator to add the necessary "
-                "permissions to your API key/Team."
-            ),
-        )
+        raise vector_store_endpoint_forbidden(index_name)
 
     # Check if key has specific permission for allowed_vector_store_indexes
     has_permission: Final = check_vector_store_permission(
@@ -496,10 +504,7 @@ def is_allowed_to_call_vector_store_endpoint(
     )
 
     if not has_permission:
-        raise HTTPException(
-            status_code=403,
-            detail=f"User does not have permission to call vector store endpoint {index_name}. Ask your administrator to add the necessary permissions to your API key/Team.",
-        )
+        raise vector_store_endpoint_forbidden(index_name)
 
     return has_permission
 
