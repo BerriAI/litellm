@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from itertools import chain
 from typing import Final
+from urllib.parse import parse_qsl, urlsplit
 
 import httpx
 import openai
@@ -24,7 +25,7 @@ from integration._support.client import (
 from integration._support.database import read_rows, write_rows
 from integration._support.otlp_sink import Span, decode_spans
 from integration._support.upstream import delete_scenario, register_scenario
-from integration._support.wire import Request, wire_server
+from integration._support.wire import Reply, Request, wire_server
 from integration.caching.response_cache_case import entry_key, redis_store
 from integration.security._callback_traffic import langfuse_sink
 from integration.security._sinks import Recorder
@@ -67,6 +68,7 @@ from integration.spend._background_responses import (
     scripted_routes,
     scripted_upstream,
     settling_reads,
+    sse_frame,
     streamed_reply,
     submissions,
     tag_spend,
@@ -347,6 +349,45 @@ def test_a_streamed_background_response_read_later_bills_its_stream_alone(gatewa
         scenario.cleanups.callback(forget_row, response_id)
         upstream.script(background_routes("completed"))
         assert tuple(read_response(gateway, key, response_id) for _ in range(2)) == free_reads("completed", 2)
+        assert_charged_exactly(lambda: key_spend(key), PRICE)
+
+
+def _finishes_only_when_resumed(raw_id: str) -> Callable[[Request], Reply]:
+    finished: Final = (sse_frame("response.completed", 9, response_body("completed", id=raw_id)) + "\n\n").encode()
+    queued: Final = json.dumps(response_body("queued", id=raw_id)).encode()
+
+    def respond(request: Request) -> Reply:
+        if urlsplit(request.target).path == "/v1/models":
+            return Reply(body=b'{"object": "list", "data": []}')
+        if request.method == "GET" and ("stream", "true") in parse_qsl(urlsplit(request.target).query):
+            return Reply(content_type="text/event-stream", chunks=(finished, b"data: [DONE]\n\n"))
+        return Reply(body=queued)
+
+    return respond
+
+
+@pytest.mark.timeout(240)
+def test_a_background_response_first_seen_finished_on_a_resumed_stream_bills_once(gateway: Gateway) -> None:
+    raw_id: Final = f"resp_resumed_{uuid.uuid4().hex}"
+    with wire_server(_finishes_only_when_resumed(raw_id)) as wire, gateway.scenario() as scenario:
+        key: Final = scenario.key()
+        model: Final = scenario.model(
+            model="openai/gpt-4o-mini",
+            api_key="sk-scripted-provider",
+            api_base=f"{wire.url}/v1",
+            input_cost_per_token=INPUT_COST_PER_TOKEN,
+            output_cost_per_token=OUTPUT_COST_PER_TOKEN,
+        )
+        response_id: Final = create_background_response(scenario, key, model)
+        resumed: Final = tuple(
+            gateway.request(
+                "GET", f"/v1/responses/{response_id}", key=key, params={"stream": "true", "starting_after": "0"}
+            )
+            for _ in range(READS)
+        )
+        assert [(answer.status_code, "response.completed" in answer.text) for answer in resumed] == [
+            (200, True)
+        ] * READS, [answer.text for answer in resumed]
         assert_charged_exactly(lambda: key_spend(key), PRICE)
 
 

@@ -25,6 +25,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.llms.anthropic.common_utils import is_claude_tool_target, without_stale_tool_search_results
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
@@ -4524,9 +4525,26 @@ def test_shared_legacy_thinking_translation_drops_a_non_numeric_budget_under_dro
     assert optional_params == {"thinking": {"type": "adaptive"}}
 
 
-def test_dropping_a_stale_tool_search_keeps_every_other_turn_as_it_was_sent() -> None:
-    from litellm.llms.anthropic.common_utils import without_stale_tool_search_results
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model", "expected"),
+    [
+        ("anthropic", "claude-sonnet-5", True),
+        ("bedrock", "us.anthropic.claude-sonnet-5-20260501-v1:0", True),
+        ("bedrock", "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123", True),
+        ("bedrock", "us.amazon.nova-2-lite-v1:0", False),
+        ("vertex_ai", "claude-sonnet-5", True),
+        ("vertex_ai", "gemini-3.8-flash", False),
+        ("azure_ai", "claude-sonnet-4-6", True),
+        ("azure_ai", "gpt-5.6", False),
+        ("openai", "gpt-5.6", False),
+        ("gemini", "gemini-3.8-flash", False),
+    ],
+)
+def test_is_claude_tool_target(custom_llm_provider: str, model: str, expected: bool):
+    assert is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model) is expected
 
+
+def test_dropping_a_stale_tool_search_keeps_every_other_turn_as_it_was_sent() -> None:
     search_use: Final = {
         "type": "server_tool_use",
         "id": "srvtoolu_01Search",

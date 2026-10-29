@@ -606,3 +606,69 @@ def test_client_tool_turn_is_replayed_without_its_provider_specific_fields(respx
     replayed_assistant: Final = _request_bodies(respx_mock)[1]["messages"][1]
     assert replayed_assistant["tool_calls"][0]["id"] == "call_1"
     assert "provider_specific_fields" not in replayed_assistant
+
+
+def test_responses_bridge_replays_commentary_reasoning_and_tool_call_in_order(respx_mock: respx.MockRouter) -> None:
+    round_one: Final = _responses_payload(
+        "resp_1",
+        [
+            {
+                "type": "message",
+                "id": "msg_commentary",
+                "status": "completed",
+                "role": "assistant",
+                "phase": "commentary",
+                "content": [{"type": "output_text", "text": "Checking Paris.", "annotations": []}],
+            },
+            {"type": "reasoning", "id": "rs_abc123", "summary": [], "encrypted_content": "enc_xyz"},
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_weather_paris",
+                "name": "get_weather",
+                "arguments": '{"city": "Paris"}',
+                "status": "completed",
+            },
+        ],
+    )
+    round_two: Final = _responses_payload(
+        "resp_2",
+        [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "phase": "final_answer",
+                "content": [{"type": "output_text", "text": "Paris is 72F", "annotations": []}],
+            }
+        ],
+    )
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        side_effect=[httpx.Response(200, json=round_one), httpx.Response(200, json=round_two)]
+    )
+
+    answer: Final = litellm.run_tool_loop(
+        model="openai/responses/gpt-5.6",
+        messages=[{"role": "user", "content": "weather in Paris?"}],
+        tools=WEATHER_TOOLS,
+        execute_tool=_tool_result,
+        api_key="sk-test",
+    )
+
+    assert answer == "Paris is 72F"
+    assert _request_bodies(respx_mock)[1]["input"][1:] == [
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Checking Paris."}],
+            "phase": "commentary",
+        },
+        {"type": "reasoning", "id": "rs_abc123", "summary": [], "encrypted_content": "enc_xyz"},
+        {"type": "function_call", "call_id": "call_weather_paris", "name": "get_weather", "arguments": '{"city": "Paris"}'},
+        {
+            "type": "function_call_output",
+            "call_id": "call_weather_paris",
+            "output": [{"type": "input_text", "text": '{"temp": "72F"}'}],
+        },
+    ]

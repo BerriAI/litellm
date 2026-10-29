@@ -33,6 +33,7 @@ from litellm.types.utils import (
 from litellm.utils import (
     CustomStreamWrapper,
     convert_to_model_response_object,
+    get_base_model_from_metadata,
 )
 
 from ...types.llms.openai import HttpxBinaryResponseContent
@@ -145,6 +146,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         azure_client: AzureOpenAI | OpenAI,
         data: dict,
         timeout: float | httpx.Timeout,
+        logging_obj: LiteLLMLoggingObj,
     ):
         """
         Helper to:
@@ -160,7 +162,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         except BadRequestError as e:
             if not is_output_token_limit_error(e):
                 raise
-            return build_output_token_limit_response(e=e, data=data, is_async=False)
+            return build_output_token_limit_response(
+                e=e,
+                data=data,
+                is_async=False,
+                base_model=get_base_model_from_metadata(logging_obj.model_call_details),
+            )
         except Exception as e:
             raise e
 
@@ -192,7 +199,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         except BadRequestError as e:
             if not is_output_token_limit_error(e):
                 raise
-            return build_output_token_limit_response(e=e, data=data, is_async=True)
+            return build_output_token_limit_response(
+                e=e,
+                data=data,
+                is_async=True,
+                base_model=get_base_model_from_metadata(logging_obj.model_call_details),
+            )
         except Exception as e:
             raise e
 
@@ -350,7 +362,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     )
 
                 headers, response = self.make_sync_azure_openai_chat_completion_request(
-                    azure_client=azure_client, data=data, timeout=timeout
+                    azure_client=azure_client, data=data, timeout=timeout, logging_obj=logging_obj
                 )
                 if not isinstance(response, BaseModel):
                     raise AzureOpenAIError(
@@ -564,7 +576,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             },
         )
         headers, response = self.make_sync_azure_openai_chat_completion_request(
-            azure_client=azure_client, data=data, timeout=timeout
+            azure_client=azure_client, data=data, timeout=timeout, logging_obj=logging_obj
         )
         logging_obj.model_call_details["response_headers"] = headers
         streamwrapper: Final = CustomStreamWrapper(
