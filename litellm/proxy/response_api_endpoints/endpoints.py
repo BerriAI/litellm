@@ -1501,6 +1501,7 @@ class _TokenCountPayload(TypedDict):
     model: ReadOnly[str]
     messages: ReadOnly[tuple[Mapping[str, object], ...]]
     tools: ReadOnly[object]
+    tool_choice: ReadOnly[object]
 
 
 class _TokenCounter(Protocol):
@@ -1789,6 +1790,7 @@ async def responses_input_tokens(
                 instructions=data.get("instructions"),
             ),
             "tools": token_fields.get("tools"),
+            "tool_choice": token_fields.get("tool_choice"),
         }
         token_request: Final = TokenCountRequest.model_validate(payload)
     except ValidationError as e:

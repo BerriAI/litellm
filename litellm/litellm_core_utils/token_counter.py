@@ -656,7 +656,7 @@ class _MessageCountParams:
         model: str,
         custom_tokenizer: dict | SelectTokenizerResponse | None,
     ):
-        from litellm.utils import print_verbose
+        from litellm.utils import huggingface_tokenizer_kind, print_verbose
 
         actual_model: Final = _fix_model_name(model)
         if uses_legacy_message_accounting(model):
@@ -671,6 +671,7 @@ class _MessageCountParams:
             self.tokens_per_name = 1
         self.count_function = _get_count_function(model, custom_tokenizer)
         self.tool_section = chat_template_tool_section(model)
+        self.bills_tool_choice = self.tool_section is None and huggingface_tokenizer_kind(model) != "deepseek"
 
 
 def token_counter(
@@ -735,7 +736,11 @@ def token_counter(
         if count_response_tokens is False:
             includes_system_message: Final = any(message.get("role", None) == "system" for message in new_messages)
             num_tokens += _count_extra(
-                params.count_function, tools, tool_choice, includes_system_message, params.tool_section
+                params.count_function,
+                tools,
+                tool_choice if params.bills_tool_choice else None,
+                includes_system_message,
+                params.tool_section,
             )
 
     else:
@@ -873,11 +878,10 @@ def _count_extra(
         tool_section (Optional[ChatTemplateToolSection]): How the model's chat template renders tools, if known.
     """
     reply_primer_tokens: Final = 3
-    tool_choice_tokens: Final = 0 if tool_section is not None else _count_tool_choice(count_function, tool_choice)
     return (
         reply_primer_tokens
         + _count_tool_definitions(count_function, tools, includes_system_message, tool_section)
-        + tool_choice_tokens
+        + _count_tool_choice(count_function, tool_choice)
     )
 
 

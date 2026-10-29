@@ -15130,6 +15130,7 @@ async def _local_token_estimate(
     prompt: str | None,
     messages: Sequence[AllMessageValues] | None,
     tools: list[ChatCompletionToolParam] | None,
+    tool_choice: str | Mapping[str, object] | None,
     custom_tokenizer: CustomHuggingfaceTokenizer | None,
     provider_failure: ProviderCountFailure | None,
 ) -> _LocalTokenEstimate:
@@ -15143,6 +15144,7 @@ async def _local_token_estimate(
         text=prompt,
         messages=messages,
         tools=tools,
+        tool_choice=tool_choice,
         custom_tokenizer=tokenizer,
     )
     total_tokens: Final = await (
@@ -15547,6 +15549,11 @@ async def _count_request_tokens(
     counted_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
         list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
     )
+    counted_tool_choice: Final = (
+        request.tool_choice
+        if counted_messages is not None and isinstance(request.tool_choice, (str, Mapping))
+        else None
+    )
     framing: Final = settings.framing if counted_messages is not None and settings.framing is not None else 0
     kimi_k3_messages: Final = counted_messages if settings.tokenizer == "kimi_k3" else None
     exact: Final = (
@@ -15567,6 +15574,7 @@ async def _count_request_tokens(
         prompt=prompt if counted_messages is None else None,
         messages=counted_messages,
         tools=counted_tools,
+        tool_choice=counted_tool_choice,
         custom_tokenizer=custom_tokenizer,
         provider_failure=ladder,
     )

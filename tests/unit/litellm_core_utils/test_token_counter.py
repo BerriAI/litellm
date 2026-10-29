@@ -653,14 +653,25 @@ def test_token_counter_counts_function_tools_like_chat_completions_tools_for_cha
 
 
 # Azure AI Foundry DeepSeek-V4-Flash-0731 billed 295 prompt tokens for the weather tool with each of
-# these tool_choice values on 2026-10-17, the same as without one
+# these tool_choice values on 2026-10-17, the same as without one. On 2026-10-29 aiand's
+# deepseek-v4.1-flash billed 296 for each, and Fireworks' deepseek-v4p1-flash and OpenRouter's
+# deepseek-v3.2 billed the same for "required" and the named tool as without one
+@pytest.mark.parametrize(
+    "model",
+    [
+        "DeepSeek-V4-Flash-0731",
+        "aiand/deepseek-ai/deepseek-v4.1-flash",
+        "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash",
+        "openrouter/deepseek/deepseek-v3.2",
+    ],
+)
 @pytest.mark.parametrize("tool_choice", ["none", "required", {"type": "function", "function": {"name": "get_weather"}}])
-def test_token_counter_tool_choice_adds_nothing_for_deepseek_v4(tool_choice: object):
+def test_token_counter_tool_choice_adds_nothing_for_deepseek_v3_and_v4(model: str, tool_choice: object):
     tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
 
     assert token_counter_new(
-        model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
-    ) == token_counter_new(model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools)
+        model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
+    ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
 
 
 @pytest.mark.parametrize(

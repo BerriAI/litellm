@@ -3476,6 +3476,7 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
     """
 
     tools: list[dict] | None = None
+    tool_choice: JsonValue = None
     system: Any | None = None
 
 

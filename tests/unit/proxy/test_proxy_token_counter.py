@@ -4192,3 +4192,125 @@ def test_utils_token_counter_line_stays_one_line_when_the_model_carries_a_newlin
     assert line["request_model"] == forged_model
     assert "\n" not in message
     assert message.startswith(f'token count - litellm_call_id="count log" request_model={json.dumps(forged_model)} ')
+
+
+_TOOL_CHOICE_MODEL: Final = "mistral-small-latest"
+_TOOL_CHOICE_QUESTION: Final = "What is the weather in Paris?"
+_CITY_SCHEMA: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}},
+    "required": ["city"],
+}
+_CHAT_WEATHER_TOOL: Final[dict[str, JsonValue]] = {
+    "type": "function",
+    "function": {"name": "get_weather", "description": "Get the weather for a city", "parameters": _CITY_SCHEMA},
+}
+
+
+def _tool_choice_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "no-count-api",
+                "litellm_params": {"model": f"mistral/{_TOOL_CHOICE_MODEL}", "api_key": "sk-test"},
+            }
+        ]
+    )
+
+
+async def _utils_route_count(tool_choice: Mapping[str, JsonValue]) -> int:
+    response: Final = await token_counter(
+        request=TokenCountRequest(
+            model="no-count-api",
+            messages=[{"role": "user", "content": _TOOL_CHOICE_QUESTION}],
+            tools=[_CHAT_WEATHER_TOOL],
+            **tool_choice,
+        )
+    )
+    return response.total_tokens
+
+
+async def _messages_route_count(tool_choice: Mapping[str, JsonValue]) -> int:
+    body: Final = {
+        "model": "no-count-api",
+        "messages": [{"role": "user", "content": _TOOL_CHOICE_QUESTION}],
+        "tools": [{"name": "get_weather", "description": "Get the weather for a city", "input_schema": _CITY_SCHEMA}],
+        **tool_choice,
+    }
+    response: Final = await anthropic_count_tokens(_json_request(body, "python-httpx/0.28.1"), UserAPIKeyAuth())
+    assert isinstance(response, dict)
+    return response["input_tokens"]
+
+
+async def _responses_route_count(tool_choice: Mapping[str, JsonValue]) -> int:
+    from litellm.proxy.response_api_endpoints.endpoints import responses_input_tokens
+
+    body: Final = {
+        "model": "no-count-api",
+        "input": _TOOL_CHOICE_QUESTION,
+        "tools": [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get the weather for a city",
+                "parameters": _CITY_SCHEMA,
+            }
+        ],
+        **tool_choice,
+    }
+    response: Final = await responses_input_tokens(
+        request=_json_request(body, "python-httpx/0.28.1"),
+        token_counter=count_request_tokens,
+        llm_router=litellm.proxy.proxy_server.llm_router,
+        user_api_key_dict=UserAPIKeyAuth(),
+        response_id_security=None,
+        managed_files=None,
+    )
+    assert isinstance(response, dict)
+    return response["input_tokens"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_count", "tool_choice"),
+    [
+        (_utils_route_count, {"type": "function", "function": {"name": "get_weather"}}),
+        (_utils_route_count, "none"),
+        (_messages_route_count, {"type": "tool", "name": "get_weather"}),
+        (_messages_route_count, {"type": "none"}),
+        (_responses_route_count, {"type": "function", "name": "get_weather"}),
+        (_responses_route_count, "none"),
+    ],
+    ids=["utils-named", "utils-none", "messages-named", "messages-none", "responses-named", "responses-none"],
+)
+async def test_count_routes_without_a_count_api_count_the_tool_choice_like_token_counter(
+    monkeypatch: pytest.MonkeyPatch,
+    route_count: Callable[[Mapping[str, JsonValue]], Coroutine[None, None, int]],
+    tool_choice: JsonValue,
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _tool_choice_router())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", litellm.proxy.proxy_server.ProxyConfig())
+    question: Final = [{"role": "user", "content": _TOOL_CHOICE_QUESTION}]
+    sdk_added: Final = litellm.token_counter(
+        model=_TOOL_CHOICE_MODEL, messages=question, tools=[_CHAT_WEATHER_TOOL], tool_choice=tool_choice
+    ) - litellm.token_counter(model=_TOOL_CHOICE_MODEL, messages=question, tools=[_CHAT_WEATHER_TOOL])
+
+    route_added: Final = await route_count({"tool_choice": tool_choice}) - await route_count({})
+
+    assert route_added == sdk_added > 0
+
+
+@pytest.mark.asyncio
+async def test_utils_token_counter_counts_a_bare_prompt_with_a_tool_choice_like_the_prompt_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _tool_choice_router())
+
+    with_choice: Final = await token_counter(
+        request=TokenCountRequest(model="no-count-api", prompt=_TOOL_CHOICE_QUESTION, tool_choice="required")
+    )
+    prompt_alone: Final = await token_counter(
+        request=TokenCountRequest(model="no-count-api", prompt=_TOOL_CHOICE_QUESTION)
+    )
+
+    assert (with_choice.error, with_choice.total_tokens) == (False, prompt_alone.total_tokens)
