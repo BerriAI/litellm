@@ -124,6 +124,9 @@ _CONTENTS: Final = {"contents": [_TURN]}
         ({"systemInstruction": {"parts": [{"text": None}, {"text": "Follow these rules"}]}}, _SYSTEM),
         ({"systemInstruction": {"parts": {"text": None}}}, _NO_SYSTEM_PARTS),
         ({"systemInstruction": {"parts": {"text": None, "inlineData": None}}}, _NO_SYSTEM_PARTS),
+        ({"systemInstruction": {"parts": {"text": None, "thought": False}}}, _NO_SYSTEM_PARTS),
+        ({"systemInstruction": {"parts": [{"thoughtSignature": "c2ln"}, {"text": "Follow these rules"}]}}, _SYSTEM),
+        ({"systemInstruction": {"parts": [{}]}}, _NO_SYSTEM_PARTS),
         ({"systemInstruction": {}}, _NO_SYSTEM_PARTS),
         ({"tools": None}, {}),
         ({"tools": [None]}, {}),
@@ -181,3 +184,11 @@ def test_google_count_tokens_rejects_media_only_system_parts(parts: JsonValue) -
             "counted",
             {"contents": [{"role": "user", "parts": [{"text": "Hello"}]}], "systemInstruction": {"parts": parts}},
         )
+
+
+def test_google_count_tokens_keeps_counting_system_text_that_sits_beside_media() -> None:
+    text_with_media: Final = {"text": "Follow these rules", "inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}}
+
+    assert _google_count_tokens_request(
+        "counted", {**_CONTENTS, "systemInstruction": {"parts": [text_with_media]}}
+    ) == _google_count_tokens_request("counted", {**_CONTENTS, **_SYSTEM})

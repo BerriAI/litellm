@@ -53,10 +53,21 @@ def _google_contents(value: JsonValue) -> JsonValue:
             return other
 
 
+_GOOGLE_PART_TEXT_AND_METADATA_FIELDS: Final = frozenset(
+    {"text", "thought", "thoughtSignature", "thought_signature", "partMetadata", "part_metadata"}
+)
+
+
+def _google_part_has_non_text_content(part: Mapping[str, JsonValue]) -> bool:
+    return any(field is not None for key, field in part.items() if key not in _GOOGLE_PART_TEXT_AND_METADATA_FIELDS)
+
+
 def _google_system_part(value: JsonValue) -> JsonValue:
     match value:
-        case {"text": None, **fields} if any(field is not None for field in fields.values()):
-            return fields
+        case dict() if value.get("text") is None and _google_part_has_non_text_content(value):
+            return {key: field for key, field in value.items() if key != "text"}
+        case dict():
+            return {"text": None, **value}
         case _:
             return value
 
