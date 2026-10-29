@@ -1,6 +1,6 @@
 import copy
 import json
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -2160,13 +2160,13 @@ def mock_chat_response_nonanthropic_prompt_caching() -> Dict[str, Any]:
 def mock_http_handler_chat_streaming_response() -> MagicMock:
     mock_stream_chunks = mock_chat_streaming_response_chunks()
 
-    def mock_iter_lines():
+    def mock_iter_text() -> Iterator[str]:
         for chunk in mock_stream_chunks:
             for line in chunk.splitlines():
-                yield line
+                yield f"{line}\n"
 
     mock_response = MagicMock()
-    mock_response.iter_lines.side_effect = mock_iter_lines
+    mock_response.iter_text.side_effect = mock_iter_text
     mock_response.status_code = 200
 
     return mock_response
@@ -2175,13 +2175,13 @@ def mock_http_handler_chat_streaming_response() -> MagicMock:
 def mock_http_handler_chat_async_streaming_response() -> MagicMock:
     mock_stream_chunks = mock_chat_streaming_response_chunks()
 
-    async def mock_iter_lines():
+    async def mock_aiter_text() -> AsyncIterator[str]:
         for chunk in mock_stream_chunks:
             for line in chunk.splitlines():
-                yield line
+                yield f"{line}\n"
 
     mock_response = MagicMock()
-    mock_response.aiter_lines.return_value = mock_iter_lines()
+    mock_response.aiter_text.return_value = mock_aiter_text()
     mock_response.status_code = 200
 
     return mock_response
@@ -2463,6 +2463,41 @@ def test_databricks_claude_drops_the_openai_tool_search_tool_under_drop_params(m
     assert mapped["tools"] == [
         {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}}
     ]
+
+
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_databricks_chat_drops_beta_gated_thinking_fields_only_under_drop_params(
+    drop_params: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    thinking: Final = {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+    mapped: Final = DatabricksConfig().map_openai_params(
+        non_default_params={"thinking": thinking},
+        optional_params={},
+        model="databricks-claude-opus-5-5",
+        drop_params=drop_params,
+    )
+    assert mapped["thinking"] == ({"type": "adaptive"} if drop_params else thinking)
+    assert thinking == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+
+
+def test_databricks_chat_keeps_ungated_thinking_display_under_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = DatabricksConfig().map_openai_params(
+        non_default_params={"thinking": {"type": "adaptive", "display": "summarized"}},
+        optional_params={},
+        model="databricks-claude-opus-5-5",
+        drop_params=True,
+    )
+    assert mapped["thinking"] == {"type": "adaptive", "display": "summarized"}
 
 
 _JSON_TOOL_ARGUMENT_FRAGMENTS: Final = ("", "", '{"name": ', '"Ada"', ', "met', 'a": ', "{}", ', "tags": []}')
