@@ -274,6 +274,7 @@ class ResponsesToCompletionBridgeHandler:
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
                 reasoning_origin=reasoning_origin_for(custom_llm_provider, model),
+                replays_openai_history=custom_llm_provider == "openai",
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,
@@ -380,6 +381,7 @@ class ResponsesToCompletionBridgeHandler:
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
                 reasoning_origin=reasoning_origin_for(custom_llm_provider, model),
+                replays_openai_history=custom_llm_provider == "openai",
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,
