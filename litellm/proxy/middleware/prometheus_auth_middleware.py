@@ -34,7 +34,9 @@ class PrometheusAuthMiddleware:
 
     ```yaml
     litellm_settings:
-        require_auth_for_metrics_endpoint: false
+        allow_unauthenticated_metrics: true
+        # or legacy flag:
+        # require_auth_for_metrics_endpoint: false
     ```
     """
 
@@ -47,8 +49,12 @@ class PrometheusAuthMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # Run auth by default; allow legacy public metrics only when explicitly disabled.
-        if litellm.require_auth_for_metrics_endpoint is not False:
+        # Run auth by default; allow public metrics only when explicitly opted out.
+        is_auth_required = (
+            litellm.allow_unauthenticated_metrics is not True
+            and litellm.require_auth_for_metrics_endpoint is not False
+        )
+        if is_auth_required:
             # user_api_key_auth reads the request body, which consumes ASGI `receive`.
             # Buffer those messages and replay them for the inner app; otherwise a
             # successful auth would forward an exhausted receive and /metrics hangs.
@@ -79,7 +85,8 @@ class PrometheusAuthMiddleware:
                 body: Final = json.dumps(
                     f"Unauthorized access to metrics endpoint: {error_message} "
                     f"To allow unauthenticated access, set "
-                    f"`litellm_settings.require_auth_for_metrics_endpoint: false` "
+                    f"`litellm_settings.allow_unauthenticated_metrics: true` "
+                    f"(or `litellm_settings.require_auth_for_metrics_endpoint: false`) "
                     f"in your proxy_config.yaml."
                 ).encode("utf-8")
                 await send(
