@@ -7101,3 +7101,34 @@ async def test_bridge_partial_response_on_disconnect_bills_only_the_input_since_
     assert await _input_tokens_billed_on_disconnect(
         cast(ResponseInputParam, [*history_it_replaces, *since_compaction])
     ) == await _input_tokens_billed_on_disconnect(since_compaction)
+
+
+def test_transform_responses_api_request_propagates_text_verbosity():
+    """#48996: Verify text.verbosity is mapped to top-level verbosity for chat completions bridge."""
+    result_high = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="openai/gpt-5.6",
+        input="Explain HTTP 400",
+        responses_api_request={"text": {"verbosity": "high"}},
+    )
+    assert result_high.get("verbosity") == "high"
+
+    result_low = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="openai/gpt-5.6",
+        input="Explain HTTP 400",
+        responses_api_request={"text": {"verbosity": "low"}},
+    )
+    assert result_low.get("verbosity") == "low"
+
+    result_none = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="openai/gpt-5.6",
+        input="Explain HTTP 400",
+        responses_api_request={"text": {"format": {"type": "text"}}},
+    )
+    assert "verbosity" not in result_none
+
+    result_empty = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="openai/gpt-5.6",
+        input="Explain HTTP 400",
+        responses_api_request={},
+    )
+    assert "verbosity" not in result_empty

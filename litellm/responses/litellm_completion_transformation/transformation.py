@@ -398,23 +398,25 @@ def tool_output_to_chat_content(
     if single_media is not None:
         return [single_media]
     if isinstance(output, list):
+        parts: Final = cast(Sequence[object], output)  # cast-ok: checked list shape, elements remain unvalidated
         normalized_blocks: Final[list[ToolMessageContentPart]] = []
         text_acc: Final[list[str]] = []
-        for part in output:
+        for part in parts:
             if not isinstance(part, dict):
                 continue
             part_type = part.get("type")
             if part_type in ("input_text", "output_text", "text"):
                 txt = part.get("text")
-                if isinstance(txt, str) and txt:
+                if isinstance(txt, str):
                     text_acc.append(txt)
-                    normalized_blocks.append({"type": "text", "text": txt})
+                    if txt:
+                        normalized_blocks.append({"type": "text", "text": txt})
             elif (media := decode_responses_media(part)) is not None:
                 normalized_blocks.append(media)
 
         if any(b.get("type") != "text" for b in normalized_blocks):
             return normalized_blocks
-        if text_acc:
+        if any(text_acc) or len(text_acc) == len(parts):
             return "".join(text_acc)
         try:
             return json.dumps(output)
@@ -1162,6 +1164,14 @@ class LiteLLMCompletionResponsesConfig:
         if text_param:
             response_format = LiteLLMCompletionResponsesConfig._transform_text_format_to_response_format(text_param)
 
+        verbosity = None
+        if isinstance(text_param, dict):
+            verbosity = text_param.get("verbosity")
+        elif hasattr(text_param, "verbosity"):
+            verbosity = getattr(text_param, "verbosity", None)
+        if verbosity is None and "verbosity" in kwargs:
+            verbosity = kwargs.get("verbosity")
+
         reasoning: Final = LiteLLMCompletionResponsesConfig._transform_reasoning_for_chat_completion(
             reasoning_param=responses_api_request.get("reasoning"),
             model=model,
@@ -1214,6 +1224,9 @@ class LiteLLMCompletionResponsesConfig:
             "metadata": kwargs.get("metadata"),
             "service_tier": responses_api_request.get("service_tier"),
             "safety_identifier": responses_api_request.get("safety_identifier"),
+            "prompt_cache_key": responses_api_request.get("prompt_cache_key"),
+            "prompt_cache_retention": responses_api_request.get("prompt_cache_retention"),
+            "verbosity": verbosity,
             "web_search_options": web_search_options,
             "response_format": response_format,
             "reasoning_effort": reasoning.effort,
