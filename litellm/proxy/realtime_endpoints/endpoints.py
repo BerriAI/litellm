@@ -4,13 +4,14 @@ import json
 import time
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi import status as http_status
 from fastapi.responses import PlainTextResponse
-from pydantic import ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -67,6 +68,20 @@ _TRANSLATION_SECRET_BODY: Final = {
 _TRANSLATION_SDP_BODY: Final = {
     "requestBody": {"required": True, "content": {"application/sdp": {"schema": {"type": "string"}}}}
 }
+
+
+@with_config(ConfigDict(strict=True, extra="allow"))
+class _RealtimeTokenPayload(TypedDict, total=False):
+    v: NotRequired[ReadOnly[object]]
+    ephemeral_key: NotRequired[ReadOnly[str]]
+    model_id: NotRequired[ReadOnly[str]]
+    user_id: NotRequired[ReadOnly[str | None]]
+    team_id: NotRequired[ReadOnly[str | None]]
+    expires_at: NotRequired[ReadOnly[object]]
+    session_type: NotRequired[ReadOnly[str | None]]
+
+
+_REALTIME_TOKEN_PAYLOAD_ADAPTER: Final = TypeAdapter(_RealtimeTokenPayload)
 
 
 def _coerce_realtime_session_type(session_type: str | None) -> str:
@@ -291,16 +306,13 @@ def _header_value(headers: Mapping[str, str], name: str, default: str) -> str:
 
 def _decode_realtime_token_payload(
     decrypted_value: str,
-) -> dict[str, Any] | None:
+) -> _RealtimeTokenPayload | None:
     """
     Decode realtime token payload; returns None for legacy/raw ephemeral tokens.
     """
     try:
-        decoded: Final = json.loads(decrypted_value)
+        decoded: Final = _REALTIME_TOKEN_PAYLOAD_ADAPTER.validate_python(json.loads(decrypted_value))
     except Exception:
-        return None
-
-    if not isinstance(decoded, dict):
         return None
     if decoded.get("v") != _REALTIME_TOKEN_VERSION:
         return None
