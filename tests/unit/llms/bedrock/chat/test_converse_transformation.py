@@ -9323,12 +9323,13 @@ def test_not_found_error(model, path, monkeypatch):
     assert [request.url.raw_path for request in sent] == [path]
 
 
-def test_an_empty_model_id_fails_locally_without_calling_aws():
+@pytest.mark.parametrize("model", ["bedrock/", "bedrock/us-east-1/"])
+def test_an_empty_model_id_fails_locally_without_calling_aws(model):
     sent: Final[list[httpx.Request]] = []
 
     with pytest.raises(litellm.NotFoundError):
         completion(
-            model="bedrock/",
+            model=model,
             messages=[{"role": "user", "content": "What is the meaning of life"}],
             client=HTTPHandler(
                 client=httpx.Client(transport=httpx.MockTransport(_invalid_model_identifier_reply(sent)))

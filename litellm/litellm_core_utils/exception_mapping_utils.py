@@ -933,6 +933,13 @@ def _bedrock_response_with_status(original_exception: _ProviderHTTPException, st
     return httpx.Response(status_code=status_code, headers=original_response.headers, request=original_response.request)
 
 
+def _came_from_bedrock_converse(original_exception: _ProviderHTTPException) -> bool:
+    original_response: Final = getattr(original_exception, "response", None)
+    if not isinstance(original_response, httpx.Response) or getattr(original_response, "_request", None) is None:
+        return False
+    return original_response.request.url.path.endswith(("/converse", "/converse-stream"))
+
+
 def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
     """
     Mantle reports context overflow as a validation_error carrying the token counts, or as
@@ -992,6 +999,7 @@ def _map_bedrock_exception(
     elif (
         "The provided model identifier is invalid" in error_str
         and bool(model)
+        and _came_from_bedrock_converse(original_exception)
         and bedrock_model_reaches_converse_by_default(model)
     ):
         raise NotFoundError(

@@ -1599,10 +1599,14 @@ def bedrock_model_supports_regex_lookaround(model: str, litellm_params: Mapping[
     return not all(bedrock_model_is_unknown(split_bedrock_region_path(candidate)[1]) for candidate in candidates)
 
 
-def bedrock_model_is_unknown(model: str) -> bool:
+def _bedrock_model_id_without_region(model: str) -> str:
     routed_id: Final = model.removeprefix("bedrock/")
     region, separator, regional_id = routed_id.partition("/")
-    model_id: Final = regional_id if separator and region in get_all_bedrock_regions() else routed_id
+    return regional_id if separator and region in get_all_bedrock_regions() else routed_id
+
+
+def bedrock_model_is_unknown(model: str) -> bool:
+    model_id: Final = _bedrock_model_id_without_region(model)
     if "/" in model_id:
         return False
     base: Final = get_bedrock_base_model(model_id)
@@ -1617,7 +1621,7 @@ def bedrock_model_is_unknown(model: str) -> bool:
 def _names_no_invoke_provider(model: str) -> bool:
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
-    return bool(model.removeprefix("bedrock/")) and BaseAWSLLM.get_bedrock_invoke_provider(model) is None
+    return bool(_bedrock_model_id_without_region(model)) and BaseAWSLLM.get_bedrock_invoke_provider(model) is None
 
 
 def bedrock_model_reaches_converse_by_default(model: str) -> bool:

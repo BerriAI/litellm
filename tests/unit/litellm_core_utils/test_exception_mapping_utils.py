@@ -1607,15 +1607,55 @@ class _ErrorWithoutResponse(Exception):
         self.status_code = status_code
 
 
-def test_bedrock_invalid_model_identifier_without_a_provider_response_still_answers_404():
+def test_bedrock_mantle_context_overflow_without_a_provider_response_answers_400():
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="openai.gpt-5.6-sol",
+            original_exception=_ErrorWithoutResponse(
+                '{"error":{"code":"context_length_exceeded","message":"too long"}}', 400
+            ),
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert excinfo.value.response.status_code == 400
+
+
+def _invalid_model_identifier_from(url: str) -> BedrockError:
+    return BedrockError(
+        status_code=400,
+        message='{"message":"The provided model identifier is invalid."}',
+        response=httpx.Response(status_code=400, request=httpx.Request(method="POST", url=url)),
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/model/us.newvendor.typo-1/converse", "/model/us.newvendor.typo-1/converse-stream"],
+)
+def test_bedrock_converse_rejecting_an_id_with_no_invoke_provider_answers_404(path):
     with pytest.raises(litellm.NotFoundError) as excinfo:
         exception_type(
             model="us.newvendor.typo-1",
-            original_exception=_ErrorWithoutResponse("The provided model identifier is invalid.", 400),
+            original_exception=_invalid_model_identifier_from(f"https://bedrock-runtime.us-east-1.amazonaws.com{path}"),
             custom_llm_provider="bedrock",
         )
 
     assert excinfo.value.response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "original_exception",
+    [
+        _invalid_model_identifier_from("https://bedrock-runtime.us-east-1.amazonaws.com/model/claude-typo-9/invoke"),
+        _ErrorWithoutResponse("The provided model identifier is invalid.", 400),
+    ],
+    ids=["invoke", "no-response"],
+)
+def test_bedrock_invalid_model_identifier_not_from_converse_stays_a_bad_request(original_exception):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(model="claude-typo-9", original_exception=original_exception, custom_llm_provider="bedrock")
+
+    assert excinfo.value.status_code == 400
 
 
 def test_bedrock_invalid_model_identifier_without_a_model_stays_a_bad_request():
