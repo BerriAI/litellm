@@ -2759,6 +2759,68 @@ class TestVLLMProxyRoute:
         mock_factory_route.assert_awaited_once()
 
 
+@pytest.mark.parametrize(
+    ("vllm_api_base", "request_path"),
+    [
+        ("http://vllm-upstream.test:8090", "/vllm/v1/chat/completions"),
+        ("http://vllm-upstream.test:8090/v1", "/vllm/v1/chat/completions"),
+        ("http://vllm-upstream.test:8090/v1", "/vllm/chat/completions"),
+    ],
+)
+def test_vllm_provider_route_reaches_v1_paths_with_its_key_as_a_bearer(
+    monkeypatch: pytest.MonkeyPatch, vllm_api_base: str, request_path: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("VLLM_API_BASE", vllm_api_base)
+    monkeypatch.setenv("VLLM_API_KEY", "sk-vllm-upstream")
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    monkeypatch.setitem(
+        proxy_server.app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual")
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post("http://vllm-upstream.test:8090/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json={"id": "chatcmpl-1"})
+        )
+        response: Final = TestClient(proxy_server.app).post(
+            request_path,
+            json={"model": "Qwen/Qwen3-0.6B", "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert (response.status_code, response.json()) == (200, {"id": "chatcmpl-1"})
+    assert route.calls.last.request.headers["authorization"] == "Bearer sk-vllm-upstream"
+    assert route.calls.last.request.headers["x-api-key"] == "sk-vllm-upstream"
+
+
+def test_vllm_provider_route_with_an_empty_key_sends_no_credential_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("VLLM_API_BASE", "http://vllm-upstream.test:8090")
+    monkeypatch.setenv("VLLM_API_KEY", "")
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    monkeypatch.setitem(
+        proxy_server.app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual")
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post("http://vllm-upstream.test:8090/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json={"id": "chatcmpl-1"})
+        )
+        response: Final = TestClient(proxy_server.app).post(
+            "/vllm/v1/chat/completions",
+            json={"model": "Qwen/Qwen3-0.6B", "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert (response.status_code, response.json()) == (200, {"id": "chatcmpl-1"})
+    assert "authorization" not in route.calls.last.request.headers
+    assert "x-api-key" not in route.calls.last.request.headers
+
+
 class TestGigachatProxyRoute:
     @pytest.mark.asyncio
     @patch(  # test-quality-ok: patching litellm internal for unit test isolation

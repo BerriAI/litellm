@@ -72,6 +72,7 @@ from litellm.llms.openai.common_utils import is_openai_agents_api_path, openai_a
 from litellm.llms.openai.workload_identity import get_workload_identity_bearer_token_for_api_base
 from litellm.llms.oss_decision import OssDecisionProvider, oss_connection, validate_oss_request
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.llms.vllm.common_utils import endpoint_under_api_base
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse, is_provider_error
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import enforced_model_allowlists
@@ -600,7 +601,7 @@ async def vllm_proxy_route(
         )
 
     return await llm_passthrough_factory_proxy_route(
-        endpoint=endpoint,
+        endpoint=endpoint_under_api_base(endpoint, get_secret_str("VLLM_API_BASE")),
         request=request,
         fastapi_response=fastapi_response,
         user_api_key_dict=user_api_key_dict,
