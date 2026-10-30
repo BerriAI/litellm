@@ -108,7 +108,7 @@ export LITELLM_PROXY_URL="http://localhost:4000"
 - Run `curl http://localhost:4000/models` to see available models
 
 **Tool calls not working?**
-- Ensure the underlying model supports tool use (GPT-4o, Claude, Gemini)
+- Ensure the underlying model supports tool use (GPT-5.6, Claude, Gemini)
 - Check LiteLLM logs for any provider-specific errors
 
 ## Learn More
