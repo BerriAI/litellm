@@ -1375,7 +1375,18 @@ def test_partial_wildcard_lists_catalog_ids_stored_with_the_provider_prefix(
 
 
 @pytest.mark.parametrize(
-    ("provider", "routing_segment"), [("bedrock", "converse"), ("bedrock", "us-east-1"), ("openai", "responses")]
+    ("provider", "routing_segment"),
+    [
+        ("bedrock", "converse"),
+        ("bedrock", "us-east-1"),
+        ("bedrock", "deepseek_r1"),
+        ("openai", "responses"),
+        ("openai", "chat_completions"),
+        ("azure", "o_series"),
+        ("vertex_ai", "gemini"),
+        ("cohere", "v2"),
+        ("black_forest_labs", "unread-segment"),
+    ],
 )
 def test_routing_segment_lists_the_same_catalog_ids_as_the_bare_provider_wildcard(
     provider: str, routing_segment: str
@@ -1390,6 +1401,39 @@ def test_routing_segment_lists_the_same_catalog_ids_as_the_bare_provider_wildcar
 
     assert bare_listing
     assert sorted(routed_listing) == sorted(bare_listing)
+
+
+@pytest.mark.parametrize(
+    "provider",
+    [
+        "deepinfra",
+        "novita",
+        "fireworks_ai",
+        "hyperbolic",
+        "nscale",
+        "baseten",
+        "groq",
+        "sambanova",
+        "nvidia_nim",
+        "featherless_ai",
+        "anthropic",
+        "watsonx",
+    ],
+)
+def test_wildcard_over_an_org_the_catalog_lacks_lists_no_catalog_id(provider: str) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    with _registered_chat_models({f"{provider}/unknown-org-route-org/model-u": provider}):
+        listed_under_known_org: Final = get_known_models_from_wildcard(
+            f"{provider}/*", LiteLLM_Params(model=f"{provider}/unknown-org-route-org/*")
+        )
+        listed_under_unknown_org: Final = get_known_models_from_wildcard(
+            f"{provider}/*", LiteLLM_Params(model=f"{provider}/unknown-org-route-missing-org/*")
+        )
+
+    assert listed_under_known_org == [f"{provider}/model-u"]
+    assert listed_under_unknown_org == []
 
 
 def test_provider_wildcard_lists_cost_map_models_but_not_pricing_tiers() -> None:

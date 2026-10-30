@@ -23,7 +23,25 @@ from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, get_valid_models, potential_model_names_in_lookup_order
 
 LLM_PROVIDER_PREFIXES: Final = frozenset(llm_provider.value for llm_provider in LlmProviders)
-_PROVIDERS_SENDING_THE_DEPLOYMENT_PATH_AS_THE_MODEL_ID: Final = frozenset({LlmProviders.TOGETHER_AI.value})
+_PROVIDERS_WITH_ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE: Final = frozenset(
+    provider.value
+    for provider in (
+        LlmProviders.OPENAI,
+        LlmProviders.AZURE,
+        LlmProviders.BEDROCK,
+        LlmProviders.VERTEX_AI,
+        LlmProviders.HUGGINGFACE,
+        LlmProviders.COHERE,
+        LlmProviders.COHERE_CHAT,
+        LlmProviders.AWS_POLLY,
+        LlmProviders.BLACK_FOREST_LABS,
+        LlmProviders.MICROSOFT_365_COPILOT,
+        LlmProviders.REDUCTO,
+        LlmProviders.SCALEDOWN,
+        LlmProviders.STABILITY,
+        LlmProviders.TRANSCRIBE,
+    )
+)
 
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
@@ -372,7 +390,7 @@ def _ids_routing_to_catalog_models(
     routing_prefix: Final = deployment_model_pattern_without_provider.removesuffix(catalog_pattern)
     reaches_catalog_model: Final = (
         _routes_to_catalog_model(routes_to_model, provider, frozenset(provider_model_ids))
-        if routing_prefix and provider in _PROVIDERS_SENDING_THE_DEPLOYMENT_PATH_AS_THE_MODEL_ID
+        if routing_prefix and provider not in _PROVIDERS_WITH_ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE
         else routes_to_model
     )
     deployment_model_pattern: Final = f"{provider_id_prefix}{catalog_pattern}"
