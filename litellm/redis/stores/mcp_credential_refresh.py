@@ -40,11 +40,11 @@ class TransportMcpRefreshLockStore:
         return await self.transport.set(_lock_key(target), owner, ttl=ttl, nx=True)
 
     async def extend(self, target: RefreshLockTarget, owner: str, *, ttl: timedelta) -> bool | RedisFailure:
-        reply: Final = await self.transport.eval(_EXTEND_IF_OWNER, (_lock_key(target),), (owner, ttl_ms(ttl)))
+        reply: Final = await self.transport.eval_direct(_EXTEND_IF_OWNER, (_lock_key(target),), (owner, ttl_ms(ttl)))
         return reply if isinstance(reply, RedisFailure) else reply == 1
 
     async def release(self, target: RefreshLockTarget, owner: str) -> bool | RedisFailure:
-        reply: Final = await self.transport.eval(_RELEASE_IF_OWNER, (_lock_key(target),), (owner,))
+        reply: Final = await self.transport.eval_direct(_RELEASE_IF_OWNER, (_lock_key(target),), (owner,))
         return reply if isinstance(reply, RedisFailure) else reply == 1
 
     async def is_held(self, target: RefreshLockTarget) -> bool | RedisFailure:
