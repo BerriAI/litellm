@@ -1743,13 +1743,36 @@ def _gemini_candidate_counts(request_body: Mapping[str, object]) -> tuple[object
 
 def _requested_output_tokens(request_body: Mapping[str, object], route: str) -> int | None:
     if RouteChecks.is_generate_content_route(route):
-        gemini_cap: Final = _to_int(_nested_field(request_body, "generationConfig", "maxOutputTokens"))
-        return gemini_cap if gemini_cap is not None and gemini_cap > 0 else None
+        return _gemini_requested_output_tokens(request_body)
     candidates: Final = (
         *(request_body.get(field) for field in _OUTPUT_TOKEN_FIELDS),
         _nested_field(request_body, "inferenceConfig", "maxTokens"),
     )
     return next((tokens for tokens in map(_to_int, candidates) if tokens is not None and tokens >= 0), None)
+
+
+_GEMINI_PASS_THROUGH_ONLY_CAPS: Final = (
+    ("generationConfig", "max_output_tokens"),
+    ("generation_config", "maxOutputTokens"),
+    ("generation_config", "max_output_tokens"),
+)
+
+
+def _gemini_requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
+    gemini_cap: Final = _positive_int(_nested_field(request_body, "generationConfig", "maxOutputTokens"))
+    pass_through_caps: Final = tuple(
+        cap
+        for config_field, field in _GEMINI_PASS_THROUGH_ONLY_CAPS
+        if (cap := _positive_int(_nested_field(request_body, config_field, field))) is not None
+    )
+    if not pass_through_caps:
+        return gemini_cap
+    return max(gemini_cap or DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK, *pass_through_caps)
+
+
+def _positive_int(value: object) -> int | None:
+    number: Final = _to_int(value)
+    return number if number is not None and number > 0 else None
 
 
 def _requested_output_counts(

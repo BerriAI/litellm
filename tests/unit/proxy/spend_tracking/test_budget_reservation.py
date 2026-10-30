@@ -338,6 +338,31 @@ def test_a_gemini_output_cap_of_zero_or_below_holds_the_default_output(cap: int)
     )
 
 
+@pytest.mark.parametrize(
+    ("output_fields", "same_hold_fields"),
+    (
+        ({"generationConfig": {"max_output_tokens": 30000}}, {"generationConfig": {"maxOutputTokens": 30000}}),
+        ({"generation_config": {"maxOutputTokens": 30000}}, {"generationConfig": {"maxOutputTokens": 30000}}),
+        ({"generation_config": {"max_output_tokens": 30000}}, {"generationConfig": {"maxOutputTokens": 30000}}),
+        (
+            {"generationConfig": {"maxOutputTokens": 8000}, "generation_config": {"max_output_tokens": 30000}},
+            {"generationConfig": {"maxOutputTokens": 30000}},
+        ),
+        ({"generation_config": {"max_output_tokens": 5}}, {}),
+        (
+            {"generationConfig": {"maxOutputTokens": 8000, "max_output_tokens": 5}},
+            {"generationConfig": {"maxOutputTokens": 8000}},
+        ),
+    ),
+)
+def test_an_output_cap_spelling_v1beta_drops_can_only_raise_the_hold(
+    output_fields: dict[str, object], same_hold_fields: dict[str, object]
+) -> None:
+    expected_hold: Final = _gemini_hold({"contents": [GEMINI_TEXT_CONTENT], **same_hold_fields})
+    assert expected_hold is not None
+    assert _gemini_hold({"contents": [GEMINI_TEXT_CONTENT], **output_fields}) == expected_hold
+
+
 UNPRICEABLE_COUNTS: Final = (10**400, "9" * 400, 1e308, math.inf)
 
 
