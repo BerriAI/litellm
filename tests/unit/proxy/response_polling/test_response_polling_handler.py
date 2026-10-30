@@ -403,6 +403,7 @@ class TestResponsePollingHandler:
 
         await handler.update_state(
             polling_id="litellm_poll_test",
+            status="completed",
             error=error_data,
         )
 
@@ -410,6 +411,37 @@ class TestResponsePollingHandler:
 
         assert stored["status"] == "failed"
         assert stored["error"] == error_data
+
+    @pytest.mark.asyncio
+    async def test_update_state_preserves_false_empty_and_zero_values(self):
+        cache: Final = fake_redis_cache(fakeredis.FakeServer())
+        await _seed(cache, {"id": "litellm_poll_test", "status": "in_progress", "usage": {"total_tokens": 3}})
+        handler: Final = ResponsePollingHandler(redis_cache=cache)
+
+        await handler.update_state(
+            polling_id="litellm_poll_test",
+            usage={},
+            output=[],
+            tools=[],
+            reasoning={},
+            instructions="",
+            temperature=0,
+            parallel_tool_calls=False,
+            store=False,
+        )
+
+        assert await _legacy_read(cache, "litellm_poll_test") == {
+            "id": "litellm_poll_test",
+            "status": "in_progress",
+            "usage": {"total_tokens": 3},
+            "output": [],
+            "tools": [],
+            "reasoning": {},
+            "instructions": "",
+            "temperature": 0,
+            "parallel_tool_calls": False,
+            "store": False,
+        }
 
     @pytest.mark.asyncio
     async def test_update_state_with_incomplete_details(self):

@@ -2,7 +2,7 @@
 Response Polling Handler for Background Responses with Cache
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
@@ -97,13 +97,13 @@ class ResponsePollingHandler:
         self,
         polling_id: str,
         status: ResponsesAPIStatus | None = None,
-        usage: dict | None = None,
-        error: dict | None = None,
-        incomplete_details: dict | None = None,
-        reasoning: dict | None = None,
+        usage: Mapping[str, object] | None = None,
+        error: Mapping[str, object] | None = None,
+        incomplete_details: Mapping[str, object] | None = None,
+        reasoning: Mapping[str, object] | None = None,
         tool_choice: object | None = None,
-        tools: list | None = None,
-        output: list | None = None,
+        tools: Sequence[object] | None = None,
+        output: Sequence[object] | None = None,
         # Additional ResponsesAPIResponse fields
         model: str | None = None,
         instructions: str | None = None,
@@ -111,7 +111,7 @@ class ResponsePollingHandler:
         top_p: float | None = None,
         max_output_tokens: int | None = None,
         previous_response_id: str | None = None,
-        text: dict | None = None,
+        text: Mapping[str, object] | None = None,
         truncation: str | None = None,
         parallel_tool_calls: bool | None = None,
         user: str | None = None,
@@ -155,60 +155,31 @@ class ResponsePollingHandler:
             verbose_proxy_logger.warning("No cached state found for polling_id: %s", polling_id)
             return
 
-        state: Final[dict[str, object]] = dict(cached_state)
-
-        # Update status (using OpenAI native status values)
-        if status:
-            state["status"] = status
-
-        # Replace full output list if provided
-        if output is not None:
-            state["output"] = output
-
-        # Update usage
-        if usage:
-            state["usage"] = usage
-
-        # Handle error (sets status to OpenAI's "failed")
-        if error:
-            state["status"] = "failed"
-            state["error"] = error  # Use OpenAI's 'error' field
-
-        # Handle incomplete details
-        if incomplete_details:
-            state["incomplete_details"] = incomplete_details
-
-        # Update reasoning, tool_choice, tools from response.completed
-        if reasoning is not None:
-            state["reasoning"] = reasoning
-        if tool_choice is not None:
-            state["tool_choice"] = tool_choice
-        if tools is not None:
-            state["tools"] = tools
-
-        # Update additional ResponsesAPIResponse fields
-        if model is not None:
-            state["model"] = model
-        if instructions is not None:
-            state["instructions"] = instructions
-        if temperature is not None:
-            state["temperature"] = temperature
-        if top_p is not None:
-            state["top_p"] = top_p
-        if max_output_tokens is not None:
-            state["max_output_tokens"] = max_output_tokens
-        if previous_response_id is not None:
-            state["previous_response_id"] = previous_response_id
-        if text is not None:
-            state["text"] = text
-        if truncation is not None:
-            state["truncation"] = truncation
-        if parallel_tool_calls is not None:
-            state["parallel_tool_calls"] = parallel_tool_calls
-        if user is not None:
-            state["user"] = user
-        if store is not None:
-            state["store"] = store
+        updates: Final[Mapping[str, object]] = {
+            "status": "failed" if error else status or None,
+            "output": output,
+            "usage": usage or None,
+            "error": error or None,
+            "incomplete_details": incomplete_details or None,
+            "reasoning": reasoning,
+            "tool_choice": tool_choice,
+            "tools": tools,
+            "model": model,
+            "instructions": instructions,
+            "temperature": temperature,
+            "top_p": top_p,
+            "max_output_tokens": max_output_tokens,
+            "previous_response_id": previous_response_id,
+            "text": text,
+            "truncation": truncation,
+            "parallel_tool_calls": parallel_tool_calls,
+            "user": user,
+            "store": store,
+        }
+        state: Final[Mapping[str, object]] = {
+            **cached_state,
+            **{key: value for key, value in updates.items() if value is not None},
+        }
 
         written: Final = await self._store.put(polling_id, state, ttl=self._ttl())
         if written is not None:
