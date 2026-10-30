@@ -258,3 +258,46 @@ async def test_gemini_streaming_function_call_preserves_thought_signature() -> N
     assert function_calls[0].name == "get_weather"
     assert function_calls[0].provider_specific_fields == {"thought_signature": signature}
     assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "empty_user_item",
+    [
+        pytest.param({"role": "user", "content": ""}, id="empty_string"),
+        pytest.param({"role": "user", "content": []}, id="empty_list"),
+        pytest.param({"role": "user", "content": None}, id="null"),
+        pytest.param({"role": "user"}, id="missing"),
+    ],
+)
+async def test_an_empty_trailing_user_item_reaches_gemini_as_a_user_turn(empty_user_item: dict[str, object]) -> None:
+    response_body: Final = {
+        "candidates": [
+            {"content": {"role": "model", "parts": [{"text": "How can I help?"}]}, "finishReason": "STOP", "index": 0}
+        ],
+        "usageMetadata": {"promptTokenCount": 4, "candidatesTokenCount": 4, "totalTokenCount": 8},
+    }
+
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post(url__regex=_GEMINI_URL).mock(
+            return_value=httpx.Response(status_code=200, json=response_body)
+        )
+        response: Final = await litellm.aresponses(
+            model="gemini/gemini-2.5-flash",
+            api_key="test-key",
+            input=[
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello!"},
+                empty_user_item,
+            ],
+        )
+        requests: Final = tuple(route.calls)
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert len(requests) == 1
+    request_body: Final = _JSON_OBJECT.validate_json(requests[0].request.content)
+    assert request_body["contents"] == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
+        {"role": "user", "parts": [{"text": " "}]},
+    ]

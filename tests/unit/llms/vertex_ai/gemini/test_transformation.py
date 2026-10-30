@@ -485,3 +485,88 @@ def test_image_only_user_content_logs_the_blank_text_fixup_at_debug(caplog: pyte
     fixups: Final = tuple(r for r in caplog.records if "No text in user content" in r.getMessage())
     assert tuple(r.levelno for r in fixups) == (logging.DEBUG,)
     assert contents[0]["parts"][-1] == {"text": " "}
+
+
+_EMPTY_USER_MESSAGES: Final = (
+    pytest.param({"role": "user", "content": ""}, id="empty_string"),
+    pytest.param({"role": "user", "content": []}, id="empty_list"),
+    pytest.param({"role": "user", "content": None}, id="null"),
+    pytest.param({"role": "user"}, id="missing"),
+    pytest.param({"role": "user", "content": [{"type": "text", "text": ""}]}, id="empty_text_block"),
+)
+
+
+@pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
+def test_an_empty_trailing_user_message_still_ends_the_request_on_a_user_turn(empty_user_message: dict) -> None:
+    contents: Final = transformation.gemini_convert_messages_with_history(
+        [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello! How can I help?"},
+            empty_user_message,
+        ]
+    )
+
+    assert contents == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello! How can I help?"}]},
+        {"role": "user", "parts": [{"text": " "}]},
+    ]
+
+
+@pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
+def test_an_empty_user_message_between_assistant_turns_keeps_the_roles_alternating(empty_user_message: dict) -> None:
+    contents: Final = transformation.gemini_convert_messages_with_history(
+        [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello!"},
+            empty_user_message,
+            {"role": "assistant", "content": "Still there?"},
+            {"role": "user", "content": "Yes"},
+        ]
+    )
+
+    assert [(c["role"], c["parts"]) for c in contents] == [
+        ("user", [{"text": "Hi"}]),
+        ("model", [{"text": "Hello!"}]),
+        ("user", [{"text": " "}]),
+        ("model", [{"text": "Still there?"}]),
+        ("user", [{"text": "Yes"}]),
+    ]
+
+
+_WEATHER_TOOL_CALL: Final = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [
+        {
+            "id": "call_weather",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+        }
+    ],
+}
+
+
+@pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
+def test_an_empty_first_user_message_still_comes_before_the_function_call(empty_user_message: dict) -> None:
+    contents: Final = transformation.gemini_convert_messages_with_history(
+        [empty_user_message, _WEATHER_TOOL_CALL, {"role": "tool", "tool_call_id": "call_weather", "content": "Sunny"}]
+    )
+
+    assert [c["role"] for c in contents] == ["user", "model", "user"]
+    assert contents[0]["parts"] == [{"text": " "}]
+
+
+@pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
+def test_an_empty_user_message_after_tool_results_adds_no_second_user_turn(empty_user_message: dict) -> None:
+    contents: Final = transformation.gemini_convert_messages_with_history(
+        [
+            {"role": "user", "content": "Weather in Paris?"},
+            _WEATHER_TOOL_CALL,
+            {"role": "tool", "tool_call_id": "call_weather", "content": "Sunny"},
+            empty_user_message,
+        ]
+    )
+
+    assert [c["role"] for c in contents] == ["user", "model", "user"]
+    assert [tuple(part) for part in contents[-1]["parts"]] == [("function_response",)]

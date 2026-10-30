@@ -763,6 +763,12 @@ def _gemini_history_media_part(
         ) from exc
 
 
+def _gemini_empty_user_turn(consumed_messages: bool, contents: Sequence[ContentType]) -> ContentType | None:
+    if not consumed_messages or (contents and contents[-1].get("role") == "user"):
+        return None
+    return ContentType(role="user", parts=[PartType(text=" ")])
+
+
 def gemini_convert_messages_with_history(
     messages: list[AllMessageValues],
     model: str | None = None,
@@ -822,7 +828,7 @@ def gemini_convert_messages_with_history(
                         ) is not None:
                             _parts.append(media_part)
                     user_content.extend(_parts)
-                elif _message_content is not None and isinstance(_message_content, str):
+                elif isinstance(_message_content, str) and _message_content:
                     _part = PartType(text=_message_content)
                     user_content.append(_part)
 
@@ -843,6 +849,8 @@ def gemini_convert_messages_with_history(
                         PartType(text=" ")
                     )  # add a blank text, to ensure Gemini doesn't fail the request.
                 contents.append(ContentType(role="user", parts=user_content))
+            elif (empty_user_turn := _gemini_empty_user_turn(msg_i > init_msg_i, contents)) is not None:
+                contents.append(empty_user_turn)
             assistant_content = []
             ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
             while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
