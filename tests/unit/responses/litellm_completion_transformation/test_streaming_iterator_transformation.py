@@ -2139,3 +2139,27 @@ def test_native_mcp_result_without_identity_cannot_reach_the_responses_stream() 
     assert next(iterator).type == "response.in_progress"
     with pytest.raises(APIError, match="unknown tool call"):
         next(iterator)
+
+
+@pytest.mark.parametrize("changed_identity", [{"name": "delete_repo"}, {"server_name": "other"}])
+def test_native_mcp_snapshot_cannot_change_a_completed_call_identity(changed_identity: dict[str, str]) -> None:
+    from litellm.exceptions import APIError
+
+    call: Final = {
+        "type": "mcp_tool_use",
+        "id": "mcp_same",
+        "name": "search_code",
+        "server_name": "github",
+        "input": {},
+    }
+    result: Final = {"type": "mcp_tool_result", "tool_use_id": "mcp_same", "content": "found"}
+    iterator: Final = _build_iterator(
+        (
+            _native_mcp_chunk((call,), (result,)),
+            _native_mcp_chunk(({**call, **changed_identity},), (result,), content="after changed identity"),
+        )
+    )
+    first_result: Final = next(event for event in iterator if event.type == "response.output_item.done")
+    assert first_result.item.name == call["name"]
+    with pytest.raises(APIError, match="changed its server or tool identity"):
+        next(iterator)

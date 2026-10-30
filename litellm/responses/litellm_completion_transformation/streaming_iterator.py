@@ -419,6 +419,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 "status": "in_progress",
             }
         )
+        previous: Final = self._native_mcp_calls.get(item.id)
+        if previous is not None and (previous.name != item.name or previous.server_label != item.server_label):
+            raise litellm.APIError(
+                status_code=502,
+                message="Native MCP call changed its server or tool identity",
+                model=self.model,
+                llm_provider=self.custom_llm_provider or "",
+            )
         if item.id in self._finished_native_mcp_calls:
             return
         if item.id not in self._native_mcp_calls:
