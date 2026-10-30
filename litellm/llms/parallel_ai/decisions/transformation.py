@@ -8,6 +8,7 @@ Contract: https://docs.parallel.ai/api-reference/decisions/make-web-grounded-typ
 from collections.abc import Mapping
 from typing import Final
 
+import httpx
 from pydantic import BaseModel, ConfigDict
 
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, ir_to_systemone_request
@@ -32,6 +33,24 @@ class ParallelAIDecisionsConfig(BaseDecisionsConfig):
 
     def get_default_api_base(self) -> str:
         return "https://api.parallel.ai"
+
+    def resolve_connection(self, api_base: str | None, api_key: str | None) -> tuple[str | None, str | None]:
+        configured_base: Final = self.resolve_api_base(None)
+        resolved_base: Final = api_base or configured_base
+        if api_key:
+            return resolved_base, api_key
+        # Compare actual endpoint URLs before loading a server-managed secret.
+        trusted_urls: Final = frozenset(
+            httpx.URL(self.get_complete_url(base, "decision"))
+            for base in (self.get_default_api_base(), configured_base)
+            if base
+        )
+        if resolved_base and httpx.URL(self.get_complete_url(resolved_base, "decision")) not in trusted_urls:
+            raise ValueError(
+                "Parallel Decisions requires an explicit api_key for a custom api_base unless "
+                "the destination is configured in PARALLEL_AI_API_BASE"
+            )
+        return resolved_base, self.resolve_api_key(None)
 
     def validate_environment(
         self,

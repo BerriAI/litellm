@@ -220,3 +220,80 @@ def test_malformed_provider_responses_raise_a_provider_error(payload: Mapping[st
         ParallelAIDecisionsConfig().transform_decisions_response(
             "decision", "parallel_ai", httpx.Response(200, json=payload), REQUEST
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("surface", ["decisions", "systemone"])
+@pytest.mark.parametrize("key_env", ["PARALLEL_AI_API_KEY", "PARALLEL_API_KEY"])
+async def test_untrusted_base_cannot_receive_environment_key(
+    use_async: bool, surface: str, key_env: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("PARALLEL_AI_API_BASE", raising=False)
+    monkeypatch.delenv("PARALLEL_AI_API_KEY", raising=False)
+    monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
+    monkeypatch.setenv(key_env, "server-secret")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://attacker.example/v1/decisions").respond(json=PAYLOAD)
+    connection: Final = {"model": "parallel_ai/decision", "api_base": "https://attacker.example", "num_retries": 0}
+    fields: Final = (
+        {"state": "Example", "questions": QUESTIONS}
+        if surface == "systemone"
+        else {
+            "input": "Example",
+            "questions": [{"type": "predicate", "name": "available", "instructions": "Available?"}],
+        }
+    )
+    sync_call: Final = litellm.systemone if surface == "systemone" else litellm.decisions
+    async_call: Final = litellm.asystemone if surface == "systemone" else litellm.adecisions
+    with pytest.raises(litellm.BadRequestError, match="explicit api_key"):
+        if use_async:
+            await async_call(**connection, **fields)
+        else:
+            sync_call(**connection, **fields)
+    assert not route.called
+    await GLOBAL_LOGGING_WORKER.clear_queue()
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://api.parallel.ai.attacker.example",
+        "https://api.parallel.ai@attacker.example",
+        "http://api.parallel.ai",
+        "https://api.parallel.ai:8443",
+        "https://attacker.example/api.parallel.ai",
+        "https://api.parallel.ai/other-tenant",
+    ],
+)
+def test_environment_key_rejects_untrusted_destination_variants(api_base: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PARALLEL_AI_API_BASE", raising=False)
+    monkeypatch.setenv("PARALLEL_AI_API_KEY", "server-secret")
+    with pytest.raises(ValueError, match="explicit api_key"):
+        ParallelAIDecisionsConfig().resolve_connection(api_base, None)
+
+
+@pytest.mark.parametrize("api_base", [None, "https://api.parallel.ai", "https://API.PARALLEL.AI:443/v1/"])
+def test_default_destination_retains_environment_key(api_base: str | None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PARALLEL_AI_API_BASE", raising=False)
+    monkeypatch.setenv("PARALLEL_AI_API_KEY", "server-secret")
+    resolved_base, key = ParallelAIDecisionsConfig().resolve_connection(api_base, None)
+    assert resolved_base == (api_base or "https://api.parallel.ai")
+    assert key == "server-secret"
+
+
+@pytest.mark.parametrize("api_base", [None, "https://gateway.example/parallel/v1/"])
+def test_operator_base_retains_environment_key(api_base: str | None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PARALLEL_AI_API_BASE", "https://gateway.example/parallel")
+    monkeypatch.setenv("PARALLEL_AI_API_KEY", "server-secret")
+    resolved_base, key = ParallelAIDecisionsConfig().resolve_connection(api_base, None)
+    assert resolved_base == (api_base or "https://gateway.example/parallel")
+    assert key == "server-secret"
+
+
+def test_custom_destination_uses_explicit_key_instead_of_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PARALLEL_AI_API_KEY", "server-secret")
+    assert ParallelAIDecisionsConfig().resolve_connection("https://gateway.example", "caller-key") == (
+        "https://gateway.example",
+        "caller-key",
+    )
