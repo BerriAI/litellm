@@ -767,8 +767,13 @@ def _stream_log_waits_for_its_pipelines(data: Mapping[str, object]) -> bool:
 def _pipelines_settled_by(
     pipelines: Sequence[tuple[str, "GuardrailPipeline"]], index: int, result: PipelineExecutionResult
 ) -> Sequence[tuple[str, "GuardrailPipeline"]]:
-    """This pipeline, plus every later one when its verdict ends the request before they run."""
-    return pipelines[index:] if result.terminal_action != "allow" else pipelines[index : index + 1]
+    """This pipeline, plus every later response pipeline when its verdict ends the request before they run."""
+    if result.terminal_action == "allow":
+        return pipelines[index : index + 1]
+    return (
+        pipelines[index],
+        *((policy_name, pipeline) for policy_name, pipeline in pipelines[index + 1 :] if pipeline.mode == "post_call"),
+    )
 
 
 def _steps_later_pipelines_still_run(

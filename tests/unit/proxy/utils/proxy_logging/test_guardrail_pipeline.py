@@ -1542,6 +1542,46 @@ async def test_post_call_pipeline_that_ends_the_request_drops_the_steps_of_a_lat
     assert data["metadata"]["applied_guardrails"] == ["first"]
 
 
+def _blocks_before_a_later_request_pipeline_data() -> dict[str, object]:
+    blocks: Final = GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="first", on_pass="block")])
+    request: Final = GuardrailPipeline(
+        mode="pre_call",
+        steps=[PipelineStep(guardrail="gate", on_pass="allow"), PipelineStep(guardrail="second", on_pass="next")],
+    )
+    return {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {
+            "guardrails": ["first", "gate", "second"],
+            "_guardrail_pipelines": [("blocks", blocks), ("request", request)],
+            "_pipeline_managed_guardrails": {"first", "gate", "second"},
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_call_pipeline_that_blocks_keeps_a_later_request_step_whose_guardrail_runs_outside_pipelines(
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first: Final = _PipelineStepGuardrail("first", "post_call")
+    gate: Final = _PipelineStepGuardrail("gate", "pre_call")
+    second: Final = _PipelineStepGuardrail("second", ["pre_call", "post_call"])
+    monkeypatch.setattr(litellm, "callbacks", [first, gate, second])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data: Final = await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={**_blocks_before_a_later_request_pipeline_data(), "litellm_logging_obj": _logging_obj(log_parked=True)},
+        call_type="completion",
+    )
+
+    with pytest.raises(HTTPException):
+        await proxy_logging.post_call_success_hook(
+            data=data, response=litellm.ModelResponse(), user_api_key_dict=make_user_api_key_auth()
+        )
+
+    assert sorted(data["metadata"]["applied_guardrails"]) == ["first", "gate", "second"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("ending", "stream_end"), [("block", pytest.raises(HTTPException)), ("modify_response", nullcontext())]
