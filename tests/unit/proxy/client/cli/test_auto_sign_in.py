@@ -656,7 +656,9 @@ def test_terminal_control_characters_in_a_401_body_never_reach_the_terminal(
     requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
 ) -> None:
     requests_mock.post(
-        f"{BASE_URL}/key/generate", status_code=401, text="\x1b]0;title\x07refused\x1b[2J\r\nsecond line\x9b31m"
+        f"{BASE_URL}/key/generate",
+        status_code=401,
+        text="\x1b]0;title\x07refused\x1b[2J\rnext\tcolumn\nsecond line\x9b31m",
     )
     sign_in: Final = FakeBrowserSignIn(_credential())
 
@@ -664,9 +666,37 @@ def test_terminal_control_characters_in_a_401_body_never_reach_the_terminal(
 
     assert result.exit_code == 1
     assert "refused" in result.stderr
-    assert "second line" in result.stderr
+    assert "next\tcolumn\nsecond line" in result.stderr
     assert not {"\x1b", "\x07", "\x9b", "\r"} & set(result.stderr)
     assert sign_in.calls == []
+
+
+def test_a_key_split_by_a_control_character_in_a_401_body_stays_redacted(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    key: Final = "sk-" + "a1b2c3d4" * 4
+    requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, text=f"refused {key[:12]}\x07{key[12:]}")
+
+    result: Final = _lite(
+        ["keys", "generate"], secret_vault_factory(), FakeBrowserSignIn(_credential()), ["--api-key", "sk-explicit"]
+    )
+
+    assert result.exit_code == 1
+    assert "refused" in result.stderr
+    assert key not in result.stderr
+
+
+def test_a_401_body_of_only_control_characters_still_gives_a_reason(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, text="\x1b\x07\r\x9b")
+
+    result: Final = _lite(
+        ["keys", "generate"], secret_vault_factory(), FakeBrowserSignIn(_credential()), ["--api-key", "sk-explicit"]
+    )
+
+    assert result.exit_code == 1
+    assert result.stderr.partition("The proxy said: ")[2].strip()
 
 
 def test_a_failed_sign_in_names_the_reason_and_points_at_lite_login(

@@ -210,11 +210,15 @@ def _attempt_with_newer_stored_key(
     return _attempt_with_key(run, ctx, stored_key)
 
 
+def _printable(text: str) -> str:
+    return _TERMINAL_CONTROL_CHARACTERS.sub("", text).strip()
+
+
 def _proxy_reason(error: UnauthorizedError) -> str:
     original: Final = error.orig_exception
     response: Final = original.response if isinstance(original, requests.HTTPError) else None
-    body: Final = response.text.strip() if response is not None else ""
-    reason: Final = _TERMINAL_CONTROL_CHARACTERS.sub("", redact_string(body) if body else str(error))
+    body: Final = response.text if response is not None else ""
+    reason: Final = redact_string(_printable(body) or _printable(str(error)))
     return reason if len(reason) <= _PROXY_REASON_CHARS else f"{reason[:_PROXY_REASON_CHARS]}..."
 
 
