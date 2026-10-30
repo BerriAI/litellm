@@ -381,14 +381,17 @@ LOW_OUTPUT_CEILING: Final = {**WIDE_WINDOW, "max_output_tokens": 1000}
 
 
 def _priced_gemini_hold(
-    model_info: dict[str, object], generation_config: dict[str, object], input_tokens: int = 10
+    model_info: dict[str, object],
+    generation_config: dict[str, object],
+    input_tokens: int = 10,
+    model: str = "vertex_ai/gemini-3.8-flash",
 ) -> float | None:
     router: Final = Router(
         model_list=[
             {
                 "model_name": "assistant",
                 "litellm_params": {
-                    "model": "vertex_ai/gemini-3.8-flash",
+                    "model": model,
                     "input_cost_per_token": 1e-6,
                     "output_cost_per_token": 4e-6,
                 },
@@ -445,6 +448,26 @@ def test_candidates_never_hold_less_than_one_candidate() -> None:
     one_candidate_hold: Final = _priced_gemini_hold(narrow_window, {"maxOutputTokens": 50_000})
     assert one_candidate_hold is not None
     assert _priced_gemini_hold(narrow_window, {"maxOutputTokens": 50_000, "candidateCount": 2}) == one_candidate_hold
+
+
+NO_WINDOW_MODEL: Final = "vertex_ai/gemini-without-cost-map-entry"
+
+
+@pytest.mark.parametrize(
+    ("generation_config", "same_hold_config"),
+    (
+        ({"maxOutputTokens": 4000, "candidateCount": 2}, {"maxOutputTokens": 8000}),
+        ({"maxOutputTokens": 8000, "candidateCount": 4}, {}),
+        ({"candidateCount": 1_000_000}, {}),
+    ),
+)
+def test_candidates_of_a_model_with_no_context_window_hold_up_to_one_uncapped_candidate(
+    generation_config: dict[str, object], same_hold_config: dict[str, object]
+) -> None:
+    no_window: Final = {"max_output_tokens": 100_000}
+    expected_hold: Final = _priced_gemini_hold(no_window, same_hold_config, model=NO_WINDOW_MODEL)
+    assert expected_hold is not None
+    assert _priced_gemini_hold(no_window, generation_config, model=NO_WINDOW_MODEL) == expected_hold
 
 
 @pytest.mark.parametrize("count", UNPRICEABLE_COUNTS)

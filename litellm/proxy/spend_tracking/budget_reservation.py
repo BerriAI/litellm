@@ -1465,20 +1465,18 @@ def _max_cost_for_cost_info(
         held_output_tokens=output_tokens,
         output_tokens=output_tokens,
     )
-    main_hold: Final = _main_generate_content_hold(model_info)
-    if one_candidate_hold is None or main_hold is None:
+    hold_ceiling: Final = _candidates_hold_ceiling(model_info=model_info, counted_input_tokens=estimated_input_tokens)
+    if one_candidate_hold is None or hold_ceiling is None:
         return one_candidate_hold
-    return max(one_candidate_hold, min(candidates_hold, main_hold))
+    return max(one_candidate_hold, min(candidates_hold, hold_ceiling))
 
 
-def _main_generate_content_hold(model_info: Mapping[str, object]) -> float | None:
+def _candidates_hold_ceiling(model_info: Mapping[str, object], counted_input_tokens: int) -> float | None:
     context_window: Final = _to_int(model_info.get("max_input_tokens"))
-    if context_window is None:
-        return None
     default_output_tokens: Final = min(DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK, _model_output_ceiling(model_info))
     return _priced_hold(
         model_info=model_info,
-        input_tokens=context_window,
+        input_tokens=counted_input_tokens if context_window is None else context_window,
         held_output_tokens=default_output_tokens,
         output_tokens=default_output_tokens,
     )
