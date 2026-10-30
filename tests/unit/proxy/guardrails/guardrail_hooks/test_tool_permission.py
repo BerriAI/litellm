@@ -2015,8 +2015,21 @@ class TestToolPermissionGuardrailAnthropicMessages:
                 "allow",
                 "Tool 'functions__exec' denied by rule 'deny_functions'",
             ),
+            (
+                [
+                    {"id": "deny_exec", "tool_name": r"^exec$", "decision": "deny"},
+                    {"id": "allow_functions", "tool_type": r"^function$", "decision": "allow"},
+                ],
+                "allow",
+                "Tool 'exec' denied by rule 'deny_exec'",
+            ),
         ],
-        ids=["bare_name_deny_rule", "bare_name_allow_rule", "qualified_rule_wins_over_an_earlier_bare_rule"],
+        ids=[
+            "bare_name_deny_rule",
+            "bare_name_allow_rule",
+            "qualified_rule_wins_over_an_earlier_bare_rule",
+            "type_rule_keeps_an_earlier_bare_name_rule_in_charge",
+        ],
     )
     async def test_pre_call_judges_a_namespace_member_by_its_bare_name_when_no_rule_names_it_qualified(
         self, rules: list[dict[str, str]], default_action: Literal["allow", "deny"], detection_message: str | None

@@ -604,8 +604,11 @@ class ToolPermissionGuardrail(CustomGuardrail):
         verbose_proxy_logger.debug(message)
         return is_allowed, None, message
 
-    def _has_matching_rule(self, tool_name: str | None, tool_type: str | None) -> bool:
-        return any(self._rule_matches_tool(rule, tool_name=tool_name, tool_type=tool_type)[0] for rule in self.rules)
+    def _has_matching_name_rule(self, tool_name: str | None, tool_type: str | None) -> bool:
+        return any(
+            rule.tool_name is not None and self._rule_matches_tool(rule, tool_name=tool_name, tool_type=tool_type)[0]
+            for rule in self.rules
+        )
 
     def _check_target_permission(
         self, target: _ToolTarget, bare_names: Mapping[str, str]
@@ -614,8 +617,8 @@ class ToolPermissionGuardrail(CustomGuardrail):
         bare_name: Final = bare_names.get(name) if name is not None else None
         falls_back: Final = (
             bare_name is not None
-            and not self._has_matching_rule(name, tool_type)
-            and self._has_matching_rule(bare_name, tool_type)
+            and not self._has_matching_name_rule(name, tool_type)
+            and self._has_matching_name_rule(bare_name, tool_type)
         )
         return self._check_tool_permission(bare_name if falls_back else name, tool_type)
 
