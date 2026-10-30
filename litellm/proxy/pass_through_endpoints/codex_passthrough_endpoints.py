@@ -43,7 +43,6 @@ from litellm.proxy.response_api_endpoints.endpoints import responses_api
 from litellm.responses.additional_tools import with_additional_tools_hoisted
 from litellm.responses.litellm_completion_transformation.reasoning_items import is_other_provider_reasoning_item
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import EncryptedContentAffinityCheck
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.router import Deployment
 from litellm.types.utils import LlmProviders
@@ -339,13 +338,6 @@ def _with_wrapped_reasoning(body: Mapping[str, object]) -> Mapping[str, object]:
     }
 
 
-def _router_pins_encrypted_reasoning(model: str, llm_router: "Router") -> bool:
-    return any(
-        isinstance(callback, EncryptedContentAffinityCheck) and callback.is_enabled_for_model_group(model)
-        for callback in llm_router.optional_callbacks or ()
-    )
-
-
 def _with_reasoning_the_targets_can_decrypt(
     body: Mapping[str, object], model: str, llm_router: "Router", deployments: tuple[Deployment, ...]
 ) -> Mapping[str, object]:
@@ -353,17 +345,9 @@ def _with_reasoning_the_targets_can_decrypt(
         items: Final = _INPUT_ITEMS.validate_python(body.get("input"))
     except ValidationError:
         return body
-    targets: Final = tuple(deployment.model_dump(exclude_none=True) for deployment in deployments)
-    target_groups: Final = (
-        (targets,) if _router_pins_encrypted_reasoning(model, llm_router) else tuple((target,) for target in targets)
-    )
-    kept: Final = list(items)
-    for group in target_groups:
-        EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
-            llm_router, kept, None, group, unmarked_origin=None
-        )
+    kept: Final = llm_router.registry().decryptable_reasoning(model, items, deployments)
     if body.get("store") is True:
-        return {**body, "input": kept}
+        return {**body, "input": list(kept)}
     resolvable: Final = (_without_unpersisted_reasoning_reference(item) for item in kept)
     return {**body, "input": [item for item in resolvable if item is not None]}
 
