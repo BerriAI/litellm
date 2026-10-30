@@ -32,13 +32,6 @@ def _proxy_settlement_table() -> BackgroundResponseSettlementTable | None:
 
 @dataclass(frozen=True, slots=True)
 class PrismaBackgroundResponseSettlementStore:
-    """
-    The primary key lets exactly one call across all replicas insert a response id, and that call bills it.
-    Skipping duplicates keeps a repeat read from raising a unique violation in Postgres.
-    With no database, a failed insert, or an insert slower than the timeout the call still bills, since a lost charge
-    cannot be recovered and the claim runs before the client gets its response.
-    """
-
     table: Callable[[], BackgroundResponseSettlementTable | None] = _proxy_settlement_table
     timeout_seconds: float = BACKGROUND_RESPONSE_SETTLEMENT_TIMEOUT_SECONDS
 

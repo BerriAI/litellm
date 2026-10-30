@@ -1,9 +1,11 @@
 import asyncio
+import functools
 import json
+from collections.abc import Callable, Coroutine
 from contextlib import suppress
 from datetime import datetime
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, Final, ParamSpec
 from urllib.parse import urlparse
 
 import anyio
@@ -55,10 +57,43 @@ from .llm_provider_handlers.transcribe_passthrough_logging_handler import (
 from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
+from .managed_id_codec import decode as decode_managed_id
 from .upstream_usage_headers import has_upstream_reported_usage
 
 cohere_passthrough_logging_handler: Final = CoherePassthroughLoggingHandler()
 _RESPONSE_BODY: Final = TypeAdapter(dict[str, object])
+
+
+async def complete_despite_cancellation(work: Coroutine[object, object, None]) -> None:
+    pending: Final = asyncio.create_task(work)
+    try:
+        await asyncio.shield(pending)
+    except asyncio.CancelledError:
+        with anyio.CancelScope(shield=True):
+            while not pending.done():
+                with suppress(asyncio.CancelledError):
+                    await asyncio.shield(pending)
+            pending.result()
+        raise
+
+
+_HandlerParams: Final = ParamSpec("_HandlerParams")
+
+
+def _finishes_despite_cancellation_when_finalizing(
+    handler: Callable[_HandlerParams, Coroutine[object, object, None]],
+) -> Callable[_HandlerParams, Coroutine[object, object, None]]:
+    @functools.wraps(handler)
+    async def handle(
+        *args: _HandlerParams.args,
+        **kwargs: _HandlerParams.kwargs,  # kwargs-ok: ParamSpec forwards the wrapped handler's exact signature
+    ) -> None:
+        if kwargs.get("finalize_before_dispatch") is True:
+            await complete_despite_cancellation(handler(*args, **kwargs))
+            return
+        await handler(*args, **kwargs)
+
+    return handle
 
 
 def _safe_response_text(httpx_response: httpx.Response) -> str:
@@ -173,16 +208,7 @@ class PassThroughEndpointLogging:
                 )
                 bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
-            pending: Final = asyncio.create_task(finalize_and_enqueue())
-            try:
-                await asyncio.shield(pending)
-            except asyncio.CancelledError:
-                with anyio.CancelScope(shield=True):
-                    while not pending.done():
-                        with suppress(asyncio.CancelledError):
-                            await asyncio.shield(pending)
-                    pending.result()
-                raise
+            await complete_despite_cancellation(finalize_and_enqueue())
             return
 
         await logging_obj.dispatch_success_handlers(
@@ -199,7 +225,9 @@ class PassThroughEndpointLogging:
     async def background_response_settled_before(self, settled_response_id: str | None) -> bool:
         if settled_response_id is None:
             return False
-        return not await self.background_response_settlement.claim(settled_response_id)
+        managed_id: Final = decode_managed_id(settled_response_id)
+        upstream_response_id: Final = settled_response_id if managed_id is None else managed_id.raw_provider_id
+        return not await self.background_response_settlement.claim(upstream_response_id)
 
     def normalize_llm_passthrough_logging_payload(
         self,
@@ -468,6 +496,7 @@ class PassThroughEndpointLogging:
         return_dict["kwargs"] = kwargs
         return return_dict
 
+    @_finishes_despite_cancellation_when_finalizing
     async def pass_through_async_success_handler(
         self,
         httpx_response: httpx.Response,
@@ -483,7 +512,7 @@ class PassThroughEndpointLogging:
         custom_llm_provider: str | None = None,
         finalize_before_dispatch: bool = False,
         **kwargs,
-    ):
+    ) -> None:
         standard_logging_response_object: PassThroughEndpointLoggingResultValues | None = None
         logging_obj.model_call_details["passthrough_logging_payload"] = passthrough_logging_payload
         if self.is_tinyfish_route(url_route, custom_llm_provider):

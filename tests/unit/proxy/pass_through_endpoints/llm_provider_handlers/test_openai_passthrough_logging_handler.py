@@ -28,6 +28,7 @@ from litellm.proxy.pass_through_endpoints.background_response_settlement import 
     PrismaBackgroundResponseSettlementStore,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.proxy.pass_through_endpoints.managed_id_codec import new_managed_id
 from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamContext, PassThroughStreamingHandler
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
@@ -2207,12 +2208,25 @@ class _StalledSettlementTable:
         return await self.table.create_many(data, skip_duplicates=skip_duplicates)
 
 
+@dataclass(frozen=True, slots=True)
+class _SlowAckSettlementTable:
+    table: _SettlementTable
+    inserted: asyncio.Event
+
+    async def create_many(self, data: Sequence[Mapping[str, str]], *, skip_duplicates: bool) -> int:
+        inserted_count: Final = await self.table.create_many(data, skip_duplicates=skip_duplicates)
+        self.inserted.set()
+        await asyncio.sleep(0.3)
+        return inserted_count
+
+
 def _settling_passthrough_logging(
-    table: _SettlementTable | _UnreachableSettlementTable | _StalledSettlementTable | None,
+    table: _SettlementTable | _UnreachableSettlementTable | _StalledSettlementTable | _SlowAckSettlementTable | None,
+    timeout_seconds: float = 0.05,
 ) -> PassThroughEndpointLogging:
     return PassThroughEndpointLogging(
         background_response_settlement=PrismaBackgroundResponseSettlementStore(
-            table=lambda: table, timeout_seconds=0.05
+            table=lambda: table, timeout_seconds=timeout_seconds
         )
     )
 
@@ -2413,11 +2427,28 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         *,
         passthrough_logging: PassThroughEndpointLogging | None = None,
     ) -> _LoggedCall:
-        url_route: Final = f"{base_url}{sub_route}"
         recorder: Final = _SpendRowRecorder()
-        logging_obj: Final = self._recorded_logging_obj(recorder, litellm_call_id, stream=False)
+        await self._handled_call(
+            method,
+            f"{base_url}{sub_route}",
+            request_body,
+            response_body,
+            self._recorded_logging_obj(recorder, litellm_call_id, stream=False),
+            passthrough_logging or PassThroughEndpointLogging(),
+        )
+        return await asyncio.wait_for(recorder.call, timeout=5)
 
-        await (passthrough_logging or PassThroughEndpointLogging()).pass_through_async_success_handler(
+    @staticmethod
+    async def _handled_call(
+        method: str,
+        url_route: str,
+        request_body: dict[str, object],
+        response_body: dict[str, object],
+        logging_obj: LiteLLMLoggingObj,
+        passthrough_logging: PassThroughEndpointLogging,
+        finalize_before_dispatch: bool = False,
+    ) -> None:
+        await passthrough_logging.pass_through_async_success_handler(
             httpx_response=httpx.Response(200, json=response_body, request=httpx.Request(method, url_route)),
             response_body=response_body,
             logging_obj=logging_obj,
@@ -2431,8 +2462,8 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
                 url=url_route, request_body=request_body, request_method=method
             ),
             custom_llm_provider="openai",
+            finalize_before_dispatch=finalize_before_dispatch,
         )
-        return await asyncio.wait_for(recorder.call, timeout=5)
 
     async def _streamed_call(
         self,
@@ -2465,9 +2496,23 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         litellm_call_id: str,
         passthrough_logging: PassThroughEndpointLogging,
     ) -> object:
+        logging_obj: Final = self._failed_stream_logging_obj(litellm_call_id)
+        await self._failed_stream(logging_obj, sub_route, raw_bytes, passthrough_logging)
+        await GLOBAL_LOGGING_WORKER.flush()
+        return logging_obj.model_call_details.get("response_cost")
+
+    def _failed_stream_logging_obj(self, litellm_call_id: str) -> LiteLLMLoggingObj:
         logging_obj: Final = self._recorded_logging_obj(_SpendRowRecorder(), litellm_call_id, stream=True)
         logging_obj.model_call_details["custom_llm_provider"] = "openai"
+        return logging_obj
 
+    @staticmethod
+    async def _failed_stream(
+        logging_obj: LiteLLMLoggingObj,
+        sub_route: str,
+        raw_bytes: list[bytes],
+        passthrough_logging: PassThroughEndpointLogging,
+    ) -> None:
         await PassThroughStreamingHandler.schedule_stream_failure_logging(
             litellm_logging_obj=logging_obj,
             endpoint_type=EndpointType.OPENAI,
@@ -2476,8 +2521,6 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
             exception=httpx.RemoteProtocolError("peer closed connection without sending complete message body"),
             stream_context=PassThroughStreamContext(passthrough_logging, f"{RESPONSES_URL}{sub_route}", DISPATCH_TIME),
         )
-        await GLOBAL_LOGGING_WORKER.flush()
-        return logging_obj.model_call_details.get("response_cost")
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -2555,7 +2598,16 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         assert settlement_table.settled_response_ids == {STORED_RESPONSE_ID}
 
     @pytest.mark.asyncio
-    async def test_a_streamed_background_create_bills_once_and_its_later_retrieve_does_not(self, local_model_cost_map):
+    @pytest.mark.parametrize(
+        "retrieved_id",
+        [
+            pytest.param(STORED_RESPONSE_ID, id="raw_id"),
+            pytest.param(new_managed_id("openai", STORED_RESPONSE_ID), id="managed_id"),
+        ],
+    )
+    async def test_a_streamed_background_create_bills_once_and_its_later_retrieve_does_not(
+        self, local_model_cost_map, retrieved_id: str
+    ):
         passthrough_logging: Final = _settling_passthrough_logging(_SettlementTable())
         finished: Final = _stored_response("completed", True, RESPONSES_USAGE)
 
@@ -2570,13 +2622,51 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
             "GET",
             f"/{STORED_RESPONSE_ID}",
             {},
-            finished,
+            {**finished, "id": retrieved_id},
             "4b7e9c25-1a6d-4f38-9e02-d8c3a5f1b760",
             passthrough_logging=passthrough_logging,
         )
 
         assert streamed_create.spend_row["spend"] > 0
         assert not retrieve.spend_row["spend"]
+
+    @pytest.mark.asyncio
+    async def test_a_finished_read_cancelled_while_it_settles_still_bills_and_its_later_read_does_not(
+        self, local_model_cost_map
+    ):
+        settled: Final = asyncio.Event()
+        passthrough_logging: Final = _settling_passthrough_logging(
+            _SlowAckSettlementTable(_SettlementTable(), settled), timeout_seconds=2
+        )
+        finished: Final = _stored_response("completed", True, RESPONSES_USAGE)
+        recorder: Final = _SpendRowRecorder()
+        cancelled_read: Final = asyncio.create_task(
+            self._handled_call(
+                "GET",
+                f"{RESPONSES_URL}/{STORED_RESPONSE_ID}",
+                {},
+                finished,
+                self._recorded_logging_obj(recorder, "6c3e8a14-2f7b-4d95-b1e0-a8d4c6f2e735", stream=False),
+                passthrough_logging,
+                finalize_before_dispatch=True,
+            )
+        )
+        await settled.wait()
+        cancelled_read.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled_read
+        first: Final = await asyncio.wait_for(recorder.call, timeout=5)
+        later: Final = await self._logged_call(
+            "GET",
+            f"/{STORED_RESPONSE_ID}",
+            {},
+            finished,
+            "d1a7f3c9-5e2b-4806-9c4d-3b8e6f0a2d17",
+            passthrough_logging=passthrough_logging,
+        )
+
+        assert first.spend_row["spend"] > 0
+        assert not later.spend_row["spend"]
 
     @pytest.mark.asyncio
     async def test_a_background_create_stream_cut_before_it_finishes_leaves_the_bill_to_the_finished_retrieve(
@@ -2671,6 +2761,29 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
 
         assert retrieve.spend_row["spend"] > 0
         assert not failed_stream_cost
+
+    @pytest.mark.asyncio
+    async def test_a_resumed_stream_that_fails_and_is_cancelled_while_it_settles_still_bills(self, local_model_cost_map):
+        settled: Final = asyncio.Event()
+        passthrough_logging: Final = _settling_passthrough_logging(
+            _SlowAckSettlementTable(_SettlementTable(), settled), timeout_seconds=2
+        )
+        logging_obj: Final = self._failed_stream_logging_obj("0e5b9d27-8c4a-4f13-a6e2-7d1f3b9c5a48")
+        cancelled_stream: Final = asyncio.create_task(
+            self._failed_stream(
+                logging_obj,
+                f"/{STORED_RESPONSE_ID}?stream=true",
+                _completed_stream_bytes(_stored_response("completed", True, RESPONSES_USAGE)),
+                passthrough_logging,
+            )
+        )
+        await settled.wait()
+        cancelled_stream.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled_stream
+        await GLOBAL_LOGGING_WORKER.flush()
+
+        assert logging_obj.model_call_details.get("response_cost", 0) > 0
 
     @pytest.mark.asyncio
     async def test_a_resumed_stream_that_fails_after_it_finished_bills_once_and_its_later_retrieve_does_not(
