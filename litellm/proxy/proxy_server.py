@@ -777,6 +777,9 @@ from litellm.proxy.management_endpoints.session_endpoints import (
     router as session_management_router,
 )
 from litellm.proxy.management_endpoints.sso.saml_sso import SAML_AUTHN_REQUEST_TTL_SECONDS
+from litellm.proxy.management_endpoints.subscription_accounts import (
+    router as subscription_accounts_router,
+)
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     router as tag_management_router,
 )
@@ -21769,6 +21772,7 @@ app.include_router(memory_router)
 app.include_router(lens_router)
 app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)
+app.include_router(subscription_accounts_router)
 app.include_router(prompt_caching_requests_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
