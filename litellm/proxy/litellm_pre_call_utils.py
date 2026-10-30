@@ -3188,9 +3188,9 @@ def _fallback_lists(
 ) -> tuple[Sequence[object], ...]:
     """Every fallback list the router can route this request through: the three
     router-level lists, the same three keys from the request body (which replace
-    the router's when present, so the union is the safe superset), and the
-    key/team ``router_settings.fallbacks`` the proxy prefers over router-level
-    fallbacks in ``_configured_fallbacks``."""
+    the router's when present, so the union is the safe superset), and the same
+    three keys from key/team ``router_settings``, which the proxy forwards into
+    the request after this discovery runs."""
     lists: Final[list[Sequence[object]]] = []  # mutable-ok: accumulates each fallback list found
     configured: Final = llm_router.settings()
     for router_list in (
@@ -3205,11 +3205,12 @@ def _fallback_lists(
         if isinstance(entries, list):
             lists.append(cast("Sequence[object]", entries))  # cast-ok: request fallback lists hold mixed entry shapes
     for settings in (router_settings, team_router_settings):
-        key_fallbacks: object = settings.get("fallbacks") if settings is not None else None
-        if isinstance(key_fallbacks, list):
-            lists.append(
-                cast("Sequence[object]", key_fallbacks)  # cast-ok: settings fallback lists hold mixed entry shapes
-            )
+        for key in _REQUEST_FALLBACK_KEYS:
+            key_fallbacks: object = settings.get(key) if settings is not None else None
+            if isinstance(key_fallbacks, list):
+                lists.append(
+                    cast("Sequence[object]", key_fallbacks)  # cast-ok: settings fallback lists hold mixed entry shapes
+                )
     return tuple(lists)
 
 
