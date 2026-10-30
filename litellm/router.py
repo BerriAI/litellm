@@ -291,6 +291,11 @@ from litellm.router_utils.cooldown_handlers import (
     mark_deployment_selection_failure,
     set_cooldown_deployments,
 )
+from litellm.router_utils.default_litellm_params import (
+    deployment_sets_litellm_param,
+    params_sent_to_deployment,
+    router_defaults_for_deployment,
+)
 from litellm.router_utils.deployment_pricing import deployment_pricing_models
 from litellm.router_utils.embedding_batch_size_check import (
     async_log_rejection_before_provider_call,
@@ -715,8 +720,7 @@ def _drops_malformed_request_tools(
 ) -> bool:
     if isinstance(request.get("tools") or [], (list, tuple)) or not deployment_params.get("tools"):
         return False
-    set_defaults: Final = {name: value for name, value in defaults.items() if value is not None}
-    return drop_policy({**deployment_params, **set_defaults, **request}).drops("tools")
+    return drop_policy(params_sent_to_deployment(deployment_params, defaults, request)).drops("tools")
 
 
 def _merged_tools(deployment_tools: Sequence[object], request_tools: object) -> list[object] | None:
@@ -4123,14 +4127,11 @@ class Router(DeprecatedRouterMembers):
     ) -> Mapping[str, object]:
         """The request as the deployment received it, merged in the order _update_kwargs_with_deployment applies."""
         deployment_params: Final = deployment.litellm_params.model_dump(exclude_none=True) if deployment else {}
-        default_params: Final = _REQUEST_KWARGS_ADAPTER.validate_python(self._core_default_litellm_params)
-        defaults: Final = {key: value for key, value in default_params.items() if value is not None}
-        deployment_tool_choice: Final = (
-            {"tool_choice": deployment_params["tool_choice"]}
-            if deployment_params.get("tool_choice") is not None
-            else {}
+        return params_sent_to_deployment(
+            deployment_params,
+            _REQUEST_KWARGS_ADAPTER.validate_python(self._core_default_litellm_params),
+            request_kwargs,
         )
-        return MappingProxyType({**deployment_params, **defaults, **deployment_tool_choice, **request_kwargs})
 
     def _names_deployment_that_cannot_continue(self, target: object) -> bool:
         name: Final = fallback_target_name(target)
@@ -5028,25 +5029,21 @@ class Router(DeprecatedRouterMembers):
             exception.retry_skip_deployment_id = deployment_id  # pyright: ignore[reportAttributeAccessIssue]  # dynamic stamp, read by _deployment_ids_to_skip_on_retry
 
     def _update_kwargs_with_default_litellm_params(
-        self, kwargs: dict, metadata_variable_name: str | None = "metadata"
+        self,
+        kwargs: dict,
+        deployment_params: Mapping[str, object],
+        metadata_variable_name: str | None = "metadata",
     ) -> None:
         """
-        Adds default litellm params to kwargs, if set.
+        Adds each router default the request does not send and the deployment does not set itself.
 
-        Handles inserting this as either "metadata" or "litellm_metadata" depending on the metadata_variable_name
+        Metadata defaults always merge in, as either "metadata" or "litellm_metadata" per metadata_variable_name.
         """
-        # 1) copy your defaults and pull out metadata
-        defaults: Final = dict(without_retrieve_stream_defaults(self._core_default_litellm_params, kwargs))
-        metadata_defaults: Final = defaults.pop("metadata", {}) or {}
-
-        # 2) add any non-metadata defaults that aren't already in kwargs
-        for key, value in defaults.items():
-            if value is None:
-                continue
+        defaults: Final = without_retrieve_stream_defaults(self._core_default_litellm_params, kwargs)
+        non_metadata_defaults: Final = {key: value for key, value in defaults.items() if key != "metadata"}
+        for key, value in router_defaults_for_deployment(non_metadata_defaults, deployment_params).items():
             kwargs.setdefault(key, value)
-
-        # 3) merge in metadata, this handles inserting this as either "metadata" or "litellm_metadata"
-        kwargs.setdefault(metadata_variable_name, {}).update(metadata_defaults)
+        kwargs.setdefault(metadata_variable_name, {}).update(defaults.get("metadata") or {})
 
     def _handle_clientside_credential(
         self, deployment: dict, kwargs: dict, function_name: str | None = None
@@ -5302,20 +5299,14 @@ class Router(DeprecatedRouterMembers):
                 data=_DEPLOYMENT_PARAMS_ADAPTER.validate_python(deployment["litellm_params"]),
             )
 
-        deployment_litellm_params: Final = _DEPLOYMENT_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])
         if router_config_requests_stream_usage(
             _REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
-            (
-                _LITELLM_PARAMS_ADAPTER.validate_python(
-                    deployment_litellm_params
-                    if isinstance(deployment_litellm_params, Mapping)
-                    else deployment_litellm_params.model_dump(exclude_none=True)
-                ),
-                defaults,
-            ),
+            (params_sent_to_deployment(deployment_context, defaults, {}),),
         ):
             kwargs[STREAM_USAGE_INJECTED_FIELD] = True
-        self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
+        self._update_kwargs_with_default_litellm_params(
+            kwargs=kwargs, deployment_params=deployment_context, metadata_variable_name=metadata_variable_name
+        )
         hop_kwargs: Final = _FALLBACK_HOP_ADAPTER.validate_python(kwargs)
         if _is_fallback_hop(hop_kwargs):
             EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
@@ -6237,13 +6228,10 @@ class Router(DeprecatedRouterMembers):
                 )
 
             data: Final = deployment["litellm_params"].copy()
-            for k, v in self._core_default_litellm_params.items():
-                if k not in kwargs:  # prioritize model-specific params > default router params
-                    kwargs[k] = v
-                elif k == "metadata":
-                    kwargs[k].update(v)
+            self._update_kwargs_with_default_litellm_params(
+                kwargs=kwargs, deployment_params=_LITELLM_PARAMS_ADAPTER.validate_python(data)
+            )
 
-            # call via litellm.completion()
             return litellm.text_completion(
                 **{**data, "prompt": prompt, "caching": self._core_cache_responses, **kwargs}
             )
@@ -16528,16 +16516,8 @@ class Router(DeprecatedRouterMembers):
         return tuple(
             key
             for key in forwarded_keys
-            if isinstance(key, str) and Router._deployment_sets_litellm_param(deployment_litellm_params, key)
+            if isinstance(key, str) and deployment_sets_litellm_param(deployment_litellm_params, key)
         )
-
-    @staticmethod
-    def _deployment_sets_litellm_param(deployment_litellm_params: Mapping[str, object], key: str) -> bool:
-        value: Final = deployment_litellm_params.get(key)
-        if value is None:
-            return False
-        field: Final = LiteLLM_Params.model_fields.get(key)
-        return field is None or value != field.default
 
     def _consumed_request_tags_stamp(
         self,

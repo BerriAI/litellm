@@ -194,6 +194,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
     get_hidden_params_dict,
 )
 from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.router_utils.default_litellm_params import params_sent_to_deployment
 from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
@@ -15278,7 +15279,7 @@ def _count_context_management(
     )
     router_defaults: Final = _router_default_litellm_params(llm_router)
     sent_params: Final = tuple(
-        {**deployment["litellm_params"], **router_defaults, **request_litellm_params}
+        params_sent_to_deployment(deployment["litellm_params"], router_defaults, request_litellm_params)
         for deployment in llm_router.registry().deployments(
             inference_model if isinstance(inference_model, str) else model, source="routable"
         )
@@ -15302,7 +15303,7 @@ def _count_drop_policy(deployment: Mapping[str, object] | None, responses_reques
     router_defaults: Final[Mapping[str, object]] = (
         {} if llm_router is None else _router_default_litellm_params(llm_router)
     )
-    return drop_policy({**litellm_params, **router_defaults, **responses_request})
+    return drop_policy(params_sent_to_deployment(litellm_params, router_defaults, responses_request))
 
 
 def _native_responses_count(
@@ -15473,7 +15474,11 @@ async def _count_request_tokens(
         if _model is not None:
             model_to_use = _model
 
-    sent_params: Final[Mapping[str, object]] = {**_router_default_litellm_params(llm_router), **request_litellm_params}
+    sent_params: Final = params_sent_to_deployment(
+        _DEPLOYMENT_LITELLM_PARAMS.validate_python((deployment or {}).get("litellm_params") or {}),
+        _router_default_litellm_params(llm_router),
+        request_litellm_params,
+    )
     count_deployment: Final = _deployment_with_request_drop_params(deployment, sent_params.get("drop_params"))
     conversation_empty: Final = not messages and not contents
     if prompt and not conversation_empty and not deployment_drops_params(count_deployment):

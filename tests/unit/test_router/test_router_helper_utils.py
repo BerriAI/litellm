@@ -390,7 +390,7 @@ def test_update_kwargs_with_default_litellm_params(model_list):
         default_litellm_params={"api_key": "test", "metadata": {"key": "value"}},
     )
     kwargs: dict = {"metadata": {"key2": "value2"}}
-    router._update_kwargs_with_default_litellm_params(kwargs=kwargs)
+    router._update_kwargs_with_default_litellm_params(kwargs=kwargs, deployment_params={})
     assert kwargs["api_key"] == "test"
     assert kwargs["metadata"]["key"] == "value"
     assert kwargs["metadata"]["key2"] == "value2"

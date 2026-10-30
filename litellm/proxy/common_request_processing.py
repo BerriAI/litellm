@@ -146,6 +146,7 @@ from litellm.router_api import RoutingContext
 from litellm.router_strategy.auto_router.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.router_utils.common_utils import resolve_model_group_alias, resolve_served_model
+from litellm.router_utils.default_litellm_params import params_sent_to_deployment
 from litellm.types.extraction import ExtractionResponse
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
@@ -743,14 +744,16 @@ def _router_defaults(llm_router: Router | None) -> Mapping[str, object]:
 def counted_drop_policies(
     data: Mapping[str, object], llm_router: Router | None, team_id: str | None
 ) -> tuple[DropPolicy, ...]:
-    requested: Final = {**_router_defaults(llm_router), **data}
+    router_defaults: Final = _router_defaults(llm_router)
     model: Final = data.get("model")
     deployments: Final = (
         _named_deployments(llm_router, model, team_id) if llm_router is not None and isinstance(model, str) else ()
     )
     if not deployments:
-        return (drop_policy(requested), _UNSEEN_DEPLOYMENT)
-    return tuple(drop_policy({**deployment, **requested}) for deployment in deployments)
+        return (drop_policy({**router_defaults, **data}), _UNSEEN_DEPLOYMENT)
+    return tuple(
+        drop_policy(params_sent_to_deployment(deployment, router_defaults, data)) for deployment in deployments
+    )
 
 
 def resolve_counted_tool_fields(

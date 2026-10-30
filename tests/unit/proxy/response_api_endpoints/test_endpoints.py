@@ -4924,6 +4924,28 @@ class TestResponsesInputTokens:
         assert counter.await_args.kwargs["request"].tools is None
         assert "tools" not in counter.await_args.kwargs["responses_request"]
 
+    @pytest.mark.parametrize(
+        ("deployment_drop_params", "expected_status"),
+        [({}, 200), ({"drop_params": False}, 400)],
+        ids=["router-default-drops", "deployment-keeps-over-router-default"],
+    )
+    def test_malformed_tools_follow_the_deployment_drop_params_over_the_router_default(
+        self, deployment_drop_params: dict[str, bool], expected_status: int
+    ) -> None:
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5.6",
+                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-test", **deployment_drop_params},
+                }
+            ],
+            default_litellm_params={"drop_params": True},
+        )
+
+        response, _ = self._post_input_tokens({"model": "gpt-5.6", "input": "hi", "tools": 5}, llm_router=router)
+
+        assert response.status_code == expected_status, response.text
+
     def test_malformed_tools_for_a_model_outside_the_router_get_a_clean_400(self) -> None:
         router: Final = litellm.Router(
             model_list=[{"model_name": "gpt-5.2", "litellm_params": {"model": "openai/gpt-5.2", "api_key": "sk-test"}}]

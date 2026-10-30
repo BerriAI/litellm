@@ -1540,7 +1540,10 @@ def _build_log_messages(log_text: JsonValue) -> list[dict[str, JsonValue]]:
 
 
 async def _count_on_a_model_without_a_count_api(
-    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object], router_defaults: dict[str, JsonValue] | None = None
+    monkeypatch: pytest.MonkeyPatch,
+    body: Mapping[str, object],
+    router_defaults: dict[str, JsonValue] | None = None,
+    deployment_params: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> JSONResponse | dict[str, JsonValue]:
     import litellm.proxy.proxy_server as proxy_server
 
@@ -1548,7 +1551,7 @@ async def _count_on_a_model_without_a_count_api(
         model_list=[
             {
                 "model_name": "mistral-tool-result",
-                "litellm_params": {"model": "mistral/mistral-small-latest", "api_key": "sk-test"},
+                "litellm_params": {"model": "mistral/mistral-small-latest", "api_key": "sk-test", **deployment_params},
             }
         ],
         default_litellm_params=router_defaults,
@@ -1591,14 +1594,22 @@ async def test_count_tokens_without_a_count_api_counts_a_non_string_tool_result_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("body_drop_params", "expected_status"), (({}, None), ({"drop_params": False}, 400)))
-async def test_count_tokens_honors_router_default_drop_params_unless_the_body_overrides_it(
-    monkeypatch: pytest.MonkeyPatch, body_drop_params: dict[str, JsonValue], expected_status: int | None
+@pytest.mark.parametrize(
+    ("deployment_params", "body_drop_params", "expected_status"),
+    (({}, {}, None), ({}, {"drop_params": False}, 400), ({"drop_params": False}, {}, 400)),
+    ids=("router-default", "body-over-router-default", "deployment-over-router-default"),
+)
+async def test_count_tokens_honors_router_default_drop_params_unless_the_body_or_deployment_overrides_it(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_params: dict[str, JsonValue],
+    body_drop_params: dict[str, JsonValue],
+    expected_status: int | None,
 ) -> None:
     response: Final = await _count_on_a_model_without_a_count_api(
         monkeypatch,
         {"model": "mistral-tool-result", "messages": _build_log_messages(None), **body_drop_params},
         router_defaults={"drop_params": True},
+        deployment_params=deployment_params,
     )
 
     match response:
@@ -3484,10 +3495,20 @@ async def test_gemini_messages_count_tokens_counts_the_unedited_body_when_drop_p
 
 
 @pytest.mark.asyncio
-async def test_gemini_messages_count_tokens_rejects_an_invalid_edit_without_drop_params() -> None:
+@pytest.mark.parametrize(
+    ("deployment_params", "router_defaults"),
+    (({}, {}), ({"drop_params": False}, {"drop_params": True})),
+    ids=("no-drop-params", "deployment-over-router-default"),
+)
+async def test_gemini_messages_count_tokens_rejects_an_invalid_edit_without_drop_params(
+    deployment_params: dict[str, JsonValue], router_defaults: dict[str, JsonValue]
+) -> None:
     with patch.object(litellm, "drop_params", False):
         response, sent_bodies = await _count_through_the_messages_endpoint(
-            Router(model_list=[_gemini_deployment("gemini-agent", {})]),
+            Router(
+                model_list=[_gemini_deployment("gemini-agent", deployment_params)],
+                default_litellm_params=router_defaults,
+            ),
             {"model": "gemini-agent", "context_management": _INVALID_COMPACT_EDIT},
         )
 
@@ -3914,6 +3935,7 @@ async def _claude_count(
     monkeypatch: pytest.MonkeyPatch,
     deployment_params: Mapping[str, JsonValue],
     responses_request: Mapping[str, object],
+    router_defaults: dict[str, JsonValue] | None = None,
 ) -> tuple[TokenCountResponse, list[dict[str, JsonValue]]]:
     router: Final = Router(
         model_list=[
@@ -3926,7 +3948,8 @@ async def _claude_count(
                     **deployment_params,
                 },
             }
-        ]
+        ],
+        default_litellm_params=router_defaults,
     )
     monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
     bodies: Final[list[dict[str, JsonValue]]] = []  # mutable-ok: collects what the mock peer receives
@@ -3950,14 +3973,15 @@ async def _claude_count(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("deployment_params", "request_params"),
-    [({"drop_params": True}, {}), ({}, {"drop_params": True})],
-    ids=["deployment", "request"],
+    ("deployment_params", "request_params", "router_defaults"),
+    [({"drop_params": True}, {}, None), ({}, {"drop_params": True}, None), ({}, {}, {"drop_params": True})],
+    ids=["deployment", "request", "router-default"],
 )
 async def test_responses_count_on_claude_downgrades_forced_tool_choice_under_drop_params(
     monkeypatch: pytest.MonkeyPatch,
     deployment_params: Mapping[str, JsonValue],
     request_params: Mapping[str, JsonValue],
+    router_defaults: dict[str, JsonValue] | None,
 ) -> None:
     monkeypatch.setitem(litellm.model_cost, "claude-zeta-9", {"supports_forced_tool_use": False})
 
@@ -3965,6 +3989,7 @@ async def test_responses_count_on_claude_downgrades_forced_tool_choice_under_dro
         monkeypatch,
         deployment_params,
         {"input": "Weather?", "tools": [_WEATHER_TOOL], "tool_choice": "required", **request_params},
+        router_defaults,
     )
 
     assert (result.error, result.total_tokens) == (False, 77)
@@ -3973,13 +3998,25 @@ async def test_responses_count_on_claude_downgrades_forced_tool_choice_under_dro
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_params", "router_defaults"),
+    [({}, None), ({"drop_params": False}, {"drop_params": True})],
+    ids=["no-drop-params", "deployment-over-router-default"],
+)
 async def test_responses_count_on_claude_rejects_forced_tool_choice_without_drop_params(
     monkeypatch: pytest.MonkeyPatch,
+    deployment_params: Mapping[str, JsonValue],
+    router_defaults: dict[str, JsonValue] | None,
 ) -> None:
     monkeypatch.setitem(litellm.model_cost, "claude-zeta-9", {"supports_forced_tool_use": False})
 
     with pytest.raises(ProxyException) as rejected:
-        await _claude_count(monkeypatch, {}, {"input": "Weather?", "tools": [_WEATHER_TOOL], "tool_choice": "required"})
+        await _claude_count(
+            monkeypatch,
+            deployment_params,
+            {"input": "Weather?", "tools": [_WEATHER_TOOL], "tool_choice": "required"},
+            router_defaults,
+        )
 
     assert (rejected.value.code, "forced tool use" in rejected.value.message) == ("400", True)
 

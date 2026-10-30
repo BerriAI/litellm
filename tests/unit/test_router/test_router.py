@@ -271,6 +271,7 @@ def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
     # invoke the helper
     router._update_kwargs_with_default_litellm_params(
         kwargs=kwargs,
+        deployment_params={},
         metadata_variable_name="litellm_metadata",
     )
 
@@ -282,6 +283,116 @@ def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
 
     # 3) metadata lands under "metadata"
     assert kwargs["litellm_metadata"] == {"baz": 123}
+
+
+_ROUTER_DEFAULT_LOCATION: Final = "us-east5"
+
+
+def _vertex_router_with_a_default_location(model: str, deployment_location: str | None) -> Router:
+    location: Final = {} if deployment_location is None else {"vertex_location": deployment_location}
+    return Router(
+        model_list=[
+            {"model_name": "vtx", "litellm_params": {"model": model, "vertex_project": "qa-project", **location}}
+        ],
+        default_litellm_params={"vertex_location": _ROUTER_DEFAULT_LOCATION},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_location", "request_location", "sent_location"),
+    [("eu", None, "eu"), (None, None, _ROUTER_DEFAULT_LOCATION), ("eu", "asia-northeast1", "asia-northeast1")],
+    ids=["deployment-over-router-default", "router-default-fills-unset", "request-over-both"],
+)
+async def test_acompletion_sends_the_deployment_value_over_a_conflicting_router_default(  # test-quality-ok: the SDK call is where merged params leave the router, Vertex HTTP needs Google auth
+    deployment_location: str | None, request_location: str | None, sent_location: str
+) -> None:
+    router: Final = _vertex_router_with_a_default_location("vertex_ai/claude-haiku-5-5", deployment_location)
+    request_params: Final = {} if request_location is None else {"vertex_location": request_location}
+
+    with patch.object(litellm, "acompletion", wraps=litellm.acompletion) as provider_call:
+        await router.acompletion(
+            model="vtx", messages=[{"role": "user", "content": "Say hi"}], mock_response="hi", **request_params
+        )
+
+    assert provider_call.call_args.kwargs["vertex_location"] == sent_location
+
+
+@pytest.mark.parametrize(
+    ("deployment_location", "sent_location"),
+    [("eu", "eu"), (None, _ROUTER_DEFAULT_LOCATION)],
+    ids=["deployment-over-router-default", "router-default-fills-unset"],
+)
+def test_text_completion_sends_the_deployment_value_over_a_conflicting_router_default(  # test-quality-ok: the SDK call is where merged params leave the router, Vertex HTTP needs Google auth
+    deployment_location: str | None, sent_location: str
+) -> None:
+    router: Final = _vertex_router_with_a_default_location("vertex_ai/claude-haiku-5-5", deployment_location)
+
+    with patch.object(litellm, "text_completion") as provider_call:
+        router.text_completion(model="vtx", prompt="Say hi")
+
+    assert provider_call.call_args.kwargs["vertex_location"] == sent_location
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_location", "sent_location"),
+    [("eu", "eu"), (None, _ROUTER_DEFAULT_LOCATION)],
+    ids=["deployment-over-router-default", "router-default-fills-unset"],
+)
+async def test_aembedding_sends_the_deployment_value_over_a_conflicting_router_default(  # test-quality-ok: the SDK call is where merged params leave the router, Vertex HTTP needs Google auth
+    deployment_location: str | None, sent_location: str
+) -> None:
+    router: Final = _vertex_router_with_a_default_location("vertex_ai/gemini-embedding-2", deployment_location)
+
+    with patch.object(litellm, "aembedding", wraps=litellm.aembedding) as provider_call:
+        await router.aembedding(model="vtx", input=["Say hi"], mock_response=[0.1, 0.2])
+
+    assert provider_call.call_args.kwargs["vertex_location"] == sent_location
+
+
+def _embedding_router(deployment_params: Mapping[str, int]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "embed",
+                "litellm_params": {"model": "openai/text-embedding-3-large", "api_key": "sk-test", **deployment_params},
+            }
+        ],
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("deployment_max_retries", "provider_hits"), [(1, 2), (3, 4)])
+async def test_aembedding_retries_at_the_provider_as_often_as_the_deployment_sets(
+    deployment_max_retries: int,
+    provider_hits: int,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/embeddings").mock(
+        return_value=httpx.Response(
+            500, headers={"retry-after-ms": "1"}, json={"error": {"message": "overloaded", "type": "server_error"}}
+        )
+    )
+    router: Final = _embedding_router({"max_retries": deployment_max_retries})
+
+    with pytest.raises(litellm.InternalServerError):
+        await router.aembedding(model="embed", input=["Say hi"])
+
+    assert len(route.calls) == provider_hits
+
+
+@pytest.mark.asyncio
+async def test_aembedding_sends_the_router_max_retries_of_zero_for_a_deployment_without_one() -> None:  # test-quality-ok: the OpenAI handler maps 0 to the SDK default, so only the SDK call shows it
+    router: Final = _embedding_router({})
+
+    with patch.object(litellm, "aembedding", wraps=litellm.aembedding) as provider_call:
+        await router.aembedding(model="embed", input=["Say hi"], mock_response=[0.1, 0.2])
+
+    assert provider_call.call_args.kwargs["max_retries"] == 0
 
 
 def test_router_model_group_llm_provider_resolves_chatgpt_without_login(tmp_path, monkeypatch: pytest.MonkeyPatch):
@@ -4306,7 +4417,8 @@ async def test_mid_stream_continuation_declines_a_fallback_naming_a_deployment_t
         ({"response_format": {"type": "text"}}, None, True),
         ({"temperature": 0.2}, None, True),
         ({"tool_choice": "required"}, {"tool_choice": "auto"}, False),
-        ({"response_format": {"type": "json_object"}}, {"response_format": {"type": "text"}}, True),
+        ({"response_format": {"type": "json_object"}}, {"response_format": {"type": "text"}}, False),
+        ({"response_format": {"type": "text"}}, {"response_format": {"type": "json_object"}}, True),
         ({"extra_body": {"n": 2}}, None, False),
     ],
     ids=[
@@ -4318,7 +4430,8 @@ async def test_mid_stream_continuation_declines_a_fallback_naming_a_deployment_t
         "deployment_plain_text_format",
         "deployment_unrelated_param",
         "deployment_tool_choice_over_router_default",
-        "router_default_format_over_deployment",
+        "deployment_json_format_over_router_default",
+        "deployment_plain_text_format_over_router_default",
         "deployment_extra_body_n",
     ],
 )
@@ -10644,6 +10757,7 @@ def test_update_kwargs_with_deployment_merge_tools_request_overrides_tool_choice
         ({}, {"drop_params": True}, {}, [{"type": "web_search"}]),
         ({}, {}, {"additional_drop_params": ["tools"]}, [{"type": "web_search"}]),
         ({"drop_params": True}, {}, {"drop_params": False}, 5),
+        ({"drop_params": False}, {"drop_params": True}, {}, 5),
         ({}, {}, {}, 5),
     ],
     ids=[
@@ -10651,6 +10765,7 @@ def test_update_kwargs_with_deployment_merge_tools_request_overrides_tool_choice
         "router_default_drop_params",
         "request_drops_tools",
         "request_overrides_deployment_drop",
+        "deployment_keep_overrides_router_default_drop",
         "no_drop_policy",
     ],
 )
