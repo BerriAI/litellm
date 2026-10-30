@@ -54512,6 +54512,7 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true
     },
     "zai/glm-5.3-flash": {
@@ -54526,8 +54527,24 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true,
         "source": "https://docs.z.ai/guides/overview/pricing",
+        "supports_vision": true
+    },
+    "zai/glm-5v-turbo": {
+        "cache_read_input_token_cost": 2.4e-07,
+        "input_cost_per_token": 1.2e-06,
+        "litellm_provider": "zai",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://vercel.com/ai-gateway/models/glm-5v-turbo",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "zai/glm-5.1": {
