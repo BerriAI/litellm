@@ -100,7 +100,7 @@ from litellm.llms.base_llm.image_generation.transformation import (
 from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
-from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig, rejects_text_format_type
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
@@ -128,9 +128,12 @@ from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
     ProjectQuotaCallback,
+    ResponseFormatRejectedError,
     ResponsesAPIStreamingIterator,
     ResponsesWebSocketStreaming,
     SyncResponsesAPIStreamingIterator,
+    aopen_stream_events,
+    open_stream_events,
 )
 from litellm.types.containers.main import (
     ContainerFileListResponse,
@@ -646,6 +649,20 @@ def _merge_messages_header_sources(*sources: Mapping[str, object] | None) -> Map
         {name: value for name, value in entries if name.lower() != "anthropic-beta"}
         | ({"anthropic-beta": merged_beta} if merged_beta else {})
     )
+
+
+def _is_json_object_fallback_rejection(error: Exception) -> bool:
+    if isinstance(error, ResponseFormatRejectedError):
+        return True
+    return (
+        isinstance(error, httpx.HTTPStatusError)
+        and error.response.status_code in (400, 422)
+        and rejects_text_format_type(error.response.text)
+    )
+
+
+_RESPONSE_API_TIMEOUT_ADAPTER: Final = TypeAdapter(float)
+_RESPONSE_API_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 class BaseLLMHTTPHandler:
@@ -2993,6 +3010,12 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
         )
 
+        fallback_request_params: Final = responses_api_provider_config.json_object_fallback_params(
+            model=model,
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+        )
+
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
         else:
@@ -3111,6 +3134,11 @@ class BaseLLMHTTPHandler:
                         and _is_sized_json_body(response)
                         and _is_json_document(response.read())
                     ):
+                        stream_events: Final = (
+                            open_stream_events(response, checks_format_rejection=True)
+                            if fallback_request_params is not None
+                            else None
+                        )
                         return SyncResponsesAPIStreamingIterator(
                             response=response,
                             model=model,
@@ -3120,6 +3148,7 @@ class BaseLLMHTTPHandler:
                             custom_llm_provider=custom_llm_provider,
                             request_data=request_context,
                             call_type=CallTypes.responses.value,
+                            events=stream_events,
                         )
                 response.read()
             else:
@@ -3130,6 +3159,27 @@ class BaseLLMHTTPHandler:
                     **body_kwargs,
                 )
         except Exception as e:
+            if fallback_request_params is not None and _is_json_object_fallback_rejection(e):
+                verbose_logger.warning(
+                    "Retrying Responses API request with json_object after a text.format json_schema rejection for model=%s",
+                    model,
+                )
+                return self.response_api_handler(
+                    model=model,
+                    input=input,
+                    responses_api_provider_config=responses_api_provider_config,
+                    response_api_optional_request_params=dict(fallback_request_params),
+                    custom_llm_provider=custom_llm_provider,
+                    litellm_params=litellm_params,
+                    logging_obj=logging_obj,
+                    extra_headers=extra_headers,
+                    extra_body=extra_body,
+                    timeout=timeout,
+                    client=sync_httpx_client,
+                    fake_stream=fake_stream,
+                    litellm_metadata=litellm_metadata,
+                    shared_session=shared_session,
+                )
             raise self._handle_error(
                 e=e,
                 provider_config=responses_api_provider_config,
@@ -3177,7 +3227,7 @@ class BaseLLMHTTPHandler:
         model: str,
         input: str | ResponseInputParam,
         responses_api_provider_config: BaseResponsesAPIConfig,
-        response_api_optional_request_params: dict,
+        response_api_optional_request_params: dict[str, object],
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -3193,6 +3243,12 @@ class BaseLLMHTTPHandler:
         Async version of the responses API handler.
         Uses async HTTP client to make requests.
         """
+        fallback_request_params: Final = responses_api_provider_config.json_object_fallback_params(
+            model=model,
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+        )
+
         if client is None or not isinstance(client, AsyncHTTPHandler):
             verbose_logger.debug(
                 "Creating HTTP client for responses API with shared_session: %s",
@@ -3212,7 +3268,9 @@ class BaseLLMHTTPHandler:
                 headers=(
                     _client_request_headers(response_api_optional_request_params, extra_headers)
                     if custom_llm_provider == "chatgpt"
-                    else response_api_optional_request_params.get("extra_headers", {}) or {}
+                    else _RESPONSE_API_HEADERS_ADAPTER.validate_python(
+                        response_api_optional_request_params.get("extra_headers", {}) or {}
+                    )
                 ),
                 model=model,
                 litellm_params=litellm_params,
@@ -3305,11 +3363,14 @@ class BaseLLMHTTPHandler:
         )
 
         try:
+            response_api_timeout: Final = timeout or _RESPONSE_API_TIMEOUT_ADAPTER.validate_python(
+                response_api_optional_request_params.get("timeout", 0)
+            )
             if is_stream_request:
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    timeout=timeout or float(response_api_optional_request_params.get("timeout", 0)),
+                    timeout=response_api_timeout,
                     stream=stream,
                     logging_obj=logging_obj,
                     **body_kwargs,
@@ -3323,6 +3384,11 @@ class BaseLLMHTTPHandler:
                         and _is_sized_json_body(response)
                         and _is_json_document(await response.aread())
                     ):
+                        stream_events: Final = (
+                            await aopen_stream_events(response, checks_format_rejection=True)
+                            if fallback_request_params is not None
+                            else None
+                        )
                         return ResponsesAPIStreamingIterator(
                             response=response,
                             model=model,
@@ -3332,18 +3398,40 @@ class BaseLLMHTTPHandler:
                             custom_llm_provider=custom_llm_provider,
                             request_data=request_context,
                             call_type=CallTypes.responses.value,
+                            events=stream_events,
                         )
                 await response.aread()
             else:
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    timeout=timeout or float(response_api_optional_request_params.get("timeout", 0)),
+                    timeout=response_api_timeout,
                     logging_obj=logging_obj,
                     **body_kwargs,
                 )
 
         except Exception as e:
+            if fallback_request_params is not None and _is_json_object_fallback_rejection(e):
+                verbose_logger.warning(
+                    "Retrying Responses API request with json_object after a text.format json_schema rejection for model=%s",
+                    model,
+                )
+                return await self.async_response_api_handler(
+                    model=model,
+                    input=input,
+                    responses_api_provider_config=responses_api_provider_config,
+                    response_api_optional_request_params=dict(fallback_request_params),
+                    custom_llm_provider=custom_llm_provider,
+                    litellm_params=litellm_params,
+                    logging_obj=logging_obj,
+                    extra_headers=extra_headers,
+                    extra_body=extra_body,
+                    timeout=timeout,
+                    client=async_httpx_client,
+                    fake_stream=fake_stream,
+                    litellm_metadata=litellm_metadata,
+                    shared_session=shared_session,
+                )
             raise self._handle_error(
                 e=e,
                 provider_config=responses_api_provider_config,

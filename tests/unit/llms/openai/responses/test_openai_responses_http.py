@@ -769,7 +769,7 @@ async def test_json_schema_stream_retries_before_response_failed(sync_mode: bool
     assert [_format_type(request) for request in requests] == ["json_schema", "json_object"]
     assert isinstance(events, tuple)
     assert isinstance(events[-1], ResponseCompletedEvent)
-    assert events[-1].response.id == "resp_json"
+    assert events[-1].response.output_text == _OUTPUT_TEXT
 
 
 @pytest.mark.asyncio

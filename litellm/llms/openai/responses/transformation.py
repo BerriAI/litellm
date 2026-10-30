@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     prompt_cache_breakpoint_for_wire,
     with_prompt_cache_breakpoint,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import response_schema_prompt
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
@@ -721,6 +722,41 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def _targets_openai_api(self, litellm_params: GenericLiteLLMParams) -> bool:
         host: Final = _DeploymentHost.model_validate(litellm_params)
         return self.custom_llm_provider == LlmProviders.OPENAI and targets_openai_api(host.api_base or host.base_url)
+
+    def json_object_fallback_params(
+        self,
+        model: str,
+        response_api_optional_request_params: Mapping[str, object],
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object] | None:
+        text: Final = _json_object_or_none(response_api_optional_request_params.get("text"))
+        text_format: Final = None if text is None else _json_object_or_none(text.get("format"))
+        if (
+            text is None
+            or text_format is None
+            or text_format.get("type") != "json_schema"
+            or self.custom_llm_provider != LlmProviders.OPENAI
+            or self._targets_openai_api(litellm_params)
+        ):
+            return None
+        schema: Final = _json_object_or_none(text_format.get("schema"))
+        if schema is None:
+            return None
+        schema_prompt: Final = response_schema_prompt(
+            model=model,
+            response_schema=schema,
+            llm_provider="openai",
+        )
+        instructions: Final = response_api_optional_request_params.get("instructions")
+        return {
+            **response_api_optional_request_params,
+            "text": {**text, "format": {"type": "json_object"}},
+            "instructions": (
+                f"{instructions}\n\n{schema_prompt}"
+                if isinstance(instructions, str) and instructions
+                else schema_prompt
+            ),
+        }
 
     @staticmethod
     def _tools_for_openai_tool_search(

@@ -41,6 +41,21 @@ STANDARD_MODE_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = types.Mappin
 ANY_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = types.MappingProxyType(
     {**SUMMARY_ONLY_REASONING_FIELD_VALUES, "mode": None, "context": None}
 )
+_TEXT_FORMAT_ERROR_MARKERS: Final = ("text.format", "response_format", "json_schema")
+_UNSUPPORTED_TEXT_FORMAT_MARKERS: Final = (
+    "unavailable",
+    "not supported",
+    "unsupported",
+    "does not support",
+    "not available",
+)
+
+
+def rejects_text_format_type(message: str) -> bool:
+    lowered: Final = message.lower()
+    return any(marker in lowered for marker in _TEXT_FORMAT_ERROR_MARKERS) and any(
+        marker in lowered for marker in _UNSUPPORTED_TEXT_FORMAT_MARKERS
+    )
 
 
 class BaseResponsesAPIConfig(ABC):
@@ -299,6 +314,14 @@ class BaseResponsesAPIConfig(ABC):
 
     def may_answer_stream_with_json(self) -> bool:
         return False
+
+    def json_object_fallback_params(
+        self,
+        model: str,
+        response_api_optional_request_params: Mapping[str, object],
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object] | None:
+        return None
 
     def supports_native_websocket(self) -> bool:
         """
