@@ -10601,8 +10601,9 @@ def test_bedrock_registered_cache_prices_preserve_dynamic_threshold_rates(
             0.00266,
         ),
         ("kyma/sonar", "https://kymaapi.com/v1/chat/completions", 0.00721, 0.00721),
+        ("openrouter/openai/gpt-5.4-nano", "https://openrouter.ai/api/v1/chat/completions", 0.00721, 0.00721),
     ],
-    ids=["perplexity", "kyma"],
+    ids=["perplexity", "kyma", "openrouter"],
 )
 def test_a_deployment_that_only_sets_a_billing_minimum_bills_the_provider_stated_cost(
     _local_model_cost_map, model: str, chat_url: str, usage_cost: object, stated_cost: float

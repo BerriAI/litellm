@@ -2951,6 +2951,24 @@ def test_streamed_messages_bill_the_list_cost_reported_in_the_final_message_delt
     assert result["result"]._hidden_params["response_cost"] == 0.00412
 
 
+def test_streamed_messages_from_a_deployment_that_only_sets_a_billing_minimum_bill_the_reported_cost():
+    logging_obj = _go_logging_obj()
+    logging_obj.litellm_params = {"metadata": {"model_info": {"min_billed_input_tokens": 100000}}}
+
+    result = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "opencode_go/claude-haiku-5-5", "stream": True},
+        endpoint_type="messages",
+        start_time=datetime.now(),
+        all_chunks=_go_stream_chunks(),
+        end_time=datetime.now(),
+    )
+
+    assert result["kwargs"]["response_cost"] == 0.00412
+
+
 def test_streamed_messages_from_other_providers_ignore_a_zero_usage_cost_field():
     logging_obj = _go_logging_obj()
     logging_obj.model_call_details["custom_llm_provider"] = "anthropic"

@@ -10,6 +10,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import ANTHROPIC_BATCHES_ROUTE
+from litellm.cost_calculator import overrides_provider_stated_cost
 from litellm.litellm_core_utils.core_helpers import (
     native_messages_reported_cost,
     override_stamped_response_cost,
@@ -346,7 +347,7 @@ class AnthropicPassthroughLoggingHandler:
             if isinstance(litellm_model_response, ModelResponse)
             else None
         )
-        if reported_cost is not None and not custom_pricing:
+        if reported_cost is not None and not overrides_provider_stated_cost(custom_pricing, logging_obj):
             return reported_cost
         return litellm.completion_cost(
             completion_response=litellm_model_response,

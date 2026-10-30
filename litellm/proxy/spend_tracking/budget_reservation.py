@@ -4,7 +4,7 @@ import asyncio
 import json
 import math
 import time
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import chain
@@ -1352,7 +1352,7 @@ def _estimate_request_input_cost_for_model(
             model_info=model_info,
             input_tokens=input_tokens,
         )
-        for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
+        for model_info in _get_model_cost_infos(model=model, llm_router=llm_router, group_billing_minimum=min)
     ]
     valid_estimates: Final = [estimate for estimate in estimates if estimate is not None]
     return max(valid_estimates) if valid_estimates else None
@@ -1521,6 +1521,7 @@ def _get_model_cost_info(
 def _get_model_cost_infos(
     model: str,
     llm_router: Router | None,
+    group_billing_minimum: Callable[[Sequence[int]], int] = max,
 ) -> Sequence[Mapping[str, object]]:
     """Cost-info candidates to estimate a request against for one model group.
 
@@ -1528,7 +1529,9 @@ def _get_model_cost_infos(
     is unknown. Rather than guess, we estimate the cost against every eligible
     pricing shape in the group (the group's flat rates plus each deployment's
     tiered table) and let the caller reserve the maximum, so a cheaper sibling
-    deployment can never leave the request under-reserved.
+    deployment can never leave the request under-reserved. The deployments'
+    billed input minimums fold into one through ``group_billing_minimum``, the
+    largest for admission and the smallest for the input cost a disconnect is charged.
     """
     try:
         group_info: Final = _get_model_cost_info(model=model, llm_router=llm_router)
@@ -1541,12 +1544,14 @@ def _get_model_cost_infos(
             exc_info=True,
         )
         return []
-    billing_minimums: Final = [
-        minimum
-        for deployment_info in deployment_infos
-        if (minimum := _to_int(deployment_info.get("min_billed_input_tokens"))) is not None
-    ]
-    base: Final = {**group_info, "min_billed_input_tokens": max(billing_minimums)} if billing_minimums else group_info
+    billing_minimums: Final = tuple(
+        _to_int(deployment_info.get("min_billed_input_tokens")) or 0 for deployment_info in deployment_infos
+    )
+    base: Final = (
+        {**group_info, "min_billed_input_tokens": group_billing_minimum(billing_minimums)}
+        if any(billing_minimums)
+        else group_info
+    )
     tiered_tables: Final = [
         table for deployment_info in deployment_infos if (table := _tiered_pricing_table(deployment_info)) is not None
     ]

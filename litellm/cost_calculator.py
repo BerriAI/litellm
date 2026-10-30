@@ -1483,6 +1483,12 @@ def _prices_only_a_billing_minimum(litellm_logging_obj: LitellmLoggingObject | N
     )
 
 
+def overrides_provider_stated_cost(
+    custom_pricing: bool | None, litellm_logging_obj: LitellmLoggingObject | None
+) -> bool:
+    return custom_pricing is True and not _prices_only_a_billing_minimum(litellm_logging_obj)
+
+
 def _without_provider_stated_cost(usage: Usage | None) -> Usage | None:
     if usage is None or getattr(usage, "cost", None) is None:
         return usage
@@ -1654,7 +1660,7 @@ def completion_cost(
         cache_read_input_tokens: int | None = None
         audio_transcription_file_duration: float = 0.0
         provider_usage_object: Final = get_usage_object(completion_response=completion_response)
-        sets_prices: Final = custom_pricing is True and not _prices_only_a_billing_minimum(litellm_logging_obj)
+        sets_prices: Final = overrides_provider_stated_cost(custom_pricing, litellm_logging_obj)
         cost_per_token_usage_object: Final[Usage | None] = (
             _without_provider_stated_cost(provider_usage_object) if sets_prices else provider_usage_object
         )
@@ -2357,7 +2363,9 @@ def response_cost_calculator(
                         getattr(response_object, HIDDEN_PARAMS_ATTR),
                     )
                     provider_response_cost: Final = get_response_cost_from_hidden_params(hidden_params)
-                    if provider_response_cost is not None and not custom_pricing:
+                    if provider_response_cost is not None and not overrides_provider_stated_cost(
+                        custom_pricing, litellm_logging_obj
+                    ):
                         return provider_response_cost
 
             response_cost = completion_cost(
