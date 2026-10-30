@@ -8,7 +8,7 @@ import copy
 import json
 import os
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import AsyncIterator, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Final, Literal
@@ -2528,7 +2528,7 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_cut_off_by_an_upstr
         _anthropic_sse("error", upstream_error),
     )
 
-    async def mock_stream():
+    async def mock_stream() -> AsyncIterator[bytes]:
         for chunk in byte_chunks:
             yield chunk
 

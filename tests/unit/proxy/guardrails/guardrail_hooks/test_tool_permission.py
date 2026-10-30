@@ -1478,7 +1478,7 @@ class TestToolPermissionGuardrailAnthropicMessages:
     @pytest.mark.parametrize(
         "delivered_events", [0, 1, 3, 7], ids=["before-message-start", "before-content", "mid-text", "after-allowed-tool"]
     )
-    async def test_stream_ended_by_an_upstream_error_is_passed_through_verbatim(self, delivered_events):
+    async def test_stream_ended_by_an_upstream_error_is_passed_through_verbatim(self, delivered_events: int):
         chunks = self._ended_by_upstream_error(self._sse_chunks("Bash")[:delivered_events])
 
         out = await self._drain(self.blocking, chunks)
@@ -1496,7 +1496,7 @@ class TestToolPermissionGuardrailAnthropicMessages:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("delivered_events", [5, 6], ids=["before-input", "full-input-before-stop"])
-    async def test_denied_tool_use_cut_off_by_an_upstream_error_never_reaches_the_client(self, delivered_events):
+    async def test_denied_tool_use_cut_off_by_an_upstream_error_never_reaches_the_client(self, delivered_events: int):
         chunks = self._ended_by_upstream_error(self._sse_chunks("Read")[:delivered_events])
 
         events = self._events(await self._drain(self.blocking, chunks))
@@ -1548,7 +1548,7 @@ class TestToolPermissionGuardrailAnthropicMessages:
         ("sent_events", "cut_off_index"), [(1, 0), (4, 1)], ids=["tool-call-first", "after-finished-text"]
     )
     async def test_stream_cut_off_mid_tool_call_with_nothing_denied_reaches_the_client_as_sent_without_that_call(
-        self, sent_events, cut_off_index
+        self, sent_events: int, cut_off_index: int
     ):
         """Claude Code retries a stream that failed before any block finished, but not one that shows a
         finished block, so the cut-off call is dropped from the stream as sent rather than rewritten."""
