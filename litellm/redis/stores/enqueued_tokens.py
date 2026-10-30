@@ -1,8 +1,33 @@
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Final, Protocol
+from typing import Final, Literal, Protocol, TypeAlias
+
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.redis.transport.contract import EvalReply, RedisFailure, RedisTransport
+
+ScopeKey: TypeAlias = Literal["api_key", "team"]
+
+
+@dataclass(frozen=True, slots=True)
+class BatchEnqueuedTokenScope:
+    key: ScopeKey
+    value: str
+    limit: int
+
+
+ReservationBackend: TypeAlias = Literal["redis", "memory"]
+
+
+@dataclass(frozen=True, slots=True)
+class BatchEnqueuedTokenReservation:
+    tokens: int
+    scopes: tuple[BatchEnqueuedTokenScope, ...]
+    backend: ReservationBackend = "redis"
+    owner: str = ""
+    reserved_at_monotonic: float = field(default_factory=time.monotonic, compare=False)
+
 
 _RESERVE: Final = """
 local amount = tonumber(ARGV[1])
@@ -24,6 +49,8 @@ if updated <= 0 then
 end
 return 1
 """
+
+_RESERVATION: Final = TypeAdapter(BatchEnqueuedTokenReservation)
 
 _SAVE_RECORD: Final = """
 redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
@@ -59,7 +86,7 @@ class OverLimit:
 
 @dataclass(frozen=True, slots=True)
 class Popped:
-    document: bytes
+    reservation: BatchEnqueuedTokenReservation
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +101,9 @@ class EnqueuedTokensStore(Protocol):
 
     async def refund(self, scope_key: str, scope_value: str, tokens: int) -> None | RedisFailure: ...
 
-    async def save_record(self, batch_id: str, document: str, *, ttl: timedelta) -> None | RedisFailure: ...
+    async def save_record(
+        self, batch_id: str, reservation: BatchEnqueuedTokenReservation, *, ttl: timedelta
+    ) -> None | RedisFailure: ...
 
     async def pop_record(
         self, batch_id: str, *, tombstone_ttl: timedelta
@@ -105,7 +134,10 @@ class TransportEnqueuedTokensStore:
         reply: Final = await self.transport.eval(_REFUND, (counter_key(scope_key, scope_value),), (tokens,))
         return reply if isinstance(reply, RedisFailure) else None
 
-    async def save_record(self, batch_id: str, document: str, *, ttl: timedelta) -> None | RedisFailure:
+    async def save_record(
+        self, batch_id: str, reservation: BatchEnqueuedTokenReservation, *, ttl: timedelta
+    ) -> None | RedisFailure:
+        document: Final = _RESERVATION.dump_json(reservation).decode("utf-8")
         reply: Final = await self.transport.eval(_SAVE_RECORD, (record_key(batch_id),), (document, _seconds(ttl)))
         return reply if isinstance(reply, RedisFailure) else None
 
@@ -119,7 +151,7 @@ class TransportEnqueuedTokensStore:
             case b"":
                 return AlreadyPopped()
             case bytes():
-                return Popped(reply)
+                return _decode_record(reply)
             case _:
                 return _decode_failure("enqueued-token reservation record", reply)
 
@@ -130,3 +162,10 @@ def _seconds(ttl: timedelta) -> int:
 
 def _decode_failure(what: str, reply: EvalReply) -> RedisFailure:
     return RedisFailure(kind="decode", message=f"unexpected {what} reply: {reply!r}")
+
+
+def _decode_record(document: bytes) -> Popped | RedisFailure:
+    try:
+        return Popped(_RESERVATION.validate_json(document))
+    except ValidationError as e:
+        return RedisFailure(kind="decode", message=f"enqueued-token reservation record does not decode: {e}")

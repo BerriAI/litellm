@@ -17,6 +17,7 @@ from typing import Final
 
 import fakeredis
 import pytest
+from pydantic import TypeAdapter
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import NoScriptError
 from redis.exceptions import TimeoutError as RedisTimeoutError
@@ -26,7 +27,6 @@ from litellm.caching.caching import DualCache
 from litellm.constants import BATCH_ENQUEUED_TOKEN_TTL_SECONDS
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.batch_enqueued_tokens import (
-    _RESERVATION_ADAPTER,
     BatchEnqueuedTokenOverLimit,
     BatchEnqueuedTokenReservation,
     BatchEnqueuedTokenScope,
@@ -37,6 +37,8 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
 )
 from litellm.proxy.utils import InternalUsageCache
 from tests._support.fake_redis import fake_redis_cache
+
+_RESERVATION_ADAPTER: Final = TypeAdapter(BatchEnqueuedTokenReservation)
 
 
 def _in_memory_store() -> BatchEnqueuedTokenStore:
@@ -235,7 +237,19 @@ async def test_a_reservation_record_round_trips_with_old_pods():
     assert await raw.get(_record("batch_old")) == b""
 
     await store.save_reservation("batch_new", reservation)
-    assert _RESERVATION_ADAPTER.validate_json(await raw.get(_record("batch_new"))) == reservation
+    assert await raw.get(_record("batch_new")) == _RESERVATION_ADAPTER.dump_json(reservation)
+
+
+@pytest.mark.asyncio
+async def test_a_reservation_record_that_does_not_decode_is_discarded(caplog):
+    store, raw = _redis_store(fakeredis.FakeServer())
+    await raw.set(_record("batch_bad"), "not a reservation", ex=60)
+
+    with caplog.at_level(logging.WARNING):
+        assert await store.pop_reservation("batch_bad") is None
+
+    assert any("Discarding malformed" in record.getMessage() for record in caplog.records)
+    assert await raw.get(_record("batch_bad")) == b""
 
 
 @pytest.mark.asyncio
@@ -361,11 +375,9 @@ async def test_failed_redis_refund_leaves_local_counters_untouched():
 
 @pytest.mark.asyncio
 async def test_pop_reservation_defaults_legacy_records_to_redis_backend():
-    store = _in_memory_store()
+    store, raw = _redis_store(fakeredis.FakeServer())
     legacy = '{"tokens": 5, "scopes": [{"key": "api_key", "value": "k", "limit": 10}]}'
-    store.internal_usage_cache.dual_cache.in_memory_cache.set_cache(
-        key="batch_enqueued_token_reservation:batch_legacy", value=legacy
-    )
+    await raw.set(_record("batch_legacy"), legacy, ex=60)
     popped = await store.pop_reservation("batch_legacy")
     assert popped == BatchEnqueuedTokenReservation(
         tokens=5, scopes=(BatchEnqueuedTokenScope(key="api_key", value="k", limit=10),), backend="redis"
