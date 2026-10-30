@@ -29,12 +29,6 @@ features:
     name: Web search
 
 known_gaps:
-  - feature: structured_output
-    provider: vertex_ai
-    strict: false
-    reason: >-
-      gemini-3.8-flash sometimes loops on shell calls or stalls under an output schema and times out (1 of 3 runs
-      passed)
   - feature: web_search
     provider: openai
     reason: The proxy has no POST /v1/alpha/search route, so Codex's web search calls get a 404 and never complete

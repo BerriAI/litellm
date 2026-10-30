@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"01a18de3-f295-7300-b286-520083b3ab84"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `gemini-argon-alias` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"red"}}
+{"type":"turn.completed","usage":{"input_tokens":9827,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":60,"reasoning_output_tokens":55}}

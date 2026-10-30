@@ -27,6 +27,7 @@ from client_apps.codex.cli_driver import (
     run_codex,
     stderr_tail,
 )
+from client_apps.codex.checks import Check, all_checks, final_message_has, named_by_eye
 from client_apps.codex.events import CommandExecution, FileChange, Transcript, WebSearch
 from client_apps.compat_results import Failed, Passed
 from client_apps.compat_collector import CompatRecorder
@@ -56,7 +57,6 @@ class CodexCell:
 
 type Verdict = Passed | Failed
 type Feature = Callable[[CodexCell, str], Verdict]
-type Check = Callable[[Transcript], str | None]
 
 
 def assert_cell(compat_result: CompatRecorder, cell: CodexCell, models: tuple[str, ...], feature: Feature) -> None:
@@ -94,23 +94,6 @@ def run_error(run: CodexRun) -> str | None:
 def verdict(run: CodexRun, check: Check) -> Verdict:
     error: Final = run_error(run) or check(run.transcript)
     return Failed(error=error) if error else Passed()
-
-
-def final_message_has(expected: str) -> Check:
-    def check(transcript: Transcript) -> str | None:
-        message: Final = transcript.final_message
-        if message is not None and expected in message.lower():
-            return None
-        return f"final message {message!r} lacks {expected!r}"
-
-    return check
-
-
-def all_checks(*checks: Check) -> Check:
-    def check(transcript: Transcript) -> str | None:
-        return next((error for error in (each(transcript) for each in checks) if error is not None), None)
-
-    return check
 
 
 def basic_messaging(cell: CodexCell, model: str) -> Verdict:
@@ -250,7 +233,7 @@ def vision(cell: CodexCell, model: str) -> Verdict:
     _ = image.write_bytes(solid_png(rgb))
     prompt: Final = f"What single color fills the attached image? Reply with one lowercase word. Request id {marker}."
     run: Final = cell.run(session, CodexTurn(model, prompt, options=("-i", str(image))))
-    return verdict(run, final_message_has(color))
+    return verdict(run, named_by_eye(color))
 
 
 class StructuredAnswer(BaseModel):

@@ -194,28 +194,3 @@ def test_a_known_gap_needs_a_reason(tmp_path: Path) -> None:
         _ = load_manifest(path)
 
     assert [error["loc"] for error in raised.value.errors()] == [("known_gaps", 0, "reason")]
-
-
-def test_a_known_gap_is_strict_unless_it_says_otherwise(tmp_path: Path) -> None:
-    path: Final = tmp_path / "manifest.yaml"
-    _ = path.write_text(
-        _manifest_yaml(
-            "[{feature: vision, provider: openai, reason: r}, "
-            "{feature: vision, provider: vertex_ai, strict: false, reason: flaky}]"
-        )
-    )
-
-    manifest: Final = load_manifest(path)
-
-    assert [(gap.provider, gap.strict) for gap in manifest.known_gaps] == [("openai", True), ("vertex_ai", False)]
-
-
-@pytest.mark.parametrize("strict", ("'false'", "0", "no-thanks"))
-def test_a_known_gaps_strict_flag_must_be_a_bool(tmp_path: Path, strict: str) -> None:
-    path: Final = tmp_path / "manifest.yaml"
-    _ = path.write_text(_manifest_yaml(f"[{{feature: vision, provider: openai, strict: {strict}, reason: r}}]"))
-
-    with pytest.raises(ValidationError) as raised:
-        _ = load_manifest(path)
-
-    assert [error["loc"] for error in raised.value.errors()] == [("known_gaps", 0, "strict")]

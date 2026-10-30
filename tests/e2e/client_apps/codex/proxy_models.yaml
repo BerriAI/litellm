@@ -39,9 +39,3 @@ vertex_ai:
       vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: global
       vertex_credentials: os.environ/VERTEXAI_CREDENTIALS
-  - model_name: gemini-3.8-flash-codex-compat-vertex-ai
-    litellm_params:
-      model: vertex_ai/gemini-3.8-flash
-      vertex_project: os.environ/VERTEXAI_PROJECT
-      vertex_location: global
-      vertex_credentials: os.environ/VERTEXAI_CREDENTIALS

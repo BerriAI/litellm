@@ -25,7 +25,7 @@ def _transcript(name: str) -> Transcript:
 def test_every_recorded_line_parses() -> None:
     unparsed: Final = {path.name: _transcript(path.name).unparsed for path in sorted(TRANSCRIPTS.glob("*.jsonl"))}
 
-    assert len(unparsed) == 9
+    assert len(unparsed) == 11
     assert all(lines == () for lines in unparsed.values()), unparsed
 
 
