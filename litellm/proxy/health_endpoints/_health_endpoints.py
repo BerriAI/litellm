@@ -280,6 +280,18 @@ class _ModelGrants(BaseModel):
     models: tuple[object, ...] = ()
 
 
+class _ModelInfoAccessGroups(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    access_groups: tuple[object, ...]
+
+
+class _DeploymentAccessGroups(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model_info: _ModelInfoAccessGroups
+
+
 services = (
     Literal[
         "slack_budget_alerts",
@@ -1216,11 +1228,32 @@ def _ids_of(deployments: Iterable[object]) -> frozenset[str]:
     return frozenset(model_id for model_id in map(_deployment_id, deployments) if model_id is not None)
 
 
-def _holds_access_group(user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None) -> bool:
-    if llm_router is None:
-        return False
-    access_groups: Final = llm_router.registry().access_groups(team_id=user_api_key_dict.team_id)
-    return not _granted_names(user_api_key_dict).isdisjoint(access_groups)
+def _access_groups_of(deployment: object) -> frozenset[str]:
+    match deployment:
+        case {"model_info": {"access_groups": list()}}:
+            access_groups: Final = _DeploymentAccessGroups.model_validate(deployment).model_info.access_groups
+            return frozenset(access_group for access_group in access_groups if isinstance(access_group, str))
+        case _:
+            return frozenset()
+
+
+@dataclass(frozen=True, slots=True)
+class _AccessGroupGrants:
+    granted_names: frozenset[str]
+    ids_in_granted_groups: frozenset[str]
+
+    def narrow(self, serving_ids: frozenset[str], served_names: frozenset[str]) -> frozenset[str]:
+        in_granted_groups: Final = serving_ids & self.ids_in_granted_groups
+        granted_directly: Final = not self.granted_names.isdisjoint(served_names)
+        return serving_ids if granted_directly or not in_granted_groups else in_granted_groups
+
+
+def _access_group_grants(llm_model_list: Sequence[object], user_api_key_dict: UserAPIKeyAuth) -> _AccessGroupGrants:
+    granted: Final = _granted_names(user_api_key_dict)
+    in_granted_groups: Final = (
+        deployment for deployment in llm_model_list if not granted.isdisjoint(_access_groups_of(deployment))
+    )
+    return _AccessGroupGrants(granted, _ids_of(in_granted_groups))
 
 
 def _ids_serving_group(
@@ -1228,37 +1261,19 @@ def _ids_serving_group(
     ids_by_name: Mapping[str, frozenset[str]],
     user_api_key_dict: UserAPIKeyAuth,
     llm_router: Router | None,
-    narrow_by_access_group: bool,
+    access_group_grants: _AccessGroupGrants,
 ) -> frozenset[str]:
     named: Final = ids_by_name.get(group)
-    if llm_router is None:
-        return named or frozenset()
     if named is not None:
-        return named & _ids_routed_to(group, user_api_key_dict, llm_router) if narrow_by_access_group else named
-    wildcard_served: Final = llm_router.registry().deployments(
-        group, source="wildcard", team_id=user_api_key_dict.team_id
+        return access_group_grants.narrow(named, frozenset((group,)))
+    if llm_router is None:
+        return frozenset()
+    team_id: Final = user_api_key_dict.team_id
+    wildcard_served: Final = llm_router.registry().deployments(group, source="wildcard", team_id=team_id)
+    served_names: Final = frozenset((group,)).union(
+        *(_names_caller_may_request(deployment, team_id) for deployment in wildcard_served)
     )
-    if not narrow_by_access_group:
-        return _ids_of(wildcard_served)
-    patterns: Final = frozenset(
-        pattern
-        for pattern in (deployment.get("model_name") for deployment in wildcard_served)
-        if isinstance(pattern, str)
-    )
-    return _ids_of(wildcard_served) & frozenset[str]().union(
-        *(_ids_routed_to(pattern, user_api_key_dict, llm_router) for pattern in patterns)
-    )
-
-
-def _ids_routed_to(model_name: str, user_api_key_dict: UserAPIKeyAuth, llm_router: Router) -> frozenset[str]:
-    routed: Final = llm_router.registry().deployments(
-        model_name,
-        source="routable",
-        request={
-            "metadata": {"user_api_key_team_id": user_api_key_dict.team_id, "user_api_key_auth": user_api_key_dict}
-        },
-    )
-    return _ids_of(routed)
+    return access_group_grants.narrow(_ids_of(wildcard_served), served_names)
 
 
 async def _names_key_may_request(
@@ -1282,11 +1297,11 @@ def _ids_serving(
     ids_by_name: Mapping[str, frozenset[str]],
     user_api_key_dict: UserAPIKeyAuth,
     llm_router: Router | None,
+    access_group_grants: _AccessGroupGrants,
 ) -> frozenset[str]:
-    narrow_by_access_group: Final = _holds_access_group(user_api_key_dict, llm_router)
     return frozenset[str]().union(
         *(
-            _ids_serving_group(group, ids_by_name, user_api_key_dict, llm_router, narrow_by_access_group)
+            _ids_serving_group(group, ids_by_name, user_api_key_dict, llm_router, access_group_grants)
             for group in groups
         )
     )
@@ -1332,7 +1347,8 @@ async def _deployments_key_may_reach(
     admitted_names: Final = await _names_key_may_request(candidate_names, aliases, user_api_key_dict, owner, llm_router)
     groups: Final = frozenset(_served_group(name, aliases, llm_router) for name in admitted_names)
     ids_by_name: Final = _ids_by_requested_name(llm_model_list, user_api_key_dict.team_id)
-    reached_ids: Final = _ids_serving(groups, ids_by_name, user_api_key_dict, llm_router)
+    access_group_grants: Final = _access_group_grants(llm_model_list, user_api_key_dict)
+    reached_ids: Final = _ids_serving(groups, ids_by_name, user_api_key_dict, llm_router, access_group_grants)
     admitted_ids: Final = await _names_key_may_request(
         _shadowed_ids(llm_model_list, admitted_names, reached_ids, user_api_key_dict.team_id),
         aliases,
@@ -1342,7 +1358,7 @@ async def _deployments_key_may_reach(
     )
     id_groups: Final = frozenset(_served_group(model_id, aliases, llm_router) for model_id in admitted_ids)
     return _ReachableDeployments(
-        reached_ids | _ids_serving(id_groups, ids_by_name, user_api_key_dict, llm_router), groups
+        reached_ids | _ids_serving(id_groups, ids_by_name, user_api_key_dict, llm_router, access_group_grants), groups
     )
 
 

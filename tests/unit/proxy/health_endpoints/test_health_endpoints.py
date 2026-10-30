@@ -4891,6 +4891,16 @@ async def test_health_endpoint_probes_only_the_access_groups_deployments_of_a_sh
     assert probed == {"id-mini-premium"}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("direct_grant", ["gpt-5.4-mini", "*"])
+async def test_health_endpoint_probes_every_deployment_of_a_name_the_key_also_holds_directly(direct_grant: str) -> None:
+    caller: Final = UserAPIKeyAuth(api_key="hashed-test-key", models=["premium", direct_grant])
+
+    probed: Final = await _live_probed_model_ids(_ACCESS_GROUP_SPLIT_MODEL_LIST, caller)
+
+    assert probed == {"id-mini-premium", "id-mini-standard"}
+
+
 _ACCESS_GROUP_SPLIT_WILDCARD_MODEL_LIST: Final = [
     {
         "model_name": "openai/*",
@@ -4914,6 +4924,42 @@ async def test_health_endpoint_probes_only_the_access_groups_wildcard_deployment
     probed: Final = await _live_probed_model_ids(_ACCESS_GROUP_SPLIT_WILDCARD_MODEL_LIST, caller)
 
     assert probed == {"id-wild-premium"}
+
+
+def _team_deployment(
+    internal_name: str, public_name: str, model: str, model_id: str, access_groups: list[str]
+) -> Mapping[str, object]:
+    return {
+        "model_name": internal_name,
+        "litellm_params": {"model": model},
+        "model_info": {
+            "id": model_id,
+            "team_id": "team-a",
+            "team_public_model_name": public_name,
+            "access_groups": access_groups,
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("public_name", "model"),
+    [
+        pytest.param("openai/*", "openai/*", id="team-wildcard"),
+        pytest.param("gpt-5.4-mini", "openai/gpt-5.4-mini", id="team-model"),
+    ],
+)
+async def test_health_endpoint_probes_only_the_access_groups_team_deployments_serving_a_name(
+    public_name: str, model: str
+) -> None:
+    model_list: Final = [
+        _team_deployment("team-premium_7c1e", public_name, model, "id-team-premium", ["premium"]),
+        _team_deployment("team-standard_9d2f", public_name, model, "id-team-standard", ["standard"]),
+    ]
+
+    probed: Final = await _live_probed_model_ids(model_list, _team_key(["premium"]))
+
+    assert probed == {"id-team-premium"}
 
 
 def test_resolve_targeted_model_ids_lets_model_id_win_over_model():
