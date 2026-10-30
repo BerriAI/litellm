@@ -472,6 +472,7 @@ GEMINI_3_5_FLASH_TEST_CASE: Final = TranslationTestCase(
                 "image_tokens": None,
                 "text_tokens": 9,
                 "video_tokens": None,
+                "cache_write_tokens": 0,
             },
             "output_tokens": 86,
             "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 84, "text_tokens": 2},

@@ -282,7 +282,7 @@ def test_sdk_compact_reaches_the_compact_endpoint_with_its_full_body(gateway: Ga
             "output": [output_item],
             "usage": {
                 "input_tokens": 7,
-                "input_tokens_details": {"cached_tokens": 0},
+                "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
                 "output_tokens": 3,
                 "output_tokens_details": {"reasoning_tokens": 0},
                 "total_tokens": 10,

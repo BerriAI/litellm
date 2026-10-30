@@ -163,9 +163,10 @@ class OpenAISdkKeyParams(TypedDict, total=False):
 def openai_sdk_key_params(api_key: str | None) -> OpenAISdkKeyParams:
     if not _SDK_READS_ADMIN_KEY_ENV:
         return {"api_key": api_key}
-    if not api_key:
+    sdk_api_key: Final = os.environ.get("OPENAI_API_KEY") if api_key is None else api_key
+    if not sdk_api_key:
         raise openai.OpenAIError(_MISSING_OPENAI_API_KEY_MESSAGE)
-    return {"api_key": api_key, "admin_api_key": api_key}
+    return {"api_key": sdk_api_key, "admin_api_key": sdk_api_key}
 
 
 _DECODED_JSON: Final = TypeAdapter(object)

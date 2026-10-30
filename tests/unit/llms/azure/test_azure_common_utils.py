@@ -11,6 +11,7 @@ from unittest.mock import ANY, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from openai import AsyncAzureOpenAI
 
 import litellm
@@ -2652,3 +2653,37 @@ def test_azure_region_lookup_sends_the_key_and_bearer_headers(monkeypatch: pytes
     params: Final = LiteLLM_Params(model="azure/gpt-region", api_key="azure-key", api_base=api_base)
 
     assert get_model_region(litellm_params=params, mode="chat") == "eastus"
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_azure_v1_deployment_keyed_only_by_the_openai_api_key_env_sends_that_key(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, is_async: bool
+) -> None:
+    for name in ("AZURE_API_KEY", "AZURE_OPENAI_API_KEY", "AZURE_AD_TOKEN", "AZURE_OPENAI_AD_TOKEN", "AZURE_CLIENT_ID"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "azure-key-in-openai-env")
+    monkeypatch.setenv("OPENAI_ADMIN_KEY", "sk-admin-key-for-org-apis")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    api_base: Final = f"https://envkey-{is_async}.openai.azure.com"
+    route: Final = respx_mock.post(f"{api_base}/openai/v1/chat/completions").respond(
+        200,
+        json={
+            "id": "chatcmpl-envkey",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "gpt-4o-mini",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}],
+        },
+    )
+    request: Final = {
+        "model": "azure/gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "api_base": api_base,
+        "api_version": "v1",
+    }
+
+    response: Final = await litellm.acompletion(**request) if is_async else litellm.completion(**request)
+
+    assert response.choices[0].message.content == "hi"
+    assert route.calls.last.request.headers["authorization"] == "Bearer azure-key-in-openai-env"
