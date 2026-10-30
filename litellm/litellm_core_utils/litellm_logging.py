@@ -165,7 +165,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.prompts.init_prompts import PromptSpec
-from litellm.types.rerank import RerankResponse
+from litellm.types.rerank import RerankResponse, get_rerank_usage
 from litellm.types.router import RouterRateLimitError, SilentExperimentFlag
 from litellm.types.utils import (
     DEPLOYMENT_SCOPED_PRICING_FIELDS,
@@ -355,6 +355,7 @@ def _get_provider_request_id(original_exception: Exception) -> str | None:
 # Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
 _CUSTOM_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
 _METADATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_RESPONSE_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
 _UNSERIALIZABLE_METADATA_KEYS: Final[frozenset[str]] = frozenset(
     ("user_api_key_auth", "user_api_key_budget_reservation")
@@ -6817,7 +6818,11 @@ class StandardLoggingPayloadSetup:
                 total_tokens=0,
             )
 
-        usage: Final = response_obj.get("usage", None) or {}
+        usage: Final = response_obj.get("usage", None)
+        if usage is None:
+            rerank_usage: Final = get_rerank_usage(_RESPONSE_MAPPING.validate_python(response_obj))
+            if rerank_usage is not None:
+                return Usage(**rerank_usage)
         if usage is None or (not isinstance(usage, dict) and not isinstance(usage, Usage)):
             return Usage(
                 prompt_tokens=0,
@@ -6853,7 +6858,7 @@ class StandardLoggingPayloadSetup:
             return _empty
         _raw: Final = response_obj.get("usage", None)
         if _raw is None:
-            return _empty
+            return dict(get_rerank_usage(_RESPONSE_MAPPING.validate_python(response_obj)) or _empty)
         if isinstance(_raw, ResponseAPIUsage):
             return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(_raw).model_dump()
         if isinstance(_raw, dict):
