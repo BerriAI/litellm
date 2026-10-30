@@ -18,6 +18,7 @@ import secrets
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
+from datetime import timedelta
 from html import escape
 from types import MappingProxyType, TracebackType
 from typing import (
@@ -49,6 +50,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.redis_batch import active_request_redis_batch
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.constants import (
     CLI_SSO_CLAIM_MAP,
@@ -150,6 +152,8 @@ from litellm.proxy.utils import (
     get_custom_url,
     get_server_root_path,
 )
+from litellm.redis.stores.login_codes import LoginCodeStore, TransportLoginCodeStore, login_code_key
+from litellm.redis.transport.contract import RedisFailure
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SSOConfigRepository
@@ -3075,6 +3079,62 @@ def _is_same_origin_return_path(return_to: str) -> bool:
     return not any(ord(ch) < 0x20 or ch in (" ", "\x7f") for ch in return_to)
 
 
+async def put_login_code(
+    code: str,
+    payload: Mapping[str, object],
+    redis_cache: "RedisCache | None",
+    local_cache: UserApiKeyCache,
+) -> None:
+    if redis_cache is None:
+        await local_cache.async_set_cache(key=login_code_key(code), value=payload, ttl=60, local_only=True)
+    backend: Final = redis_cache if redis_cache is not None else local_cache.redis_cache
+    if backend is None:
+        return
+    store: Final[LoginCodeStore] = TransportLoginCodeStore(backend.transport(), defer_writes=redis_cache is None)
+    result: Final = await store.put(code, payload, ttl=timedelta(seconds=60))
+    if redis_cache is not None and isinstance(result, RedisFailure) and result.kind == "breaker_open":
+        raise RedisCircuitBreakerOpenError(result.message)
+
+
+async def get_login_code(code: str, redis_cache: "RedisCache | None", local_cache: UserApiKeyCache) -> object:
+    if redis_cache is None:
+        local: Final = TypeAdapter(object).validate_python(
+            await local_cache.async_get_cache(key=login_code_key(code), local_only=True)
+        )
+        if local is not None:
+            return local
+    backend: Final = redis_cache if redis_cache is not None else local_cache.redis_cache
+    if backend is None:
+        return None
+    request_batch: Final = active_request_redis_batch(backend) if redis_cache is None else None
+    if request_batch is not None and request_batch.read_as_missing(login_code_key(code)):
+        return None
+    store: Final[LoginCodeStore] = TransportLoginCodeStore(backend.transport())
+    result: Final = await store.get(code)
+    if isinstance(result, RedisFailure):
+        if redis_cache is not None and result.kind == "breaker_open":
+            raise RedisCircuitBreakerOpenError(result.message)
+        return None
+    if redis_cache is None and result is not None:
+        await local_cache.async_set_cache(key=login_code_key(code), value=result, local_only=True)
+    return result
+
+
+async def delete_login_code(code: str, redis_cache: "RedisCache | None", local_cache: UserApiKeyCache) -> None:
+    if redis_cache is None:
+        local_cache.in_memory_cache.delete_cache(login_code_key(code))
+    backend: Final = redis_cache if redis_cache is not None else local_cache.redis_cache
+    if backend is None:
+        return
+    store: Final[LoginCodeStore] = TransportLoginCodeStore(backend.transport())
+    result: Final = await store.delete(code)
+    match result:
+        case RedisFailure(message=message):
+            raise RuntimeError(message)
+        case None:
+            return
+
+
 @with_service_target(SSO_SESSIONS_TARGET)
 async def sso_return_to_redirect(
     return_to: str | None,
@@ -3106,12 +3166,8 @@ async def sso_return_to_redirect(
 
     if SSOAuthenticationHandler.validate_return_to(return_to):
         code: Final = secrets.token_urlsafe(32)
-        cache_key: Final = f"login_code:{code}"
         cache_value: Final = {"token": jwt_token, "redirect_url": return_to}
-        if redis_usage_cache is not None:
-            await redis_usage_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
-        else:
-            await user_api_key_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
+        await put_login_code(code, cache_value, redis_usage_cache, user_api_key_cache)
 
         separator: Final = "&" if "?" in return_to else "?"
         redirect_url: Final = return_to + separator + urlencode({"login": "success", "code": code})

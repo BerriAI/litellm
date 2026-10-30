@@ -18868,12 +18868,10 @@ async def login_v3(request: Request):
 
         # Store JWT behind a single-use opaque code (60s TTL)
         code: Final = secrets.token_urlsafe(32)
-        cache_key: Final = f"login_code:{code}"
         cache_value: Final = {"token": jwt_token, "redirect_url": litellm_dashboard_ui}
-        if redis_usage_cache is not None:
-            await redis_usage_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
-        else:
-            await user_api_key_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
+        from litellm.proxy.management_endpoints.ui_sso import put_login_code
+
+        await put_login_code(code, cache_value, redis_usage_cache, user_api_key_cache)
 
         return JSONResponse(
             content={"code": code, "expires_in": 60},
@@ -18902,7 +18900,7 @@ async def login_v3(request: Request):
 
 @router.post("/v3/login/exchange", include_in_schema=False)  # exchange single-use opaque code for JWT
 async def login_v3_exchange(request: Request):
-    from litellm.proxy.management_endpoints.ui_sso import set_session_token_cookie
+    from litellm.proxy.management_endpoints.ui_sso import delete_login_code, get_login_code, set_session_token_cookie
 
     try:
         if not general_settings.get("control_plane_url"):
@@ -18923,11 +18921,8 @@ async def login_v3_exchange(request: Request):
                 code=status.HTTP_400_BAD_REQUEST,
             )
 
-        cache_key: Final = f"login_code:{code}"
         cached_data: Final[object] = _UNTYPED_VALUE.validate_python(
-            await redis_usage_cache.async_get_cache(key=cache_key)
-            if redis_usage_cache is not None
-            else await user_api_key_cache.async_get_cache(key=cache_key)
+            await get_login_code(str(code), redis_usage_cache, user_api_key_cache)
         )
 
         if not cached_data or not isinstance(cached_data, dict):
@@ -18939,10 +18934,7 @@ async def login_v3_exchange(request: Request):
             )
 
         # Single-use: delete immediately
-        if redis_usage_cache is not None:
-            await redis_usage_cache.async_delete_cache(key=cache_key)
-        else:
-            await user_api_key_cache.async_delete_cache(key=cache_key)
+        await delete_login_code(str(code), redis_usage_cache, user_api_key_cache)
 
         json_response: Final = JSONResponse(
             content={
