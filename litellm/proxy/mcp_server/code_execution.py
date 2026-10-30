@@ -281,6 +281,7 @@ async def _execute_script(arguments: Mapping[str, object], context: OperationCon
     if caller is None:
         return error_result("MCP code execution requires an authenticated caller")
     from litellm.proxy.mcp_server.code_runtime import execute_code
+    from litellm.proxy.mcp_server.code_worker import json_bytes
 
     try:
         request: Final = CodeInput.model_validate(arguments or {})
@@ -375,9 +376,9 @@ async def _execute_script(arguments: Mapping[str, object], context: OperationCon
         content=[
             TextContent(
                 type="text",
-                text=json.dumps(
+                text=json_bytes(
                     {"output": result.output, "error": result.error, "calls_started": result.calls_started}
-                ),
+                ).decode("utf-8"),
             )
         ],
         is_error=result.error is not None,

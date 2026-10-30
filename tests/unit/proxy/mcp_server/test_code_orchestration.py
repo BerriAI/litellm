@@ -578,14 +578,29 @@ class CodeTextPolicy(CustomGuardrail):
         self.directions = (*self.directions, input_type)
         texts: Final = inputs.get("texts", [])
         self.scanned = (*self.scanned, *texts)
-        if any("blocked-output" in text for text in texts):
+        if any("blocked-output" in text or "秘密" in text for text in texts):
             raise HTTPException(status_code=403, detail="Code output rejected")
-        return {**inputs, "texts": [text.replace("mask-output", "filtered-output") for text in texts]}
+        return {
+            **inputs,
+            "texts": [
+                text.replace("mask-output", "filtered-output").replace("机密", "filtered-output") for text in texts
+            ],
+        }
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("nested", [False, True])
-@pytest.mark.parametrize("output", ["allowed-output", "mask-output", "blocked-output"])
+@pytest.mark.parametrize(
+    "output",
+    [
+        "allowed-output",
+        "mask-output",
+        "blocked-output",
+        pytest.param("秘密", id="unicode-block"),
+        pytest.param("机密", id="unicode-mask"),
+        pytest.param("你好", id="unicode-allow"),
+    ],
+)
 async def test_final_code_output_policy_enforces_and_preserves_logging(
     monkeypatch: pytest.MonkeyPatch,
     registered_gateway: tuple[OperationContext, ObservedCalls, Sequence[str]],
@@ -599,7 +614,7 @@ async def test_final_code_output_policy_enforces_and_preserves_logging(
     monkeypatch.setattr(litellm, "callbacks", [*litellm.callbacks, policy])
     calls: Final = (Call(id=0, tool_id="allowed-echo", arguments={"message": "safe-upstream"}),) if nested else ()
     process: Final = install_transport(monkeypatch, calls, (output,))
-    if output == "blocked-output":
+    if output in ("blocked-output", "秘密"):
         with pytest.raises(HTTPException, match="Code output rejected"):
             await run_code_tool({"code": "/* protocol fixture */"}, context)
         assert len(observed.responses) == int(nested)
@@ -610,15 +625,16 @@ async def test_final_code_output_policy_enforces_and_preserves_logging(
         result: Final = await run_code_tool({"code": "/* protocol fixture */"}, context)
         assert not result.is_error and isinstance(result.content[0], TextContent)
         assert load_json(result.content[0].text) == {
-            "output": [output.replace("mask-output", "filtered-output")],
+            "output": [output.replace("mask-output", "filtered-output").replace("机密", "filtered-output")],
             "error": None,
             "calls_started": int(nested),
         }
     assert received == (["safe-upstream"] if nested else [])
     assert process.stopped
     assert len(observed.responses) == int(nested) + 1
-    assert len(policy.scanned) == int(nested) + 1 + int(output == "blocked-output")
+    assert len(policy.scanned) == int(nested) + 1 + int(output in ("blocked-output", "秘密"))
     assert policy.directions == ("response",) * len(policy.scanned)
+    assert any(output in text for text in policy.scanned)
 
 
 @pytest.mark.asyncio

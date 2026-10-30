@@ -1702,7 +1702,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 
 class RejectOutput(CustomGuardrail):
     async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
-        if any("qa-rejected-output" in text for text in inputs.get("texts", [])):
+        if any("qa-rejected-output" in text or "秘密" in text for text in inputs.get("texts", [])):
             raise HTTPException(status_code=400, detail="QA output rejected")
         return inputs
 """)
@@ -1746,7 +1746,12 @@ class RejectOutput(CustomGuardrail):
             outcomes = []
             for path in ("/mcp", "/mcp/proxy", "rest"):
                 responses = []
-                for code in ('text("qa-rejected-output")', 'text("qa-allowed-output")'):
+                for code in (
+                    'text("qa-rejected-output")',
+                    'text(String.fromCodePoint(0x79d8, 0x5bc6))',
+                    'text("qa-allowed-output")',
+                    'text(String.fromCodePoint(0x4f60, 0x597d))',
+                ):
                     if path == "rest":
                         result = McpCaller(gateway, gateway.key, "rest").call("litellm_execute_code", {"code": code})
                     else:
@@ -1755,11 +1760,18 @@ class RejectOutput(CustomGuardrail):
                         )
                     responses.append(result)
                 outcomes.append((path, *responses))
-            for path, rejected, allowed in outcomes:
-                assert not rejected.ok, (path, rejected)
-                assert "QA output rejected" in (rejected.error or ""), (path, rejected)
+            unicode_outcomes: Final = tuple(
+                {"route": route, "status": result.status, "ok": result.ok, "output": result.text}
+                for route, _rejected, result, _allowed, _unicode_allowed in outcomes
+            )
+            for path, rejected, unicode_rejected, allowed, unicode_allowed in outcomes:
+                for blocked in (rejected, unicode_rejected):
+                    assert not blocked.ok, (path, blocked, unicode_outcomes)
+                    assert "QA output rejected" in (blocked.error or ""), (path, blocked)
                 assert allowed.ok and allowed.text is not None, (path, allowed)
                 assert json.loads(allowed.text)["output"] == ["qa-allowed-output"]
+                assert unicode_allowed.ok and unicode_allowed.text is not None, (path, unicode_allowed)
+                assert json.loads(unicode_allowed.text)["output"] == ["你好"]
             surrogate = McpCaller(gateway, gateway.key, "rest").call(
                 "litellm_execute_code", {"code": "text('kept'); text(String.fromCharCode(0xd800));"}
             )
