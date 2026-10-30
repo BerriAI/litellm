@@ -1028,13 +1028,44 @@ def chunk_usage(chunk: object) -> object:
     return getattr(chunk, "usage", None)
 
 
-USAGE_COST_BILLED_PROVIDERS: Final = frozenset({"kyma"})
+PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS: Final = frozenset({"xai", "perplexity", "opencode_go"})
+
+
+UPSTREAM_USAGE_COST: Final = "upstream_usage_cost"
+
+
+def _numeric(value: object) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def stamp_litellm_bill_on_usage(response: object, usage: object, bill: float) -> None:
+    """Writes litellm's bill into ``usage.cost`` and the hidden ``response_cost`` cache, keeping the upstream's own
+    ``usage.cost`` under ``upstream_usage_cost`` so a later pricing pass still bills the upstream's charge instead of
+    reading litellm's bill back as if the upstream had reported it."""
+    hidden: Final[object] = getattr(response, "_hidden_params", None)
+    if isinstance(hidden, dict):
+        hidden_params: Final = cast(dict[str, object], hidden)  # cast-ok: hidden params ride on the response as a dict
+        upstream: Final = (
+            hidden_params[UPSTREAM_USAGE_COST]
+            if UPSTREAM_USAGE_COST in hidden_params
+            else _numeric(getattr(usage, "cost", None))
+        )
+        hidden_params.update({"response_cost": bill, UPSTREAM_USAGE_COST: upstream})
+    setattr(usage, "cost", bill)
 
 
 def billed_usage_cost(response: object, custom_llm_provider: str | None) -> float | None:
-    if custom_llm_provider not in USAGE_COST_BILLED_PROVIDERS:
+    """The charge an OpenAI-compatible upstream reports in ``usage.cost``, skipped for providers billed from their own
+    usage fields. Once litellm wrote its own bill into ``usage.cost`` (the stream builder and the Responses terminal
+    event do), the upstream's figure is read from ``upstream_usage_cost`` instead."""
+    if custom_llm_provider in PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS:
         return None
-    cost: Final = provider_reported_usage_cost(_usage_field(response, "usage"), custom_llm_provider)
+    hidden: Final = as_str_mapping(getattr(response, "_hidden_params", None))
+    cost: Final = (
+        _numeric(hidden[UPSTREAM_USAGE_COST])
+        if hidden is not None and UPSTREAM_USAGE_COST in hidden
+        else provider_reported_usage_cost(_usage_field(response, "usage"), custom_llm_provider)
+    )
     return cost if cost is not None and math.isfinite(cost) and cost >= 0 else None
 
 
