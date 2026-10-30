@@ -16,6 +16,12 @@ from litellm.caching.redis_batch import active_request_redis_batch
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+from litellm.redis.stores.mcp_agent_permission_links import (
+    AGENT_NO_MCP_PERMISSION_SENTINEL,
+    McpAgentPermissionLinkStore,
+    TransportMcpAgentPermissionLinkStore,
+    agent_permission_link_key,
+)
 from litellm.redis.stores.mcp_user_permission_links import (
     USER_NO_MCP_PERMISSION_SENTINEL as _USER_NO_PERMISSION,
 )
@@ -366,6 +372,44 @@ async def invalidate_user_permission_link(cache: UserApiKeyCache, user_id: str) 
 def object_permission_cache_key(object_permission_id: str) -> str:
     """Cache key ``get_object_permission`` stores a permission row under."""
     return f"object_permission_id:{object_permission_id}"
+
+
+async def get_agent_permission_link(cache: UserApiKeyCache, agent_id: str) -> str | None:
+    key: Final = agent_permission_link_key(agent_id)
+    local: Final = _PERMISSION_LINK_VALUE.validate_python(await cache.async_get_cache(key=key, local_only=True))
+    if local is not None:
+        return local if isinstance(local, str) else None
+    if cache.redis_cache is None:
+        return None
+    batch: Final = active_request_redis_batch(cache.redis_cache)
+    if batch is not None and batch.read_as_missing(key):
+        return None
+    with suppress(Exception):
+        store: Final[McpAgentPermissionLinkStore] = TransportMcpAgentPermissionLinkStore(cache.redis_cache.transport())
+        result: Final = await store.get(agent_id)
+        if isinstance(result, RedisFailure):
+            return None
+        if result is not None:
+            await cache.async_set_cache(key=key, value=result, local_only=True)
+        return result
+    return None
+
+
+async def fill_agent_permission_link(
+    cache: UserApiKeyCache, agent_id: str, permission_id: str | None, *, ttl: float
+) -> None:
+    await cache.async_set_cache(
+        key=agent_permission_link_key(agent_id),
+        value=permission_id or AGENT_NO_MCP_PERMISSION_SENTINEL,
+        ttl=ttl,
+        local_only=True,
+    )
+    if cache.redis_cache is not None:
+        with suppress(Exception):
+            store: Final[McpAgentPermissionLinkStore] = TransportMcpAgentPermissionLinkStore(
+                cache.redis_cache.transport()
+            )
+            _ = await store.fill(agent_id, permission_id, ttl=timedelta(seconds=int(ttl)))
 
 
 #: Cached under ``tag_registry_cache_key`` when the table exceeds ``TAG_REGISTRY_MAX_SIZE``:
