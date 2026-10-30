@@ -6054,7 +6054,10 @@ def completion(
         mapping_special_params: Final = MappingProxyType(dict(cleaned_provider_params))
 
         def optional_params_for_model_info(deployment_info: Mapping[str, object] | None) -> dict[str, object]:
-            return get_optional_params(**mapping_args, model_info=deployment_info, **mapping_special_params)
+            precheck_args: Final[Mapping[str, object]] = (
+                {**mapping_args, "tool_choice": None, "audio": None} if bridges_to_interactions_api else mapping_args
+            )
+            return get_optional_params(**precheck_args, model_info=deployment_info, **mapping_special_params)
 
         validated_model_info: Final = (
             _MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None

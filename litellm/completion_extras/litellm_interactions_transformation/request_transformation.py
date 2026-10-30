@@ -210,6 +210,13 @@ def _validate_request_params(
     if not VertexGeminiConfig.supports_sampling_params(model):
         _validate_sampling_param(params, "temperature", model, drop_params)
         _validate_sampling_param(params, "top_p", model, drop_params)
+    raw_choice: Final = params.get("tool_choice")
+    if raw_choice is not None and _convert_tool_choice(raw_choice) is None:
+        _reject_or_drop(
+            model,
+            f"Unsupported tool_choice={raw_choice!r} for the Gemini Interactions API.",
+            drop_params,
+        )
 
 
 def _parse_data_uri(data_uri: str, fallback_mime: str) -> tuple[str, str]:

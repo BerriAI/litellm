@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 import json
 from typing import Final
 
@@ -295,3 +296,67 @@ def test_top_level_interactions_kwargs_pass_preprocessing_with_drop_params_false
     }
     assert captured[1].url.path.endswith("/models/gemini-3-flash-preview:generateContent")
     assert "use_interactions" not in json.loads(captured[1].content)
+
+
+@pytest.mark.parametrize(
+    ("extra_kwargs", "expected_fields"),
+    (
+        (
+            {"tool_choice": "any"},
+            {"generation_config": {"tool_choice": "any"}},
+        ),
+        (
+            {"tool_choice": "validated"},
+            {"generation_config": {"tool_choice": "validated"}},
+        ),
+        (
+            {"tool_choice": {"allowed_tools": {"mode": "any", "tools": ["get_weather"]}}},
+            {"generation_config": {"tool_choice": {"allowed_tools": {"mode": "any", "tools": ["get_weather"]}}}},
+        ),
+        (
+            {"audio": {"voice": "alloy", "format": "wav"}},
+            {
+                "response_format": {"type": "audio"},
+                "generation_config": {"speech_config": [{"voice": "Kore"}]},
+            },
+        ),
+    ),
+)
+def test_interactions_native_tool_choice_and_wav_audio_bypass_legacy_gemini_validation(
+    extra_kwargs: Mapping[str, object],
+    expected_fields: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    captured: Final[list[httpx.Request]] = []  # mutable-ok: transport spy
+
+    def responder(req: httpx.Request) -> httpx.Response:
+        captured.append(req)
+        return httpx.Response(
+            200,
+            json={
+                "id": "v1_tc_audio",
+                "status": "completed",
+                "steps": [{"type": "model_output", "content": [{"type": "text", "text": "ok"}]}],
+                "usage": {"total_input_tokens": 4, "total_output_tokens": 2, "total_tokens": 6},
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        resp: Final = litellm.completion(
+            model="gemini/gemini-3-flash-preview",
+            messages=[{"role": "user", "content": "test"}],
+            use_interactions=True,
+            api_key="unit-gemini-key",
+            api_base="https://generativelanguage.googleapis.com",
+            client=HTTPHandler(client=raw_client),
+            **extra_kwargs,  # pyright: ignore[reportArgumentType]  # dynamic completion kwargs under test
+        )
+
+    assert isinstance(resp, ModelResponse)
+    assert len(captured) == 1
+    assert json.loads(captured[0].content) == {
+        "model": "gemini-3-flash-preview",
+        "input": [{"type": "user_input", "content": [{"type": "text", "text": "test"}]}],
+        **expected_fields,
+    }

@@ -9702,8 +9702,13 @@ def validate_chat_completion_tool_choice(
                 llm_provider="",
             )
 
+        is_allowed_tools_cfg: Final = isinstance(tool_choice.get("allowed_tools"), dict) and "type" not in tool_choice
         # Standard OpenAI format: {"type": "function", "function": {...}}
-        if tool_choice_type != "allowed_tools" and (tool_choice_type is None or tool_choice.get("function") is None):
+        if (
+            not is_allowed_tools_cfg
+            and tool_choice_type != "allowed_tools"
+            and (tool_choice_type is None or tool_choice.get("function") is None)
+        ):
             raise BadRequestError(
                 message=f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec",
                 model=model,
