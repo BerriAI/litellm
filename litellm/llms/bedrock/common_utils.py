@@ -1334,14 +1334,16 @@ def bedrock_serves_service_tier(model: str, service_tier: str) -> bool:
     row for exactly the models that serve a tier, so a non-null price is the capability signal (the
     proxy normalizes every row to the full ModelInfo shape, so key presence alone means nothing). ``default``
     and ``auto`` are always served, and a model absent from the price map has no signal and is
-    forwarded as before.
+    forwarded as before. Regional CRIS rows (``eu.``, ``apac.``, ``us-gov.``) often omit the tier
+    prices their base row carries, so the base row is consulted too.
     """
     from litellm.litellm_core_utils.llm_cost_calc.utils import get_service_tier_cost_key
 
     cost_key: Final = get_service_tier_cost_key("input_cost_per_token", service_tier)
     if cost_key == "input_cost_per_token":
         return True
-    entries: Final = tuple(entry for entry in _bedrock_price_map_entries(model) if entry is not None)
+    candidates: Final = (*_bedrock_price_map_entries(model), _model_cost_entry(get_bedrock_base_model(model)))
+    entries: Final = tuple(entry for entry in candidates if entry is not None)
     if not entries:
         return True
     return any(entry.get(cost_key) is not None for entry in entries)

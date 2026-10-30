@@ -2286,6 +2286,7 @@ _STANDARD_ONLY_ROW: Final = {
         ("tiered.model-v1:0", "priority", True),
         ("tiered.model-v1:0", "flex", True),
         ("bedrock/us-west-2/tiered.model-v1:0", "flex", True),
+        ("eu.tiered.model-v1:0", "priority", True),
         ("standard.model-v1:0", "priority", False),
         ("standard.model-v1:0", "flex", False),
         ("standard.model-v1:0", "default", True),
@@ -2298,8 +2299,10 @@ def test_bedrock_serves_service_tier_follows_price_map_tier_rows(
 ) -> None:
     """A Bedrock model serves a tier exactly when its price-map row carries a non-null price for that tier.
     The proxy expands every row to the full ModelInfo shape, so a null price (standard-only row) is no signal,
-    `default` and `auto` are always served, and an unknown model keeps being forwarded."""
+    `default` and `auto` are always served, and an unknown model keeps being forwarded. A regional CRIS row
+    that omits the tier prices does not hide the base row that carries them."""
     monkeypatch.setitem(litellm.model_cost, "tiered.model-v1:0", dict(_TIER_PRICED_ROW))
+    monkeypatch.setitem(litellm.model_cost, "eu.tiered.model-v1:0", dict(_STANDARD_ONLY_ROW))
     monkeypatch.setitem(litellm.model_cost, "standard.model-v1:0", dict(_STANDARD_ONLY_ROW))
 
     assert bedrock_serves_service_tier(model, service_tier) is expected
