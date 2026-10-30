@@ -4404,26 +4404,22 @@ async def test_ProxyConfig__update_general_settings_warns_about_an_ignored_store
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig__update_general_settings_says_the_config_file_applies_for_a_stored_ui_field_it_sets(
+async def test_ProxyConfig__update_general_settings_does_not_warn_about_a_stored_copy_of_an_admin_ui_field(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     pc: Final = ProxyConfig()
-    pc._load_yaml_settings_stores({"general_settings": {}, "litellm_settings": {"budget_rollover": True}})
+    pc._load_yaml_settings_stores({"general_settings": {}})
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        await pc._update_general_settings({"budget_rollover": False})
+        await pc._update_general_settings({"budget_rollover": True, "enforce_user_param": True})
 
-    warnings: Final = [record.getMessage() for record in caplog.records if "budget_rollover" in record.getMessage()]
-    assert warnings == [
-        "general_settings.budget_rollover is stored in the database, but the proxy does not apply that stored "
-        "value, so it is ignored. The config file's value applies. Remove the stored copy with POST "
-        "/config/field/delete."
-    ]
+    warned: Final = [record.getMessage().split(" ")[0] for record in caplog.records if "is ignored" in record.getMessage()]
+    assert warned == ["general_settings.enforce_user_param"]
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig__update_general_settings_warns_once_about_a_stored_row_that_is_not_an_object(
+async def test_ProxyConfig__update_general_settings_warns_once_each_time_the_stored_row_stops_being_an_object(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     pc: Final = ProxyConfig()
@@ -4432,14 +4428,16 @@ async def test_ProxyConfig__update_general_settings_warns_once_about_a_stored_ro
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         await pc._update_general_settings(None)
-        await pc._update_general_settings('{"enforce_user_param": true}')
-        await pc._update_general_settings('{"enforce_user_param": true}')
+        await pc._update_general_settings('{"store_prompts_in_spend_logs": true}')
+        await pc._update_general_settings('{"store_prompts_in_spend_logs": true}')
+        await pc._update_general_settings({"store_prompts_in_spend_logs": True})
+        await pc._update_general_settings('{"store_prompts_in_spend_logs": true}')
 
     warnings: Final = [record.getMessage() for record in caplog.records if "JSON object" in record.getMessage()]
     assert warnings == [
         "general_settings is stored in the database as something other than a JSON object, so the proxy ignores "
         "every stored general setting."
-    ]
+    ] * 2
 
 
 def _paused_scheduler(monkeypatch):
@@ -5075,6 +5073,32 @@ async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endp
 
     non_llm_initialization.assert_awaited_once()
     assert settings_refresh.await_count == (0 if ui_settings_already_synced else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored_row, rebuilds_routes",
+    [({"pass_through_endpoints": []}, True), ('{"pass_through_endpoints": []}', False), ([], False)],
+    ids=["object", "json-string", "array"],
+)
+async def test_ProxyConfig_add_deployment_rebuilds_pass_through_routes_only_from_an_object_general_settings_row(
+    monkeypatch: pytest.MonkeyPatch, stored_row: object, rebuilds_routes: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.pass_through_endpoints import pass_through_endpoints
+
+    pc: Final = ProxyConfig()
+    rebuild_routes: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "prefetch_config_params", AsyncMock())
+    monkeypatch.setattr(proxy_server, "get_config_param", AsyncMock(return_value=SimpleNamespace(param_value=stored_row)))
+    monkeypatch.setattr(pass_through_endpoints, "initialize_pass_through_endpoints_in_db", rebuild_routes)
+    monkeypatch.setattr(pc, "_should_load_db_object", lambda *, object_type: object_type == "pass_through_endpoints")
+    monkeypatch.setattr(pc, "get_credentials", AsyncMock())
+
+    await pc.add_deployment(prisma_client=MagicMock(), proxy_logging_obj=MagicMock(), ui_settings_already_synced=True)
+
+    assert rebuild_routes.await_count == (1 if rebuilds_routes else 0)
 
 
 # ---------------------------------------------------------------------------
