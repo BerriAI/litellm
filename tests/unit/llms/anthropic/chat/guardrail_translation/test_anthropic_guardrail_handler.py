@@ -561,11 +561,18 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
     @staticmethod
     def _python_masking_guardrail() -> CustomGuardrail:
         class MaskPython(CustomGuardrail):
-            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[LiteLLMLoggingObj] = None,
+            ) -> GenericGuardrailAPIInputs:
                 for tool_call in inputs.get("tool_calls", []):
-                    tool_call.function.arguments = re.sub(
-                        "python", "[MASKED]", tool_call.function.arguments, flags=re.I
-                    )
+                    if isinstance(tool_call, ChatCompletionMessageToolCall):
+                        tool_call.function.arguments = re.sub(
+                            "python", "[MASKED]", tool_call.function.arguments, flags=re.I
+                        )
                 return {
                     **inputs,
                     "texts": [re.sub("python", "[MASKED]", text, flags=re.I) for text in inputs.get("texts", [])],
@@ -576,7 +583,13 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
     @staticmethod
     def _python_texts_masking_guardrail() -> CustomGuardrail:
         class MaskPythonTexts(CustomGuardrail):
-            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[LiteLLMLoggingObj] = None,
+            ) -> GenericGuardrailAPIInputs:
                 return {
                     **inputs,
                     "texts": [re.sub("python", "[MASKED]", text, flags=re.I) for text in inputs.get("texts", [])],
