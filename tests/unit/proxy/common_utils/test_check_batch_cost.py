@@ -1786,17 +1786,17 @@ class TestUnmanagedVertexRouting:
         """Regression (LIT-10326): two deployments share gemini-2.5-flash with different
         buckets. A batch created on team B's deployment stores deploy-team-b in file_object,
         so the poller must read it back through team B, not the first match (team A)."""
-        router = MagicMock()
+        router: Final = MagicMock()
         router.registry.return_value.resolve.return_value = None
         router.registry.return_value.deployments.return_value = self._two_team_deployments()
         router.registry.return_value.deployment = MagicMock(return_value=self._vertex_deployment())
-        instance = self._instance(track_unmanaged=True, router=router)
-        job = self._job(
+        instance: Final = self._instance(track_unmanaged=True, router=router)
+        job: Final = self._job(
             file_object=json.dumps({**json.loads(_unmanaged_vertex_file_object()), "model_id": "deploy-team-b"})
         )
 
         with patch(_IS_B64, return_value=False):
-            result = instance._resolve_job_routing(job, MagicMock())
+            result: Final = instance._resolve_job_routing(job, MagicMock())
 
         assert result == ("deploy-team-b", "8823717160934178816")
         router.registry.return_value.deployment.assert_called_once_with("deploy-team-b")
@@ -1804,17 +1804,17 @@ class TestUnmanagedVertexRouting:
     def test_flag_on_falls_back_to_base_model_match_when_the_stored_deployment_is_gone(self):
         """The stored deployment was removed from the config after the batch was created:
         the row still routes through today's base-model lookup instead of being skipped."""
-        router = MagicMock()
+        router: Final = MagicMock()
         router.registry.return_value.resolve.return_value = None
         router.registry.return_value.deployments.return_value = self._two_team_deployments()
         router.registry.return_value.deployment = MagicMock(return_value=None)
-        instance = self._instance(track_unmanaged=True, router=router)
-        job = self._job(
+        instance: Final = self._instance(track_unmanaged=True, router=router)
+        job: Final = self._job(
             file_object=json.dumps({**json.loads(_unmanaged_vertex_file_object()), "model_id": "deploy-removed"})
         )
 
         with patch(_IS_B64, return_value=False):
-            result = instance._resolve_job_routing(job, MagicMock())
+            result: Final = instance._resolve_job_routing(job, MagicMock())
 
         assert result == ("deploy-team-a", "8823717160934178816")
 

@@ -163,8 +163,14 @@ def test_unmanaged_batch_on_the_second_deployment_sharing_a_base_model_is_polled
         batch_b: Final = _create_batch(owned.gateway, key, "b")
         assert (batch_a, batch_b) == (jobs[_project("a")][0], jobs[_project("b")][0]), (batch_a, batch_b, jobs)
 
+        seen: Final[list[Request]] = []  # mutable-ok: drain empties the wire queue, so samples accumulate across retries
+
+        def polled_so_far() -> tuple[Request, ...]:
+            seen.extend(wire.drain())
+            return tuple(seen)
+
         polled: Final = eventually(
-            wire.drain,
+            polled_so_far,
             lambda requests: bool(_retrieve_targets(requests, batch_b)) and bool(_retrieve_targets(requests, batch_a)),
             seconds=90,
         )
