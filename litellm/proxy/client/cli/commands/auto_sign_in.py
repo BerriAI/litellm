@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import sys
 import time
@@ -41,6 +42,7 @@ _DISPLAY_VARIABLES: Final = ("DISPLAY", "WAYLAND_DISPLAY")
 _SIGNED_IN_LOGIN_WITHOUT_KEY_ROW: Final = HTTPStatus.NOT_FOUND
 _WAIT_FOR_ANOTHER_SIGN_IN_SECONDS: Final = LOGIN_TIMEOUT_SECONDS + 60
 _PROXY_REASON_CHARS: Final = 500
+_TERMINAL_CONTROL_CHARACTERS: Final = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
 
 def _runs_in_ci(environ: Mapping[str, str]) -> bool:
@@ -87,7 +89,7 @@ def _locate_browser(
 
 
 def _shows_a_window(browser: webbrowser.BaseBrowser) -> bool:
-    return Path(browser.name).name not in _TEXT_MODE_BROWSERS
+    return Path(getattr(browser, "name", "")).name not in _TEXT_MODE_BROWSERS
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,7 +214,7 @@ def _proxy_reason(error: UnauthorizedError) -> str:
     original: Final = error.orig_exception
     response: Final = original.response if isinstance(original, requests.HTTPError) else None
     body: Final = response.text.strip() if response is not None else ""
-    reason: Final = redact_string(body) if body else str(error)
+    reason: Final = _TERMINAL_CONTROL_CHARACTERS.sub("", redact_string(body) if body else str(error))
     return reason if len(reason) <= _PROXY_REASON_CHARS else f"{reason[:_PROXY_REASON_CHARS]}..."
 
 

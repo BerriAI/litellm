@@ -307,6 +307,18 @@ def test_an_ssh_session_without_a_display_never_opens_a_browser_on_the_remote_sc
     assert requests_mock.call_count == 0
 
 
+class BrowserWithoutAName(webbrowser.BaseBrowser):
+    def __init__(self) -> None:
+        self._name = "default"
+
+
+def test_a_browser_object_without_a_name_still_starts_the_sign_in(requests_mock: Mocker) -> None:
+    sign_in: Final = PkceBrowserSignIn(find_browser=lambda _name: BrowserWithoutAName(), environ={})
+
+    assert sign_in.unavailable_because() is None
+    assert requests_mock.call_count == 0
+
+
 @pytest.mark.parametrize(
     "environ",
     [
@@ -637,6 +649,23 @@ def test_a_long_401_body_is_cut_before_it_reaches_the_terminal(
     assert "Authentication Error, the key was refused" in result.stderr
     assert "END-OF-BODY" not in result.stderr
     assert len(result.stderr) < 2_000
+    assert sign_in.calls == []
+
+
+def test_terminal_control_characters_in_a_401_body_never_reach_the_terminal(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    requests_mock.post(
+        f"{BASE_URL}/key/generate", status_code=401, text="\x1b]0;title\x07refused\x1b[2J\r\nsecond line\x9b31m"
+    )
+    sign_in: Final = FakeBrowserSignIn(_credential())
+
+    result: Final = _lite(["keys", "generate"], secret_vault_factory(), sign_in, ["--api-key", "sk-explicit"])
+
+    assert result.exit_code == 1
+    assert "refused" in result.stderr
+    assert "second line" in result.stderr
+    assert not {"\x1b", "\x07", "\x9b", "\r"} & set(result.stderr)
     assert sign_in.calls == []
 
 
