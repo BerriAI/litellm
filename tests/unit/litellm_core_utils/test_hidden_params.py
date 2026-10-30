@@ -1,7 +1,11 @@
-from typing import Final
+import pickle
+from collections.abc import Callable
+from typing import ClassVar, Final
 
 import pytest
+from openai import BaseModel as OpenAIBaseModel
 from openai.types.chat import ChatCompletionChunk
+from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from litellm.litellm_core_utils.hidden_params import (
     HIDDEN_PARAMS_ATTR,
@@ -9,13 +13,14 @@ from litellm.litellm_core_utils.hidden_params import (
     get_hidden_params_storage,
     get_or_create_hidden_params,
     served_from_cache,
+    set_extra_attribute,
     set_hidden_param,
     set_hidden_params,
 )
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from litellm.types.decisions import DecisionsResponse
 from litellm.types.llms.base import HiddenParams
-from litellm.types.utils import ModelResponse, TextChoices, TextCompletionResponse, Usage
+from litellm.types.utils import ModelResponse, ModelResponseStream, TextChoices, TextCompletionResponse, Usage
 
 
 def test_get_and_set_hidden_params_on_plain_object() -> None:
@@ -309,3 +314,133 @@ def test_served_from_cache_is_true_only_for_a_response_the_cache_stamped(
     assert served_from_cache(model_response) is expected
     assert served_from_cache({HIDDEN_PARAMS_ATTR: dict(hidden_params)}) is expected
     assert served_from_cache(object()) is False
+
+
+class _ExtraModel(BaseModel):  # frozen-ok: the assignment tests need a model that accepts attribute writes
+    model_config = ConfigDict(extra="allow")
+
+    declared: str | None = None
+    marker: ClassVar[str | None] = None
+    unset_marker: ClassVar[int]
+    _secret: str = PrivateAttr(default="hidden")
+
+    @property
+    def doubled(self) -> str | None:
+        return self.declared
+
+    @doubled.setter
+    def doubled(self, value: str) -> None:
+        self.declared = value * 2
+
+
+class _FrozenExtraModel(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class _ValidatedExtraModel(BaseModel):  # frozen-ok: the assignment tests need a model that accepts attribute writes
+    model_config = ConfigDict(extra="allow", validate_assignment=True)
+
+    __pydantic_extra__: dict[str, int]
+
+
+class _IgnoredExtraModel(BaseModel):  # frozen-ok: the assignment tests need a model that accepts attribute writes
+    model_config = ConfigDict(extra="ignore")
+
+
+class _MirroringModel(BaseModel):  # frozen-ok: the assignment tests need a model that accepts attribute writes
+    model_config = ConfigDict(extra="allow")
+
+    def __setattr__(self, name: str, value: object) -> None:
+        super().__setattr__(name, value)
+        super().__setattr__(f"{name}_copy", value)
+
+
+class _NoneClassAttribute:
+    inherited = None
+
+
+class _InheritingExtraModel(_NoneClassAttribute, BaseModel):  # frozen-ok: assignment tests need attribute writes
+    model_config = ConfigDict(extra="allow")
+
+
+class _ForbiddingOpenAIModel(OpenAIBaseModel):  # frozen-ok: assignment tests need attribute writes
+    model_config = ConfigDict(extra="forbid")
+
+
+def _assignment_outcome(model: BaseModel, assign: Callable[[], None], name: str) -> tuple[object, ...]:
+    try:
+        assign()
+    except (AttributeError, ValueError) as error:
+        return type(error), str(error)
+    return model.model_dump(), getattr(model, name), model.model_fields_set, model.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "build, name, value",
+    [
+        pytest.param(lambda: _ExtraModel(existing=1, later=3), "fresh", 1, id="new-extra"),
+        pytest.param(lambda: _ExtraModel(existing=1, later=3), "existing", 2, id="existing-extra-keeps-order"),
+        pytest.param(lambda: _ExtraModel(existing=1, later=3), "declared", "x", id="declared-field"),
+        pytest.param(lambda: _ExtraModel(existing=1, later=3), "doubled", "ab", id="property"),
+        pytest.param(lambda: _ExtraModel(existing=1, later=3), "_free", 1, id="undeclared-underscore-name"),
+        pytest.param(lambda: _ExtraModel(existing=1, later=3), "_secret", "x", id="private-attribute"),
+        pytest.param(lambda: _ExtraModel(existing=1, later=3), "marker", 1, id="class-var"),
+        pytest.param(lambda: _ExtraModel(existing=1, later=3), "unset_marker", 1, id="class-var-without-value"),
+        pytest.param(lambda: _ExtraModel(existing=1, later=3), "model_config", 1, id="class-attribute"),
+        pytest.param(_FrozenExtraModel, "fresh", 1, id="frozen"),
+        pytest.param(_ValidatedExtraModel, "fresh", "5", id="validate-assignment"),
+        pytest.param(_IgnoredExtraModel, "fresh", 1, id="extra-ignore"),
+        pytest.param(_MirroringModel, "fresh", 1, id="setattr-override"),
+        pytest.param(_InheritingExtraModel, "inherited", 1, id="class-attribute-set-to-none"),
+        pytest.param(
+            lambda: _ForbiddingOpenAIModel.construct(existing=1), "fresh", 1, id="extra-forbid-built-by-construct"
+        ),
+    ],
+)
+def test_set_extra_attribute_matches_setattr(build: Callable[[], BaseModel], name: str, value: object) -> None:
+    through_setattr: Final = build()
+    through_helper: Final = build()
+
+    expected: Final = _assignment_outcome(through_setattr, lambda: setattr(through_setattr, name, value), name)
+    actual: Final = _assignment_outcome(through_helper, lambda: set_extra_attribute(through_helper, name, value), name)
+
+    assert actual == expected
+
+
+@pytest.mark.parametrize("response_type", [ModelResponse, ModelResponseStream])
+def test_hidden_params_raises_attribute_error_once_deleted(
+    response_type: type[ModelResponse | ModelResponseStream],
+) -> None:
+    response: Final = response_type()
+    del response._hidden_params
+
+    assert getattr(response, "hidden_params", "fallback") == "fallback"
+
+
+def _round_trip(response: ModelResponse | ModelResponseStream) -> ModelResponse | ModelResponseStream:
+    return pickle.loads(pickle.dumps(response))
+
+
+@pytest.mark.parametrize("response_type", [ModelResponse, ModelResponseStream])
+@pytest.mark.parametrize(
+    "rebuild",
+    [
+        pytest.param(lambda response: response, id="init"),
+        pytest.param(lambda response: response.model_copy(), id="model-copy"),
+        pytest.param(lambda response: response.model_copy(deep=True), id="deep-copy"),
+        pytest.param(_round_trip, id="pickle"),
+    ],
+)
+def test_hidden_params_is_the_stored_dict_on_every_construction_path(
+    response_type: type[ModelResponse | ModelResponseStream],
+    rebuild: Callable[[ModelResponse | ModelResponseStream], ModelResponse | ModelResponseStream],
+) -> None:
+    original: Final = response_type()
+    original.hidden_params["model_id"] = "deployment-1"
+    response: Final = rebuild(original)
+
+    response.hidden_params["api_base"] = "https://example.com"
+
+    assert response.hidden_params is response._hidden_params
+    assert get_hidden_params(response) == response._hidden_params
+    assert response._hidden_params["api_base"] == "https://example.com"

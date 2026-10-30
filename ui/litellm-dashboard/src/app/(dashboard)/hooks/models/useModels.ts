@@ -45,6 +45,7 @@ export const useModelsInfo = (
   accessGroup?: string,
   wildcardOnly: boolean = false,
   blocked?: boolean,
+  options: { useStoredParams?: boolean } = {},
 ) => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<PaginatedModelInfoResponse>({
@@ -57,6 +58,7 @@ export const useModelsInfo = (
         ...(search && { search }),
         ...(modelName && { modelName }),
         ...(modelId && { modelId }),
+        useStoredParams: Boolean(options.useStoredParams),
         ...(teamId && { teamId }),
         ...(sortBy && { sortBy }),
         ...(sortOrder && { sortOrder }),
@@ -86,6 +88,7 @@ export const useModelsInfo = (
         accessGroup,
         wildcardOnly,
         blocked,
+        options,
       ),
     enabled: Boolean(accessToken && userId && userRole),
   });

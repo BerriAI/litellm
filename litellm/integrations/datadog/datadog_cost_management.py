@@ -205,11 +205,12 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         # see _RESERVED_TAG_KEYS for the rationale.
         if self.cost_tag_keys:
             allow: Final = set(self.cost_tag_keys)
+            client_allow: Final = allow - {"is_silent_experiment"}
             for rt in log.get("request_tags") or []:
                 if not isinstance(rt, str) or ":" not in rt:
                     continue
                 k, _, v = rt.partition(":")
-                if k in allow and v:
+                if k in client_allow and v:
                     self._set_custom_tag(tags, k, v)
             for k, v in metadata.items():
                 if k in allow and v is not None and not isinstance(v, (dict, list)):
@@ -218,7 +219,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
                 nested = metadata.get(nested_key)
                 if isinstance(nested, dict):
                     for k, v in nested.items():
-                        if k in allow and v is not None and not isinstance(v, (dict, list)):
+                        if k in client_allow and v is not None and not isinstance(v, (dict, list)):
                             self._set_custom_tag(tags, k, str(v))
 
         return tags

@@ -15,12 +15,15 @@
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, future::ready, stream::BoxStream};
 use litellm_framer::{
-    frames,
+    SseError, frames,
     sse::{SseCodec, SseEvent, decode_all},
 };
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::{Error, ErrorDetail, base_llm::base_model_iterator::ByteStream};
+use crate::{
+    Error, ErrorDetail,
+    base_llm::base_model_iterator::{ByteStream, tunnelled_http},
+};
 
 pub type EventStream<E> = BoxStream<'static, Result<E, Error>>;
 
@@ -70,8 +73,13 @@ pub fn invalid(error: serde_json::Error) -> Error {
     Error::InvalidResponse(ErrorDetail::invalid("stream event", error))
 }
 
-fn framing(error: litellm_framer::SseError) -> Error {
-    Error::InvalidResponse(ErrorDetail::failed("stream framing", error))
+fn framing(error: SseError) -> Error {
+    match &error {
+        SseError::Body(body) if let Some(http) = tunnelled_http(body) => Error::Http(http.clone()),
+        SseError::Body(_) | SseError::InvalidUtf8(_) => {
+            Error::InvalidResponse(ErrorDetail::failed("stream framing", error))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -92,6 +100,45 @@ mod tests {
             ..SseEvent::default()
         };
         assert_eq!(is_done(&event), done);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_transport_failure_tunnelled_through_the_body_comes_back_as_itself() {
+        use futures_util::StreamExt;
+
+        let failure = litellm_http::Error::upstream(502, "gateway went away".into());
+        let bytes: ByteStream = futures_util::stream::iter([
+            Ok(Bytes::from_static(b"data: {}\n\n")),
+            Err(std::io::Error::other(failure.clone())),
+        ])
+        .boxed();
+
+        let mut events = event_stream::<serde_json::Value>(bytes, is_done);
+        assert!(events.next().await.expect("first event").is_ok());
+        let error = events.next().await.expect("failure").unwrap_err();
+        assert_eq!(error, Error::Http(failure));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_body_failure_that_is_not_transport_is_an_invalid_response() {
+        use futures_util::StreamExt;
+
+        let bytes: ByteStream =
+            futures_util::stream::iter([Err(std::io::Error::other("disk full"))]).boxed();
+
+        let error = event_stream::<serde_json::Value>(bytes, is_done)
+            .next()
+            .await
+            .expect("failure")
+            .unwrap_err();
+        assert!(matches!(error, Error::InvalidResponse(_)), "{error:?}");
+        assert!(
+            litellm_error::Report::new(&error)
+                .to_string()
+                .contains("disk full")
+        );
     }
 
     #[rstest]
