@@ -334,3 +334,19 @@ def test_retrieval_cannot_bind_native_calls_without_a_provider_url() -> None:
     response: Final = {"output": [{"type": "mcp_call", "server_label": "github", "name": "search_code"}]}
     with pytest.raises(ProxyException, match="absent from the validated request"):
         check_native_mcp_response(identity(), {}, response, is_retrieval=True)
+
+
+def test_response_binds_to_its_own_deployment_and_current_policy() -> None:
+    from litellm.proxy.auth.native_mcp_policy import native_mcp_deployment_validator
+
+    validate: Final = native_mcp_deployment_validator(identity())
+    assert validate is not None
+    first: Final = validate(request())
+    second: Final = validate({})
+    response: Final = first({"output": [{"type": "mcp_call", "server_label": "github", "name": "search_code"}]})
+    assert check_native_mcp_response(identity(), {}, response) is None
+    with pytest.raises(ProxyException, match="no grant"):
+        check_native_mcp_response(UserAPIKeyAuth(metadata={"native_mcp_policy": {}}), {}, response)
+    rebound: Final = second(response)
+    with pytest.raises(ProxyException, match="absent from the validated request"):
+        check_native_mcp_response(identity(), {}, rebound)

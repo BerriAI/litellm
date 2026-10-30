@@ -1,5 +1,6 @@
 import json
 from collections.abc import Mapping
+from itertools import count
 from typing import Final, Literal
 
 import pytest
@@ -398,7 +399,139 @@ def test_native_mcp_modern_toolset_honors_default_off_and_explicit_grants(
         assert JSON_OBJECT.validate_json(sent[0].body)["tools"] == body["tools"]
 
 
-@pytest.mark.parametrize("granted", (False,), ids=("denied",))
+def test_native_mcp_response_checks_anthropic_tool_through_chat_translation(
+    gateway: Gateway,
+) -> None:
+    with (
+        wire_server(lambda request: _reply("messages", request, "delete_repo")) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model=_provider("messages"), api_base=wire.url)
+        key: Final = scenario.key(native_mcp_policy=_policy())
+        body: Final = _request("messages", model)
+        response: Final = gateway.request("POST", "/v1/chat/completions", body, key=key)
+        assert len(wire.drain()) == 1
+        assert response.status_code == 400, response.text
+        assert "tool_access_denied" in response.text
+
+
+@pytest.mark.parametrize("surface", ("responses", "messages"))
+@pytest.mark.parametrize("tool", ("search_code", "delete_repo"))
+def test_native_mcp_response_checks_returned_tool(
+    gateway: Gateway, surface: Surface, tool: str
+) -> None:
+    with (
+        wire_server(lambda request: _reply(surface, request, tool)) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model=_provider(surface), api_base=wire.url)
+        key: Final = scenario.key(native_mcp_policy=_policy())
+        response: Final = gateway.request(
+            "POST", f"/v1/{surface}", _request(surface, model), key=key
+        )
+        assert len(wire.drain()) == 1
+        assert response.status_code == (200 if tool == "search_code" else 400), (
+            response.text
+        )
+        assert tool in response.text
+        if tool == "delete_repo":
+            assert object_value(JSON_OBJECT.validate_json(response.content)["error"])[
+                "type"
+            ] == (
+                "invalid_request_error"
+                if surface == "messages"
+                else "tool_access_denied"
+            )
+
+
+def test_native_mcp_allowed_response_remains_retrievable(gateway: Gateway) -> None:
+    reply: Final = Reply(
+        body=json.dumps(_response("responses", "search_code")).encode()
+    )
+    with wire_server(lambda _: reply) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(api_base=wire.url)
+        key: Final = scenario.key(native_mcp_policy=_policy())
+        created: Final = gateway.post(
+            "/v1/responses", _request("responses", model), key=key
+        )
+        fetched: Final = gateway.request(
+            "GET", f"/v1/responses/{created['id']}", key=key
+        )
+        assert len(wire.drain()) == 2
+        assert fetched.status_code == 200, fetched.text
+        assert JSON_OBJECT.validate_json(fetched.content)["output"] == created["output"]
+
+
+@pytest.mark.parametrize("surface", ("responses", "messages"))
+@pytest.mark.parametrize("stream", (False,), ids=("json",))
+def test_native_mcp_configured_grant_binds_returned_tools(
+    gateway: Gateway, surface: Surface, stream: bool
+) -> None:
+    field: Final = "mcp_servers" if surface == "messages" else "tools"
+    configured: Final = _request(surface, "unused")[field]
+    with (
+        wire_server(lambda request: _reply(surface, request, "search_code")) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = (
+            scenario.model(
+                model=_provider(surface), api_base=wire.url, mcp_servers=configured
+            )
+            if surface == "messages"
+            else scenario.model(
+                model=_provider(surface), api_base=wire.url, tools=configured
+            )
+        )
+        key: Final = scenario.key(native_mcp_policy=_policy())
+        body: Final = {
+            name: value
+            for name, value in _request(surface, model).items()
+            if name != field
+        }
+        response: Final = gateway.request(
+            "POST", f"/v1/{surface}", {**body, "stream": stream}, key=key
+        )
+        assert response.status_code == 200, response.text
+        assert "search_code" in response.text
+        assert "tool_access_denied" not in response.text
+        if stream:
+            assert (
+                "response.completed" in response.text
+                if surface == "responses"
+                else "message_stop" in response.text
+            )
+        sent: Final = wire.drain()
+        assert len(sent) == 1
+        assert JSON_OBJECT.validate_json(sent[0].body)[field] == configured
+
+
+def test_native_mcp_retry_preserves_request_binding(gateway: Gateway) -> None:
+    attempts: Final = count()
+
+    def upstream(request: Request) -> Reply:
+        if next(attempts) == 0:
+            return Reply(
+                status=429,
+                body=b'{"error":{"message":"retry control","type":"rate_limit_error"}}',
+            )
+        return _reply("responses", request, "search_code")
+
+    with wire_server(upstream) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(api_base=wire.url, num_retries=1)
+        key: Final = scenario.key(native_mcp_policy=_policy())
+        body: Final = _request("responses", model)
+        response: Final = gateway.request("POST", "/v1/responses", body, key=key)
+        assert response.status_code == 200, response.text
+        assert "search_code" in response.text
+        sent: Final = wire.drain()
+        assert len(sent) == 2
+        assert all(
+            JSON_OBJECT.validate_json(request.body)["tools"] == body["tools"]
+            for request in sent
+        )
+
+
+@pytest.mark.parametrize("granted", (True, False), ids=("allowed", "denied"))
 def test_native_mcp_fallback_checks_its_configured_tools(
     gateway: Gateway, granted: bool
 ) -> None:
@@ -446,3 +579,46 @@ def test_native_mcp_fallback_checks_its_configured_tools(
         else:
             assert fallback_requests == ()
             assert "tool_access_denied" in response.text
+
+
+def test_native_mcp_retrieval_applies_current_policy_after_revocation(
+    gateway: Gateway,
+) -> None:
+    reply: Final = Reply(
+        body=json.dumps(_response("responses", "search_code")).encode()
+    )
+    with wire_server(lambda _: reply) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(api_base=wire.url)
+        key: Final = scenario.key(native_mcp_policy=_policy())
+        created: Final = gateway.post(
+            "/v1/responses", _request("responses", model), key=key
+        )
+        control: Final = gateway.request(
+            "GET", f"/v1/responses/{created['id']}", key=key
+        )
+        assert control.status_code == 200, control.text
+        gateway.post("/key/update", {"key": key, "native_mcp_policy": {}})
+        denied: Final = gateway.request(
+            "GET", f"/v1/responses/{created['id']}", key=key
+        )
+        assert denied.status_code == 400, denied.text
+        assert "tool_access_denied" in denied.text
+        assert len(wire.drain()) in (2, 3)
+
+
+def test_native_mcp_empty_policy_preserves_ordinary_response_retrieval(
+    gateway: Gateway,
+) -> None:
+    reply: Final = Reply(body=json.dumps(_response("responses")).encode())
+    with wire_server(lambda _: reply) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(api_base=wire.url)
+        key: Final = scenario.key(native_mcp_policy={})
+        created: Final = gateway.post(
+            "/v1/responses", {"model": model, "input": "Answer without tools"}, key=key
+        )
+        fetched: Final = gateway.request(
+            "GET", f"/v1/responses/{created['id']}", key=key
+        )
+        assert fetched.status_code == 200, fetched.text
+        assert JSON_OBJECT.validate_json(fetched.content)["output"] == created["output"]
+        assert len(wire.drain()) == 2
