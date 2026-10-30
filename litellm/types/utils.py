@@ -4638,6 +4638,7 @@ class LlmProviders(str, Enum):
     OPENINFER = "openinfer"
     INFERENCEAPIS = "inferenceapis"
     ZEROGPU = "zerogpu"
+    BOURSE = "bourse"
     DARKBLOOM = "darkbloom"
     META = "meta"
     SAIL = "sail"
