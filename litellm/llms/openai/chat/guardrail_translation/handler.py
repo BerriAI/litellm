@@ -30,7 +30,10 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     replayed_tool_search_tool_names,
 )
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chunk_builder
-from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
+from litellm.llms.anthropic.common_utils import (
+    anthropic_server_tool_call_params,
+    write_anthropic_server_tool_calls,
+)
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -1133,16 +1136,13 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     ) -> None:
         guardrailed_by_task: Final = MappingProxyType(dict(zip(task_mappings, guardrailed_tool_calls)))
         for choice_idx, choice in enumerate(response.choices):
-            server_tool_calls = anthropic_server_tool_call_params(choice.message)
-            rewritten = tuple(
-                _rewritten_server_tool_call(server_tool_call, guardrailed_by_task.get((choice_idx, server_idx)))
-                for server_idx, server_tool_call in enumerate(server_tool_calls)
+            write_anthropic_server_tool_calls(
+                choice.message,
+                tuple(
+                    _rewritten_server_tool_call(server_tool_call, guardrailed_by_task.get((choice_idx, server_idx)))
+                    for server_idx, server_tool_call in enumerate(anthropic_server_tool_call_params(choice.message))
+                ),
             )
-            if rewritten != server_tool_calls:
-                choice.message.provider_specific_fields = {
-                    **(choice.message.provider_specific_fields or {}),
-                    "server_tool_calls": list(rewritten),
-                }
 
     @staticmethod
     def _string_choice_contents(response: "ModelResponse") -> tuple[str | None, ...]:
@@ -1271,16 +1271,13 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             return
         for response in responses_so_far:
             for choice in response.choices:
-                streamed = anthropic_server_tool_call_params(choice.delta)
-                rewritten = tuple(
-                    guardrailed_by_id.get((choice.index, server_tool_call["id"]), server_tool_call)
-                    for server_tool_call in streamed
+                write_anthropic_server_tool_calls(
+                    choice.delta,
+                    tuple(
+                        guardrailed_by_id.get((choice.index, server_tool_call["id"]), server_tool_call)
+                        for server_tool_call in anthropic_server_tool_call_params(choice.delta)
+                    ),
                 )
-                if rewritten != streamed:
-                    choice.delta.provider_specific_fields = {
-                        **(choice.delta.provider_specific_fields or {}),
-                        "server_tool_calls": list(rewritten),
-                    }
 
     async def _apply_guardrail_responses_to_output_streaming(
         self,

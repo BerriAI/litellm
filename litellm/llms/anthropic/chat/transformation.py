@@ -63,7 +63,6 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
-    ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
     AllAnthropicPassThroughMessageValues,
     AllAnthropicToolsValues,
@@ -91,7 +90,6 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
-    OpenAIChatCompletionFinishReason,
     OpenAIMcpServerTool,
     OpenAIWebSearchOptions,
 )
@@ -168,6 +166,7 @@ _ANTHROPIC_TOOL_NAME_MAX_LEN: Final = 128
 _DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
 _TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
+_CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
     ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
@@ -265,6 +264,19 @@ def _hosted_web_tool_use(block: object) -> tuple[str, str, object] | None:
             return call_id, name, tool_input
         case _:
             return None
+
+
+def _server_tool_use_id(block: object) -> str | None:
+    match block:
+        case {"type": "server_tool_use", "id": str() as call_id}:
+            return call_id
+        case _:
+            return None
+
+
+def _server_tool_use_ids(completion_response: Mapping[str, object]) -> frozenset[str]:
+    blocks: Final = _CONTENT_BLOCKS_ADAPTER.validate_python(completion_response.get("content") or ())
+    return frozenset(filter(None, map(_server_tool_use_id, blocks)))
 
 
 def _hosted_web_call(call_id: str, tool_name: str, tool_input: object, result: object) -> ResponseFunctionWebSearch:
@@ -2876,11 +2888,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         return usage
 
-    @staticmethod
-    def _is_server_tool_call(tool_call: ChatCompletionToolCallChunk) -> bool:
-        tool_call_id: Final = tool_call["id"]
-        return tool_call_id is not None and tool_call_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
-
     def _build_code_by_id_map(self, tool_calls: list[ChatCompletionToolCallChunk]) -> dict[str, str]:
         code_by_id: Final[dict[str, str]] = {}
         for tc in tool_calls:
@@ -2947,6 +2954,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         tool_results: Sequence[_AnthropicToolResultBlock] | None,
         compaction_blocks: Sequence[object] | None,
         tool_calls: list[ChatCompletionToolCallChunk],
+        server_tool_use_ids: frozenset[str],
     ) -> dict[str, object]:
         provider_specific_fields: Final[dict[str, object]] = {
             "citations": citations,
@@ -2984,7 +2992,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if compaction_blocks is not None:
             provider_specific_fields["compaction_blocks"] = compaction_blocks
 
-        server_tool_calls: Final = [tc for tc in tool_calls if self._is_server_tool_call(tc)]
+        server_tool_calls: Final = [tc for tc in tool_calls if tc["id"] in server_tool_use_ids]
         if server_tool_calls:
             provider_specific_fields["server_tool_calls"] = server_tool_calls
 
@@ -3047,7 +3055,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ):
             text_content = prefix_prompt + text_content
 
-        client_tool_calls: Final = [tc for tc in tool_calls if not self._is_server_tool_call(tc)]
+        server_tool_use_ids: Final = _server_tool_use_ids(completion_response)
+        client_tool_calls: Final = [tc for tc in tool_calls if tc["id"] not in server_tool_use_ids]
         provider_specific_fields: Final = self._build_provider_specific_fields(
             completion_response,
             citations,
@@ -3056,6 +3065,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             tool_results,
             compaction_blocks,
             tool_calls,
+            server_tool_use_ids,
         )
 
         json_mode_message, tool_calls_for_message, json_extra_content = self._resolve_json_mode_non_streaming(
@@ -3090,10 +3100,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         model_response.choices[0].message = _message
         model_response.hidden_params["original_response"] = completion_response["content"]
-        model_response.choices[0].finish_reason = cast(
-            OpenAIChatCompletionFinishReason,
-            map_finish_reason(completion_response["stop_reason"]),
-        )
+        model_response.choices[0].finish_reason = map_finish_reason(completion_response["stop_reason"])
 
         usage: Final = self.calculate_usage(
             usage_object=completion_response["usage"],

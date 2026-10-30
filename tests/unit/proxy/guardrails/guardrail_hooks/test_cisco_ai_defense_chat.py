@@ -1777,6 +1777,78 @@ class TestCiscoAIDefenseToolCallBypass:
             f"included in the scanned text. Sent: {sent!r}"
         )
 
+    @staticmethod
+    def _server_tool_call_response() -> ModelResponse:
+        from litellm.types.utils import ChatCompletionMessageToolCall, Function
+
+        return ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="tool_calls",
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_1",
+                                type="function",
+                                function=Function(name="get_weather", arguments='{"city": "Paris"}'),
+                            )
+                        ],
+                        provider_specific_fields={
+                            "server_tool_calls": [
+                                {
+                                    "id": "srvtoolu_01",
+                                    "type": "function",
+                                    "function": {"name": "web_search", "arguments": '{"query": "persimmon"}'},
+                                }
+                            ]
+                        },
+                    ),
+                )
+            ]
+        )
+
+    @pytest.mark.asyncio
+    async def test_post_call_scan_sends_server_tool_call_arguments_to_cisco(self):
+        g = _make_guardrail(event_hook="post_call")
+        post_mock = AsyncMock(return_value=_safe_response())
+
+        with _patch_inspection_post(g, post_mock):
+            await g.async_post_call_success_hook(
+                data={"messages": [{"role": "user", "content": "look up persimmon"}]},
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=self._server_tool_call_response(),
+            )
+
+        assert [call.kwargs["json"]["messages"] for call in post_mock.call_args_list] == [
+            [
+                {"role": "user", "content": "look up persimmon"},
+                {"role": "assistant", "content": '{"query": "persimmon"} {"city": "Paris"}'},
+            ]
+        ]
+
+    @pytest.mark.asyncio
+    async def test_post_call_redact_clears_server_tool_call_arguments(self):
+        g = _make_guardrail(event_hook="post_call", on_flagged_action="monitor")
+        cisco_resp = _redact_response(sanitized_text="[REDACTED]")
+
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco_resp)):
+            result = await g.async_post_call_success_hook(
+                data={"messages": [{"role": "user", "content": "look up persimmon"}]},
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=self._server_tool_call_response(),
+            )
+
+        message = result.choices[0].message
+        assert message.provider_specific_fields == {
+            "server_tool_calls": [
+                {"id": "srvtoolu_01", "type": "function", "function": {"name": "web_search", "arguments": "{}"}}
+            ]
+        }
+        assert message.tool_calls[0].function.arguments == "{}"
+
 
 class TestCiscoAIDefenseToolDefinitionBypass:
 

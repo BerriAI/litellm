@@ -26,6 +26,7 @@ from litellm.integrations.opentelemetry import (
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse_otel import (
     LangfuseSpanAttributes,
@@ -605,8 +606,8 @@ def _extract_choices_output(response_obj: _Gettable) -> str | None:
     message: Final = _as_gettable(first_choice.get("message", {}))
     if message is None:
         return None
-    tool_calls: Final = message.get("tool_calls")
-    if isinstance(tool_calls, list) and tool_calls:
+    tool_calls: Final = tool_calls_with_server_tool_calls(message)
+    if tool_calls:
         transformed_tool_calls: Final = [
             entry for tool_call in tool_calls if (entry := _transformed_tool_call(response_obj, tool_call)) is not None
         ]

@@ -17,7 +17,8 @@ def _claude_mapping(messages, response_obj):
     return logger.claude_mapping(model="gpt-5.6", messages=messages, response_obj=response_obj)
 
 
-def test_claude_mapping_serializes_custom_tool_calls(monkeypatch):
+@pytest.fixture()
+def anthropic_prompts(monkeypatch):
     """
     Stub the anthropic module unconditionally: the SDK may be absent (it lives in the
     proxy-runtime extra), and the tests/unit/llms/anthropic test package can
@@ -27,6 +28,10 @@ def test_claude_mapping_serializes_custom_tool_calls(monkeypatch):
     stub.HUMAN_PROMPT = "\n\nHuman:"
     stub.AI_PROMPT = "\n\nAssistant:"
     monkeypatch.setitem(sys.modules, "anthropic", stub)
+
+
+@pytest.mark.usefixtures("anthropic_prompts")
+def test_claude_mapping_serializes_custom_tool_calls():
     response_obj = {
         "id": "chatcmpl-1",
         "choices": [
@@ -56,6 +61,44 @@ def test_claude_mapping_serializes_custom_tool_calls(monkeypatch):
     tool_use_blocks = [b for b in mapped["content"] if b["type"] == "tool_use"]
     assert {"type": "tool_use", "id": "call_c", "name": "ApplyPatch", "input": "*** Begin Patch"} in tool_use_blocks
     assert {"type": "tool_use", "id": "call_f", "name": "read_file", "input": '{"path": "a.py"}'} in tool_use_blocks
+
+
+@pytest.mark.usefixtures("anthropic_prompts")
+def test_claude_mapping_puts_server_tool_calls_first_as_tool_use_blocks():
+    response_obj = {
+        "id": "chatcmpl-1",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_f",
+                            "type": "function",
+                            "function": {"name": "read_file", "arguments": '{"path": "a.py"}'},
+                        },
+                    ],
+                    "provider_specific_fields": {
+                        "server_tool_calls": [
+                            {
+                                "id": "srvtoolu_01",
+                                "type": "function",
+                                "function": {"name": "web_search", "arguments": '{"query": "persimmon"}'},
+                            }
+                        ]
+                    },
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 2},
+    }
+    mapped = _claude_mapping([{"role": "user", "content": "hi"}], response_obj)
+    assert mapped["content"] == [
+        {"type": "tool_use", "id": "srvtoolu_01", "name": "web_search", "input": '{"query": "persimmon"}'},
+        {"type": "tool_use", "id": "call_f", "name": "read_file", "input": '{"path": "a.py"}'},
+    ]
 
 
 @pytest.fixture()

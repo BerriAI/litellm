@@ -3548,6 +3548,45 @@ def test_code_execution_tool_results_extraction():
     assert "Done!" in transformed_response.choices[0].message.content
 
 
+def test_server_and_client_tool_calls_split_by_block_type_not_id_prefix():
+    completion_response: Final = {
+        "id": "msg_split",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": [
+            {"type": "server_tool_use", "id": "toolu_server", "name": "web_search", "input": {"query": "persimmon"}},
+            {"type": "tool_use", "id": "srvtoolu_client", "name": "get_weather", "input": {"city": "Paris"}},
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+    raw_response: Final = MagicMock(spec=httpx.Response)
+    raw_response.headers = {}
+
+    message: Final = (
+        AnthropicConfig()
+        .transform_parsed_response(
+            completion_response=completion_response,
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            json_mode=False,
+            prefix_prompt=None,
+        )
+        .choices[0]
+        .message
+    )
+
+    assert [
+        (call["id"], call["function"].get("name"), call["function"].get("arguments"))
+        for call in anthropic_server_tool_call_params(message)
+    ] == [("toolu_server", "web_search", '{"query": "persimmon"}')]
+    assert [
+        (tool_call.id, tool_call.function.name, tool_call.function.arguments) for tool_call in message.tool_calls or ()
+    ] == [("srvtoolu_client", "get_weather", '{"city": "Paris"}')]
+
+
 def test_code_execution_tool_results_in_hidden_params():
     """
     Test that tool_results reaches _hidden_params so the Responses API adapter

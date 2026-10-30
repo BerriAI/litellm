@@ -1,15 +1,17 @@
 import builtins
+import json
 from collections.abc import Mapping, Sequence
 from typing import Final, Literal, Optional, Union
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from openai.types.responses.response_function_web_search import (
+    Action,
     ActionOpenPage,
     ActionSearch,
     ActionSearchSource,
     ResponseFunctionWebSearch,
 )
-from pydantic import ConfigDict, PrivateAttr
+from pydantic import ConfigDict, PrivateAttr, TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
@@ -114,6 +116,40 @@ def build_web_search_call(
 def web_search_call_tool_id(call_id: str) -> str | None:
     tool_id: Final = call_id.removeprefix(WEB_SEARCH_CALL_ID_PREFIX)
     return None if tool_id == call_id else tool_id
+
+
+_HOSTED_WEB_TOOL_ARGUMENTS: Final = TypeAdapter(dict[str, object])
+
+
+def hosted_web_tool_call(action: object) -> tuple[str, str] | None:
+    match action:
+        case ActionSearch(query=str() as query):
+            return "web_search", json.dumps({"query": query})
+        case ActionOpenPage(url=str() as url):
+            return "web_fetch", json.dumps({"url": url})
+        case _:
+            return None
+
+
+def _decoded_hosted_web_tool_arguments(arguments: str) -> Mapping[str, object]:
+    try:
+        return _HOSTED_WEB_TOOL_ARGUMENTS.validate_json(arguments)
+    except ValidationError:
+        return {}
+
+
+def with_hosted_web_tool_arguments(action: Action, arguments: str) -> Action:
+    match action, _decoded_hosted_web_tool_arguments(arguments):
+        case ActionSearch(), {"query": str() as query}:
+            return action.model_copy(update={"query": query, "queries": [query] if query else []})
+        case ActionSearch(), _:
+            return action.model_copy(update={"query": "", "queries": []})
+        case ActionOpenPage(), {"url": str() as url}:
+            return action.model_copy(update={"url": url})
+        case ActionOpenPage(), _:
+            return action.model_copy(update={"url": None})
+        case _:
+            return action
 
 
 class OutputImageGenerationCall(BaseLiteLLMOpenAIResponseObject):

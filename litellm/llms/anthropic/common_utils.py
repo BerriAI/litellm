@@ -60,10 +60,21 @@ from litellm.types.llms.anthropic import (
     AnthropicThinkingParam,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantToolCall
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantToolCall,
+    ChatCompletionToolCallFunctionChunk,
+)
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.proxy.model_listing import ModelInfoResponse
-from litellm.types.utils import ChatCompletionMessageToolCall, LlmProviders
+from litellm.types.utils import (
+    ChatCompletionMessageCustomToolCall,
+    ChatCompletionMessageToolCall,
+    Delta,
+    LlmProviders,
+    Message,
+    chat_completion_tool_call_from_dict,
+)
 
 _MessageT = TypeVar("_MessageT")
 
@@ -117,6 +128,7 @@ _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
 OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _SERVER_TOOL_CALLS_ADAPTER: Final = TypeAdapter(tuple[ChatCompletionAssistantToolCall, ...])
+_TOOL_CALL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
@@ -2084,10 +2096,66 @@ def anthropic_server_tool_call_params(message: object) -> tuple[ChatCompletionAs
 
 
 def anthropic_server_tool_calls(message: object) -> tuple[ChatCompletionMessageToolCall, ...]:
-    return tuple(
-        ChatCompletionMessageToolCall(id=call["id"], type=call["type"], function=dict(call["function"]))
-        for call in anthropic_server_tool_call_params(message)
+    return tuple(_message_tool_call_from_params(call) for call in anthropic_server_tool_call_params(message))
+
+
+def tool_calls_with_server_tool_calls(
+    message: object,
+) -> tuple[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall, ...]:
+    client_tool_calls: Final = tuple(
+        call
+        for tool_call in parts_of(message_field(message, "tool_calls"))
+        if (call := _client_message_tool_call(tool_call)) is not None
     )
+    return (*anthropic_server_tool_calls(message), *client_tool_calls)
+
+
+def with_server_tool_call_arguments(
+    call: ChatCompletionAssistantToolCall, arguments: str
+) -> ChatCompletionAssistantToolCall:
+    return ChatCompletionAssistantToolCall(
+        id=call["id"],
+        type=call["type"],
+        function=ChatCompletionToolCallFunctionChunk(name=call["function"].get("name"), arguments=arguments),
+    )
+
+
+def write_anthropic_server_tool_calls(
+    holder: Message | Delta, rewritten: tuple[ChatCompletionAssistantToolCall, ...]
+) -> None:
+    if rewritten == anthropic_server_tool_call_params(holder):
+        return
+    holder.provider_specific_fields = {  # rebind-ok: a guardrail rewrite must land on the message it scanned
+        **(holder.provider_specific_fields or {}),
+        "server_tool_calls": list(rewritten),
+    }
+
+
+def write_anthropic_server_tool_call_arguments(holder: Message | Delta, index: int, arguments: str) -> None:
+    write_anthropic_server_tool_calls(
+        holder,
+        tuple(
+            with_server_tool_call_arguments(call, arguments) if call_index == index else call
+            for call_index, call in enumerate(anthropic_server_tool_call_params(holder))
+        ),
+    )
+
+
+def _message_tool_call_from_params(call: ChatCompletionAssistantToolCall) -> ChatCompletionMessageToolCall:
+    return ChatCompletionMessageToolCall(id=call["id"], type=call["type"], function=dict(call["function"]))
+
+
+def _client_message_tool_call(
+    tool_call: object,
+) -> ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall | None:
+    match tool_call:
+        case ChatCompletionMessageToolCall() | ChatCompletionMessageCustomToolCall():
+            return tool_call
+        case _:
+            try:
+                return chat_completion_tool_call_from_dict(_TOOL_CALL_FIELDS_ADAPTER.validate_python(tool_call))
+            except (TypeError, ValidationError):
+                return None
 
 
 def tool_call_is_rebuilt_as_server_tool_use(

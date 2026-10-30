@@ -31,7 +31,6 @@ from openai.types.chat.chat_completion_named_tool_choice_param import (
 from openai.types.responses import ResponseFunctionToolCall, ResponseFunctionWebSearch
 from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from openai.types.responses.response_create_params import ResponseInputParam
-from openai.types.responses.response_function_web_search import ActionOpenPage, ActionSearch
 from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomParam
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
 from openai.types.responses.tool_param import FunctionToolParam
@@ -121,6 +120,7 @@ from litellm.types.responses.main import (
     OutputImageGenerationCall,
     OutputText,
     OutputToolSearchCall,
+    hosted_web_tool_call,
     web_search_call_tool_id,
 )
 from litellm.types.utils import (
@@ -881,27 +881,23 @@ def _chain_session_metadata(chain_session: str, request_kwargs: Mapping[str, obj
     return {key: {**_STR_KEY_DICT_ADAPTER.validate_python(metadata), CALLER_SESSION_ID_METADATA_KEY: chain_session}}
 
 
-def _pending_claude_server_tool_call(search: ResponseFunctionWebSearch) -> ChatCompletionAssistantToolCall | None:
+def claude_web_search_call_tool_call(search: ResponseFunctionWebSearch) -> ChatCompletionAssistantToolCall | None:
     tool_id: Final = web_search_call_tool_id(search.id)
-    if search.status != "in_progress" or tool_id is None:
+    if tool_id is None or not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
         return None
-    if not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
+    hosted_call: Final = hosted_web_tool_call(search.action)
+    if hosted_call is None:
         return None
-    match search.action:
-        case ActionSearch(query=str() as query):
-            return _server_tool_call(tool_id, "web_search", json.dumps({"query": query}))
-        case ActionOpenPage(url=str() as url):
-            return _server_tool_call(tool_id, "web_fetch", json.dumps({"url": url}))
-        case _:
-            return None
-
-
-def _server_tool_call(tool_id: str, name: str, arguments: str) -> ChatCompletionAssistantToolCall:
+    name, arguments = hosted_call
     return ChatCompletionAssistantToolCall(
         id=tool_id,
         type="function",
         function=ChatCompletionToolCallFunctionChunk(name=name, arguments=arguments),
     )
+
+
+def _pending_claude_server_tool_call(search: ResponseFunctionWebSearch) -> ChatCompletionAssistantToolCall | None:
+    return claude_web_search_call_tool_call(search) if search.status == "in_progress" else None
 
 
 class LiteLLMCompletionResponsesConfig:

@@ -24,6 +24,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import iter_items
+from litellm.llms.anthropic.common_utils import (
+    anthropic_server_tool_calls,
+    write_anthropic_server_tool_call_arguments,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_ssl_configuration,
@@ -515,27 +519,37 @@ class CatoNetworksGuardrail(CustomGuardrail):
     @staticmethod
     def _output_fragments(message: Message) -> Sequence[tuple[tuple[str, int | None], str]]:
         """Assistant text the proxy returns to the caller: ``content`` plus every
-        ``tool_calls[].function.arguments`` string, each tagged with where a
-        redaction must be written back. ``content`` is only included when present
-        so a tool-call-only choice keeps its ``None`` content (the text-vs-tool-call
-        signal downstream consumers rely on) while its arguments are still inspected."""
-        fragments: Final[list] = []
-        if message.content is not None:
-            fragments.append((("content", None), message.content))
-        for idx, tool_call in enumerate(message.tool_calls or []):
-            function = getattr(tool_call, "function", None)
-            arguments = getattr(function, "arguments", None)
-            if isinstance(arguments, str) and arguments:
-                fragments.append((("tool_call", idx), arguments))
-        return fragments
+        tool call's ``function.arguments`` string, Claude's server tool calls first,
+        each tagged with where a redaction must be written back. ``content`` is only
+        included when present so a tool-call-only choice keeps its ``None`` content
+        (the text-vs-tool-call signal downstream consumers rely on) while its
+        arguments are still inspected."""
+        content: Final = () if message.content is None else ((("content", None), message.content),)
+        return (
+            *content,
+            *CatoNetworksGuardrail._tool_call_fragments("server_tool_call", anthropic_server_tool_calls(message)),
+            *CatoNetworksGuardrail._tool_call_fragments("tool_call", message.tool_calls or ()),
+        )
+
+    @staticmethod
+    def _tool_call_fragments(kind: str, tool_calls: Sequence[object]) -> tuple[tuple[tuple[str, int | None], str], ...]:
+        return tuple(
+            ((kind, idx), arguments)
+            for idx, arguments in enumerate(
+                getattr(getattr(tool_call, "function", None), "arguments", None) for tool_call in tool_calls
+            )
+            if isinstance(arguments, str) and arguments
+        )
 
     @staticmethod
     def _apply_output_fragment(message: Any, target: tuple[str, int | None], redacted: str) -> None:
-        kind, idx = target
-        if kind == "content":
-            message.content = redacted
-        else:
-            message.tool_calls[idx].function.arguments = redacted
+        match target:
+            case ("content", _):
+                message.content = redacted
+            case ("server_tool_call", int() as idx):
+                write_anthropic_server_tool_call_arguments(message, idx, redacted)
+            case (_, idx):
+                message.tool_calls[idx].function.arguments = redacted
 
     @staticmethod
     def _responses_output_field(item: object, key: str) -> str | Sequence[object] | None:

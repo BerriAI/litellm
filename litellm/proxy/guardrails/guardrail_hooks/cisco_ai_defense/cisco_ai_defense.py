@@ -36,6 +36,12 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.core_helpers import iter_items
+from litellm.llms.anthropic.common_utils import (
+    anthropic_server_tool_call_params,
+    tool_calls_with_server_tool_calls,
+    with_server_tool_call_arguments,
+    write_anthropic_server_tool_calls,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -47,7 +53,9 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     Choices,
+    Delta,
     LLMResponseTypes,
+    Message,
     ModelResponse,
     ModelResponseStream,
     TextCompletionResponse,
@@ -1633,6 +1641,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
     @classmethod
     def _clear_tool_call_arguments(cls, message: object) -> None:
         """Clear tool-call / function-call arguments after Cisco redaction."""
+        cls._clear_server_tool_call_arguments(message)
         tool_calls = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
         for tc in tool_calls or []:
             fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
@@ -1641,6 +1650,23 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
             message.get("function_call") if isinstance(message, dict) else getattr(message, "function_call", None)
         )
         cls._clear_arguments_field(function_call)
+
+    @staticmethod
+    def _clear_server_tool_call_arguments(message: object) -> None:
+        cleared: Final = tuple(
+            with_server_tool_call_arguments(server_tool_call, "{}")
+            for server_tool_call in anthropic_server_tool_call_params(message)
+        )
+        match message:
+            case Message() | Delta():
+                write_anthropic_server_tool_calls(message, cleared)
+            case dict() if cleared:
+                message["provider_specific_fields"] = {  # rebind-ok: a redaction must land on the message it scanned
+                    **(message.get("provider_specific_fields") or {}),
+                    "server_tool_calls": list(cleared),
+                }
+            case _:
+                pass
 
     def _redact_responses_api_output(
         self,
@@ -2074,8 +2100,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
     @classmethod
     def _extract_message_tool_argument_parts(cls, message: object) -> list[str]:
         parts: Final[list[str]] = []
-        tool_calls = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
-        for tool_call in tool_calls or []:
+        for tool_call in tool_calls_with_server_tool_calls(message):
             args = cls._extract_tool_call_arguments(tool_call)
             if args:
                 parts.append(args)
