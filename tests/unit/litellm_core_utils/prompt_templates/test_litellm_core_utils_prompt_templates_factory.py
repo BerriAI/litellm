@@ -8364,6 +8364,34 @@ def test_anthropic_messages_pt_paused_turn_before_new_user_message_drops_unrun_s
     assert {"type": "text", "text": "Step 1 is Tokyo."} in replayed
 
 
+@_PAUSED_TURN_THINKING_CASES
+@_PAUSED_TURN_CONTENT_CASES
+def test_anthropic_messages_pt_paused_turn_resent_without_search_results_runs_only_its_last_search(
+    thinking_blocks, content
+):
+    paused_turn = _paused_web_search_turn(thinking_blocks, content)
+    result = anthropic_messages_pt(
+        [
+            {"role": "user", "content": "Play the sister city chain game."},
+            {key: value for key, value in paused_turn.items() if key != "provider_specific_fields"},
+        ],
+        model="claude-sonnet-4-5",
+        llm_provider="anthropic",
+    )
+
+    replayed = result[-1]["content"]
+    assert [block["id"] for block in replayed if block["type"] in ("server_tool_use", "tool_use")] == [
+        "srvtoolu_01Paused"
+    ]
+    assert replayed[-1] == {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Paused",
+        "name": "web_search",
+        "input": {"query": "Adelaide sister cities"},
+    }
+    assert [block["type"] for block in replayed if block["type"] == "thinking"] == []
+
+
 def test_anthropic_messages_pt_list_content_with_thinking_preserves_order():
     """
     Test that when assistant content is already a list containing interleaved

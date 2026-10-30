@@ -2086,6 +2086,10 @@ def _unrun_server_tool_use_ids(blocks: Sequence[Mapping[str, object]]) -> frozen
     )
 
 
+def _last_block_id_among(blocks: Sequence[Mapping[str, object]], ids: frozenset[object]) -> object:
+    return next(block_id for block in reversed(blocks) if (block_id := _block_id(block)) in ids)
+
+
 def _paused_turn_replay(
     tool_invokes: Sequence[_AnthropicToolInvokeItem],
     thinking_blocks: Sequence[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
@@ -2098,9 +2102,10 @@ def _paused_turn_replay(
     unrun_ids: Final = _unrun_server_tool_use_ids(tool_invokes)
     if not unrun_ids:
         return tuple(tool_invokes), tuple(thinking_blocks)
-    if is_final_message:
-        return tuple(tool_invokes), ()
-    return tuple(block for block in tool_invokes if _block_id(block) not in unrun_ids), ()
+    dropped_ids: Final = (
+        unrun_ids - frozenset((_last_block_id_among(tool_invokes, unrun_ids),)) if is_final_message else unrun_ids
+    )
+    return tuple(block for block in tool_invokes if _block_id(block) not in dropped_ids), ()
 
 
 def convert_to_anthropic_tool_invoke(

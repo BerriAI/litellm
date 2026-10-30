@@ -437,6 +437,32 @@ def _input_item_role(input_item: Mapping[str, object]) -> str:
     return cast(str, input_item.get("role") or "user")  # cast-ok: client-supplied role forwarded verbatim, unvalidated
 
 
+def _starts_a_turn(input_item: Mapping[str, object]) -> bool:
+    item_type: Final = input_item.get("type")
+    if item_type in TOOL_CALL_OUTPUT_ITEM_TYPES:
+        return True
+    return item_type in (None, "message") and input_item.get("role") != "assistant"
+
+
+def _is_unrun_hosted_search(input_item: Mapping[str, object]) -> bool:
+    return input_item.get("type") == "web_search_call" and input_item.get("status") == "in_progress"
+
+
+def _without_encrypted_content(input_item: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in input_item.items() if key != "encrypted_content"}
+
+
+def _without_paused_turn_thinking(input_items: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    turns: Final = tuple(accumulate(int(_starts_a_turn(item)) for item in input_items))
+    paused_turns: Final = frozenset(
+        turn for turn, item in zip(turns, input_items, strict=True) if _is_unrun_hosted_search(item)
+    )
+    return tuple(
+        _without_encrypted_content(item) if turn in paused_turns and item.get("type") == "reasoning" else item
+        for turn, item in zip(turns, input_items, strict=True)
+    )
+
+
 SessionMessage: TypeAlias = (
     AllMessageValues
     | GenericChatCompletionMessage
@@ -1488,7 +1514,7 @@ class LiteLLMCompletionResponsesConfig:
             messages.append(ChatCompletionUserMessage(role="user", content=input))
         elif isinstance(input, list):
             existing_tool_call_ids: Final[set[str]] = set()
-            for _input in input:
+            for _input in _without_paused_turn_thinking(input):
                 chat_completion_messages = (
                     LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
                         input_item=_input,
