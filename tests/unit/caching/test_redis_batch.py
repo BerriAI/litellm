@@ -95,6 +95,7 @@ class FakeRedisCache(RedisCache):
         self.namespace = namespace
         self._circuit_breaker = RedisCircuitBreaker(failure_threshold=5, recovery_timeout=30)
         self.service_logger_obj = ServiceLogging()
+        self._connection: Final = self._make_connection()
         self.default_ttl = None
         self.alone: list[tuple[str, Any]] = []
         self.store: dict[str, Any] = {}

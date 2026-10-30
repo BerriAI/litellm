@@ -683,12 +683,12 @@ def test_call_stack_info_skips_guard_frames_when_deployed_without_sources(monkey
     check comparing those two paths stops skipping and the service log then names the guard
     machinery instead of the real caller.
     """
-    from litellm.caching import redis_cache as redis_cache_module
     from litellm.caching.redis_cache import (
         RedisCircuitBreaker,
         _get_call_stack_info,
         _redis_circuit_breaker_guard_sync,
     )
+    from litellm.redis import health as redis_cache_module
 
     monkeypatch.setattr(redis_cache_module, "__file__", redis_cache_module.__file__ + "c")
 
@@ -1197,8 +1197,8 @@ def test_timeouts_during_a_blip_log_once_per_interval_not_once_per_call(sync_bat
 
     from redis.exceptions import TimeoutError as RedisTimeoutError
 
-    from litellm.caching import redis_cache as redis_cache_module
     from litellm.caching.redis_cache import _RedisTimeoutLogThrottle
+    from litellm.redis import health as redis_cache_module
 
     clock = MagicMock(return_value=1_000.0)
     monkeypatch.setattr(
@@ -1271,8 +1271,8 @@ async def test_write_path_timeouts_inside_the_interval_stay_at_debug(call_method
 
     from redis.exceptions import TimeoutError as RedisTimeoutError
 
-    from litellm.caching import redis_cache as redis_cache_module
     from litellm.caching.redis_cache import _RedisTimeoutLogThrottle
+    from litellm.redis import health as redis_cache_module
 
     clock = MagicMock(return_value=1_000.0)
     throttle = _RedisTimeoutLogThrottle(interval=5.0, clock=clock)

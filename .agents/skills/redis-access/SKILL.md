@@ -20,7 +20,7 @@ metadata:
 - New coordination state gets a store in `litellm/redis/stores/<keyspace>.py`, not a new `RedisCache` method
 - A Python store is a finished state. Adding one does not require a Rust port
 - Callers get typed domain results from the store and keep policy, which TTL applies, fail open or closed, retries, and the `with_service_target` that labels the calls
-- New code never calls `init_async_client`, `init_pubsub_client`, `async_register_script` or `.redis_client`, and never imports redis-py outside `litellm/redis/transport/redis_py.py`. `litellm/caching/redis_cache.py` and `redis_cluster_cache.py` stay allowlisted while they own the breaker's exception types and the generic verbs
+- New code never calls `init_async_client`, `init_pubsub_client`, `async_register_script` or `.redis_client`, and never imports redis-py outside `litellm/redis/transport/redis_py.py`, except for exception classification in `litellm/redis/health.py`. `litellm/caching/redis_cache.py` and `redis_cluster_cache.py` stay allowlisted while they own the generic verbs
 
 ## The transport
 
@@ -38,8 +38,8 @@ metadata:
 - Replies are undecoded bytes. `eval` returns `int | bytes | None | tuple[...]`. Decoding belongs to the store that owns the keyspace
 - `eval` takes script text every call and does `EVALSHA` with `EVAL` fallback, so nothing registers scripts
 - These rules are shared with `crates/redis-client`, whose `AGENTS.md` has the Rust side. Change both together, since Python and Rust pods share keys in one Redis
-- `RedisCache.transport()` builds the transport over that cache's own client, pub/sub client, namespace, circuit breaker, `_admit_async_call`, cluster-aware `mget` and `ServiceLogging`. No new connection, no second breaker, and `RedisClusterCache`'s connection gate still applies
-- Every method runs its command through two steps, in this order. `run_under_breaker` wraps the existing `_run_under_circuit_breaker` from `litellm/caching/redis_cache.py`, so admission, the generation check, the health failure classification and the timeout flag are the ones legacy traffic uses, and maps the outcome to a `RedisFailure` (`breaker_open`, `transport`, `server`) instead of raising. `RedisServiceEvents.observe` times the call, logs a failure and emits the service event
+- `RedisCache.transport()` delegates to its internal `RedisConnection`, which builds the transport over that cache's own client, pub/sub client, namespace, circuit breaker, `_admit_async_call`, cluster-aware `mget` and `ServiceLogging`. No new connection, no second breaker, and `RedisClusterCache`'s connection gate still applies
+- Every method runs its command through two steps, in this order. `run_under_breaker` wraps the shared `_run_under_circuit_breaker` from `litellm/redis/health.py`, so admission, the generation check, the health failure classification and the timeout flag are the ones legacy traffic uses, and maps the outcome to a `RedisFailure` (`breaker_open`, `transport`, `server`) instead of raising. `RedisServiceEvents.observe` times the call, logs a failure and emits the service event
 
 - `ping`, the admin commands and pub/sub skip the breaker, like the `RedisCache` methods they replace, so health checks still reach a Redis the breaker took out. They still go through `RedisServiceEvents.observe`, except `get_message` polling
 

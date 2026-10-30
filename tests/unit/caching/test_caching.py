@@ -14,8 +14,8 @@ import pytest
 import respx
 
 import litellm
+import litellm.redis.health as redis_cache_module
 from litellm import acompletion, aembedding, completion, embedding
-import litellm.caching.redis_cache as redis_cache_module
 from litellm._internal_context import current_service_target
 from litellm.caching.caching import Cache, CacheMode, response_cache_phase
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES

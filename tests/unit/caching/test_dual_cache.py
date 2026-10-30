@@ -727,8 +727,8 @@ async def test_redis_timeouts_falling_back_to_memory_log_once_per_interval(caplo
     """The first fallback WARNING of a timeout streak logs, the rest stay at DEBUG until the summary."""
     from redis.exceptions import TimeoutError as RedisTimeoutError
 
-    from litellm.caching import redis_cache as redis_cache_module
     from litellm.caching.redis_cache import _RedisTimeoutLogThrottle
+    from litellm.redis import health as redis_cache_module
 
     clock = MagicMock(return_value=1_000.0)
     monkeypatch.setattr(

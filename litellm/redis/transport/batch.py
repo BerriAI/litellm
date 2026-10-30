@@ -11,7 +11,7 @@ from litellm._internal_context import (
     service_target,
 )
 from litellm._logging import verbose_logger
-from litellm.caching.redis_cache import (
+from litellm.redis.health import (
     RedisCircuitBreaker,
     _get_call_stack_info,  # pyright: ignore[reportPrivateUsage]  # same caller chain every RedisCache method reports
     _run_under_circuit_breaker,  # pyright: ignore[reportPrivateUsage]  # same health signal as every RedisCache method

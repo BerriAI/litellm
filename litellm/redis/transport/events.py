@@ -8,7 +8,7 @@ from typing import Final, TypeVar
 from litellm._internal_context import current_service_target, service_target
 from litellm._logging import verbose_logger
 from litellm._service_logger import ServiceLogging
-from litellm.caching.redis_cache import (
+from litellm.redis.health import (
     _get_call_stack_info,  # pyright: ignore[reportPrivateUsage]  # same caller attribution as RedisCache events
     log_redis_failure,
     log_redis_failure_value,
