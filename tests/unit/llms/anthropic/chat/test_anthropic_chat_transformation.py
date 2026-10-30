@@ -9838,11 +9838,11 @@ def _edits_for(keeps_thinking: bool) -> list[dict[str, str]]:
 )
 @pytest.mark.parametrize("context_management_first", [True, False])
 def test_map_openai_params_drops_clear_thinking_edit_exactly_when_thinking_is(
-    model, params, keeps_thinking, context_management_first
-):
+    model: str, params: dict[str, object], keeps_thinking: bool, context_management_first: bool
+) -> None:
     context_management: Final = {"context_management": {"edits": [CLEAR_THINKING_EDIT, CLEAR_TOOL_USES_EDIT]}}
     rest: Final = {"max_tokens": 8192, **params}
-    result = AnthropicConfig().map_openai_params(
+    result: Final = AnthropicConfig().map_openai_params(
         non_default_params={**context_management, **rest}
         if context_management_first
         else {**rest, **context_management},
@@ -9862,8 +9862,10 @@ def test_map_openai_params_drops_clear_thinking_edit_exactly_when_thinking_is(
         pytest.param("claude-sonnet-4-5", {"summary": "concise"}, id="effort-less-dict"),
     ],
 )
-def test_map_openai_params_keeps_clear_thinking_edit_when_thinking_was_not_dropped(model, reasoning_effort):
-    result = AnthropicConfig().map_openai_params(
+def test_map_openai_params_keeps_clear_thinking_edit_when_thinking_was_not_dropped(
+    model: str, reasoning_effort: str | dict[str, str]
+) -> None:
+    result: Final = AnthropicConfig().map_openai_params(
         non_default_params={
             "context_management": {"edits": [CLEAR_THINKING_EDIT]},
             "max_tokens": 8192,
@@ -9886,10 +9888,10 @@ def test_map_openai_params_keeps_clear_thinking_edit_when_thinking_was_not_dropp
     ],
 )
 def test_transform_request_drops_clear_thinking_edit_with_thinking_for_tool_turn_without_thinking_blocks(
-    monkeypatch, model, modify_params, keeps_thinking, keeps_edit
-):
+    monkeypatch: pytest.MonkeyPatch, model: str, modify_params: bool, keeps_thinking: bool, keeps_edit: bool
+) -> None:
     monkeypatch.setattr(litellm, "modify_params", modify_params)
-    result = AnthropicConfig().transform_request(
+    result: Final = AnthropicConfig().transform_request(
         model=model,
         messages=[
             {"role": "user", "content": "Look it up"},

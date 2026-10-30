@@ -10,6 +10,7 @@ Bearer/SigV4 auth chain, and the wire request through the public entrypoint.
 """
 
 import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -249,6 +250,13 @@ class TestRequestBody:
                 id="thinking-added-back-keeps-edit",
             ),
             pytest.param(
+                "anthropic.claude-opus-4-5-20251101-v1:0",
+                {"max_tokens": BEDROCK_MIN_THINKING_BUDGET_TOKENS, "reasoning_effort": "none"},
+                None,
+                ["clear_tool_uses_20250919"],
+                id="max-tokens-too-small-to-add-thinking-back-drops-edit",
+            ),
+            pytest.param(
                 "anthropic.claude-mythos-preview",
                 {},
                 None,
@@ -265,9 +273,13 @@ class TestRequestBody:
         ],
     )
     def test_clear_thinking_edit_dropped_only_with_dropped_thinking(
-        self, model, thinking_params, expected_thinking, expected_edit_types
-    ):
-        body = BedrockMantleAnthropicMessagesConfig().transform_anthropic_messages_request(
+        self,
+        model: str,
+        thinking_params: dict[str, object],
+        expected_thinking: dict[str, object] | None,
+        expected_edit_types: list[str],
+    ) -> None:
+        body: Final = BedrockMantleAnthropicMessagesConfig().transform_anthropic_messages_request(
             model=model,
             messages=[{"role": "user", "content": "ping"}],
             anthropic_messages_optional_request_params={
@@ -283,8 +295,8 @@ class TestRequestBody:
         assert body.get("thinking") == expected_thinking
         assert [edit["type"] for edit in body["context_management"]["edits"]] == expected_edit_types
 
-    def test_disabled_thinking_without_edits_is_untouched(self):
-        body = BedrockMantleAnthropicMessagesConfig().transform_anthropic_messages_request(
+    def test_disabled_thinking_without_edits_is_untouched(self) -> None:
+        body: Final = BedrockMantleAnthropicMessagesConfig().transform_anthropic_messages_request(
             model="anthropic.claude-3-5-haiku-20241022-v1:0",
             messages=[{"role": "user", "content": "ping"}],
             anthropic_messages_optional_request_params={"max_tokens": 8, "thinking": {"type": "disabled"}},

@@ -2143,10 +2143,12 @@ def test_bedrock_invoke_transform_emits_adaptive_thinking_for_opus_4_8():
         pytest.param({"reasoning_effort": "none"}, id="reasoning-effort-none"),
     ],
 )
-def test_bedrock_invoke_keeps_thinking_for_clear_thinking_edit_when_base_drops_thinking(thinking_params):
+def test_bedrock_invoke_keeps_thinking_for_clear_thinking_edit_when_base_drops_thinking(
+    thinking_params: dict[str, object],
+) -> None:
     from litellm.types.router import GenericLiteLLMParams
 
-    result = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
         model="anthropic.claude-opus-4-5-20251101-v1:0",
         messages=[{"role": "user", "content": "hi"}],
         anthropic_messages_optional_request_params={

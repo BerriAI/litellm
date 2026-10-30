@@ -87,6 +87,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         optional_params: MutableMapping[str, object],  # mutable-ok: edits optional params in place
         model: str,
         custom_llm_provider: str,
+        max_tokens: int | None,
     ) -> None:
         optional_params.pop("thinking", None)
         drop_clear_thinking_edits_for_model(optional_params, model, custom_llm_provider)
@@ -418,7 +419,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             raise AnthropicError(message=str(e.message), status_code=400)
 
         if mapped_thinking is None:
-            self._drop_thinking(optional_params, model, custom_llm_provider)
+            self._drop_thinking(optional_params, model, custom_llm_provider, max_tokens)
             optional_params.pop("output_config", None)
             return
 
@@ -426,7 +427,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if fitted_thinking is None:
             verbose_logger.warning(DROP_UNFITTING_REASONING_EFFORT_WARNING, reasoning_effort, model, max_tokens)
             if "thinking" not in optional_params:
-                self._drop_thinking(optional_params, model, custom_llm_provider)
+                self._drop_thinking(optional_params, model, custom_llm_provider, max_tokens)
             return
 
         optional_params.setdefault("thinking", fitted_thinking)
@@ -514,7 +515,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             or AnthropicConfig.validate_effort_for_model(model, effort, custom_llm_provider) is None
         ):
             if adaptive_thinking:
-                self._drop_thinking(optional_params, model, custom_llm_provider)
+                self._drop_thinking(optional_params, model, custom_llm_provider, max_tokens)
             return
 
         supports_thinking: Final = AnthropicModelInfo.supports_model_capability(
@@ -542,7 +543,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params["thinking"] = capped_thinking
         else:
             verbose_logger.warning(DROP_UNSUPPORTED_ADAPTIVE_EFFORT_WARNING, model)
-            self._drop_thinking(optional_params, model, custom_llm_provider)
+            self._drop_thinking(optional_params, model, custom_llm_provider, max_tokens)
 
         if isinstance(output_config, dict) and "effort" in output_config:
             residual: Final = {k: v for k, v in output_config.items() if k != "effort"}
