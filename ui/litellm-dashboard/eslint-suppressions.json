@@ -498,9 +498,6 @@
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/MCPToolsetsTab.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -1095,11 +1092,6 @@
   },
   "src/app/(dashboard)/usage/_components/components/EndpointUsage/components/EndpointUsageTable.tsx": {
     "no-nested-ternary": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/usage/_components/components/UsagePageView.tsx": {
-    "react-hooks/purity": {
       "count": 1
     }
   },

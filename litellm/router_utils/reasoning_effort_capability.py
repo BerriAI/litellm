@@ -27,20 +27,22 @@ it above.
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias, get_args
-
-from typing_extensions import assert_never
+from typing import Final, TypeAlias, get_args
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
+from litellm.litellm_core_utils.reasoning_effort_strength import (
+    REASONING_EFFORT_STRENGTH_ORDER,
+    ReasoningEffortRounding,
+    nearest_declared_reasoning_effort,
+)
 from litellm.litellm_core_utils.reasoning_effort_utils import reasoning_effort_from_thinking
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, validated_object_mapping
 from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.llms.openai import REASONING_EFFORT
 
-ReasoningEffortRounding: TypeAlias = Literal["up", "down"]
 RequestedReasoningEffort: TypeAlias = str | Mapping[str, object] | None
 
 REASONING_EFFORT_ADVERTISEMENT_ORDER: Final[tuple[str, ...]] = get_args(REASONING_EFFORT)
@@ -115,35 +117,6 @@ def declared_reasoning_efforts_for_model(model: str, custom_llm_provider: str) -
     return declared_reasoning_efforts(entry)
 
 
-REASONING_EFFORT_STRENGTH_ORDER: Final = ("minimal", "low", "medium", "high", "xhigh", "max")
-_STRENGTH_RANK: Final = MappingProxyType({effort: rank for rank, effort in enumerate(REASONING_EFFORT_STRENGTH_ORDER)})
-
-
-def nearest_declared_reasoning_effort(
-    requested: str, declared: Sequence[str], rounding: ReasoningEffortRounding = "up"
-) -> str:
-    """Rounding up takes the weakest declared level at least as strong as the request, else the
-    strongest declared, so the caller gets no less reasoning than it asked for instead of a rejected
-    call. Rounding down mirrors it: the strongest declared level at most as strong, else the
-    weakest. none is the off switch rather than a strength, so it is never rounded onto the ladder
-    and no level is rounded to it: a caller who turned reasoning off must not be billed for it, and
-    a model that cannot turn it off says so itself. A level outside the strength order is likewise
-    returned as is for upstream to judge."""
-    ranked: Final = sorted(
-        (effort for effort in declared if effort in _STRENGTH_RANK), key=lambda effort: _STRENGTH_RANK[effort]
-    )
-    if requested in ranked or requested not in _STRENGTH_RANK or not ranked:
-        return requested
-    strength: Final = _STRENGTH_RANK[requested]
-    match rounding:
-        case "up":
-            return next((effort for effort in ranked if _STRENGTH_RANK[effort] >= strength), ranked[-1])
-        case "down":
-            return next((effort for effort in reversed(ranked) if _STRENGTH_RANK[effort] <= strength), ranked[0])
-        case _:
-            assert_never(rounding)
-
-
 _ROUNDING_KEY: Final = "reasoning_effort_rounding"
 _DEFAULT_EFFORT: Final = "default"
 _EFFORT_KEY: Final = "effort"
@@ -163,7 +136,7 @@ def deployment_reasoning_effort_levels(deployment_model_info: object) -> tuple[s
 
 def deployment_rounds_reasoning_effort(deployment_model_info: object) -> bool:
     declared: Final = deployment_reasoning_effort_levels(deployment_model_info)
-    return declared is not None and any(level in _STRENGTH_RANK for level in declared)
+    return declared is not None and any(level in REASONING_EFFORT_STRENGTH_ORDER for level in declared)
 
 
 def with_adaptive_thinking_as_effort(
@@ -426,6 +399,27 @@ def _log_remap(
     logged_deployment_id: Final = _single_line(deployment_id)
     logged_model_group: Final = _single_line(model_group)
     logged_deployment_model: Final = _single_line(deployment_model)
+    extra: Final = MappingProxyType(
+        {
+            "reasoning_effort_deployment_id": logged_deployment_id,
+            "reasoning_effort_model_group": logged_model_group,
+            "reasoning_effort_deployment_model": logged_deployment_model,
+            "reasoning_effort_requested": logged_requested_level,
+            "reasoning_effort_sent": logged_sent_level,
+            "reasoning_effort_rounding": rounding,
+        }
+    )
+    if sent_level is None and requested_level != _DEFAULT_EFFORT:
+        verbose_logger.warning(
+            "Dropping reasoning level %s (drop_params=True) for deployment %s, model group %s, model %s because its "
+            "model_info.reasoning_effort_levels does not list that level. List every level the deployment supports.",
+            logged_requested_level,
+            logged_deployment_id,
+            logged_model_group,
+            logged_deployment_model,
+            extra=extra,
+        )
+        return
     verbose_logger.info(
         "reasoning_effort %s sent as %s (rounding %s) to deployment %s, model group %s, model %s",
         logged_requested_level,
@@ -434,14 +428,7 @@ def _log_remap(
         logged_deployment_id,
         logged_model_group,
         logged_deployment_model,
-        extra={
-            "reasoning_effort_deployment_id": logged_deployment_id,
-            "reasoning_effort_model_group": logged_model_group,
-            "reasoning_effort_deployment_model": logged_deployment_model,
-            "reasoning_effort_requested": logged_requested_level,
-            "reasoning_effort_sent": logged_sent_level,
-            "reasoning_effort_rounding": rounding,
-        },
+        extra=extra,
     )
 
 
