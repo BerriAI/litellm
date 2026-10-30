@@ -23,6 +23,7 @@ class Route(str, Enum):
     OCR = "ocr"
     TOKEN_COUNTER = "token_counter"
     TOKENIZER = "tokenizer"
+    ROUTER = "router"
 
 
 class Target(str, Enum):
@@ -221,6 +222,7 @@ RULES: Final[Rules] = (
     RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY),
     RouteRule(Route.TOKEN_COUNTER, Rollout.PYTHON_ONLY),
     RouteRule(Route.TOKENIZER, Rollout.PYTHON_ONLY),
+    RouteRule(Route.ROUTER, Rollout.RUST_OPT_IN),
     RouteRule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),
 )
 
