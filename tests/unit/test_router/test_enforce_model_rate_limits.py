@@ -6,6 +6,7 @@ regardless of the routing strategy being used.
 """
 
 import asyncio
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -522,10 +523,10 @@ async def _async_rejects(check: ModelRateLimitingCheck, deployment: dict[str, ob
     return False
 
 
-_FRESH_LIMITS: Final = ({"rpm": 0}, {"rpd": 0}, {"tpm": 0}, {"tpd": 0}, {"rpm": 1, "tpm": 1})
+_FRESH_LIMITS: Final = ({"rpm": 0}, {"rpm": 0.0}, {"rpm": False}, {"rpd": 0}, {"tpm": 0}, {"tpd": 0}, {"rpm": 1, "tpm": 1})
 
 
-def _deployment_with(limits: dict[str, int]) -> dict[str, object]:
+def _deployment_with(limits: Mapping[str, float]) -> dict[str, object]:
     return {
         "litellm_params": {"model": "gpt-4.1-mini", **limits},
         "model_info": {"id": "limit-test-id"},
@@ -623,9 +624,9 @@ class TestDailyLimits:
 
         assert at_limit == frozenset({"concurrent-0", "concurrent-1", "concurrent-2"})
 
-    @pytest.mark.parametrize("limits", _FRESH_LIMITS, ids=lambda limits: ",".join(limits))
+    @pytest.mark.parametrize("limits", _FRESH_LIMITS, ids=lambda limits: ",".join(f"{kind}={value!r}" for kind, value in limits.items()))
     def test_a_deployment_is_reported_at_its_limit_exactly_when_its_next_request_is_rejected(
-        self, limits: dict[str, int]
+        self, limits: Mapping[str, float]
     ):
         deployment = _deployment_with(limits)
         check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(DAY_ONE))
@@ -635,9 +636,9 @@ class TestDailyLimits:
         assert reported == _rejects(check, deployment)
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("limits", _FRESH_LIMITS, ids=lambda limits: ",".join(limits))
+    @pytest.mark.parametrize("limits", _FRESH_LIMITS, ids=lambda limits: ",".join(f"{kind}={value!r}" for kind, value in limits.items()))
     async def test_async_a_deployment_is_reported_at_its_limit_exactly_when_its_next_request_is_rejected(
-        self, limits: dict[str, int]
+        self, limits: Mapping[str, float]
     ):
         deployment = _deployment_with(limits)
         check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(DAY_ONE))

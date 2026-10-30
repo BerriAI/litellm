@@ -129,7 +129,7 @@ def _deployment_model_id(deployment: Mapping[str, object]) -> object:
 class _LimitCounter:
     model_id: str
     key: str
-    limit: int
+    limit: float
     counts_requests: bool
 
     def reached(self, usage: object) -> bool:
@@ -142,7 +142,7 @@ def _counters_with_limits(model_id: str, counters: Sequence[tuple[str, object, b
     return tuple(
         _LimitCounter(model_id, key, limit, counts_requests)
         for key, limit, counts_requests in counters
-        if type(limit) is int
+        if isinstance(limit, (int, float))
     )
 
 
@@ -307,7 +307,7 @@ class ModelRateLimitingCheck(CustomLogger):
         return tpm_key, rpm_key
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    def _get_current_tpm(self, tpm_key: str, tpm_limit: int) -> int | None:
+    def _get_current_tpm(self, tpm_key: str, tpm_limit: float) -> int | None:
         local_tpm: Final = self.dual_cache.get_cache(key=tpm_key, local_only=True)
         redis_cache: Final = self.dual_cache.redis_cache
         if redis_cache is None or (local_tpm is not None and local_tpm >= tpm_limit):
@@ -318,7 +318,7 @@ class ModelRateLimitingCheck(CustomLogger):
             return local_tpm
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    async def _async_get_current_tpm(self, tpm_key: str, tpm_limit: int, parent_otel_span: Span | None) -> int | None:
+    async def _async_get_current_tpm(self, tpm_key: str, tpm_limit: float, parent_otel_span: Span | None) -> int | None:
         local_tpm: Final = await self.dual_cache.async_get_cache(key=tpm_key, local_only=True)
         redis_cache: Final = self.dual_cache.redis_cache
         if redis_cache is None or (local_tpm is not None and local_tpm >= tpm_limit):

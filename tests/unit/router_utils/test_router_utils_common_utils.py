@@ -1,6 +1,8 @@
 import asyncio
 import logging
+from collections.abc import Mapping
 from itertools import chain
+from types import MappingProxyType
 from typing import Dict, Final, List, Optional, Union
 from unittest.mock import Mock
 
@@ -924,13 +926,27 @@ async def test_web_search_options_that_is_not_an_object_routes_like_a_plain_requ
     assert picks == {"search", "no-search"}
 
 
-def _web_search_group_with_model_rate_limits() -> Router:
+_SEARCH_RPM_OF_ONE: Final = (
+    pytest.param({"litellm_params": {"rpm": 1}}, id="int-rpm-in-litellm-params"),
+    pytest.param({"model_info": {"rpm": 1.0}}, id="float-rpm-in-model-info"),
+    pytest.param({"model_info": {"rpm": True}}, id="bool-rpm-in-model-info"),
+)
+
+
+def _web_search_group_with_model_rate_limits(
+    search_rpm: Mapping[str, Mapping[str, object]] = MappingProxyType({"litellm_params": {"rpm": 1}}),
+) -> Router:
     return Router(
         model_list=[
             {
                 "model_name": "mixed",
-                "litellm_params": {"model": "openai/gpt-x", "api_key": "fake-key", "mock_response": "hi", "rpm": 1},
-                "model_info": {"id": "search"},
+                "litellm_params": {
+                    "model": "openai/gpt-x",
+                    "api_key": "fake-key",
+                    "mock_response": "hi",
+                    **search_rpm.get("litellm_params", {}),
+                },
+                "model_info": {"id": "search", **search_rpm.get("model_info", {})},
             },
             {
                 "model_name": "mixed",
@@ -948,8 +964,11 @@ def _web_search_group_with_model_rate_limits() -> Router:
 
 
 @pytest.mark.asyncio
-async def test_web_search_request_goes_to_the_other_deployment_once_the_capable_one_hits_its_enforced_rpm() -> None:
-    router: Final = _web_search_group_with_model_rate_limits()
+@pytest.mark.parametrize("search_rpm", _SEARCH_RPM_OF_ONE)
+async def test_web_search_request_goes_to_the_other_deployment_once_the_capable_one_hits_its_enforced_rpm(
+    search_rpm: Mapping[str, Mapping[str, object]],
+) -> None:
+    router: Final = _web_search_group_with_model_rate_limits(search_rpm)
     served_by: Final = tuple(
         [
             (
@@ -963,8 +982,11 @@ async def test_web_search_request_goes_to_the_other_deployment_once_the_capable_
     assert served_by == ("search", "no-search", "no-search")
 
 
-def test_sync_web_search_request_goes_to_the_other_deployment_once_the_capable_one_hits_its_enforced_rpm() -> None:
-    router: Final = _web_search_group_with_model_rate_limits()
+@pytest.mark.parametrize("search_rpm", _SEARCH_RPM_OF_ONE)
+def test_sync_web_search_request_goes_to_the_other_deployment_once_the_capable_one_hits_its_enforced_rpm(
+    search_rpm: Mapping[str, Mapping[str, object]],
+) -> None:
+    router: Final = _web_search_group_with_model_rate_limits(search_rpm)
     served_by: Final = tuple(
         router.completion(
             model="mixed", messages=[{"role": "user", "content": "hi"}], num_retries=0, **_ANTHROPIC_WEB_SEARCH_REQUEST
