@@ -1,3 +1,5 @@
+import base64
+import binascii
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -89,6 +91,7 @@ _PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
 ] = TypeAdapter(ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None)
 _HANDLER: Final = BaseLLMHTTPHandler()
 _BASE64_MARKER: Final = ";base64,"
+_SNIFFABLE_MEDIA_TYPES: Final = frozenset({"image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"})
 
 
 _IMAGE_ADAPTER: Final[TypeAdapter[DecisionsImage]] = TypeAdapter(DecisionsImage, config=ConfigDict(title="images"))
@@ -710,11 +713,51 @@ def _decoded_byte_count(payload: str) -> int:
     return len(standard_base64(payload).rstrip("=")) * 3 // 4
 
 
-def _decoded_image_bytes(image: DecisionsImage) -> int:
+def _base64_payload(image: DecisionsImage) -> str | None:
     if isinstance(image, DecisionsBase64Image):
-        return _decoded_byte_count(image.base64)
+        return image.base64
     marker_at: Final = image.lower().find(_BASE64_MARKER)
-    return 0 if marker_at < 0 else _decoded_byte_count(image[marker_at + len(_BASE64_MARKER) :])
+    return None if marker_at < 0 else image[marker_at + len(_BASE64_MARKER) :]
+
+
+def _decoded_image_bytes(image: DecisionsImage) -> int:
+    payload: Final = _base64_payload(image)
+    return 0 if payload is None else _decoded_byte_count(payload)
+
+
+def _leading_bytes(payload: str) -> bytes:
+    head: Final = standard_base64(payload)[:16]
+    try:
+        return base64.b64decode(head + "=" * (-len(head) % 4))
+    except binascii.Error:
+        return b""
+
+
+def _sniffed_media_types(head: bytes) -> frozenset[str]:
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return frozenset({"image/png"})
+    if head.startswith(b"\xff\xd8\xff"):
+        return frozenset({"image/jpeg", "image/jpg"})
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return frozenset({"image/gif"})
+    if head.startswith(b"RIFF") and head[8:12] == b"WEBP":
+        return frozenset({"image/webp"})
+    return frozenset()
+
+
+def _is_readable_image(media_types: frozenset[str] | None, image: DecisionsImage) -> bool:
+    payload: Final = _base64_payload(image)
+    if media_types is None or not media_types <= _SNIFFABLE_MEDIA_TYPES or payload is None:
+        return True
+    return bool(_sniffed_media_types(_leading_bytes(payload)) & media_types)
+
+
+def _unreadable_image_error(call: DecisionsCall) -> str | None:
+    media_types: Final = call.provider_config.image_rules_for(call.model).image_media_types
+    unreadable: Final = sum(not _is_readable_image(media_types, image) for image in input_images(call.ir_request.input))
+    if media_types is None or not unreadable:
+        return None
+    return f"takes only {', '.join(sorted(media_types))} image bytes, got {unreadable} image(s) that are none of these"
 
 
 def _byte_limit(limit: int) -> str:
@@ -748,11 +791,21 @@ def _fits_alone(rules: BaseDecisionsConfig, image: DecisionsImage) -> bool:
     )
 
 
+def _is_usable(
+    rules: BaseDecisionsConfig, failed_downloads: frozenset[str], drops_params: bool, image: DecisionsImage
+) -> bool:
+    return (
+        _is_not_one_of(failed_downloads, image)
+        and _fits_alone(rules, image)
+        and (not drops_params or _is_readable_image(rules.image_media_types, image))
+    )
+
+
 def _kept_images(call: DecisionsCall) -> tuple[bool, ...]:
     rules: Final = call.provider_config.image_rules_for(call.model)
     images: Final = input_images(call.ir_request.input)
-    failed_downloads: Final = frozenset(_remote_image_urls(call))
-    fits: Final = tuple(_is_not_one_of(failed_downloads, image) and _fits_alone(rules, image) for image in images)
+    usable: Final = partial(_is_usable, rules, frozenset(_remote_image_urls(call)), _drops_params(call.litellm_params))
+    fits: Final = tuple(map(usable, images))
     spent: Final = accumulate(
         _decoded_image_bytes(image) if fit else 0 for image, fit in zip(images, fits, strict=True)
     )
@@ -767,7 +820,7 @@ def _with_images_within_limits(call: DecisionsCall, kept: Sequence[bool]) -> Dec
     if all(kept):
         return call
     kept_input: Final = _with_images_kept(call.ir_request.input, kept)
-    error: Final = _image_limit_error(call)
+    error: Final = _image_limit_error(call) or _unreadable_image_error(call)
     if error is None:
         return replace(call, ir_request=replace(call.ir_request, input=kept_input))
     return _dropped_or_refused(call, kept_input, error)

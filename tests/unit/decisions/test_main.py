@@ -1915,7 +1915,7 @@ _CLOUDFLARE_RUN_URL: Final = "https://api.cloudflare.com/client/v4/accounts/acct
 _PERPLEXITY_DECISIONS_URL: Final = "https://api.perplexity.ai/v1/decisions"
 _TEXT_ONLY_MODEL: Final = "nace/drex-v2.0"
 _TEXT_ONLY_URL: Final = "https://console.nace.ai/v1/systemone"
-_PNG_DATA_URL: Final = "data:image/png;base64,AA=="
+_PNG_DATA_URL: Final = "data:image/png;base64,iVBORw0KGgo="
 _REMOTE_IMAGE_URL: Final = "https://images.example/screen.png"
 _SCREEN_TEXT: Final = "Is the screen cracked?"
 _SYSTEMONE_PREDICATE: Final[Mapping[str, object]] = MappingProxyType(
@@ -2216,13 +2216,13 @@ async def test_a_malformed_image_under_drop_params_keeps_the_well_formed_ones(
         model="cloudflare/clef",
         state=_SCREEN_TEXT,
         questions=_SYSTEMONE_PREDICATE,
-        images=[entry, _PNG_DATA_URL, {"content_type": "image/png", "base64": "AA=="}],
+        images=[entry, _PNG_DATA_URL, {"content_type": "image/png", "base64": "iVBORw0KGgo="}],
         drop_params=True,
     )
 
     assert json.loads(route.calls[0].request.content)["images"] == [
         _PNG_DATA_URL,
-        {"content_type": "image/png", "base64": "AA=="},
+        {"content_type": "image/png", "base64": "iVBORw0KGgo="},
     ]
 
 
@@ -2437,24 +2437,33 @@ async def test_dropping_the_only_malformed_input_images_is_rejected_before_http(
 _MIB: Final = 1024 * 1024
 
 
+_PNG_SIGNATURE: Final = b"\x89PNG\r\n\x1a\n"
+
+
+def _png_base64(decoded_bytes: int) -> str:
+    return base64.b64encode(_PNG_SIGNATURE.ljust(decoded_bytes, b"\0")).decode()
+
+
 def _png_data_url(decoded_bytes: int) -> str:
-    return f"data:image/png;base64,{base64.b64encode(bytes(decoded_bytes)).decode()}"
+    return f"data:image/png;base64,{_png_base64(decoded_bytes)}"
 
 
 def _png_object(decoded_bytes: int) -> Mapping[str, object]:
-    return {"content_type": "image/png", "base64": base64.b64encode(bytes(decoded_bytes)).decode()}
+    return {"content_type": "image/png", "base64": _png_base64(decoded_bytes)}
 
 
 def _distinct_png_data_urls(count: int) -> tuple[str, ...]:
-    return tuple(f"data:image/png;base64,{base64.b64encode(bytes((index,))).decode()}" for index in range(count))
+    return tuple(
+        f"data:image/png;base64,{base64.b64encode(_PNG_SIGNATURE + bytes((index,))).decode()}" for index in range(count)
+    )
 
 
 _OVERSIZED_IMAGES: Final[tuple[tuple[Sequence[object], str], ...]] = (
     ((_png_data_url(4 * _MIB + 1),), "images of at most 4,194,304 bytes (4 MiB) each, got one of 4,194,305 bytes"),
     ((_png_object(4 * _MIB + 1),), "images of at most 4,194,304 bytes (4 MiB) each, got one of 4,194,305 bytes"),
     (
-        (_png_data_url(4 * _MIB), _png_object(4 * _MIB), _png_data_url(1)),
-        "at most 8,388,608 bytes (8 MiB) of images per request, got 8,388,609 bytes",
+        (_png_data_url(4 * _MIB), _png_object(4 * _MIB), _png_data_url(8)),
+        "at most 8,388,608 bytes (8 MiB) of images per request, got 8,388,616 bytes",
     ),
 )
 
@@ -2646,7 +2655,7 @@ def test_remote_image_urls_with_an_uppercase_scheme_are_inlined_for_cloudflare(
     ]
 
 
-_PNG_DATA_URL_WITH_NAME: Final = "data:image/png;name=screen.png;base64,AA=="
+_PNG_DATA_URL_WITH_NAME: Final = "data:image/png;name=screen.png;base64,iVBORw0KGgo="
 _GIF_DATA_URL: Final = "data:image/gif;base64,R0lGODlh"
 _CLOUDFLARE_TYPE_REFUSAL: Final = "cloudflare takes only image/jpeg, image/jpg, image/png, image/webp images, got "
 
@@ -4590,6 +4599,100 @@ async def test_a_remote_image_that_fails_to_download_is_refused_before_http_when
     assert route.call_count == 0
 
 
+_NOT_AN_IMAGE_BASE64: Final = base64.b64encode(b"not an image").decode()
+_PERPLEXITY_IMAGE_TYPE_MODELS: Final = (
+    ("perplexity/pplx-decider-v1.2", _PERPLEXITY_DECISIONS_URL),
+    ("openrouter/perplexity/pplx-decider-v1.2", "https://openrouter.ai/api/alpha/decisions"),
+)
+_PERPLEXITY_IMAGE_TYPE_MODEL_IDS: Final = ("perplexity", "openrouter-perplexity")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
+@pytest.mark.parametrize(("model", "url"), _PERPLEXITY_IMAGE_TYPE_MODELS, ids=_PERPLEXITY_IMAGE_TYPE_MODEL_IDS)
+async def test_image_bytes_that_are_not_an_image_the_model_takes_are_dropped_under_drop_params(
+    sync: bool, model: str, url: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(url).respond(json=_RESPONSE)
+    gif: Final = f"data:image/png;base64,{base64.b64encode(b'GIF89a').decode()}"
+    request_kwargs: Final = {
+        "model": model,
+        "state": _SCREEN_TEXT,
+        "questions": _SYSTEMONE_PREDICATE,
+        "images": [{"content_type": "image/png", "base64": _NOT_AN_IMAGE_BASE64}, gif, _PNG_DATA_URL],
+        "api_key": "k",
+        "drop_params": True,
+    }
+
+    if sync:
+        litellm.systemone(**request_kwargs)
+    else:
+        await litellm.asystemone(**request_kwargs)
+
+    assert json.loads(route.calls.last.request.content)["state"] == [
+        _SCREEN_TEXT,
+        {"type": "image_url", "image_url": {"url": _PNG_DATA_URL}},
+    ]
+
+
+@pytest.mark.parametrize(("model", "url"), _PERPLEXITY_IMAGE_TYPE_MODELS, ids=_PERPLEXITY_IMAGE_TYPE_MODEL_IDS)
+def test_image_bytes_that_are_not_an_image_still_reach_the_model_without_drop_params(
+    model: str, url: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(url).respond(json=_RESPONSE)
+    not_an_image: Final = f"data:image/png;base64,{_NOT_AN_IMAGE_BASE64}"
+
+    litellm.systemone(model=model, state=_SCREEN_TEXT, questions=_SYSTEMONE_PREDICATE, images=[not_an_image], api_key="k")
+
+    assert json.loads(route.calls.last.request.content)["state"] == [
+        _SCREEN_TEXT,
+        {"type": "image_url", "image_url": {"url": not_an_image}},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("model", "url"), _PERPLEXITY_IMAGE_TYPE_MODELS, ids=_PERPLEXITY_IMAGE_TYPE_MODEL_IDS)
+async def test_image_bytes_that_are_not_an_image_are_refused_before_http_when_nothing_else_is_left(
+    model: str, url: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(url).respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match=r"image bytes, got 1 image\(s\) that are none of these"):
+        await litellm.adecisions(
+            model=model,
+            api_key="k",
+            input=[
+                {
+                    "role": "user",
+                    "content": [{"type": "input_image", "image_url": f"data:image/png;base64,{_NOT_AN_IMAGE_BASE64}"}],
+                }
+            ],
+            questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+            drop_params=True,
+        )
+
+    assert route.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("model", "url", "upstream_model"), _STATE_IMAGE_PROVIDERS, ids=_STATE_IMAGE_PROVIDER_IDS)
+async def test_logging_callbacks_get_the_state_that_was_sent_with_its_images(
+    model: str, url: str, upstream_model: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    route: Final = respx_mock.post(url).respond(json=_RESPONSE)
+    recording_logger: Final = _InputRecordingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recording_logger])
+
+    await litellm.asystemone(
+        model=model, state=_SCREEN_TEXT, questions=_SYSTEMONE_PREDICATE, images=[_PNG_DATA_URL], api_key="k"
+    )
+    await _drain_logging_worker()
+
+    assert recording_logger.inputs == [json.loads(route.calls.last.request.content)]
+
+
 _STATE_IMAGE_LIMITS: Final = (
     ("perplexity/pplx-decider-v1.2", "https://api.perplexity.ai/v1/decisions", 8),
     ("openrouter/cloudflare/clef-flash", "https://openrouter.ai/api/alpha/decisions", 4),
@@ -4737,14 +4840,14 @@ def test_openrouter_jev_drops_webp_and_keeps_png_under_drop_params(respx_mock: r
         model="openrouter/typesafe/jev-1.14",
         state=_SCREEN_TEXT,
         questions=_SYSTEMONE_PREDICATE,
-        images=["data:image/webp;base64,BB==", "data:image/png;base64,AA=="],
+        images=["data:image/webp;base64,BB==", _PNG_DATA_URL],
         api_key="k",
         drop_params=True,
     )
 
     assert json.loads(route.calls.last.request.content)["state"] == [
         _SCREEN_TEXT,
-        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
+        {"type": "image_url", "image_url": {"url": _PNG_DATA_URL}},
     ]
 
 

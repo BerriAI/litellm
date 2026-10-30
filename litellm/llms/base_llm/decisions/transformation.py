@@ -370,7 +370,7 @@ def ir_to_systemone_request(
     state_carries_images: Final = images_in_state and bool(images)
     return {
         "model": model,
-        "state": _multimodal_state(request.input) if state_carries_images else _systemone_state(request.input),
+        "state": [*_multimodal_state(request.input)] if state_carries_images else _systemone_state(request.input),
         **(
             {"audio": [clip if isinstance(clip, str) else clip.model_dump() for clip in request.audio]}
             if request.audio
