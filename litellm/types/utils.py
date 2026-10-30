@@ -4785,7 +4785,7 @@ class LiteLLMFineTuningJob(FineTuningJob):
 
 _BatchFieldValue: TypeAlias = object
 
-_OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS: Final = MappingProxyType(
+OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS: Final = MappingProxyType(
     {"pending": "validating", "running": "in_progress"}
 )
 
@@ -4803,7 +4803,7 @@ class LiteLLMBatch(Batch):
     @field_validator("status", mode="before")
     @classmethod
     def _map_vllm_router_status(cls, value: _BatchFieldValue) -> _BatchFieldValue:
-        return _OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS.get(value, value) if isinstance(value, str) else value
+        return OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS.get(value, value) if isinstance(value, str) else value
 
     @property
     def hidden_params(self) -> dict[str, _BatchFieldValue]:  # mutable-ok: API requires mutation

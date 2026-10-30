@@ -37,13 +37,14 @@ import litellm.batches.main as bm
 import asyncio
 import datetime
 import json
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Final
 import httpx
 import respx
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 from litellm.integrations.custom_logger import CustomLogger
+from openai.types.batch import Batch
 from litellm.types.utils import LiteLLMBatch
 
 
@@ -1296,20 +1297,20 @@ async def test_hosted_vllm_router_batch_with_an_unknown_value_is_rejected(
     assert [error["loc"] for error in exc_info.value.errors()] == [(field,)]
 
 
-async def _list_on_vllm_router() -> list[LiteLLMBatch]:
+async def _list_on_vllm_router() -> Sequence[Batch]:
     page: Final = await litellm.alist_batches(
         custom_llm_provider="hosted_vllm", api_key="sk-test", api_base=VLLM_ROUTER_API_BASE
     )
     return page.data
 
 
-async def _list_on_vllm_router_sync() -> list[LiteLLMBatch]:
+async def _list_on_vllm_router_sync() -> Sequence[Batch]:
     return litellm.list_batches(custom_llm_provider="hosted_vllm", api_key="sk-test", api_base=VLLM_ROUTER_API_BASE).data
 
 
 @pytest.mark.parametrize("list_router", (_list_on_vllm_router, _list_on_vllm_router_sync))
 async def test_hosted_vllm_router_batch_list_comes_back_as_openai_batches(
-    respx_mock: respx.MockRouter, list_router: Callable[[], Awaitable[list[LiteLLMBatch]]]
+    respx_mock: respx.MockRouter, list_router: Callable[[], Awaitable[Sequence[Batch]]]
 ):
     respx_mock.get(f"{VLLM_ROUTER_API_BASE}/batches").respond(
         200,
@@ -1331,3 +1332,38 @@ async def test_hosted_vllm_router_batch_list_comes_back_as_openai_batches(
         ("batch_5f8dac", "batch", "validating"),
         ("batch_c74802", "batch", "in_progress"),
     ]
+
+
+async def test_openai_batch_list_items_come_back_as_openai_sent_them(respx_mock: respx.MockRouter):
+    respx_mock.get("http://openai.test/v1/batches").respond(
+        200,
+        json={
+            "object": "list",
+            "data": [
+                {
+                    **_OPENAI_BATCH_JSON,
+                    "status": "completed",
+                    "usage": {
+                        "input_tokens": 10,
+                        "input_tokens_details": {"cached_tokens": 4},
+                        "output_tokens": 5,
+                        "output_tokens_details": {"reasoning_tokens": 2},
+                        "total_tokens": 15,
+                    },
+                },
+                {**_OPENAI_BATCH_JSON, "id": "batch_def456", "status": "queued"},
+            ],
+            "first_id": "batch_abc123",
+            "last_id": "batch_def456",
+            "has_more": False,
+        },
+    )
+
+    page: Final = await litellm.alist_batches(
+        custom_llm_provider="openai", api_key="sk-test", api_base="http://openai.test/v1"
+    )
+
+    first, second = page.data
+    assert first.usage is not None
+    assert (first.usage.input_tokens_details.cached_tokens, first.usage.output_tokens_details.reasoning_tokens) == (4, 2)
+    assert (second.id, second.object, second.status) == ("batch_def456", "batch", "queued")

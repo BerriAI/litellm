@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.logging_utils import speech_request_body, track_
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator, MockResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.utils import (
+    OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS,
     EmbeddingResponse,
     ImageResponse,
     LiteLLMBatch,
@@ -2161,8 +2162,16 @@ class OpenAIFilesAPI(BaseLLM):
         return response
 
 
-def _as_litellm_batches(batches: Sequence[Batch]) -> Sequence[LiteLLMBatch]:
-    return [LiteLLMBatch.model_validate(batch.model_dump()) for batch in batches]
+def _with_openai_batch_fields(batches: Sequence[Batch]) -> Sequence[Batch]:
+    return [
+        batch.model_copy(
+            update={
+                "object": batch.object or "batch",
+                "status": OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS.get(batch.status, batch.status),
+            }
+        )
+        for batch in batches
+    ]
 
 
 class OpenAIBatchesAPI(BaseLLM):
@@ -2355,7 +2364,7 @@ class OpenAIBatchesAPI(BaseLLM):
     ):
         verbose_logger.debug("listing batches, after= %s, limit= %s", after, limit)
         response: Final = await openai_client.batches.list(after=after, limit=limit)
-        return response.model_copy(update={"data": _as_litellm_batches(response.data)})
+        return response.model_copy(update={"data": _with_openai_batch_fields(response.data)})
 
     def list_batches(
         self,
@@ -2394,7 +2403,7 @@ class OpenAIBatchesAPI(BaseLLM):
         if not isinstance(openai_client, OpenAI):
             raise TypeError("OpenAI client is not an instance of OpenAI. Make sure you passed a sync OpenAI client.")
         response: Final = openai_client.batches.list(after=after, limit=limit)
-        return response.model_copy(update={"data": _as_litellm_batches(response.data)})
+        return response.model_copy(update={"data": _with_openai_batch_fields(response.data)})
 
 
 class OpenAIAssistantsAPI(BaseLLM):
