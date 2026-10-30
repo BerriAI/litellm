@@ -576,7 +576,12 @@ class AnthropicResponsesSSEByteStream:
         return await self._frames.__anext__()
 
     async def aclose(self) -> None:
-        await self._frames.aclose()
+        from litellm.llms.anthropic.messages.native.streaming_iterator import aclose_if_supported
+
+        try:
+            await self._frames.aclose()
+        finally:
+            await aclose_if_supported(self._wrapper.responses_stream)
 
     def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
         return self._wrapper.partial_response_on_disconnect()

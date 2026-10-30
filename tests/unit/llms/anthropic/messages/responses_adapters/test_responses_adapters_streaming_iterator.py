@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from types import SimpleNamespace
 
 import anyio
+import httpx
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
@@ -27,6 +28,8 @@ from litellm.llms.anthropic.messages.native.utils import INCOMPLETE_STREAM_ERROR
 from litellm.llms.anthropic.messages.responses_adapters.streaming_iterator import (
     AnthropicResponsesStreamWrapper,
 )
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
 from litellm.types.llms.openai import ResponseFailedEvent, ResponsesAPIResponse
 
 
@@ -818,3 +821,44 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
 
         asyncio.run(_disconnect_mid_hook())
         assert len(finished) == 1
+
+
+class _EndlessProviderStream(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b'data: {"type": "response.created", "response": {"id": "resp_1", "status": "in_progress", "output": []}}\n\n'
+        yield (
+            b'data: {"type": "response.output_item.added", "output_index": 0, "item": '
+            b'{"type": "message", "id": "msg_1", "role": "assistant", "content": [], "status": "in_progress"}}\n\n'
+        )
+        while True:
+            yield (
+                b'data: {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, '
+                b'"content_index": 0, "delta": "word "}\n\n'
+            )
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def test_closing_the_sse_stream_mid_response_closes_the_provider_response():
+    provider_stream = _EndlessProviderStream()
+
+    async def _close_after_the_first_text_delta() -> None:
+        upstream = ResponsesAPIStreamingIterator(
+            response=httpx.Response(200, stream=provider_stream),
+            model="m",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=_logging_obj_with_failure_hook(_FailureHookRecorder()),
+        )
+        sse = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m").async_anthropic_sse_wrapper()
+        async for frame in sse:
+            if b'"text_delta"' in frame:
+                await sse.aclose()
+                return
+        pytest.fail("the stream ended without a text delta")
+
+    asyncio.run(_close_after_the_first_text_delta())
+    assert provider_stream.closed
