@@ -33,3 +33,7 @@ class TestA2AGuardrailHandlerStreamingScanKey:
     def test_unparseable_items_are_ignored(self):
         key = A2AGuardrailHandler().get_streaming_scan_key([_text_event("hi"), "not json", b"bytes"])
         assert key.texts == ("hi",)
+
+    def test_json_items_that_are_not_objects_are_ignored(self):
+        key = A2AGuardrailHandler().get_streaming_scan_key([_text_event("hi"), "[1, 2]", "5"])
+        assert key.texts == ("hi",)

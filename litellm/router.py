@@ -1622,7 +1622,7 @@ class Router(DeprecatedRouterMembers):
         self._core_deployment_names: list[str] = []  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self._core_deployment_latency_map = {}
         ### CACHING ###
-        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = "local"  # default to an in-memory cache
+        cache_type: Literal["local", "redis", "redis-semantic", "s3"] = "local"  # default to an in-memory cache
         redis_cache = None
         cache_config: Final[dict[str, Any]] = {}
 
@@ -12857,7 +12857,10 @@ class Router(DeprecatedRouterMembers):
         configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
         reasoning_efforts_initialized = False
         reasoning_efforts_unknown = False
-        model_list: Final = self._core_get_model_list_of_routed_group(model_group)
+        serves_team_deployments: Final = team_id is not None and bool(
+            self._team_deployments_named(team_id, model_group)
+        )
+        model_list: Final = self._core_get_model_list_of_routed_group(model_group, team_id)
         model_group_description: Final[str | None] = next(
             (d for d in (_configured_model_info(m).get("description") for m in model_list) if isinstance(d, str)),
             None,
@@ -12865,7 +12868,8 @@ class Router(DeprecatedRouterMembers):
         for model in model_list:
             is_match = False
             if (
-                "model_name" in model
+                serves_team_deployments
+                or "model_name" in model
                 and model["model_name"] == model_group
                 or "model_name" in model
                 and self._core_pattern_router.route(model_group) is not None
@@ -14214,17 +14218,22 @@ class Router(DeprecatedRouterMembers):
             lambda name: self._core_wildcard_route_deployments(name, team_id),
         )
 
-    def _core_get_model_list_of_routed_group(self, model_group: str) -> list[DeploymentTypedDict]:
+    def _core_get_model_list_of_routed_group(
+        self, model_group: str, team_id: str | None = None
+    ) -> list[DeploymentTypedDict]:
         """
         The deployments a request the router has already resolved to model_group is
-        served from: the ones named model_group, the routing group of that name, or
-        the wildcard route matching it when neither exists.
+        served from: team_id's own deployments under that public name when the team has
+        any, else the ones named model_group, the routing group of that name, or the
+        wildcard route matching it when neither exists.
 
         Unlike get_model_list, model_group's own model_group_alias entry is not
         followed. The router resolves an alias exactly once, so a group reached as
         an alias target is served by its own deployments, never by a second hop:
         in the chain X -> T -> U a request to X is served from T's deployments.
         """
+        if team_id is not None and self._team_deployments_named(team_id, model_group):
+            return self._core_get_all_deployments(model_name=model_group, team_id=team_id)
         own: Final = cast(  # cast-ok: the private alias returns what get_all_deployments returns
             list[DeploymentTypedDict], self._get_all_deployments(model_name=model_group)
         )

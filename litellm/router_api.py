@@ -420,7 +420,7 @@ class RouterRegistry:
         if source == "named":
             return r._core_deployments_named(model_name)
         if source == "routed_group":
-            return r._core_get_model_list_of_routed_group(model_name)
+            return r._core_get_model_list_of_routed_group(model_name, team_id)
         if source == "wildcard":
             return r._core_wildcard_route_deployments(model_name, team_id)
         if source == "routable":
