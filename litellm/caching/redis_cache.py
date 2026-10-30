@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast
 from pydantic import TypeAdapter
 
 import litellm
-from litellm._internal_context import current_service_caller, current_service_target
+from litellm._internal_context import current_service_caller
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
     DEFAULT_REDIS_MAJOR_VERSION,
@@ -84,6 +84,8 @@ class _AsyncRedisCommands(Protocol):
 
     def get(self, name: str) -> Awaitable[object]: ...
 
+    def mget(self, keys: Sequence[str]) -> Awaitable[object]: ...
+
     def set(self, name: str, value: str | bytes | float, *, nx: bool, px: int | None) -> Awaitable[object]: ...
 
     def delete(self, *names: str) -> Awaitable[int]: ...
@@ -100,6 +102,8 @@ class _AsyncRedisCommands(Protocol):
 
     def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
 
+    def evalsha(self, sha: str, numkeys: int, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
+
 
 _GENERIC_CALLER_MODULES: Final = frozenset(
     {
@@ -108,7 +112,6 @@ _GENERIC_CALLER_MODULES: Final = frozenset(
         "litellm.caching.dual_cache",
         "litellm.caching.caching",
         "litellm.rust_bridge.execution",
-        "litellm.redis.transport.redis_py",
         "contextlib",
     }
 )
@@ -157,7 +160,11 @@ def _decoded_counts(values: Sequence[bytes | str | None]) -> tuple[int | None, .
 
 def _is_generic_caller_frame(frame: FrameType) -> bool:
     module: Final = frame.f_globals.get("__name__")
-    return module in _GENERIC_CALLER_MODULES or frame.f_code.co_name in _GENERIC_CALLER_FRAME_NAMES
+    return (
+        module in _GENERIC_CALLER_MODULES
+        or (isinstance(module, str) and module.startswith("litellm.redis."))
+        or frame.f_code.co_name in _GENERIC_CALLER_FRAME_NAMES
+    )
 
 
 def _ends_call_stack(frame: FrameType) -> bool:
@@ -610,85 +617,10 @@ async def _run_under_circuit_breaker(
     return result
 
 
-def _redis_failure(exc: Exception) -> RedisFailure | None:
-    from redis.exceptions import DataError, RedisError, ResponseError
+def _is_redis_error(exc: BaseException) -> bool:
+    from redis.exceptions import RedisError
 
-    if isinstance(exc, (ResponseError, DataError)) and not _is_redis_health_failure(exc):
-        return RedisFailure(kind="server", message=str(exc))
-    if _is_redis_health_failure(exc) or isinstance(exc, RedisError):
-        return RedisFailure(kind="transport", message=str(exc), timeout=is_redis_timeout_failure(exc))
-    return None
-
-
-class _Admit(Protocol):
-    def __call__(self, call: Callable[[], Awaitable[_RedisCallResult]], /) -> Awaitable[_RedisCallResult]: ...
-
-
-def _admit_directly(call: Callable[[], Awaitable[_RedisCallResult]]) -> Awaitable[_RedisCallResult]:
-    return call()
-
-
-@dataclass(frozen=True, slots=True)
-class ReportingGuard:
-    events: "ServiceLogging"
-
-    async def __call__(self, name: str, call: Callable[[], Awaitable[_RedisCallResult]], /) -> _RedisCallResult:
-        caller: Final = _get_call_stack_info()
-        start_time: Final = time.time()
-        result: Final = await call()
-        end_time: Final = time.time()
-        if not isinstance(result, RedisFailure):
-            asyncio.create_task(
-                self.events.async_service_success_hook(
-                    service=ServiceTypes.REDIS,
-                    call_type=name,
-                    duration=end_time - start_time,
-                    start_time=start_time,
-                    end_time=end_time,
-                    caller=caller,
-                )
-            )
-            return result
-        target: Final = current_service_target()
-        _log_redis_failure_value(
-            verbose_logger, logging.WARNING, f"Redis {name} failed" + (f" for {target}" if target else ""), result
-        )
-        if result.kind != "breaker_open":
-            asyncio.create_task(
-                self.events.async_service_failure_hook(
-                    service=ServiceTypes.REDIS,
-                    duration=end_time - start_time,
-                    error=result.message,
-                    call_type=name,
-                    start_time=start_time,
-                    end_time=end_time,
-                    caller=caller,
-                )
-            )
-        return result
-
-
-@dataclass(frozen=True, slots=True)
-class BreakerGuard:
-    breaker: RedisCircuitBreaker
-    report: ReportingGuard
-    admit: _Admit = _admit_directly
-
-    async def __call__(
-        self, name: str, call: Callable[[], Awaitable[_RedisCallResult]], /
-    ) -> _RedisCallResult | RedisFailure:
-        return await self.report(name, lambda: self._run(name, call))
-
-    async def _run(self, name: str, call: Callable[[], Awaitable[_RedisCallResult]]) -> _RedisCallResult | RedisFailure:
-        try:
-            return await _run_under_circuit_breaker(self.breaker, name, lambda: self.admit(call))
-        except RedisCircuitBreakerOpenError as e:
-            return RedisFailure(kind="breaker_open", message=str(e))
-        except Exception as e:
-            failure: Final = _redis_failure(e)
-            if failure is None:
-                raise
-            return failure
+    return isinstance(exc, RedisError)
 
 
 def _run_under_circuit_breaker_sync(
@@ -937,12 +869,15 @@ class RedisCache(BaseCache):
         return self.init_async_client()
 
     def transport(self) -> RedisTransport:
+        from litellm.redis.transport.events import RedisServiceEvents
         from litellm.redis.transport.redis_py import RedisPyTransport
 
         return RedisPyTransport(
             client=self._async_commands,
             namespace=self.namespace,
-            guard=BreakerGuard(self._circuit_breaker, ReportingGuard(self.service_logger_obj), self._admit_async_call),
+            breaker=self._circuit_breaker,
+            admit=self._admit_async_call,
+            events=RedisServiceEvents(self.service_logger_obj),
         )
 
     def check_and_fix_namespace(self, key: str) -> str:

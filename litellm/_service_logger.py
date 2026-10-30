@@ -111,6 +111,9 @@ class ServiceLogging(CustomLogger):
                 return _as_otel_logger(open_telemetry_logger)
         return None
 
+    def has_sinks(self) -> bool:
+        return bool(litellm.service_callback)
+
     @staticmethod
     def _sync_dispatch_loop() -> asyncio.AbstractEventLoop | None:
         """The event loop a blocking caller can dispatch on, or ``None`` if it has none."""
@@ -121,7 +124,7 @@ class ServiceLogging(CustomLogger):
         return None if loop.is_closed() else loop
 
     @staticmethod
-    async def _emit_guarded(hook: Callable[[], Coroutine[object, object, None]]) -> None:
+    async def emit_guarded(hook: Callable[[], Coroutine[object, object, None]]) -> None:
         """Emit one service event, absorbing anything the callbacks raise.
 
         Monitoring must not break the call it monitors. Sync callers are the ones that
@@ -144,11 +147,11 @@ class ServiceLogging(CustomLogger):
         loop: Final = ServiceLogging._sync_dispatch_loop()
         try:
             if loop is None:
-                asyncio.run(ServiceLogging._emit_guarded(hook))
+                asyncio.run(ServiceLogging.emit_guarded(hook))
             elif loop.is_running():
-                loop.create_task(ServiceLogging._emit_guarded(hook))
+                loop.create_task(ServiceLogging.emit_guarded(hook))
             else:
-                loop.run_until_complete(ServiceLogging._emit_guarded(hook))
+                loop.run_until_complete(ServiceLogging.emit_guarded(hook))
         except Exception as e:
             verbose_logger.exception("Error dispatching service event - %s", e)
 

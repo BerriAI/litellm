@@ -1,14 +1,19 @@
+from collections.abc import Awaitable, Callable
+from typing import TypeVar
+
 import fakeredis
 
 import litellm
 from litellm._service_logger import ServiceLogging
-from litellm.caching.redis_cache import (
-    BreakerGuard,
-    RedisCache,
-    RedisCircuitBreaker,
-    ReportingGuard,
-)
+from litellm.caching.redis_cache import RedisCache, RedisCircuitBreaker
+from litellm.redis.transport.events import RedisServiceEvents
 from litellm.redis.transport.redis_py import RedisPyTransport
+
+_T = TypeVar("_T")
+
+
+def _admit_directly(call: Callable[[], Awaitable[_T]]) -> Awaitable[_T]:
+    return call()
 
 
 def fake_redis_cache(
@@ -35,9 +40,10 @@ def fake_redis_transport(
     events: ServiceLogging | None = None,
     namespace: str | None = None,
 ) -> RedisPyTransport:
-    breaker = RedisCircuitBreaker(failure_threshold=failure_threshold, recovery_timeout=3600)
     return RedisPyTransport(
         client=lambda: client,
         namespace=namespace,
-        guard=BreakerGuard(breaker, ReportingGuard(events or ServiceLogging())),
+        breaker=RedisCircuitBreaker(failure_threshold=failure_threshold, recovery_timeout=3600),
+        admit=_admit_directly,
+        events=RedisServiceEvents(events or ServiceLogging()),
     )
