@@ -10,6 +10,7 @@ from typing import Final, Literal, TypeAlias
 import psutil
 import pytest
 
+from litellm.rust_bridge._native import NativeDatabase
 from tests.integration._support.client import eventually
 from tests.integration._support.database import read_rows, scratch_database
 
@@ -79,6 +80,7 @@ async def _exercise_lifespans(mode: Mode) -> None:
                 async with proxy_server.proxy_startup_event(proxy_server.app) as state:
                     database: Final = state["database"]
                     assert database is not None
+                    assert isinstance(database.native, NativeDatabase)
                     assert await database.prisma.writer_db.query_raw("SELECT 42 AS answer") == [{"answer": 42}]
                     assert await database.prisma.read_db.query_raw("SELECT 43 AS answer") == [{"answer": 43}]
                     assert psutil.Process().children(recursive=True)
