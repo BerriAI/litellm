@@ -2,9 +2,9 @@ use std::{sync::Arc, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_core_utils::settings::Lookup;
-use litellm_secrets_types::{
-    BaseSecretManager, GoogleOperationContext, Secret, SecretCache, SecretValue,
-};
+use litellm_secret_value::SecretValue;
+use litellm_secrets_types::{BaseSecretManager, GoogleOperationContext, Secret, SecretCache};
+
 use serde::Deserialize;
 
 use litellm_auth_gcp::GoogleCredentials;
