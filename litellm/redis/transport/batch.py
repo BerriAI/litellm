@@ -62,10 +62,11 @@ def _is_missing_script(failure: Exception) -> bool:
 
 
 class _Op(Generic[_T]):
-    __slots__ = ("caller", "future", "settled_hooks", "spec", "target")
+    __slots__ = ("caller", "future", "retry_missing_script", "settled_hooks", "spec", "target")
 
-    def __init__(self, spec: OpSpec[_T]) -> None:
+    def __init__(self, spec: OpSpec[_T], *, retry_missing_script: bool) -> None:
         self.spec: Final = spec
+        self.retry_missing_script: Final = retry_missing_script
         self.future: Final[asyncio.Future[_T]] = asyncio.get_running_loop().create_future()
         self.future.add_done_callback(_mark_retrieved)
         self.settled_hooks: Final[list[SettledHook[_T]]] = []  # mutable-ok: append-only registry
@@ -92,7 +93,7 @@ class _Op(Generic[_T]):
             except Exception as e:  # noqa: BLE001  # a reply this op cannot decode fails this op alone
                 self.future.set_exception(e)
             return None
-        if _is_missing_script(failure):
+        if self.retry_missing_script and _is_missing_script(failure):
             return self.settle_alone()
         self.recover(failure)
         return None
@@ -154,8 +155,8 @@ class PipelineBatch:
     _misses: set[str] = field(default_factory=set)  # mutable-ok: keys a read of this batch found absent
     flushes: int = 0
 
-    def declare(self, spec: OpSpec[_T]) -> BatchResult[_T]:
-        op: Final = _Op(spec)
+    def declare(self, spec: OpSpec[_T], *, retry_missing_script: bool = True) -> BatchResult[_T]:
+        op: Final = _Op(spec, retry_missing_script=retry_missing_script)
         self._pending.append(op)  # pyright: ignore[reportArgumentType]  # heterogeneous ops share the flush loop
         return BatchResult(self, op)
 
