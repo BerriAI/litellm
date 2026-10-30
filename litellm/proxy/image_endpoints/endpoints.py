@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_checks import can_key_call_requested_models
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
@@ -122,9 +123,18 @@ async def image_generation(
         if isinstance(model, str):
             reject_url_valued_destination("model", model)
 
-        data["model"] = resolve_inference_model(
-            data.get("model"), general_settings, user_model, model, kind="image_generation"
+        body_model: Final = data.get("model")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # data is an untyped dict body
+        resolved_model: Final = resolve_inference_model(
+            body_model, general_settings, user_model, model, kind="image_generation"
         )
+        data["model"] = resolved_model
+        # Auth read the body model. When the deployment or query model from the URL
+        # overrides it, the served model was never checked, so authorize the resolved
+        # name here, before any alias rewrite. A body model was already checked by auth.
+        if llm_router is not None and isinstance(model, str) and model and model != body_model:
+            await can_key_call_requested_models(
+                model=resolved_model, valid_token=user_api_key_dict, llm_router=llm_router
+            )
 
         ### MODEL ALIAS MAPPING ###
         # check if model name in model alias map
