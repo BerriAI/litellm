@@ -591,9 +591,21 @@ async def _relay_upstream(litellm_logging_obj: LiteLLMLogging, *upstream_frames:
     await asyncio.wait_for(relay.bidirectional_forward(), timeout=2)
 
 
+_REALTIME_SESSION_CREATED: Final = json.dumps({"type": "session.created", "session": {"id": "sess_1"}}).encode()
+
+
 async def _clean_realtime_session(litellm_logging_obj: LiteLLMLogging) -> None:
-    session_created: Final = json.dumps({"type": "session.created", "session": {"id": "sess_1"}}).encode()
-    await _relay_upstream(litellm_logging_obj, session_created, ConnectionClosed(Close(1000, ""), None))
+    await _relay_upstream(litellm_logging_obj, _REALTIME_SESSION_CREATED, ConnectionClosed(Close(1000, ""), None))
+
+
+async def _upstream_internal_error_after_a_frame(litellm_logging_obj: LiteLLMLogging) -> None:
+    await _relay_upstream(
+        litellm_logging_obj, _REALTIME_SESSION_CREATED, ConnectionClosed(Close(1011, "upstream failed"), None)
+    )
+
+
+async def _upstream_drop_without_close_frame_after_a_frame(litellm_logging_obj: LiteLLMLogging) -> None:
+    await _relay_upstream(litellm_logging_obj, _REALTIME_SESSION_CREATED, ConnectionClosed(None, None))
 
 
 async def _upstream_close_before_any_frame(litellm_logging_obj: LiteLLMLogging) -> None:
@@ -607,8 +619,20 @@ async def _refused_handshake(litellm_logging_obj: LiteLLMLogging) -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("realtime_session", "counted_successes"),
-    [(_clean_realtime_session, 1), (_upstream_close_before_any_frame, 0), (_refused_handshake, 0)],
-    ids=["clean-session", "upstream-close-before-any-frame", "refused-handshake"],
+    [
+        (_clean_realtime_session, 1),
+        (_upstream_close_before_any_frame, 0),
+        (_refused_handshake, 0),
+        (_upstream_internal_error_after_a_frame, 0),
+        (_upstream_drop_without_close_frame_after_a_frame, 0),
+    ],
+    ids=[
+        "clean-session",
+        "upstream-close-before-any-frame",
+        "refused-handshake",
+        "upstream-1011-after-a-frame",
+        "upstream-1006-after-a-frame",
+    ],
 )
 async def test_realtime_session_counts_a_router_success_only_when_it_ended_without_a_failure(
     realtime_session: Callable[[LiteLLMLogging], Awaitable[None]], counted_successes: int

@@ -14,7 +14,6 @@ from types import MappingProxyType
 from typing import Final, NoReturn, Protocol, runtime_checkable
 
 from pydantic import JsonValue, TypeAdapter
-from typing_extensions import TypeIs  # noqa: TID251  # narrows request metadata without copying it
 
 import litellm
 from litellm._logging import redact_string, verbose_proxy_logger
@@ -42,6 +41,8 @@ from ..common_utils import BedrockError
 from .transformation import BedrockRealtimeConfig, requested_modalities
 
 _CLIENT_MESSAGE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_REQUEST_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_SPEND_LOG_METADATA_KEYS: Final = ("litellm_metadata", "metadata")
 
 _EMPTY_JSON_OBJECT: Final[Mapping[str, JsonValue]] = MappingProxyType({})
 
@@ -213,23 +214,25 @@ def _pending_opening_message(scope: Mapping[str, object]) -> str | None:
     return pending if isinstance(pending, str) else None
 
 
-def _is_str_keyed_dict(
-    value: object,
-) -> TypeIs[dict[str, object]]:  # guard-ok: request kwargs have str keys  # mutable-ok: the spend row reads it
-    return isinstance(value, dict)
+def _spend_log_metadata(litellm_params: Mapping[str, object]) -> tuple[str, Mapping[str, object]] | None:
+    return next(
+        (
+            (key, metadata)
+            for key in _SPEND_LOG_METADATA_KEYS
+            if (metadata := _REQUEST_MAPPING_ADAPTER.validate_python(litellm_params.get(key)))
+        ),
+        None,
+    )
 
 
 def _record_failure_on_spend_log(logging_obj: LiteLLMLogging, error: BaseException) -> None:
     """The spend row of a session the provider ended reads failure while it still bills the forwarded events."""
-    litellm_params: Final[object] = logging_obj.model_call_details.get("litellm_params")
-    metadata_candidates: Final = (
-        (litellm_params.get("litellm_metadata"), litellm_params.get("metadata"))
-        if _is_str_keyed_dict(litellm_params)
-        else ()
+    litellm_params: Final = _REQUEST_MAPPING_ADAPTER.validate_python(
+        logging_obj.model_call_details.get("litellm_params")
     )
-    spend_log_metadata: Final = next(
-        (metadata for metadata in metadata_candidates if _is_str_keyed_dict(metadata) and metadata), None
-    )
+    if litellm_params is None:
+        return
+    spend_log_metadata: Final = _spend_log_metadata(litellm_params)
     if spend_log_metadata is None:
         return
     status_code: Final[object] = getattr(error, "status_code", None)
@@ -239,8 +242,11 @@ def _record_failure_on_spend_log(logging_obj: LiteLLMLogging, error: BaseExcepti
         "error_message": redact_string(str(error)),
         "llm_provider": "bedrock",
     }
-    spend_log_metadata["status"] = "failure"
-    spend_log_metadata["error_information"] = error_information
+    metadata_key, metadata = spend_log_metadata
+    logging_obj.model_call_details["litellm_params"] = {  # rebind-ok: the spend row reads the logging object
+        **litellm_params,
+        metadata_key: {**metadata, "status": "failure", "error_information": error_information},
+    }
 
 
 def _raise_provider_failure(scope: MutableMapping[str, object], failure: BaseException) -> NoReturn:
@@ -513,10 +519,7 @@ class BedrockRealtime(BaseAWSLLM):
                 "Bedrock Realtime: stream failed after the client disconnected: %s", outcome.provider_failure
             )
         provider_failure: Final = None if outcome.client_disconnected else outcome.provider_failure
-        provider_ended_committed_session: Final = provider_failure is not None and _is_session_committed(
-            websocket.scope
-        )
-        if logged_events or provider_ended_committed_session:
+        if logged_events:
             if provider_failure is not None:
                 _record_failure_on_spend_log(logging_obj, _as_bedrock_error(provider_failure))
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(

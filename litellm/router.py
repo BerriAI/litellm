@@ -97,6 +97,7 @@ from litellm.constants import (
     MID_STREAM_FAILURE_LOG_WAIT_SECONDS,
     OUTPUT_TOKEN_CEILING_PARAMS,
     PROMPT_CACHE_PIN_CACHE_MAX_SIZE,
+    REALTIME_SESSION_ENDED_ABNORMALLY_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
@@ -6686,6 +6687,7 @@ class Router(DeprecatedRouterMembers):
                 _MODEL_INFO_ADAPTER.validate_python(kwargs["model_info"]).get("id")
                 if isinstance(realtime_session_logging, LiteLLMLogging)
                 and realtime_session_logging.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY) is True
+                and realtime_session_logging.model_call_details.get(REALTIME_SESSION_ENDED_ABNORMALLY_KEY) is not True
                 else None
             )
             if realtime_session_deployment_id is not None:
