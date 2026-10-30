@@ -554,7 +554,7 @@ async def acompletion(
         - The `completion` function is called using `run_in_executor` to execute synchronously in the event loop.
         - If `stream` is True, the function returns an async generator that yields completion lines.
     """
-    fallbacks = kwargs.get("fallbacks", None)
+    fallbacks: Final = kwargs.get("fallbacks", None) or litellm.model_fallbacks
     mock_timeout = kwargs.get("mock_timeout", None)
 
     if mock_timeout is True:
@@ -570,9 +570,6 @@ async def acompletion(
     loop: Final = asyncio.get_event_loop()
     custom_llm_provider = kwargs.get("custom_llm_provider", None)
     _ = _resolve_control_options(kwargs, model)
-    caller_request: Final = cast(  # cast-ok: acompletion types messages and tools as bare Lists
-        "Mapping[str, object]", {"model": model, "messages": messages, "tools": None if tools is None else [*tools]}
-    )
     caller_kwargs: Final = cast("Mapping[str, object]", {**kwargs})  # cast-ok: acompletion takes untyped kwargs
 
     ## PROMPT MANAGEMENT HOOKS ##
@@ -595,8 +592,10 @@ async def acompletion(
         api_base=base_url or kwargs.get("api_base"),
     )
 
-    if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
-        litellm_logging_obj.should_run_prompt_management_hooks(
+    if (
+        fallbacks is None
+        and isinstance(litellm_logging_obj, LiteLLMLoggingObj)
+        and litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=kwargs.get("prompt_id", None),
             non_default_params=kwargs,
             tools=tools,
@@ -703,10 +702,9 @@ async def acompletion(
             litellm_params=(GenericLiteLLMParams.model_validate(_supplemental) if _supplemental else None),
         )
 
-    fallbacks = fallbacks or litellm.model_fallbacks
     if fallbacks is not None:
         response = await async_completion_with_fallbacks(
-            **{**completion_kwargs, **caller_request}, kwargs={"fallbacks": fallbacks, **caller_kwargs}
+            **completion_kwargs, kwargs={"fallbacks": fallbacks, **caller_kwargs}
         )
         if response is None:
             raise Exception(

@@ -551,7 +551,7 @@ async def test_acompletion_fallback_sends_the_context_a_vector_store_tool_retrie
             ]
         ),
     )
-    respx_mock.post("https://api.openai.com/v1/vector_stores/vs_docs/search").mock(
+    search_route: Final = respx_mock.post("https://api.openai.com/v1/vector_stores/vs_docs/search").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -561,7 +561,7 @@ async def test_acompletion_fallback_sends_the_context_a_vector_store_tool_retrie
             },
         )
     )
-    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+    openai_route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
         return_value=httpx.Response(
             401,
             json={"error": {"message": "invalid key", "type": "authentication_error", "param": None, "code": None}},
@@ -588,3 +588,4 @@ async def test_acompletion_fallback_sends_the_context_a_vector_store_tool_retrie
     direct_body, fallback_body = (json.loads(call.request.content) for call in anthropic_route.calls)
     assert "litellm is an LLM gateway" in json.dumps(direct_body)
     assert fallback_body == direct_body
+    assert search_route.call_count <= openai_route.call_count + anthropic_route.call_count
