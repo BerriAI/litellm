@@ -234,8 +234,8 @@ class TestEncryptedReasoningRoundTrip:
         ]
         assert len(messages[0]["tool_calls"]) == 1
 
-    def test_replayed_blocks_precede_existing_blocks(self):
-        """Signature verification depends on the original block order."""
+    def test_merge_keeps_only_the_newest_block(self):
+        """Blocks from separate turns would otherwise sit side by side on one message."""
         messages = LiteLLMCompletionResponsesConfig._merge_reasoning_only_assistant_messages(
             [
                 {
@@ -251,7 +251,74 @@ class TestEncryptedReasoningRoundTrip:
             ]
         )
         assert len(messages) == 1
-        assert [block["thinking"] for block in messages[0]["thinking_blocks"]] == ["older", "newer"]
+        assert [block["thinking"] for block in messages[0]["thinking_blocks"]] == ["newer"]
+
+    def test_web_search_turn_replays_only_its_last_thinking_block(self):
+        """Claude rejects a follow-up whose replay puts blocks it wrote apart side by side."""
+        blocks = [
+            {"type": "thinking", "thinking": "", "signature": "sig-before-search-1"},
+            {"type": "thinking", "thinking": "", "signature": "sig-before-search-2"},
+            {"type": "thinking", "thinking": "", "signature": "sig-before-answer"},
+        ]
+        messages = _transform_input(
+            [
+                {"role": "user", "content": "Who directed the 2006 Best Picture winner?"},
+                {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": json.dumps(blocks)},
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "Paul Haggis.", "annotations": []}],
+                },
+                {
+                    "type": "web_search_call",
+                    "id": "ws_1",
+                    "status": "completed",
+                    "action": {"type": "search", "query": "2006 Best Picture"},
+                },
+                {
+                    "type": "web_search_call",
+                    "id": "ws_2",
+                    "status": "completed",
+                    "action": {"type": "search", "query": "Crash 2004 film director"},
+                },
+                {"role": "user", "content": "Summarize that in one sentence."},
+            ]
+        )
+        assistants = [message for message in messages if message["role"] == "assistant"]
+        assert len(assistants) == 1
+        assert assistants[0]["thinking_blocks"] == [blocks[-1]]
+        assert "Paul Haggis." in json.dumps(assistants[0]["content"])
+        assert messages[-1]["role"] == "user"
+
+    def test_reasoning_before_a_user_turn_replays_one_block_in_one_message(self):
+        """A stateless replay must not leave blocks side by side either."""
+        messages = _transform_input(
+            [
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [{"type": "summary_text", "text": "first"}],
+                    "encrypted_content": json.dumps([{"type": "thinking", "thinking": "a", "signature": "sig-a"}]),
+                },
+                {
+                    "type": "reasoning",
+                    "id": "rs_2",
+                    "summary": [{"type": "summary_text", "text": "second"}],
+                    "encrypted_content": json.dumps(
+                        [
+                            {"type": "thinking", "thinking": "b", "signature": "sig-b"},
+                            {"type": "thinking", "thinking": "c", "signature": "sig-c"},
+                        ]
+                    ),
+                },
+                {"role": "user", "content": "and now?"},
+            ]
+        )
+        assert [message["role"] for message in messages] == ["assistant", "user"]
+        assert messages[0]["reasoning_content"] == "first\nsecond"
+        assert messages[0]["thinking_blocks"] == [{"type": "thinking", "thinking": "c", "signature": "sig-c"}]
 
     def test_encrypted_only_reasoning_preserved_before_user_turn(self):
         """A signed item with no plaintext still survives a stateless replay."""

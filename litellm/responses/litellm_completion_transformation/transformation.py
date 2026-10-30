@@ -1633,9 +1633,10 @@ class LiteLLMCompletionResponsesConfig:
         immediately following assistant message.
 
         Signed ``thinking_blocks`` decoded from ``encrypted_content`` travel the
-        same way and are placed ahead of any thinking blocks the target message
-        already carries, because Anthropic and Bedrock verify signatures against
-        the original block order.
+        same way, but only the newest one is replayed. A reasoning item does not
+        record where each block sat between the turn's server tool steps and
+        text, and Claude rejects a latest assistant message whose thinking
+        blocks sit side by side when it wrote them apart.
 
         If the reasoning item is not followed by an assistant message (e.g. a
         stateless chain replays ``reasoning`` + ``user``), the standalone
@@ -1683,7 +1684,7 @@ class LiteLLMCompletionResponsesConfig:
             ],
         ) -> None:
             pending_texts: Final = tuple(text for text, _ in pending_items if text)
-            pending_blocks: Final = tuple(block for _, blocks in pending_items for block in blocks or ())
+            pending_blocks: Final = tuple(chain.from_iterable(blocks or () for _, blocks in pending_items))
             if pending_texts:
                 existing_text: Final = _reasoning_text(msg)
                 combined: Final = "\n".join(pending_texts + ((existing_text,) if existing_text else ()))
@@ -1692,13 +1693,25 @@ class LiteLLMCompletionResponsesConfig:
                 else:
                     setattr(msg, "reasoning_content", combined)  # noqa: B010  # attribute name is fixed, not dynamic
             if pending_blocks:
-                replayed: Final = list(pending_blocks + (_thinking_blocks(msg) or ()))
+                replayed: Final = list((pending_blocks + (_thinking_blocks(msg) or ()))[-1:])
                 if isinstance(msg, dict):
                     cast(dict[str, object], msg)["thinking_blocks"] = replayed  # cast-ok: mutable reasoning carrier
                 else:
                     setattr(msg, "thinking_blocks", replayed)  # noqa: B010  # attribute name is fixed, not dynamic
 
-        _standalone: Final = LiteLLMCompletionResponsesConfig._reasoning_only_assistant_message
+        def _standalone(
+            pending_items: Sequence[
+                tuple[
+                    str | None,
+                    tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...] | None,
+                ]
+            ],
+        ) -> ChatCompletionResponseMessage:
+            pending_texts: Final = tuple(text for text, _ in pending_items if text)
+            pending_blocks: Final = tuple(chain.from_iterable(blocks or () for _, blocks in pending_items))
+            return LiteLLMCompletionResponsesConfig._reasoning_only_assistant_message(
+                "\n".join(pending_texts) or None, pending_blocks[-1:]
+            )
 
         merged: list[  # mutable-ok: accumulator  # rebind-ok: accumulator
             AllMessageValues
@@ -1729,12 +1742,13 @@ class LiteLLMCompletionResponsesConfig:
             elif pending:
                 # Not followed by an assistant message — keep the reasoning
                 # standalone instead of dropping it.
-                merged.extend([_standalone(text, blocks) for text, blocks in pending])
+                merged.append(_standalone(pending))
                 pending = []
 
             merged.append(msg)
 
-        merged.extend([_standalone(text, blocks) for text, blocks in pending])
+        if pending:
+            merged.append(_standalone(pending))
 
         return merged
 
