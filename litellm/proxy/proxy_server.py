@@ -5190,7 +5190,7 @@ def _build_redis_usage_cache_from_environment() -> RedisCache | None:
 
     Lets the proxy's coordination Redis (cross-pod tpm/rpm rate limits, spend
     tracking, pod lock manager) run when the response-cache backend is not a
-    plain Redis KV cache (e.g. a semantic cache, disk, or s3).
+    plain Redis KV cache (e.g. a semantic cache or s3).
 
     Returns None when the environment carries no connection target (host, url,
     cluster nodes, or sentinel nodes).
@@ -10974,7 +10974,7 @@ class ProxyStartupEvent:
         """
         Builds a standalone Redis cache from REDIS_* environment variables so
         use_redis_transaction_buffer can run when the proxy cache backend is not
-        Redis (e.g. disk, s3).
+        Redis (e.g. s3).
 
         Returns None when the buffer is disabled, or when no Redis host or url
         is set in the environment.
