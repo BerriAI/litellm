@@ -20,11 +20,26 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Final, Optional
 from unittest.mock import AsyncMock, Mock, patch
 
+import fakeredis
 import pytest
 from fastapi import Request
 from pydantic import ValidationError
 
+from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
+from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
+from tests._support.fake_redis import fake_redis_cache
+
+
+async def _seed(cache: RedisCache, state: dict[str, object]) -> None:
+    await cache.async_set_cache(
+        key=ResponsePollingHandler.get_cache_key(str(state["id"])), value=json.dumps(state), ttl=3600
+    )
+
+
+async def _legacy_read(cache: RedisCache, polling_id: str) -> dict[str, object]:
+    return json.loads(await cache.async_get_cache(ResponsePollingHandler.get_cache_key(polling_id)))
+
 
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
@@ -58,15 +73,9 @@ class TestResponsePollingHandler:
         # OpenAI format
         assert ResponsePollingHandler.is_polling_id("resp_abc123") is False
         # Anthropic format
-        assert (
-            ResponsePollingHandler.is_polling_id("msg_01XFDUDYJgAACzvnptvVoYEL")
-            is False
-        )
+        assert ResponsePollingHandler.is_polling_id("msg_01XFDUDYJgAACzvnptvVoYEL") is False
         # Generic UUID
-        assert (
-            ResponsePollingHandler.is_polling_id("550e8400-e29b-41d4-a716-446655440000")
-            is False
-        )
+        assert ResponsePollingHandler.is_polling_id("550e8400-e29b-41d4-a716-446655440000") is False
 
     def test_get_cache_key_format(self):
         """Test that cache keys have the correct format"""
@@ -80,8 +89,7 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_create_initial_state_returns_queued_status(self):
         """Test that create_initial_state returns response with queued status"""
-        mock_redis = AsyncMock()
-        handler = ResponsePollingHandler(redis_cache=mock_redis, ttl=3600)
+        handler = ResponsePollingHandler(redis_cache=fake_redis_cache(fakeredis.FakeServer()), ttl=3600)
 
         polling_id = "litellm_poll_test123"
         request_data = {
@@ -105,8 +113,9 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_create_initial_state_stores_in_redis(self):
         """Test that create_initial_state stores state in Redis with correct TTL"""
-        mock_redis = AsyncMock()
-        handler = ResponsePollingHandler(redis_cache=mock_redis, ttl=7200)
+        server = fakeredis.FakeServer()
+        cache = fake_redis_cache(server, namespace="ns")
+        handler = ResponsePollingHandler(redis_cache=cache, ttl=7200)
 
         polling_id = "litellm_poll_test123"
         request_data = {"model": "gpt-4o", "input": "Hello"}
@@ -116,26 +125,18 @@ class TestResponsePollingHandler:
             request_data=request_data,
         )
 
-        # Verify Redis was called with correct parameters
-        mock_redis.async_set_cache.assert_called_once()
-        call_args = mock_redis.async_set_cache.call_args
+        raw = fakeredis.FakeAsyncRedis(server=server)
+        assert await raw.keys("*") == [b"ns:litellm:polling:response:litellm_poll_test123"]
+        assert 7_190_000 < await raw.pttl("ns:litellm:polling:response:litellm_poll_test123") <= 7_200_000
 
-        assert (
-            call_args.kwargs["key"] == "litellm:polling:response:litellm_poll_test123"
-        )
-        assert call_args.kwargs["ttl"] == 7200
-
-        # Verify the stored value is valid JSON
-        stored_value = call_args.kwargs["value"]
-        parsed = json.loads(stored_value)
+        parsed = await _legacy_read(cache, polling_id)
         assert parsed["id"] == polling_id
         assert parsed["status"] == "queued"
 
     @pytest.mark.asyncio
     async def test_create_initial_state_sets_created_at_timestamp(self):
         """Test that create_initial_state sets a valid created_at timestamp"""
-        mock_redis = AsyncMock()
-        handler = ResponsePollingHandler(redis_cache=mock_redis)
+        handler = ResponsePollingHandler(redis_cache=fake_redis_cache(fakeredis.FakeServer()))
 
         before_time = int(datetime.now(timezone.utc).timestamp())
 
@@ -153,46 +154,45 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_update_state_changes_status_to_in_progress(self):
         """Test that update_state can change status to in_progress"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        cache = fake_redis_cache(fakeredis.FakeServer())
+        await _seed(
+            cache,
             {
                 "id": "litellm_poll_test",
                 "object": "response",
                 "status": "queued",
                 "output": [],
                 "created_at": 1234567890,
-            }
+            },
         )
 
-        handler = ResponsePollingHandler(redis_cache=mock_redis, ttl=3600)
+        handler = ResponsePollingHandler(redis_cache=cache, ttl=3600)
 
         await handler.update_state(
             polling_id="litellm_poll_test",
             status="in_progress",
         )
 
-        # Verify the update was saved
-        mock_redis.async_set_cache.assert_called_once()
-        call_args = mock_redis.async_set_cache.call_args
-        stored = json.loads(call_args.kwargs["value"])
+        stored = await _legacy_read(cache, "litellm_poll_test")
 
         assert stored["status"] == "in_progress"
 
     @pytest.mark.asyncio
     async def test_update_state_replaces_full_output_list(self):
         """Test that update_state replaces the full output list"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        cache = fake_redis_cache(fakeredis.FakeServer())
+        await _seed(
+            cache,
             {
                 "id": "litellm_poll_test",
                 "object": "response",
                 "status": "in_progress",
                 "output": [{"id": "old_item", "type": "message"}],
                 "created_at": 1234567890,
-            }
+            },
         )
 
-        handler = ResponsePollingHandler(redis_cache=mock_redis, ttl=3600)
+        handler = ResponsePollingHandler(redis_cache=cache, ttl=3600)
 
         new_output = [
             {
@@ -212,8 +212,7 @@ class TestResponsePollingHandler:
             output=new_output,
         )
 
-        call_args = mock_redis.async_set_cache.call_args
-        stored = json.loads(call_args.kwargs["value"])
+        stored = await _legacy_read(cache, "litellm_poll_test")
 
         assert len(stored["output"]) == 2
         assert stored["output"][0]["id"] == "item_1"
@@ -222,18 +221,19 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_update_state_with_usage(self):
         """Test that update_state correctly stores usage data"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        cache = fake_redis_cache(fakeredis.FakeServer())
+        await _seed(
+            cache,
             {
                 "id": "litellm_poll_test",
                 "object": "response",
                 "status": "in_progress",
                 "output": [],
                 "created_at": 1234567890,
-            }
+            },
         )
 
-        handler = ResponsePollingHandler(redis_cache=mock_redis)
+        handler = ResponsePollingHandler(redis_cache=cache)
 
         usage_data = {"input_tokens": 10, "output_tokens": 50, "total_tokens": 60}
 
@@ -243,8 +243,7 @@ class TestResponsePollingHandler:
             usage=usage_data,
         )
 
-        call_args = mock_redis.async_set_cache.call_args
-        stored = json.loads(call_args.kwargs["value"])
+        stored = await _legacy_read(cache, "litellm_poll_test")
 
         assert stored["status"] == "completed"
         assert stored["usage"] == usage_data
@@ -252,24 +251,23 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_update_state_with_reasoning_tools_tool_choice(self):
         """Test that update_state stores reasoning, tools, and tool_choice from response.completed"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        cache = fake_redis_cache(fakeredis.FakeServer())
+        await _seed(
+            cache,
             {
                 "id": "litellm_poll_test",
                 "object": "response",
                 "status": "in_progress",
                 "output": [],
                 "created_at": 1234567890,
-            }
+            },
         )
 
-        handler = ResponsePollingHandler(redis_cache=mock_redis)
+        handler = ResponsePollingHandler(redis_cache=cache)
 
         reasoning_data = {"effort": "medium", "summary": "Step by step analysis"}
         tool_choice_data = {"type": "function", "function": {"name": "get_weather"}}
-        tools_data = [
-            {"type": "function", "function": {"name": "get_weather", "parameters": {}}}
-        ]
+        tools_data = [{"type": "function", "function": {"name": "get_weather", "parameters": {}}}]
 
         await handler.update_state(
             polling_id="litellm_poll_test",
@@ -279,8 +277,7 @@ class TestResponsePollingHandler:
             tools=tools_data,
         )
 
-        call_args = mock_redis.async_set_cache.call_args
-        stored = json.loads(call_args.kwargs["value"])
+        stored = await _legacy_read(cache, "litellm_poll_test")
 
         assert stored["reasoning"] == reasoning_data
         assert stored["tool_choice"] == tool_choice_data
@@ -289,18 +286,19 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_update_state_with_all_responses_api_fields(self):
         """Test that update_state stores all ResponsesAPIResponse fields from response.completed"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        cache = fake_redis_cache(fakeredis.FakeServer())
+        await _seed(
+            cache,
             {
                 "id": "litellm_poll_test",
                 "object": "response",
                 "status": "in_progress",
                 "output": [],
                 "created_at": 1234567890,
-            }
+            },
         )
 
-        handler = ResponsePollingHandler(redis_cache=mock_redis)
+        handler = ResponsePollingHandler(redis_cache=cache)
 
         # All ResponsesAPIResponse fields that can be updated
         await handler.update_state(
@@ -324,8 +322,7 @@ class TestResponsePollingHandler:
             incomplete_details={"reason": "max_output_tokens"},
         )
 
-        call_args = mock_redis.async_set_cache.call_args
-        stored = json.loads(call_args.kwargs["value"])
+        stored = await _legacy_read(cache, "litellm_poll_test")
 
         # Verify all fields are stored correctly
         assert stored["status"] == "completed"
@@ -353,8 +350,9 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_update_state_preserves_existing_fields(self):
         """Test that update_state preserves fields not being updated"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        cache = fake_redis_cache(fakeredis.FakeServer())
+        await _seed(
+            cache,
             {
                 "id": "litellm_poll_test",
                 "object": "response",
@@ -363,10 +361,10 @@ class TestResponsePollingHandler:
                 "created_at": 1234567890,
                 "model": "gpt-4o",
                 "temperature": 0.5,
-            }
+            },
         )
 
-        handler = ResponsePollingHandler(redis_cache=mock_redis)
+        handler = ResponsePollingHandler(redis_cache=cache)
 
         # Only update status
         await handler.update_state(
@@ -374,8 +372,7 @@ class TestResponsePollingHandler:
             status="completed",
         )
 
-        call_args = mock_redis.async_set_cache.call_args
-        stored = json.loads(call_args.kwargs["value"])
+        stored = await _legacy_read(cache, "litellm_poll_test")
 
         # Verify existing fields are preserved
         assert stored["status"] == "completed"
@@ -386,18 +383,19 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_update_state_with_error_sets_failed_status(self):
         """Test that providing an error automatically sets status to failed"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        cache = fake_redis_cache(fakeredis.FakeServer())
+        await _seed(
+            cache,
             {
                 "id": "litellm_poll_test",
                 "object": "response",
                 "status": "in_progress",
                 "output": [],
                 "created_at": 1234567890,
-            }
+            },
         )
 
-        handler = ResponsePollingHandler(redis_cache=mock_redis)
+        handler = ResponsePollingHandler(redis_cache=cache)
 
         error_data = {
             "type": "internal_error",
@@ -407,30 +405,62 @@ class TestResponsePollingHandler:
 
         await handler.update_state(
             polling_id="litellm_poll_test",
+            status="completed",
             error=error_data,
         )
 
-        call_args = mock_redis.async_set_cache.call_args
-        stored = json.loads(call_args.kwargs["value"])
+        stored = await _legacy_read(cache, "litellm_poll_test")
 
         assert stored["status"] == "failed"
         assert stored["error"] == error_data
 
     @pytest.mark.asyncio
+    async def test_update_state_preserves_false_empty_and_zero_values(self):
+        cache: Final = fake_redis_cache(fakeredis.FakeServer())
+        await _seed(cache, {"id": "litellm_poll_test", "status": "in_progress", "usage": {"total_tokens": 3}})
+        handler: Final = ResponsePollingHandler(redis_cache=cache)
+
+        await handler.update_state(
+            polling_id="litellm_poll_test",
+            usage={},
+            output=[],
+            tools=[],
+            reasoning={},
+            instructions="",
+            temperature=0,
+            parallel_tool_calls=False,
+            store=False,
+        )
+
+        assert await _legacy_read(cache, "litellm_poll_test") == {
+            "id": "litellm_poll_test",
+            "status": "in_progress",
+            "usage": {"total_tokens": 3},
+            "output": [],
+            "tools": [],
+            "reasoning": {},
+            "instructions": "",
+            "temperature": 0,
+            "parallel_tool_calls": False,
+            "store": False,
+        }
+
+    @pytest.mark.asyncio
     async def test_update_state_with_incomplete_details(self):
         """Test that update_state stores incomplete_details"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        cache = fake_redis_cache(fakeredis.FakeServer())
+        await _seed(
+            cache,
             {
                 "id": "litellm_poll_test",
                 "object": "response",
                 "status": "in_progress",
                 "output": [],
                 "created_at": 1234567890,
-            }
+            },
         )
 
-        handler = ResponsePollingHandler(redis_cache=mock_redis)
+        handler = ResponsePollingHandler(redis_cache=cache)
 
         incomplete_details = {"reason": "max_output_tokens"}
 
@@ -440,8 +470,7 @@ class TestResponsePollingHandler:
             incomplete_details=incomplete_details,
         )
 
-        call_args = mock_redis.async_set_cache.call_args
-        stored = json.loads(call_args.kwargs["value"])
+        stored = await _legacy_read(cache, "litellm_poll_test")
 
         assert stored["status"] == "incomplete"
         assert stored["incomplete_details"] == incomplete_details
@@ -460,27 +489,23 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_update_state_handles_missing_cached_state(self):
         """Test that update_state handles case when cached state doesn't exist"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = None  # Cache miss
+        server = fakeredis.FakeServer()
+        handler = ResponsePollingHandler(redis_cache=fake_redis_cache(server))
 
-        handler = ResponsePollingHandler(redis_cache=mock_redis)
-
-        # Should not raise an exception
         await handler.update_state(
             polling_id="litellm_poll_test",
             status="in_progress",
         )
 
-        # Should not try to set cache if nothing was found
-        mock_redis.async_set_cache.assert_not_called()
+        assert await fakeredis.FakeAsyncRedis(server=server).keys("*") == []
 
     # ==================== Get State Tests ====================
 
     @pytest.mark.asyncio
     async def test_get_state_returns_cached_state(self):
         """Test that get_state returns the cached state"""
-        mock_redis = AsyncMock()
-        cached_state = {
+        cache = fake_redis_cache(fakeredis.FakeServer())
+        cached_state: dict[str, object] = {
             "id": "litellm_poll_test",
             "object": "response",
             "status": "in_progress",
@@ -488,9 +513,9 @@ class TestResponsePollingHandler:
             "created_at": 1234567890,
             "usage": {"input_tokens": 10, "output_tokens": 20},
         }
-        mock_redis.async_get_cache.return_value = json.dumps(cached_state)
+        await _seed(cache, cached_state)
 
-        handler = ResponsePollingHandler(redis_cache=mock_redis)
+        handler = ResponsePollingHandler(redis_cache=cache)
 
         result = await handler.get_state("litellm_poll_test")
 
@@ -499,10 +524,7 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_get_state_returns_none_for_missing_state(self):
         """Test that get_state returns None when state doesn't exist"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = None
-
-        handler = ResponsePollingHandler(redis_cache=mock_redis)
+        handler = ResponsePollingHandler(redis_cache=fake_redis_cache(fakeredis.FakeServer()))
 
         result = await handler.get_state("litellm_poll_nonexistent")
 
@@ -522,25 +544,25 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_cancel_polling_updates_status_to_cancelled(self):
         """Test that cancel_polling sets status to cancelled"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        cache = fake_redis_cache(fakeredis.FakeServer())
+        await _seed(
+            cache,
             {
                 "id": "litellm_poll_test",
                 "object": "response",
                 "status": "in_progress",
                 "output": [],
                 "created_at": 1234567890,
-            }
+            },
         )
 
-        handler = ResponsePollingHandler(redis_cache=mock_redis)
+        handler = ResponsePollingHandler(redis_cache=cache)
 
         result = await handler.cancel_polling("litellm_poll_test")
 
         assert result is True
 
-        call_args = mock_redis.async_set_cache.call_args
-        stored = json.loads(call_args.kwargs["value"])
+        stored = await _legacy_read(cache, "litellm_poll_test")
         assert stored["status"] == "cancelled"
 
     # ==================== Delete Polling Tests ====================
@@ -548,27 +570,77 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_delete_polling_removes_from_cache(self):
         """Test that delete_polling removes the entry from Redis"""
-        mock_redis = AsyncMock()
-        mock_async_client = AsyncMock()
-        mock_redis.redis_async_client = True  # hasattr check
-        # init_async_client is a sync method that returns an async client
-        mock_redis.init_async_client = Mock(return_value=mock_async_client)
-
-        # Mock async_delete_cache to actually call init_async_client and delete
-        async def mock_async_delete_cache(key):
-            client = mock_redis.init_async_client()
-            await client.delete(key)
-
-        mock_redis.async_delete_cache = mock_async_delete_cache
-
-        handler = ResponsePollingHandler(redis_cache=mock_redis)
+        cache = fake_redis_cache(fakeredis.FakeServer())
+        await _seed(cache, {"id": "litellm_poll_test", "status": "queued"})
+        handler = ResponsePollingHandler(redis_cache=cache)
 
         result = await handler.delete_polling("litellm_poll_test")
 
         assert result is True
-        mock_async_client.delete.assert_called_once_with(
-            "litellm:polling:response:litellm_poll_test"
+        assert await handler.get_state("litellm_poll_test") is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stored", [b'{"id": "single-encoded"}', b'"[1, 2]"'])
+    async def test_a_state_that_does_not_decode_raises_from_reads_and_updates(self, stored: bytes):
+        server = fakeredis.FakeServer()
+        await fakeredis.FakeAsyncRedis(server=server).set(
+            ResponsePollingHandler.get_cache_key("litellm_poll_x"), stored
         )
+        handler = ResponsePollingHandler(redis_cache=fake_redis_cache(server))
+
+        with pytest.raises((TypeError, ValueError)):
+            await handler.get_state("litellm_poll_x")
+        with pytest.raises((TypeError, ValueError)):
+            await handler.update_state("litellm_poll_x", status="completed")
+
+    @pytest.mark.asyncio
+    async def test_an_unreachable_redis_reads_as_missing_and_raises_from_the_delete(self):
+        server = fakeredis.FakeServer()
+        cache = fake_redis_cache(server)
+        await _seed(cache, {"id": "litellm_poll_test", "status": "queued"})
+        handler = ResponsePollingHandler(redis_cache=cache)
+        server.connected = False
+
+        assert await handler.get_state("litellm_poll_test") is None
+        await handler.update_state("litellm_poll_test", status="completed")
+        with pytest.raises(RuntimeError):
+            await handler.delete_polling("litellm_poll_test")
+        queued = await handler.create_initial_state(polling_id="litellm_poll_new", request_data={})
+        assert queued.status == "queued"
+
+    @pytest.mark.asyncio
+    async def test_an_open_breaker_raises_from_every_operation(self):
+        server = fakeredis.FakeServer()
+        cache = fake_redis_cache(server)
+        handler = ResponsePollingHandler(redis_cache=cache)
+        server.connected = False
+        for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
+            assert await handler.get_state("litellm_poll_test") is None
+
+        with pytest.raises(RedisCircuitBreakerOpenError):
+            await handler.get_state("litellm_poll_test")
+        with pytest.raises(RedisCircuitBreakerOpenError):
+            await handler.update_state("litellm_poll_test", status="completed")
+        with pytest.raises(RedisCircuitBreakerOpenError):
+            await handler.create_initial_state(polling_id="litellm_poll_new", request_data={})
+        with pytest.raises(RedisCircuitBreakerOpenError):
+            await handler.delete_polling("litellm_poll_test")
+
+    @pytest.mark.asyncio
+    async def test_initial_state_and_updates_keep_the_legacy_bytes_in_redis(self):
+        server = fakeredis.FakeServer()
+        raw = fakeredis.FakeAsyncRedis(server=server)
+        handler = ResponsePollingHandler(redis_cache=fake_redis_cache(server))
+        key = ResponsePollingHandler.get_cache_key("litellm_poll_bytes")
+
+        queued = await handler.create_initial_state(
+            polling_id="litellm_poll_bytes", request_data={"metadata": {"note": "caf\u00e9"}}
+        )
+        assert await raw.get(key) == json.dumps(queued.model_dump_json()).encode()
+
+        await handler.update_state("litellm_poll_bytes", status="completed")
+        updated = {**json.loads(queued.model_dump_json()), "status": "completed"}
+        assert await raw.get(key) == json.dumps(json.dumps(updated)).encode()
 
     @pytest.mark.asyncio
     async def test_delete_polling_returns_false_without_redis(self):
@@ -596,26 +668,30 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_update_state_uses_configured_ttl(self):
         """Test that update_state uses the configured TTL"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        server = fakeredis.FakeServer()
+        cache = fake_redis_cache(server)
+        await _seed(
+            cache,
             {
                 "id": "litellm_poll_test",
                 "object": "response",
                 "status": "queued",
                 "output": [],
                 "created_at": 1234567890,
-            }
+            },
         )
 
-        handler = ResponsePollingHandler(redis_cache=mock_redis, ttl=1800)
+        handler = ResponsePollingHandler(redis_cache=cache, ttl=1800)
 
         await handler.update_state(
             polling_id="litellm_poll_test",
             status="in_progress",
         )
 
-        call_args = mock_redis.async_set_cache.call_args
-        assert call_args.kwargs["ttl"] == 1800
+        ttl_ms = await fakeredis.FakeAsyncRedis(server=server).pttl(
+            ResponsePollingHandler.get_cache_key("litellm_poll_test")
+        )
+        assert 1_790_000 < ttl_ms <= 1_800_000
 
 
 class TestStreamingEventProcessing:
@@ -689,6 +765,7 @@ class TestBackgroundStreamingModule:
     def test_background_streaming_task_is_async(self):
         """Test that background_streaming_task is an async function"""
         import inspect
+
         from litellm.proxy.response_polling.background_streaming import (
             background_streaming_task,
         )
@@ -886,9 +963,7 @@ class TestProviderResolutionForPolling:
         model_name_to_deployment_indices = {
             "gpt-5": [0],
         }
-        model_list = [
-            {"model_name": "gpt-5", "litellm_params": {"model": "openai/gpt-5"}}
-        ]
+        model_list = [{"model_name": "gpt-5", "litellm_params": {"model": "openai/gpt-5"}}]
 
         model = "unknown-model"  # Not in router
         polling_via_cache_enabled = ["openai"]
@@ -1282,9 +1357,7 @@ class TestStreamingEventParsing:
                         content_list = output_items[item_id]["content"]
                         if content_index < len(content_list):
                             if isinstance(content_list[content_index], dict):
-                                content_list[content_index]["text"] = accumulated_text[
-                                    key
-                                ]
+                                content_list[content_index]["text"] = accumulated_text[key]
 
         assert accumulated_text[("item_123", 0)] == "Hello World!"
         assert output_items["item_123"]["content"][0]["text"] == "Hello World!"
@@ -1346,9 +1419,7 @@ class TestStreamingEventParsing:
 
     def test_parse_sse_format(self):
         """Test parsing Server-Sent Events format"""
-        raw_chunk = (
-            b'data: {"type": "response.output_item.added", "item": {"id": "123"}}'
-        )
+        raw_chunk = b'data: {"type": "response.output_item.added", "item": {"id": "123"}}'
 
         # Decode bytes to string
         if isinstance(raw_chunk, bytes):
@@ -1476,9 +1547,7 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         # Find the final update_state call (last one)
@@ -1515,9 +1584,7 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         final_call = handler.update_state.call_args_list[-1]
@@ -1558,17 +1625,13 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         final_call = handler.update_state.call_args_list[-1]
         assert final_call.kwargs["status"] == "incomplete"
         assert final_call.kwargs["error"] == error_payload
-        assert final_call.kwargs["incomplete_details"] == {
-            "reason": "max_output_tokens"
-        }
+        assert final_call.kwargs["incomplete_details"] == {"reason": "max_output_tokens"}
         assert final_call.kwargs["usage"] == {"input_tokens": 10, "output_tokens": 4096}
 
     @pytest.mark.asyncio
@@ -1597,9 +1660,7 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         final_call = handler.update_state.call_args_list[-1]
@@ -1632,9 +1693,7 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         final_call = handler.update_state.call_args_list[-1]
@@ -1699,9 +1758,7 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         final_call = handler.update_state.call_args_list[-1]
@@ -1725,9 +1782,7 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         final_call = handler.update_state.call_args_list[-1]
@@ -1763,9 +1818,7 @@ class TestBackgroundStreamingTerminalEvents:
                 yield f"data: {json.dumps(event)}\n\n"
 
         async def upstream_call_behind_disconnect_guard(**kwargs):
-            return await create_response(
-                slow_upstream_stream(), "text/event-stream", {}, request=kwargs["request"]
-            )
+            return await create_response(slow_upstream_stream(), "text/event-stream", {}, request=kwargs["request"])
 
         handler = AsyncMock(spec=ResponsePollingHandler)
         kwargs = _make_background_streaming_kwargs("poll_7", handler)
@@ -1838,8 +1891,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_create_initial_state_with_empty_metadata(self):
         """Test create_initial_state handles missing metadata gracefully"""
-        mock_redis = AsyncMock()
-        handler = ResponsePollingHandler(redis_cache=mock_redis)
+        handler = ResponsePollingHandler(redis_cache=fake_redis_cache(fakeredis.FakeServer()))
 
         response = await handler.create_initial_state(
             polling_id="litellm_poll_test",
@@ -1851,26 +1903,26 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_update_state_with_none_output_clears_output(self):
         """Test that output=[] explicitly sets empty output"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        cache = fake_redis_cache(fakeredis.FakeServer())
+        await _seed(
+            cache,
             {
                 "id": "litellm_poll_test",
                 "object": "response",
                 "status": "in_progress",
                 "output": [{"id": "item_1"}],  # Has existing output
                 "created_at": 1234567890,
-            }
+            },
         )
 
-        handler = ResponsePollingHandler(redis_cache=mock_redis)
+        handler = ResponsePollingHandler(redis_cache=cache)
 
         await handler.update_state(
             polling_id="litellm_poll_test",
             output=[],  # Explicitly set empty
         )
 
-        call_args = mock_redis.async_set_cache.call_args
-        stored = json.loads(call_args.kwargs["value"])
+        stored = await _legacy_read(cache, "litellm_poll_test")
 
         assert stored["output"] == []
 
