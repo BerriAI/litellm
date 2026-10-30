@@ -16,8 +16,12 @@ Pins covered:
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping
+from datetime import datetime, timezone
+from enum import Enum
+from http import HTTPStatus
 from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
@@ -248,24 +252,118 @@ class _MaskedReprModel(BaseModel, frozen=True):
         return "_MaskedReprModel(token=[secure])"
 
 
+class _MaskedReprStrModel(BaseModel, frozen=True):
+    token: str
+
+    def __repr_str__(self, join_str: str) -> str:
+        return "token=[secure]"
+
+
+class _MaskedReprArgsModel(BaseModel, frozen=True):
+    token: str
+
+    def __repr_args__(self) -> Iterable[tuple[str | None, object]]:
+        return (("token", "[secure]"),)
+
+
+class _MaskedStrModel(BaseModel, frozen=True):
+    token: str
+
+    def __str__(self) -> str:
+        return "_MaskedStrModel(token=[secure])"
+
+
+class _MaskedReprString(str):
+    def __repr__(self) -> str:
+        return "_MaskedReprString([secure])"
+
+
 _REDACTED_HEADERS: Final = RedactedDict({"authorization": "Bearer hook-canary"})
+
+_MASKED_IN_EVERY_FRAME: Final = (
+    _UPSTREAM_HEADERS,
+    _REDACTED_HEADERS,
+    MappingProxyType({"headers": _REDACTED_HEADERS}),
+    MappingProxyType(_REDACTED_HEADERS),
+    _HiddenFieldModel(user="rig", password="hook-canary"),
+    _MaskedReprModel(token="hook-canary"),
+    _MaskedReprStrModel(token="hook-canary"),
+    _MaskedReprArgsModel(token="hook-canary"),
+)
+_MASKED_IN_EVERY_FRAME_IDS: Final = (
+    "header_mapping",
+    "redacted_dict",
+    "proxy_over_dict_holding_redacted_dict",
+    "proxy_wrapping_redacted_dict",
+    "repr_false_field",
+    "masked_repr_model",
+    "masked_repr_str_model",
+    "masked_repr_args_model",
+)
 
 
 @pytest.mark.parametrize(
-    ("nested", "expected"),
-    [
-        (_UPSTREAM_HEADERS, repr(_UPSTREAM_HEADERS)),
-        (_REDACTED_HEADERS, repr(_REDACTED_HEADERS)),
-        (MappingProxyType({"headers": _REDACTED_HEADERS}), {"headers": repr(_REDACTED_HEADERS)}),
-        (_HiddenFieldModel(user="rig", password="hook-canary"), {"user": "rig"}),
-        (_MaskedReprModel(token="hook-canary"), repr(_MaskedReprModel(token="hook-canary"))),
-    ],
-    ids=["header_mapping", "redacted_dict", "proxy_over_redacted_dict", "repr_false_field", "masked_repr_model"],
+    "nested",
+    [*_MASKED_IN_EVERY_FRAME, _MaskedReprString("hook-canary")],
+    ids=[*_MASKED_IN_EVERY_FRAME_IDS, "masked_repr_string"],
 )
-def test_responses_stream_frames_never_show_what_a_nested_value_hides_from_its_repr(
-    nested: object, expected: object
+def test_responses_sse_chunk_never_shows_what_a_nested_value_hides_from_its_repr(nested: object) -> None:
+    frame: Final = _format_responses_sse_chunk(
+        chunk=MappingProxyType({"type": "response.output_text.delta", "nested": nested})
+    )
+
+    assert isinstance(frame, str)
+    assert json.loads(frame.removeprefix("data: "))["type"] == "response.output_text.delta"
+    assert "hook-canary" not in frame
+
+
+@pytest.mark.parametrize(
+    "nested",
+    [*_MASKED_IN_EVERY_FRAME, _MaskedStrModel(token="hook-canary")],
+    ids=[*_MASKED_IN_EVERY_FRAME_IDS, "masked_str_model"],
+)
+def test_responses_error_event_never_shows_what_a_nested_value_hides_from_its_string_form(nested: object) -> None:
+    frame: Final = ResponsesStreamErrorState().format_error(
+        {"message": "blocked", "provider_specific_fields": {"guardrail": "rig-guard", "detail": nested}}
+    )
+
+    payload: Final = json.loads(frame.split("data: ", 1)[1])
+    assert payload["error"]["provider_specific_fields"]["guardrail"] == "rig-guard"
+    assert "hook-canary" not in frame
+
+
+class _RigColor(Enum):
+    RED = 1
+
+
+class _Score(float):
+    pass
+
+
+_WHEN: Final = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    ("nested", "printed", "dumped"),
+    [
+        (_WHEN, repr(_WHEN), str(_WHEN)),
+        (_RigColor.RED, repr(_RigColor.RED), str(_RigColor.RED)),
+        (HTTPStatus.BAD_REQUEST, repr(HTTPStatus.BAD_REQUEST), 400),
+        (_Score(0.5), repr(_Score(0.5)), 0.5),
+    ],
+    ids=["datetime", "enum", "int_enum", "float_subclass"],
+)
+def test_responses_stream_frames_print_values_json_cannot_take_as_base_printed_them(
+    nested: object, printed: str, dumped: object
 ) -> None:
-    assert _responses_frame_payload(nested)["nested"] == expected
+    chunk_frame: Final = _format_responses_sse_chunk(
+        chunk=MappingProxyType({"type": "response.output_text.delta", "nested": nested})
+    )
+    error_frame: Final = ResponsesStreamErrorState().format_error({"message": "blocked", "nested": nested})
+
+    assert isinstance(chunk_frame, str)
+    assert json.loads(chunk_frame.removeprefix("data: "))["nested"] == printed
+    assert json.loads(error_frame.split("data: ", 1)[1])["error"]["nested"] == dumped
 
 
 @pytest.mark.parametrize("mapping", [dict, MappingProxyType], ids=["dict", "mapping_proxy"])
@@ -290,38 +388,64 @@ def _self_referencing_chunk() -> Mapping[str, object]:
     return chunk
 
 
+def test_responses_stream_frames_print_a_value_that_holds_itself_as_its_text() -> None:
+    nested: Final = _self_referencing_chunk()
+
+    assert _responses_frame_payload(nested)["nested"] == {"type": "response.output_text.delta", "self": repr(nested)}
+
+
 class _UnprintableValue:
     def __repr__(self) -> str:
         raise RuntimeError("no string form")
 
 
+def test_responses_stream_frames_leave_out_only_the_nested_value_with_no_string_form() -> None:
+    chunk_frame: Final = _format_responses_sse_chunk(
+        chunk={"type": "response.output_text.delta", "meta": {"guardrail": "rig-guard", "bad": _UnprintableValue()}}
+    )
+    error_frame: Final = ResponsesStreamErrorState().format_error(
+        {
+            "message": "blocked",
+            "code": "400",
+            "type": "guardrail_error",
+            "provider_specific_fields": {"guardrail": "rig-guard", "bad": _UnprintableValue()},
+        }
+    )
+
+    assert isinstance(chunk_frame, str)
+    assert json.loads(chunk_frame.removeprefix("data: "))["meta"] == {"guardrail": "rig-guard"}
+    assert json.loads(error_frame.split("data: ", 1)[1])["error"] == {
+        "message": "blocked",
+        "code": "400",
+        "type": "guardrail_error",
+        "provider_specific_fields": {"guardrail": "rig-guard"},
+    }
+
+
+def test_responses_error_event_keeps_a_detail_nested_past_the_recursion_limit() -> None:
+    nested: Final = functools.reduce(lambda inner, _: {"x": inner}, range(5000), {"leaf": 1})
+    frame: Final = ResponsesStreamErrorState().format_error(
+        {"message": "blocked", "provider_specific_fields": {"guardrail": "rig-guard", "detail": nested}}
+    )
+
+    payload: Final = json.loads(frame.split("data: ", 1)[1])
+    assert payload["error"]["provider_specific_fields"]["guardrail"] == "rig-guard"
+    assert "'leaf': 1" in frame
+
+
 @pytest.mark.parametrize(
     "chunk",
     [
-        _self_referencing_chunk(),
         _UPSTREAM_HEADERS,
         RedactedDict({"type": "response.output_text.delta", "authorization": "Bearer hook-canary"}),
+        MappingProxyType(RedactedDict({"type": "response.output_text.delta", "authorization": "Bearer hook-canary"})),
     ],
-    ids=["self_reference", "header_mapping_chunk", "redacted_dict_chunk"],
+    ids=["header_mapping_chunk", "redacted_dict_chunk", "proxy_wrapping_redacted_dict_chunk"],
 )
-def test_responses_sse_chunk_json_cannot_encode_streams_as_a_plain_data_frame(chunk: Mapping[str, object]) -> None:
+def test_responses_sse_chunk_that_is_not_a_plain_mapping_streams_as_the_plain_data_frame(
+    chunk: Mapping[str, object],
+) -> None:
     assert _format_responses_sse_chunk(chunk=chunk) == _format_streaming_sse_chunk(chunk=chunk)
-
-
-@pytest.mark.parametrize(
-    "nested",
-    [_self_referencing_chunk(), _UnprintableValue()],
-    ids=["self_reference", "unprintable_value"],
-)
-def test_responses_error_event_drops_only_the_error_detail_json_cannot_encode(nested: object) -> None:
-    frame: Final = ResponsesStreamErrorState().format_error(
-        {"message": "blocked", "code": "400", "type": "guardrail_error", "nested": nested}
-    )
-
-    assert frame.startswith("event: error\ndata: ")
-    payload: Final = json.loads(frame.split("data: ", 1)[1])
-    assert (payload["type"], payload["message"]) == ("error", "blocked")
-    assert payload["error"] == {"message": "blocked", "code": "400", "type": "guardrail_error"}
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(

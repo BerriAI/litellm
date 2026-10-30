@@ -1,6 +1,7 @@
 import json
 import time
 from collections.abc import Iterable, Mapping, Sequence
+from enum import Enum
 from http import HTTPStatus
 from types import MappingProxyType
 from typing import Final
@@ -68,48 +69,104 @@ class _ErrorPayload(LiteLLMBaseModel):
         return {"message": self.error} if isinstance(self.error, str) else self.error
 
 
-def _is_plain_mapping(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: exact type check
-    return type(value) in (dict, MappingProxyType)
+_DROPPED: Final = object()
+
+
+class _BaseForm(Enum):
+    PRINTED = "printed"
+    DUMPED = "dumped"
+
+
+def _is_plain_dict(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: exact type check
+    return type(value) is dict
 
 
 def _is_plain_sequence(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: exact type check
     return type(value) in (list, tuple)
 
 
-def _json_key(key: object) -> str | int | float | bool | None:
-    return key if key is None or isinstance(key, str | int | float | bool) else repr(key)
+def _is_proxy(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: mappingproxy cannot be subclassed
+    return isinstance(value, MappingProxyType)
 
 
-def _json_safe_items(items: Iterable[tuple[object, object]]) -> Mapping[str | int | float | bool | None, object]:
-    return {_json_key(key): _json_safe(item) for key, item in items}
+def _prints_as_dict(proxy: Mapping[object, object]) -> bool:
+    return repr(proxy) == f"mappingproxy({dict(proxy)!r})"
 
 
-def _json_safe(value: object) -> object:
-    if value is None or isinstance(value, str | int | float | bool):
-        return value
-    if _is_plain_mapping(value):
-        return _json_safe_items(value.items())
-    if _is_plain_sequence(value):
-        return [_json_safe(item) for item in value]
-    if isinstance(value, BaseModel) and type(value).__repr__ is BaseModel.__repr__:
-        shown: Final[Iterable[tuple[str | None, object]]] = value.__repr_args__()
-        return _json_safe_items(shown)
-    return repr(value)
+def _prints_its_fields(model: BaseModel) -> bool:
+    kind: Final = type(model)
+    return (
+        kind.__repr__ is BaseModel.__repr__
+        and kind.__str__ is BaseModel.__str__
+        and kind.__repr_str__ is BaseModel.__repr_str__
+    )
 
 
-def _stream_json(value: object) -> str | None:
+def _str_skips_its_repr(model: BaseModel) -> bool:
+    kind: Final = type(model)
+    return kind.__str__ is BaseModel.__str__ and kind.__repr__ is not BaseModel.__repr__
+
+
+def _text(value: object, form: _BaseForm) -> object:
     try:
-        return json.dumps(_json_safe(value))
-    except Exception:  # noqa: BLE001  # hook values run their own __repr__, so any failure must fall back
-        return None
+        if form is _BaseForm.PRINTED:
+            return repr(value)
+        if isinstance(value, int):
+            return int(value)
+        if isinstance(value, float):
+            return float(value)
+        if isinstance(value, BaseModel) and _str_skips_its_repr(value):
+            return repr(value)
+        return str(value)
+    except Exception:  # noqa: BLE001  # hook values run their own __repr__ and __str__, so a failure drops the value
+        return _DROPPED
 
 
-def _encodable_items(error: Mapping[str, object]) -> Mapping[str, object]:
-    return {key: value for key, value in error.items() if _stream_json(value) is not None}
+def _json_key(key: object, form: _BaseForm) -> object:
+    return key if key is None or type(key) in (str, int, float, bool) else _text(key, form)
+
+
+def _expansion(value: object, form: _BaseForm) -> tuple[Iterable[tuple[object, object]], _BaseForm] | None:
+    if _is_plain_dict(value):
+        return value.items(), form
+    if _is_proxy(value) and _prints_as_dict(value):
+        return value.items(), _BaseForm.PRINTED
+    if isinstance(value, BaseModel) and _prints_its_fields(value):
+        return value.__repr_args__(), _BaseForm.PRINTED
+    return None
+
+
+def _json_safe(value: object, form: _BaseForm, path: frozenset[int]) -> object:
+    if value is None or type(value) in (str, int, float, bool):
+        return value
+    if id(value) in path:
+        return _text(value, form)
+    inner_path: Final = path | frozenset((id(value),))
+    try:
+        if _is_plain_sequence(value):
+            shown_items: Final = [_json_safe(item, form, inner_path) for item in value]
+            return [item for item in shown_items if item is not _DROPPED]
+        expansion: Final = _expansion(value, form)
+        if expansion is None:
+            return _text(value, form)
+        items, inner = expansion
+        pairs: Final = [(_json_key(key, inner), _json_safe(item, inner, inner_path)) for key, item in items]
+        return {key: item for key, item in pairs if key is not _DROPPED and item is not _DROPPED}
+    except Exception:  # noqa: BLE001  # hook values run their own printers and can nest past the recursion limit
+        return _text(value, form)
 
 
 def responses_chunk_json(chunk: object) -> str | None:
-    return _stream_json(chunk) if _is_plain_mapping(chunk) else None
+    if not _is_plain_dict(chunk) and not _is_proxy(chunk):
+        return None
+    shown: Final = _json_safe(chunk, _BaseForm.PRINTED, frozenset())
+    return None if isinstance(shown, str) or shown is _DROPPED else json.dumps(shown)
+
+
+def _dumped_detail(error: Mapping[str, object]) -> Mapping[str, object]:
+    path: Final = frozenset((id(error),))
+    shown: Final = [(key, _json_safe(value, _BaseForm.DUMPED, path)) for key, value in error.items()]
+    return {key: value for key, value in shown if value is not _DROPPED}
 
 
 def sse_error_object(data: str | bytes) -> Mapping[str, object] | None:
@@ -242,9 +299,7 @@ class ResponsesStreamErrorState:
     def format_error(self, error: Mapping[str, object]) -> str:
         fields: Final = responses_error_fields(error)
         sequence_number: Final = self.sequence_number + 1
-        payload: Final = _stream_json(_error_event(fields, _encodable_items(error), sequence_number)) or json.dumps(
-            _error_event(fields, fields, sequence_number)
-        )
+        payload: Final = json.dumps(_error_event(fields, _dumped_detail(error), sequence_number))
         return f"event: error\ndata: {payload}\n\n"
 
     def format_error_message(self, frame: str) -> str:
