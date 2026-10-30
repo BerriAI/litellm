@@ -1256,8 +1256,11 @@ class _AccessGroupGrants:
     granted_names: frozenset[str]
     ids_in_granted_groups: frozenset[str]
 
-    def requested_name(self, name: str, public_names: Mapping[str, str]) -> str:
-        return name if name in self.granted_names else public_names.get(name, name)
+    def requested_name(self, name: str, public_names: Mapping[str, str], admitted_names: frozenset[str]) -> str:
+        public_name: Final = public_names.get(name)
+        if public_name is None or public_name not in admitted_names or name in self.granted_names:
+            return name
+        return public_name
 
     def narrow(self, serving_ids: frozenset[str], served_names: frozenset[str]) -> frozenset[str]:
         in_granted_groups: Final = serving_ids & self.ids_in_granted_groups
@@ -1365,7 +1368,7 @@ async def _deployments_key_may_reach(
     access_group_grants: Final = _access_group_grants(llm_model_list, user_api_key_dict)
     public_names: Final = _public_names_by_internal_name(llm_model_list, user_api_key_dict.team_id)
     groups: Final = frozenset(
-        _served_group(access_group_grants.requested_name(name, public_names), aliases, llm_router)
+        _served_group(access_group_grants.requested_name(name, public_names, admitted_names), aliases, llm_router)
         for name in admitted_names
     )
     ids_by_name: Final = _ids_by_requested_name(llm_model_list, user_api_key_dict.team_id)

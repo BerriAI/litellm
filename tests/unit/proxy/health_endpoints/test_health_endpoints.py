@@ -4973,6 +4973,23 @@ async def test_health_endpoint_probes_a_team_deployment_whose_internal_name_the_
     assert probed == {"id-team-premium", "id-team-standard"}
 
 
+@pytest.mark.asyncio
+async def test_health_endpoint_probes_only_the_team_deployment_whose_internal_name_an_agent_holds() -> None:
+    from litellm.types.agents import AgentResponse
+
+    policy: Final = AgentResponse(
+        agent_id="managed",
+        agent_name="Managed",
+        agent_card_params={},
+        object_permission={"models": ["model_name_team-a_9d2f6e01"]},
+    )
+    caller: Final = _team_key(["gpt-5.4-mini"]).model_copy(update={"managed_agent_policy": policy})
+
+    probed: Final = await _live_probed_model_ids(_team_split_model_list("gpt-5.4-mini", "openai/gpt-5.4-mini"), caller)
+
+    assert probed == {"id-team-standard"}
+
+
 def test_resolve_targeted_model_ids_lets_model_id_win_over_model():
     resolve = _health_endpoints_module._resolve_targeted_model_ids
 
