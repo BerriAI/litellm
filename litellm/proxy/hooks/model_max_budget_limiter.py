@@ -172,16 +172,17 @@ def model_access_groups_of(router: "Router", model: str, team_id: str | None = N
     """
     return frozenset(
         group
-        for group in router.get_model_access_groups(model_name=model, team_id=team_id)
-        if group not in router.model_names
+        for group in router.registry().access_groups(model_name=model, team_id=team_id)
+        if group not in router.registry().names(kind="group_set")
     )
 
 
 def routed_models_of(router: "Router", team_id: str | None = None) -> RoutedModels:
     serves_every_name: Final = (
-        router.default_deployment is not None or router.router_general_settings.pass_through_all_models
+        router.settings().default_deployment is not None
+        or router.settings().router_general_settings.pass_through_all_models
     )
-    served_names: Final = frozenset(router.model_names) | (
+    served_names: Final = frozenset(router.registry().names(kind="group_set")) | (
         frozenset({_GLOB_WILDCARD}) if serves_every_name else frozenset()
     )
     team_members: Final = _team_public_names_by_group(router=router, team_id=team_id)
@@ -190,7 +191,7 @@ def routed_models_of(router: "Router", team_id: str | None = None) -> RoutedMode
         group_members=MappingProxyType(
             {
                 group: frozenset(members) | team_members.get(group, frozenset())
-                for group, members in router.get_model_access_groups().items()
+                for group, members in router.registry().access_groups().items()
                 if group not in served_names
             }
         ),

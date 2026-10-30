@@ -46,6 +46,11 @@ from litellm.constants import (
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.litellm_core_utils.tool_fields import DropPolicy
+from litellm.llms.base_llm.managed_resources.utils import (
+    extract_provider_resource_id_from_unified_id,
+    is_base64_encoded_unified_id,
+)
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.proxy._types import (
     MODEL_LIST_ROUTES,
@@ -165,6 +170,7 @@ from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
 from litellm.utils import get_utc_datetime
+from litellm.vector_stores.vector_store_registry import listed_vector_store_ids, vector_store_ids_in_tool
 
 from .auth_checks_organization import (
     add_team_org_context_to_request_body,
@@ -440,7 +446,7 @@ def _request_has_trace_id(request_body: Mapping[str, object], request: Request, 
     from litellm.proxy.litellm_pre_call_utils import (
         _trace_id_from_traceparent,  # pyright: ignore[reportPrivateUsage]  # reuse W3C traceparent parser
         get_chain_id_from_headers,
-        metadata_variable_name_for_route,
+        metadata_variable_name_for_request,
     )
 
     if get_chain_id_from_headers(dict(request.headers)):
@@ -454,7 +460,7 @@ def _request_has_trace_id(request_body: Mapping[str, object], request: Request, 
         traceparent: Final[str | None] = request.headers.get("traceparent")
         if isinstance(traceparent, str) and _trace_id_from_traceparent(traceparent):
             return True
-    metadata_variable_name: Final = metadata_variable_name_for_route(get_request_route(request))
+    metadata_variable_name: Final = metadata_variable_name_for_request(get_request_route(request), request_body)
     selected_metadata: Final[object] = request_body.get(metadata_variable_name)
     if isinstance(selected_metadata, dict):
         selected_metadata_dict: Final = _TRACE_ID_METADATA_ADAPTER.validate_python(selected_metadata)
@@ -530,7 +536,7 @@ def _get_router_zero_cost_cache(llm_router: Router) -> dict[str, bool] | None:
         * dies with the router itself — no risk of CPython reusing the
           previous router's ``id()`` and serving its cached entries.
     """
-    cache: Final = getattr(llm_router, "_zero_cost_cache", None)
+    cache: Final = llm_router.registry().zero_cost()
     return cache if isinstance(cache, dict) else None
 
 
@@ -538,7 +544,7 @@ def is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None)
     """
     Check if a model has zero cost (no configured pricing).
 
-    Uses the router's get_model_group_info method to get pricing information.
+    Uses the router registry's group info to get pricing information.
 
     Args:
         model: The model name or list of model names
@@ -563,8 +569,8 @@ def is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None)
                     return False
                 continue
         try:
-            # Use router's get_model_group_info method directly for better reliability
-            model_group_info = llm_router.get_model_group_info(model_group=model_name, include_hidden=True)
+            # Use the router registry's group info directly for better reliability
+            model_group_info = llm_router.registry().group(model_name, include_hidden=True)
 
             if model_group_info is None:
                 # Model not found or no pricing info available
@@ -671,15 +677,16 @@ def _deployments_served_for(model: str, llm_router: "Router") -> Sequence[Deploy
     group count, or the wildcard route serving the group when none carries its name, the same
     fallback ``get_model_list()`` takes.
     """
-    routed_group: Final = llm_router.routable_model_group(model)
-    if llm_router.routable_model_group(routed_group) == routed_group:
-        return llm_router.get_model_list(model_name=routed_group) or ()
-    named: Final = llm_router.get_model_list_from_model_alias(model_name=model)
+    registry: Final = llm_router.registry()
+    routed_group: Final = registry.resolve(model)
+    if registry.resolve(routed_group) == routed_group:
+        return registry.deployments(routed_group) or ()
+    named: Final = registry.deployments(model, source="alias")
     if named:
         return named
     return tuple(
         DeploymentTypedDict(**deployment)
-        for deployment in llm_router.pattern_router.get_deployments_by_pattern(model=routed_group)
+        for deployment in registry.patterns().get_deployments_by_pattern(model=routed_group)
     )
 
 
@@ -770,7 +777,8 @@ def _model_group_has_pricing(model: str, llm_router: "Router") -> bool:
     tiered_pricing or a positive price on any billed metric (tokens, characters, seconds, pages,
     images, queries, ...), so models billed by a non-token metric are not treated as unpriced.
     """
-    for deployment in llm_router.get_model_list(model_name=model) or ():
+    registry: Final = llm_router.registry()
+    for deployment in registry.deployments(model) or ():
         litellm_params = deployment.get("litellm_params") or _EMPTY_COST_ENTRY
         if _entry_declares_price(litellm_params):
             return True
@@ -779,9 +787,7 @@ def _model_group_has_pricing(model: str, llm_router: "Router") -> bool:
         if model_id is None:
             continue
 
-        model_info = llm_router.get_deployment_model_info(
-            model_id=model_id, model_name=litellm_params.get("model") or ""
-        )
+        model_info = registry.deployment_model_info(model_id, litellm_params.get("model") or "")
         if model_info is not None and _entry_has_priced_metric(model_info):
             return True
 
@@ -792,13 +798,13 @@ def model_has_no_cost_mapping(model: str | None, llm_router: Router | None) -> b
     if not model or llm_router is None:
         return False
 
-    if llm_router.get_model_group_info(model_group=model) is None:
+    if llm_router.registry().group(model) is None:
         return False
 
     if _model_group_has_pricing(model=model, llm_router=llm_router):
         return False
 
-    return not _is_cost_explicitly_configured(llm_router.get_model_list(model_name=model) or ())
+    return not _is_cost_explicitly_configured(llm_router.registry().deployments(model) or ())
 
 
 def _unpriced_models_in_request(model: str | list[str] | None, llm_router: Router | None) -> tuple[str, ...]:
@@ -1361,11 +1367,15 @@ async def common_checks(
     if not skip_all_budget_checks:
         # Key metadata.tags are injected into request_body here so the tag budget
         # check can read them; this mutation must run before the gathered checks.
-        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_request
 
         if valid_token is not None:
             for tag_target in LiteLLMProxyRequestSetup.pre_auth_tag_merge_targets(request, request_body):
                 LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(request_data=tag_target, route=route)
+                LiteLLMProxyRequestSetup.merge_caller_body_tags(
+                    request_data=tag_target,
+                    metadata_variable_name=metadata_variable_name_for_request(route, tag_target),
+                )
                 LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(request_data=tag_target, user_api_key_dict=valid_token)
         LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, request_body)
 
@@ -1514,6 +1524,7 @@ async def common_checks(
             valid_token=valid_token,
             user_object=user_object,
             deny_by_default=_vector_store_deny_by_default(_typed_request_body(general_settings)),
+            llm_router=llm_router,
         )
 
     # 12. [OPTIONAL] Tool allowlist - key/team allowed_tools (no DB in hot path)
@@ -2778,7 +2789,7 @@ def model_in_access_group(model: str, team_models: list[str] | None, llm_router:
 
     access_groups: dict[str, list[str]] = defaultdict(list)
     if llm_router:
-        access_groups = llm_router.get_model_access_groups(model_name=model)
+        access_groups = llm_router.registry().access_groups(model_name=model)
 
     if len(access_groups) > 0:  # check if token contains any model access groups
         for idx, m in enumerate(
@@ -4822,7 +4833,7 @@ def _resolve_all_team_model_sentinel_for_auth_check(
 ) -> list[str]:
     if SpecialModelNames.all_team_models.value not in models or team_id is None or llm_router is None:
         return models
-    proxy_models: Final = llm_router.get_model_names()
+    proxy_models: Final = llm_router.registry().names()
     non_sentinel_models: Final = [model for model in models if model != SpecialModelNames.all_team_models.value]
     if not proxy_models:
         return non_sentinel_models or models
@@ -4842,7 +4853,7 @@ def check_model_access_helper(
     access_groups: dict[str, list[str]] = defaultdict(list)
 
     if llm_router:
-        access_groups = llm_router.get_model_access_groups(model_name=model, team_id=team_id)
+        access_groups = llm_router.registry().access_groups(model_name=model, team_id=team_id)
 
     models = _resolve_all_team_model_sentinel_for_auth_check(
         models=models,
@@ -4888,7 +4899,7 @@ def _owning_team_names_for_team_deployment(
 ) -> tuple[str, ...]:
     if llm_router is None or team_id is None or not model.startswith(f"model_name_{team_id}_"):
         return ()
-    deployment: Final = llm_router.get_deployment_by_model_group_name(model_group_name=model)
+    deployment: Final = llm_router.registry().deployments(model, source="first_in_group")
     public_name: Final = (
         deployment.model_info.team_public_model_name
         if deployment is not None and deployment.model_info.team_id == team_id
@@ -4947,8 +4958,8 @@ def _can_object_call_model(
         litellm.model_alias_map[model]
         if model in litellm.model_alias_map
         else (
-            llm_router.get_model_from_alias(model)
-            if llm_router is not None and model in llm_router.model_group_alias
+            llm_router.registry().resolve(model, kind="alias")
+            if llm_router is not None and model in llm_router.registry().aliases()
             else None
         )
     )
@@ -5035,7 +5046,7 @@ def _live_team_alias_target(
     deleted_team_deployment: Final = (
         llm_router is not None
         and target.startswith(f"model_name_{team_id}_")
-        and target not in llm_router.model_name_to_deployment_indices
+        and target not in llm_router.registry().index("model_name")
     )
     return model if deleted_team_deployment else target
 
@@ -5227,7 +5238,7 @@ def _model_access_groups_serving_model(
     return frozenset(
         group
         for requested_model in requested
-        for group in llm_router.get_model_access_groups(model_name=requested_model, team_id=team_id)
+        for group in llm_router.registry().access_groups(model_name=requested_model, team_id=team_id)
     )
 
 
@@ -7985,6 +7996,57 @@ def _strict_requested_vector_store_ids(request_body: Mapping[str, object]) -> tu
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _UnreadableVectorStoreIds:
+    pass
+
+
+def _top_level_vector_store_ids(
+    vector_store_ids: object, drop_policies: Callable[[], tuple[DropPolicy, ...]]
+) -> tuple[str, ...] | _UnreadableVectorStoreIds:
+    listed: Final = listed_vector_store_ids(vector_store_ids)
+    if vector_store_ids is None or vector_store_ids == [*listed]:
+        return listed
+    if any(policy.drops("vector_store_ids") for policy in drop_policies()):
+        return listed
+    if isinstance(vector_store_ids, str):
+        return (vector_store_ids,)
+    return _UnreadableVectorStoreIds()
+
+
+def _legacy_requested_vector_store_ids(
+    request_body: Mapping[str, object], drop_policies: Callable[[], tuple[DropPolicy, ...]]
+) -> tuple[str, ...] | _UnreadableVectorStoreIds:
+    """
+    Reads tools the way VectorStoreRegistry does and leaves a malformed tool to the proxy's tool
+    validation. A top-level vector_store_ids string names one store, since a query parameter always
+    arrives as a string. Any other value that is not a list of strings names no readable stores unless a
+    drop policy the request can resolve to drops it, and then only the string entries of a list name
+    stores, as in registry retrieval.
+    """
+    top_level: Final = _top_level_vector_store_ids(request_body.get("vector_store_ids"), drop_policies)
+    if isinstance(top_level, _UnreadableVectorStoreIds):
+        return top_level
+    return tuple(
+        chain(
+            top_level,
+            chain.from_iterable(vector_store_ids_in_tool(tool) for tool in _tools(request_body.get("tools"))),
+        )
+    )
+
+
+def _restricts_vector_stores(grants: Sequence[tuple[GrantLayer, LiteLLM_ObjectPermissionTable | None]]) -> bool:
+    return any(grant is not None and bool(grant.vector_stores) for _, grant in grants)
+
+
+def _request_drop_policies(
+    request_body: Mapping[str, object], llm_router: Router | None, valid_token: UserAPIKeyAuth | None
+) -> tuple[DropPolicy, ...]:
+    from litellm.proxy.common_request_processing import counted_drop_policies
+
+    return counted_drop_policies(request_body, llm_router, valid_token.team_id if valid_token is not None else None)
+
+
 def _require_vector_store_grant(
     object_type: GrantLayer,
     vector_store_ids_to_run: Sequence[str],
@@ -8032,6 +8094,7 @@ async def vector_store_access_check(
     *,
     user_object: LiteLLM_UserTable | None = None,
     deny_by_default: bool = False,
+    llm_router: Router | None = None,
 ):
     """
     Checks whether the caller may use every vector store the request names.
@@ -8040,11 +8103,19 @@ async def vector_store_access_check(
     `retrieval_config.vector_store_id`. Grants come from each identity's
     `object_permission.vector_stores`.
 
-    With `deny_by_default=False` (legacy), a key or team only restricts access when its list is
-    nonempty, and stores are only read from the request when a vector store registry is loaded.
+    Both modes read the same request fields, with or without a vector store registry, and answer 400
+    when the top-level `vector_store_ids` is not a list of strings, which legacy mode does only when the
+    key or team has an allowlist and the value is not a string, which it checks as one store id. A
+    LiteLLM-managed store id is compared by the provider store id it decodes to, on both sides. Legacy mode skips that value instead when the request, `litellm_settings`, the router defaults or a deployment of the requested
+    model drops it (`drop_params`, or `additional_drop_params` naming it), the same settings the proxy's
+    tool validation reads, and reads tools the way the registry does, where strict mode answers 400 on a
+    malformed one.
 
-    With `deny_by_default=True` (`general_settings.vector_store_deny_by_default`), stores are read
-    even without a registry, and a missing record, `null` or `[]` grants nothing:
+    With `deny_by_default=False` (legacy), a key or team only restricts access when its list is
+    nonempty.
+
+    With `deny_by_default=True` (`general_settings.vector_store_deny_by_default`), a missing record,
+    `null` or `[]` grants nothing:
 
     - virtual key: the key must grant every store, and so must its team when it has one, even if
       the team failed to load
@@ -8056,8 +8127,8 @@ async def vector_store_access_check(
     rescue nor restrict a key or team request.
 
     Raises ProxyException (401, `{key,team,user}_vector_store_access_denied`) on the first identity
-    that does not grant a requested store, and with the flag on, ProxyException (400,
-    `invalid_request_error`) when a `vector_store_ids` field is not a list of strings.
+    that does not grant a requested store, and ProxyException (400, `invalid_request_error`) on a
+    malformed `vector_store_ids` the request does not drop and, in legacy mode, an allowlist applies to.
     """
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -8068,21 +8139,23 @@ async def vector_store_access_check(
         verbose_proxy_logger.debug("Prisma client not found, skipping vector store access check")
         return True
 
-    registry_ids: Final = (
-        _strict_requested_vector_store_ids(_typed_request_body(request_body))
+    typed_request_body: Final = _typed_request_body(request_body)
+    requested_ids: Final = (
+        _strict_requested_vector_store_ids(typed_request_body)
         if deny_by_default
-        else (
-            litellm.vector_store_registry.get_vector_store_ids_to_run(
-                non_default_params=request_body, tools=request_body.get("tools", None)
-            )
-            if litellm.vector_store_registry is not None
-            else None
+        else _legacy_requested_vector_store_ids(
+            typed_request_body, lambda: _request_drop_policies(typed_request_body, llm_router, valid_token)
         )
-        or ()
     )
-    rag_vector_store_id: Final = _get_rag_query_vector_store_id(_typed_request_body(request_body))
+    if isinstance(requested_ids, _UnreadableVectorStoreIds):
+        if _restricts_vector_stores(
+            await _identity_grants(valid_token, team_object, None, prisma_client, user_api_key_cache)
+        ):
+            raise _malformed_vector_store_ids()
+        return True
+    rag_vector_store_id: Final = _get_rag_query_vector_store_id(typed_request_body)
     rag_ids: Final = (rag_vector_store_id,) if rag_vector_store_id is not None else ()
-    vector_store_ids_to_run: Final = tuple(dict.fromkeys((*registry_ids, *rag_ids)))
+    vector_store_ids_to_run: Final = tuple(dict.fromkeys((*requested_ids, *rag_ids)))
     if not vector_store_ids_to_run:
         return True
 
@@ -8109,6 +8182,12 @@ async def vector_store_access_check(
     return True
 
 
+def _provider_vector_store_id(vector_store_id: str) -> str:
+    if not is_base64_encoded_unified_id(vector_store_id):
+        return vector_store_id
+    return extract_provider_resource_id_from_unified_id(vector_store_id) or vector_store_id
+
+
 def _can_object_call_vector_stores(
     object_type: Literal["key", "team", "org", "user"],
     vector_store_ids_to_run: Sequence[str],
@@ -8127,8 +8206,9 @@ def _can_object_call_vector_stores(
     if len(object_permissions.vector_stores) == 0:
         return True
 
+    allowed_stores: Final = frozenset(map(_provider_vector_store_id, object_permissions.vector_stores))
     for vector_store_id in vector_store_ids_to_run:
-        if vector_store_id not in object_permissions.vector_stores:
+        if _provider_vector_store_id(vector_store_id) not in allowed_stores:
             raise ProxyException(
                 message=f"User not allowed to access vector store. Tried to access {vector_store_id}. Only allowed to access {object_permissions.vector_stores}",
                 type=ProxyErrorTypes.get_vector_store_access_error_type_for_object(object_type),

@@ -2659,7 +2659,7 @@ def test_perplexity_streaming_dict_cost_bills_through_its_own_calculator():
     ) == pytest.approx(0.00503)
 
 
-def test_openai_compatible_streaming_cost_is_priced_from_the_cost_map():
+def test_openai_compatible_streaming_reported_cost_is_billed_instead_of_the_cost_map():
     import litellm
     from litellm.cost_calculator import (
         get_response_cost_from_hidden_params,
@@ -2681,7 +2681,7 @@ def test_openai_compatible_streaming_cost_is_priced_from_the_cost_map():
         id="chatcmpl-openai-compatible",
         model=model,
         choices=[],
-        usage=Usage(completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=3_144_000),
+        usage=Usage(completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.037),
     )
 
     CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response, "openai")
@@ -2693,7 +2693,7 @@ def test_openai_compatible_streaming_cost_is_priced_from_the_cost_map():
         custom_llm_provider="openai",
         call_type="completion",
         optional_params={},
-    ) == pytest.approx(2e-5)
+    ) == pytest.approx(0.037)
 
 
 def test_xai_streaming_reported_cost_still_takes_the_margin(monkeypatch):
@@ -7818,6 +7818,38 @@ async def test_openai_stream_relays_the_served_service_tier_on_every_chunk_inclu
 
     assert [chunk.get("service_tier") for chunk in relayed] == ["default"] * len(relayed), relayed
     assert relayed[-1]["usage"]["total_tokens"] == 11
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_stream_relays_the_served_service_tier_on_the_finish_chunk_it_adds(logging_obj: Logging, sync_mode: bool):
+    from litellm.utils import ModelResponseListIterator
+
+    def _chunk(content: str, finish_reason: str | None) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-tier",
+            created=1742056047,
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(finish_reason=finish_reason, index=0, delta=Delta(content=content))],
+            service_tier="priority",
+        )
+
+    logging_obj.update_environment_variables(
+        model="gpt-4.1-mini", optional_params={}, litellm_params={}, custom_llm_provider="openai"
+    )
+    wrapper = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=[_chunk("Hi", None), _chunk("!", "stop")]),
+        model="gpt-4.1-mini",
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+    )
+
+    relayed = (
+        [chunk.model_dump() for chunk in wrapper] if sync_mode else [chunk.model_dump() async for chunk in wrapper]
+    )
+
+    assert [chunk["choices"][0]["finish_reason"] for chunk in relayed] == [None, None, "stop"], relayed
+    assert [chunk.get("service_tier") for chunk in relayed] == ["priority"] * len(relayed), relayed
 
 
 def _last_chunk_carries_finish_reason_wrapper(
