@@ -1169,7 +1169,7 @@ async def _handle_team_membership_changes(
     existing_teams_set: Final = set(existing_teams)
     new_teams_set: Final = set(new_teams)
 
-    teams_to_add: Final = new_teams_set - existing_teams_set
+    teams_to_add: Final = tuple(team for team in dict.fromkeys(new_teams) if team not in existing_teams_set)
     teams_to_remove: Final = existing_teams_set - new_teams_set
 
     if teams_to_add or teams_to_remove:

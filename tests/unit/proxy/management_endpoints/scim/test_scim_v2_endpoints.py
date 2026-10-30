@@ -25,6 +25,7 @@ from litellm.proxy._types import (
     NewUserResponse,
     ProxyErrorTypes,
     ProxyException,
+    TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
 from litellm.proxy.management_endpoints.scim.scim_v2 import (
@@ -954,8 +955,8 @@ class _EmailMatchedUserRow:
 
 
 @pytest.mark.asyncio
-async def test_handle_existing_user_by_email_keeps_record_team_order(mocker):
-    user_rows = _EmailMatchedUserRow(
+async def test_handle_existing_user_by_email_keeps_record_team_order(mocker: MockerFixture):
+    user_rows: Final = _EmailMatchedUserRow(
         LiteLLM_UserTable(
             user_id="same-id",
             user_email="member@example.com",
@@ -964,7 +965,7 @@ async def test_handle_existing_user_by_email_keeps_record_team_order(mocker):
             metadata={},
         )
     )
-    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client: Final = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = user_rows
 
@@ -1339,6 +1340,49 @@ async def test_handle_team_membership_changes_add_and_remove(mocker):
     assert call_args[1]["user_id"] == "test-user"
     assert call_args[1]["teams_ids_to_add_user_to"] == ["team3"]
     assert call_args[1]["teams_ids_to_remove_user_from"] == ["team1"]
+
+
+class _TeamRosterRecord:
+    def __init__(self, missing_team: str) -> None:
+        self.missing_team = missing_team
+        self.teams: tuple[str, ...] = ()
+
+    async def team_member_add(self, *, data: TeamMemberAddRequest, user_api_key_dict: UserAPIKeyAuth) -> None:
+        if data.team_id == self.missing_team:
+            raise HTTPException(status_code=404, detail={"error": "Team not found"})
+        self.teams = (*self.teams, data.team_id)
+
+
+@pytest.mark.asyncio
+async def test_handle_team_membership_changes_adds_teams_in_request_order_when_one_fails(mocker: MockerFixture):
+    requested_teams: Final = (
+        "team-zeta",
+        "team-alpha",
+        "team-kappa",
+        "team-kept",
+        "team-mu",
+        "team-missing",
+        "team-beta",
+        "team-omega",
+        "team-delta",
+        "team-sigma",
+        "team-gamma",
+        "team-tau",
+    )
+    roster: Final = _TeamRosterRecord(missing_team="team-missing")
+    mocker.patch(  # test-quality-ok: team_member_add is module-level, not injectable into the helper
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_add",
+        roster.team_member_add,
+    )
+
+    with pytest.raises(SCIMRosterSyncError):
+        await _handle_team_membership_changes(
+            user_id="test-user",
+            existing_teams=["team-kept"],
+            new_teams=list(requested_teams),
+        )
+
+    assert roster.teams == tuple(team for team in requested_teams if team not in {"team-kept", "team-missing"})
 
 
 @pytest.mark.asyncio
