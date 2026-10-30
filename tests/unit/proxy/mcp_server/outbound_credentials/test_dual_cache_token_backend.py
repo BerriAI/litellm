@@ -40,8 +40,7 @@ async def test_a_token_one_worker_writes_reaches_another_with_the_legacy_wire_by
 async def test_a_token_an_old_pod_wrote_is_read_and_cached_locally() -> None:
     server = fakeredis.FakeServer()
     raw = fakeredis.FakeAsyncRedis(server=server)
-    legacy = fake_redis_cache(server)
-    await legacy.async_set_cache(KEY, "enc:old", ttl=60)
+    await raw.set(KEY, json.dumps("enc:old"), ex=60)
     reader = _worker(server)
 
     got = await _backend(reader).get("alice", "srv")
