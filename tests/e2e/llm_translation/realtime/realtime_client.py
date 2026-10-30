@@ -63,7 +63,7 @@ PROVIDERS = (
         "azure",
         "azure-realtime",
         LiteLLMParamsBody(
-            model="azure/gpt-realtime",
+            model="azure/gpt-realtime-1.5",
             api_key="os.environ/AZURE_API_KEY",
             api_version="2025-08-28",
             realtime_protocol="GA",

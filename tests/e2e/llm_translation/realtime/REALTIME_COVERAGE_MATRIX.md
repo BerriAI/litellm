@@ -40,7 +40,7 @@ at call time. The provider table below is the source of truth; edit `PROVIDERS` 
 | provider | model alias | upstream model |
 |----------|-------------|----------------|
 | openai | `openai-realtime` | `openai/gpt-realtime-2` |
-| azure | `azure-realtime` | `azure/gpt-realtime-2` (GA protocol) |
+| azure | `azure-realtime` | `azure/gpt-realtime-1.5` (GA protocol) |
 | gemini | `gemini-realtime` | `gemini/gemini-3.1-flash-live-preview` |
 | vertex_ai | `vertex-realtime` | `vertex_ai/gemini-live-2.5-flash-native-audio` |
 

@@ -46,7 +46,7 @@ from websockets.exceptions import ConnectionClosedError
 
 pytestmark = pytest.mark.e2e
 
-AZURE_REALTIME_MODEL: Final = "azure/gpt-realtime"
+AZURE_REALTIME_MODEL: Final = "azure/gpt-realtime-1.5"
 
 TEXT_PARAMS: Final = tuple(
     pytest.param(

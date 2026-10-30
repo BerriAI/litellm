@@ -31,7 +31,7 @@ WEATHER_WAV = (
     Path(__file__).resolve().parent / "realtime" / "fixtures" / "weather_question_24k.wav"
 )
 
-OPENAI_TRANSCRIBE_MODEL: Final = "openai/gpt-4o-mini-transcribe"
+OPENAI_TRANSCRIBE_MODEL: Final = "openai/gpt-transcribe"
 OPENAI_WHISPER_MODEL: Final = "openai/whisper-1"
 MISSING_MODEL_PHRASES: Final = ("model=none", "invalid model", "model is required")
 

@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
 
-REALTIME_BACKEND = "openai/gpt-realtime"
+REALTIME_BACKEND = "openai/gpt-realtime-2.1"
 
 
 class RealtimeSession(BaseModel):
