@@ -20,6 +20,7 @@ TOKEN_PRICED_NAMES: Final = (
     "codex-mini",
     "model-router",
     "cohere-command-a",
+    "Cohere-command-a-plus-05-2026",
     "grok-4-20-reasoning",
     "grok-4-20-non-reasoning",
 )
