@@ -48,6 +48,7 @@ from litellm.integrations.otel.model.spans import (
     validate_registry,
 )
 from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
+from litellm.types.responses.main import build_web_search_call
 
 
 @pytest.fixture(autouse=True)
@@ -796,6 +797,37 @@ def test_responses_tool_calls_fold_into_the_assistant_message_with_tool_calls_fi
         {"id": "call_2", "type": "function", "function": {"name": "grep", "arguments": "-r TODO"}},
     ]
     assert data.finish_reasons == ("tool_calls",)
+
+
+def test_responses_claude_web_calls_lead_the_tool_calls_without_ending_the_turn_on_tool_calls():
+    claude_fetch = build_web_search_call("srvtoolu_01", {"url": "https://example.com/"}, None, tool_name="web_fetch")
+    openai_search = {
+        "type": "web_search_call",
+        "id": "ws_1",
+        "status": "completed",
+        "action": {"type": "search", "query": "news"},
+    }
+    client_call = {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{}"}
+    claude_tool_call = {
+        "id": "srvtoolu_01",
+        "type": "function",
+        "function": {"name": "web_fetch", "arguments": '{"url": "https://example.com/"}'},
+    }
+
+    hosted_only = LLMCallSpanData.from_standard_logging_payload(
+        _responses_payload([_RESPONSES_TEXT_ITEM, claude_fetch.model_dump(), openai_search]), capture_content=True
+    )
+    with_client_call = LLMCallSpanData.from_standard_logging_payload(
+        _responses_payload([_RESPONSES_TEXT_ITEM, claude_fetch.model_dump(), client_call]), capture_content=True
+    )
+
+    assert json.loads(json.dumps(hosted_only.choices_out[0]["message"]["tool_calls"])) == [claude_tool_call]
+    assert hosted_only.finish_reasons == ("stop",)
+    assert json.loads(json.dumps(with_client_call.choices_out[0]["message"]["tool_calls"])) == [
+        claude_tool_call,
+        {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}},
+    ]
+    assert with_client_call.finish_reasons == ("tool_calls",)
 
 
 def test_responses_tool_call_only_output_has_no_content():

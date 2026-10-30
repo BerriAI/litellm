@@ -71,7 +71,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
     ResponsesSessionHandler,
     StoredTurns,
 )
-from litellm.types.llms.anthropic import ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX, AnthropicToolSearchToolRegex
+from litellm.types.llms.anthropic import AnthropicToolSearchToolRegex, claude_hosted_web_tool_call
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -120,8 +120,6 @@ from litellm.types.responses.main import (
     OutputImageGenerationCall,
     OutputText,
     OutputToolSearchCall,
-    hosted_web_tool_call,
-    web_search_call_tool_id,
 )
 from litellm.types.utils import (
     ChatCompletionAnnotation,
@@ -882,13 +880,10 @@ def _chain_session_metadata(chain_session: str, request_kwargs: Mapping[str, obj
 
 
 def claude_web_search_call_tool_call(search: ResponseFunctionWebSearch) -> ChatCompletionAssistantToolCall | None:
-    tool_id: Final = web_search_call_tool_id(search.id)
-    if tool_id is None or not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
+    claude_call: Final = claude_hosted_web_tool_call(search)
+    if claude_call is None:
         return None
-    hosted_call: Final = hosted_web_tool_call(search.action)
-    if hosted_call is None:
-        return None
-    name, arguments = hosted_call
+    tool_id, name, arguments = claude_call
     return ChatCompletionAssistantToolCall(
         id=tool_id,
         type="function",

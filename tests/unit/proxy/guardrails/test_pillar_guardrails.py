@@ -34,6 +34,7 @@ from litellm.proxy.guardrails.guardrail_hooks.pillar.pillar import (
     build_pillar_response_headers,
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
+from litellm.types.utils import Choices, Message, ModelResponse
 
 # ============================================================================
 # FIXTURES
@@ -667,6 +668,49 @@ async def test_post_call_hook_with_tool_calls(
         )
 
     assert result == mock_llm_response_with_tools
+
+
+@pytest.mark.asyncio
+async def test_post_call_hook_blocks_a_flagged_claude_server_tool_call(
+    pillar_guardrail_instance,
+    sample_request_data,
+    user_api_key_dict,
+    pillar_clean_response,
+    pillar_flagged_response,
+):
+    server_call = {
+        "id": "srvtoolu_01",
+        "type": "function",
+        "function": {"name": "web_fetch", "arguments": '{"url": "https://example.com/"}'},
+    }
+    response = ModelResponse(
+        choices=[
+            Choices(
+                message=Message(
+                    role="assistant",
+                    content="Fetched it",
+                    provider_specific_fields={"server_tool_calls": [server_call]},
+                )
+            )
+        ]
+    )
+
+    async def _pillar_flags_the_server_call(*_args, **kwargs):
+        scanned_tool_calls = kwargs["json"]["messages"][-1].get("tool_calls") or []
+        return pillar_flagged_response if server_call in scanned_tool_calls else pillar_clean_response
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        side_effect=_pillar_flags_the_server_call,
+    ):
+        with pytest.raises(HTTPException) as excinfo:
+            await pillar_guardrail_instance.async_post_call_success_hook(
+                data=sample_request_data,
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+            )
+
+    assert excinfo.value.status_code == 400
 
 
 # =========================================================================

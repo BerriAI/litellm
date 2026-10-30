@@ -32,6 +32,8 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chunk_builder
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
+    changed_server_tool_call_arguments,
+    write_anthropic_hosted_web_call_arguments,
     write_anthropic_server_tool_calls,
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
@@ -1264,6 +1266,16 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         )
         if not guardrailed_by_id:
             return
+        original_by_id: Final = MappingProxyType(dict(_streamed_server_tool_calls(responses_so_far)))
+        changed_by_choice: Final = MappingProxyType(
+            {
+                choice_index: changed_server_tool_call_arguments(
+                    _choice_server_tool_calls(original_by_id, choice_index),
+                    _choice_server_tool_calls(guardrailed_by_id, choice_index),
+                )
+                for choice_index in frozenset(index for index, _ in guardrailed_by_id)
+            }
+        )
         for response in responses_so_far:
             for choice in response.choices:
                 write_anthropic_server_tool_calls(
@@ -1272,6 +1284,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         guardrailed_by_id.get((choice.index, server_tool_call["id"]), server_tool_call)
                         for server_tool_call in anthropic_server_tool_call_params(choice.delta)
                     ),
+                )
+                write_anthropic_hosted_web_call_arguments(
+                    choice.delta, changed_by_choice.get(choice.index, MappingProxyType({}))
                 )
 
     async def _apply_guardrail_responses_to_output_streaming(
@@ -1474,6 +1489,21 @@ def _server_tool_call_tasks(
             continue
         for server_idx, server_tool_call in enumerate(anthropic_server_tool_call_params(choice.message)):
             yield (choice_idx, server_idx), server_tool_call
+
+
+def _streamed_server_tool_calls(
+    responses: Sequence["ModelResponseStream"],
+) -> Iterator[tuple[tuple[int, str | None], ChatCompletionAssistantToolCall]]:
+    for response in responses:
+        for choice in response.choices:
+            for server_tool_call in anthropic_server_tool_call_params(choice.delta):
+                yield (choice.index, server_tool_call["id"]), server_tool_call
+
+
+def _choice_server_tool_calls(
+    calls_by_id: Mapping[tuple[int, str | None], ChatCompletionAssistantToolCall], choice_index: int
+) -> tuple[ChatCompletionAssistantToolCall, ...]:
+    return tuple(call for (index, _), call in calls_by_id.items() if index == choice_index)
 
 
 def _server_tool_call_input(server_tool_call: ChatCompletionAssistantToolCall) -> dict[str, object]:
