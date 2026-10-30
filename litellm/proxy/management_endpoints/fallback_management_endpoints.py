@@ -107,11 +107,14 @@ def _checked_content_policy_rules(
 def apply_content_policy_fallbacks(llm_router: "Router", rules: object, *, log_skipped_rules: bool) -> None:
     checked_rules: Final = _checked_content_policy_rules(rules)
     runtime_rules: Final = tuple(result for _, result in checked_rules if not isinstance(result, ValidationError))
-    layered_rules: Final = _layered_over_config_rules(
-        runtime_rules,
-        _config_file_rules(
-            litellm.content_policy_fallbacks  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped module list
-        ),
+    layered_rules: Final = (
+        _layered_over_config_rules(
+            runtime_rules,
+            _config_file_rules(
+                litellm.content_policy_fallbacks  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped module list
+            ),
+        )
+        or None
     )
     for rule, result in checked_rules:
         if log_skipped_rules and isinstance(result, ValidationError):
@@ -352,9 +355,7 @@ async def get_fallback(
         fallback_targets: Final = _FALLBACK_TARGETS.validate_python(
             get_all_fallbacks(model=model, llm_router=llm_router, fallback_type=fallback_type)
         )
-        fallback_models: Final = [
-            name for target in fallback_targets if (name := fallback_target_model_name(target)) is not None
-        ]
+        fallback_models: Final = [fallback_target_model_name(target) or model for target in fallback_targets]
 
         if not fallback_models:
             raise HTTPException(

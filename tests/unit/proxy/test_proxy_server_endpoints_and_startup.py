@@ -5633,6 +5633,21 @@ async def test_db_content_policy_fallbacks_reach_the_router(stored_target: str |
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stored_rules", [[], [{"primary": "backup"}]])
+async def test_a_saved_content_policy_list_with_no_valid_rule_leaves_refusals_to_the_general_fallbacks(
+    monkeypatch: pytest.MonkeyPatch, stored_rules: list[object]
+):
+    monkeypatch.setattr(litellm, "content_policy_fallbacks", None)
+    router: Final = _content_policy_router(fallbacks=[{"primary": ["backup"]}])
+
+    await proxy_server_module.ProxyConfig()._add_router_settings_from_db_config(
+        llm_router=router, prisma_client=_router_settings_row(stored_rules)
+    )
+
+    assert await _answer_after_content_policy_refusal(router) == "backup answered"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("litellm_settings_rules", "stored_rules", "refused_model"),
     [

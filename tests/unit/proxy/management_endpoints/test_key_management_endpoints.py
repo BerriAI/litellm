@@ -13,7 +13,7 @@ import pytest
 import yaml
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 
 import litellm
 from litellm.constants import PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
@@ -7597,7 +7597,7 @@ async def test_generate_key_with_router_settings(monkeypatch):
         "num_retries": 3,
         "model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}},
         "weights": {"gpt-4": {"weighted-id": 1}},
-        "content_policy_fallbacks": [{"gpt-4": ["gpt-4o", {"model": "gpt-4o-mini", "temperature": 0}]}],
+        "content_policy_fallbacks": [{"gpt-4": ["gpt-4o", "gpt-4o-mini"]}],
     }
 
     request_data = GenerateKeyRequest(
@@ -7735,6 +7735,17 @@ async def test_update_key_with_router_settings(
     )
     assert cleared["team_id"] == target_team
     assert json.loads(cleared["router_settings"]) == {}
+
+
+@pytest.mark.parametrize("request_type", [GenerateKeyRequest, UpdateKeyRequest])
+def test_a_key_content_policy_rule_can_only_name_fallback_models(
+    request_type: type[GenerateKeyRequest] | type[UpdateKeyRequest],
+):
+    with pytest.raises(ValidationError, match="must be model names"):
+        request_type(
+            key="sk-key",
+            router_settings={"content_policy_fallbacks": [{"gpt-4": ["gpt-4o", {"model": "gpt-4o-mini"}]}]},
+        )
 
 
 @pytest.mark.asyncio

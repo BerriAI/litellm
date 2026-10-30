@@ -449,6 +449,20 @@ class TestFallbackWritesSeeTheLatestStoredRules:
 
         assert response.fallback_models == ["gpt-5.4-mini", "team-fallback"]
 
+    @pytest.mark.parametrize(
+        ("fallback_type", "router_setting"),
+        [("general", "fallbacks"), ("content_policy", "content_policy_fallbacks")],
+    )
+    async def test_get_names_the_rules_own_model_for_a_dict_target_that_names_none(
+        self, fallback_type: Literal["general", "content_policy"], router_setting: str
+    ) -> None:
+        router: Final = _team_router()
+        router.update_settings(**{router_setting: [{"team-primary": [{"temperature": 0}, "team-fallback"]}]})
+        with patch("litellm.proxy.proxy_server.llm_router", router):
+            response: Final = await get_fallback("team-primary", fallback_type, MagicMock())
+
+        assert response.fallback_models == ["team-primary", "team-fallback"]
+
     async def test_get_answers_an_error_for_a_string_valued_rule_instead_of_its_characters(self) -> None:
         router: Final = _team_router()
         router.update_settings(fallbacks=[{"team-primary": "team-fallback"}])
