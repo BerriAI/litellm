@@ -34,6 +34,7 @@ from litellm.proxy.guardrails.anthropic_sse import (
 )
 from litellm.responses.additional_tools import ADDITIONAL_TOOLS_INPUT_ITEM_TYPE
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+from litellm.types.llms.anthropic import ANTHROPIC_HOSTED_TOOLS
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     PermissionError,
     ToolPermissionRule,
@@ -61,7 +62,7 @@ _FUNCTION_CALLING_CONFIG_KEYS: Final = ("functionCallingConfig", "function_calli
 _ALLOWED_FUNCTION_NAMES_KEYS: Final = ("allowedFunctionNames", "allowed_function_names")
 _FORCED_FUNCTION_CALLING_MODES: Final = frozenset({"ANY", "VALIDATED"})
 _NAME_IDENTIFIED_TYPES: Final = frozenset({"function", "custom", "namespace", *_HOSTED_SERVER_NAME_FIELDS})
-_CLIENT_RUN_TYPE_PREFIXES: Final = ("bash_", "text_editor_", "computer_", "memory_")
+_TEXT_EDITOR_TOOL_NAMES: Final = frozenset({"str_replace_editor", "str_replace_based_edit_tool"})
 _TYPE_VERSION_SUFFIX: Final = re.compile(r"_\d{8}$")
 _NAMED_CHOICE_TYPES: Final = frozenset({"tool", "function", "custom", "allowed_tools", "any", "auto", "none"})
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
@@ -70,10 +71,11 @@ _ToolTarget: TypeAlias = tuple[str | None, str | None]
 
 
 def _name_identifies_tool(name: str, tool_type: str) -> bool:
+    stem: Final = _TYPE_VERSION_SUFFIX.sub("", tool_type)
     return (
         tool_type in _NAME_IDENTIFIED_TYPES
-        or tool_type.startswith(_CLIENT_RUN_TYPE_PREFIXES)
-        or _TYPE_VERSION_SUFFIX.sub("", tool_type) == name
+        or name == stem
+        or (stem == ANTHROPIC_HOSTED_TOOLS.TEXT_EDITOR.value and name in _TEXT_EDITOR_TOOL_NAMES)
     )
 
 

@@ -2312,22 +2312,37 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert result["tools"] == [tool]
 
     @pytest.mark.asyncio
-    async def test_pre_call_blocks_an_anthropic_server_tool_whose_name_is_not_its_own(self) -> None:
+    @pytest.mark.parametrize(
+        "tool, call_type",
+        [
+            ({"type": "web_search_20250305", "name": "get_weather"}, "anthropic_messages"),
+            (
+                {
+                    "type": "computer_20251124",
+                    "name": "get_weather",
+                    "function": {"parameters": {"display_width_px": 1024, "display_height_px": 768}},
+                },
+                "acompletion",
+            ),
+            ({"type": "computer_use", "name": "get_weather", "environment": "browser"}, "acompletion"),
+            ({"type": "text_editor_20250728", "name": "get_weather"}, "anthropic_messages"),
+        ],
+        ids=["server_tool", "anthropic_computer_tool", "gemini_computer_use", "text_editor"],
+    )
+    async def test_pre_call_blocks_a_provider_defined_tool_whose_name_is_not_its_own(
+        self, tool: dict[str, object], call_type: CallTypesLiteral
+    ) -> None:
         guardrail = self._pre_call(
             [{"id": "allow_weather", "tool_name": r"^get_weather$", "decision": "allow"}],
             "block",
             default_action="deny",
         )
-        data = {
-            "model": "gemini-3",
-            "messages": [{"role": "user", "content": "hi"}],
-            "tools": [{"type": "web_search_20250305", "name": "get_weather"}],
-        }
+        data = {"model": "gemini-3", "messages": [{"role": "user", "content": "hi"}], "tools": [tool]}
 
         with pytest.raises(HTTPException) as excinfo:
-            await self._run_pre_call(guardrail, data, "anthropic_messages")
+            await self._run_pre_call(guardrail, data, call_type)
 
-        assert excinfo.value.detail["detection_message"] == "Tool 'web_search_20250305' denied by default action"
+        assert excinfo.value.detail["detection_message"] == f"Tool '{tool['type']}' denied by default action"
 
     @pytest.mark.asyncio
     async def test_pre_call_blocks_a_tool_whose_type_is_not_a_string_by_its_name(self) -> None:
