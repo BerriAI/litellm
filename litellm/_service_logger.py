@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
@@ -111,6 +111,9 @@ class ServiceLogging(CustomLogger):
                 return _as_otel_logger(open_telemetry_logger)
         return None
 
+    def has_sinks(self) -> bool:
+        return bool(litellm.service_callback)
+
     @staticmethod
     def _sync_dispatch_loop() -> asyncio.AbstractEventLoop | None:
         """The event loop a blocking caller can dispatch on, or ``None`` if it has none."""
@@ -121,7 +124,7 @@ class ServiceLogging(CustomLogger):
         return None if loop.is_closed() else loop
 
     @staticmethod
-    async def _emit_guarded(hook: Callable[[], Coroutine[object, object, None]]) -> None:
+    async def emit_guarded(hook: Callable[[], Coroutine[object, object, None]]) -> None:
         """Emit one service event, absorbing anything the callbacks raise.
 
         Monitoring must not break the call it monitors. Sync callers are the ones that
@@ -144,11 +147,11 @@ class ServiceLogging(CustomLogger):
         loop: Final = ServiceLogging._sync_dispatch_loop()
         try:
             if loop is None:
-                asyncio.run(ServiceLogging._emit_guarded(hook))
+                asyncio.run(ServiceLogging.emit_guarded(hook))
             elif loop.is_running():
-                loop.create_task(ServiceLogging._emit_guarded(hook))
+                loop.create_task(ServiceLogging.emit_guarded(hook))
             else:
-                loop.run_until_complete(ServiceLogging._emit_guarded(hook))
+                loop.run_until_complete(ServiceLogging.emit_guarded(hook))
         except Exception as e:
             verbose_logger.exception("Error dispatching service event - %s", e)
 
@@ -224,15 +227,16 @@ class ServiceLogging(CustomLogger):
         parent_otel_span: Span | None = None,
         start_time: datetime | float | None = None,
         end_time: datetime | float | None = None,
-        event_metadata: dict | None = None,
+        event_metadata: Mapping[str, object] | None = None,
         caller: str | None = None,
-    ):
+    ) -> None:
         """
         - For counting if the redis, postgres call is successful
         """
         if self.mock_testing:
             self.mock_testing_async_success_hook += 1
 
+        metadata: Final = None if event_metadata is None else dict(event_metadata)
         payload: Final = ServiceLoggerPayload(
             is_error=False,
             error=None,
@@ -241,7 +245,7 @@ class ServiceLogging(CustomLogger):
             call_type=call_type,
             caller=caller,
             target=current_service_target() if service == ServiceTypes.REDIS else None,
-            event_metadata=event_metadata,
+            event_metadata=metadata,
         )
 
         # OTel loggers already fired this event. ``service_callback`` can hold more
@@ -262,7 +266,7 @@ class ServiceLogging(CustomLogger):
                     parent_otel_span=parent_otel_span,
                     start_time=start_time,
                     end_time=end_time,
-                    event_metadata=event_metadata,
+                    event_metadata=metadata,
                 )
             else:
                 _otel_logger_to_use = self._resolve_otel_service_logger(callback)
@@ -278,7 +282,7 @@ class ServiceLogging(CustomLogger):
                         parent_otel_span=parent_otel_span,
                         start_time=start_time,
                         end_time=end_time,
-                        event_metadata=event_metadata,
+                        event_metadata=metadata,
                     )
 
     async def init_prometheus_services_logger_if_none(self):
@@ -325,9 +329,9 @@ class ServiceLogging(CustomLogger):
         parent_otel_span: Span | None = None,
         start_time: datetime | float | None = None,
         end_time: float | datetime | None = None,
-        event_metadata: dict | None = None,
+        event_metadata: Mapping[str, object] | None = None,
         caller: str | None = None,
-    ):
+    ) -> None:
         """
         - For counting if the redis, postgres call is unsuccessful
         """
@@ -340,6 +344,7 @@ class ServiceLogging(CustomLogger):
         elif isinstance(error, str):
             error_message = error
 
+        metadata: Final = None if event_metadata is None else dict(event_metadata)
         payload: Final = ServiceLoggerPayload(
             is_error=True,
             error=error_message,
@@ -348,7 +353,7 @@ class ServiceLogging(CustomLogger):
             call_type=call_type,
             caller=caller,
             target=current_service_target() if service == ServiceTypes.REDIS else None,
-            event_metadata=event_metadata,
+            event_metadata=metadata,
         )
 
         # Dedupe OTel loggers per event — see ``async_service_success_hook`` for why
@@ -369,7 +374,7 @@ class ServiceLogging(CustomLogger):
                     parent_otel_span=parent_otel_span,
                     start_time=start_time,
                     end_time=end_time,
-                    event_metadata=event_metadata,
+                    event_metadata=metadata,
                 )
             else:
                 _otel_logger_to_use = self._resolve_otel_service_logger(callback)
@@ -387,7 +392,7 @@ class ServiceLogging(CustomLogger):
                         parent_otel_span=parent_otel_span,
                         start_time=start_time,
                         end_time=end_time,
-                        event_metadata=event_metadata,
+                        event_metadata=metadata,
                     )
 
     async def async_post_call_failure_hook(
