@@ -539,6 +539,29 @@ class TestDailyLimits:
 
         assert "TPD limit=100, current usage=120" in str(exc_info.value)
 
+    @pytest.mark.asyncio
+    async def test_deployments_at_their_rpm_or_rpd_limit_are_reported_and_ones_below_are_not(self):
+        minute_spent = {
+            "litellm_params": {"model": "gpt-4.1-mini", "rpm": 1},
+            "model_info": {"id": "minute-test-id"},
+            "model_name": "daily-model",
+        }
+        below_limits = {
+            "litellm_params": {"model": "gpt-4.1-mini", "rpm": 2, "rpd": 2},
+            "model_info": {"id": "below-test-id"},
+            "model_name": "daily-model",
+        }
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(DAY_ONE))
+
+        await _async_pre_call(check, RPD_DEPLOYMENT)
+        await _async_pre_call(check, RPD_DEPLOYMENT)
+        await _async_pre_call(check, minute_spent)
+        await _async_pre_call(check, below_limits)
+
+        assert await check.async_deployment_ids_at_limit(
+            [RPD_DEPLOYMENT, minute_spent, below_limits], None
+        ) == frozenset({"daily-test-id", "minute-test-id"})
+
     def test_pre_call_check_minute_rejected_request_does_not_spend_rpd(self):
         clock = Clock(DAY_ONE)
         check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)

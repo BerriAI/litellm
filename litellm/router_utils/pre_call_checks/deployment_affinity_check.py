@@ -14,7 +14,7 @@ where routing to a consistent deployment is still beneficial.
 
 import hashlib
 from collections.abc import Callable, Mapping, Sequence
-from typing import Final, cast
+from typing import Final, TypeVar, cast
 
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
@@ -34,6 +34,8 @@ from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.common_utils import deployment_ids_failed_in_request, prefer_web_search_deployments
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes
+
+_DeploymentT: Final = TypeVar("_DeploymentT", bound=dict[str, object])
 
 
 class DeploymentAffinityCacheValue(TypedDict, closed=True):
@@ -366,7 +368,7 @@ class DeploymentAffinityCheck(CustomLogger):
         return self._pinned_model_id(winner)
 
     @staticmethod
-    def _find_deployment_by_model_id(healthy_deployments: list[dict], model_id: str) -> dict | None:
+    def _find_deployment_by_model_id(healthy_deployments: Sequence[_DeploymentT], model_id: str) -> _DeploymentT | None:
         for deployment in healthy_deployments:
             model_info = deployment.get("model_info")
             if not isinstance(model_info, dict):
@@ -391,7 +393,7 @@ class DeploymentAffinityCheck(CustomLogger):
         2. cached API-key deployment affinity
         """
         request_kwargs = request_kwargs or {}
-        typed_healthy_deployments: Final = cast(list[dict], healthy_deployments)
+        typed_healthy_deployments: Final = cast(list[dict[str, object]], healthy_deployments)  # cast-ok: router dicts
         if request_kwargs.get("_target_order") is not None:
             return typed_healthy_deployments
 
@@ -467,17 +469,16 @@ class DeploymentAffinityCheck(CustomLogger):
                     session_model_id = session_cache_result
 
                 if session_model_id and session_model_id not in failed_deployment_ids:
-                    session_deployment: Final = self._find_deployment_by_model_id(
-                        healthy_deployments=pin_candidates,
-                        model_id=session_model_id,
+                    session_deployments: Final = self._pinned_deployments(
+                        typed_healthy_deployments, pin_candidates, session_model_id
                     )
-                    if session_deployment is not None:
+                    if session_deployments is not None:
                         verbose_router_logger.debug(
                             "DeploymentAffinityCheck: session-id affinity hit -> deployment=%s session_id=%s",
                             session_model_id,
                             session_id,
                         )
-                        return [session_deployment]
+                        return list(session_deployments)
                     else:
                         verbose_router_logger.debug(
                             "DeploymentAffinityCheck: session-id pinned deployment=%s not found in healthy_deployments",
@@ -504,11 +505,8 @@ class DeploymentAffinityCheck(CustomLogger):
         if not model_id or model_id in failed_deployment_ids:
             return typed_healthy_deployments
 
-        deployment = self._find_deployment_by_model_id(
-            healthy_deployments=pin_candidates,
-            model_id=model_id,
-        )
-        if deployment is None:
+        pinned_deployments: Final = self._pinned_deployments(typed_healthy_deployments, pin_candidates, model_id)
+        if pinned_deployments is None:
             verbose_router_logger.debug(
                 "DeploymentAffinityCheck: pinned deployment=%s not found in healthy_deployments",
                 model_id,
@@ -520,7 +518,18 @@ class DeploymentAffinityCheck(CustomLogger):
             model_id,
             self._shorten_for_logs(self._hash_user_key(user_key)),
         )
-        return [deployment]
+        return list(pinned_deployments)
+
+    @classmethod
+    def _pinned_deployments(
+        cls, healthy_deployments: Sequence[_DeploymentT], pin_candidates: Sequence[_DeploymentT], model_id: str
+    ) -> tuple[_DeploymentT, ...] | None:
+        pinned: Final = cls._find_deployment_by_model_id(healthy_deployments=healthy_deployments, model_id=model_id)
+        if pinned is None:
+            return None
+        if cls._find_deployment_by_model_id(healthy_deployments=pin_candidates, model_id=model_id) is not None:
+            return (pinned,)
+        return (*pin_candidates, pinned)
 
     async def _read_shared_session_pin(self, cache_key: str, ttl_seconds: int, parent_otel_span: Span | None) -> object:
         redis_cache: Final = self.cache.redis_cache

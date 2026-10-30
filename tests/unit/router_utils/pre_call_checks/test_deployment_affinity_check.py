@@ -1397,3 +1397,55 @@ async def test_pin_holds_for_a_web_search_request_when_no_untried_deployment_can
     )
 
     assert [d["model_info"]["id"] for d in filtered] == ["no-search"]
+
+
+@pytest.mark.asyncio
+async def test_key_pin_holds_for_a_web_search_request_when_tag_filtering_removes_every_deployment_that_can_search():
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mixed",
+                "litellm_params": {
+                    "model": "openai/gpt-x",
+                    "api_key": "fake-key",
+                    "mock_response": "hi",
+                    "tags": ["cheap"],
+                },
+                "model_info": {"id": model_id, "supports_web_search": False},
+            }
+            for model_id in ("flagged-a", "flagged-b")
+        ]
+        + [
+            {
+                "model_name": "mixed",
+                "litellm_params": {
+                    "model": "openai/gpt-y",
+                    "api_key": "fake-key",
+                    "mock_response": "hi",
+                    "tags": ["premium"],
+                },
+                "model_info": {"id": "search"},
+            }
+        ],
+        optional_pre_call_checks=["deployment_affinity"],
+        enable_tag_filtering=True,
+    )
+    await router.cache.async_set_cache(
+        DeploymentAffinityCheck.get_affinity_cache_key(model_group="mixed", user_key="caller-1"),
+        {"model_id": "flagged-a"},
+        ttl=3600,
+    )
+
+    served_by: Final = {
+        (
+            await router.acompletion(
+                model="mixed",
+                messages=[{"role": "user", "content": "hi"}],
+                metadata={"user_api_key_hash": "caller-1", "tags": ["cheap"]},
+                web_search_options={},
+            )
+        )._hidden_params["model_id"]
+        for _ in range(20)
+    }
+
+    assert served_by == {"flagged-a"}

@@ -12,12 +12,13 @@ is logged the first time such a deployment is seen.
 """
 
 import contextlib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta
+from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -115,6 +116,19 @@ class _DailyLimitDeployment(BaseModel):
                 request=httpx.Request(method="model_rate_limit_check", url="https://github.com/BerriAI/litellm"),
             ),
         )
+
+
+def _deployment_model_id(deployment: Mapping[str, object]) -> object:
+    model_info: Final = deployment.get("model_info")
+    return model_info.get("id") if isinstance(model_info, Mapping) else None
+
+
+def _counters_with_limits(model_id: str, counters: Sequence[tuple[str, object]]) -> tuple[tuple[str, str, int], ...]:
+    return tuple((model_id, key, limit) for key, limit in counters if type(limit) is int)
+
+
+def _reached(current: object, limit: int) -> bool:
+    return isinstance(current, (int, float)) and current >= limit
 
 
 def _reset_offset_from_kwargs(kwargs: Mapping[str, object]) -> timedelta:
@@ -298,6 +312,43 @@ class ModelRateLimitingCheck(CustomLogger):
             return await redis_cache.async_get_cache(key=tpm_key, parent_otel_span=parent_otel_span)
         except RedisCircuitBreakerOpenError:
             return local_tpm
+
+    def _limit_counters(
+        self,
+        deployment: dict[str, object],  # mutable-ok: the limit and key readers take router deployment dicts
+        now: datetime,
+    ) -> tuple[tuple[str, str, int], ...]:
+        model_id: Final = _deployment_model_id(deployment)
+        if not isinstance(model_id, str):
+            return ()
+        tpm_limit, rpm_limit = self._get_deployment_limits(deployment)
+        tpm_key, rpm_key = self._get_cache_keys(deployment, now.strftime("%H-%M"))
+        try:
+            daily: Final = _DailyLimitDeployment.model_validate(deployment)
+        except ValidationError:
+            return _counters_with_limits(model_id, ((tpm_key, tpm_limit), (rpm_key, rpm_limit)))
+        tpd_limit, rpd_limit = daily.limits()
+        tpd_key, rpd_key = daily.cache_keys(now)
+        return _counters_with_limits(
+            model_id, ((tpm_key, tpm_limit), (rpm_key, rpm_limit), (tpd_key, tpd_limit), (rpd_key, rpd_limit))
+        )
+
+    async def async_deployment_ids_at_limit(
+        self,
+        deployments: Sequence[dict[str, object]],  # mutable-ok: _limit_counters reads router deployment dicts
+        parent_otel_span: Span | None,
+    ) -> frozenset[str]:
+        now: Final = self.clock()
+        counters: Final = tuple(
+            chain.from_iterable(self._limit_counters(deployment, now) for deployment in deployments)
+        )
+        return frozenset(
+            [
+                model_id
+                for model_id, key, limit in counters
+                if _reached(await self._async_get_current_tpm(key, limit, parent_otel_span), limit)
+            ]
+        )
 
     @with_service_target(ROUTER_USAGE_TARGET)
     def pre_call_check(self, deployment: dict) -> dict | None:

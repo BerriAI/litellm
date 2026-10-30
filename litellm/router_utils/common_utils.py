@@ -1,6 +1,7 @@
 import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeVar
 
@@ -459,7 +460,19 @@ def _is_web_search_tool(tool: object) -> bool:
 
 
 def _is_web_search_request(tools: object, web_search_options: object) -> bool:
-    return web_search_options is not None or any(_is_web_search_tool(tool) for tool in optional_sequence(tools) or ())
+    return as_str_mapping(web_search_options) is not None or any(
+        _is_web_search_tool(tool) for tool in optional_sequence(tools) or ()
+    )
+
+
+def web_search_capable_deployments(
+    deployments: Sequence[_DeploymentT], request_kwargs: Mapping[str, object] | None
+) -> tuple[_DeploymentT, ...]:
+    if request_kwargs is None or not _is_web_search_request(
+        request_kwargs.get("tools"), request_kwargs.get("web_search_options")
+    ):
+        return ()
+    return tuple(d for d in deployments if _deployment_supports_web_search(d))
 
 
 def filter_web_search_deployments(
@@ -515,21 +528,26 @@ def _retry_history_was_trimmed(metadata: object) -> bool:
     return type(retry_count) is int and retry_count > len(_retry_breadcrumbs(metadata))
 
 
+def _breadcrumb_deployment_ids(breadcrumb: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(
+        deployment_id
+        for deployment_id in (breadcrumb.get("deployment_id"), breadcrumb.get("configured_deployment_id"))
+        if isinstance(deployment_id, str)
+    )
+
+
 def _deployment_ids_retried_in_request(request_kwargs: Mapping[str, object]) -> tuple[str, ...]:
     breadcrumbs: Final = (
         *_retry_breadcrumbs(request_kwargs.get("metadata")),
         *_retry_breadcrumbs(request_kwargs.get("litellm_metadata")),
     )
-    return tuple(
-        deployment_id
-        for breadcrumb in breadcrumbs
-        if isinstance(deployment_id := breadcrumb.get("configured_deployment_id", breadcrumb.get("deployment_id")), str)
-    )
+    return tuple(chain.from_iterable(map(_breadcrumb_deployment_ids, breadcrumbs)))
 
 
 def prefer_web_search_deployments(
     deployments: list[_DeploymentT],  # mutable-ok: router deployment-list contract
     request_kwargs: Mapping[str, object] | None,
+    at_rate_limit: frozenset[str] = frozenset(),
 ) -> list[_DeploymentT]:  # mutable-ok: returns a mutable deployment list
     if request_kwargs is None or not _is_web_search_request(
         request_kwargs.get("tools"), request_kwargs.get("web_search_options")
@@ -545,6 +563,7 @@ def prefer_web_search_deployments(
             *as_excluded_deployment_ids(request_kwargs.get("_excluded_deployment_ids")),
             *as_retry_skipped_deployment_ids(request_kwargs.get("_retry_skipped_deployment_ids")),
             *_deployment_ids_retried_in_request(request_kwargs),
+            *at_rate_limit,
         )
     )
     untried: Final = (d for d in deployments if _deployment_id(d) not in tried)
@@ -557,8 +576,8 @@ def prefer_web_search_deployments(
     return [
         d
         for d in deployments
-        if _deployment_supports_web_search(d)
-        or litellm.utils.get_deployment_order(d) not in orders_with_an_untried_capable_deployment
+        if litellm.utils.get_deployment_order(d) not in orders_with_an_untried_capable_deployment
+        or (_deployment_supports_web_search(d) and _deployment_id(d) not in tried)
     ]
 
 
@@ -581,8 +600,9 @@ async def apick_preferring_web_search(
     pick: Callable[[list[_DeploymentT]], Awaitable[_Picked | None]],  # mutable-ok: router deployment-list contract
     deployments: list[_DeploymentT],  # mutable-ok: router deployment-list contract
     request_kwargs: Mapping[str, object] | None,
+    at_rate_limit: frozenset[str] = frozenset(),
 ) -> _Picked | None:
-    preferred: Final = prefer_web_search_deployments(deployments, request_kwargs)
+    preferred: Final = prefer_web_search_deployments(deployments, request_kwargs, at_rate_limit)
     if len(preferred) == len(deployments):
         return await pick(deployments)
     try:

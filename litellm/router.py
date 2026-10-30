@@ -275,6 +275,7 @@ from litellm.router_utils.common_utils import (
     truncate_fallback_error_detail,
     warn_on_ignored_model_capability_flags,
     warn_on_provider_credential_mismatch,
+    web_search_capable_deployments,
     with_admin_api_key_secret_reference,
     without_model_capability_flags,
     without_router_only_kwargs,
@@ -10382,6 +10383,9 @@ class Router(DeprecatedRouterMembers):
         healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
         return healthy_deployments, _all_deployments
 
+    def _model_rate_limit_checks(self) -> tuple[ModelRateLimitingCheck, ...]:
+        return tuple(callback for callback in self._routing_callbacks() if isinstance(callback, ModelRateLimitingCheck))
+
     def routing_strategy_pre_call_checks(self, deployment: dict):
         """
         Mimics 'async_routing_strategy_pre_call_checks'
@@ -15794,10 +15798,24 @@ class Router(DeprecatedRouterMembers):
 
             start_time: Final = time.time()
             routing_kwargs: Final = cast(Mapping[str, object], request_kwargs)  # cast-ok: str-keyed request kwargs
+            web_search_capable: Final = web_search_capable_deployments(
+                request_kwargs=routing_kwargs,
+                deployments=cast(list[dict[str, object]], healthy_deployments),  # cast-ok: str-keyed dicts
+            )
+            at_rate_limit: Final = frozenset(
+                chain.from_iterable(
+                    [
+                        await check.async_deployment_ids_at_limit(web_search_capable, parent_otel_span)
+                        for check in self._model_rate_limit_checks()
+                    ]
+                )
+            )
             if strategy == "simple-shuffle":
                 shuffled: Final = simple_shuffle(
                     resolve_model_alias=self._core_get_model_from_alias,
-                    healthy_deployments=prefer_web_search_deployments(healthy_deployments, routing_kwargs),
+                    healthy_deployments=prefer_web_search_deployments(
+                        healthy_deployments, routing_kwargs, at_rate_limit
+                    ),
                     model=model,
                     request_kwargs=routing_kwargs,
                 )
@@ -15818,6 +15836,7 @@ class Router(DeprecatedRouterMembers):
                     ),
                     cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
                     routing_kwargs,
+                    at_rate_limit,
                 )
             if deployment is None:
                 exception: Final = await async_raise_no_deployment_exception(
