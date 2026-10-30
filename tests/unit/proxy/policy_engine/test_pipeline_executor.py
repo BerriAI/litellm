@@ -18,6 +18,7 @@ import pytest
 import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.proxy._types import UserAPIKeyAuth
@@ -34,7 +35,7 @@ from litellm.types.proxy.policy_engine.pipeline_types import (
     GuardrailPipeline,
     PipelineStep,
 )
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypesLiteral, GenericGuardrailAPIInputs
 
 try:
     from fastapi.exceptions import HTTPException
@@ -1161,6 +1162,7 @@ async def test_pipeline_step_keeps_native_hook_when_opted_out(monkeypatch):
         data=data,
         user_api_key_dict=MagicMock(),
         call_type="completion",
+        metadata_key="metadata",
     )
 
     assert outcome == "pass"
@@ -1274,7 +1276,7 @@ def _assert_passed_with_discard_warning(result, caplog, reason):
     assert len(discard_warnings) == 1
     assert reason in discard_warnings[0]
     assert "text rewrites included" in discard_warnings[0]
-    assert "masker" not in ((result.modified_data or {}).get("metadata") or {}).get("applied_guardrails", [])
+    assert result.modified_data["metadata"]["applied_guardrails"] == ["masker"]
 
 
 @pytest.mark.asyncio
@@ -1434,6 +1436,60 @@ async def test_streaming_step_records_the_guardrail_in_the_applied_guardrails_he
 
     result = await _run_streaming_step(_WritingTranslation(), [_chunk()])
 
+    assert result.modified_data["metadata"]["applied_guardrails"] == ["masker"]
+
+
+class _SelfRecordingGuardrail(_TextReturningGuardrail):
+    records_own_guardrail_information = True
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_whose_guardrail_records_its_own_results_is_named(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_SelfRecordingGuardrail(["hello world"])])
+
+    result = await _run_streaming_step(_WritingTranslation(), [_chunk()])
+
+    assert result.modified_data["metadata"]["applied_guardrails"] == ["masker"]
+
+
+class _LitellmMetadataOpeningGuardrail(CustomGuardrail):
+    """Opens ``litellm_metadata`` on the request while scanning, as the A2A translation does."""
+
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        request_data["litellm_metadata"] = {"user_api_key_hash": "hashed"}
+        return inputs
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_is_named_in_the_metadata_the_request_started_with(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_LitellmMetadataOpeningGuardrail()])
+
+    result = await _run_streaming_step(_WritingTranslation(), [_chunk()])
+
+    assert result.modified_data["metadata"]["applied_guardrails"] == ["masker"]
+    assert "applied_guardrails" not in result.modified_data["litellm_metadata"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_that_flags_the_stream_is_named_when_the_pipeline_moves_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_BlockingStreamGuardrail()])
+
+    result = await _run_streaming_step(_WritingTranslation(), [_chunk()])
+
+    assert [(step.outcome, step.action_taken) for step in result.step_results] == [("fail", "next")]
     assert result.modified_data["metadata"]["applied_guardrails"] == ["masker"]
 
 

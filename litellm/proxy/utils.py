@@ -714,6 +714,38 @@ def pipeline_managed_guardrail_names(
     )
 
 
+def _ran_or_runs_outside_pipelines(
+    callback: CustomGuardrail | None,
+    data: Mapping[str, object],
+    pipeline_modes: frozenset[str],
+) -> bool:
+    return callback is not None and (
+        callback.pre_call_hook_ran_or_raised(data)
+        or callback.deployment_hook_ran(data)
+        or any(
+            callback._event_hook_is_event_type(hook)  # pyright: ignore[reportPrivateUsage]  # no public hook check
+            for hook in GuardrailEventHooks
+            if hook.value not in pipeline_modes
+        )
+    )
+
+
+def _runs_only_in_pipelines(
+    name: str, data: Mapping[str, object], pre_call: frozenset[str], post_call: frozenset[str]
+) -> bool:
+    return not _ran_or_runs_outside_pipelines(
+        PipelineExecutor.find_guardrail_callback(name),
+        data,
+        frozenset(mode for mode, names in (("pre_call", pre_call), ("post_call", post_call)) if name in names),
+    )
+
+
+def _request_steps_that_have_not_run(data: Mapping[str, object]) -> frozenset[str]:
+    """Pre_call policy pipeline steps a pipeline skipped, whose guardrail nothing else ran or runs for this request."""
+    pre_call: Final = pipeline_managed_guardrail_names(data, "pre_call")
+    return frozenset(name for name in pre_call if _runs_only_in_pipelines(name, data, pre_call, frozenset()))
+
+
 def _partition_post_call_callbacks() -> tuple[tuple[CustomGuardrail, ...], tuple[CustomLogger, ...]]:
     resolved: Final = tuple(
         litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
@@ -2711,8 +2743,12 @@ class ProxyLogging:
             data.pop("prompt_version", None)
             data.pop("prompt_environment", None)
 
-    def _process_guardrail_metadata(self, data: dict) -> None:
-        """Process guardrails from metadata and add to applied_guardrails."""
+    def _process_guardrail_metadata(self, data: dict, *, skip_guardrails: bool = False) -> None:
+        """
+        Process guardrails from metadata and add to applied_guardrails, leaving out the pre_call
+        policy pipeline steps that have not run. With ``skip_guardrails`` the pipelines run on
+        another request, so every step is added.
+        """
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
@@ -2736,8 +2772,17 @@ class ProxyLogging:
             if not isinstance(applied_guardrails, list):
                 applied_guardrails = []
 
+            not_run: Final = (
+                frozenset[str]()
+                if skip_guardrails
+                else _request_steps_that_have_not_run(cast(dict[str, object], data))  # cast-ok: request payload
+            )
             for guardrail_name in guardrails_in_metadata:
-                if isinstance(guardrail_name, str) and guardrail_name not in applied_guardrails:
+                if (
+                    isinstance(guardrail_name, str)
+                    and guardrail_name not in applied_guardrails
+                    and guardrail_name not in not_run
+                ):
                     add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=guardrail_name)
 
     async def _maybe_execute_pipelines(
@@ -3027,7 +3072,7 @@ class ProxyLogging:
                 and (guardrails_only or not caps.has_pre_call_override)
             ):
                 if data is not None:
-                    self._process_guardrail_metadata(data)
+                    self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
                 return data
 
             parallel_guardrails: Final[tuple[CustomGuardrail, ...]] = (
@@ -3131,17 +3176,17 @@ class ProxyLogging:
                 )
 
             if data is not None:
-                self._process_guardrail_metadata(data)
+                self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
 
             return data
         except SensitiveDataRouteException as e:
             data = await self._handle_sensitive_data_route_exception(e, data, user_api_key_dict)
             if data is not None:
-                self._process_guardrail_metadata(data)
+                self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
             return data
         except Exception:
             if data is not None:
-                self._process_guardrail_metadata(data)
+                self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
             raise
 
     async def _run_parallel_pre_call_guardrails(
