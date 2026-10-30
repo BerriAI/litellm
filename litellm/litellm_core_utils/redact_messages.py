@@ -583,6 +583,7 @@ def scrubbed_exception_text(model_call_details: Mapping[str, object]) -> tuple[s
     """
     The error message and traceback a failure logged when redaction scrubbed the request's text out of
     either, for callbacks that would otherwise record the raw exception. ``None`` when nothing was scrubbed.
+    Without a logged error message, the message is the exception text that ends the traceback.
     """
     payload: Final = _as_mapping(model_call_details.get("standard_logging_object")) or {}
     error_information: Final = _as_mapping(payload.get("error_information")) or {}
@@ -593,10 +594,14 @@ def scrubbed_exception_text(model_call_details: Mapping[str, object]) -> tuple[s
     )
     if not any(isinstance(text, str) and REDACTED_BY_LITELLM in text for text in (message, traceback_text)):
         return None
-    return (
-        message if isinstance(message, str) else "",
-        traceback_text if isinstance(traceback_text, str) else "",
-    )
+    logged_traceback_text: Final = traceback_text if isinstance(traceback_text, str) else ""
+    return (message if isinstance(message, str) else _exception_text(logged_traceback_text), logged_traceback_text)
+
+
+def _exception_text(traceback_text: str) -> str:
+    """The lines after the last indented frame line of ``traceback_text``."""
+    lines: Final = reversed(traceback_text.rstrip().splitlines())
+    return "\n".join(reversed(tuple(itertools.takewhile(lambda line: not line.startswith(" "), lines))))
 
 
 def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[str, object]:

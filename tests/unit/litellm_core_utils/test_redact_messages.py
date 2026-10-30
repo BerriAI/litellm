@@ -2202,6 +2202,21 @@ def test_scrubbed_exception_text_reports_a_scrub_of_the_logged_traceback() -> No
     assert scrubbed_exception_text(model_call_details) == ("outer", "ValueError: bad: redacted-by-litellm")
 
 
+def test_scrubbed_exception_text_reads_the_message_off_the_traceback_without_a_logged_message() -> None:
+    traceback_text: Final = (
+        "Traceback (most recent call last):\n"
+        '  File "main.py", line 1, in completion\n'
+        "    raise BadRequestError(message)\n"
+        "BadRequestError: Invalid content: 'redacted-by-litellm'\n"
+        "Received Messages=['redacted-by-litellm']\n"
+    )
+
+    assert scrubbed_exception_text({"traceback_exception": traceback_text}) == (
+        "BadRequestError: Invalid content: 'redacted-by-litellm'\nReceived Messages=['redacted-by-litellm']",
+        traceback_text,
+    )
+
+
 def test_scrubbed_error_information_for_request_scrubs_only_when_the_request_redacts() -> None:
     error_information: Final = StandardLoggingPayloadErrorInformation(
         error_code="400", error_class="BadRequestError", error_message=f"bad: {PROMPT}", traceback=f"tb {PROMPT}"
