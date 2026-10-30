@@ -784,7 +784,8 @@ async def route_request(
 
 
 class UnroutableModelProbe:
-    """Asks ``route_request``, on a copy of the request, whether its model can be routed.
+    """Asks ``route_request``, on a copy of the request, whether its model can be routed. A model the router
+    recognizes and an ``a2a/`` agent name count as routable without asking.
 
     ``refusal`` is the routing error a caller skipped a pre-call guardrail for, and the request must end with it.
     """
@@ -815,7 +816,7 @@ class UnroutableModelProbe:
         return refusal is not None
 
     async def _refusal(self, data: Mapping[str, object], model: object) -> ProxyModelNotFoundError | None:
-        if (
+        if _is_a2a_agent_model(model) or (
             isinstance(model, str)
             and self._llm_router is not None
             and self._llm_router.registry().resolve(model, kind="recognized")

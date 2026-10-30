@@ -3182,7 +3182,10 @@ async def test_unroutable_model_probe_closes_the_call_and_routes_each_model_once
 
 
 @pytest.mark.asyncio
-async def test_unroutable_model_probe_does_not_route_a_loaded_model(monkeypatch):
+@pytest.mark.parametrize("model", ["gpt-4o", "a2a/support-agent"])
+async def test_unroutable_model_probe_does_not_route_a_loaded_model_or_an_agent(
+    monkeypatch: pytest.MonkeyPatch, model: str
+):
     routed: Final[list[object]] = []
 
     async def recording_route_request(*, data, **kwargs):
@@ -3193,5 +3196,5 @@ async def test_unroutable_model_probe_does_not_route_a_loaded_model(monkeypatch)
         model_list=[{"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}}]
     )
 
-    assert await _probe(router).refuses({"model": "gpt-4o"}) is False
+    assert await _probe(router).refuses({"model": model}) is False
     assert routed == []

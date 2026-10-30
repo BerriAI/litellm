@@ -46,7 +46,6 @@ from litellm.constants import (
     MAX_LITELLM_CALL_ID_LENGTH,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     NON_INFERENCE_CALL_TYPES,
-    REDACTED_BY_LITELLM,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_DATA_PREFIX,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
@@ -142,6 +141,7 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     ProxyLogging,
     _check_and_merge_model_level_guardrails,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     check_and_merge_model_level_guardrails,
+    without_unscanned_content,
 )
 from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect, spawn_logging_task
 from litellm.router import Router
@@ -2086,39 +2086,6 @@ class _ClientStreamFailureReport:
             )
 
 
-_SYSTEM_INSTRUCTION_KEYS: Final = ("systemInstruction", "system_instruction")
-
-
-def _without_unscanned_content(request: Mapping[str, object]) -> Mapping[str, object]:
-    """Every request field a pre-call guardrail can rewrite, each replaced with a redaction marker."""
-    system_instruction: Final = {"parts": [{"text": REDACTED_BY_LITELLM}]}
-    redactions: Final[Mapping[str, object]] = {
-        "messages": [{"role": "user", "content": REDACTED_BY_LITELLM}],
-        "contents": [{"role": "user", "parts": [{"text": REDACTED_BY_LITELLM}]}],
-        "prompt": "",
-        "input": "",
-        "tools": [],
-        "system": REDACTED_BY_LITELLM,
-        "instructions": REDACTED_BY_LITELLM,
-        **{key: system_instruction for key in _SYSTEM_INSTRUCTION_KEYS},
-    }
-    config: Final = request.get("config")
-    config_fields: Final = _REQUEST_FIELDS.validate_python(config) if isinstance(config, Mapping) else None
-    return {
-        **{key: value for key, value in redactions.items() if key in request},
-        **(
-            {}
-            if config_fields is None
-            else {
-                "config": {
-                    **config_fields,
-                    **{key: system_instruction for key in _SYSTEM_INSTRUCTION_KEYS if key in config_fields},
-                }
-            }
-        ),
-    }
-
-
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict, served_model: str | None = None):
         self.data = data
@@ -2687,7 +2654,7 @@ class ProxyBaseLLMRequestProcessing:
         """Redact the request body and its logged snapshot, so failure callbacks never see content a skipped
         masking guardrail would have rewritten.
         """
-        self.data.update(_without_unscanned_content(self.data))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # self.data is the untyped request dict
+        self.data.update(without_unscanned_content(self.data))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # self.data is the untyped request dict
         refresh_proxy_server_request_body_snapshot(self.data)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # self.data is the untyped request dict
 
     async def _pre_call_with_fallbacks(

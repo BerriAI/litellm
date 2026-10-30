@@ -1676,9 +1676,8 @@ _LITELLM_PACKAGES: Final = frozenset({"litellm", "litellm_enterprise", "enterpri
 
 
 def _is_custom_pre_call_hook(callback: CustomLogger) -> bool:
-    return (
-        "async_pre_call_hook" in type(callback).__dict__
-        and type(callback).__module__.partition(".")[0] not in _LITELLM_PACKAGES
+    return type(callback).__module__.partition(".")[0] not in _LITELLM_PACKAGES and (
+        isinstance(callback, CustomGuardrail) or "async_pre_call_hook" in type(callback).__dict__
     )
 
 
@@ -1693,6 +1692,41 @@ async def _skipped_for_unroutable_model(
         and guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call)  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
         and await probe.refuses(data)
     )
+
+
+_SYSTEM_INSTRUCTION_KEYS: Final = ("systemInstruction", "system_instruction")
+
+
+def without_unscanned_content(request: Mapping[str, object]) -> Mapping[str, object]:
+    """Every request field a pre-call guardrail can rewrite, each replaced with a redaction marker."""
+    system_instruction: Final = {"parts": [{"text": REDACTED_BY_LITELLM}]}
+    redactions: Final[Mapping[str, object]] = {
+        "messages": [{"role": "user", "content": REDACTED_BY_LITELLM}],
+        "contents": [{"role": "user", "parts": [{"text": REDACTED_BY_LITELLM}]}],
+        "prompt": "",
+        "input": "",
+        "query": "",
+        "instruction": "",
+        "tools": [],
+        "system": REDACTED_BY_LITELLM,
+        "instructions": REDACTED_BY_LITELLM,
+        **{key: system_instruction for key in _SYSTEM_INSTRUCTION_KEYS},
+    }
+    config: Final = request.get("config")
+    config_fields: Final = _as_str_mapping(config)
+    return {
+        **{key: value for key, value in redactions.items() if key in request},
+        **(
+            {}
+            if not isinstance(config, Mapping)
+            else {
+                "config": {
+                    **config_fields,
+                    **{key: system_instruction for key in _SYSTEM_INSTRUCTION_KEYS if key in config_fields},
+                }
+            }
+        ),
+    }
 
 
 _LISTED_MODEL_NAMES: Final = TypeAdapter(tuple[str, ...])
@@ -2977,7 +3011,8 @@ class ProxyLogging:
 
         With ``routing_probe``, a pre-call guardrail litellm ships is not called for a model ``route_request``
         refuses, when only litellm's own guardrails and hooks come after it and no guardrail reroutes on
-        sensitive data.
+        sensitive data. The hooks after a skipped sequential guardrail see the request with every field it
+        could have rewritten redacted.
         """
         verbose_proxy_logger.debug("Inside Proxy Logging Pre-call hook!")
 
@@ -3092,6 +3127,7 @@ class ProxyLogging:
                             data,  # pyright: ignore[reportUnknownArgumentType]  # data is the untyped request dict
                             probe,
                         ):
+                            data.update(without_unscanned_content(data))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # data is the untyped request dict
                             continue
 
                         data = await self._run_sequential_guardrail_callback(
@@ -3495,7 +3531,11 @@ class ProxyLogging:
                 callback for callback in resolved_callbacks if _overrides_hook(callback, "async_filter_listed_models")
             ),
             last_custom_pre_call_hook=max(
-                (position for position, callback in enumerate(resolved_callbacks) if _is_custom_pre_call_hook(callback)),
+                (
+                    position
+                    for position, callback in enumerate(resolved_callbacks)
+                    if _is_custom_pre_call_hook(callback)
+                ),
                 default=-1,
             ),
             routes_on_sensitive_data=any(

@@ -12840,6 +12840,39 @@ class _CustomerRoutingGuardrail(CustomGuardrail):
         return data
 
 
+class _InheritedCustomerGuardrail(_CustomerRoutingGuardrail):
+    """A customer guardrail that inherits its pre-call hook from the customer's own base class."""
+
+
+class _CustomerTextGuardrail(CustomGuardrail):
+    """A customer guardrail that only implements ``apply_guardrail``."""
+
+    def __init__(self, run_in_parallel: bool = False) -> None:
+        super().__init__(
+            guardrail_name="customer-text-guardrail", event_hook=GuardrailEventHooks.pre_call, default_on=True
+        )
+        self.run_in_parallel = run_in_parallel
+        self.calls = 0
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        self.calls += 1
+        return inputs
+
+
+class _BuiltInContentCheck(CustomLogger):
+    """Stands in for a content check litellm ships that is not a guardrail: records the messages it was sent."""
+
+    __module__ = "litellm.proxy.hooks.content_check_double"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: Final[list[str]] = []
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.seen.append(json.dumps(data.get("messages")))
+        return data
+
+
 class _ModelMappingHook(CustomLogger):
     """A customer callback that renames a virtual model, editing the request or returning a new one."""
 
@@ -13196,8 +13229,8 @@ class TestUnroutableModelSkipsPreCallGuardrails:
 
 
 class TestUnroutableModelFailureLogHidesUnscannedContent:
-    """A request turned away before a guardrail that applied to it ran must not log the content that guardrail
-    would have scanned, since a masking guardrail never got to mask it."""
+    """A request turned away before a guardrail that applied to it ran must not log, or hand to the hooks after it,
+    the content that guardrail would have scanned, since a masking guardrail never got to mask it."""
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -13221,10 +13254,23 @@ class TestUnroutableModelFailureLogHidesUnscannedContent:
                 {"tools": [{"type": "function", "function": {"name": "mail", "description": _RAW_EMAIL}}]},
                 id="tool-definitions",
             ),
+            pytest.param(
+                {"query": f"email {_RAW_EMAIL}", "instruction": f"email {_RAW_EMAIL}"},
+                id="rerank-query-and-instruction",
+            ),
         ],
     )
     async def test_failure_log_hides_every_field_a_skipped_guardrail_would_have_scanned(self, monkeypatch, body):
         sent: Final = await _send(monkeypatch, [_VendorGuardrail(behavior="mask")], body=body)
+
+        assert sent.status == 400
+        assert _shows_no_raw_content(sent), sent.failure_dumps
+
+    @pytest.mark.asyncio
+    async def test_failure_log_hides_content_a_skipped_parallel_guardrail_would_have_scanned(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        sent: Final = await _send(monkeypatch, [_VendorGuardrail(behavior="mask", run_in_parallel=True)])
 
         assert sent.status == 400
         assert _shows_no_raw_content(sent), sent.failure_dumps
@@ -13248,6 +13294,17 @@ class TestUnroutableModelFailureLogHidesUnscannedContent:
 
         assert (first.status, limited.status, guardrail.calls) == (400, 429, 0)
         assert _shows_no_raw_content(limited), limited.failure_dumps
+
+    @pytest.mark.asyncio
+    async def test_built_in_hook_after_a_skipped_guardrail_is_not_sent_the_content_it_would_have_masked(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        check: Final = _BuiltInContentCheck()
+
+        sent: Final = await _send(monkeypatch, [_VendorGuardrail(behavior="mask"), check])
+
+        assert sent.status == 400
+        assert check.seen and not any(_RAW_EMAIL in seen for seen in check.seen), check.seen
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -13304,9 +13361,10 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
         assert (enforcer.calls if check == "content-enforcer" else guardrail.calls) == 1
 
     @pytest.mark.asyncio
-    async def test_customer_guardrail_can_still_rename_a_virtual_model(self, monkeypatch):
+    @pytest.mark.parametrize("customer_guardrail", [_CustomerRoutingGuardrail, _InheritedCustomerGuardrail])
+    async def test_customer_guardrail_can_still_rename_a_virtual_model(self, monkeypatch, customer_guardrail):
         guardrail: Final = _VendorGuardrail()
-        customer: Final = _CustomerRoutingGuardrail()
+        customer: Final = customer_guardrail()
 
         sent: Final = await _send(monkeypatch, [guardrail, customer], model="virtual-model")
 
@@ -13314,9 +13372,14 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
         assert (guardrail.calls, customer.calls) == (1, 1)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "customer_guardrail", [_CustomerRoutingGuardrail, _InheritedCustomerGuardrail, _CustomerTextGuardrail]
+    )
     @pytest.mark.parametrize("run_in_parallel", [False, True])
-    async def test_customer_guardrail_still_runs_for_an_unknown_model(self, monkeypatch, run_in_parallel):
-        customer: Final = _CustomerRoutingGuardrail(run_in_parallel=run_in_parallel)
+    async def test_customer_guardrail_still_runs_for_an_unknown_model(
+        self, monkeypatch, customer_guardrail, run_in_parallel
+    ):
+        customer: Final = customer_guardrail(run_in_parallel=run_in_parallel)
 
         sent: Final = await _send(monkeypatch, [customer])
 
