@@ -1883,7 +1883,10 @@ def completion_cost(
                             video_resolution = str(_vr).strip().lower()
                         video_count = _vc if isinstance(_vc, int) and not isinstance(_vc, bool) and _vc > 1 else 1
 
-                        if _video_model_info is None and provider_reported_cost is not None:
+                        if provider_reported_cost is not None and (
+                            _video_model_info is None
+                            or not overrides_provider_stated_cost(custom_pricing, litellm_logging_obj)
+                        ):
                             return float(provider_reported_cost)
 
                         if duration_seconds is not None:

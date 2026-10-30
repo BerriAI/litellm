@@ -474,6 +474,30 @@ class TestVideoGeneration:
         )
         assert abs(cost - 1.8) < 0.001
 
+    def test_completion_cost_video_deployment_with_only_a_billing_minimum_keeps_provider_reported_cost(self):
+        from litellm.cost_calculator import completion_cost
+
+        mock_response = MagicMock()
+        mock_response.usage = {
+            "duration_seconds": 5.0,
+            "video_resolution": "720p",
+            "provider_reported_cost_usd": 0.31,
+        }
+        type(mock_response)._hidden_params = {}
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.litellm_params = {"metadata": {"model_info": {"min_billed_input_tokens": 1000}}}
+
+        cost = completion_cost(
+            completion_response=mock_response,
+            model="runwayml/gen4_turbo",
+            call_type="create_video",
+            custom_llm_provider="runwayml",
+            custom_pricing=True,
+            litellm_logging_obj=mock_logging_obj,
+        )
+        assert cost == 0.31
+
 
     def test_video_generation_with_files(self):
         """Test video generation with file uploads."""
