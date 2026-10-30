@@ -14,6 +14,7 @@ is logged the first time such a deployment is seen.
 import asyncio
 import contextlib
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Literal
@@ -124,12 +125,25 @@ def _deployment_model_id(deployment: Mapping[str, object]) -> object:
     return model_info.get("id") if isinstance(model_info, Mapping) else None
 
 
-def _counters_with_limits(model_id: str, counters: Sequence[tuple[str, object]]) -> tuple[tuple[str, str, int], ...]:
-    return tuple((model_id, key, limit) for key, limit in counters if type(limit) is int)
+@dataclass(frozen=True, slots=True)
+class _LimitCounter:
+    model_id: str
+    key: str
+    limit: int
+    counts_requests: bool
+
+    def reached(self, usage: object) -> bool:
+        if isinstance(usage, (int, float)):
+            return usage >= self.limit
+        return self.counts_requests and self.limit <= 0
 
 
-def _reached(current: object, limit: int) -> bool:
-    return isinstance(current, (int, float)) and current >= limit
+def _counters_with_limits(model_id: str, counters: Sequence[tuple[str, object, bool]]) -> tuple[_LimitCounter, ...]:
+    return tuple(
+        _LimitCounter(model_id, key, limit, counts_requests)
+        for key, limit, counts_requests in counters
+        if type(limit) is int
+    )
 
 
 def _reset_offset_from_kwargs(kwargs: Mapping[str, object]) -> timedelta:
@@ -318,7 +332,7 @@ class ModelRateLimitingCheck(CustomLogger):
         self,
         deployment: dict[str, object],  # mutable-ok: the limit and key readers take router deployment dicts
         now: datetime,
-    ) -> tuple[tuple[str, str, int], ...]:
+    ) -> tuple[_LimitCounter, ...]:
         model_id: Final = _deployment_model_id(deployment)
         if not isinstance(model_id, str):
             return ()
@@ -327,11 +341,34 @@ class ModelRateLimitingCheck(CustomLogger):
         try:
             daily: Final = _DailyLimitDeployment.model_validate(deployment)
         except ValidationError:
-            return _counters_with_limits(model_id, ((tpm_key, tpm_limit), (rpm_key, rpm_limit)))
+            return _counters_with_limits(model_id, ((tpm_key, tpm_limit, False), (rpm_key, rpm_limit, True)))
         tpd_limit, rpd_limit = daily.limits()
         tpd_key, rpd_key = daily.cache_keys(now)
         return _counters_with_limits(
-            model_id, ((tpm_key, tpm_limit), (rpm_key, rpm_limit), (tpd_key, tpd_limit), (rpd_key, rpd_limit))
+            model_id,
+            (
+                (tpm_key, tpm_limit, False),
+                (rpm_key, rpm_limit, True),
+                (tpd_key, tpd_limit, False),
+                (rpd_key, rpd_limit, True),
+            ),
+        )
+
+    def _counters_of(
+        self,
+        deployments: Sequence[dict[str, object]],  # mutable-ok: _limit_counters reads router deployment dicts
+    ) -> tuple[_LimitCounter, ...]:
+        now: Final = self.clock()
+        return tuple(chain.from_iterable(self._limit_counters(deployment, now) for deployment in deployments))
+
+    def deployment_ids_at_limit(
+        self,
+        deployments: Sequence[dict[str, object]],  # mutable-ok: _limit_counters reads router deployment dicts
+    ) -> frozenset[str]:
+        return frozenset(
+            counter.model_id
+            for counter in self._counters_of(deployments)
+            if counter.reached(self._get_current_tpm(counter.key, counter.limit))
         )
 
     async def async_deployment_ids_at_limit(
@@ -339,15 +376,12 @@ class ModelRateLimitingCheck(CustomLogger):
         deployments: Sequence[dict[str, object]],  # mutable-ok: _limit_counters reads router deployment dicts
         parent_otel_span: Span | None,
     ) -> frozenset[str]:
-        now: Final = self.clock()
-        counters: Final = tuple(
-            chain.from_iterable(self._limit_counters(deployment, now) for deployment in deployments)
-        )
+        counters: Final = self._counters_of(deployments)
         usages: Final = await asyncio.gather(
-            *(self._async_get_current_tpm(key, limit, parent_otel_span) for _, key, limit in counters)
+            *(self._async_get_current_tpm(counter.key, counter.limit, parent_otel_span) for counter in counters)
         )
         return frozenset(
-            model_id for (model_id, _, limit), usage in zip(counters, usages, strict=True) if _reached(usage, limit)
+            counter.model_id for counter, usage in zip(counters, usages, strict=True) if counter.reached(usage)
         )
 
     @with_service_target(ROUTER_USAGE_TARGET)

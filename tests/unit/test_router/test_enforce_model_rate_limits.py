@@ -506,6 +506,33 @@ async def _async_pre_call(check: ModelRateLimitingCheck, deployment: dict[str, o
     return await check.async_pre_call_check(deployment)
 
 
+def _rejects(check: ModelRateLimitingCheck, deployment: dict[str, object]) -> bool:
+    try:
+        _pre_call(check, deployment)
+    except litellm.RateLimitError:
+        return True
+    return False
+
+
+async def _async_rejects(check: ModelRateLimitingCheck, deployment: dict[str, object]) -> bool:
+    try:
+        await _async_pre_call(check, deployment)
+    except litellm.RateLimitError:
+        return True
+    return False
+
+
+_FRESH_LIMITS: Final = ({"rpm": 0}, {"rpd": 0}, {"tpm": 0}, {"tpd": 0}, {"rpm": 1, "tpm": 1})
+
+
+def _deployment_with(limits: dict[str, int]) -> dict[str, object]:
+    return {
+        "litellm_params": {"model": "gpt-4.1-mini", **limits},
+        "model_info": {"id": "limit-test-id"},
+        "model_name": "daily-model",
+    }
+
+
 async def _async_log_success(check: ModelRateLimitingCheck, kwargs: dict[str, object]) -> None:
     await check.async_log_success_event(kwargs, None, None, None)
 
@@ -595,6 +622,29 @@ class TestDailyLimits:
         at_limit = await asyncio.wait_for(check.async_deployment_ids_at_limit(deployments, None), timeout=5)
 
         assert at_limit == frozenset({"concurrent-0", "concurrent-1", "concurrent-2"})
+
+    @pytest.mark.parametrize("limits", _FRESH_LIMITS, ids=lambda limits: ",".join(limits))
+    def test_a_deployment_is_reported_at_its_limit_exactly_when_its_next_request_is_rejected(
+        self, limits: dict[str, int]
+    ):
+        deployment = _deployment_with(limits)
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(DAY_ONE))
+
+        reported = "limit-test-id" in check.deployment_ids_at_limit([deployment])
+
+        assert reported == _rejects(check, deployment)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("limits", _FRESH_LIMITS, ids=lambda limits: ",".join(limits))
+    async def test_async_a_deployment_is_reported_at_its_limit_exactly_when_its_next_request_is_rejected(
+        self, limits: dict[str, int]
+    ):
+        deployment = _deployment_with(limits)
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(DAY_ONE))
+
+        reported = "limit-test-id" in await check.async_deployment_ids_at_limit([deployment], None)
+
+        assert reported == await _async_rejects(check, deployment)
 
     def test_pre_call_check_minute_rejected_request_does_not_spend_rpd(self):
         clock = Clock(DAY_ONE)

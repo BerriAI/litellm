@@ -963,6 +963,50 @@ async def test_web_search_request_goes_to_the_other_deployment_once_the_capable_
     assert served_by == ("search", "no-search", "no-search")
 
 
+def test_sync_web_search_request_goes_to_the_other_deployment_once_the_capable_one_hits_its_enforced_rpm() -> None:
+    router: Final = _web_search_group_with_model_rate_limits()
+    served_by: Final = tuple(
+        router.completion(
+            model="mixed", messages=[{"role": "user", "content": "hi"}], num_retries=0, **_ANTHROPIC_WEB_SEARCH_REQUEST
+        )._hidden_params["model_id"]
+        for _ in range(3)
+    )
+    assert served_by == ("search", "no-search", "no-search")
+
+
+@pytest.mark.asyncio
+async def test_web_search_request_never_goes_to_a_capable_deployment_whose_enforced_rpm_is_zero() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "mixed",
+                "litellm_params": {"model": "openai/gpt-x", "api_key": "fake-key", "mock_response": "hi", "rpm": 0},
+                "model_info": {"id": "search"},
+            },
+            {
+                "model_name": "mixed",
+                "litellm_params": {"model": "openai/gpt-y", "api_key": "fake-key", "mock_response": "hi", "rpm": 1000},
+                "model_info": {"id": "no-search", "supports_web_search": False},
+            },
+        ],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+    )
+    served_by: Final = tuple(
+        [
+            (
+                await router.acompletion(
+                    model="mixed",
+                    messages=[{"role": "user", "content": "hi"}],
+                    num_retries=0,
+                    **_ANTHROPIC_WEB_SEARCH_REQUEST,
+                )
+            )._hidden_params["model_id"]
+            for _ in range(5)
+        ]
+    )
+    assert served_by == ("no-search",) * 5
+
+
 def _rate_limited_web_search_group(routing_strategy: str) -> Router:
     return Router(
         model_list=[

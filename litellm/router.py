@@ -16862,12 +16862,21 @@ class Router(DeprecatedRouterMembers):
                 ),
             )
 
+        web_search_capable: Final = web_search_capable_deployments(
+            request_kwargs=routing_kwargs,
+            deployments=cast(list[dict[str, object]], healthy_deployments),  # cast-ok: str-keyed dicts
+        )
+        at_rate_limit: Final = frozenset(
+            chain.from_iterable(
+                check.deployment_ids_at_limit(web_search_capable) for check in self._model_rate_limit_checks()
+            )
+        )
         if strategy == "simple-shuffle":
             # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
             ############## Check 'weight' param set for weighted pick #################
             shuffled: Final = simple_shuffle(
                 resolve_model_alias=self._core_get_model_from_alias,
-                healthy_deployments=prefer_web_search_deployments(healthy_deployments, routing_kwargs),
+                healthy_deployments=prefer_web_search_deployments(healthy_deployments, routing_kwargs, at_rate_limit),
                 model=model,
                 request_kwargs=routing_kwargs,
             )
@@ -16885,6 +16894,7 @@ class Router(DeprecatedRouterMembers):
             ),
             cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
             routing_kwargs,
+            at_rate_limit,
         )
 
         if deployment is None:

@@ -585,8 +585,9 @@ def pick_preferring_web_search(
     pick: Callable[[list[_DeploymentT]], _Picked | None],  # mutable-ok: router deployment-list contract
     deployments: list[_DeploymentT],  # mutable-ok: router deployment-list contract
     request_kwargs: Mapping[str, object] | None,
+    at_rate_limit: frozenset[str] = frozenset(),
 ) -> _Picked | None:
-    preferred: Final = prefer_web_search_deployments(deployments, request_kwargs)
+    preferred: Final = prefer_web_search_deployments(deployments, request_kwargs, at_rate_limit)
     if len(preferred) == len(deployments):
         return pick(deployments)
     try:
