@@ -159,7 +159,7 @@ def embedding(
     logging_obj.pre_call(
         input=input,
         api_key=api_key,
-        additional_args={"complete_input_dict": data},
+        additional_args={"complete_input_dict": data, "api_base": embed_url},
     )
 
     ## COMPLETION CALL
