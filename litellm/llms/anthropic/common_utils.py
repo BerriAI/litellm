@@ -2020,30 +2020,32 @@ def _is_clear_thinking_edit(edit: object) -> bool:
             return False
 
 
-def drop_clear_thinking_edits(params: MutableMapping[str, object]) -> None:  # mutable-ok: edits in place
+def drop_clear_thinking_edits(params: MutableMapping[str, object]) -> bool:  # mutable-ok: edits in place
     """
     Remove the ``clear_thinking_*`` context-management edits, which Anthropic
     rejects without ``thinking``.  ``context_management`` itself goes only when
-    such an edit was removed and nothing else is left in it.
+    such an edit was removed and nothing else is left in it.  Returns whether an
+    edit was removed.
     """
     raw_context_management: Final = params.get("context_management")
     if not isinstance(raw_context_management, dict):
-        return
+        return False
     context_management: Final = OBJECT_MAPPING_ADAPTER.validate_python(raw_context_management)
     raw_edits: Final = context_management.get("edits")
     if not isinstance(raw_edits, list):
-        return
+        return False
     edits: Final = OBJECT_LIST_ADAPTER.validate_python(raw_edits)
     kept_edits: Final = [edit for edit in edits if not _is_clear_thinking_edit(edit)]
     if len(kept_edits) == len(edits):
-        return
+        return False
     if not kept_edits and len(context_management) == 1:
         params.pop("context_management")
-        return
+        return True
     params["context_management"] = {  # rebind-ok: callers mutate their request params in place
         **context_management,
         "edits": kept_edits,
     }
+    return True
 
 
 def drop_clear_thinking_edits_for_model(
@@ -2056,8 +2058,23 @@ def drop_clear_thinking_edits_for_model(
         AnthropicModelInfo.supports_model_capability(model, capability, custom_llm_provider)
         for capability in ("thinking_always_on", "thinking_on_by_default")
     )
-    if not thinks_without_thinking_param:
-        drop_clear_thinking_edits(params)
+    if not thinks_without_thinking_param and drop_clear_thinking_edits(params):
+        litellm.verbose_logger.warning(
+            "litellm removed the clear_thinking context-management edit for model %s because the request goes out "
+            "without thinking. If this model thinks by default, set model_info.thinking_on_by_default to true to "
+            "keep the edit.",
+            model,
+        )
+
+
+def _has_clear_thinking_edit(params: Mapping[str, object]) -> bool:
+    raw_context_management: Final = params.get("context_management")
+    if not isinstance(raw_context_management, dict):
+        return False
+    raw_edits: Final = OBJECT_MAPPING_ADAPTER.validate_python(raw_context_management).get("edits")
+    if not isinstance(raw_edits, list):
+        return False
+    return any(_is_clear_thinking_edit(edit) for edit in OBJECT_LIST_ADAPTER.validate_python(raw_edits))
 
 
 def strip_thinking_blocks_from_anthropic_messages_request_dict(
@@ -2065,14 +2082,13 @@ def strip_thinking_blocks_from_anthropic_messages_request_dict(
 ) -> None:
     """
     Mutate an Anthropic Messages-style request dict: strip thinking blocks from
-    ``messages`` and remove ``thinking`` with its dependent context-management
-    edits (see :func:`drop_clear_thinking_edits`).
+    ``messages`` and remove ``thinking`` unless a ``clear_thinking_*`` edit needs it.
     """
     msgs: Final = data.get("messages")
     if isinstance(msgs, list):
         data["messages"] = strip_thinking_blocks_from_anthropic_messages(msgs)
-    data.pop("thinking", None)
-    drop_clear_thinking_edits(data)
+    if not _has_clear_thinking_edit(data):
+        data.pop("thinking", None)
 
 
 _DROP_ANTHROPIC_MESSAGE: Final = object()

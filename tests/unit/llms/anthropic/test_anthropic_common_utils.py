@@ -1704,18 +1704,47 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert "thinking" not in data
         assert data["messages"] == []
 
-    def test_strip_thinking_request_dict_drops_clear_thinking_edits(self) -> None:
+    @pytest.mark.parametrize("thinking", [{"type": "adaptive"}, {"type": "enabled", "budget_tokens": 1024}])
+    def test_strip_thinking_request_dict_keeps_thinking_for_a_clear_thinking_edit(
+        self, thinking: dict[str, object]
+    ) -> None:
+        from litellm.llms.anthropic.common_utils import (
+            strip_thinking_blocks_from_anthropic_messages_request_dict,
+        )
+
+        context_management: Final = {
+            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}, {"type": "clear_tool_uses_20250919"}]
+        }
+        data: Final[dict[str, object]] = {
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": [{"type": "thinking", "thinking": "unsigned"}]},
+            ],
+            "thinking": thinking,
+            "context_management": context_management,
+        }
+        strip_thinking_blocks_from_anthropic_messages_request_dict(data)
+        assert data == {
+            "messages": [{"role": "user", "content": "hi"}],
+            "thinking": thinking,
+            "context_management": context_management,
+        }
+
+    def test_strip_thinking_request_dict_drops_thinking_without_a_clear_thinking_edit(self) -> None:
         from litellm.llms.anthropic.common_utils import (
             strip_thinking_blocks_from_anthropic_messages_request_dict,
         )
 
         data: Final[dict[str, object]] = {
-            "messages": [{"role": "assistant", "content": [{"type": "thinking", "thinking": "unsigned"}]}],
+            "messages": [{"role": "user", "content": "hi"}],
             "thinking": {"type": "adaptive"},
-            "context_management": {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]},
+            "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
         }
         strip_thinking_blocks_from_anthropic_messages_request_dict(data)
-        assert "context_management" not in data
+        assert data == {
+            "messages": [{"role": "user", "content": "hi"}],
+            "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
+        }
 
     @pytest.mark.parametrize(
         ("context_management", "expected"),
@@ -1747,8 +1776,31 @@ class TestAnthropicThinkingSignatureSelfHeal:
         )
 
         params: Final[dict[str, object]] = {"context_management": context_management}
-        drop_clear_thinking_edits(params)
+        dropped: Final = drop_clear_thinking_edits(params)
         assert params == ({} if expected is None else {"context_management": expected})
+        assert dropped is (expected != context_management)
+
+    @pytest.mark.usefixtures("local_model_cost_map")
+    @pytest.mark.parametrize(
+        ("model", "edits", "warned"),
+        [
+            pytest.param("claude-sonnet-4-5", [{"type": "clear_thinking_20251015"}], True, id="dropped-warns"),
+            pytest.param("claude-sonnet-5-5", [{"type": "clear_thinking_20251015"}], False, id="kept-quiet"),
+            pytest.param("claude-sonnet-4-5", [{"type": "clear_tool_uses_20250919"}], False, id="nothing-dropped"),
+        ],
+    )
+    def test_drop_clear_thinking_edits_for_model_warns_only_when_an_edit_goes(
+        self, model: str, edits: list[dict[str, str]], warned: bool, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from litellm.llms.anthropic.common_utils import drop_clear_thinking_edits_for_model
+
+        params: Final[dict[str, object]] = {"context_management": {"edits": edits}}
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            drop_clear_thinking_edits_for_model(params, model, "anthropic")
+        warnings: Final = [r.getMessage() for r in caplog.records if "clear_thinking" in r.getMessage()]
+
+        assert len(warnings) == int(warned)
+        assert all(model in w and "model_info.thinking_on_by_default" in w for w in warnings)
 
     def test_strip_empty_content_blocks_from_anthropic_messages(self):
         """Covers #22930.  The core regression scenario: an assistant message
