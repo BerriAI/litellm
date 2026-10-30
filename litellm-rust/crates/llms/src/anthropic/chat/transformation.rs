@@ -25,7 +25,8 @@ use crate::{
             streaming::StreamShape,
             transformation::{
                 BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-                ValidatedEnvironment, unsupported_message, unsupported_param,
+                ValidatedEnvironment, map_openai_param_names, unsupported_message,
+                unsupported_param,
             },
         },
     },
@@ -43,10 +44,13 @@ use crate::{
 /// take a 400 after the call, where Python drops it and succeeds.
 const SUPPORTED_PARAMS: &[(&str, &str)] = &[
     ("max_tokens", "max_tokens"),
+    ("max_completion_tokens", "max_tokens"),
     ("temperature", "temperature"),
     ("top_p", "top_p"),
-    ("stop", "stop_sequences"),
+    ("stop", STOP_SEQUENCES),
 ];
+
+const STOP_SEQUENCES: &str = "stop_sequences";
 
 #[derive(Deserialize)]
 struct TextResponseProjection {
@@ -94,6 +98,22 @@ impl BaseConfig for AnthropicConfig {
 
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)] {
         SUPPORTED_PARAMS
+    }
+
+    fn map_openai_params(
+        &self,
+        _model: &str,
+        params: Map<String, Value>,
+    ) -> Result<Map<String, Value>, Decline> {
+        Ok(
+            map_openai_param_names(SUPPORTED_PARAMS, self.config_params(), params)?
+                .into_iter()
+                .filter_map(|(name, value)| match name.as_str() {
+                    STOP_SEQUENCES => stop_sequences(value).map(|value| (name, value)),
+                    _ => Some((name, value)),
+                })
+                .collect(),
+        )
     }
 
     fn get_complete_url(
@@ -216,6 +236,15 @@ impl BaseConfig for AnthropicConfig {
     }
 }
 
+fn stop_sequences(stop: Value) -> Option<Value> {
+    match stop {
+        Value::String(stop) => Some(json!([stop])),
+        Value::Array(stops) if stops.is_empty() => None,
+        Value::Array(stops) => Some(Value::Array(stops)),
+        _ => None,
+    }
+}
+
 fn text_block(text: &str) -> Value {
     json!({"type": "text", "text": text})
 }
@@ -293,6 +322,29 @@ mod tests {
 
     fn reason(msgs: Value, opts: Value) -> Option<Decline> {
         ANTHROPIC_CHAT_COMPLETIONS_CONFIG.unsupported_reason(&messages(msgs), &params(opts))
+    }
+
+    fn map(opts: Value) -> Result<Map<String, Value>, Decline> {
+        ANTHROPIC_CHAT_COMPLETIONS_CONFIG.map_openai_params("claude-sonnet-4-5", params(opts))
+    }
+
+    #[rstest]
+    #[case::stop_string(json!({"stop": "5"}), json!({"stop_sequences": ["5"]}))]
+    #[case::empty_stop_list(json!({"stop": []}), json!({}))]
+    #[case::stop_list(json!({"stop": ["a", "b"]}), json!({"stop_sequences": ["a", "b"]}))]
+    #[case::max_completion_tokens(json!({"max_completion_tokens": 32}), json!({"max_tokens": 32}))]
+    fn maps_openai_params_to_anthropic_names(#[case] openai: Value, #[case] anthropic: Value) {
+        assert_eq!(map(openai), Ok(params(anthropic)));
+    }
+
+    #[rstest]
+    #[case::unknown(json!({"top_k": 40}))]
+    #[case::anthropic_name(json!({"stop_sequences": ["5"]}))]
+    fn declines_an_openai_param_it_has_no_anthropic_name_for(#[case] openai: Value) {
+        assert_eq!(
+            map(openai),
+            Err(Decline::new("unrecognized request parameter"))
+        );
     }
 
     #[test]

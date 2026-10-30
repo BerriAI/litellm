@@ -10,7 +10,10 @@ use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
 };
 use litellm_inference::resources::CoreResources;
-use litellm_inference_chat::{ChatCompletionsRoute, types::ChatCompletionsRequest};
+use litellm_inference_chat::{
+    ChatCompletionsRoute,
+    types::{ChatCompletionsRequest, OptionalParams},
+};
 use rstest::rstest;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -68,6 +71,37 @@ async fn chat_aliases_call_core_and_use_the_body_model_before_the_path(
 }
 
 #[rstest]
+#[tokio::test]
+async fn chat_maps_openai_params_for_a_bedrock_deployment() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_partial_json(json!({
+            "inferenceConfig": {"maxTokens": 16, "topP": 0.5, "stopSequences": ["5"]}
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "output": {"message": {"role": "assistant", "content": [{"text": "hello"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2}
+        })))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let response = support::post(
+        support::app("bedrock/us-east-1/anthropic.claude-v2", &upstream.uri()),
+        "/v1/chat/completions",
+        json!({
+            "model": "public/model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 16,
+            "top_p": 0.5,
+            "stop": "5"
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), 200);
+}
+
+#[rstest]
 #[case::streaming(json!({"messages": [{"role": "user", "content": "hi"}], "stream": true}), 501)]
 #[case::missing_messages(json!({}), 400)]
 #[case::malformed_messages(json!({"messages": "hi"}), 400)]
@@ -96,11 +130,13 @@ async fn chat_errors_come_from_core(
         ChatCompletionsRequest {
             model: "anthropic/test-model",
             messages: fields.get("messages").cloned().unwrap_or_default(),
-            optional_params: fields
-                .iter()
-                .filter(|(name, _)| name.as_str() != "messages")
-                .map(|(name, value)| (name.clone(), value.clone()))
-                .collect(),
+            optional_params: OptionalParams::OpenAi(
+                fields
+                    .iter()
+                    .filter(|(name, _)| name.as_str() != "messages")
+                    .map(|(name, value)| (name.clone(), value.clone()))
+                    .collect(),
+            ),
             api_key: Some("test-key"),
             api_base: Some(&base),
             custom_llm_provider: None,

@@ -10,7 +10,7 @@ use litellm_llms_types::formats::chat_completions::ChatMessage;
 use serde_json::{Map, Value};
 
 use super::Error;
-use crate::types::{ChatCompletionsCall, ResolvedChatCompletionsRequest};
+use crate::types::{ChatCompletionsCall, OptionalParams, ResolvedChatCompletionsRequest};
 
 const HEADER_CONTEXT: &str = "chat completions";
 
@@ -47,6 +47,7 @@ pub(super) fn string_headers(
 
 pub(super) fn resolve_request(
     call: ChatCompletionsCall,
+    model: &str,
     config: &'static dyn BaseConfig,
 ) -> Result<ResolvedChatCompletionsRequest, Error> {
     let messages = serde_json::from_value::<Vec<ChatMessage>>(call.messages).map_err(|err| {
@@ -62,12 +63,18 @@ pub(super) fn resolve_request(
             },
         ));
     }
-    if let Some(reason) = config.unsupported_reason(&messages, &call.optional_params) {
+    let optional_params = match call.optional_params {
+        OptionalParams::OpenAi(params) => config
+            .map_openai_params(model, params)
+            .map_err(Error::Declined)?,
+        OptionalParams::ProviderMapped(params) => params,
+    };
+    if let Some(reason) = config.unsupported_reason(&messages, &optional_params) {
         return Err(Error::Declined(reason));
     }
     Ok(ResolvedChatCompletionsRequest {
         messages,
-        optional_params: call.optional_params,
+        optional_params,
         api_key: call.api_key,
         api_base: call.api_base,
         extra_headers: call.extra_headers,

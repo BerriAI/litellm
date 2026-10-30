@@ -29,7 +29,8 @@ use crate::{
             streaming::StreamShape,
             transformation::{
                 BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-                ValidatedEnvironment, unsupported_message, unsupported_param,
+                ValidatedEnvironment, map_openai_param_names, unsupported_message,
+                unsupported_param,
             },
         },
     },
@@ -43,11 +44,15 @@ use crate::{
 /// `inferenceConfig` otherwise, and that branch reads the model catalog the
 /// core cannot see.
 const SUPPORTED_PARAMS: &[(&str, &str)] = &[
-    ("max_tokens", "maxTokens"),
+    ("max_tokens", MAX_TOKENS),
+    ("max_completion_tokens", MAX_TOKENS),
     ("temperature", "temperature"),
     ("top_p", "topP"),
-    ("stop", "stopSequences"),
+    ("stop", STOP_SEQUENCES),
 ];
+
+const MAX_TOKENS: &str = "maxTokens";
+const STOP_SEQUENCES: &str = "stopSequences";
 
 const AWS_BEDROCK_RUNTIME_ENDPOINT: &str = "aws_bedrock_runtime_endpoint";
 
@@ -106,6 +111,28 @@ impl BaseConfig for AmazonConverseConfig {
 
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)] {
         SUPPORTED_PARAMS
+    }
+
+    fn map_openai_params(
+        &self,
+        model: &str,
+        params: Map<String, Value>,
+    ) -> Result<Map<String, Value>, Decline> {
+        let mapped = map_openai_param_names(SUPPORTED_PARAMS, CONFIG_PARAMS, params)?;
+        if has_model_specific_token_and_stop_rules(model)
+            && [MAX_TOKENS, STOP_SEQUENCES]
+                .iter()
+                .any(|name| mapped.contains_key(*name))
+        {
+            return Err(Decline::new("model-specific max_tokens or stop rules"));
+        }
+        Ok(mapped
+            .into_iter()
+            .filter_map(|(name, value)| match name.as_str() {
+                STOP_SEQUENCES => stop_sequences(value).map(|value| (name, value)),
+                _ => Some((name, value)),
+            })
+            .collect())
     }
 
     fn get_complete_url(
@@ -301,6 +328,22 @@ impl BaseConfig for AmazonConverseConfig {
     }
 }
 
+fn has_model_specific_token_and_stop_rules(model: &str) -> bool {
+    model.contains("xai.grok-")
+        || model.contains("moonshotai.kimi-k3")
+        || model.match_indices("openai.gpt-").any(|(index, prefix)| {
+            model[index + prefix.len()..].starts_with(|next: char| next.is_ascii_digit())
+        })
+}
+
+fn stop_sequences(stop: Value) -> Option<Value> {
+    match stop {
+        Value::String(stop) if stop.is_empty() => None,
+        Value::String(stop) => Some(json!([stop])),
+        stop => Some(stop),
+    }
+}
+
 fn converse_body(conversation: &Conversation, optional_params: &Map<String, Value>) -> Value {
     let messages: Vec<Value> = conversation
         .turns
@@ -397,6 +440,85 @@ mod tests {
 
     fn reason(msgs: Value, opts: Value) -> Option<Decline> {
         BEDROCK_CHAT_COMPLETIONS_CONFIG.unsupported_reason(&messages(msgs), &params(opts))
+    }
+
+    fn map(model: &str, opts: Value) -> Result<Map<String, Value>, Decline> {
+        BEDROCK_CHAT_COMPLETIONS_CONFIG.map_openai_params(model, params(opts))
+    }
+
+    const CLAUDE: &str = "us-east-1/anthropic.claude-sonnet-4-5-v1:0";
+
+    #[rstest]
+    #[case::stop_string(CLAUDE, json!({"stop": "5"}), json!({"stopSequences": ["5"]}))]
+    #[case::empty_stop(CLAUDE, json!({"stop": ""}), json!({}))]
+    #[case::stop_list(CLAUDE, json!({"stop": ["a", "b"]}), json!({"stopSequences": ["a", "b"]}))]
+    #[case::max_completion_tokens(
+        CLAUDE,
+        json!({"max_completion_tokens": 32}),
+        json!({"maxTokens": 32})
+    )]
+    #[case::later_max_tokens_wins(
+        CLAUDE,
+        json!({"max_completion_tokens": 32, "max_tokens": 16}),
+        json!({"maxTokens": 16})
+    )]
+    #[case::later_max_completion_tokens_wins(
+        CLAUDE,
+        json!({"max_tokens": 16, "max_completion_tokens": 32}),
+        json!({"maxTokens": 32})
+    )]
+    #[case::sampling(
+        CLAUDE,
+        json!({"temperature": 0.2, "top_p": 0.9}),
+        json!({"temperature": 0.2, "topP": 0.9})
+    )]
+    #[case::null_is_unset(CLAUDE, json!({"max_tokens": null}), json!({}))]
+    #[case::stream_and_config_keep_their_names(
+        CLAUDE,
+        json!({"stream": false, "aws_region_name": "eu-west-1"}),
+        json!({"stream": false, "aws_region_name": "eu-west-1"})
+    )]
+    #[case::gpt_oss_has_no_model_rules(
+        "openai.gpt-oss-120b-1:0",
+        json!({"max_tokens": 16}),
+        json!({"maxTokens": 16})
+    )]
+    #[case::rule_family_without_its_params(
+        "openai.gpt-5.6",
+        json!({"temperature": 0.2}),
+        json!({"temperature": 0.2})
+    )]
+    fn maps_openai_params_to_converse_names(
+        #[case] model: &str,
+        #[case] openai: Value,
+        #[case] converse: Value,
+    ) {
+        assert_eq!(map(model, openai), Ok(params(converse)));
+    }
+
+    #[rstest]
+    #[case::gpt_max_tokens("us.openai.gpt-5.6-v1:0", json!({"max_tokens": 16}))]
+    #[case::gpt_before_5_6_stop("openai.gpt-5.4", json!({"stop": "5"}))]
+    #[case::grok_stop("xai.grok-4-6", json!({"stop": ["5"]}))]
+    #[case::kimi_max_completion_tokens("moonshotai.kimi-k3", json!({"max_completion_tokens": 16}))]
+    fn declines_max_tokens_and_stop_on_models_python_rewrites_them_for(
+        #[case] model: &str,
+        #[case] openai: Value,
+    ) {
+        assert_eq!(
+            map(model, openai),
+            Err(Decline::new("model-specific max_tokens or stop rules"))
+        );
+    }
+
+    #[rstest]
+    #[case::unknown(json!({"top_k": 40}))]
+    #[case::converse_name(json!({"maxTokens": 16}))]
+    fn declines_an_openai_param_it_has_no_converse_name_for(#[case] openai: Value) {
+        assert_eq!(
+            map(CLAUDE, openai),
+            Err(Decline::new("unrecognized request parameter"))
+        );
     }
 
     #[test]

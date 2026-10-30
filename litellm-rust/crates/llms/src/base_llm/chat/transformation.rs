@@ -24,6 +24,8 @@ pub struct ProviderChatResponseData {
 
 pub const STREAM_PARAM: &str = "stream";
 
+const UNRECOGNIZED_PARAM: &str = "unrecognized request parameter";
+
 /// Message fields that carry no meaning for the upstream body, so their
 /// presence does not make a request untranslatable.
 const IGNORABLE_MESSAGE_FIELDS: &[&str] = &["name"];
@@ -35,6 +37,18 @@ pub trait BaseConfig: Sync {
 
     /// Supported OpenAI parameter names paired with their provider names.
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)];
+
+    fn map_openai_params(
+        &self,
+        _model: &str,
+        params: Map<String, Value>,
+    ) -> Result<Map<String, Value>, Decline> {
+        map_openai_param_names(
+            self.supported_openai_param_mappings(),
+            self.config_params(),
+            params,
+        )
+    }
 
     fn get_complete_url(
         &self,
@@ -98,6 +112,36 @@ pub trait BaseConfig: Sync {
     }
 }
 
+pub fn map_openai_param_names(
+    supported: &'static [(&'static str, &'static str)],
+    config: &'static [&'static str],
+    params: Map<String, Value>,
+) -> Result<Map<String, Value>, Decline> {
+    params
+        .into_iter()
+        .filter(|(_, value)| !value.is_null())
+        .map(|(name, value)| {
+            provider_param_name(supported, config, name)
+                .map(|provider_name| (provider_name, value))
+                .ok_or(Decline::new(UNRECOGNIZED_PARAM))
+        })
+        .collect()
+}
+
+fn provider_param_name(
+    supported: &'static [(&'static str, &'static str)],
+    config: &'static [&'static str],
+    name: String,
+) -> Option<String> {
+    if name == STREAM_PARAM || config.contains(&name.as_str()) {
+        return Some(name);
+    }
+    supported
+        .iter()
+        .find(|(openai_name, _)| *openai_name == name)
+        .map(|(_, provider_name)| (*provider_name).to_string())
+}
+
 pub fn unsupported_param(
     supported: &'static [(&'static str, &'static str)],
     config: &'static [&'static str],
@@ -119,7 +163,7 @@ pub fn unsupported_param(
                     .any(|(_, provider_name)| *provider_name == key)
                 && !config.contains(&key.as_str())
         })
-        .then_some(Decline::new("unrecognized request parameter"))
+        .then_some(Decline::new(UNRECOGNIZED_PARAM))
 }
 
 /// Message shapes the core can translate faithfully: text content, either a

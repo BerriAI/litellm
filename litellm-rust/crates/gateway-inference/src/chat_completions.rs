@@ -6,7 +6,7 @@ use axum::{
     extract::State,
     response::{IntoResponse, Response},
 };
-use litellm_inference_chat::types::ChatCompletionsCall;
+use litellm_inference_chat::types::{ChatCompletionsCall, OptionalParams};
 use serde_json::{Map, Value};
 
 use crate::{
@@ -62,10 +62,11 @@ async fn handle(
             ChatCompletionsCall {
                 model: deployment.model.clone(),
                 messages,
-                optional_params: body
-                    .into_iter()
-                    .filter(|(name, _)| !matches!(name.as_str(), "model" | "messages"))
-                    .collect(),
+                optional_params: OptionalParams::OpenAi(
+                    body.into_iter()
+                        .filter(|(name, _)| !matches!(name.as_str(), "model" | "messages"))
+                        .collect(),
+                ),
                 api_key: deployment.api_key.clone(),
                 api_base: deployment.api_base.clone(),
                 custom_llm_provider: deployment.custom_llm_provider.clone(),
