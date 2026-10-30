@@ -81,6 +81,7 @@ from litellm.responses.litellm_completion_transformation.tool_search import is_s
 from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALL_OUTPUT_ITEM_TYPES,
     LiteLLMCompletionResponsesConfig,
+    ResponsesInput,
     tool_output_to_chat_content,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -573,13 +574,14 @@ def _grouped_by_call_id(pairs: Iterable[tuple[str, _Grouped]]) -> Mapping[str, t
 
 
 def _texts_by_tool_row(
-    messages: Sequence[Mapping[str, object]], input_data: "str | ResponseInputParam"
+    messages: Sequence[Mapping[str, object]], input_data: ResponsesInput
 ) -> Mapping[int, tuple[str, ...]]:
     if isinstance(input_data, str):
         return MappingProxyType({})
+    input_items: Final = (input_data,) if isinstance(input_data, dict) else input_data
     output_texts_by_call_id: Final = _grouped_by_call_id(
         (str(stream_item_field(item, "call_id")), tuple(text for _, text in tool_output_texts(item)))
-        for item in input_data
+        for item in input_items
         if stream_item_field(item, "type") in TOOL_CALL_OUTPUT_ITEM_TYPES
     )
     row_indices_by_call_id: Final = _grouped_by_call_id(
@@ -724,10 +726,12 @@ class OpenAIResponsesHandler(BaseTranslation):
         `instructions` into chat completion messages.
         """
         input_data: Final = data.get("input")
-        if input_data is None:
+        if not isinstance(input_data, (str, dict, list, tuple)):
             return None
         messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-            input=input_data,
+            input=cast(  # cast-ok: runtime container shape is validated immediately above before Responses-specific parsing enforces each nested item type.
+                "ResponsesInput", input_data
+            ),
             responses_api_request=data,
         )
         return cast(list[AllMessageValues], messages) if messages else None
@@ -743,10 +747,12 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         Handles both string input and list of message objects.
         """
-        raw_input: Final[str | ResponseInputParam | None] = data.get("input")
-        if not isinstance(raw_input, (str, list)):
+        raw_input: Final = data.get("input")
+        if not isinstance(raw_input, (str, dict, list, tuple)):
             return data
-        input_data: Final = cast("str | ResponseInputParam", raw_input)  # cast-ok: fields read via stream_item_field
+        input_data: Final = cast(  # cast-ok: runtime container shape is validated immediately above before Responses-specific parsing enforces each nested item type.
+            "ResponsesInput", raw_input
+        )
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
         scan_only: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
@@ -822,7 +828,7 @@ class OpenAIResponsesHandler(BaseTranslation):
     async def _apply_guardrailed_texts(
         self,
         data: dict[str, object],
-        input_data: "str | ResponseInputParam",
+        input_data: ResponsesInput,
         extracted: _ExtractedInputs,
         guardrail_to_apply: "CustomGuardrail",
         guardrailed_inputs: GenericGuardrailAPIInputs,
@@ -842,7 +848,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             data["input"] = input_texts[0]  # rebind-ok: data is an out-param
             return
         await self._apply_guardrail_responses_to_input(
-            messages=input_data,
+            messages=(input_data,) if isinstance(input_data, dict) else input_data,
             responses=input_texts,
             task_mappings=extracted.task_mappings,
         )
@@ -850,7 +856,7 @@ class OpenAIResponsesHandler(BaseTranslation):
     def _extract_guardrail_inputs(
         self,
         data: Mapping[str, object],
-        input_data: "str | ResponseInputParam",
+        input_data: ResponsesInput,
         flattened_tool_groups: Sequence[Sequence[Mapping[str, object]]],
         *,
         skip_system: bool = False,
@@ -874,7 +880,8 @@ class OpenAIResponsesHandler(BaseTranslation):
             if not scan_only:
                 texts_to_check.append(input_data)
         else:
-            for msg_idx, message in enumerate(input_data):
+            input_messages: Final = (input_data,) if isinstance(input_data, dict) else input_data
+            for msg_idx, message in enumerate(input_messages):
                 if role_out_of_guardrail_scope(
                     _input_item_role(message),
                     skip_system_message=skip_system,

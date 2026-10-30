@@ -309,6 +309,40 @@ class TestOpenAIResponsesHandlerInputProcessing:
         assert result["model"] == "gpt-4"
 
     @pytest.mark.asyncio
+    async def test_process_input_dict_with_string_content(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = MockGuardrail(guardrail_name="test")
+        data = {
+            "input": {"role": "user", "content": "Hello", "type": "message"},
+            "model": "gpt-4",
+        }
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        result_input = result["input"]
+        assert isinstance(result_input, dict)
+        assert result_input["content"] == "Hello [GUARDRAILED]"
+
+    @pytest.mark.asyncio
+    async def test_process_input_dict_tool_output_lists_its_parts_in_structured_messages(self) -> None:
+        guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
+        request: Final = {
+            "input": {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": [{"type": "input_text", "text": "first "}, {"type": "input_text", "text": "output"}],
+            },
+            "model": "gpt-4",
+        }
+
+        await OpenAIResponsesHandler().process_input_messages(request, guardrail)
+
+        assert guardrail.seen_texts == [["first ", "output"]]
+        assert guardrail.seen_message_contents == [
+            [[{"type": "text", "text": "first "}, {"type": "text", "text": "output"}]]
+        ]
+
+    @pytest.mark.asyncio
     async def test_compaction_summary_is_scanned_and_rewritten_inside_its_item(self) -> None:
         affinity_prefix: Final = "litellm_enc:bW9kZWxfaWQ6ZGVwLWE=;"
         data: Final = {
