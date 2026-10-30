@@ -27,9 +27,8 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
-    UI_SETTINGS_CACHE_KEY,
-    UI_SETTINGS_CACHE_TTL,
     _ui_settings_db,
+    cache_ui_settings,
     normalize_moyai_url,
 )
 from litellm.proxy.utils import CONFIG_PARAMS_TARGET
@@ -234,7 +233,7 @@ async def _persist_moyai_url(prisma_client: "PrismaClient", moyai_url: str) -> N
             "update": {"ui_settings": json.dumps(ui_settings)},
         },
     )
-    await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
+    await cache_ui_settings(user_api_key_cache, ui_settings)
 
 
 @router.post(

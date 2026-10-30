@@ -4,6 +4,7 @@ import json
 import os
 from collections import Counter
 from collections.abc import Mapping, MutableMapping, Sequence
+from datetime import timedelta
 from types import MappingProxyType
 from typing import (
     Annotated,
@@ -23,6 +24,8 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.redis_batch import active_request_redis_batch
+from litellm.caching.redis_cache import RedisCache
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -45,6 +48,8 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import (
     is_ptu_cost_attribution_enabled,
 )
 from litellm.proxy.utils import CONFIG_PARAMS_TARGET, invalidate_config_param
+from litellm.redis.stores.ui_settings import TransportUISettingsStore, UISettingsStore, settings_key
+from litellm.redis.transport.contract import RedisFailure
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -1722,8 +1727,40 @@ async def update_mcp_tool_search_settings(
     )
 
 
-UI_SETTINGS_CACHE_KEY: Final = "ui_settings:settings_dict"
+UI_SETTINGS_CACHE_KEY: Final = settings_key()
 UI_SETTINGS_CACHE_TTL: Final = 600  # 10 minutes
+
+
+class _UISettingsCache(Protocol):
+    @property
+    def redis_cache(self) -> RedisCache | None: ...
+
+    async def async_get_cache(self, *, key: str, local_only: bool) -> object: ...
+
+    async def async_set_cache(self, *, key: str, value: object, local_only: bool, ttl: float | None = None) -> None: ...
+
+
+async def cache_ui_settings(cache: _UISettingsCache, settings: Mapping[str, object]) -> None:
+    await cache.async_set_cache(key=settings_key(), value=settings, ttl=UI_SETTINGS_CACHE_TTL, local_only=True)
+    if cache.redis_cache is not None:
+        store: Final[UISettingsStore] = TransportUISettingsStore(cache.redis_cache.transport())
+        await store.put(settings, ttl=timedelta(seconds=UI_SETTINGS_CACHE_TTL))
+
+
+async def _cached_ui_settings(cache: _UISettingsCache) -> object:
+    local: Final = _DECODED_JSON.validate_python(await cache.async_get_cache(key=settings_key(), local_only=True))
+    if local is not None or cache.redis_cache is None:
+        return local
+    batch: Final = active_request_redis_batch(cache.redis_cache)
+    if batch is not None and batch.read_as_missing(settings_key()):
+        return None
+    store: Final[UISettingsStore] = TransportUISettingsStore(cache.redis_cache.transport())
+    cached: Final = await store.get()
+    if isinstance(cached, RedisFailure):
+        return None
+    if cached is not None:
+        await cache.async_set_cache(key=settings_key(), value=cached, local_only=True)
+    return cached
 
 
 @with_service_target(CONFIG_PARAMS_TARGET)
@@ -1737,7 +1774,7 @@ async def get_ui_settings_cached() -> dict[str, JsonValue]:
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     # 1. Try cache
-    cached: Final = _DECODED_JSON.validate_python(await user_api_key_cache.async_get_cache(key=UI_SETTINGS_CACHE_KEY))
+    cached: Final = await _cached_ui_settings(user_api_key_cache)
     if cached is not None and isinstance(cached, dict):
         return cached
 
@@ -1757,7 +1794,7 @@ async def get_ui_settings_cached() -> dict[str, JsonValue]:
     ui_settings = {k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
 
     # 3. Populate cache with TTL
-    await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
+    await cache_ui_settings(user_api_key_cache, ui_settings)
 
     return ui_settings
 
@@ -1849,7 +1886,7 @@ async def get_ui_settings():
     # Refresh DualCache so other code paths (e.g. /user/filter/ui) see fresh values
     from litellm.proxy.proxy_server import user_api_key_cache
 
-    await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
+    await cache_ui_settings(user_api_key_cache, ui_settings)
 
     effective_ui_settings: Final[Mapping[str, object]] = MappingProxyType(
         {
@@ -2025,7 +2062,7 @@ async def update_ui_settings(
     from litellm.proxy.proxy_server import user_api_key_cache
 
     sanitized: Final = {k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
-    await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=sanitized, ttl=UI_SETTINGS_CACHE_TTL)
+    await cache_ui_settings(user_api_key_cache, sanitized)
 
     asyncio.create_task(
         create_config_audit_log(

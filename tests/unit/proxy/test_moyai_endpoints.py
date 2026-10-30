@@ -82,19 +82,9 @@ async def test_start_returns_connect_url_with_all_params(monkeypatch: pytest.Mon
 async def _exchange_env(monkeypatch: pytest.MonkeyPatch):
     from litellm.proxy import proxy_server
 
-    cache: dict = {}
-
-    async def _get(key: str):
-        return cache.get(key)
-
-    async def _set(key: str, value, ttl=None):
-        cache[key] = value
-
     monkeypatch.setattr(proxy_server, "master_key", "sk-master")
     monkeypatch.setattr(proxy_server, "llm_router", None)
-    user_api_key_cache = SimpleNamespace(
-        async_get_cache=AsyncMock(side_effect=_get), async_set_cache=AsyncMock(side_effect=_set)
-    )
+    user_api_key_cache: Final = DualCache()
     monkeypatch.setattr(proxy_server, "user_api_key_cache", user_api_key_cache)
 
     prisma = MagicMock()
@@ -277,33 +267,34 @@ async def test_exchange_concurrent_replay_claims_nonce_once(monkeypatch: pytest.
     assert len(mint_calls) == 1
 
 
-def _target_recording_cache(cache: DualCache) -> SimpleNamespace:
-    async def _set(key: str, value: object, **kwargs: object) -> None:
-        await cache.async_set_cache(key=f"{key}:service_target", value=current_service_target())
-        await cache.async_set_cache(key=key, value=value, **kwargs)
-
-    return SimpleNamespace(async_set_cache=_set)
-
-
 @pytest.mark.asyncio
 async def test_persist_moyai_url_writes_ui_settings_cache_under_config_params_target(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    import logging
+
+    import fakeredis
+
     from litellm.proxy import proxy_server
     from litellm.proxy.moyai_endpoints import _persist_moyai_url
     from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import UI_SETTINGS_CACHE_KEY
     from litellm.proxy.utils import CONFIG_PARAMS_TARGET
+    from tests._support.fake_redis import fake_redis_cache
 
-    cache: Final = DualCache()
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", _target_recording_cache(cache))
+    server: Final = fakeredis.FakeServer()
+    cache: Final = DualCache(redis_cache=fake_redis_cache(server))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    server.connected = False
 
     prisma: Final = MagicMock()
     prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
     prisma.db.litellm_uisettings.upsert = AsyncMock()
 
-    await _persist_moyai_url(prisma, "https://moyai.example.com")
+    with caplog.at_level(logging.WARNING):
+        await _persist_moyai_url(prisma, "https://moyai.example.com")
 
-    assert await cache.async_get_cache(key=f"{UI_SETTINGS_CACHE_KEY}:service_target") == CONFIG_PARAMS_TARGET
+    assert f"Redis set failed for {CONFIG_PARAMS_TARGET}" in caplog.text
     assert await cache.async_get_cache(key=UI_SETTINGS_CACHE_KEY) == {"moyai_url": "https://moyai.example.com"}
     assert current_service_target() is None
 
