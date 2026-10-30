@@ -28,6 +28,28 @@ from litellm.types.proxy.public_endpoints.public_endpoints import ProviderCreate
 from litellm.types.utils import LlmProviders
 
 
+def test_meta_model_api_fields_are_separate_from_meta_llama() -> None:
+    app: Final = FastAPI()
+    app.include_router(router)
+    response: Final = TestClient(app).get("/public/providers/fields")
+    assert response.status_code == 200
+    providers: Final = response.json()
+    meta: Final = next((p for p in providers if p["litellm_provider"] == "meta"), None)
+    llama: Final = next(p for p in providers if p["litellm_provider"] == "meta_llama")
+    assert meta is not None
+    assert meta["provider"] == "META"
+    assert meta["provider_display_name"] == "Meta Model API"
+    assert meta["default_model_placeholder"] == "meta/muse-spark-1.1"
+    fields: Final = {field["key"]: field for field in meta["credential_fields"]}
+    assert set(fields) == {"api_base", "api_key"}
+    assert fields["api_base"]["field_type"] == "text"
+    assert fields["api_key"]["field_type"] == "password"
+    assert fields["api_base"]["required"] is False
+    assert fields["api_key"]["required"] is False
+    assert llama["provider"] == "LLAMA"
+    assert llama["provider_display_name"] == "Meta Llama"
+
+
 def test_bigmodel_fields_require_private_key_and_share_default_base_with_adapter() -> None:
     from litellm.llms.bigmodel.common_utils import BIGMODEL_API_BASE
 
@@ -568,7 +590,6 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "libertai",
         "litellm_agent",
         "manus",
-        "meta",
         "modelscope",
         "mongodb",
         "nano-gpt",
