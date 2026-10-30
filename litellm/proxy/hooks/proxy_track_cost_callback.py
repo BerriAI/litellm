@@ -630,9 +630,15 @@ class _ProxyDBLogger(CustomLogger):
         from litellm.litellm_core_utils.litellm_logging import Logging
         from litellm.proxy.db.exception_handler import exception_chain
         from litellm.proxy.proxy_server import usage_capture
-        from litellm.proxy.spend_tracking.usage_capture import UsageAcknowledgementError
+        from litellm.proxy.spend_tracking.usage_capture import (
+            UnsupportedUsageAcknowledgementError,
+            UsageAcknowledgementError,
+        )
 
-        if any(isinstance(error, UsageAcknowledgementError) for error in exception_chain(original_exception)):
+        if any(
+            isinstance(error, (UsageAcknowledgementError, UnsupportedUsageAcknowledgementError))
+            for error in exception_chain(original_exception)
+        ):
             return
         usage_meter: Final = usage_capture.meter
 
@@ -642,8 +648,6 @@ class _ProxyDBLogger(CustomLogger):
         details: Final[Mapping[str, object]] = (
             _str_keyed_fields(logging_obj.model_call_details) if isinstance(logging_obj, Logging) else {}
         )
-        if details.get("call_type") == "IGNORE_THIS" and is_pre_routing_rejection(original_exception, request_data):
-            return
         params: Final = _str_keyed_fields(request_data.get("litellm_params") or details.get("litellm_params"))
         failure_data: Final = {
             **details,

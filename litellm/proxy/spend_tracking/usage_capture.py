@@ -37,6 +37,10 @@ if TYPE_CHECKING:
 from litellm.proxy.db.accounting_ledger import AccountingConflictError, UsageWrite
 
 
+class UnsupportedUsageAcknowledgementError(UsageCaptureError):
+    pass
+
+
 class UsageAcknowledgementError(UsageCaptureError):
     def __init__(self, cause: Exception) -> None:
         super().__init__("Usage persistence did not acknowledge commit")
@@ -513,9 +517,10 @@ def validate_sync_ack_request(
     if streaming or background or call_type not in {"acompletion", "atext_completion", "aembedding", "aresponses"}:
         from fastapi import HTTPException
 
-        raise HTTPException(
-            400, "accounting_sync_ack supports foreground non-stream chat, text, embedding and Responses requests"
+        rejection: Final = UnsupportedUsageAcknowledgementError(
+            "accounting_sync_ack supports foreground non-stream chat, text, embedding and Responses requests"
         )
+        raise HTTPException(400, str(rejection)) from rejection
 
 
 async def capture_proxy_response(logging_obj: object, response: object) -> None:

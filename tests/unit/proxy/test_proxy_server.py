@@ -4311,3 +4311,73 @@ async def test_capture_enablement_rejects_unrecoverable_writer_modes(
     with pytest.raises(ValueError, match="requires local Prisma"):
         proxy_server._configure_usage_capture()
     assert proxy_server.usage_capture.meter is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        (
+            "/v1/chat/completions",
+            {"model": "openai/gpt-5-mini", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+        ),
+        ("/v1/responses", {"model": "openai/gpt-5-mini", "input": "hi", "background": True}),
+        (
+            "/v1/ocr",
+            {
+                "model": "mistral/mistral-ocr-latest",
+                "document": {"type": "document_url", "document_url": "https://example.com/test.pdf"},
+            },
+        ),
+        (
+            "/v1/messages",
+            {"model": "openai/gpt-5-mini", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
+        ),
+    ],
+)
+async def test_sync_ack_policy_rejection_never_captures_usage(
+    path: str,
+    payload: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    respx_mock: respx.MockRouter,
+) -> None:
+    from fastapi import Request
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.db.accounting_ledger import UsageWrite
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
+
+    persisted: Final[asyncio.Queue[UsageWrite]] = asyncio.Queue()
+
+    async def persist(writes: tuple[UsageWrite, ...]) -> None:
+        for write in writes:
+            persisted.put_nowait(write)
+
+    async def authorize(request: Request) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(api_key="test-key", request_route=request.url.path)
+
+    runtime: Final = UsageCaptureRuntime()
+    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
+    monkeypatch.setattr(proxy_server, "general_settings", {"accounting_sync_ack": True})
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(UserApiKeyCache()))
+    monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger()])
+    monkeypatch.setitem(proxy_server.app.dependency_overrides, proxy_server.user_api_key_auth, authorize)
+    runtime.start(persist, UsageCaptureSettings())
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=proxy_server.app), base_url="http://test"
+        ) as client:
+            response: Final = await client.post(path, json=payload)
+    finally:
+        await runtime.stop(1)
+    assert response.status_code == 400
+    assert "accounting_sync_ack supports foreground non-stream" in response.text
+    assert len(respx_mock.calls) == 0
+    assert persisted.empty()
+    assert "Usage capture failed" not in caplog.text
