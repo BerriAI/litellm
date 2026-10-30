@@ -14,7 +14,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import finite_cost
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params, set_hidden_params
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -214,12 +214,10 @@ class OpenrouterConfig(OpenAIGPTConfig):
             response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
             response_provider: Final = response_json.get("provider")
             if isinstance(response_provider, str) and response_provider:
-                if not hasattr(model_response, HIDDEN_PARAMS_ATTR):
-                    set_hidden_params(model_response, {})
-                provider_hidden_params: Final = cast(  # cast-ok: OpenAI response hidden params use dict storage
-                    dict[str, object], getattr(model_response, HIDDEN_PARAMS_ATTR)
+                set_hidden_params(
+                    model_response,
+                    {**(get_hidden_params(model_response) or {}), "upstream_provider": response_provider},
                 )
-                provider_hidden_params["upstream_provider"] = response_provider
             if "usage" in response_json and response_json["usage"]:
                 response_cost: Final = _JSON_OBJECT.validate_python(response_json["usage"]).get("cost")
                 if response_cost is not None:
