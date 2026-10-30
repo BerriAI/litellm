@@ -446,7 +446,7 @@ def _request_has_trace_id(request_body: Mapping[str, object], request: Request, 
     from litellm.proxy.litellm_pre_call_utils import (
         _trace_id_from_traceparent,  # pyright: ignore[reportPrivateUsage]  # reuse W3C traceparent parser
         get_chain_id_from_headers,
-        metadata_variable_name_for_route,
+        metadata_variable_name_for_request,
     )
 
     if get_chain_id_from_headers(dict(request.headers)):
@@ -460,7 +460,7 @@ def _request_has_trace_id(request_body: Mapping[str, object], request: Request, 
         traceparent: Final[str | None] = request.headers.get("traceparent")
         if isinstance(traceparent, str) and _trace_id_from_traceparent(traceparent):
             return True
-    metadata_variable_name: Final = metadata_variable_name_for_route(get_request_route(request))
+    metadata_variable_name: Final = metadata_variable_name_for_request(get_request_route(request), request_body)
     selected_metadata: Final[object] = request_body.get(metadata_variable_name)
     if isinstance(selected_metadata, dict):
         selected_metadata_dict: Final = _TRACE_ID_METADATA_ADAPTER.validate_python(selected_metadata)
@@ -1372,11 +1372,15 @@ async def common_checks(
     if not skip_all_budget_checks:
         # Key metadata.tags are injected into request_body here so the tag budget
         # check can read them; this mutation must run before the gathered checks.
-        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_request
 
         if valid_token is not None:
             for tag_target in LiteLLMProxyRequestSetup.pre_auth_tag_merge_targets(request, request_body):
                 LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(request_data=tag_target, route=route)
+                LiteLLMProxyRequestSetup.merge_caller_body_tags(
+                    request_data=tag_target,
+                    metadata_variable_name=metadata_variable_name_for_request(route, tag_target),
+                )
                 LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(request_data=tag_target, user_api_key_dict=valid_token)
         LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, request_body)
 

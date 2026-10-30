@@ -4503,7 +4503,7 @@ class TestCursorInputArmFlattening:
 
 class TestChatCompletionsBodyDetection:
     def test_routing_matrix(self):
-        from litellm.proxy.response_api_endpoints.endpoints import _is_chat_completions_body
+        from litellm.proxy.litellm_pre_call_utils import is_chat_completions_body as _is_chat_completions_body
 
         assert _is_chat_completions_body({"messages": [{"role": "user", "content": "hi"}]}) is True
         assert _is_chat_completions_body({"messages": [{"role": "user", "content": "hi"}], "input": []}) is True
