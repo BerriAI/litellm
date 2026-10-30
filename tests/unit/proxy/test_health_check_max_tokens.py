@@ -11,6 +11,7 @@ import respx
 
 import litellm
 from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
+from litellm.litellm_core_utils.llm_request_utils import RankedChatModel
 from litellm.proxy import health_check as hc_module
 from litellm.proxy.health_check import (
     _is_strategy_router_deployment,
@@ -85,8 +86,10 @@ async def test_ahealth_check_wildcard_models_respects_max_tokens():
     """
     with (
         patch(
-            "litellm.litellm_core_utils.llm_request_utils.pick_cheapest_chat_models_from_llm_provider",
-            return_value=["gpt-4o-mini"],
+            "litellm.litellm_core_utils.llm_request_utils.rank_chat_models_from_llm_provider",
+            return_value=(
+                RankedChatModel(model="gpt-4o-mini", route_rank=0, cost=0.0, is_past_deprecation_date=False),
+            ),
         ),
         patch("litellm.acompletion", new_callable=AsyncMock),
     ):
