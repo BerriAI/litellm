@@ -1894,13 +1894,15 @@ def test_cohere_drop_params_rejects_unsupported_response_format(
     drop_params: bool | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    with pytest.raises(litellm.UnsupportedParamsError):
+    with pytest.raises(litellm.UnsupportedParamsError) as rejection:
         get_optional_params(
             model="command-r-plus-08-2024",
             custom_llm_provider="cohere",
             response_format={"type": "json_object"},
             drop_params=drop_params,
         )
+
+    assert rejection.value.response.status_code == rejection.value.status_code == 400
 
 
 @pytest.mark.respx(assert_all_called=True)

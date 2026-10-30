@@ -225,9 +225,9 @@ class NotFoundError(openai.NotFoundError):
 class BadRequestError(openai.BadRequestError):
     def __init__(
         self,
-        message,
-        model,
-        llm_provider,
+        message: str,
+        model: str | None,
+        llm_provider: str | None,
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
@@ -1035,17 +1035,16 @@ class UnsupportedParamsError(BadRequestError):
         max_retries: int | None = None,
         num_retries: int | None = None,
     ):
-        self.status_code = 400
-        self.message = f"litellm.UnsupportedParamsError: {message}"
-        self.model = model
-        self.llm_provider = llm_provider
-        self.litellm_debug_info = litellm_debug_info
-        response = response or httpx.Response(
-            status_code=self.status_code,
-            request=httpx.Request(method="GET", url="https://litellm.ai"),  # mock request object
+        super().__init__(
+            message=message,
+            model=model,
+            llm_provider=llm_provider,
+            response=response,
+            litellm_debug_info=litellm_debug_info,
+            max_retries=max_retries,
+            num_retries=num_retries,
         )
-        self.max_retries = max_retries
-        self.num_retries = num_retries
+        self.message = f"litellm.UnsupportedParamsError: {message}"
 
 
 LITELLM_EXCEPTION_TYPES: Final = [

@@ -1531,9 +1531,10 @@ async def async_pre_call_deployment_hook(kwargs: dict[str, Any], call_type: str)
     route: Final[object] = getattr(kwargs.get("litellm_logging_obj"), "call_type", None)
     resolved: Final = resolve_deployment_tool_fields(kwargs, route)
     if isinstance(resolved, MalformedField):
+        model: Final = kwargs.get("model")
         raise MalformedRequestFieldError(
             message=resolved.message,
-            model=kwargs.get("model"),
+            model=model if isinstance(model, str) else None,
             llm_provider=_deployment_provider(kwargs),
             body={"type": "invalid_request_error", "param": resolved.field},
         )

@@ -200,7 +200,7 @@ class ResponsesAPIRequestUtils:
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
-        allowed_openai_params: list[str] | None = None,
+        allowed_openai_params: Sequence[str] | None = None,
         drop_params: bool | None = None,
     ) -> dict:
         """
@@ -225,7 +225,7 @@ class ResponsesAPIRequestUtils:
         non_default_params: Final = cast(dict, response_api_optional_params)
         # Check for unsupported parameters
         ResponsesAPIRequestUtils._check_valid_arg(
-            supported_params=supported_params + (allowed_openai_params or []),
+            supported_params=[*supported_params, *(allowed_openai_params or ())],
             non_default_params=non_default_params,
             drop_params=should_drop_params,
             custom_llm_provider=responses_api_provider_config.custom_llm_provider,
@@ -252,7 +252,7 @@ class ResponsesAPIRequestUtils:
         return apply_openai_param_overrides(
             optional_params=params_with_normalized_stream_options,
             non_default_params=non_default_params,
-            allowed_openai_params=allowed_openai_params or [],
+            allowed_openai_params=list(allowed_openai_params or ()),
         )
 
     @staticmethod

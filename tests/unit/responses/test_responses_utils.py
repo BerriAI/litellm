@@ -1,5 +1,6 @@
 from importlib import import_module
 import base64
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -41,6 +42,28 @@ class TestResponsesAPIRequestUtils:
         assert result["max_output_tokens"] == 100
         assert "prompt" in result
         assert result["prompt"] == {"id": "pmpt_123"}
+
+    def test_get_optional_params_responses_api_forwards_a_param_a_tuple_allowlist_names(self):
+        result: Final = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+            model="gpt-4o",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            response_api_optional_params=ResponsesAPIOptionalRequestParams(
+                {"temperature": 0.7, "custom_flag": "on"}  # pyright: ignore[reportCallIssue]  # an unsupported key is the input under test
+            ),
+            allowed_openai_params=("custom_flag",),
+        )
+
+        assert result == {"temperature": 0.7, "custom_flag": "on"}
+
+    def test_get_optional_params_responses_api_treats_a_bare_string_allowlist_like_chat_completions(self):
+        result: Final = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+            model="gpt-4o",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            response_api_optional_params=ResponsesAPIOptionalRequestParams({"temperature": 0.7}),
+            allowed_openai_params="temperature",
+        )
+
+        assert result == {"temperature": 0.7}
 
     def test_get_optional_params_responses_api_unsupported_param(self):
         """Test that unsupported parameters raise an error"""
