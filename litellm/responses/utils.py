@@ -7,7 +7,7 @@ from itertools import chain
 from types import MappingProxyType
 from typing import Any, Final, Optional, TypeVar, Union, cast, get_args, get_type_hints, overload
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypedDict as ExtraItemsTypedDict
 from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire payloads without a runtime conversion
 
@@ -15,7 +15,6 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, iter_items
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
-from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig, ReasoningSummaryLevel
 from litellm.types.llms.openai import (
@@ -1423,27 +1422,44 @@ def _openai_model_info(model: str) -> ModelInfo | None:
     return None if isinstance(model_info, ModelInfoLookupMiss) else model_info
 
 
-class _ReasoningDeclarations(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore")
-
-    litellm_provider: str | None = None
-    reasoning_modes: tuple[str, ...] | None = None
-    reasoning_contexts: tuple[str, ...] | None = None
+def _declared_strings(rows: Iterable[Mapping[str, object]], field: str) -> frozenset[str]:
+    return frozenset(chain.from_iterable(_string_items(row.get(field)) for row in rows))
 
 
-_BUNDLED_REASONING_DECLARATIONS: Final = TypeAdapter(dict[str, _ReasoningDeclarations])
+def _string_items(values: object) -> tuple[str, ...]:
+    listed: Final = iter_items(values) if type(values) in (list, tuple) else ()
+    return tuple(value for value in listed if isinstance(value, str))
+
+
+_NO_COST_MAP: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _model_cost() -> Mapping[str, object]:
+    model_cost: Final = as_str_mapping(attribute_or_none(litellm, "model_cost"))
+    return _NO_COST_MAP if model_cost is None else model_cost
 
 
 @lru_cache(maxsize=1)
-def _reasoning_values_any_openai_row_declares() -> Mapping[str, frozenset[str]]:
-    bundled: Final = _BUNDLED_REASONING_DECLARATIONS.validate_json(GetModelCostMap.read_local_model_cost_map_text())
-    openai_rows: Final = tuple(row for row in bundled.values() if row.litellm_provider == "openai")
+def _reasoning_values_declared_in_cost_map(
+    _cost_map_id: int, _cost_map_generation: int
+) -> Mapping[str, frozenset[str]]:
+    openai_rows: Final = tuple(
+        row
+        for row in map(as_str_mapping, tuple(_model_cost().values()))
+        if row is not None and row.get("litellm_provider") == "openai"
+    )
     return MappingProxyType(
         {
-            "mode": frozenset(chain.from_iterable(row.reasoning_modes or () for row in openai_rows)),
-            "context": frozenset(chain.from_iterable(row.reasoning_contexts or () for row in openai_rows)),
+            "mode": _declared_strings(openai_rows, "reasoning_modes"),
+            "context": _declared_strings(openai_rows, "reasoning_contexts"),
         }
     )
+
+
+def _reasoning_values_any_openai_row_declares() -> Mapping[str, frozenset[str]]:
+    from litellm.utils import get_model_cost_mutation_generation
+
+    return _reasoning_values_declared_in_cost_map(id(_model_cost()), get_model_cost_mutation_generation())
 
 
 def _declared_values(values: Sequence[str] | None, undeclared: frozenset[str]) -> frozenset[str | None]:
@@ -1463,38 +1479,49 @@ def _openai_declared_reasoning_field_values(model_info: ModelInfo | None) -> Map
     )
 
 
-def _openai_reasoning_field_values(model: str) -> Mapping[str, frozenset[str | None] | None]:
-    model_info: Final = _openai_model_info(model)
-    if model_info is not None and not model_info.get("supports_reasoning"):
-        return MappingProxyType({})
-    return _openai_declared_reasoning_field_values(model_info)
-
-
 def _openai_accepts_reasoning_field(
-    key: str, value: object, values_by_field: Mapping[str, frozenset[str | None] | None]
+    key: str,
+    value: object,
+    values_by_field: Mapping[str, frozenset[str | None] | None],
+    *,
+    keeps_unlisted_keys: bool,
 ) -> bool:
     if key == "effort":
         return True
     if key not in values_by_field:
-        return False
+        return keeps_unlisted_keys
     allowed: Final = values_by_field[key]
     return allowed is None or (isinstance(value, str | None) and value in allowed)
 
 
 def _reasoning_with_accepted_fields(
-    reasoning: Mapping[str, object], values_by_field: Mapping[str, frozenset[str | None] | None]
+    reasoning: Mapping[str, object],
+    values_by_field: Mapping[str, frozenset[str | None] | None],
+    *,
+    keeps_unlisted_keys: bool = False,
 ) -> Mapping[str, object]:
     return {
-        key: value for key, value in reasoning.items() if _openai_accepts_reasoning_field(key, value, values_by_field)
+        key: value
+        for key, value in reasoning.items()
+        if _openai_accepts_reasoning_field(key, value, values_by_field, keeps_unlisted_keys=keeps_unlisted_keys)
     }
 
 
 def _openai_accepted_reasoning(reasoning: Mapping[str, object], model: str) -> Mapping[str, object]:
-    return _reasoning_with_accepted_fields(reasoning, _openai_reasoning_field_values(model))
+    model_info: Final = _openai_model_info(model)
+    if model_info is None:
+        return openai_api_well_formed_reasoning(reasoning, keeps_unlisted_keys=True)
+    if not model_info.get("supports_reasoning"):
+        return _reasoning_with_accepted_fields(reasoning, MappingProxyType({}))
+    return _reasoning_with_accepted_fields(reasoning, _openai_declared_reasoning_field_values(model_info))
 
 
-def openai_api_well_formed_reasoning(reasoning: Mapping[str, object]) -> Mapping[str, object]:
-    return _reasoning_with_accepted_fields(reasoning, _openai_declared_reasoning_field_values(None))
+def openai_api_well_formed_reasoning(
+    reasoning: Mapping[str, object], *, keeps_unlisted_keys: bool
+) -> Mapping[str, object]:
+    return _reasoning_with_accepted_fields(
+        reasoning, _openai_declared_reasoning_field_values(None), keeps_unlisted_keys=keeps_unlisted_keys
+    )
 
 
 def openai_well_formed_reasoning(

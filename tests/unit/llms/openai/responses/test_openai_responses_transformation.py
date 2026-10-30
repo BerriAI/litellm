@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from collections.abc import Callable, Mapping
 from types import SimpleNamespace
 from typing import Final, cast
@@ -12,6 +13,7 @@ from openai.types.responses.response_compaction_item import ResponseCompactionIt
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.responses.o_series_transformation import AzureOpenAIOSeriesResponsesAPIConfig
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
@@ -36,7 +38,6 @@ from litellm.types.llms.openai import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import Choices, Message, ModelResponse
 from tests.unit.proxy.conftest import httpx_transport
-import time
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 
@@ -3348,6 +3349,9 @@ class TestMalformedParamsFollowDropParams:
             pytest.param({"parallel_tool_calls": "true"}, id="parallel-tool-calls-string"),
             pytest.param({"previous_response_id": 12}, id="previous-response-id-int"),
             pytest.param({"previous_response_id": ""}, id="previous-response-id-empty"),
+            pytest.param({"tool_choice": 5, "tools": [_WEATHER_TOOL]}, id="tool-choice-a-number-with-tools"),
+            pytest.param({"tool_choice": ["get_time"], "tools": [_WEATHER_TOOL]}, id="tool-choice-a-list-with-tools"),
+            pytest.param({"reasoning": "high"}, id="reasoning-not-an-object"),
         ],
     )
     def test_a_malformed_value_is_dropped_under_drop_params_and_sent_as_is_without(
@@ -3419,7 +3423,6 @@ class TestMalformedParamsFollowDropParams:
         "params",
         [
             pytest.param({"tool_choice": {"name": "get_time"}, "tools": [_WEATHER_TOOL]}, id="choice-without-a-type"),
-            pytest.param({"tool_choice": ["get_time"], "tools": [_WEATHER_TOOL]}, id="choice-not-an-object"),
             pytest.param(
                 {"tool_choice": {"type": "function", "name": "get_time"}, "tools": _WEATHER_TOOL}, id="tools-not-a-list"
             ),
@@ -3536,11 +3539,10 @@ class TestMalformedParamsFollowDropParams:
         [
             (AzureOpenAIResponsesAPIConfig(), "gpt-6.1-sol"),
             (AzureOpenAIOSeriesResponsesAPIConfig(), "o_series/gpt-6.1-sol"),
-            (OpenAIResponsesAPIConfig(), "my-fine-tuned-model"),
         ],
-        ids=["azure", "azure-o-series", "outside-openai-catalog"],
+        ids=["azure", "azure-o-series"],
     )
-    def test_reasoning_values_no_openai_row_declares_are_dropped_where_the_openai_catalog_does_not_apply(
+    def test_azure_drops_reasoning_values_and_keys_no_openai_row_declares(
         self, local_model_cost_map, monkeypatch, config, model
     ):
         monkeypatch.setattr(litellm, "drop_params", False)
@@ -3566,6 +3568,33 @@ class TestMalformedParamsFollowDropParams:
         assert dropped["reasoning"] == {"effort": "high"}
         assert kept["reasoning"] == declared
         assert sent["reasoning"] == malformed
+
+    def test_an_openai_model_outside_the_catalog_keeps_reasoning_keys_openai_does_not_define(
+        self, local_model_cost_map, monkeypatch
+    ):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        server_keys: Final = {"max_tokens": 2000, "exclude": True}
+        requested: Final = {"effort": "high", "mode": "turbo", "context": "forever", "summary": "sometimes", **server_keys}
+
+        dropped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+            {"reasoning": dict(requested)}, "my-org/qwen3-32b", True
+        )
+
+        assert dropped["reasoning"] == {"effort": "high", **server_keys}
+
+    def test_a_reasoning_mode_a_reloaded_cost_map_declares_is_kept_on_azure(self, local_model_cost_map):
+        row: Final = litellm.model_cost["gpt-6.1-sol"]
+        new_mode: Final = "-".join(row["reasoning_modes"]) + "-next"
+        request: Final = {"reasoning": {"effort": "high", "mode": new_mode}}
+
+        before_reload: Final = AzureOpenAIResponsesAPIConfig().map_openai_params(dict(request), "gpt-6.1-sol", True)
+        adopt_model_cost_map(
+            {**litellm.model_cost, "gpt-6.1-sol": {**row, "reasoning_modes": [*row["reasoning_modes"], new_mode]}}
+        )
+        after_reload: Final = AzureOpenAIResponsesAPIConfig().map_openai_params(dict(request), "gpt-6.1-sol", True)
+
+        assert before_reload["reasoning"] == {"effort": "high"}
+        assert after_reload == request
 
 
 @pytest.mark.asyncio

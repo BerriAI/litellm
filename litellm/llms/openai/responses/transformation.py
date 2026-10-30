@@ -335,7 +335,7 @@ def _tool_mappings(tools: object) -> tuple[Mapping[str, object], ...]:
 def _names_a_sent_tool(tool_choice: object, tools: tuple[Mapping[str, object], ...]) -> bool:
     choice: Final = as_str_mapping(tool_choice)
     if choice is None:
-        return True
+        return False
     match choice.get("type"):
         case "allowed_tools":
             allowed: Final = choice.get("tools")
@@ -375,6 +375,8 @@ def _is_well_formed(name: str, value: object, params: Mapping[str, object]) -> b
             return value is None or isinstance(value, bool)
         case "previous_response_id":
             return value is None or (isinstance(value, str) and value != "")
+        case "reasoning":
+            return value is None or as_str_mapping(value) is not None
         case _:
             return True
 
@@ -536,8 +538,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def _accepted_reasoning(self, reasoning: Mapping[str, object], model: str) -> Mapping[str, object]:
         if self.custom_llm_provider not in _PROVIDERS_CHECKED_FOR_MALFORMED_VALUES:
             return reasoning
-        if self.custom_llm_provider != LlmProviders.OPENAI or not OpenAIGPTConfig.is_openai_catalog_model(model):
-            return openai_api_well_formed_reasoning(reasoning)
+        if self.custom_llm_provider != LlmProviders.OPENAI:
+            return openai_api_well_formed_reasoning(reasoning, keeps_unlisted_keys=False)
+        if not OpenAIGPTConfig.is_openai_catalog_model(model):
+            return openai_api_well_formed_reasoning(reasoning, keeps_unlisted_keys=True)
         return openai_well_formed_reasoning(reasoning, model, model_reasons=self._supports_reasoning_param(model=model))
 
     def _is_well_formed_effort(self, effort: object, declared_reasoning_efforts: Collection[str] | None) -> bool:
