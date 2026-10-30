@@ -36,6 +36,7 @@ from litellm import Router, verbose_logger
 from litellm._internal_context import with_service_target
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_batch import active_request_redis_batch
 from litellm.constants import (
     BATCH_OUTPUT_FILE_FALLBACK_RETRY_AFTER_SECONDS,
     BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS,
@@ -93,6 +94,8 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_metadata,
 )
+from litellm.redis.stores.managed_files import ManagedFileStore, TransportManagedFileStore, file_key
+from litellm.redis.transport.contract import RedisFailure
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
@@ -578,6 +581,12 @@ def _keyed_get(source: object, key: str, default: object = None) -> object:
     return require_attributes(source, _SupportsKeyedGet, "get").get(key, default)
 
 
+class _LocalMetadataCache(Protocol):
+    async def async_get_cache(self, key: str, *, local_only: bool) -> object: ...
+
+    async def async_set_cache(self, key: str, value: object, *, local_only: bool) -> None: ...
+
+
 class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     # Class variables or attributes
     def __init__(
@@ -592,6 +601,46 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         self.prisma_client = prisma_client
         self._sleep = sleep
         self._clock = clock
+
+    def _metadata_cache(self) -> DualCache:
+        if isinstance(self.internal_usage_cache, DualCache):
+            return self.internal_usage_cache
+        return self.internal_usage_cache.dual_cache
+
+    async def _cache_file(self, file_id: str, record: Mapping[str, object] | None) -> None:
+        cache: Final = self._metadata_cache()
+        local_cache: Final = require_attributes(cache, _LocalMetadataCache, "async_get_cache", "async_set_cache")
+        await local_cache.async_set_cache(file_key(file_id), record, local_only=True)
+        if cache.redis_cache is None:
+            return
+        store: Final[ManagedFileStore] = TransportManagedFileStore(cache.redis_cache.transport())
+        seconds: Final = (
+            int(cache.default_in_memory_ttl)
+            if cache.default_in_memory_ttl is not None
+            else cache.redis_cache.default_ttl
+        )
+        ttl: Final = timedelta(seconds=seconds)
+        if record is None:
+            await store.invalidate_file(file_id, ttl=ttl)
+        else:
+            await store.write_file(file_id, record, ttl=ttl)
+
+    async def _cached_file(self, file_id: str) -> object:
+        cache: Final = self._metadata_cache()
+        local_cache: Final = require_attributes(cache, _LocalMetadataCache, "async_get_cache", "async_set_cache")
+        local: Final = await local_cache.async_get_cache(file_key(file_id), local_only=True)
+        if local is not None or cache.redis_cache is None:
+            return local
+        request_batch: Final = active_request_redis_batch(cache.redis_cache)
+        if request_batch is not None and request_batch.read_as_missing(file_key(file_id)):
+            return None
+        store: Final[ManagedFileStore] = TransportManagedFileStore(cache.redis_cache.transport())
+        result: Final = await store.read_file(file_id)
+        if isinstance(result, RedisFailure):
+            return None
+        if result is not None:
+            await local_cache.async_set_cache(file_key(file_id), result, local_only=True)
+        return result
 
     @staticmethod
     def _get_prometheus_logger():
@@ -623,11 +672,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 storage_backend=storage_metadata.get("storage_backend"),
                 storage_url=storage_metadata.get("storage_url"),
             )
-            await self.internal_usage_cache.async_set_cache(
-                key=file_id,
-                value=litellm_managed_file_object.model_dump(),
-                litellm_parent_otel_span=litellm_parent_otel_span,
-            )
+            await self._cache_file(file_id, litellm_managed_file_object.model_dump())
 
         ## STORE MODEL MAPPINGS IN DB
 
@@ -820,13 +865,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         self, file_id: str, litellm_parent_otel_span: Optional[Span] = None
     ) -> Optional[LiteLLM_ManagedFileTable]:
         ## CHECK CACHE
-        result = cast(
-            Optional[dict],
-            await self.internal_usage_cache.async_get_cache(
-                key=file_id,
-                litellm_parent_otel_span=litellm_parent_otel_span,
-            ),
-        )
+        result: Final = await self._cached_file(file_id)
 
         if result:
             return LiteLLM_ManagedFileTable.model_validate(result)
@@ -847,11 +886,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if initial_value is None:
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
         ## delete old value
-        await self.internal_usage_cache.async_set_cache(
-            key=file_id,
-            value=None,
-            litellm_parent_otel_span=litellm_parent_otel_span,
-        )
+        await self._cache_file(file_id, None)
         await _managed_file_table(self.prisma_client).delete(where={"unified_file_id": file_id})
         return initial_value.file_object
 
@@ -1098,11 +1133,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if not await ManagedFileRepository(self.prisma_client).update_file_object(stored.unified_file_id, file_object):
             return
         refreshed_row: Final = stored.model_copy(update={"file_object": file_object})
-        await self.internal_usage_cache.async_set_cache(
-            key=stored.unified_file_id,
-            value=refreshed_row.model_dump(),
-            litellm_parent_otel_span=None,
-        )
+        await self._cache_file(stored.unified_file_id, refreshed_row.model_dump())
 
     async def _save_xai_refreshed_file_object(
         self,
@@ -1117,14 +1148,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             sized_file_object,
             if_file_object=_stored_json_text(stored.file_object) if stored.file_object is not None else None,
         ):
-            await self.internal_usage_cache.async_set_cache(
-                key=stored.unified_file_id, value=None, litellm_parent_otel_span=None
-            )
+            await self._cache_file(stored.unified_file_id, None)
             return None
-        await self.internal_usage_cache.async_set_cache(
-            key=stored.unified_file_id,
-            value=stored.model_copy(update={"file_object": sized_file_object}).model_dump(),
-            litellm_parent_otel_span=None,
+        await self._cache_file(
+            stored.unified_file_id, stored.model_copy(update={"file_object": sized_file_object}).model_dump()
         )
         return sized_file_object
 

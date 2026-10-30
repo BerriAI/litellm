@@ -1783,8 +1783,7 @@ async def test_store_unified_file_id_updates_file_metadata_on_existing_row():
     prisma_client.db.litellm_managedfiletable.upsert = AsyncMock(
         return_value=MagicMock()
     )
-    internal_usage_cache = MagicMock()
-    internal_usage_cache.async_set_cache = AsyncMock()
+    internal_usage_cache = DualCache()
 
     proxy_managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=internal_usage_cache,
@@ -3404,9 +3403,10 @@ async def test_afile_delete_returns_provider_response_when_stored_file_object_no
     )
     prisma_client.db.litellm_managedfiletable.delete = AsyncMock()
 
-    internal_usage_cache = MagicMock()
-    internal_usage_cache.async_get_cache = AsyncMock(
-        return_value={
+    internal_usage_cache = DualCache()
+    await internal_usage_cache.async_set_cache(
+        key=unified_file_id,
+        value={
             "unified_file_id": unified_file_id,
             "model_mappings": {"model-123": "file-provider-xyz"},
             "flat_model_file_ids": ["file-provider-xyz"],
@@ -3415,7 +3415,6 @@ async def test_afile_delete_returns_provider_response_when_stored_file_object_no
             "updated_by": "test-user",
         }
     )
-    internal_usage_cache.async_set_cache = AsyncMock()
 
     proxy_managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=internal_usage_cache,

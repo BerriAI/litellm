@@ -1402,9 +1402,9 @@ def _make_real_managed_files_instance():
         PROXY_LiteLLMManagedFiles,
     )
 
-    mock_cache = MagicMock()
-    mock_cache.async_get_cache = AsyncMock(return_value=None)
-    mock_cache.async_set_cache = AsyncMock()
+    from litellm.caching.dual_cache import DualCache
+
+    mock_cache = DualCache()
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
