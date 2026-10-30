@@ -1320,6 +1320,108 @@ def test_anthropic_messages_pt_keeps_png_image_url_as_image() -> None:
     }
 
 
+@pytest.mark.parametrize("llm_provider", ("anthropic", "vertex_ai"))
+def test_anthropic_messages_pt_converts_plain_text_data_uri_to_document(llm_provider: str) -> None:
+    text_data = "aGVsbG8gd29ybGQ="
+    result: Final = anthropic_messages_pt(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize"},
+                    {"type": "image_url", "image_url": {"url": f"data:text/plain;base64,{text_data}"}},
+                ],
+            }
+        ],
+        model="claude-opus-5-5",
+        llm_provider=llm_provider,
+    )
+
+    assert result[0]["content"][1] == {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "text/plain", "data": text_data},
+    }
+
+
+@pytest.mark.parametrize(
+    ("url_input", "format_param"),
+    (
+        ("https://example.com/document.pdf", None),
+        ("https://example.com/document.pdf#page=1", None),
+        ("https://example.com/document.pdf?token=xyz#page=1", None),
+        ({"url": "https://example.com/document.pdf"}, None),
+        ({"url": "https://example.com/download?id=42", "format": "application/pdf"}, None),
+        ("https://example.com/download?id=42", "application/pdf"),
+    ),
+)
+def test_create_anthropic_image_param_converts_pdf_url_to_document(
+    monkeypatch: pytest.MonkeyPatch, url_input: str | dict, format_param: str | None
+) -> None:
+    pdf_data = "JVBERi0xLjQK"
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64",
+        lambda url: f"data:application/pdf;base64,{pdf_data}",
+    )
+    result = create_anthropic_image_param(url_input, format=format_param)
+
+    assert result == {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_data},
+    }
+
+
+def test_anthropic_messages_pt_converts_pdf_url_to_document(monkeypatch: pytest.MonkeyPatch) -> None:
+    pdf_data = "JVBERi0xLjQK"
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64",
+        lambda url: f"data:application/pdf;base64,{pdf_data}",
+    )
+    result: Final = anthropic_messages_pt(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "review"},
+                    {"type": "image_url", "image_url": "https://example.com/spec.pdf"},
+                ],
+            }
+        ],
+        model="claude-3-7-sonnet",
+        llm_provider="anthropic",
+    )
+
+    assert result[0]["content"][1] == {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_data},
+    }
+
+
+def test_anthropic_messages_pt_converts_plain_text_url_to_document(monkeypatch: pytest.MonkeyPatch) -> None:
+    text_data = "aGVsbG8="
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64",
+        lambda url: f"data:text/plain;base64,{text_data}",
+    )
+    result: Final = anthropic_messages_pt(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "review"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/log.txt", "format": "text/plain"}},
+                ],
+            }
+        ],
+        model="claude-3-7-sonnet",
+        llm_provider="anthropic",
+    )
+
+    assert result[0]["content"][1] == {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "text/plain", "data": text_data},
+    }
+
+
 EMPTY_USER_MESSAGES: Final = pytest.mark.parametrize(
     "empty_user_message",
     [{"role": "user", "content": None}, {"role": "user", "content": []}, {"role": "user"}],
