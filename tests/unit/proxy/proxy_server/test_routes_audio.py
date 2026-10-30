@@ -14,9 +14,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
+from litellm import Router
 from litellm.proxy import proxy_server
+from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.router import RouterErrors
+
+_TAG_ROUTING_DENIAL = f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model=tts-1 and tags=['x']"
 
 
 @pytest.fixture
@@ -208,7 +214,8 @@ def test_audio_speech_error(client, auth_as, patched_speech_error, path):
     with auth_as():
         response = client.post(path, json=payload)
     assert response.status_code == 500
-    assert len(response.content) > 0
+    error = response.json()["error"]
+    assert (error["type"], error["param"]) == ("internal_server_error", None)
 
 
 def test_audio_speech_bad_request_maps_to_400(client, auth_as, patched_speech_provider_rejection):
@@ -243,6 +250,104 @@ def test_audio_transcription_happy_path(client, auth_as, patched_transcription, 
         "text_field": "hello world",
         "media_type_hint": "application/json",
     }
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"])
+def test_audio_transcription_over_the_file_size_cap_is_rejected_as_a_bad_request(
+    client, auth_as, patched_transcription, monkeypatch, path
+):
+    from litellm.proxy.common_utils.http_parsing_utils import check_file_size_under_limit
+
+    capped_router = Router(
+        model_list=[
+            {"model_name": "whisper-1", "litellm_params": {"model": "openai/whisper-1", "max_file_size_mb": 0.000001}}
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", capped_router)
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setattr(proxy_server, "check_file_size_under_limit", check_file_size_under_limit)
+    files = {"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")}
+    with auth_as():
+        response = client.post(path, files=files, data={"model": "whisper-1"})
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert "File size is too large" in error["message"]
+    assert error["param"] == "file"
+
+
+def test_audio_speech_tag_routing_denial_is_typed_as_a_proxy_auth_error(
+    client, auth_as, patched_speech_error, monkeypatch
+):
+    async def _deny(*args, **kwargs):
+        raise ValueError(_TAG_ROUTING_DENIAL)
+
+    monkeypatch.setattr(proxy_server, "route_request", _deny)
+    with auth_as():
+        response = client.post("/v1/audio/speech", json={"model": "tts-1", "input": "Hi", "voice": "alloy"})
+    assert response.status_code == 401
+    error = response.json()["error"]
+    assert (error["type"], error["param"]) == ("auth_error", None)
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_status", "expected_type"),
+    [
+        pytest.param(ValueError(_TAG_ROUTING_DENIAL), 401, "auth_error", id="tag_routing_denial"),
+        pytest.param(
+            HTTPException(status_code=403, detail="Blocked by the content policy"),
+            403,
+            "permission_error",
+            id="hook_policy_block",
+        ),
+    ],
+)
+def test_audio_transcription_failure_is_typed_by_who_rejected_it(
+    client, auth_as, patched_transcription, monkeypatch, failure, expected_status, expected_type
+):
+    async def _deny(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(proxy_server, "route_request", _deny)
+    files = {"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")}
+    with auth_as():
+        response = client.post("/v1/audio/transcriptions", files=files, data={"model": "whisper-1"})
+    assert response.status_code == expected_status
+    error = response.json()["error"]
+    assert (error["type"], error["param"]) == (expected_type, None)
+
+
+@pytest.mark.parametrize(
+    "rejection",
+    [
+        pytest.param(
+            ProxyException(
+                message="Invalid type for 'metadata': expected an object, but got an integer instead.",
+                type=ProxyErrorTypes.bad_request_error,
+                param="metadata",
+                code=400,
+            ),
+            id="bad_metadata",
+        ),
+        pytest.param(
+            ProxyException(
+                message="tag budgets are unavailable", type=ProxyErrorTypes.no_db_connection, param=None, code=503
+            ),
+            id="tag_budget_store_down",
+        ),
+    ],
+)
+def test_audio_transcription_keeps_the_status_of_a_proxy_rejection(
+    client, auth_as, patched_transcription, monkeypatch, rejection
+):
+    async def _reject(data, **kwargs):
+        raise rejection
+
+    monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _reject)
+    files = {"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")}
+    with auth_as():
+        response = client.post("/v1/audio/transcriptions", files=files, data={"model": "whisper-1"})
+    assert response.status_code == int(rejection.code)
+    assert response.json()["error"] == rejection.to_dict()
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"])

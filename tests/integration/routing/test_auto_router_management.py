@@ -9,7 +9,7 @@ import httpx
 import pytest
 import yaml
 from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value, until_asserted
-from integration._support.database import read_rows, scratch_database
+from integration._support.database import read_rows, scratch_database, write_rows
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
@@ -639,3 +639,25 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
         ), response.text
         assert tuple(request for request in complex_tier.drain() if request.method == "POST") == (), response.text
         assert tuple(request for request in baseline.drain() if request.method == "POST") == (), response.text
+
+
+@pytest.mark.parametrize("api_key,expected", [("unattributed", 2.0), ("raw:unattributed", 4.0)])
+def test_benchmarks_preserve_literal_key_identity(gateway: Gateway, api_key: str, expected: float) -> None:
+    user_id: Final = f"benchmark-key-{uuid.uuid4().hex}"
+    for key, savings in (("", 3.0), ("unattributed", 2.0), ("raw:unattributed", 4.0)):
+        write_rows(
+            'INSERT INTO "LiteLLM_DailyUserSpend" '
+            "(id, user_id, date, api_key, model, autorouter_savings_spend, updated_at) "
+            "VALUES (%s, %s, '2026-09-09', %s, 'model', %s, now())",
+            (str(uuid.uuid4()), user_id, key, str(savings)),
+        )
+    try:
+        response: Final = gateway.request(
+            "GET",
+            "/auto_router/benchmarks",
+            params={"start_date": "2026-09-09", "end_date": "2026-09-09", "user_id": user_id, "api_key": api_key},
+        )
+        assert response.status_code == 200, response.text
+        assert object_value(object_value(response.json())["totals"])["saved_spend"] == expected
+    finally:
+        write_rows('DELETE FROM "LiteLLM_DailyUserSpend" WHERE user_id = %s', (user_id,))

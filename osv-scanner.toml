@@ -79,11 +79,6 @@ ignoreUntil = 2026-11-27
 reason = "tornado 6.6 (published 2026-10-21) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 6.5.10 while 3.11+ locks 6.6; litellm starts no tornado server or client, since semantic-router and aurelio-sdk only declare it and tenacity and sentry-sdk import it only to wrap tornado code when it is present, so tornado's chunked body reading is never reached; remove this entry once 3.10 is dropped"
 
 [[IgnoredVulns]]
-id = "GHSA-w8v5-vhqr-4h9v"
-ignoreUntil = 2026-11-27
-reason = "diskcache still has no fixed release published (checked 2026-10-28), and it is reached only through the optional caching extra; remove this entry once one exists"
-
-[[IgnoredVulns]]
 id = "GHSA-45c3-73f7-pv4m"
 ignoreUntil = 2026-11-27
 reason = "dnspython 2.9.0 (published 2026-10-09) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 2.8.0 while 3.11+ locks 2.9.0; the advisory is CPU use in dns.name.from_wire_parser and litellm only reaches dnspython through pydantic EmailStr, which never does DNS lookups; remove this entry once 3.10 is dropped or a 3.10-compatible fix ships"

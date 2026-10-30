@@ -36,7 +36,7 @@ const ACCEPTED_DOCUMENT_TYPES = [
 
 const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024;
 
-const RAG_INGEST_UNSUPPORTED_PROVIDERS = new Set(["valkey"]);
+const RAG_INGEST_UNSUPPORTED_PROVIDERS = new Set(["valkey", "opensearch"]);
 
 const providerItems = Object.entries(VectorStoreProviders)
   .filter(([providerEnum]) => !RAG_INGEST_UNSUPPORTED_PROVIDERS.has(vectorStoreProviderMap[providerEnum]))
