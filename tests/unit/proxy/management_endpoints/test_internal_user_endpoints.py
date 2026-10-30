@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import fakeredis
 import httpx
 import pytest
 from fastapi import HTTPException
@@ -41,6 +42,7 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
 from litellm.proxy.proxy_server import app
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
+from tests._support.fake_redis import fake_redis_cache
 from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
     JWTMappingRow,
@@ -4419,8 +4421,7 @@ async def test_user_update_persists_mcp_entitlement_and_links_it(mocker):
     )
 
     mock_prisma_client = _object_permission_mocks(mocker)
-    cache = mocker.MagicMock()
-    cache.async_delete_cache = mocker.AsyncMock()
+    cache: Final = UserApiKeyCache(redis_cache=fake_redis_cache(fakeredis.FakeServer(), namespace="entitlements"))
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
 
     await _update_single_user_helper(
@@ -4456,8 +4457,10 @@ async def test_user_update_invalidates_the_cached_entitlement(mocker):
     )
 
     _object_permission_mocks(mocker)
-    cache = mocker.MagicMock()
-    cache.async_delete_cache = mocker.AsyncMock()
+    cache: Final = UserApiKeyCache(redis_cache=fake_redis_cache(fakeredis.FakeServer(), namespace="entitlements"))
+    keys: Final = ("object_permission_id:perm-new", "user_object_permission_id:target-user", "target-user")
+    for key in keys:
+        await cache.async_set_cache(key, "stale", ttl=60)
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
 
     await _update_single_user_helper(
@@ -4468,12 +4471,8 @@ async def test_user_update_invalidates_the_cached_entitlement(mocker):
         user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
     )
 
-    deleted = {call.kwargs["key"] for call in cache.async_delete_cache.call_args_list}
-    assert deleted == {
-        "object_permission_id:perm-new",
-        "user_object_permission_id:target-user",
-        "target-user",
-    }
+    for key in keys:
+        assert await cache.async_get_cache(key) is None
 
 
 @pytest.mark.asyncio
@@ -4483,9 +4482,10 @@ async def test_user_update_broadcasts_the_entitlement_invalidation_to_other_work
     )
 
     _object_permission_mocks(mocker)
-    cache: Final = mocker.MagicMock()
-    cache.async_delete_cache = mocker.AsyncMock()
-    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)  # test-quality-ok: substitute the cache dependency
+    cache: Final = UserApiKeyCache(redis_cache=fake_redis_cache(fakeredis.FakeServer(), namespace="entitlements"))
+    mocker.patch(
+        "litellm.proxy.proxy_server.user_api_key_cache", cache
+    )  # test-quality-ok: substitute the cache dependency
     broadcast: Final = mocker.patch(  # test-quality-ok: observe the Redis publication boundary
         "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
         new_callable=mocker.AsyncMock,
@@ -4520,8 +4520,10 @@ async def test_admin_can_clear_a_users_mcp_entitlement(mocker):
     )
 
     mock_prisma_client = _object_permission_mocks(mocker, "perm-existing")
-    cache = mocker.MagicMock()
-    cache.async_delete_cache = mocker.AsyncMock()
+    cache: Final = UserApiKeyCache(redis_cache=fake_redis_cache(fakeredis.FakeServer(), namespace="entitlements"))
+    keys: Final = ("object_permission_id:perm-existing", "user_object_permission_id:target-user", "target-user")
+    for key in keys:
+        await cache.async_set_cache(key, "stale", ttl=60)
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
 
     await _update_single_user_helper(
@@ -4534,12 +4536,8 @@ async def test_admin_can_clear_a_users_mcp_entitlement(mocker):
     assert "object_permission" not in written
     mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_not_called()
 
-    deleted = {call.kwargs["key"] for call in cache.async_delete_cache.call_args_list}
-    assert deleted == {
-        "object_permission_id:perm-existing",
-        "user_object_permission_id:target-user",
-        "target-user",
-    }
+    for key in keys:
+        assert await cache.async_get_cache(key) is None
 
 
 @pytest.mark.asyncio
@@ -4554,8 +4552,15 @@ async def test_user_update_invalidates_both_the_old_and_new_permission_rows(mock
     )
 
     _object_permission_mocks(mocker, "perm-existing")
-    cache = mocker.MagicMock()
-    cache.async_delete_cache = mocker.AsyncMock()
+    cache: Final = UserApiKeyCache(redis_cache=fake_redis_cache(fakeredis.FakeServer(), namespace="entitlements"))
+    keys: Final = (
+        "object_permission_id:perm-existing",
+        "object_permission_id:perm-new",
+        "user_object_permission_id:target-user",
+        "target-user",
+    )
+    for key in keys:
+        await cache.async_set_cache(key, "stale", ttl=60)
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
 
     await _update_single_user_helper(
@@ -4566,13 +4571,8 @@ async def test_user_update_invalidates_both_the_old_and_new_permission_rows(mock
         user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
     )
 
-    deleted = {call.kwargs["key"] for call in cache.async_delete_cache.call_args_list}
-    assert deleted == {
-        "object_permission_id:perm-existing",
-        "object_permission_id:perm-new",
-        "user_object_permission_id:target-user",
-        "target-user",
-    }
+    for key in keys:
+        assert await cache.async_get_cache(key) is None
 
 
 @pytest.mark.asyncio

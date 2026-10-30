@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import fakeredis
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -26,6 +27,7 @@ from litellm.proxy._types import (
     SpecialMCPServerNames,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
     UnloadableEntitlementError,
@@ -33,6 +35,48 @@ from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
     is_mcp_admitted_user_subject,
 )
 from litellm.types.agents import AgentCaller
+from tests._support.fake_redis import fake_redis_cache
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("permission_id", ["policy", None])
+async def test_user_permission_link_fills_from_cached_user_row_and_survives_redis_outage(
+    monkeypatch: pytest.MonkeyPatch, permission_id: str | None
+) -> None:
+    server: Final = fakeredis.FakeServer()
+    redis: Final = fake_redis_cache(server, namespace="auth")
+    cache: Final = UserApiKeyCache(redis_cache=redis, default_in_memory_ttl=41)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    await cache.async_set_cache(
+        "link-user", LiteLLM_UserTable(user_id="link-user", object_permission_id=permission_id), local_only=True
+    )
+    prisma: Final = MagicMock()
+    assert await MCPRequestHandler._user_object_permission_id("link-user", prisma) == permission_id
+    assert await redis.async_get_cache("user_object_permission_id:link-user") == (
+        permission_id or "__user_no_mcp_permission__"
+    )
+    cache.in_memory_cache.delete_cache("user_object_permission_id:link-user")
+    server.connected = False
+    assert await MCPRequestHandler._user_object_permission_id("link-user", prisma) == permission_id
+    assert await cache.async_get_cache("user_object_permission_id:link-user", local_only=True) == (
+        permission_id or "__user_no_mcp_permission__"
+    )
+    prisma.db.litellm_usertable.find_unique.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fresh_user_policy_does_not_use_redis_sentinel(monkeypatch: pytest.MonkeyPatch) -> None:
+    redis: Final = fake_redis_cache(fakeredis.FakeServer(), namespace="auth")
+    cache: Final = UserApiKeyCache(redis_cache=redis)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    await redis.async_set_cache("user_object_permission_id:link-user", "__user_no_mcp_permission__", ttl=60)
+    prisma: Final = MagicMock()
+    prisma.db.litellm_usertable.find_unique = AsyncMock(side_effect=RuntimeError("database unavailable"))
+    assert await MCPRequestHandler._user_object_permission_id("link-user", prisma) is None
+    prisma.db.litellm_usertable.find_unique.assert_not_called()
+    with pytest.raises(HTTPException) as error:
+        await MCPRequestHandler._user_object_permission_id("link-user", prisma, check_db_only=True)
+    assert error.value.status_code == 503
 
 
 @pytest.mark.parametrize(
