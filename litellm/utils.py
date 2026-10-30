@@ -1689,6 +1689,15 @@ async def _client_async_logging_helper(
         )
 
 
+_COMPLETION_RETRY_CALL_PAIRS: Final[Mapping[CallTypes, CallTypes]] = MappingProxyType(
+    {
+        CallTypes.completion: CallTypes.acompletion,
+        CallTypes.decisions: CallTypes.adecisions,
+        CallTypes.systemone: CallTypes.asystemone,
+    }
+)
+
+
 def _get_wrapper_num_retries(kwargs: dict[str, Any], exception: Exception) -> tuple[int | None, dict[str, Any]]:
     """
     Get the number of retries from the kwargs and the retry policy.
@@ -2218,7 +2227,7 @@ def client(original_function):
             # RETURN RESULT
             return result
         except Exception as e:
-            if call_type in (CallTypes.completion.value, CallTypes.decisions.value, CallTypes.systemone.value):
+            if call_type in _COMPLETION_RETRY_CALL_PAIRS:
                 num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
                 if kwargs.get("retry_policy", None):
                     get_num_retries_from_retry_policy: Callable[..., int | None] = (
@@ -2555,11 +2564,7 @@ def client(original_function):
 
             retry_call_type: Final = _get_call_type_from_public_name(original_function.__name__)
             num_retries, kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)
-            if retry_call_type in (
-                CallTypes.acompletion.value,
-                CallTypes.adecisions.value,
-                CallTypes.asystemone.value,
-            ):
+            if retry_call_type in _COMPLETION_RETRY_CALL_PAIRS.values():
                 context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
 
                 is_acompletion_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
