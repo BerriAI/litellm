@@ -168,13 +168,6 @@ def drops_unsupported_params(drop_params: object) -> bool:
     return litellm.drop_params is True or normalize_drop_params(drop_params) is True
 
 
-def drop_params_flag(value: object, source: str, logger: logging.Logger) -> bool:
-    normalized: Final = normalize_drop_params(value)
-    if normalized is None and value is not None:
-        logger.warning("%s=%r is not a flag value, treating it as off", source, value)
-    return bool(normalized)
-
-
 DROP_PARAMS_ENV_VAR: Final = "LITELLM_DROP_PARAMS"
 
 

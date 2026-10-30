@@ -365,7 +365,6 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
 from litellm.litellm_core_utils.audio_utils.utils import resolve_speech_media_type
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
-    drop_params_flag,
     get_litellm_metadata_from_kwargs,
     get_parent_otel_span_from_kwargs,
     iter_items,
@@ -681,6 +680,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     SCHEDULER_PRIORITY_HEADER,
     LiteLLMProxyRequestSetup,
     add_litellm_data_to_request,
+    parse_litellm_settings_drop_params,
 )
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
     rust_control_plane_router,
@@ -6974,7 +6974,7 @@ class ProxyConfig:
                     parse_budget_reset_time(value)
                     setattr(litellm, key, value)
                 elif key == "drop_params":
-                    litellm.drop_params = drop_params_flag(value, "litellm_settings.drop_params", verbose_proxy_logger)
+                    litellm.drop_params = parse_litellm_settings_drop_params(value)
                 elif key == "suppress_startup_output":
                     continue
                 else:

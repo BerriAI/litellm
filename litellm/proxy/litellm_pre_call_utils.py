@@ -1145,6 +1145,17 @@ def should_auto_drop_params_for_agentic_cli(
     return normalize_drop_params(litellm_settings.get("drop_params")) is not False
 
 
+def parse_litellm_settings_drop_params(value: object) -> bool:
+    normalized: Final = normalize_drop_params(value)
+    if normalized is None and value is not None:
+        verbose_proxy_logger.warning(
+            "litellm_settings.drop_params=%r is not a flag value, treating it as off, except for Claude Code and "
+            "Codex requests, which keep their drop_params default on. Set it to true or false",
+            value,
+        )
+    return normalized is True
+
+
 def safe_add_api_version_from_query_params(data: dict, request: Request):
     try:
         if hasattr(request, "query_params"):
