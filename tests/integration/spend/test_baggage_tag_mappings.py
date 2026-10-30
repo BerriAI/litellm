@@ -143,9 +143,27 @@ def _anthropic_reply() -> Reply:
     )
 
 
+def _batch_reply() -> Reply:
+    return Reply(
+        body=json.dumps(
+            {
+                "id": f"batch_{uuid.uuid4().hex}",
+                "object": "batch",
+                "endpoint": "/v1/chat/completions",
+                "input_file_id": "file-baggage",
+                "completion_window": "24h",
+                "status": "validating",
+                "created_at": 1,
+            }
+        ).encode()
+    )
+
+
 def _provider(request: Request) -> Reply:
     if request.target == GUARDRAIL_PATH:
         return Reply(body=b'{"action":"NONE"}')
+    if request.target == "/v1/batches":
+        return _batch_reply()
     if request.target == "/v1/responses":
         return _responses_reply()
     if request.target == "/v1/messages":
@@ -541,6 +559,47 @@ def test_required_mapping_rejects_a_request_without_its_baggage_value_before_the
         assert mapped.provider.drain() == ()
         admitted: Final = _chat(mapped, key, f"entrypoint=a,tenant={uuid.uuid4().hex}")
         assert admitted.status_code == 200, admitted.text
+
+
+def _batch_body(rig: Rig) -> dict[str, JsonValue]:
+    return {
+        "model": rig.chat_model,
+        "input_file_id": "file-baggage",
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h",
+    }
+
+
+@pytest.mark.parametrize("provider_prefix", ["litellm_proxy", "hosted_vllm"])
+def test_required_mapping_rejects_provider_prefixed_batches_and_files_before_the_provider(
+    mapped: Rig, provider_prefix: str
+) -> None:
+    batches: Final = f"/{provider_prefix}/v1/batches"
+    files: Final = f"/{provider_prefix}/v1/files"
+    with mapped.proxy.scenario() as scenario:
+        key: Final = scenario.key(allowed_routes=[batches, files])
+        mapped.provider.drain()
+        rejected_batch: Final = mapped.proxy.request("POST", batches, _batch_body(mapped), key=key)
+        rejected_file: Final = mapped.proxy.request_multipart(
+            files, {"purpose": "batch"}, {"file": ("batch.jsonl", b"{}", "application/jsonl")}, key=key
+        )
+        assert rejected_batch.status_code == 400, rejected_batch.text
+        assert rejected_file.status_code == 400, rejected_file.text
+        assert "baggage value for tenant" in rejected_batch.text
+        assert "baggage value for tenant" in rejected_file.text
+        assert mapped.provider.drain() == ()
+
+
+def test_provider_prefixed_batch_spend_row_carries_the_mapped_tags(mapped: Rig) -> None:
+    route: Final = "/litellm_proxy/v1/batches"
+    tenant: Final = uuid.uuid4().hex
+    with mapped.proxy.scenario() as scenario:
+        key: Final = scenario.key(allowed_routes=[route])
+        admitted: Final = mapped.proxy.request(
+            "POST", route, _batch_body(mapped), key=key, headers={"baggage": f"entrypoint=a,tenant={tenant}"}
+        )
+        assert admitted.status_code == 200, admitted.text
+        assert _spend_tags(mapped.proxy, key) == {mapped.exact_tag, mapped.tenant_tag(tenant)}
 
 
 def test_require_budgeted_tag_rejects_an_unbudgeted_mapped_tag_until_the_tag_has_a_budget(mapped: Rig) -> None:

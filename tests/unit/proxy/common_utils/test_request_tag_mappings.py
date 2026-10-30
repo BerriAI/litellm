@@ -290,6 +290,19 @@ def test_unbilled_and_mcp_routes_skip_baggage_mappings(route):
     assert not is_baggage_mapped_route(route)
 
 
+@pytest.mark.parametrize("prefix", ["/litellm_proxy", "/hosted_vllm", "/xai", "/manus", "/deepseek", "/mcp"])
+@pytest.mark.parametrize("path", ["/v1/batches", "/v1/batches/batch_qa/cancel", "/v1/batches/a/b/cancel", "/v1/files"])
+def test_batch_and_file_routes_under_any_provider_prefix_take_baggage_mappings(prefix, path):
+    assert is_baggage_mapped_route(f"{prefix}{path}")
+
+
+@pytest.mark.parametrize(
+    "route", ["/hosted_vllm/nested/v1/batches", "/hosted_vllm/v1/batches_extra", "/hosted_vllm/v2/files"]
+)
+def test_routes_outside_the_provider_prefixed_batch_and_file_handlers_skip_baggage_mappings(route):
+    assert not is_baggage_mapped_route(route)
+
+
 @pytest.mark.parametrize("registered", [True, False])
 def test_custom_pass_through_routes_take_baggage_mappings_once_registered(registered):
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import _registered_pass_through_routes
