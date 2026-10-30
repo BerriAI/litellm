@@ -750,6 +750,84 @@ def test_websocket_turn_tokens_count_toward_the_tag_tpm_so_its_next_http_call_is
     assert "tag" in refused.text.lower(), refused.text
 
 
+def _key_tokens(key: str) -> int:
+    return _counted_tokens(f"{{api_key:{_key_hash(key)}}}:tokens")
+
+
+def test_a_turn_is_refused_on_the_open_socket_once_earlier_turns_used_up_the_key_tpm(
+    limited: Gateway, cert: tuple[Path, Path]
+) -> None:
+    with responses_peer(cert, _heavy_turn) as peer, limited.scenario() as scenario:
+        deployment: Final = _native(scenario, peer)
+        key: Final = scenario.key(models=[deployment.name], tpm_limit=SOCKET_TPM_LIMIT)
+
+        async def session() -> tuple[tuple[tuple[dict[str, JsonValue], ...], ...], int | None]:
+            async with _socket(limited, key, deployment.name) as connection:
+                answered: Final = (await _say(connection, deployment.name), await _say(connection, deployment.name))
+                await _until(partial(_key_tokens, key), lambda tokens: tokens >= 2 * HEAVY_TURN_TOKENS)
+                refused: Final = (await _say(connection, deployment.name), await _say(connection, deployment.name))
+                return (*answered, *refused), connection.close_code
+
+        (first, second, third, fourth), close_code = asyncio.run(session())
+
+        assert [completed(received)["status"] for received in (first, second)] == ["completed"] * 2
+        _assert_refused(third)
+        _assert_refused(fourth)
+        assert close_code is None
+        assert deployment.forwarded_turns() == 2
+
+
+def test_managed_socket_turns_count_toward_the_sockets_tag_tpm_like_the_key_tpm(limited: Gateway) -> None:
+    tag: Final = f"ws-managed-tag-tpm-{uuid.uuid4().hex}"
+    limited.post("/tag/new", {"name": tag, "tpm_limit": 1_000_000})
+    try:
+        with limited.scenario() as scenario:
+            deployment: Final = _managed(scenario)
+            key: Final = scenario.key(models=[deployment.name], tpm_limit=1_000_000)
+
+            async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+                async with _socket(limited, key, deployment.name, {"x-litellm-tags": tag}) as connection:
+                    return (await _say(connection, deployment.name), await _say(connection, deployment.name))
+
+            turns: Final = asyncio.run(session())
+            turn_tokens: Final = sum(
+                int(str(object_value(completed(received)["usage"])["total_tokens"])) for received in turns
+            )
+            assert turn_tokens > 0, turns
+
+            eventually(
+                lambda: (_key_tokens(key), _counted_tokens(f"{{tag:{tag}}}:tokens")),
+                lambda counters: counters[0] >= turn_tokens and counters[0] == counters[1],
+                seconds=20,
+            )
+    finally:
+        limited.post("/tag/delete", {"name": tag})
+
+
+def test_a_socket_opened_after_turns_used_up_the_key_tpm_gets_the_turn_refusal_frame_and_closes_1008(
+    limited: Gateway, cert: tuple[Path, Path]
+) -> None:
+    with responses_peer(cert, _heavy_turn) as peer, limited.scenario() as scenario:
+        deployment: Final = _native(scenario, peer)
+        key: Final = scenario.key(models=[deployment.name], tpm_limit=SOCKET_TPM_LIMIT)
+
+        async def spend_then_reopen() -> tuple[tuple[dict[str, JsonValue], ...], int | None]:
+            async with _socket(limited, key, deployment.name) as spending:
+                completed(await _say(spending, deployment.name))
+                completed(await _say(spending, deployment.name))
+            await _until(partial(_key_tokens, key), lambda tokens: tokens >= 2 * HEAVY_TURN_TOKENS)
+            async with _socket(limited, key, deployment.name) as refused:
+                received: Final = await _say(refused, deployment.name)
+                await asyncio.wait_for(refused.wait_closed(), timeout=20)
+                return received, refused.close_code
+
+        received, close_code = asyncio.run(spend_then_reopen())
+
+        _assert_refused(received)
+        assert close_code == 1008, close_code
+        assert deployment.forwarded_turns() == 2
+
+
 def _assert_http_chat_counted_once(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         identity: Final = f"ws-admission-{uuid.uuid4().hex}"

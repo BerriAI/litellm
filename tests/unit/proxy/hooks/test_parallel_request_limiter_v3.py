@@ -7,12 +7,12 @@ import contextvars
 import logging
 import sys
 import time
-from collections.abc import AsyncGenerator, Iterator, Sequence
+from collections.abc import AsyncGenerator, Coroutine, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Any, Dict, Final, List, Optional
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -23,9 +23,11 @@ import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.litellm_core_utils import ptu_pricing
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
@@ -49,10 +51,11 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.spend_tracking.input_tokens import models_counted_for
 from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
+from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.router_utils.ptu_shares import PTUTeamCeiling
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.extraction import ExtractionResponse
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.mcp import MCPPreCallRequestObject, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
@@ -3815,6 +3818,274 @@ async def test_a_nested_call_charges_its_own_usage_but_not_the_tags_of_the_reque
 
     assert await _tokens_counted(handler, local_cache, "api_key", _api_key) == 15
     assert await _tokens_counted(handler, local_cache, "tag", "outer-tag") == 0
+
+
+def _socket_turn_kwargs(
+    call_id: str, metadata: dict[str, object], call_type: str = CallTypes.aresponses_websocket.value
+) -> dict[str, object]:
+    return {
+        "litellm_call_id": call_id,
+        "call_type": call_type,
+        "standard_logging_object": {"metadata": metadata},
+    }
+
+
+def _logged_http_responses_call(model: str, total_tokens: int) -> ResponsesAPIResponse:
+    response: Final = ResponsesAPIResponse(
+        id="resp_http_call",
+        created_at=0,
+        model=model,
+        object="response",
+        output=[],
+        status="completed",
+        usage=ResponseAPIUsage(input_tokens=total_tokens - 10, output_tokens=10, total_tokens=total_tokens),
+    )
+    return response.model_copy(
+        update={"usage": ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(response.usage)}
+    )
+
+
+_SOCKET_TURN_TAG: Final = "ws-tag"
+_SOCKET_TURN_TPM_LIMIT: Final = 1000
+
+
+def _socket_with_tpm_limited_tag() -> None:
+    _request_stash.set(
+        RequestRateLimiterStash(owner_litellm_call_id="socket-open", tpm_limited_tags=frozenset({_SOCKET_TURN_TAG}))
+    )
+
+
+def _handler_with_socket_tag_limit(local_cache: DualCache) -> PROXY_MaxParallelRequestsHandler_v3:
+    resolver, _ = _static_tag_limits({_SOCKET_TURN_TAG: TagRateLimit(rpm_limit=None, tpm_limit=_SOCKET_TURN_TPM_LIMIT)})
+    return _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache), tag_rate_limit_resolver=resolver
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "auth_limits",
+    [
+        {"tpm_limit": _SOCKET_TURN_TPM_LIMIT},
+        {"team_id": "team-ws", "team_tpm_limit": _SOCKET_TURN_TPM_LIMIT},
+        {"user_id": "user-ws", "user_tpm_limit": _SOCKET_TURN_TPM_LIMIT},
+        {},
+    ],
+    ids=["key", "team", "user", "tag"],
+)
+async def test_a_later_socket_turn_is_refused_once_a_tpm_window_it_counts_toward_has_no_tokens_left_v3(
+    auth_limits: dict[str, object],
+) -> None:
+    api_key: Final = hash_token("sk-socket-turn-check")
+    local_cache: Final = DualCache()
+    handler: Final = _handler_with_socket_tag_limit(local_cache)
+    _socket_with_tpm_limited_tag()
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, **auth_limits)
+    turn_metadata: Final = {
+        "user_api_key_hash": api_key,
+        "user_api_key_team_id": "team-ws",
+        "user_api_key_user_id": "user-ws",
+    }
+
+    async def log_turn(call_id: str) -> None:
+        await handler.async_log_success_event(
+            kwargs=_socket_turn_kwargs(call_id, turn_metadata),
+            response_obj=_responses_websocket_turn_events(total_tokens=_SOCKET_TURN_TPM_LIMIT // 2),
+            start_time=None,
+            end_time=None,
+        )
+
+    await log_turn("turn-1")
+    await handler.enforce_token_limits_for_frame(user_api_key_dict=user_api_key_dict, requested_model="gpt-5.4")
+    await log_turn("turn-2")
+    tokens_before_check: Final = await _tokens_counted(handler, local_cache, "api_key", api_key)
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        await handler.enforce_token_limits_for_frame(user_api_key_dict=user_api_key_dict, requested_model="gpt-5.4")
+
+    assert exc_info.value.status_code == 429
+    assert await _tokens_counted(handler, local_cache, "api_key", api_key) == tokens_before_check
+
+
+@pytest.mark.asyncio
+async def test_the_socket_turn_check_ignores_request_limits_and_charges_nothing_v3(monkeypatch) -> None:
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    api_key: Final = hash_token("sk-socket-turn-rpm")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, rpm_limit=1, tpm_limit=_SOCKET_TURN_TPM_LIMIT)
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "gpt-5.4", "litellm_call_id": "socket-open"},
+        call_type=CallTypes.aresponses_websocket.value,
+    )
+    tokens_after_open: Final = await _tokens_counted(handler, local_cache, "api_key", api_key)
+
+    for _ in range(3):
+        await handler.enforce_token_limits_for_frame(user_api_key_dict=user_api_key_dict, requested_model="gpt-5.4")
+
+    assert await _tokens_counted(handler, local_cache, "api_key", api_key) == tokens_after_open
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "socket_call_id, tag_tokens",
+    [("socket-open", 600), ("another-socket", 0), (None, 0)],
+    ids=["this-socket", "another-socket", "no-socket"],
+)
+async def test_a_managed_socket_turn_charges_the_sockets_tpm_limited_tags_v3(
+    socket_call_id: str | None, tag_tokens: int
+) -> None:
+    api_key: Final = hash_token("sk-managed-socket-turn")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    _socket_with_tpm_limited_tag()
+    turn_metadata: Final = {} if socket_call_id is None else {RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY: socket_call_id}
+
+    await handler.async_log_success_event(
+        kwargs={
+            **_socket_turn_kwargs("managed-turn", {"user_api_key_hash": api_key}, CallTypes.aresponses.value),
+            "litellm_params": {"litellm_metadata": turn_metadata},
+        },
+        response_obj=_logged_http_responses_call("claude-opus-4-7", total_tokens=600),
+        start_time=None,
+        end_time=None,
+    )
+
+    assert await _tokens_counted(handler, local_cache, "api_key", api_key) == 600
+    assert await _tokens_counted(handler, local_cache, "tag", _SOCKET_TURN_TAG) == tag_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["socket", "http"])
+async def test_a_socket_turn_reaches_the_team_tpm_window_as_an_http_call_does_v3(transport: str, monkeypatch) -> None:
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    api_key: Final = hash_token("sk-team-window")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    _socket_with_tpm_limited_tag()
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, team_id="team-ws", team_tpm_limit=500)
+
+    async def pre_call() -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-5.4"},
+            call_type=CallTypes.aresponses.value,
+        )
+
+    await pre_call()
+    await handler.async_log_success_event(
+        kwargs=_socket_turn_kwargs(
+            f"{transport}-call",
+            {"user_api_key_hash": api_key, "user_api_key_team_id": "team-ws"},
+            CallTypes.aresponses_websocket.value if transport == "socket" else CallTypes.aresponses.value,
+        ),
+        response_obj=(
+            _responses_websocket_turn_events(total_tokens=600)
+            if transport == "socket"
+            else _logged_http_responses_call("gpt-5.4", total_tokens=600)
+        ),
+        start_time=None,
+        end_time=None,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await pre_call()
+    assert exc_info.value.status_code == 429
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_type, completion_tokens, counted",
+    [
+        (CallTypes.aresponses_websocket.value, 7, 27),
+        (CallTypes.aresponses_websocket.value, 0, 0),
+        (CallTypes.acompletion.value, 7, 0),
+    ],
+    ids=["socket-turn", "socket-turn-without-output", "unreserved-http-call"],
+)
+async def test_a_failed_socket_turn_counts_its_recorded_partial_usage_v3(
+    call_type: str, completion_tokens: int, counted: int
+) -> None:
+    api_key: Final = hash_token("sk-failed-socket-turn")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    _socket_with_tpm_limited_tag()
+
+    await handler.async_log_failure_event(
+        kwargs={
+            **_socket_turn_kwargs("failed-turn", {"user_api_key_hash": api_key}, call_type),
+            "combined_usage_object": Usage(
+                prompt_tokens=27 - completion_tokens, completion_tokens=completion_tokens, total_tokens=27
+            ),
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert await _tokens_counted(handler, local_cache, "api_key", api_key) == counted
+    assert await _tokens_counted(handler, local_cache, "tag", _SOCKET_TURN_TAG) == counted
+
+
+class _InlineLoggingWorker:
+    def __init__(self) -> None:
+        self.enqueued: tuple[Coroutine[object, object, None], ...] = ()
+
+    def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine[object, object, None]) -> None:
+        self.enqueued = (*self.enqueued, async_coroutine)
+
+    async def drain(self) -> None:
+        for coroutine in self.enqueued:
+            await coroutine
+
+
+@pytest.mark.asyncio
+async def test_a_realtime_sessions_usage_counts_toward_the_keys_tpm_window_v3(monkeypatch) -> None:
+    api_key: Final = hash_token("sk-realtime-session")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    monkeypatch.setattr(litellm, "callbacks", [handler])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [handler])
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="gpt-realtime",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.arealtime.value,
+        start_time=datetime.now(),
+        litellm_call_id="realtime-session",
+        function_id="realtime-session",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-realtime",
+        optional_params={},
+        litellm_params={"metadata": {"user_api_key_hash": api_key}},
+        custom_llm_provider="openai",
+    )
+    worker: Final = _InlineLoggingWorker()
+    streaming: Final = RealTimeStreaming(MagicMock(), MagicMock(), logging_obj, logging_worker=worker)
+    for input_tokens, output_tokens in ((120, 30), (200, 50)):
+        streaming.store_message(
+            {
+                "type": "response.done",
+                "response": {
+                    "usage": {
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "total_tokens": input_tokens + output_tokens,
+                    }
+                },
+            }
+        )
+
+    await streaming.log_messages()
+    await worker.drain()
+
+    assert await _tokens_counted(handler, local_cache, "api_key", api_key) == 400
 
 @pytest.mark.asyncio
 async def test_failure_event_settles_project_itpm_otpm_at_recovered_partial_usage_v3():

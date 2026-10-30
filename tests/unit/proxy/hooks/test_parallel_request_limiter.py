@@ -166,6 +166,82 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(response_
         )
 
 
+def _socket_turn_events(input_tokens: int, output_tokens: int) -> list[dict[str, object]]:
+    usage: Final = {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+    }
+    return [
+        {"type": "response.created", "response": {"id": "resp_ws_turn", "status": "in_progress", "output": []}},
+        {"type": "response.completed", "response": {"id": "resp_ws_turn", "status": "completed", "usage": usage}},
+    ]
+
+
+def _realtime_session_events(input_tokens: int, output_tokens: int) -> list[dict[str, object]]:
+    usage: Final = {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+    }
+    return [{"type": "session.created", "session": {}}, {"type": "response.done", "response": {"usage": usage}}]
+
+
+@pytest.mark.parametrize(
+    "call_type, events, tokens",
+    [
+        (CallTypes.aresponses_websocket.value, _socket_turn_events(input_tokens=590, output_tokens=10), 600),
+        (CallTypes.arealtime.value, _realtime_session_events(input_tokens=590, output_tokens=10), 600),
+        (CallTypes.aresponses.value, _socket_turn_events(input_tokens=590, output_tokens=10), 0),
+    ],
+    ids=["responses-websocket-turn", "realtime-session", "events-of-a-non-socket-call"],
+)
+@pytest.mark.asyncio
+async def test_async_log_success_event_counts_socket_session_tokens(
+    call_type: str, events: list[dict[str, object]], tokens: int
+):
+    api_key: Final = hash_token("sk-socket-session")
+    handler: Final = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), clock=_frozen_clock
+    )
+    precise_minute: Final = FROZEN_INSTANT.strftime("%Y-%m-%d-%H-%M")
+    scope_ids: Final = (api_key, "socket-user", "socket-team", "socket-end-user")
+    for scope_id in scope_ids:
+        await handler.internal_usage_cache.async_set_cache(
+            key=f"{scope_id}::{precise_minute}::request_count",
+            value={"current_requests": 1, "current_tpm": 0, "current_rpm": 1},
+            litellm_parent_otel_span=None,
+        )
+
+    await handler.async_log_success_event(
+        kwargs={
+            "call_type": call_type,
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": api_key,
+                    "user_api_key_user_id": "socket-user",
+                    "user_api_key_team_id": "socket-team",
+                    "user_api_key_model_max_budget": {},
+                }
+            },
+            "user": "socket-end-user",
+        },
+        response_obj=events,
+        start_time=FROZEN_INSTANT,
+        end_time=FROZEN_INSTANT,
+    )
+
+    counted: Final = [
+        (
+            await handler.internal_usage_cache.async_get_cache(
+                key=f"{scope_id}::{precise_minute}::request_count", litellm_parent_otel_span=None
+            )
+        )["current_tpm"]
+        for scope_id in scope_ids
+    ]
+    assert counted == [tokens, tokens, tokens, tokens]
+
+
 @pytest.mark.asyncio
 async def test_a_pre_call_across_a_minute_rollover_lands_in_the_bucket_of_its_first_clock_read():
     internal_usage_cache: Final = InternalUsageCache(DualCache())
