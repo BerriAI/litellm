@@ -444,8 +444,20 @@ def _non_string_tool_output_call_id_error(input_items: Sequence[object]) -> BadR
     if malformed is None:
         return None
     index, call_id = malformed
+    return _invalid_input_type(f"input[{index}].call_id", call_id)
+
+
+def _non_string_role_error(item_index: int, messages: Sequence[object]) -> BadRequestError | None:
+    roles: Final = (message_field(message, "role") for message in messages)
+    malformed: Final = next((role for role in roles if role is not None and not isinstance(role, str)), None)
+    if malformed is None:
+        return None
+    return _invalid_input_type(f"input[{item_index}].role", malformed)
+
+
+def _invalid_input_type(field_path: str, value: object) -> BadRequestError:
     return BadRequestError(
-        message=f"Invalid type for 'input[{index}].call_id': expected a string, got {type(call_id).__name__}",
+        message=f"Invalid type for '{field_path}': expected a string, got {type(value).__name__}",
         model="",
         llm_provider="",
     )
@@ -1507,7 +1519,7 @@ class LiteLLMCompletionResponsesConfig:
             if call_id_error is not None:
                 raise call_id_error
             existing_tool_call_ids: Final[set[str]] = set()
-            for _input in input:
+            for item_index, _input in enumerate(input):
                 chat_completion_messages = (
                     LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
                         input_item=_input,
@@ -1515,6 +1527,8 @@ class LiteLLMCompletionResponsesConfig:
                         native_compaction=native_compaction,
                     )
                 )
+                if (role_error := _non_string_role_error(item_index, chat_completion_messages)) is not None:
+                    raise role_error
 
                 if LiteLLMCompletionResponsesConfig._is_input_item_function_call(input_item=_input):
                     call_id_raw = _input.get("call_id") or _input.get("id") or ""

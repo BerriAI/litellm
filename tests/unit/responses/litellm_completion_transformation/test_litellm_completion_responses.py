@@ -17,6 +17,7 @@ from openai.types.responses.response_function_web_search import (
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.constants import CALLER_SESSION_ID_METADATA_KEY
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
@@ -6713,7 +6714,6 @@ def test_summary_replay_drops_the_history_its_compaction_item_replaces() -> None
     ]
 
 
-
 @pytest.mark.parametrize(
     ("call", "output"),
     [
@@ -6864,7 +6864,14 @@ def test_compaction_replay_invents_no_call_for_an_output_whose_call_was_never_st
     [
         pytest.param(
             _COMPACTION_REQUESTED,
-            [("user", ()), ("assistant", ("call_0",)), ("tool", "Sunny."), ("assistant", ()), ("assistant", ("call_0",)), ("tool", "Rain.")],
+            [
+                ("user", ()),
+                ("assistant", ("call_0",)),
+                ("tool", "Sunny."),
+                ("assistant", ()),
+                ("assistant", ("call_0",)),
+                ("tool", "Rain."),
+            ],
             id="native_compaction_block",
         ),
         pytest.param(
@@ -7006,7 +7013,9 @@ async def test_bridge_partial_response_on_disconnect_bills_the_relayed_chat_chun
     assert incomplete_event.type == "response.incomplete"
     assert incomplete_event.response.status == "incomplete"
     assert incomplete_event.response.usage is not None
-    assert incomplete_event.response.usage.output_tokens == litellm.token_counter(model="gpt-4o-mini", text=relayed_text)
+    assert incomplete_event.response.usage.output_tokens == litellm.token_counter(
+        model="gpt-4o-mini", text=relayed_text
+    )
     assert incomplete_event.response.usage.input_tokens > 0
 
 
@@ -7076,3 +7085,40 @@ def test_a_tool_output_with_a_non_string_call_id_is_a_400_naming_its_input_item(
     assert raised.value.message == (
         f"litellm.BadRequestError: Invalid type for 'input[2].call_id': expected a string, got {type_name}"
     )
+
+
+@pytest.mark.parametrize(("role", "type_name"), [(["user"], "list"), ({"name": "user"}, "dict"), (7, "int")])
+def test_a_message_item_with_a_non_string_role_is_a_400_naming_its_input_item(role: object, type_name: str) -> None:
+    history: Final = cast(ResponseInputParam, [{"role": "user", "content": "Hi"}, {"role": role, "content": "Go on"}])
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=history, responses_api_request={"instructions": "Be terse."}
+        )
+
+    assert raised.value.message == (
+        f"litellm.BadRequestError: Invalid type for 'input[1].role': expected a string, got {type_name}"
+    )
+
+
+def test_a_non_string_role_on_an_item_that_never_reads_it_still_converts() -> None:
+    history: Final = cast(
+        ResponseInputParam,
+        [
+            {"role": "user", "content": "Weather in Paris?"},
+            {
+                "type": "function_call",
+                "call_id": "call_weather",
+                "name": "get_weather",
+                "arguments": "{}",
+                "role": ["x"],
+            },
+            {"type": "function_call_output", "call_id": "call_weather", "output": "sunny", "role": ["x"]},
+        ],
+    )
+
+    messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=history, responses_api_request={}
+    )
+
+    assert [message_field(message, "role") for message in messages] == ["user", "assistant", "tool"]
