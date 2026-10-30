@@ -168,7 +168,7 @@ from litellm.litellm_core_utils.served_output_texts import (
     record_served_output_texts,
     served_stream_output_texts,
 )
-from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.litellm_core_utils.token_counter import offload_token_count, usage_tokenizer_model
 from litellm.llms import load_guardrail_translation_mappings
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
@@ -1139,7 +1139,9 @@ def _estimated_prompt_usage(
         None,
     )
     return _estimate_dispatched_failure_usage(
-        model=str(model_call_details.get("model") or ""),
+        model=usage_tokenizer_model(
+            str(model_call_details.get("model") or ""), get_base_model_from_metadata(model_call_details)
+        ),
         request_input=(
             messages_since_newest_compaction(dispatched_input)
             if dispatched_call_type in _RESPONSES_CALL_TYPES
@@ -1387,7 +1389,8 @@ def _stamp_deployment_attribution(
     callbacks key off it and must not count a proxy-side reject against the deployment. A failure
     after the provider handoff keeps the metadata the router stamped; a request that never reached a
     provider is flagged ``PROXY_REJECTED_BEFORE_ROUTING_KEY`` (deployment metrics key off it) whatever
-    its metadata says, since ``metadata.model_info`` can be caller supplied."""
+    its metadata says, since ``metadata.model_info`` can be caller supplied. Its ``deployment`` and
+    ``model_group`` always come from the router config, never from the caller's metadata."""
     attribution: Final = _deployment_attribution_for_model_group(model_group, team_id)
     if "custom_llm_provider" in attribution:
         litellm_params["custom_llm_provider"] = attribution["custom_llm_provider"]
@@ -1402,9 +1405,13 @@ def _stamp_deployment_attribution(
     if not isinstance(metadata, dict):
         return attribution
     metadata.setdefault("model_info", attribution["model_info"])
-    metadata.setdefault("deployment", attribution["deployment"])
-    if isinstance(model_group, str):
-        metadata.setdefault("model_group", model_group)
+    routing: Final = MappingProxyType(
+        {"deployment": attribution["deployment"], **({"model_group": model_group} if model_group else {})}
+    )
+    metadata.update(routing)
+    litellm_metadata: Final = litellm_params.get("litellm_metadata")
+    if isinstance(litellm_metadata, dict):
+        litellm_metadata.update(routing)
     return attribution
 
 
@@ -1420,7 +1427,7 @@ def _deployment_attribution_for_model_group(model_group: object, team_id: str | 
 
     if llm_router is None:
         return _EMPTY_LIFT
-    deployments: Final = llm_router.get_model_list(model_name=model_group, team_id=team_id)
+    deployments: Final = llm_router.registry().deployments(model_name=model_group, team_id=team_id)
     if not deployments:
         return _EMPTY_LIFT
 
@@ -1484,6 +1491,9 @@ object rather than ``True`` because ``request_data`` is the client body: JSON ca
 client can neither hide a guardrail block nor force a row by sending the key or a ``litellm_call_id`` itself."""
 
 _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
+_PROXY_ONLY_ERROR_LOGGED_FIELDS: Final = frozenset(
+    {"model", "messages", "input", "prompt", "user", "stream", "litellm_call_id"}
+)
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
 
 
@@ -1516,6 +1526,57 @@ def _client_disconnected(exception: Exception) -> bool:
 
 def _provider_billed_the_failure(exception: Exception) -> bool:
     return _timed_out_reading_from_provider(exception) or _client_disconnected(exception)
+
+
+def _as_str_mapping(value: object) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        return MappingProxyType({})
+    return cast(  # cast-ok: the runtime Mapping check validates the container shape
+        Mapping[str, object], value
+    )
+
+
+def _proxy_only_error_logged_metadata_keys(*, authenticated: bool, past_pre_call: bool) -> frozenset[str]:
+    return frozenset(
+        key
+        for key, logged in (("tags", authenticated), ("standard_logging_guardrail_information", past_pre_call))
+        if logged
+    )
+
+
+def _is_logged_metadata_value(key: str, value: object) -> bool:
+    if key != "tags":
+        return True
+    tags: Final = cast(list[object], value) if isinstance(value, list) else None  # cast-ok: isinstance checked the list
+    return tags is not None and all(isinstance(item, str) for item in tags)
+
+
+def _proxy_only_error_log_metadata(
+    value: object, logged_keys: frozenset[str]
+) -> dict[str, object] | None:  # mutable-ok: router attribution stamps the logged metadata in place
+    metadata: Final = _as_str_mapping(value)
+    if not isinstance(value, Mapping):
+        return None
+    return {
+        key: value for key, value in metadata.items() if key in logged_keys and _is_logged_metadata_value(key, value)
+    }
+
+
+def _proxy_only_error_log_fields(
+    request_data: Mapping[str, object], logged_metadata_keys: frozenset[str]
+) -> Mapping[str, object]:
+    metadata_fields: Final = {
+        key: filtered_metadata
+        for key in ("metadata", "litellm_metadata")
+        if (filtered_metadata := _proxy_only_error_log_metadata(request_data.get(key), logged_metadata_keys))
+        is not None
+    }
+    return MappingProxyType(
+        {
+            **{key: value for key, value in request_data.items() if key in _PROXY_ONLY_ERROR_LOGGED_FIELDS},
+            **metadata_fields,
+        }
+    )
 
 
 def _failure_fields_to_lift(
@@ -2281,10 +2342,13 @@ class ProxyLogging:
         """
         from litellm.proxy.proxy_server import llm_router
 
-        if llm_router is None or not hasattr(llm_router, "guardrail_list"):
+        if llm_router is None:
+            return False
+        router_settings: Final = llm_router.settings()
+        if not router_settings.is_set("guardrail_list"):
             return False
 
-        matching: Final = [g for g in llm_router.guardrail_list if g.get("guardrail_name") == guardrail_name]
+        matching: Final = [g for g in router_settings.guardrail_list if g.get("guardrail_name") == guardrail_name]
         return len(matching) > 1
 
     async def _execute_guardrail_hook(
@@ -2373,7 +2437,7 @@ class ProxyLogging:
             raise ValueError("Router not initialized")
 
         # Select guardrail using router's load balancing
-        selected_guardrail: Final = llm_router.get_available_guardrail(guardrail_name=guardrail_name)
+        selected_guardrail: Final = llm_router.settings().guardrail(guardrail_name)
 
         callback: Final[CustomGuardrail | None] = selected_guardrail.get("callback")
         if callback is None:
@@ -2805,7 +2869,11 @@ class ProxyLogging:
 
         return data
 
-    def has_pre_call_guardrails(self, request_metadata: Mapping[str, object]) -> bool:
+    def has_pre_call_guardrails(
+        self,
+        request_metadata: Mapping[str, object],
+        event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call,
+    ) -> bool:
         """
         Whether anything configured would inspect the content of a request carrying this metadata.
 
@@ -2824,8 +2892,7 @@ class ProxyLogging:
             return True
         probe: Final = {"metadata": dict(request_metadata)}
         return any(
-            isinstance(callback, CustomGuardrail)
-            and callback.should_run_guardrail(data=probe, event_type=GuardrailEventHooks.pre_call)
+            isinstance(callback, CustomGuardrail) and callback.should_run_guardrail(data=probe, event_type=event_type)
             for callback in caps.resolved_callbacks
         )
 
@@ -3767,7 +3834,9 @@ class ProxyLogging:
         request_data.pop("standard_logging_object", None)
 
         ### LOGGING ###
-        if self._is_proxy_only_llm_api_error(
+        if isinstance(logging_obj, Logging) and logging_obj.prepared_cost is not None:
+            await self._dispatch_proxy_only_failure_handlers(logging_obj, original_exception)
+        elif self._is_proxy_only_llm_api_error(
             original_exception=original_exception,
             error_type=error_type,
             route=user_api_key_dict.request_route,
@@ -3778,6 +3847,7 @@ class ProxyLogging:
                 user_api_key_dict=user_api_key_dict,
                 route=route,
                 original_exception=original_exception,
+                error_type=error_type,
             )
 
         request_data.update(
@@ -3872,6 +3942,7 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         route: str | None = None,
         original_exception: Exception | None = None,
+        error_type: ProxyErrorTypes | None = None,
     ):
         """
         Handle logging for proxy only errors by calling `litellm_logging_obj.async_failure_handler`
@@ -3880,19 +3951,25 @@ class ProxyLogging:
         """
         litellm_logging_obj: Logging | None = request_data.get("litellm_logging_obj", None)
         set_up_by_request: Final = litellm_logging_obj is not None
+        request_fields: Final = cast(Mapping[str, object], request_data)  # cast-ok: request bodies are str-keyed JSON
+        logged_metadata_keys: Final = _proxy_only_error_logged_metadata_keys(
+            authenticated=error_type != ProxyErrorTypes.auth_error, past_pre_call=set_up_by_request
+        )
+        user_api_key_logged_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+            user_api_key_dict=user_api_key_dict
+        )
         if litellm_logging_obj is None:
             from litellm._uuid import uuid
 
             request_data.setdefault("litellm_call_id", str(uuid.uuid4()))
-            user_api_key_logged_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
-                user_api_key_dict=user_api_key_dict
-            )
 
             litellm_logging_obj, data = litellm.utils.function_setup(
                 original_function=route or "IGNORE_THIS",
                 rules_obj=litellm.utils.Rules(),
                 start_time=datetime.now(),
-                **request_data,
+                **_proxy_only_error_log_fields(  # pyright: ignore[reportArgumentType]  # the allowlist never carries is_async_call
+                    request_fields, logged_metadata_keys
+                ),
             )
             request_data["litellm_logging_obj"] = litellm_logging_obj  # rebind-ok: lifted then popped by the caller
             request_data.update({REJECTED_BEFORE_REQUEST_SETUP_KEY: REJECTED_BEFORE_REQUEST_SETUP})
@@ -3902,18 +3979,39 @@ class ProxyLogging:
 
         if litellm_logging_obj is not None:
             ## UPDATE LOGGING INPUT
-            _optional_params: Final = {}
-            _litellm_params: Final = {}
+            _optional_params: Final[dict[str, object]] = {}  # mutable-ok: filled below, then handed to the logger
+            _litellm_params: Final[dict[str, object]] = {}  # mutable-ok: filled below, then handed to the logger
 
             litellm_param_keys: Final = LoggedLiteLLMParams.__annotations__.keys()
-            for k, v in request_data.items():
+            for k, v in _proxy_only_error_log_fields(request_fields, logged_metadata_keys).items():
                 if k in litellm_param_keys:
                     _litellm_params[k] = v
                 elif k not in ("model", "user", "litellm_logging_obj"):
                     _optional_params[k] = v
 
+            existing: Final = _as_str_mapping(
+                litellm_logging_obj.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
+            )
+            litellm_params: Final = {
+                **_litellm_params,
+                "metadata": {
+                    **_as_str_mapping(existing.get("metadata")),
+                    **_as_str_mapping(_litellm_params.get("metadata")),
+                    **user_api_key_logged_metadata,
+                },
+                **{
+                    key: {
+                        **_as_str_mapping(existing.get(key)),
+                        **_as_str_mapping(value),
+                        **user_api_key_logged_metadata,
+                    }
+                    for key, value in _litellm_params.items()
+                    if key == "litellm_metadata"
+                },
+            }
+
             attribution: Final = _stamp_deployment_attribution(
-                _litellm_params,
+                litellm_params,
                 request_data.get("model"),
                 user_api_key_dict.team_id,
                 dispatched=_reached_deployment(litellm_logging_obj),
@@ -3923,7 +4021,7 @@ class ProxyLogging:
                 model=request_data.get("model", ""),
                 user=request_data.get("user", ""),
                 optional_params=_optional_params,
-                litellm_params=_litellm_params,
+                litellm_params=litellm_params,
                 **(
                     {"custom_llm_provider": attribution["custom_llm_provider"]}
                     if "custom_llm_provider" in attribution
@@ -4854,31 +4952,22 @@ class ProxyLogging:
         logging_obj._deferred_stream_complete_args = None
         return True
 
-    async def arelease_max_parallel_requests_on_disconnect(
+    async def arelease_max_parallel_requests(
         self,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> None:
         """
-        Release the api-key max_parallel_requests slot when a streaming
-        response is cancelled mid-flight (client disconnect) and no logging
-        callback fired for it. Neither the success nor failure callback runs on
-        the resulting CancelledError / GeneratorExit, so the pre-call +1 would
-        otherwise leak.
-
-        Awaited from the shielded streaming cleanup rather than scheduled
-        fire-and-forget, so the caller can make it the single owner of the
-        release: when a disconnect-time success event does fire (partial-spend
-        billing or a deferred-guardrail flush), that event's own limiter
-        callback releases the slot and this is not called at all. Two
-        concurrent releases of the same acquisition would otherwise race and
-        double-decrement under the limiter's in-memory fallback.
+        Release an ended request's v3 concurrency acquisition independently of logging.
+        The request stash serializes release with callbacks and clears the acquisition,
+        so repeated cleanup cannot release another request's slot.
         """
         limiter: Final = self.get_proxy_hook("parallel_request_limiter")
         if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
             return
         await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
 
-    _arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests_on_disconnect
+    arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests
+    _arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests
 
     async def arelease_responses_websocket_slot(self, user_api_key_dict: UserAPIKeyAuth) -> None:
         """Release the slot a Responses WebSocket took at admission. Only call this once that admission succeeded:
@@ -8931,7 +9020,7 @@ def check_and_merge_model_level_guardrails(
 
     model_level_guardrails: list[object] | None = None
     if model_id is not None:
-        deployment: Final = llm_router.get_deployment(model_id=model_id)
+        deployment: Final = llm_router.registry().deployment(model_id)
         if deployment is None:
             return data
         deployment_guardrails: Final = deployment.litellm_params.get("guardrails")
@@ -8954,7 +9043,7 @@ def check_and_merge_model_level_guardrails(
         # Pass team_id so team-scoped public model names resolve the same way
         # route_request resolves them; otherwise team-scoped deployments are
         # invisible to this lookup and their guardrails are silently dropped.
-        deployments: Final = llm_router.get_model_list(model_name=alias, team_id=team_id) or []
+        deployments: Final = llm_router.registry().deployments(model_name=alias, team_id=team_id) or []
         seen: Final[set] = set()
         union: Final[list] = []
         for dep in deployments:
@@ -9161,7 +9250,7 @@ def is_known_model(model: str | None, llm_router: Router | None) -> bool:
     """
     if model is None or llm_router is None:
         return False
-    model_names: Final = llm_router.get_model_names()
+    model_names: Final = llm_router.registry().names()
 
     model_names_set: Final = set(model_names)
 
@@ -9424,8 +9513,9 @@ async def _agent_access_group_visible_models(
         return None
     if llm_router is None:
         return ceiling.models
-    proxy_model_list: Final = llm_router.get_model_names()
-    model_access_groups: Final = llm_router.get_model_access_groups()
+    registry: Final = llm_router.registry()
+    proxy_model_list: Final = registry.names()
+    model_access_groups: Final = registry.access_groups()
     granted: Final = get_team_models(
         team_models=sorted(ceiling.models),
         proxy_model_list=proxy_model_list,
@@ -9497,8 +9587,8 @@ async def get_available_models_for_user(
         proxy_model_list = []
         model_access_groups = {}
     else:
-        proxy_model_list = llm_router.get_model_names()
-        model_access_groups = llm_router.get_model_access_groups()
+        proxy_model_list = llm_router.registry().names()
+        model_access_groups = llm_router.registry().access_groups()
 
     requested_team_object: Final = (
         await _get_validated_team_object(
@@ -9719,11 +9809,13 @@ def create_model_info_response(
     }
 
     alias_target: Final = (
-        resolve_model_group_alias(llm_router.model_group_alias, model_id) if llm_router is not None else None
+        resolve_model_group_alias(llm_router.registry().aliases(), model_id) if llm_router is not None else None
     )
     lookup_model: Final = alias_target if alias_target is not None else model_id
 
-    listing_info: Final = llm_router.get_model_listing_info(lookup_model) if llm_router is not None else None
+    listing_info: Final = (
+        llm_router.registry().group(lookup_model, field="listing_info") if llm_router is not None else None
+    )
 
     # One entry per distinct model behind the listed name; (None,) when the router knows
     # nothing about it, so the listed name is resolved on its own as before.
@@ -9765,7 +9857,7 @@ def create_model_info_response(
             max_output_tokens = listing_info.max_output_tokens
 
     if llm_router is not None:
-        configured_mode: Final = llm_router.get_configured_mode(lookup_model)
+        configured_mode: Final = llm_router.registry().group(lookup_model, field="mode")
         if isinstance(configured_mode, str):
             base["mode"] = configured_mode
 

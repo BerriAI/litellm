@@ -2,7 +2,7 @@ use std::time::{Duration, SystemTime};
 
 use litellm_auth_types::SecretValue;
 use litellm_gateway_auth::{
-    KeyError,
+    Error,
     keys::{KeyHash, KeyLookup, KeyStatus, LookupFuture, verify_key},
 };
 use rstest::{fixture, rstest};
@@ -59,7 +59,7 @@ async fn checks_expiration(
 
     match valid {
         true => assert_eq!(result.unwrap(), hash),
-        false => assert!(matches!(result, Err(KeyError::Expired))),
+        false => assert!(matches!(result, Err(Error::Expired))),
     }
 }
 
@@ -79,7 +79,7 @@ async fn rejects_unusable_keys(
 
     assert!(matches!(
         verify_key(&lookup, &token, || now).await,
-        Err(KeyError::Invalid)
+        Err(Error::InvalidToken)
     ));
 }
 
@@ -93,7 +93,7 @@ async fn rejects_a_different_token(token: SecretValue, now: SystemTime) {
 
     assert!(matches!(
         verify_key(&lookup, &SecretValue::new("sk-other-credential"), || now).await,
-        Err(KeyError::Invalid)
+        Err(Error::InvalidToken)
     ));
 }
 
@@ -102,9 +102,9 @@ struct Unavailable;
 impl KeyLookup for Unavailable {
     fn lookup<'a>(&'a self, _: &'a KeyHash) -> LookupFuture<'a> {
         Box::pin(async {
-            Err(KeyError::Lookup(Box::new(std::io::Error::other(
-                "backend detail",
-            ))))
+            Err(Error::Unavailable(litellm_error::Source::new(
+                std::io::Error::other("backend detail"),
+            )))
         })
     }
 }
@@ -114,10 +114,8 @@ impl KeyLookup for Unavailable {
 async fn lookup_failure_preserves_source_without_exposing_it(token: SecretValue, now: SystemTime) {
     let error = verify_key(&Unavailable, &token, || now).await.unwrap_err();
 
-    assert!(matches!(&error, KeyError::Lookup(_)));
-    assert_eq!(
-        std::error::Error::source(&error).unwrap().to_string(),
-        "backend detail"
-    );
+    assert_eq!(error.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+    let cause = litellm_error::find::<std::io::Error>(&error).expect("lookup cause");
+    assert_eq!(cause.to_string(), "backend detail");
     assert!(!error.to_string().contains("backend detail"));
 }

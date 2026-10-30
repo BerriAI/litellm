@@ -15,7 +15,11 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import (
+    ReadOnly,
+    TypedDict,
+    TypeIs,  # noqa: TID251  # narrows the caller's tools without copying them
+)
 
 if TYPE_CHECKING:
     from botocore.eventstream import EventStreamMessage
@@ -44,6 +48,8 @@ from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
 if TYPE_CHECKING:
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.types.llms.openai import AllMessageValues
+
+BEDROCK_INVOKE_TRACE_FIELD: Final = "amazon-bedrock-trace"
 
 
 _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
@@ -360,6 +366,49 @@ class NativeOutputFallback:
     litellm_params: Mapping[str, object]
 
 
+_TOOLS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_TOOL_SPEC_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def warn_bedrock_strict_tools_dropped(model: str) -> None:
+    verbose_logger.warning(
+        "Bedrock rejected the strict tool schemas for model=%s, so litellm sent the request again without `strict` "
+        "because drop_params is set.",
+        model,
+    )
+
+
+def _without_strict(tool: Mapping[str, object]) -> Mapping[str, object]:
+    spec_key: Final = next((key for key in ("function", "toolSpec") if key in tool), None)
+    if spec_key is None:
+        return tool
+    spec: Final = _TOOL_SPEC_ADAPTER.validate_python(tool[spec_key])
+    return {**tool, spec_key: {key: value for key, value in spec.items() if key != "strict"}}
+
+
+def _sends_strict(tool: Mapping[str, object], supports_strict_tools: bool) -> bool:
+    if "toolSpec" in tool:
+        return "strict" in _TOOL_SPEC_ADAPTER.validate_python(tool["toolSpec"])
+    if "function" not in tool:
+        return False
+    return supports_strict_tools and bool(_TOOL_SPEC_ADAPTER.validate_python(tool["function"]).get("strict"))
+
+
+def bedrock_strict_tools_fallback(
+    model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+) -> NativeOutputFallback | None:
+    tools: Final = _TOOLS_ADAPTER.validate_python(optional_params.get("tools", ()))
+    supports_strict_tools: Final = bedrock_converse_supports_strict_tools(
+        bedrock_capability_model(model, litellm_params.get("base_model"))
+    )
+    if not any(_sends_strict(tool, supports_strict_tools) for tool in tools):
+        return None
+    return NativeOutputFallback(
+        optional_params={**optional_params, "tools": [_without_strict(tool) for tool in tools]},
+        litellm_params=litellm_params,
+    )
+
+
 def requests_output_config_format(optional_params: Mapping[str, object]) -> bool:
     match optional_params:
         case {"output_config": {"format": object()}}:
@@ -517,6 +566,26 @@ def strip_unsupported_bedrock_invoke_output_config_keys(
         request_body["output_config"] = {"format": preserved_format}  # rebind-ok: out-param
 
 
+_TOOL_ITEMS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+
+
+def _is_str_keyed_dict(
+    value: object,
+) -> TypeIs[dict[str, object]]:  # guard-ok: JSON tool objects  # mutable-ok: fallbacks reuse tools edited in place
+    return isinstance(value, dict)
+
+
+def _normalize_custom_field_on_tool(tool: object) -> None:
+    if not _is_str_keyed_dict(tool):
+        return
+    custom: Final = tool.pop("custom", None)
+    if not _is_str_keyed_dict(custom) or "defer_loading" in tool:
+        return
+    deferred: Final = custom.get("defer_loading")
+    if isinstance(deferred, bool):
+        tool["defer_loading"] = deferred  # rebind-ok: a fallback reuses the caller's tool, as on main
+
+
 def normalize_custom_field_on_tools(request_body: dict) -> None:
     """
     Drop the ``custom`` field from each tool, first hoisting a boolean
@@ -534,15 +603,8 @@ def normalize_custom_field_on_tools(request_body: dict) -> None:
     tools: Final = request_body.get("tools")
     if not tools or not isinstance(tools, list):
         return
-    for tool in tools:
-        if not isinstance(tool, dict):
-            continue
-        custom: dict[str, object] | None = tool.pop("custom", None)
-        if not isinstance(custom, dict) or "defer_loading" in tool:
-            continue
-        deferred: object = custom.get("defer_loading")
-        if isinstance(deferred, bool):
-            tool["defer_loading"] = deferred
+    for tool in _TOOL_ITEMS_ADAPTER.validate_python(tools):
+        _normalize_custom_field_on_tool(tool)
 
 
 _TOOL_DICTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
@@ -1256,6 +1318,12 @@ def _mantle_api_base_from_env() -> str | None:
         return None
     base: Final = env_base.rstrip("/")
     return next((base[: -len(suffix)] for suffix in _MANTLE_OPENAI_BASE_SUFFIXES if base.endswith(suffix)), base)
+
+
+DROP_DISABLED_REASONING_EFFORT_WARNING: Final = (
+    "Dropping %s=%r for Bedrock model=%r (drop_params=True) because the model map marks that level unsupported. "
+    "Send a level the model supports."
+)
 
 
 def bedrock_reasoning_effort_disabled(model: str, effort: str) -> bool:
