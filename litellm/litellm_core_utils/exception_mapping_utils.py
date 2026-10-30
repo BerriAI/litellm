@@ -389,6 +389,7 @@ def _map_openai_exception(
             model=model,
             llm_provider=custom_llm_provider,
             litellm_debug_info=extra_information,
+            response=_upstream_reply(response),
         )
     elif (
         ("invalid_request_error" in error_str and "content_policy_violation" in error_str)
@@ -460,6 +461,7 @@ def _map_openai_exception(
             model=model,
             llm_provider=custom_llm_provider,
             body=getattr(original_exception, "body", None),
+            response=_upstream_reply(response),
         )
     elif "Request too large" in error_str:
         raise RateLimitError(
@@ -490,6 +492,7 @@ def _map_openai_exception(
             model=model,
             request=_request,
             litellm_debug_info=extra_information,
+            response=_upstream_reply(response),
         )
     elif hasattr(original_exception, "status_code"):
         if original_exception.status_code == 400:
@@ -2091,6 +2094,7 @@ def _map_azure_exception(
             model=model,
             extra_information=extra_information,
             original_exception=original_exception,
+            response=response,
         )
     elif azure_error_code == "invalid_encrypted_content" or "could not be verified" in error_str:
         helpful_message: Final = (

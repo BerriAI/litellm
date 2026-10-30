@@ -639,6 +639,21 @@ def test_azure_content_policy_wins_over_context_length_code(monkeypatch: pytest.
 _AZURE_REFUSAL_BODY: Final = '{"error":{"message":"azure refused","type":"upstream_refusal","code":"refused"}}'
 _AZURE_DEPLOYMENT_NOT_FOUND_BODY: Final = '{"error":{"code":"DeploymentNotFound","message":"no such deployment"}}'
 _AZURE_INTERNAL_ERROR_BODY: Final = '{"error":{"code":"InternalServerError","message":"Internal server error"}}'
+_AZURE_CONTENT_FILTER_BODY: Final = json.dumps(
+    {
+        "error": {
+            "message": "The response was filtered due to the prompt triggering Azure OpenAI's content management policy.",
+            "type": None,
+            "param": "prompt",
+            "code": "content_filter",
+            "status": 400,
+            "innererror": {
+                "code": "ResponsibleAIPolicyViolation",
+                "content_filter_result": {"violence": {"filtered": True, "severity": "high"}},
+            },
+        }
+    }
+)
 _AZURE_KEY: Final = "azure-provider-secret"
 _AZURE_BASE: Final = "https://azure-upstream.openai.azure.com"
 _AZURE_ARGS: Final = {"api_base": _AZURE_BASE, "api_version": "2024-10-21", "api_key": _AZURE_KEY, "max_retries": 0}
@@ -722,6 +737,7 @@ async def _azure_atext_completion_stream() -> None:
     ("status_code", "body", "mapped_error"),
     (
         (400, _AZURE_REFUSAL_BODY, BadRequestError),
+        (400, _AZURE_CONTENT_FILTER_BODY, BadRequestError),
         (403, _AZURE_REFUSAL_BODY, litellm.APIError),
         (404, _AZURE_DEPLOYMENT_NOT_FOUND_BODY, litellm.NotFoundError),
         (500, _AZURE_INTERNAL_ERROR_BODY, openai.APIError),

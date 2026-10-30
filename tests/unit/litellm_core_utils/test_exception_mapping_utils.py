@@ -2981,3 +2981,40 @@ def test_gemini_server_error_response_carries_the_upstream_error_body(provider: 
 
     assert raised.value.response.status_code == 500
     assert raised.value.response.json() == json.loads(body)
+
+
+@pytest.mark.parametrize(
+    ("status_code", "message", "mapped_error"),
+    (
+        (500, "The server had an error processing your request. Sorry about that!", litellm.InternalServerError),
+        (520, "Web server is returning an unknown error", litellm.InternalServerError),
+        (504, "A timeout occurred", litellm.Timeout),
+        (500, "Mistral API raised a streaming error", litellm.APIError),
+    ),
+)
+def test_openai_error_matched_by_its_message_keeps_the_upstream_body(
+    status_code: int, message: str, mapped_error: type[Exception]
+) -> None:
+    body: Final = json.dumps({"error": {"message": message, "type": "server_error", "param": None, "code": None}})
+    sent_request: Final = httpx.Request(
+        "POST",
+        "https://api.openai.com/v1/chat/completions",
+        headers={"authorization": "Bearer sk-openai-secret"},
+        content=b'{"messages":[{"role":"user","content":"hi"}]}',
+    )
+    upstream: Final = httpx.Response(
+        status_code, content=body, headers={"x-request-id": "req-openai"}, request=sent_request
+    )
+
+    with pytest.raises(mapped_error) as raised:
+        exception_type(
+            model="gpt-5.6",
+            original_exception=openai.APIStatusError(message, response=upstream, body=json.loads(body)),
+            custom_llm_provider="openai",
+        )
+
+    error_response: Final = getattr(raised.value, "response")
+    assert error_response.text == body
+    assert error_response.headers["x-request-id"] == "req-openai"
+    assert "sk-openai-secret" not in str(error_response.request.headers)
+    assert error_response.request.content == b""
