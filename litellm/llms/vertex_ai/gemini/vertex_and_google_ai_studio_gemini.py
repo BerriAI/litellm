@@ -100,7 +100,7 @@ from ..common_utils import (
     VertexAIError,
     build_json_schema,
     build_vertex_schema,
-    needs_parameters_json_schema,
+    parameters_json_schema_for,
     supports_response_json_schema,
     with_integer_enums_that_fit,
 )
@@ -513,7 +513,7 @@ def mapped_gemini_speech_config(
 
 
 class _CallerFunction(TypedDict, total=False):
-    parameters: ReadOnly[Mapping[str, JsonValue]]
+    parameters: ReadOnly[Mapping[str, object]]
 
 
 class _CallerTool(_CallerFunction, total=False):
@@ -524,13 +524,17 @@ _CALLER_TOOL: Final = TypeAdapter(_CallerTool)
 _CALLER_TOOLS: Final = TypeAdapter(tuple[object, ...])
 
 
-def _parameters_json_schema(tool: object) -> Mapping[str, JsonValue] | None:
+def _caller_parameters(tool: object) -> Mapping[str, object] | None:
     try:
         caller_tool: Final = _CALLER_TOOL.validate_python(tool)
     except ValidationError:
         return None
-    parameters: Final = caller_tool.get("function", caller_tool).get("parameters")
-    return parameters if parameters is not None and needs_parameters_json_schema(parameters) else None
+    return caller_tool.get("function", caller_tool).get("parameters")
+
+
+def _parameters_json_schema(tool: object) -> Mapping[str, JsonValue] | None:
+    parameters: Final = _caller_parameters(tool)
+    return None if parameters is None else parameters_json_schema_for(parameters)
 
 
 def _parameters_json_schemas(tools: object) -> tuple[Mapping[str, JsonValue] | None, ...]:

@@ -2592,6 +2592,10 @@ _WEATHER_VERTEX_PARAMETERS: Final = {"type": "object", "properties": {"city": {"
             ],
         },
         {"$ref": "#/$defs/Lookup", "$defs": {"Lookup": {"oneOf": [_LOOKUP_BY_A, _LOOKUP_BY_B]}}},
+        {
+            "$ref": "#/$defs/Lookup",
+            "$defs": {"Lookup": {"$ref": "#/$defs/Union"}, "Union": {"anyOf": [_LOOKUP_BY_A, _LOOKUP_BY_B]}},
+        },
         {"allOf": [{"type": "object", "properties": _LOOKUP_PROPERTIES}, {"required": ["b"]}]},
     ],
     ids=[
@@ -2600,12 +2604,13 @@ _WEATHER_VERTEX_PARAMETERS: Final = {"type": "object", "properties": {"city": {"
         "root-object-branches",
         "object-with-property-branches",
         "root-ref-to-union",
+        "chained-root-ref-to-union",
         "root-all-of",
     ],
 )
 @pytest.mark.respx(assert_all_called=True)
 def test_gemini_sends_a_union_root_tool_schema_unchanged_as_parameters_json_schema(
-    respx_mock: respx.MockRouter, parameters: dict[str, object]
+    respx_mock: respx.MockRouter, parameters: Mapping[str, object]
 ) -> None:
     route: Final = respx_mock.post(
         url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash:generateContent.*"
@@ -2637,6 +2642,29 @@ def test_gemini_sends_a_union_root_tool_schema_unchanged_as_parameters_json_sche
                 {"name": "weather", "parameters": _WEATHER_VERTEX_PARAMETERS},
             ]
         }
+    ]
+
+
+def test_vertex_sends_a_union_root_tool_schema_built_with_tuples_as_parameters_json_schema() -> None:
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "parameters": {"anyOf": ({**_LOOKUP_BY_A, "required": ("a",)}, _LOOKUP_BY_B)},
+                    },
+                }
+            ]
+        },
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+
+    assert request_params["tools"] == [
+        {"function_declarations": [{"name": "lookup", "parametersJsonSchema": {"anyOf": [_LOOKUP_BY_A, _LOOKUP_BY_B]}}]}
     ]
 
 

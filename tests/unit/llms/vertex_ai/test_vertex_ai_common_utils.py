@@ -1,6 +1,6 @@
 import copy
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from enum import Enum
 from typing import Final
@@ -1644,6 +1644,11 @@ _OBJECT_BRANCH: Final = {"type": "object", "properties": {"a": {"type": "string"
         ({"type": "string"}, True),
         ({"$ref": "#/$defs/Lookup", "$defs": {"Lookup": {"anyOf": [_OBJECT_BRANCH]}}}, True),
         ({"$ref": "#/$defs/Lookup", "$defs": {"Lookup": {"type": ["object", "null"]}}}, True),
+        ({"type": ["object"], "properties": {"a": {"type": "string"}}}, False),
+        ({"$ref": "#/$defs/Lookup", "$defs": {"Lookup": {"type": ["OBJECT"]}}}, False),
+        ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"anyOf": [_OBJECT_BRANCH]}}}, True),
+        ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B"}, "B": _OBJECT_BRANCH}}, False),
+        ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/A"}}}, False),
     ],
     ids=[
         "object",
@@ -1661,9 +1666,14 @@ _OBJECT_BRANCH: Final = {"type": "object", "properties": {"a": {"type": "string"
         "non-object-type",
         "root-ref-to-union",
         "root-ref-to-type-list",
+        "single-object-type-list",
+        "root-ref-to-single-object-type-list",
+        "chained-root-ref-to-union",
+        "chained-root-ref-to-object",
+        "cyclic-root-ref",
     ],
 )
-def test_needs_parameters_json_schema(parameters: dict[str, JsonValue], expected: bool) -> None:
+def test_needs_parameters_json_schema(parameters: Mapping[str, JsonValue], expected: bool) -> None:
     assert needs_parameters_json_schema(parameters) is expected
 
 

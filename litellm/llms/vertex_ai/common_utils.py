@@ -11,6 +11,7 @@ from typing import Any, Final, Literal, TypeVar, cast, get_type_hints
 
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic_core import to_jsonable_python
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -891,23 +892,50 @@ _build_vertex_schema = build_vertex_schema
 
 _VERTEX_PARAMETERS_UNSUPPORTED_ROOT_KEYWORDS: Final = ("anyOf", "oneOf", "allOf")
 _ROOT_DEFS_REF_PREFIX: Final = "#/$defs/"
+_JSON_SCHEMA: Final = TypeAdapter(Mapping[str, JsonValue])
 
 
-def _root_ref_target(parameters: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
-    match parameters.get("$ref"), parameters.get("$defs"):
-        case str() as ref, dict() as defs if ref.startswith(_ROOT_DEFS_REF_PREFIX):
-            target: Final = defs.get(ref.removeprefix(_ROOT_DEFS_REF_PREFIX))
-            return target if isinstance(target, dict) else parameters
+def _is_absent_or_object_type(schema_type: object) -> bool:
+    match schema_type:
+        case None:
+            return True
+        case str():
+            return schema_type.lower() == "object"
+        case [str() as only_type]:
+            return only_type.lower() == "object"
         case _:
-            return parameters
+            return False
+
+
+def _root_cannot_be_vertex_parameters(root: Mapping[str, object]) -> bool:
+    return any(
+        keyword in root for keyword in _VERTEX_PARAMETERS_UNSUPPORTED_ROOT_KEYWORDS
+    ) or not _is_absent_or_object_type(root.get("type"))
+
+
+def _resolve_root_ref(
+    schema: Mapping[str, JsonValue], defs: Mapping[str, JsonValue], seen_refs: frozenset[str]
+) -> Mapping[str, JsonValue]:
+    match schema.get("$ref"):
+        case str() as ref if ref.startswith(_ROOT_DEFS_REF_PREFIX) and ref not in seen_refs:
+            target: Final = defs.get(ref.removeprefix(_ROOT_DEFS_REF_PREFIX))
+            return _resolve_root_ref(target, defs, seen_refs | {ref}) if isinstance(target, dict) else schema
+        case _:
+            return schema
 
 
 def needs_parameters_json_schema(parameters: Mapping[str, JsonValue]) -> bool:
-    root: Final = _root_ref_target(parameters)
-    schema_type: Final = root.get("type")
-    return any(keyword in root for keyword in _VERTEX_PARAMETERS_UNSUPPORTED_ROOT_KEYWORDS) or (
-        schema_type is not None and not (isinstance(schema_type, str) and schema_type.lower() == "object")
+    defs: Final = parameters.get("$defs")
+    return _root_cannot_be_vertex_parameters(
+        _resolve_root_ref(parameters, defs if isinstance(defs, dict) else {}, frozenset())
     )
+
+
+def parameters_json_schema_for(parameters: Mapping[str, object]) -> Mapping[str, JsonValue] | None:
+    if "$ref" not in parameters and not _root_cannot_be_vertex_parameters(parameters):
+        return None
+    json_schema: Final = _JSON_SCHEMA.validate_python(to_jsonable_python(parameters))
+    return json_schema if needs_parameters_json_schema(json_schema) else None
 
 
 def build_json_schema(parameters: dict) -> dict:
