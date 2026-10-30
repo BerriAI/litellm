@@ -1,5 +1,5 @@
 import builtins
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from enum import Enum
 from os import PathLike
 from typing import IO, TYPE_CHECKING, Any, Final, Generic, Literal, Optional, TypeAlias, Union
@@ -66,6 +66,7 @@ from pydantic import (
     ConfigDict,
     Discriminator,
     Field,
+    FieldSerializationInfo,
     NonNegativeInt,
     PrivateAttr,
     SerializerFunctionWrapHandler,
@@ -1487,15 +1488,66 @@ One of: completed, failed, in_progress, cancelled, queued, or incomplete.
 """
 
 
-_NULL_DROPPED_OUTPUT_ITEM_KEYS: Final = frozenset(
-    (
-        ("reasoning", "status"),
-        ("reasoning", "content"),
-        ("reasoning", "encrypted_content"),
-        ("tool_search_call", "created_by"),
-        ("tool_search_output", "created_by"),
-    )
-)
+_NULL_DROPPED_REASONING_ITEM_KEYS: Final = frozenset(("status", "content", "encrypted_content"))
+
+
+def _as_json_object(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _as_json_array(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, list) else None
+
+
+def _drops_created_by(value: object, *, drops_set_created_by: bool) -> bool:
+    return value is None or drops_set_created_by
+
+
+def _drops(item_type: object, key: object, value: object, *, drops_set_created_by: bool) -> bool:
+    if key == "created_by":
+        return _drops_created_by(value, drops_set_created_by=drops_set_created_by)
+    return value is None and item_type == "reasoning" and key in _NULL_DROPPED_REASONING_ITEM_KEYS
+
+
+def _without_created_by(entry: object, *, drops_set_created_by: bool) -> object:
+    entry_object: Final = _as_json_object(entry)
+    if entry_object is None:
+        return entry
+    return {
+        k: v
+        for k, v in entry_object.items()
+        if k != "created_by" or not _drops_created_by(v, drops_set_created_by=drops_set_created_by)
+    }
+
+
+def _replayable_output_value(item_type: object, key: object, value: object, *, drops_set_created_by: bool) -> object:
+    entries: Final = _as_json_array(value)
+    if item_type != "shell_call_output" or key != "output" or entries is None:
+        return value
+    return [_without_created_by(entry, drops_set_created_by=drops_set_created_by) for entry in entries]
+
+
+def replayable_responses_item(
+    item: Mapping[str, object], *, drops_set_created_by: bool = False
+) -> Mapping[str, object]:
+    item_type: Final = item.get("type")
+    return {
+        k: _replayable_output_value(item_type, k, v, drops_set_created_by=drops_set_created_by)
+        for k, v in item.items()
+        if not _drops(item_type, k, v, drops_set_created_by=drops_set_created_by)
+    }
+
+
+def replayable_responses_input(value: object, *, drops_set_created_by: bool = False) -> object:
+    items: Final = _as_json_array(value)
+    if items is None:
+        return value
+    return [
+        replayable_responses_item(obj, drops_set_created_by=drops_set_created_by)
+        if (obj := _as_json_object(item)) is not None
+        else item
+        for item in items
+    ]
 
 
 class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
@@ -1548,7 +1600,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
 
     @field_validator("reasoning", mode="before")
     @classmethod
-    def validate_reasoning_to_dict(cls, value: Any) -> dict[str, Any] | None:
+    def validate_reasoning_to_dict(cls, value: Any) -> builtins.object:
         """Accept API reasoning dict (including effort 'none'/'xhigh'); always store as dict."""
         if value is None:
             return None
@@ -1570,34 +1622,16 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
 
     @field_serializer("output", mode="wrap")
     @classmethod
-    def _serialize_output_filter_reasoning_nulls(cls, value, handler, _info):
+    def _serialize_output_as_replayable(
+        cls, value: builtins.object, handler: SerializerFunctionWrapHandler, _info: FieldSerializationInfo
+    ):
         """
-        Filter null status/content/encrypted_content from reasoning output items.
-
-        Mirrors the request-side filtering in
-        OpenAIResponsesAPIConfig._handle_reasoning_item() which filters these
-        same fields before sending requests to providers.
-
-        Without this, reasoning items include null fields that cause SDK errors
-        (e.g., the OpenAI C# SDK crashes on status=null).
-
-        Issue: https://github.com/BerriAI/litellm/issues/16824
+        Drop the nulls the SDK types default in but providers never send: created_by on every output item
+        (OpenAI rejects it when `output` is replayed as `input`), and status/content/encrypted_content on
+        reasoning items (the OpenAI C# SDK crashes on status=null, issue #16824).
         """
-        serialized: Final = handler(value)
-        if not isinstance(serialized, list):
-            return serialized
-        return [
-            (
-                {
-                    k: v
-                    for k, v in item.items()
-                    if v is not None or (item.get("type"), k) not in _NULL_DROPPED_OUTPUT_ITEM_KEYS
-                }
-                if isinstance(item, dict)
-                else item
-            )
-            for item in serialized
-        ]
+        serialized: Final[object] = handler(value)
+        return replayable_responses_input(serialized)
 
     @property
     def output_text(self) -> str:

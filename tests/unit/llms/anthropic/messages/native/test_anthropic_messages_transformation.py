@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -6,17 +7,23 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+import respx
 from pydantic import JsonValue
 
 import litellm
+from litellm import anthropic_beta_headers_manager
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.anthropic.wif import get_anthropic_wif_token
+from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessagesConfig
 from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
 from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
 from litellm.llms.tencent.messages.transformation import TencentAnthropicMessagesConfig
+from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+    VertexAIPartnerModelsAnthropicMessagesConfig,
+)
 from litellm.types.llms.anthropic import AnthropicFinishReason
 from litellm.types.router import GenericLiteLLMParams
 from tests.unit.llms.anthropic.test_anthropic_wif import (
@@ -77,6 +84,84 @@ def test_native_response_defaults_stop_sequence_without_changing_other_fields(
         **upstream,
         "stop_sequence": expected_stop_sequence,
     }
+
+
+_EMPTY_SCHEMA: Final[dict[str, object]] = {"type": "object", "properties": {}}
+
+
+@pytest.mark.parametrize(
+    "config_class",
+    [AnthropicMessagesConfig, VertexAIPartnerModelsAnthropicMessagesConfig],
+)
+@pytest.mark.parametrize(
+    ("drop_params", "expected_eager_tool"),
+    [
+        (True, {"name": "A", "input_schema": _EMPTY_SCHEMA}),
+        (False, {"name": "A", "input_schema": _EMPTY_SCHEMA, "custom": {"eager_input_streaming": True}}),
+    ],
+)
+def test_messages_request_hoists_wrapped_defer_loading_and_drops_custom_only_under_drop_params(
+    config_class: type[AnthropicMessagesConfig], drop_params: bool, expected_eager_tool: dict[str, object]
+) -> None:
+    tools: Final[list[dict[str, object]]] = [
+        {"name": "A", "input_schema": _EMPTY_SCHEMA, "custom": {"eager_input_streaming": True}},
+        {"name": "B", "input_schema": _EMPTY_SCHEMA, "custom": {"defer_loading": True}},
+        {"name": "C", "input_schema": _EMPTY_SCHEMA, "custom": {"defer_loading": True, "eager_input_streaming": True}},
+        {"name": "D", "input_schema": _EMPTY_SCHEMA},
+    ]
+    optional_params: Final[dict[str, object]] = {"max_tokens": 50, "tools": tools}
+
+    request: Final = config_class().transform_anthropic_messages_request(
+        model="claude-haiku-5-5",
+        messages=[{"role": "user", "content": "Hi"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+
+    assert request["tools"] == [
+        expected_eager_tool,
+        {"name": "B", "input_schema": _EMPTY_SCHEMA, "defer_loading": True},
+        {
+            "name": "C",
+            "input_schema": _EMPTY_SCHEMA,
+            "defer_loading": True,
+            **({} if drop_params else {"custom": {"eager_input_streaming": True}}),
+        },
+        {"name": "D", "input_schema": _EMPTY_SCHEMA},
+    ]
+    assert tools[0]["custom"] == {"eager_input_streaming": True}
+    assert optional_params["tools"] is tools
+
+
+@pytest.mark.parametrize(
+    ("config", "model"),
+    [
+        (DeepSeekAnthropicMessagesConfig(), "deepseek-chat"),
+        (MinimaxMessagesConfig(), "MiniMax-M2"),
+        (AnthropicMessagesConfig(), "deepseek-chat"),
+        (OpenAILikeAnthropicMessagesConfig(), "anthropic/claude-haiku-4.5"),
+    ],
+)
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_messages_request_never_defers_tools_off_claude(
+    config: AnthropicMessagesConfig, model: str, drop_params: bool
+) -> None:
+    wrapped_tool: Final[dict[str, object]] = {
+        "name": "A",
+        "input_schema": _EMPTY_SCHEMA,
+        "custom": {"defer_loading": True},
+    }
+
+    request: Final = config.transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Hi"}],
+        anthropic_messages_optional_request_params={"max_tokens": 50, "tools": [wrapped_tool]},
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+
+    assert request["tools"] == [{"name": "A", "input_schema": _EMPTY_SCHEMA} if drop_params else wrapped_tool]
 
 
 def test_workload_identity_allowed_for_anthropic() -> None:
@@ -416,3 +501,133 @@ def test_drop_params_forwards_a_non_object_message_item_as_sent_on_the_native_re
 
     assert request["messages"][1] == 7
     assert request["messages"][2]["content"][0]["content"] == [{"type": "text", "text": "sunny"}]
+
+
+BINDING_AND_DISPLAY_BETAS: Final = "thinking-binding-controls-2026-08-01,thinking-display-updates-2026-08-18"
+
+
+def test_messages_headers_add_the_binding_beta_when_thinking_carries_block_binding() -> None:
+    headers: Final = AnthropicMessagesConfig()._update_headers_with_anthropic_beta(
+        headers={},
+        optional_params={"thinking": {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}},
+        messages=[],
+    )
+    assert "thinking-binding-controls-2026-08-01" in headers["anthropic-beta"].split(",")
+
+
+def test_messages_headers_add_no_binding_beta_without_block_binding() -> None:
+    headers: Final = AnthropicMessagesConfig()._update_headers_with_anthropic_beta(
+        headers={}, optional_params={"thinking": {"type": "adaptive"}}, messages=[]
+    )
+    assert "thinking-binding-controls-2026-08-01" not in headers.get("anthropic-beta", "")
+
+
+def _bound_adaptive_request(headers: dict[str, str], drop_params: bool | None = True) -> dict[str, object]:
+    thinking: Final = {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+    optional_params: Final = {"max_tokens": 64, "thinking": thinking}
+    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers=headers,
+    )
+    assert thinking == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }, "the caller's thinking dict must survive for a fallback leg"
+    return request
+
+
+def test_messages_request_keeps_beta_gated_thinking_fields_when_the_final_header_carries_the_betas() -> None:
+    request: Final = _bound_adaptive_request({"anthropic-beta": BINDING_AND_DISPLAY_BETAS})
+    assert request["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+
+
+def test_messages_request_drops_beta_gated_thinking_fields_the_final_header_does_not_carry(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        request: Final = _bound_adaptive_request({"anthropic-beta": "thinking-binding-controls-2026-08-01"})
+    assert request["thinking"] == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+    assert any("thinking.display=updates" in record.getMessage() for record in caplog.records)
+
+
+def test_messages_request_sends_beta_gated_thinking_fields_as_is_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = _bound_adaptive_request({}, drop_params=None)
+    assert request["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+
+
+def test_messages_request_drops_clear_at_from_a_mid_conversation_system_turn_without_its_beta() -> None:
+    system_turn: Final = {"role": "system", "content": "be terse", "clear_at": "end_turn"}
+    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "hi"}, system_turn, {"role": "user", "content": "go"}],
+        anthropic_messages_optional_request_params={"max_tokens": 64},
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={"anthropic-beta": "mid-conversation-system-2026-07-01"},
+    )
+    assert request["messages"][1] == {"role": "system", "content": "be terse"}
+    assert system_turn == {"role": "system", "content": "be terse", "clear_at": "end_turn"}
+
+
+def test_a_provider_without_a_beta_headers_row_forwards_beta_gated_fields_under_drop_params(
+    local_beta_headers_config: None,
+) -> None:
+    thinking: Final = {"type": "enabled", "budget_tokens": 1024, "display": "updates"}
+    request: Final = MinimaxMessagesConfig().transform_anthropic_messages_request(
+        model="MiniMax-M2",
+        messages=[
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "Hello"},
+            {"role": "user", "content": "how are you"},
+            {"role": "system", "content": "Answer in French", "output_config": {"effort": "low"}},
+        ],
+        anthropic_messages_optional_request_params={"max_tokens": 64, "thinking": dict(thinking)},
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+    assert request["thinking"] == thinking
+    assert request["messages"][-1]["output_config"] == {"effort": "low"}
+
+
+def test_a_first_party_messages_request_never_fetches_the_remote_beta_headers_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+
+    with respx.mock(assert_all_called=False) as router:
+        remote_config: Final = router.get(litellm.anthropic_beta_headers_url).mock(
+            return_value=httpx.Response(200, json={})
+        )
+        request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+            model="claude-opus-4-8",
+            messages=[
+                {"role": "user", "content": "hi"},
+                {"role": "system", "content": "be terse", "clear_at": "end_turn"},
+                {"role": "user", "content": "go"},
+            ],
+            anthropic_messages_optional_request_params={"max_tokens": 64},
+            litellm_params=GenericLiteLLMParams(drop_params=True),
+            headers={},
+        )
+
+    assert request["messages"][1] == {"role": "system", "content": "be terse"}
+    assert not remote_config.called
