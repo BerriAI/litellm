@@ -20,6 +20,8 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.prompt_templates.common_utils import messages_with_file_parts_as_image_urls
+from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -427,6 +429,13 @@ class OCIChatConfig(BaseConfig):
             alias = param_map.get(key)
             if key == "reasoning_effort" and alias and not _model_supports_reasoning_effort(model):
                 if drop_params or litellm.drop_params:
+                    warn_dropped_reasoning(
+                        key,
+                        value,
+                        model,
+                        "the model map lists no reasoning_effort levels for it, so OCI would reject reasoningEffort.",
+                        drop_params_gated=True,
+                    )
                     continue
                 raise OCIError(
                     status_code=400,
@@ -450,6 +459,14 @@ class OCIChatConfig(BaseConfig):
                 if key == "n" and (value is None or value == 1):
                     continue
                 if drop_params or litellm.drop_params:
+                    if key == "reasoning_effort":
+                        warn_dropped_reasoning(
+                            key,
+                            value,
+                            model,
+                            "OCI's Cohere chat API has no reasoning effort field.",
+                            drop_params_gated=True,
+                        )
                     continue
                 raise OCIError(
                     status_code=400,
@@ -681,7 +698,9 @@ class OCIChatConfig(BaseConfig):
                 servingMode=serving_mode,
                 chatRequest=OCIChatRequestPayload(
                     apiFormat=vendor.value,
-                    messages=adapt_messages_to_generic_oci_standard(messages),
+                    messages=adapt_messages_to_generic_oci_standard(
+                        list(messages_with_file_parts_as_image_urls(messages))
+                    ),
                     **self._get_optional_params(vendor, optional_params, model),
                 ),
             )

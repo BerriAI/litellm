@@ -10,6 +10,7 @@ from typing import Any, Final
 from pydantic import JsonValue
 from typing_extensions import assert_never
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.count_tokens.transformation import ChatCountTranslationError, anthropic_count_fields
@@ -51,6 +52,18 @@ class CountTokensFailure:
 
 
 CountTokensOutcome = CountedTokens | CountTokensFailure
+
+
+def _claude_count_translator(litellm_params: Mapping[str, object]) -> AnthropicConfig:
+    deployment_model: Final = litellm_params.get("model")
+    if not isinstance(deployment_model, str):
+        return AnthropicConfig()
+    provider_hint: Final = litellm_params.get("custom_llm_provider")
+    model, provider, _, _ = litellm.get_llm_provider(
+        model=deployment_model, custom_llm_provider=provider_hint if isinstance(provider_hint, str) else None
+    )
+    chat_config: Final = litellm.ProviderConfigManager.get_provider_chat_config(model, LlmProviders(provider))
+    return chat_config if isinstance(chat_config, AnthropicConfig) else AnthropicConfig()
 
 
 def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: str) -> bool:
@@ -138,16 +151,22 @@ class BedrockTokenCounter(BaseTokenCounter):
         counted_model: Final = model_to_use.removeprefix("bedrock_mantle/")
         resolved_model: Final = get_bedrock_base_model(counted_model)
         primary_tokenizer: Final = MANTLE_TOKENIZER_TYPE if use_mantle else RUNTIME_TOKENIZER_TYPE
+        litellm_params: Final = (deployment or {}).get("litellm_params", {})
         translated: Final = (
             await anthropic_count_fields(
-                counted_model, messages, system, tools, messages_format, AnthropicConfig(), chat_params
+                counted_model,
+                messages,
+                system,
+                tools,
+                messages_format,
+                _claude_count_translator(litellm_params),
+                chat_params,
             )
             if is_mantle_claude_model(resolved_model)
             else None
         )
         if isinstance(translated, ChatCountTranslationError):
             return translated.response(request_model, model_to_use, primary_tokenizer)
-        litellm_params: Final = (deployment or {}).get("litellm_params", {})
         runtime_request: Final = (
             _request_data(model_to_use, messages, tools, system)
             if translated is None

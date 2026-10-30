@@ -1,6 +1,7 @@
 
 import json
 from typing import Final
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -463,6 +464,34 @@ def test_openrouter_cost_tracking_non_streaming():
         == 0.00015
     )
 
+
+
+@pytest.mark.parametrize("cost", [float("nan"), float("inf")])
+def test_openrouter_chat_leaves_a_non_finite_provider_cost_out_of_the_response_headers(cost: float) -> None:
+    body: Final = {
+        "id": "gen-123",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "openai/gpt-5.6-luna",
+        "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop", "index": 0}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11, "cost": cost},
+    }
+
+    result: Final = OpenrouterConfig().transform_response(
+        model="openrouter/openai/gpt-5.6-luna",
+        raw_response=httpx.Response(
+            200, content=json.dumps(body).encode(), headers={"content-type": "application/json"}
+        ),
+        model_response=litellm.ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "Reply with ok"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert "llm_provider-x-litellm-response-cost" not in result._hidden_params.get("additional_headers", {})
 
 def test_openrouter_cost_tracking_streaming():
     """

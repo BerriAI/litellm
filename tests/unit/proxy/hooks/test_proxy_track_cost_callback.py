@@ -3,6 +3,7 @@ import json
 import logging
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
@@ -622,6 +623,56 @@ async def test_async_post_call_failure_hook_reads_used_client_oauth_token_from_t
         end_time=datetime.now(),
     )
     assert json.loads(payload["metadata"])["used_client_oauth_token"] is expected
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_route, body",
+    [
+        (
+            "/cursor/chat/completions",
+            {
+                "input": "Hello",
+                "metadata": {"requester_ip_address": "203.0.113.9", "user_agent": "spoofed"},
+                "litellm_metadata": {"requester_ip_address": "127.0.0.1", "user_agent": "Cursor/1.0"},
+            },
+        ),
+        (
+            "/v1/chat/completions",
+            {
+                "messages": [{"role": "user", "content": "Hello"}],
+                "metadata": {"requester_ip_address": "127.0.0.1", "user_agent": "Cursor/1.0"},
+                "litellm_metadata": {"requester_ip_address": "203.0.113.9", "user_agent": "spoofed"},
+            },
+        ),
+    ],
+)
+async def test_async_post_call_failure_hook_logs_the_proxy_stamped_ip_and_user_agent(request_route: str, body: dict):
+    request_data = {
+        "model": "gpt-4o",
+        "proxy_server_request": {"request_id": "test_request_id"},
+        **body,
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await ProxyDBLogger().async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("invalid api key"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key", request_route=request_route),
+        )
+
+    payload = get_logging_payload(
+        kwargs=mock_update_database.call_args[1]["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert payload["requester_ip_address"] == "127.0.0.1"
+    assert json.loads(payload["metadata"])["user_agent"] == "Cursor/1.0"
 
 
 @pytest.mark.asyncio
@@ -2718,6 +2769,22 @@ async def test_failure_spend_rows_raise_the_live_spend_counters_by_their_cost(
 
 
 @pytest.mark.asyncio
+async def test_a_completed_cost_failure_raises_the_live_spend_counters_once(live_spend_counters: DualCache):
+    """A failure whose cost was already finalized settles through the success path's write, which raises the
+    counters itself."""
+    for key, spend in _LIVE_COUNTERS.items():
+        await live_spend_counters.async_set_cache(key, spend)
+
+    await _fail_request(
+        ProxyDBLogger(), {"standard_logging_object": {"cost_finalized": True, "response_cost": 0.125}}
+    )
+
+    assert await _counter_values(live_spend_counters) == pytest.approx(
+        {key: spend + 0.125 for key, spend in _LIVE_COUNTERS.items()}
+    )
+
+
+@pytest.mark.asyncio
 async def test_failure_spend_rows_leave_the_live_spend_counters_alone_while_spend_updates_are_disabled(
     live_spend_counters: DualCache, monkeypatch: pytest.MonkeyPatch
 ):
@@ -3072,7 +3139,10 @@ class _FakeDeploymentLookup:
     def __init__(self, deployments):
         self._deployments = deployments
 
-    def get_model_info(self, id):
+    def registry(self):
+        return self
+
+    def deployment_dict(self, id):
         if id not in self._deployments:
             return None
         return {"model_name": "premium-haiku", "model_info": {"id": id, "access_groups": list(self._deployments[id])}}
@@ -3271,10 +3341,10 @@ async def _no_fallback(line: bytes) -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_log_success_event_hands_the_sidecar_a_compact_event_and_skips_the_pipeline(tmp_path):
+async def test_async_log_success_event_hands_the_sidecar_a_compact_event_and_skips_the_pipeline(socket_path: Path):
     handler = _RecordingHandler()
     consumer = SpendEventConsumer(handler)
-    address = UnixAddress(path=str(tmp_path / "spend.sock"))
+    address = UnixAddress(path=str(socket_path))
     server = await consumer.serve(address)
     producer = SpendEventProducer(
         address=address, on_unavailable="fallback", buffer_size=10, connect_timeout=1.0, fallback=_no_fallback
@@ -3632,11 +3702,12 @@ def _grounded_gemini_kwargs(response_cost: float) -> dict:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("opted_in", [True, False])
-async def test_track_cost_callback_frees_grounding_under_the_allowance_only_when_opted_in(monkeypatch, opted_in):
+@pytest.mark.parametrize(("opted_in", "finalized"), [(True, False), (False, False), (True, True)])
+async def test_track_cost_callback_frees_grounding_under_the_allowance_only_when_opted_in(monkeypatch, opted_in, finalized):
     monkeypatch.setattr(litellm, "apply_search_free_tier", opted_in, raising=False)
     counter = _SharedCounter()
     kwargs = _grounded_gemini_kwargs(response_cost=1.0)
+    kwargs["standard_logging_object"]["cost_finalized"] = finalized
     response = ModelResponse(
         usage=Usage(
             prompt_tokens=10,
@@ -3663,7 +3734,7 @@ async def test_track_cost_callback_frees_grounding_under_the_allowance_only_when
         mock_proxy_logging.internal_usage_cache.dual_cache.redis_cache = counter
 
         await ProxyDBLogger()._PROXY_track_cost_callback(
-            kwargs=kwargs, completion_response=response, start_time=datetime.now(), end_time=datetime.now()
+            kwargs=kwargs, completion_response=response, start_time=_CALL_START, end_time=_CALL_START
         )
         await asyncio.sleep(0)
 
@@ -3671,13 +3742,16 @@ async def test_track_cost_callback_frees_grounding_under_the_allowance_only_when
         mock_proxy_logging.db_spend_update_writer.update_database.assert_awaited_once()
 
     breakdown = kwargs["standard_logging_object"]["cost_breakdown"]
-    if opted_in:
+    if opted_in and not finalized:
         assert kwargs["response_cost"] == pytest.approx(1.0 - 5 * 0.1)
         assert breakdown["original_cost"] == 1.0 and breakdown["discount_amount"] == pytest.approx(5 * 0.1)
         assert sum(counter.totals.values()) == 5
     else:
         assert kwargs["response_cost"] == 1.0 and "discount_amount" not in breakdown
         assert counter.totals == {}
+
+    written_cost = mock_proxy_logging.db_spend_update_writer.update_database.await_args.kwargs["response_cost"]
+    assert written_cost == pytest.approx(kwargs["standard_logging_object"]["response_cost"])
 
 
 @pytest.mark.asyncio
