@@ -201,7 +201,7 @@ def test_a_targeted_coroutine_closed_from_another_context_does_not_raise() -> No
     assert current_service_target() is None
 
 
-_DIRECT_REDIS_CALL: Final = re.compile(r"\b_?redis_cache\.(?!async_register_script\b)(?:async_)?\w+\(")
+_DIRECT_REDIS_CALL: Final = re.compile(r"\b_?redis_cache\.(?!(?:async_register_script|transport)\b)(?:async_)?\w+\(")
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,6 +224,22 @@ def _scan_function(source: str, fn: ast.FunctionDef | ast.AsyncFunctionDef) -> _
         declares_a_family=bool(_DECLARES_TARGET.search(body + "\n" + decorators)),
         referenced_names=(names | attrs) - {fn.name},
     )
+
+
+@pytest.mark.parametrize(
+    ("body", "reaches_redis"),
+    (
+        ("redis_cache.transport()", False),
+        ('redis_cache.async_register_script("lua")', False),
+        ('redis_cache.async_get_cache("key")', True),
+        ('redis_cache.transport(); redis_cache.async_get_cache("key")', True),
+    ),
+)
+def test_redis_family_scan_distinguishes_factories_from_commands(body: str, reaches_redis: bool) -> None:
+    source: Final = f"def call():\n    {body}\n"
+    function: Final = ast.parse(source).body[0]
+    assert isinstance(function, ast.FunctionDef)
+    assert _scan_function(source, function).reaches_redis_directly is reaches_redis
 
 
 def _covered_by_callers(scans: tuple[_FunctionScan, ...], covered: frozenset[str]) -> frozenset[str]:

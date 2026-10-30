@@ -44,7 +44,7 @@ import secrets
 from base64 import urlsafe_b64encode
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Final, Literal, Protocol, TypeVar
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -98,6 +98,17 @@ from litellm.proxy.mcp_server.outbound_credentials.session_token import (
     open_session_refresh_token,
     open_session_token,
 )
+from litellm.redis.stores.mcp_single_use import (
+    AssertionRedeemed,
+    AuthCodeUsed,
+    ConnectFlowUsed,
+    RefreshFamilyRevoked,
+    RefreshTokenUsed,
+    SingleUseMarker,
+    TransportMcpSingleUseStore,
+    marker_key,
+)
+from litellm.redis.transport.contract import RedisFailure
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -130,11 +141,7 @@ the 10-minute ceiling RFC 6749 section 4.1.2 recommends. Single-use and PKCE bin
 unchanged, so the longer window only extends how long the legitimate holder has to paste
 it, not what an observer could do with it."""
 _CLAIM_TTL_BUFFER_SECONDS: Final = 60
-_USED_CODE_CACHE_PREFIX: Final = "mcp_gateway_dcr_code_used:"
-_USED_FLOW_CACHE_PREFIX: Final = "mcp_gateway_dcr_flow_used:"
-_USED_REFRESH_CACHE_PREFIX: Final = "mcp_gateway_dcr_refresh_used:"
 _REFRESH_REPLAYED_DESCRIPTION: Final = "the refresh token was already used"
-_REVOKED_REFRESH_FAMILY_CACHE_PREFIX: Final = "mcp_gateway_dcr_refresh_family_revoked:"
 _REFRESH_FAMILY_REVOKED_DESCRIPTION: Final = "the refresh token was revoked"
 
 MAX_REDIRECT_URIS: Final = 4
@@ -260,7 +267,7 @@ class AssertionIdentity(SubjectIdentity):
     marker must outlive it, the ``scope`` the credential is issued for, and the route groups that
     scope narrows the credential to (``None`` leaves it the full ``lite login`` credential)."""
 
-    replay_key: str = Field(min_length=1)
+    replay: AssertionRedeemed
     replay_ttl_seconds: int = Field(gt=0)
     scope: str | None = None
     allowed_routes: tuple[str, ...] | None = None
@@ -468,14 +475,6 @@ def resolve_session_signing(master_key: str | None, caller: str) -> SessionSigni
         verbose_logger.error("%s rejected: %s", caller, keys.detail)
         return _oauth_error(500, "server_error", "the gateway session signing configuration is invalid")
     return SessionSigning(keys=keys, now=datetime.now(timezone.utc))
-
-
-def _refresh_claim_key(jti: str) -> str:
-    return f"{_USED_REFRESH_CACHE_PREFIX}{jti}"
-
-
-def _refresh_family_key(family: str) -> str:
-    return f"{_REVOKED_REFRESH_FAMILY_CACHE_PREFIX}{family}"
 
 
 _REFRESH_CLAIM_TTL_SECONDS: Final = SESSION_REFRESH_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS
@@ -1229,7 +1228,7 @@ async def complete_connect_flow(
             return _oauth_error(400, "invalid_request", "authorize the requested MCP server before finishing")
     flow_refusal: Final = _claim_refusal(
         await _SingleUseGuard(cache).claim(
-            f"{_USED_FLOW_CACHE_PREFIX}{opened.jti}", CONNECT_FLOW_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS
+            ConnectFlowUsed(opened.jti), CONNECT_FLOW_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS
         ),
         replayed=_oauth_error(
             400, "invalid_request", "this connect flow was already completed; restart the connection"
@@ -1348,7 +1347,7 @@ class _SingleUseGuard:
     id replays through a different worker):
 
     - When a Redis backend is configured it is the SOLE authority: the claim goes straight to Redis
-      (``INCR`` is atomic across replicas), and any Redis fault fails the claim CLOSED — it never falls
+      (``INCRBYFLOAT`` is atomic across replicas), and any Redis fault fails the claim CLOSED — it never falls
       back to the per-worker in-memory count (``DualCache.async_increment_cache`` does fall back, which
       is exactly the replay window this avoids).
     - With no Redis configured (single-replica) the in-memory increment is authoritative within the one
@@ -1361,8 +1360,8 @@ class _SingleUseGuard:
         self._cache = cache
 
     @with_service_target(_DCR_CLAIMS_TARGET)
-    async def claim(self, key: str, ttl_seconds: int) -> ClaimOutcome:
-        """Atomically claim ``key``. ``"first"`` iff this caller is the first (increment to 1),
+    async def claim(self, marker: SingleUseMarker, ttl_seconds: int) -> ClaimOutcome:
+        """Atomically claim ``marker``. ``"first"`` iff this caller is the first (increment to 1),
         ``"replayed"`` on a replay (>1), and ``"unavailable"`` when the claim could not be recorded in
         the shared backend, which every caller treats as a refusal (fail closed)."""
         from litellm.proxy.proxy_server import redis_usage_cache  # noqa: PLC0415  # circular import at module load
@@ -1374,41 +1373,36 @@ class _SingleUseGuard:
         # proxy already treats as cross-worker, so no call site can wire the guarantee away.
         redis_cache: Final = redis_usage_cache or getattr(self._cache, "redis_cache", None)
         if redis_cache is not None:
-            # Shared, atomic authority for multi-replica deployments. Claim ONLY against Redis and fail
-            # CLOSED on any Redis fault (async_increment re-raises) rather than fall back to the
-            # per-worker in-memory count, which would let each replica observe count==1 and replay the id.
-            try:
-                count = await redis_cache.async_increment(key, 1, ttl=ttl_seconds)
-            except Exception as e:  # noqa: BLE001  # ANY Redis fault fails the single-use claim closed
-                verbose_logger.warning(
-                    "mcp gateway single-use claim: shared cache backend unavailable, failing closed: %s", e
-                )
-                return "unavailable"
-            return "first" if count == 1 else "replayed"
+            match await TransportMcpSingleUseStore(redis_cache.transport()).claim(
+                marker, ttl=timedelta(seconds=ttl_seconds)
+            ):
+                case RedisFailure():
+                    return "unavailable"
+                case 1:
+                    return "first"
+                case _:
+                    return "replayed"
         # No shared backend configured (single-replica): the in-memory increment is authoritative.
-        count = await self._cache.async_increment_cache(key, 1, ttl=ttl_seconds, local_only=True)
+        count: Final = await self._cache.async_increment_cache(marker_key(marker), 1, ttl=ttl_seconds, local_only=True)
         return "first" if count == 1 else "replayed"
 
     @with_service_target(_DCR_CLAIMS_TARGET)
-    async def peek(self, key: str) -> Literal["unclaimed", "claimed", "unavailable"]:
+    async def peek(self, marker: SingleUseMarker) -> Literal["unclaimed", "claimed", "unavailable"]:
         """Read-only view of a single-use marker, resolved against the same shared authority as
         :meth:`claim` so introspection observes exactly the record redemption and revocation wrote.
-        A backend fault is ``"unavailable"`` (fail closed) rather than a guess either way, which is why
-        the read goes to the Redis client itself: the cache wrapper's ``async_get_cache`` turns a fault
-        into ``None``, and ``None`` here would pass as unclaimed. The key is namespaced exactly as the
-        wrapper namespaces every write, or a ``namespace`` configured under ``coordination_redis`` or
-        ``cache_params`` would hide the marker."""
+        A backend fault is ``"unavailable"`` (fail closed) rather than a guess either way."""
         from litellm.proxy.proxy_server import redis_usage_cache  # noqa: PLC0415  # circular import at module load
 
         redis_cache: Final = redis_usage_cache or getattr(self._cache, "redis_cache", None)
         if redis_cache is not None:
-            try:
-                value = await redis_cache.init_async_client().get(redis_cache.check_and_fix_namespace(key=key))
-            except Exception as e:  # noqa: BLE001  # ANY Redis fault fails the read closed
-                verbose_logger.warning("mcp gateway single-use peek: shared cache backend unavailable: %s", e)
-                return "unavailable"
-            return "unclaimed" if value is None else "claimed"
-        local: Final = await self._cache.async_get_cache(key, local_only=True)
+            match await TransportMcpSingleUseStore(redis_cache.transport()).peek(marker):
+                case RedisFailure():
+                    return "unavailable"
+                case True:
+                    return "claimed"
+                case False:
+                    return "unclaimed"
+        local: Final = await self._cache.async_get_cache(marker_key(marker), local_only=True)
         return "unclaimed" if local is None else "claimed"
 
 
@@ -1417,7 +1411,7 @@ async def _family_refusal(guard: _SingleUseGuard, family: str | None) -> Respons
     minted; a backend that cannot say answers 503."""
     if family is None:
         return None
-    peeked: Final = await guard.peek(_refresh_family_key(family))
+    peeked: Final = await guard.peek(RefreshFamilyRevoked(family))
     match peeked:
         case "unclaimed":
             return None
@@ -1666,7 +1660,7 @@ class _ProxyCredentialIssuer:
     async def __call__(
         self,
         principal: SessionPrincipal,
-        claim_key: str,
+        claim: SingleUseMarker,
         claim_ttl_seconds: int,
         replayed: str,
         family: str | None = None,
@@ -1678,7 +1672,7 @@ class _ProxyCredentialIssuer:
         if not isinstance(minted, MintedProxyCredential):
             return _mint_failure_response(minted)
         refusal: Final = _claim_refusal(
-            await self._guard.claim(claim_key, claim_ttl_seconds),
+            await self._guard.claim(claim, claim_ttl_seconds),
             replayed=_oauth_error(400, "invalid_grant", replayed),
         )
         if refusal is not None:
@@ -1712,21 +1706,26 @@ class _GrantIssuer:
     async def __call__(
         self,
         principal: SessionPrincipal,
-        claim_key: str,
+        claim: SingleUseMarker,
         claim_ttl_seconds: int,
         replayed: str,
         family: str | None = None,
     ) -> Response:
         match principal.audience:
             case None:
-                return await self._issue_session_pair(principal, claim_key, claim_ttl_seconds, replayed, family)
+                return await self._issue_session_pair(principal, claim, claim_ttl_seconds, replayed, family)
             case "proxy_api":
-                return await self._issue_proxy_credential(principal, claim_key, claim_ttl_seconds, replayed, family)
+                return await self._issue_proxy_credential(principal, claim, claim_ttl_seconds, replayed, family)
             case _:
                 assert_never(principal.audience)
 
     async def _issue_session_pair(
-        self, principal: SessionPrincipal, claim_key: str, claim_ttl_seconds: int, replayed: str, family: str | None
+        self,
+        principal: SessionPrincipal,
+        claim: SingleUseMarker,
+        claim_ttl_seconds: int,
+        replayed: str,
+        family: str | None,
     ) -> Response:
         ended: Final = await _family_refusal(self._guard, family)
         if ended is not None:
@@ -1735,7 +1734,7 @@ class _GrantIssuer:
         if failure is not None:
             return _reload_failure_response(failure)
         refusal: Final = _claim_refusal(
-            await self._guard.claim(claim_key, claim_ttl_seconds),
+            await self._guard.claim(claim, claim_ttl_seconds),
             replayed=_oauth_error(400, "invalid_grant", replayed),
         )
         if refusal is not None:
@@ -1743,12 +1742,17 @@ class _GrantIssuer:
         return _session_token_pair(principal, self._signing.keys, self._signing.now, family)
 
     async def _issue_proxy_credential(
-        self, principal: SessionPrincipal, claim_key: str, claim_ttl_seconds: int, replayed: str, family: str | None
+        self,
+        principal: SessionPrincipal,
+        claim: SingleUseMarker,
+        claim_ttl_seconds: int,
+        replayed: str,
+        family: str | None,
     ) -> Response:
         target_refusal: Final = self._proxy_api_target_refusal()
         if target_refusal is not None:
             return target_refusal
-        return await self._proxy_credential(principal, claim_key, claim_ttl_seconds, replayed, family)
+        return await self._proxy_credential(principal, claim, claim_ttl_seconds, replayed, family)
 
     async def exchange(
         self, subject_token: str, client_id: str, exchange_subject_token: ExchangeSubjectToken
@@ -1787,7 +1791,7 @@ class _GrantIssuer:
         if isinstance(identity, SubjectTokenRefusal):
             return _subject_token_refusal_response(identity)
         refused: Final = _claim_refusal(
-            await self._guard.claim(identity.replay_key, identity.replay_ttl_seconds),
+            await self._guard.claim(identity.replay, identity.replay_ttl_seconds),
             _oauth_error(400, "invalid_grant", "the assertion has already been redeemed"),
         )
         if refused is not None:
@@ -1853,7 +1857,7 @@ async def _authorization_code_grant(
             audience=parsed.audience,
             team_id=parsed.team_id,
         ),
-        claim_key=f"{_USED_CODE_CACHE_PREFIX}{parsed.jti}",
+        claim=AuthCodeUsed(parsed.jti),
         claim_ttl_seconds=parsed.exp - int(now.timestamp()) + _CLAIM_TTL_BUFFER_SECONDS,
         replayed="the authorization code was already used",
     )
@@ -1891,7 +1895,7 @@ async def _refresh_token_grant(
     # credential file, and the chain it recovers into has to be alive. Only a revocation ends it.
     return await issue(
         opened.principal,
-        claim_key=_refresh_claim_key(opened.jti),
+        claim=RefreshTokenUsed(opened.jti),
         claim_ttl_seconds=_REFRESH_CLAIM_TTL_SECONDS,
         replayed=_REFRESH_REPLAYED_DESCRIPTION,
         family=opened.family,
@@ -1922,7 +1926,7 @@ async def refresh_proxy_credential(
     issue: Final = _ProxyCredentialIssuer(signing, mint_proxy_credential, _SingleUseGuard(cache))
     return await issue(
         opened.principal,
-        claim_key=_refresh_claim_key(opened.jti),
+        claim=RefreshTokenUsed(opened.jti),
         claim_ttl_seconds=_REFRESH_CLAIM_TTL_SECONDS,
         replayed=_REFRESH_REPLAYED_DESCRIPTION,
         family=opened.family,
@@ -1999,8 +2003,8 @@ async def revoke_session_refresh_token(
     opened: Final = open_session_refresh_bearer(token, signing.keys, signing.now, expected_client_id=client_id)
     if isinstance(opened, SessionRefreshOpened):
         guard: Final = _SingleUseGuard(cache)
-        ended: Final = await guard.claim(_refresh_family_key(opened.family), _REFRESH_CLAIM_TTL_SECONDS)
-        burned: Final = await guard.claim(_refresh_claim_key(opened.jti), _REFRESH_CLAIM_TTL_SECONDS)
+        ended: Final = await guard.claim(RefreshFamilyRevoked(opened.family), _REFRESH_CLAIM_TTL_SECONDS)
+        burned: Final = await guard.claim(RefreshTokenUsed(opened.jti), _REFRESH_CLAIM_TTL_SECONDS)
         if "unavailable" in (burned, ended):
             return _oauth_error(503, "temporarily_unavailable", _CLAIM_UNAVAILABLE_DESCRIPTION)
     return Response(content="{}", media_type="application/json", headers=TOKEN_NO_CACHE_HEADERS)
@@ -2085,8 +2089,8 @@ async def introspect_gateway_token(
         return _inactive_introspection_response()
     if opened.kind == "session_refresh":
         guard: Final = _SingleUseGuard(cache)
-        used: Final = await guard.peek(_refresh_claim_key(opened.jti))
-        ended: Final = await guard.peek(_refresh_family_key(opened.family))
+        used: Final = await guard.peek(RefreshTokenUsed(opened.jti))
+        ended: Final = await guard.peek(RefreshFamilyRevoked(opened.family))
         if "unavailable" in (used, ended):
             return _oauth_error(503, "temporarily_unavailable", _CLAIM_UNAVAILABLE_DESCRIPTION)
         if "claimed" in (used, ended):
