@@ -310,6 +310,41 @@ async def test_handle_budget_for_entity_updates_only_cleared_or_supplied_fields(
 
 
 @pytest.mark.asyncio
+async def test_handle_budget_for_entity_update_carrying_own_budget_id() -> None:
+    """Regression for #46999: a /tag/update that carries the tag's own budget_id
+    500'd with "multiple values for keyword argument 'budget_id'" because the id
+    was collected into the update fields and also passed explicitly. The id is
+    the row identity, not an updatable field, and the update must go through."""
+    from litellm.proxy.management_helpers.utils import handle_budget_for_entity
+    from litellm.types.tag_management import TagUpdateRequest
+
+    tag: Final = TagUpdateRequest.model_validate({"name": "budget-tag", "budget_id": "budget-1", "max_budget": 10})
+    budget_update: Final = AsyncMock()
+    prisma_client: Final = cast(
+        PrismaClient,
+        SimpleNamespace(db=SimpleNamespace(litellm_budgettable=SimpleNamespace(update=budget_update))),
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+    ):
+        returned: Final = await handle_budget_for_entity(
+            data=tag,
+            existing_budget_id="budget-1",
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin"),
+            prisma_client=prisma_client,
+            litellm_proxy_admin_name="admin",
+            cleared_budget_fields=frozenset(),
+        )
+
+    assert returned == "budget-1"
+    budget_update.assert_awaited_once()
+    update_data: Final = cast(Mapping[str, object], budget_update.await_args.kwargs["data"])
+    assert update_data.get("max_budget") == 10
+
+
+@pytest.mark.asyncio
 async def test_add_new_member_no_budget_when_default_budget_row_is_missing():
     from litellm.proxy._types import LitellmUserRoles
 
