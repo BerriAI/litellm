@@ -242,11 +242,10 @@ async def test_store_in_memory_spend_updates_restores_on_rpush_failure(
 
 
 @pytest.mark.asyncio
-async def test_store_in_memory_spend_updates_all_empty_returns_early(redis_update_buffer, mock_redis_cache):
+async def test_store_in_memory_spend_updates_all_empty_returns_early(redis_update_buffer, mock_redis_cache, raw_redis):
     """
     When all queues are empty, pipeline should never be called.
     """
-    mock_redis_cache.async_rpush_pipeline = AsyncMock()
 
     # All queues return empty
     empty_queue = AsyncMock()
@@ -263,7 +262,7 @@ async def test_store_in_memory_spend_updates_all_empty_returns_early(redis_updat
         daily_agent_spend_update_queue=empty_daily_queue,
     )
 
-    mock_redis_cache.async_rpush_pipeline.assert_not_called()
+    assert await raw_redis.keys("*") == []
 
 
 @pytest.mark.asyncio
@@ -540,11 +539,10 @@ async def test_restored_window_spend_transactions_drain_back_unchanged(
 
 
 @pytest.mark.asyncio
-async def test_restore_transactions_to_redis_noop_when_empty(redis_update_buffer, mock_redis_cache):
+async def test_restore_transactions_to_redis_noop_when_empty(redis_update_buffer, mock_redis_cache, raw_redis):
     """Nothing to restore -> no Redis call."""
-    mock_redis_cache.async_rpush_pipeline = AsyncMock()
     await redis_update_buffer.restore_transactions_to_redis()
-    mock_redis_cache.async_rpush_pipeline.assert_not_called()
+    assert await raw_redis.keys("*") == []
 
 
 @pytest.mark.asyncio
@@ -865,8 +863,9 @@ async def test_store_spend_logs_in_redis_is_off_unless_transaction_buffering_is_
 async def test_tool_discoveries_go_back_on_the_queue_when_the_redis_push_fails():
     from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import ToolDiscoveryQueue
 
-    redis_cache = MagicMock()
-    redis_cache.async_rpush_pipeline = AsyncMock(side_effect=ConnectionError("redis down"))
+    server: Final = fakeredis.FakeServer()
+    redis_cache: Final = fake_redis_cache(server)
+    server.connected = False
     queue = ToolDiscoveryQueue()
     queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
     queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})

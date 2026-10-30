@@ -20,10 +20,8 @@ from litellm.caching import RedisCache
 from litellm.constants import (
     MAX_REDIS_BUFFER_DEQUEUE_COUNT,
     REDIS_SPEND_LOGS_BUFFER_MAX_ROWS,
-    REDIS_TOOL_DISCOVERY_BUFFER_KEY,
     REDIS_UPDATE_BUFFER_KEY,
 )
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     BaseDailySpendTransaction,
     DailyAgentSpendTransaction,
@@ -59,12 +57,9 @@ from litellm.redis.stores.spend_update_buffer import (
     TransportSpendUpdateBufferStore,
     spend_buffer_key,
 )
+from litellm.redis.stores.tool_discovery_buffer import ToolDiscoveryBufferStore, TransportToolDiscoveryBufferStore
 from litellm.redis.transport.contract import RedisFailure, raise_redis_failure
 from litellm.secret_managers.main import str_to_bool
-from litellm.types.caching import (
-    RedisPipelineLpopOperation,
-    RedisPipelineRpushOperation,
-)
 from litellm.types.services import ServiceTypes
 
 SPEND_QUEUE_TARGET: Final = "spend_queue"
@@ -125,6 +120,10 @@ def _parked_spend_logs(redis_cache: RedisCache) -> SpendLogsParkingStore:
     return TransportSpendLogsParkingStore(redis_cache.transport())
 
 
+def _tool_discoveries(redis_cache: RedisCache) -> ToolDiscoveryBufferStore:
+    return TransportToolDiscoveryBufferStore(redis_cache.transport())
+
+
 def _zero_for_non_finite_constant(constant: str) -> float:
     verbose_proxy_logger.warning(
         "Redis spend buffer - reading a parked %s spend as 0, the spend it held is lost", constant
@@ -158,9 +157,6 @@ def _merged_entity_transactions(
         (_entity_transactions(transaction, field) for transaction in list_of_transactions),
         {},
     )
-
-
-_TOOL_DISCOVERY_ITEMS: Final = TypeAdapter(list[ToolDiscoveryQueueItem])
 
 
 class RedisUpdateBuffer:
@@ -575,46 +571,38 @@ class RedisUpdateBuffer:
         items: Final = tool_discovery_queue.flush()
         if not items:
             return
-        try:
-            _ = await self.redis_cache.async_rpush_pipeline(
-                rpush_list=[
-                    RedisPipelineRpushOperation(key=REDIS_TOOL_DISCOVERY_BUFFER_KEY, values=[safe_dumps(items)])
-                ]
-            )
-        except (RedisError, OSError, asyncio.TimeoutError) as e:
-            verbose_proxy_logger.error(
-                "Tool discovery - failed to push %d tool rows to Redis, restoring them for the next tick. Error: %s",
-                len(items),
-                str(e),
-            )
-            for item in items:
-                tool_discovery_queue.add_update(item)
+        pushed: Final = await _tool_discoveries(self.redis_cache).push(items)
+        if not isinstance(pushed, RedisFailure):
+            return
+        if pushed.kind not in ("transport", "server"):
+            raise_redis_failure(pushed)
+        verbose_proxy_logger.error(
+            "Tool discovery - failed to push %d tool rows to Redis, restoring them for the next tick. Error: %s",
+            len(items),
+            pushed.message,
+        )
+        for item in items:
+            tool_discovery_queue.add_update(item)
 
     @with_service_target(SPEND_QUEUE_TARGET)
     async def restore_tool_discoveries_to_redis(self, items: Sequence[ToolDiscoveryQueueItem]) -> None:
         """Put drained tool rows back for the next drain after a write that provably did not apply."""
         if self.redis_cache is None or not items:
             return
-        _ = await self.redis_cache.async_rpush_pipeline(
-            rpush_list=[
-                RedisPipelineRpushOperation(key=REDIS_TOOL_DISCOVERY_BUFFER_KEY, values=[safe_dumps(list(items))])
-            ]
-        )
+        restored: Final = await _tool_discoveries(self.redis_cache).push(items)
+        if isinstance(restored, RedisFailure):
+            raise_redis_failure(restored)
 
     @with_service_target(SPEND_QUEUE_TARGET)
     async def get_all_tool_discoveries_from_redis_buffer(self) -> tuple[ToolDiscoveryQueueItem, ...]:
         """Drain every worker's tool rows and fold them to one row per tool_name."""
         if self.redis_cache is None:
             return ()
-        popped: Final = await self.redis_cache.async_lpop_pipeline(
-            lpop_list=[
-                RedisPipelineLpopOperation(key=REDIS_TOOL_DISCOVERY_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT)
-            ]
-        )
-        entries: Final = popped[0] if popped else None
-        if not entries:
+        batches: Final = await _tool_discoveries(self.redis_cache).drain(count=MAX_REDIS_BUFFER_DEQUEUE_COUNT)
+        if isinstance(batches, RedisFailure):
+            raise_redis_failure(batches)
+        if not batches:
             return ()
-        batches: Final = tuple(_TOOL_DISCOVERY_ITEMS.validate_json(entry) for entry in entries)
         return aggregate_tool_discoveries(chain.from_iterable(batches))
 
     @with_service_target(SPEND_QUEUE_TARGET)
