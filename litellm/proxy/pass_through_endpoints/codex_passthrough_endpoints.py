@@ -41,6 +41,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import pass_thr
 from litellm.proxy.response_api_endpoints.endpoints import responses_api
 from litellm.responses.additional_tools import with_additional_tools_hoisted
 from litellm.responses.litellm_completion_transformation.reasoning_items import is_other_provider_reasoning_item
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import EncryptedContentAffinityCheck
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.router import Deployment
@@ -359,7 +360,16 @@ def _with_reasoning_the_targets_can_decrypt(
         EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
             llm_router, kept, None, group, unmarked_origin=None
         )
-    return {**body, "input": kept}
+    if body.get("store") is True:
+        return {**body, "input": kept}
+    resolvable: Final = (_without_unpersisted_reasoning_reference(item) for item in kept)
+    return {**body, "input": [item for item in resolvable if item is not None]}
+
+
+def _without_unpersisted_reasoning_reference(item: object) -> object | None:
+    if not _is_unpersisted_reasoning_reference(item):
+        return item
+    return ResponsesAPIRequestUtils.readable_reasoning(_JSON_OBJECT.validate_python(item))
 
 
 def _model_and_provider(deployment: Deployment) -> tuple[str, str] | None:

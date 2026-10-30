@@ -1159,6 +1159,115 @@ def test_litellm_model_on_native_route_gets_only_the_reasoning_it_can_decrypt(
     )
 
 
+_WHOLE_FIREWORKS_REASONING: Final = {**_FIREWORKS_REASONING, "status": "completed"}
+_SUMMARY_ONLY_REASONING: Final = {key: value for key, value in _FIREWORKS_REASONING.items() if key != "id"}
+_OTHER_DEPLOYMENTS_BLOB: Final = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+    "gAAAAB-other-deployment-blob", "other-deployment"
+)
+
+
+@pytest.mark.parametrize(
+    ("model", "replayed", "store", "expected"),
+    [
+        pytest.param(
+            "oai-luna", _WHOLE_FIREWORKS_REASONING, False, [_SUMMARY_ONLY_REASONING], id="whole fireworks item to openai"
+        ),
+        pytest.param(
+            "oai-luna",
+            {**_WHOLE_FIREWORKS_REASONING, "encrypted_content": _OTHER_DEPLOYMENTS_BLOB},
+            False,
+            [_SUMMARY_ONLY_REASONING],
+            id="whole item with another deployment's blob to openai",
+        ),
+        pytest.param(
+            "oai-luna",
+            {**_SUMMARY_ONLY_REASONING, "content": [], "encrypted_content": _OTHER_DEPLOYMENTS_BLOB},
+            False,
+            [{**_SUMMARY_ONLY_REASONING, "content": []}],
+            id="codex's replay of another deployment's item to openai",
+        ),
+        pytest.param(
+            "oai-luna",
+            {**_SUMMARY_ONLY_REASONING, "content": None, "encrypted_content": None},
+            False,
+            [_SUMMARY_ONLY_REASONING],
+            id="codex's replay of a blobless item to openai",
+        ),
+        pytest.param(
+            "oai-luna",
+            {"type": "reasoning", "id": "rs_unreadable", "summary": []},
+            False,
+            [],
+            id="an unresolvable id with nothing readable is dropped",
+        ),
+        pytest.param(
+            "open-weights",
+            {**_SUMMARY_ONLY_REASONING, "id": "rs_openai"},
+            False,
+            [_SUMMARY_ONLY_REASONING],
+            id="openai summary-only item to fireworks",
+        ),
+        pytest.param(
+            "oai-luna",
+            {**_LUNA_REASONING, "id": "rs_luna", "content": []},
+            False,
+            [{**_LUNA_REASONING, "id": "rs_luna", "content": [], "encrypted_content": _LUNA_BLOB}],
+            id="the minting deployment gets its item whole",
+        ),
+        pytest.param(
+            "oai-luna", _FIREWORKS_REASONING, True, [_FIREWORKS_REASONING], id="a stored conversation keeps the id"
+        ),
+    ],
+)
+def test_reasoning_the_target_cannot_resolve_reaches_it_without_its_id(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    xai_fireworks_and_openai_router: Router,
+    model: str,
+    replayed: dict[str, object],
+    store: bool,
+    expected: list[dict[str, object]],
+) -> None:
+    _account_catalog(respx_mock)
+    fireworks: Final = _open_weights_provider(respx_mock)
+    luna: Final = respx_mock.post(f"{_OPENAI_BASE}/responses").mock(side_effect=_provider_reply)
+    response: Final = client.post(
+        "/backend-api/codex/responses",
+        json={
+            "model": model,
+            "input": [_USER_TURN, replayed, _ASSISTANT_TURN, _USER_TURN],
+            "stream": False,
+            "store": store,
+        },
+        headers=_ACCOUNT_HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    sent: Final = json.loads((fireworks if model == "open-weights" else luna).calls.last.request.content)["input"]
+    assert [item for item in sent if item.get("type") == "reasoning"] == expected
+
+
+def test_reasoning_the_chat_bridge_target_cannot_resolve_reaches_it_as_its_summary(
+    client: TestClient, respx_mock: respx.MockRouter, xai_fireworks_and_openai_router: Router
+) -> None:
+    _account_catalog(respx_mock)
+    chat_endpoint: Final = respx_mock.post(f"{_XAI_BASE}/chat/completions").mock(side_effect=_xai_search_call_reply)
+    response: Final = client.post(
+        "/backend-api/codex/responses",
+        json={
+            "model": "grok-4.7",
+            "input": [_USER_TURN, _WHOLE_FIREWORKS_REASONING, _ASSISTANT_TURN, _USER_TURN],
+            "stream": False,
+            "store": False,
+        },
+        headers=_ACCOUNT_HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    messages: Final = json.loads(chat_endpoint.calls.last.request.content)["messages"]
+    assert [message.get("reasoning_content") for message in messages if message["role"] == "assistant"] == [
+        "Thinking it over"
+    ]
+
+
 def _namespace(name: str, *members: str) -> dict[str, object]:
     return {
         "type": "namespace",
