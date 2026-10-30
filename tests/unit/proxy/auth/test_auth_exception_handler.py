@@ -1174,8 +1174,26 @@ def _marked_malformed_key_error() -> HTTPException:
         pytest.param(
             ProxyException(message="Forbidden", type=ProxyErrorTypes.auth_error, param=None, code=403),
             False,
+            "WARNING",
+            id="403_warning_no_traceback",
+        ),
+        pytest.param(
+            litellm.BudgetExceededError(current_cost=0.0, max_budget=0.0),
+            False,
+            "WARNING",
+            id="key_over_budget_warning_no_traceback",
+        ),
+        pytest.param(
+            HTTPException(status_code=429, detail="Rate limit exceeded for api_key"),
+            False,
+            "WARNING",
+            id="key_over_rate_limit_warning_no_traceback",
+        ),
+        pytest.param(
+            ProxyException(message="DB unavailable", type=ProxyErrorTypes.auth_error, param=None, code=503),
+            True,
             "ERROR",
-            id="403_stays_error_without_traceback",
+            id="503_stays_error_with_traceback",
         ),
     ],
 )
@@ -1221,6 +1239,59 @@ async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
     assert records[0].levelname == expect_level
     expected_logger_name = "LiteLLM Proxy.stdout" if expect_level == "WARNING" else "LiteLLM Proxy"
     assert records[0].name == expected_logger_name
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "transformed,expect_escalation",
+    [
+        pytest.param(
+            ProxyException(message="Upstream down", type=ProxyErrorTypes.auth_error, param=None, code=503),
+            True,
+            id="callback_turns_rejection_into_5xx_escalates",
+        ),
+        pytest.param(
+            ProxyException(message="Slow down", type=ProxyErrorTypes.auth_error, param=None, code=429),
+            False,
+            id="callback_keeps_a_client_rejection_quiet",
+        ),
+    ],
+)
+async def test_quiet_auth_rejection_escalates_only_when_a_callback_makes_it_a_fault(
+    transformed, expect_escalation, caplog
+):
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    with (
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=transformed,
+        ),
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
+        ),
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        verbose_proxy_logger.propagate = True
+        try:
+            with caplog.at_level("WARNING", logger="LiteLLM Proxy"), pytest.raises(ProxyException):
+                await handler.handle_authentication_error(
+                    ProxyException(message="Forbidden", type=ProxyErrorTypes.auth_error, param=None, code=403),
+                    MagicMock(),
+                    {},
+                    "/v1/chat/completions",
+                    None,
+                    "sk-bad-key",
+                )
+        finally:
+            verbose_proxy_logger.propagate = False
+
+    errors = [r for r in caplog.records if r.levelname == "ERROR" and "user_api_key_auth()" in r.getMessage()]
+    assert bool(errors) is expect_escalation
 
 
 _DENIED_CLIENT_MESSAGE = (

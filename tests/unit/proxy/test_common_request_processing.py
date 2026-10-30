@@ -11000,33 +11000,100 @@ async def test_a_broken_hook_does_not_replace_the_real_error_with_its_own_bug():
     assert "audit backend" not in collected[-2].decode()
 
 
+def _moderation_backend_rejected_proxy_key() -> Exception:
+    from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
+
+    request: Final = httpx.Request("POST", "https://api.openai.com/v1/moderations")
+    return MaskedHTTPStatusError(
+        httpx.HTTPStatusError(
+            "Client error '401 Unauthorized'", request=request, response=httpx.Response(401, request=request)
+        )
+    )
+
+
 @pytest.mark.parametrize(
-    "exc,expect_traceback",
+    "exc,log_client_error_tracebacks,expect_level,expect_traceback",
     [
-        pytest.param(HTTPException(status_code=400, detail="Invalid model name passed in"), False, id="expected_400"),
-        pytest.param(ValueError("unexpected internal error"), True, id="unexpected_error"),
+        pytest.param(
+            HTTPException(status_code=400, detail="Invalid model name passed in"),
+            False,
+            "WARNING",
+            False,
+            id="unknown_model_400_warning",
+        ),
+        pytest.param(
+            HTTPException(status_code=400, detail={"error": "Violated OpenAI moderation policy"}),
+            False,
+            "WARNING",
+            False,
+            id="guardrail_block_warning",
+        ),
+        pytest.param(
+            HTTPException(status_code=429, detail="Rate limit exceeded for api_key"),
+            False,
+            "WARNING",
+            False,
+            id="key_rate_limit_warning",
+        ),
+        pytest.param(
+            litellm.BadRequestError(
+                message="Function web_search not found", model="gpt-oss-120b", llm_provider="fireworks_ai"
+            ),
+            False,
+            "WARNING",
+            False,
+            id="provider_rejects_invalid_request_warning",
+        ),
+        pytest.param(
+            litellm.AuthenticationError(message="Incorrect API key", model="gpt-5.4-mini", llm_provider="openai"),
+            False,
+            "ERROR",
+            True,
+            id="provider_rejects_deployment_key_error_with_traceback",
+        ),
+        pytest.param(
+            _moderation_backend_rejected_proxy_key(),
+            False,
+            "ERROR",
+            False,
+            id="guardrail_backend_failure_error",
+        ),
+        pytest.param(
+            ValueError("unexpected internal error"), False, "ERROR", True, id="unexpected_error_with_traceback"
+        ),
+        pytest.param(
+            HTTPException(status_code=400, detail="Invalid model name passed in"),
+            True,
+            "ERROR",
+            True,
+            id="opt_in_restores_error_with_traceback",
+        ),
     ],
 )
-def test_log_llm_api_exception_traceback_only_for_unexpected_errors(exc, expect_traceback, caplog):
-    """Regression for LIT-6043: expected 4xx errors log without formatting a
-    traceback; unexpected errors keep logger.exception behavior."""
+def test_log_llm_api_exception_level_matches_who_caused_the_failure(
+    exc, log_client_error_tracebacks, expect_level, expect_traceback, caplog, monkeypatch
+):
+    """Regression for LIT-4487: a failure the client caused logs one WARNING line on stdout so
+    ERROR stays alertable; proxy, deployment, and guardrail backend faults keep ERROR."""
     from litellm._logging import verbose_proxy_logger
     from litellm.proxy.common_request_processing import log_llm_api_exception
 
+    monkeypatch.setattr(litellm, "log_client_error_tracebacks", log_client_error_tracebacks)
     verbose_proxy_logger.propagate = True
     try:
-        with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+        with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
             try:
                 raise exc
             except Exception as raised:
-                log_llm_api_exception(raised, "call-id-for-traceback-test")
+                log_llm_api_exception(raised, "call-id-for-level-test")
     finally:
         verbose_proxy_logger.propagate = False
 
     records = [r for r in caplog.records if "_handle_llm_api_exception(): Exception occured" in r.getMessage()]
     assert len(records) == 1
+    assert records[0].levelname == expect_level
+    assert records[0].name == ("LiteLLM Proxy.stdout" if expect_level == "WARNING" else "LiteLLM Proxy")
     assert (records[0].exc_info is not None) is expect_traceback
-
 
 class TestResolveLitellmCallId:
     def test_client_call_id_within_the_bound_is_kept(self):

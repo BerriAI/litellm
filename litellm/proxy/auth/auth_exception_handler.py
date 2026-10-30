@@ -12,7 +12,11 @@ import litellm
 from litellm._logging import verbose_proxy_logger, verbose_proxy_stdout_logger
 from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.otel.runtime import seed_request_identity
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, is_expected_client_error
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    is_client_caused_failure,
+    is_expected_client_error,
+)
 from litellm.proxy._types import (
     LitellmUserRoles,
     ModelAccessDeniedProxyException,
@@ -24,7 +28,6 @@ from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module expor
     _get_request_ip_address,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_request_ip_address,
     is_invalid_virtual_key_error,
-    is_unauthorized_error,
     mark_invalid_virtual_key_error,
     normalize_request_route,
 )
@@ -202,11 +205,12 @@ class UserAPIKeyAuthExceptionHandler:
             user_agent: Final = _get_user_agent(request)
 
             # Log authentication failures before identity seeding and callbacks, so the log
-            # survives a raising callback pipeline. Route 401 rejections to WARNING on stdout
-            # (suppressible via LITELLM_LOG=ERROR); anything else is unexpected and logs at ERROR.
+            # survives a raising callback pipeline. Route client-caused rejections (bad key, budget,
+            # rate limit) to WARNING on stdout (suppressible via LITELLM_LOG=ERROR); anything else
+            # is unexpected and logs at ERROR.
             log_extra: Final = {"requester_ip": requester_ip}
             is_invalid_virtual_key: Final = is_invalid_virtual_key_error(e)
-            is_quiet_log: Final = is_unauthorized_error(e) and not litellm.log_client_error_tracebacks
+            is_quiet_log: Final = is_client_caused_failure(e) and not litellm.log_client_error_tracebacks
             logger: Final = verbose_proxy_stdout_logger if is_quiet_log else verbose_proxy_logger
             logger.log(
                 logging.WARNING if is_quiet_log else logging.ERROR,
@@ -264,8 +268,8 @@ class UserAPIKeyAuthExceptionHandler:
                 e = transformed_exception
 
             final_exception: Final = mark_invalid_virtual_key_error(_as_proxy_exception(e), is_invalid_virtual_key)
-            # If a quiet-logged malformed-key transform yields non-401, escalate to ERROR
-            if is_quiet_log and str(final_exception.code) != str(status.HTTP_401_UNAUTHORIZED):
+            # If a callback turns a quiet-logged rejection into a non-client failure, escalate to ERROR
+            if is_quiet_log and not is_client_caused_failure(final_exception):
                 verbose_proxy_logger.error(
                     "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s",
                     final_exception,

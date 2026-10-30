@@ -9,8 +9,10 @@ from typing import Final
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from openai.types.chat import ChatCompletionChunk
 
+from litellm.exceptions import BadRequestError, GuardrailRaisedException
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
     RESPONSE_COST_HEADER,
@@ -22,6 +24,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     get_parent_otel_span_from_kwargs,
     get_provider_response_headers_from_hidden_params,
+    is_client_caused_failure,
     map_finish_reason,
     normalize_drop_params,
     preserve_upstream_non_openai_attributes,
@@ -33,6 +36,8 @@ from litellm.litellm_core_utils.core_helpers import (
     set_provider_response_headers_in_hidden_params,
     unbind_budget_reservation_from_callbacks,
 )
+from litellm.llms.anthropic.common_utils import AnthropicError
+from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import Delta, ImageResponse, ModelResponseStream, StreamingChoices, TranscriptionResponse
 
@@ -559,6 +564,65 @@ class TestIsExpectedClientError:
             category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
         )
         assert is_expected_client_error(vendor_limit) is False
+
+
+def _provider_error(status_code: int) -> Exception:
+    return AnthropicError(status_code=status_code, message="provider rejected the request")
+
+
+def _guardrail_backend_failure() -> Exception:
+    request: Final = httpx.Request("POST", "https://api.openai.com/v1/moderations")
+    rejected: Final = httpx.HTTPStatusError(
+        "Client error '401 Unauthorized'", request=request, response=httpx.Response(401, request=request)
+    )
+    return MaskedHTTPStatusError(rejected)
+
+
+class TestIsClientCausedFailure:
+    @pytest.mark.parametrize(
+        "exception",
+        [
+            pytest.param(_provider_error(400), id="provider_400_invalid_request"),
+            pytest.param(_provider_error(413), id="provider_413_request_too_large"),
+            pytest.param(_provider_error(422), id="provider_422_unprocessable"),
+            pytest.param(
+                BadRequestError(
+                    message="Function web_search not found", model="gpt-oss-120b", llm_provider="fireworks_ai"
+                ),
+                id="mapped_provider_400",
+            ),
+            pytest.param(HTTPException(status_code=400), id="proxy_400"),
+            pytest.param(HTTPException(status_code=403), id="proxy_403"),
+            pytest.param(HTTPException(status_code=429), id="proxy_429"),
+            pytest.param(
+                GuardrailRaisedException(guardrail_name="mod-block", message="flagged", blocked_content=True),
+                id="guardrail_verdict",
+            ),
+        ],
+    )
+    def test_client_caused(self, exception: Exception) -> None:
+        assert is_client_caused_failure(exception) is True
+
+    @pytest.mark.parametrize(
+        "exception",
+        [
+            pytest.param(_provider_error(401), id="provider_401_bad_deployment_key"),
+            pytest.param(_provider_error(403), id="provider_403"),
+            pytest.param(_provider_error(404), id="provider_404"),
+            pytest.param(_provider_error(429), id="provider_429"),
+            pytest.param(_provider_error(500), id="provider_500"),
+            pytest.param(HTTPException(status_code=500), id="proxy_500"),
+            pytest.param(_guardrail_backend_failure(), id="guardrail_backend_rejected_proxy_key"),
+            pytest.param(
+                GuardrailRaisedException(guardrail_name="mod-broken", message="backend unreachable"),
+                id="guardrail_without_verdict",
+            ),
+            pytest.param(ValueError("boom"), id="no_status"),
+            pytest.param(None, id="none"),
+        ],
+    )
+    def test_fault(self, exception: Exception | None) -> None:
+        assert is_client_caused_failure(exception) is False
 
 
 class TestProviderResponseHeadersInHiddenParams:

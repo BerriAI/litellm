@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 import litellm
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import verbose_proxy_logger, verbose_proxy_stdout_logger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -498,16 +498,21 @@ async def new_end_user(
 
         return _to_customer_response(end_user_record)
     except Exception as e:
-        verbose_proxy_logger.exception(
-            "litellm.proxy.management_endpoints.customer_endpoints.new_end_user(): Exception occured - %s", e
-        )
         if "Unique constraint failed on the fields: (`user_id`)" in str(e):
+            verbose_proxy_stdout_logger.warning(
+                "litellm.proxy.management_endpoints.customer_endpoints.new_end_user(): customer already exists - "
+                "user_id=%s",
+                data.user_id,
+            )
             raise ProxyException(
                 message=f"Customer already exists, passed user_id={data.user_id}. Please pass a new user_id.",
                 type="bad_request",
                 code=400,
                 param="user_id",
             )
+        verbose_proxy_logger.exception(
+            "litellm.proxy.management_endpoints.customer_endpoints.new_end_user(): Exception occured - %s", e
+        )
         raise handle_exception_on_proxy(e)
 
 

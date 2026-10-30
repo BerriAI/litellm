@@ -11355,7 +11355,13 @@ def is_prompt_caching_valid_prompt(
             use_default_image_token_count=True,
         )
     except Exception as e:
-        verbose_logger.error("Error in is_prompt_caching_valid_prompt: %s", e)
+        from litellm.litellm_core_utils.token_counter import UnsupportedContentTypeError
+
+        verbose_logger.log(
+            logging.DEBUG if isinstance(e, UnsupportedContentTypeError) else logging.ERROR,
+            "Error in is_prompt_caching_valid_prompt: %s",
+            e,
+        )
         return False
 
 

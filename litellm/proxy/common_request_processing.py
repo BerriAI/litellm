@@ -34,7 +34,11 @@ from starlette.types import Receive, Scope, Send
 from typing_extensions import Never
 
 import litellm
-from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
+from litellm._logging import (
+    redact_internal_details_from_client_message,
+    verbose_proxy_logger,
+    verbose_proxy_stdout_logger,
+)
 from litellm._uuid import uuid
 from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
 from litellm.constants import (
@@ -62,6 +66,7 @@ from litellm.litellm_core_utils.bug_report import (
 from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     independent_snapshot,
+    is_client_caused_failure,
     is_expected_client_error,
     redact_nested_match_and_regex_keys,
 )
@@ -1917,15 +1922,18 @@ def log_llm_api_exception(e: Exception, litellm_call_id: str | None) -> None:
             extra=MappingProxyType({"litellm_call_id": litellm_call_id}),
         )
         return
-    log_fn: Final = (
-        verbose_proxy_logger.error
-        if is_expected_client_error(e) and not litellm.log_client_error_tracebacks
-        else verbose_proxy_logger.exception
-    )
-    log_fn(
+    is_quiet_log: Final = is_client_caused_failure(e) and not litellm.log_client_error_tracebacks
+    logger: Final = verbose_proxy_stdout_logger if is_quiet_log else verbose_proxy_logger
+    logger.log(
+        logging.WARNING if is_quiet_log else logging.ERROR,
         "litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - litellm_call_id=%s - %s",
         litellm_call_id,
         e,
+        exc_info=(
+            True
+            if not is_quiet_log and (litellm.log_client_error_tracebacks or not is_expected_client_error(e))
+            else None
+        ),
         extra=MappingProxyType({"litellm_call_id": litellm_call_id}),
     )
 

@@ -258,19 +258,44 @@ def is_expected_client_error(exception: BaseException | None) -> bool:
     ProxyException stores the status on .code (as a str), HTTPException and
     litellm exceptions on .status_code.
     """
-    if exception is None:
+    if exception is None or _is_provider_originated(exception):
         return False
-    if _is_provider_originated(exception):
+    status: Final = _http_status(exception)
+    return status is not None and 400 <= status < 500
+
+
+_CLIENT_REQUEST_STATUSES: Final = frozenset({400, 413, 422})
+
+
+def is_client_caused_failure(exception: BaseException | None) -> bool:
+    """
+    True when a request failed because of what the client sent, so the proxy logs it as a warning
+    instead of an ERROR an operator gets paged on: the proxy's own 4xx rejections and a provider
+    saying the request itself is invalid (400, 413, 422). A guardrail that could not reach a
+    verdict, a 4xx from a backend the proxy called itself (``httpx.HTTPStatusError``, e.g. a
+    moderation API rejecting the proxy's own key), and provider auth, permission, not-found and
+    rate-limit errors stay faults.
+    """
+    from litellm.exceptions import GuardrailRaisedException
+
+    if exception is None or isinstance(exception, httpx.HTTPStatusError):
         return False
+    if isinstance(exception, GuardrailRaisedException) and not exception.blocked_content:
+        return False
+    if is_expected_client_error(exception):
+        return True
+    return _is_provider_originated(exception) and _http_status(exception) in _CLIENT_REQUEST_STATUSES
+
+
+def _http_status(exception: BaseException) -> int | None:
     code: Final[object] = getattr(exception, "code", None)
     status_code: Final[object] = code if code is not None else getattr(exception, "status_code", None)
     if status_code is None or isinstance(status_code, bool):
-        return False
+        return None
     try:
-        status: Final = int(str(status_code))
+        return int(str(status_code))
     except ValueError:
-        return False
-    return 400 <= status < 500
+        return None
 
 
 def coerce_token_limit(value: object) -> int | None:

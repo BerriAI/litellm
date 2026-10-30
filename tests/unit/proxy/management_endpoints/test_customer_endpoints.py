@@ -388,6 +388,42 @@ def test_customer_endpoints_error_schema_consistency(mock_prisma_client, mock_us
         assert isinstance(error2[key], str), f"error2[{key}] should be a string"
 
 
+@pytest.mark.parametrize(
+    "create_error,expect_status,expect_level,expect_traceback",
+    [
+        pytest.param(
+            Exception("Unique constraint failed on the fields: (`user_id`)"),
+            400,
+            "WARNING",
+            False,
+            id="duplicate_customer_warning",
+        ),
+        pytest.param(Exception("connection refused"), 500, "ERROR", True, id="db_failure_error_with_traceback"),
+    ],
+)
+def test_new_customer_logs_a_duplicate_as_a_warning(
+    mock_prisma_client, mock_user_api_key_auth, caplog, create_error, expect_status, expect_level, expect_traceback
+):
+    """Regression for LIT-4487: re-creating an existing customer is the caller's mistake, so it
+    must not log an ERROR with a traceback before returning its clean 400."""
+    from litellm._logging import verbose_proxy_logger
+
+    mock_prisma_client.db.litellm_endusertable.create = AsyncMock(side_effect=create_error)
+    verbose_proxy_logger.propagate = True
+    try:
+        with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+            response = client.post(
+                "/customer/new", json={"user_id": "existing-user"}, headers={"Authorization": "Bearer test-key"}
+            )
+    finally:
+        verbose_proxy_logger.propagate = False
+
+    assert response.status_code == expect_status
+    records = [r for r in caplog.records if "new_end_user()" in r.getMessage()]
+    assert [r.levelname for r in records] == [expect_level]
+    assert (records[0].exc_info is not None) is expect_traceback
+
+
 EXPECTED_RESPONSE_MODELS = {
     "/customer/block": BlockUsersResponse,
     "/customer/unblock": UnblockUsersResponse,

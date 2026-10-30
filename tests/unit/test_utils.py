@@ -4849,6 +4849,29 @@ def test_is_prompt_caching_valid_prompt_without_messages_is_not_cacheable(local_
     assert is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=None) is False
 
 
+def test_is_prompt_caching_valid_prompt_logs_an_uncountable_content_part_below_error(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Regression for LIT-4487: an assistant refusal part the token counter cannot count made every
+    such request log an ERROR, though the only consequence is that the prompt is not cacheable."""
+    from litellm._logging import verbose_logger
+
+    messages = [
+        {"role": "user", "content": "Say hi"},
+        {"role": "assistant", "content": [{"type": "refusal", "refusal": "I cannot help with that."}]},
+        {"role": "user", "content": "Just say hi then"},
+    ]
+    verbose_logger.propagate = True
+    try:
+        with caplog.at_level("DEBUG", logger="LiteLLM"):
+            assert is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=messages) is False
+    finally:
+        verbose_logger.propagate = False
+
+    records = [r for r in caplog.records if "is_prompt_caching_valid_prompt" in r.getMessage()]
+    assert [r.levelname for r in records] == ["DEBUG"]
+
+
 def test_custom_logger_guards_ignore_subclass_instances(monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression LIT-4392: the success/failure existence guards used isinstance, so a user
     subclass of a built-in logger already promoted into the callback lists made the guard
