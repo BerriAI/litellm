@@ -203,7 +203,8 @@ async def _record_send_message_billing(
         response_dict=response_dict,
     )
     _set_usage_on_logging_obj(kwargs=kwargs, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
-    _set_litellm_params_on_logging_obj(kwargs=kwargs, litellm_params=litellm_params)
+    if "error" not in response_dict:
+        _set_litellm_params_on_logging_obj(kwargs=kwargs, litellm_params=litellm_params)
     _set_agent_id_on_logging_obj(kwargs=kwargs, agent_id=agent_id)
 
 

@@ -6,6 +6,7 @@ async_success_handler (cross-thread pydantic mutation segfaults pydantic-core).
 
 import asyncio
 import time
+from collections.abc import AsyncIterator, Callable, Mapping
 from datetime import datetime
 from typing import Final
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ import pytest
 import litellm
 from litellm.a2a_protocol import streaming_iterator as a2a_streaming_iterator_module
 from litellm.a2a_protocol.streaming_iterator import A2AStreamingIterator
+from litellm.a2a_protocol.utils import A2ARequestUtils
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import thread_pool_executor as thread_pool_executor_module
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
@@ -189,3 +191,65 @@ async def test_stream_logs_its_first_chunk_time_measured_from_the_call_start():
 
     assert first_chunk_at is not None
     assert recorder.logged == [(call_start, first_chunk_at)]
+
+
+_REPLY: Final = (
+    "Paris is the capital of France. It sits on the Seine, holds about two million people, "
+    "and has been the seat of the French government for most of the last thousand years."
+)
+
+
+def _artifact_event(text: str, append: bool | None) -> Mapping[str, object]:
+    result: Final = {
+        "kind": "artifact-update",
+        "taskId": "t1",
+        "contextId": "c1",
+        "artifact": {"artifactId": "a1", "parts": [{"kind": "text", "text": text}]},
+    }
+    return {"jsonrpc": "2.0", "id": "r1", "result": result if append is None else {**result, "append": append}}
+
+
+async def _snapshot_stream() -> AsyncIterator[Mapping[str, object]]:
+    for end in range(40, len(_REPLY) + 40, 40):
+        yield _artifact_event(_REPLY[:end], append=None)
+
+
+async def _watsonx_stream() -> AsyncIterator[Mapping[str, object]]:
+    from litellm.a2a_protocol.providers.watsonx_orchestrate.transformation import (
+        WatsonxOrchestrateTransformation,
+    )
+
+    async for event in WatsonxOrchestrateTransformation.fake_streaming_from_text(_REPLY, "r1", delay_ms=0):
+        yield event
+
+
+@pytest.mark.parametrize(
+    "agent_stream",
+    (pytest.param(_snapshot_stream, id="replacing_snapshots"), pytest.param(_watsonx_stream, id="watsonx_chunks")),
+)
+@pytest.mark.asyncio
+async def test_stream_counts_the_whole_artifact_once(
+    agent_stream: Callable[[], AsyncIterator[Mapping[str, object]]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    logging_obj: Final = LitellmLogging(
+        model="a2a_agent/trip-planner",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="asend_message_streaming",
+        start_time=time.time(),
+        litellm_call_id="artifact-count",
+        function_id="artifact-count",
+    )
+    iterator: Final = A2AStreamingIterator(
+        stream=agent_stream(),
+        request=SimpleNamespace(params=SimpleNamespace(message={"role": "user", "parts": []})),
+        logging_obj=logging_obj,
+        agent_name="trip-planner",
+        output_text=A2ARequestUtils.extract_text_from_stream_event,
+    )
+
+    _ = [chunk async for chunk in iterator]
+
+    assert logging_obj.model_call_details["usage"].completion_tokens == A2ARequestUtils.count_tokens(_REPLY)

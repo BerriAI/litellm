@@ -6,12 +6,16 @@ import hashlib
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Protocol
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, has_attributes
 
 if TYPE_CHECKING:
     from a2a.types import SendMessageRequest, SendStreamingMessageRequest
+
+_OBJECT_ITEMS: Final = TypeAdapter(tuple[object, ...])
 
 
 class _SupportsModelDump(Protocol):
@@ -66,8 +70,8 @@ class A2ARequestUtils:
         Returns:
             Text from response message parts
         """
-        result: Final = response_dict.get("result", {})
-        if not isinstance(result, dict):
+        result: Final = as_str_mapping(response_dict.get("result"))
+        if result is None:
             return ""
 
         # Direct message format (A2A spec): detect by explicit kind tag only.
@@ -75,9 +79,23 @@ class A2ARequestUtils:
         # type that happens to include a "parts" field.
         if result.get("kind") == "message":
             return A2ARequestUtils.extract_text_from_message(result)
+        if result.get("kind") == "task":
+            return A2ARequestUtils.extract_text_from_task(result)
 
         message: Final = result.get("message", {})
         return A2ARequestUtils.extract_text_from_message(message)
+
+    @staticmethod
+    def extract_text_from_task(task: Mapping[str, object]) -> str:
+        artifacts: Final = task.get("artifacts")
+        artifact_items: Final = _OBJECT_ITEMS.validate_python(artifacts) if isinstance(artifacts, list) else ()
+        artifact_texts: Final = tuple(
+            A2ARequestUtils.extract_text_from_message(artifact) for artifact in artifact_items
+        )
+        if any(artifact_texts):
+            return " ".join(text for text in artifact_texts if text)
+        status: Final = as_str_mapping(task.get("status"))
+        return A2ARequestUtils.extract_text_from_message(status.get("message")) if status is not None else ""
 
     @staticmethod
     def extract_text_from_stream_event(event: Mapping[str, object]) -> str:

@@ -29,6 +29,17 @@ def _chunk_payload(chunk: "SendStreamingMessageResponse | Mapping[str, object]")
     return chunk.model_dump(mode="json", exclude_none=True) if hasattr(chunk, "model_dump") else {}
 
 
+def _artifact_update(payload: Mapping[str, object]) -> tuple[str, bool] | None:
+    result: Final = as_str_mapping(payload.get("result"))
+    if result is None or result.get("kind") != "artifact-update":
+        return None
+    artifact: Final = as_str_mapping(result.get("artifact"))
+    artifact_id: Final = artifact.get("artifactId") if artifact is not None else None
+    if not isinstance(artifact_id, str):
+        return None
+    return artifact_id, result.get("append") is True
+
+
 class A2AStreamingIterator:
     """
     Async iterator for A2A streaming responses with token tracking.
@@ -54,6 +65,8 @@ class A2AStreamingIterator:
         # Collect chunks for token counting
         self.chunks: list[SendStreamingMessageResponse | Mapping[str, object]] = []
         self.collected_text_parts: list[str] = []
+        self.artifact_texts: Mapping[str, str] = {}
+        self.saw_error = False
         self.final_chunk: SendStreamingMessageResponse | Mapping[str, object] | None = None
 
     def __aiter__(self):
@@ -67,12 +80,14 @@ class A2AStreamingIterator:
 
             # Store chunk
             self.chunks.append(chunk)
+            payload: Final = _chunk_payload(chunk)
+            self.saw_error = self.saw_error or "error" in payload
 
             # Extract text from chunk for token counting
-            self._collect_text_from_chunk(chunk)
+            self._collect_text_from_chunk(payload)
 
             # Check if this is the final chunk (completed status)
-            if self._is_completed_chunk(chunk):
+            if self._is_completed_chunk(payload):
                 self.final_chunk = chunk
 
             return chunk
@@ -84,19 +99,27 @@ class A2AStreamingIterator:
             await self._handle_stream_complete()
             raise
 
-    def _collect_text_from_chunk(self, chunk: "SendStreamingMessageResponse | Mapping[str, object]") -> None:
+    def _collect_text_from_chunk(self, payload: Mapping[str, object]) -> None:
         """Extract text from a streaming chunk and add to collected parts."""
         try:
-            text: Final = self.output_text(_chunk_payload(chunk))
-            if text:
+            text: Final = self.output_text(payload)
+            if not text:
+                return
+            artifact_update: Final = _artifact_update(payload)
+            if artifact_update is None:
                 self.collected_text_parts.append(text)
+                return
+            artifact_id, append = artifact_update
+            artifact_text: Final = self.artifact_texts.get(artifact_id, "") + text if append else text
+            self.artifact_texts = {**self.artifact_texts, artifact_id: artifact_text}
+            self.collected_text_parts.append(artifact_text)
         except Exception:
             verbose_logger.debug("Failed to extract text from A2A streaming chunk")
 
-    def _is_completed_chunk(self, chunk: "SendStreamingMessageResponse | Mapping[str, object]") -> bool:
+    def _is_completed_chunk(self, payload: Mapping[str, object]) -> bool:
         """Check if chunk indicates stream completion."""
         try:
-            result: Final = _chunk_payload(chunk).get("result", {})
+            result: Final = payload.get("result", {})
             if isinstance(result, dict):
                 status: Final = result.get("status", {})
                 if isinstance(status, dict):
@@ -134,7 +157,7 @@ class A2AStreamingIterator:
             self.logging_obj.model_call_details["stream"] = False
 
             # Calculate cost using A2ACostCalculator
-            response_cost: Final = A2ACostCalculator.calculate_a2a_cost(self.logging_obj)
+            response_cost: Final = 0.0 if self.saw_error else A2ACostCalculator.calculate_a2a_cost(self.logging_obj)
             self.logging_obj.model_call_details["response_cost"] = response_cost
 
             # Build result for logging
