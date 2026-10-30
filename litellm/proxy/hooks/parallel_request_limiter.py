@@ -1,20 +1,22 @@
 import asyncio
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Protocol
 
-from pydantic import BaseModel
-from typing_extensions import TypedDict
+from pydantic import BaseModel, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import DualCache, EmbeddingResponse, ModelResponse, TextCompletionResponse
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.redis_batch import active_request_redis_batch
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
-from litellm.proxy._types import CommonProxyErrors, CurrentItemRateLimit, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
@@ -23,6 +25,19 @@ from litellm.proxy.auth.budget_throttle import throttled_limit
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.redis.stores.legacy_request_limits import (
+    GlobalLimit,
+    InvalidSnapshot,
+    LegacyRequestLimitsStore,
+    LegacySnapshot,
+    Limit,
+    MinuteLimit,
+    TransportLegacyRequestLimitsStore,
+    UsageSnapshot,
+    limit_key,
+    snapshot,
+)
+from litellm.redis.transport.contract import RedisFailure
 from litellm.types.utils import CallTypes, Usage
 
 if TYPE_CHECKING:
@@ -48,6 +63,13 @@ def _response_total_tokens(response_obj: object) -> int:
     return response_usage.total_tokens if isinstance(response_usage, Usage) else 0
 
 
+_CALLBACK_DATA: Final = TypeAdapter(dict[str, object])
+
+
+def _optional_identity(value: object) -> str | None:
+    return None if value is None else str(value)
+
+
 _CONNECTION_SCOPED_CALL_TYPES: Final = frozenset({CallTypes.aresponses_websocket.value})
 
 
@@ -56,19 +78,121 @@ def _slots_released(kwargs: Mapping[str, object]) -> int:
     return 0 if kwargs.get("call_type") in _CONNECTION_SCOPED_CALL_TYPES else 1
 
 
+def _usage(value: LegacySnapshot | None | RedisFailure, *, empty_is_missing: bool = False) -> UsageSnapshot | None:
+    if empty_is_missing and (not value or isinstance(value, InvalidSnapshot) and value.empty):
+        return None
+    if value is None or isinstance(value, dict):
+        return value
+    raise ValueError("invalid legacy request limit snapshot")
+
+
+class _LocalLimitCache(Protocol):
+    async def async_get_cache(self, key: str, *, local_only: bool) -> object: ...
+
+    async def async_batch_get_cache(self, keys: list[str], *, local_only: bool) -> list[object] | None: ...
+
+    async def async_set_cache(self, key: str, value: object, *, local_only: bool, ttl: int | None = None) -> None: ...
+
+    async def async_set_cache_pipeline(
+        self, cache_list: Sequence[tuple[str, object]], *, local_only: bool, ttl: int | None = None
+    ) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _LegacyLimitCache:
+    cache: DualCache
+
+    @property
+    def local(self) -> _LocalLimitCache:
+        return self.cache
+
+    def store(self) -> LegacyRequestLimitsStore | None:
+        redis: Final = self.cache.redis_cache
+        return None if redis is None else TransportLegacyRequestLimitsStore(redis.transport())
+
+    async def read(
+        self, key: MinuteLimit, litellm_parent_otel_span: Span | None, *, empty_is_missing: bool = False
+    ) -> UsageSnapshot | None:
+        local: Final = await self.local.async_get_cache(limit_key(key), local_only=True)
+        if local is not None:
+            return _usage(snapshot(local), empty_is_missing=empty_is_missing)
+        store: Final = self.store()
+        if store is None:
+            return None
+        redis: Final = self.cache.redis_cache
+        request: Final = None if redis is None else active_request_redis_batch(redis)
+        if request is not None and request.read_as_missing(limit_key(key)):
+            return None
+        remote: Final = await store.read(key)
+        if isinstance(remote, RedisFailure):
+            return None
+        if remote is not None:
+            await self.local.async_set_cache(limit_key(key), remote, local_only=True)
+        return _usage(remote, empty_is_missing=empty_is_missing)
+
+    async def read_many(self, limits: Sequence[Limit | None]) -> tuple[LegacySnapshot | None | RedisFailure, ...]:
+        present: Final = tuple(limit for limit in limits if limit is not None)
+        keys: Final = tuple(limit_key(limit) for limit in present)
+        local: Final = await self.local.async_batch_get_cache(list(keys), local_only=True)
+        local_by_key: Final = dict(zip(keys, local or (None for _ in keys)))
+        store: Final = self.store()
+        if store is None:
+            return tuple(None if limit is None else snapshot(local_by_key[limit_key(limit)]) for limit in limits)
+        missing, reserved = self.cache.reserve_redis_batch_reads(keys)
+        needed: Final = tuple(limit for limit in present if limit_key(limit) in missing)
+        remote: Final = await store.read_many(needed) if needed else ()
+        if isinstance(remote, RedisFailure):
+            if remote.kind == "breaker_open":
+                self.cache.rollback_redis_batch_reads(reserved)
+            return tuple(None if limit is None else snapshot(local_by_key[limit_key(limit)]) for limit in limits)
+        remote_by_key: Final = dict(zip((limit_key(limit) for limit in needed), remote))
+        for key, value in remote_by_key.items():
+            if value is not None and not isinstance(value, RedisFailure):
+                await self.local.async_set_cache(key, value, local_only=True)
+        merged: Final = {**local_by_key, **remote_by_key}
+        return tuple(None if limit is None else _snapshot_result(merged[limit_key(limit)]) for limit in limits)
+
+    async def write_many(
+        self,
+        cache_list: Sequence[tuple[MinuteLimit, UsageSnapshot]],
+        ttl: int,
+        litellm_parent_otel_span: Span | None,
+        local_only: bool = False,
+    ) -> None:
+        await self.local.async_set_cache_pipeline(
+            tuple((limit_key(limit), value) for limit, value in cache_list), ttl=ttl, local_only=True
+        )
+        store: Final = self.store()
+        if store is not None and not local_only:
+            await store.write_many(cache_list, ttl=timedelta(seconds=ttl))
+
+    async def write(
+        self, key: MinuteLimit, value: UsageSnapshot, ttl: int, litellm_parent_otel_span: Span | None
+    ) -> None:
+        await self.local.async_set_cache(limit_key(key), value, ttl=ttl, local_only=True)
+        store: Final = self.store()
+        if store is not None:
+            await store.write(key, value, ttl=timedelta(seconds=ttl))
+
+
+def _snapshot_result(value: object) -> LegacySnapshot | None | RedisFailure:
+    return value if isinstance(value, RedisFailure) else snapshot(value)
+
+
 class CacheObject(TypedDict):
-    current_global_requests: dict | None
-    request_count_api_key: dict | None
-    request_count_api_key_model: dict | None
-    request_count_user_id: dict | None
-    request_count_team_id: dict | None
-    request_count_end_user_id: dict | None
+    current_global_requests: ReadOnly[LegacySnapshot | None | RedisFailure]
+    request_count_api_key: ReadOnly[LegacySnapshot | None | RedisFailure]
+    request_count_api_key_model: ReadOnly[LegacySnapshot | None | RedisFailure]
+    request_count_user_id: ReadOnly[LegacySnapshot | None | RedisFailure]
+    request_count_team_id: ReadOnly[LegacySnapshot | None | RedisFailure]
+    request_count_end_user_id: ReadOnly[LegacySnapshot | None | RedisFailure]
 
 
 class _PROXY_MaxParallelRequestsHandler(CustomLogger):
     # Class variables or attributes
     def __init__(self, internal_usage_cache: InternalUsageCache, *, clock: Callable[[], datetime] = datetime.now):
         self.internal_usage_cache = internal_usage_cache
+        self._limits: Final = _LegacyLimitCache(internal_usage_cache.dual_cache)
         self._clock: Final = clock
 
     def print_verbose(self, print_statement) -> None:
@@ -89,13 +213,14 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         max_parallel_requests: int,
         tpm_limit: int,
         rpm_limit: int,
-        current: dict | None,
-        request_count_api_key: str,
+        current: LegacySnapshot | None | RedisFailure,
+        request_count_api_key: MinuteLimit,
         rate_limit_type: Literal["key", "model_per_key", "user", "customer", "team"],
-        values_to_update_in_cache: list[tuple[str, object]],
+        values_to_update_in_cache: list[tuple[MinuteLimit, UsageSnapshot]],
     ) -> dict:
-        verbose_proxy_logger.info("Current Usage of %s in this minute: %s", rate_limit_type, current)
-        if current is None:
+        usage: Final = _usage(current)
+        verbose_proxy_logger.info("Current Usage of %s in this minute: %s", rate_limit_type, usage)
+        if usage is None:
             if max_parallel_requests == 0 or tpm_limit == 0 or rpm_limit == 0:
                 # base case — at least one dimension is set to 0 (effectively
                 # disabled). Pick the most specific dimension as the
@@ -115,22 +240,22 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     requested_model=data.get("model") if data else None,
                     descriptor_key=rate_limit_type,
                 )
-            new_val = {
+            new_val: UsageSnapshot = {
                 "current_requests": 1,
                 "current_tpm": 0,
                 "current_rpm": 1,
             }
             values_to_update_in_cache.append((request_count_api_key, new_val))
         elif (
-            int(current["current_requests"]) < max_parallel_requests
-            and current["current_tpm"] < tpm_limit
-            and current["current_rpm"] < rpm_limit
+            int(usage["current_requests"]) < max_parallel_requests
+            and usage["current_tpm"] < tpm_limit
+            and usage["current_rpm"] < rpm_limit
         ):
             # Increase count for this token
             new_val = {
-                "current_requests": current["current_requests"] + 1,
-                "current_tpm": current["current_tpm"],
-                "current_rpm": current["current_rpm"] + 1,
+                "current_requests": usage["current_requests"] + 1,
+                "current_tpm": usage["current_tpm"],
+                "current_rpm": usage["current_rpm"] + 1,
             }
             values_to_update_in_cache.append((request_count_api_key, new_val))
 
@@ -138,16 +263,16 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Detect which dimension actually tripped the limit so we can
             # surface the right rate_limit_type. Order matches the boolean
             # condition above (concurrent → tpm → rpm) — first match wins.
-            if int(current["current_requests"]) >= max_parallel_requests:
+            if int(usage["current_requests"]) >= max_parallel_requests:
                 triggered_type = RateLimitType.CONCURRENT_REQUESTS
-            elif current["current_tpm"] >= tpm_limit:
+            elif usage["current_tpm"] >= tpm_limit:
                 triggered_type = RateLimitType.TOKENS
             else:
                 triggered_type = RateLimitType.REQUESTS
             requested_model: Final = data.get("model") if data else None
             resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(requested_model)
             raise ProxyRateLimitError(
-                detail=f"LiteLLM Rate Limit Handler for rate limit type = {rate_limit_type}. {CommonProxyErrors.max_parallel_request_limit_reached.value}. current rpm: {current['current_rpm']}, rpm limit: {rpm_limit}, current tpm: {current['current_tpm']}, tpm limit: {tpm_limit}, current max_parallel_requests: {current['current_requests']}, max_parallel_requests: {max_parallel_requests}",
+                detail=f"LiteLLM Rate Limit Handler for rate limit type = {rate_limit_type}. {CommonProxyErrors.max_parallel_request_limit_reached.value}. current rpm: {usage['current_rpm']}, rpm limit: {rpm_limit}, current tpm: {usage['current_tpm']}, tpm limit: {tpm_limit}, current max_parallel_requests: {usage['current_requests']}, max_parallel_requests: {max_parallel_requests}",
                 headers={"retry-after": str(self.time_to_next_minute())},
                 rate_limit_type=triggered_type,
                 model=resolved_model,
@@ -155,7 +280,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 descriptor_key=rate_limit_type,
             )
 
-        await self.internal_usage_cache.async_batch_set_cache(
+        await self._limits.write_many(
             cache_list=values_to_update_in_cache,
             ttl=60,
             litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
@@ -225,36 +350,23 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
     async def get_all_cache_objects(
         self,
         current_global_requests: str | None,
-        request_count_api_key: str | None,
-        request_count_api_key_model: str | None,
-        request_count_user_id: str | None,
-        request_count_team_id: str | None,
-        request_count_end_user_id: str | None,
+        request_count_api_key: MinuteLimit | None,
+        request_count_api_key_model: MinuteLimit | None,
+        request_count_user_id: MinuteLimit | None,
+        request_count_team_id: MinuteLimit | None,
+        request_count_end_user_id: MinuteLimit | None,
         parent_otel_span: Span | None = None,
     ) -> CacheObject:
-        keys: Final = [
-            current_global_requests,
-            request_count_api_key,
-            request_count_api_key_model,
-            request_count_user_id,
-            request_count_team_id,
-            request_count_end_user_id,
-        ]
-        results: Final = await self.internal_usage_cache.async_batch_get_cache(
-            keys=keys,
-            parent_otel_span=parent_otel_span,
-        )
-
-        if results is None:
-            return CacheObject(
-                current_global_requests=None,
-                request_count_api_key=None,
-                request_count_api_key_model=None,
-                request_count_user_id=None,
-                request_count_team_id=None,
-                request_count_end_user_id=None,
+        results: Final = await self._limits.read_many(
+            (
+                GlobalLimit() if current_global_requests is not None else None,
+                request_count_api_key,
+                request_count_api_key_model,
+                request_count_user_id,
+                request_count_team_id,
+                request_count_end_user_id,
             )
-
+        )
         return CacheObject(
             current_global_requests=results[0],
             request_count_api_key=results[1],
@@ -289,7 +401,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             rpm_limit = sys.maxsize
 
         values_to_update_in_cache: list[
-            tuple[str, object]
+            tuple[MinuteLimit, UsageSnapshot]
         ] = []  # values that need to get updated in cache, will run a batch_set_cache after this function
 
         # ------------
@@ -330,31 +442,31 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             current_global_requests=(
                 "global_max_parallel_requests" if global_max_parallel_requests is not None else None
             ),
-            request_count_api_key=(f"{api_key}::{precise_minute}::request_count" if api_key is not None else None),
+            request_count_api_key=(MinuteLimit(str(api_key), precise_minute) if api_key is not None else None),
             request_count_api_key_model=(
-                f"{api_key}::{_model}::{precise_minute}::request_count"
+                MinuteLimit(str(api_key), precise_minute, _model)
                 if api_key is not None and _model is not None
                 else None
             ),
             request_count_user_id=(
-                f"{user_api_key_dict.user_id}::{precise_minute}::request_count"
+                MinuteLimit(user_api_key_dict.user_id, precise_minute)
                 if user_api_key_dict.user_id is not None
                 else None
             ),
             request_count_team_id=(
-                f"{user_api_key_dict.team_id}::{precise_minute}::request_count"
+                MinuteLimit(user_api_key_dict.team_id, precise_minute)
                 if user_api_key_dict.team_id is not None
                 else None
             ),
             request_count_end_user_id=(
-                f"{user_api_key_dict.end_user_id}::{precise_minute}::request_count"
+                MinuteLimit(user_api_key_dict.end_user_id, precise_minute)
                 if user_api_key_dict.end_user_id is not None
                 else None
             ),
             parent_otel_span=user_api_key_dict.parent_otel_span,
         )
         if api_key is not None:
-            request_count_api_key = f"{api_key}::{precise_minute}::request_count"
+            request_count_api_key = MinuteLimit(str(api_key), precise_minute)
             # CHECK IF REQUEST ALLOWED for key
             await self.check_key_in_limits(
                 user_api_key_dict=user_api_key_dict,
@@ -375,7 +487,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         _tpm_limit_for_key_model: Final = get_key_model_tpm_limit(user_api_key_dict, model_name=_model)
         _rpm_limit_for_key_model: Final = get_key_model_rpm_limit(user_api_key_dict, model_name=_model)
         if _tpm_limit_for_key_model is not None or _rpm_limit_for_key_model is not None:
-            request_count_api_key = f"{api_key}::{_model}::{precise_minute}::request_count"
+            request_count_api_key = MinuteLimit(str(api_key), precise_minute, _model)
             tpm_limit_for_model = None
             rpm_limit_for_model = None
 
@@ -427,7 +539,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if user_rpm_limit is None:
                 user_rpm_limit = sys.maxsize
 
-            request_count_api_key = f"{user_id}::{precise_minute}::request_count"
+            request_count_api_key = MinuteLimit(user_id, precise_minute)
             # print(f"Checking if {request_count_api_key} is allowed to make request for minute {precise_minute}")
             await self.check_key_in_limits(
                 user_api_key_dict=user_api_key_dict,
@@ -455,7 +567,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if team_rpm_limit is None:
                 team_rpm_limit = sys.maxsize
 
-            request_count_api_key = f"{team_id}::{precise_minute}::request_count"
+            request_count_api_key = MinuteLimit(team_id, precise_minute)
             # print(f"Checking if {request_count_api_key} is allowed to make request for minute {precise_minute}")
             await self.check_key_in_limits(
                 user_api_key_dict=user_api_key_dict,
@@ -483,7 +595,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 end_user_rpm_limit = sys.maxsize
 
             # now do the same tpm/rpm checks
-            request_count_api_key = f"{user_api_key_dict.end_user_id}::{precise_minute}::request_count"
+            request_count_api_key = MinuteLimit(user_api_key_dict.end_user_id, precise_minute)
 
             # print(f"Checking if {request_count_api_key} is allowed to make request for minute {precise_minute}")
             await self.check_key_in_limits(
@@ -501,7 +613,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             )
 
         asyncio.create_task(
-            self.internal_usage_cache.async_batch_set_cache(
+            self._limits.write_many(
                 cache_list=values_to_update_in_cache,
                 ttl=60,
                 litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
@@ -509,34 +621,34 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         )
 
     @with_service_target("rate_limits")
-    async def async_log_success_event(self, kwargs, response_obj: object, start_time, end_time) -> None:
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
 
-        litellm_parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(kwargs=kwargs)
+        litellm_parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(kwargs=dict(kwargs))
         try:
             self.print_verbose("INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
-            released: Final = _slots_released(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # legacy callback kwargs are untyped
+            released: Final = _slots_released(kwargs)
 
-            global_max_parallel_requests: Final = kwargs["litellm_params"]["metadata"].get(
-                "global_max_parallel_requests", None
-            )
-            user_api_key: Final = kwargs["litellm_params"]["metadata"]["user_api_key"]
-            user_api_key_user_id: Final = kwargs["litellm_params"]["metadata"].get("user_api_key_user_id", None)
-            user_api_key_team_id: Final = kwargs["litellm_params"]["metadata"].get("user_api_key_team_id", None)
-            user_api_key_model_max_budget: Final = kwargs["litellm_params"]["metadata"].get(
-                "user_api_key_model_max_budget", None
-            )
-            user_api_key_end_user_id: Final = kwargs.get("user")
-
-            user_api_key_metadata: Final = kwargs["litellm_params"]["metadata"].get("user_api_key_metadata", {}) or {}
-            user_api_key_team_metadata = kwargs["litellm_params"]["metadata"].get("user_api_key_team_metadata", None)
-            user_api_key_dict: Final = UserAPIKeyAuth(
-                api_key=user_api_key,
-                metadata=user_api_key_metadata,
-                model_max_budget=user_api_key_model_max_budget,
-                team_metadata=user_api_key_team_metadata,
+            params: Final = _CALLBACK_DATA.validate_python(kwargs["litellm_params"])
+            metadata: Final = _CALLBACK_DATA.validate_python(params["metadata"])
+            global_max_parallel_requests: Final = metadata.get("global_max_parallel_requests")
+            user_api_key: Final = _optional_identity(metadata["user_api_key"])
+            user_api_key_user_id: Final = _optional_identity(metadata.get("user_api_key_user_id"))
+            user_api_key_team_id: Final = _optional_identity(metadata.get("user_api_key_team_id"))
+            user_api_key_model_max_budget: Final = metadata.get("user_api_key_model_max_budget")
+            user_api_key_end_user_id: Final = _optional_identity(kwargs.get("user"))
+            user_api_key_metadata: Final = _CALLBACK_DATA.validate_python(metadata.get("user_api_key_metadata") or {})
+            user_api_key_dict: Final = UserAPIKeyAuth.model_validate(
+                {
+                    "api_key": user_api_key,
+                    "metadata": user_api_key_metadata,
+                    "model_max_budget": user_api_key_model_max_budget,
+                    "team_metadata": metadata.get("user_api_key_team_metadata"),
+                }
             )
 
             # ------------
@@ -562,13 +674,14 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - API Key
             # ------------
 
-            values_to_update_in_cache: Final[list[tuple[str, object]]] = []
+            values_to_update_in_cache: Final[list[tuple[MinuteLimit, UsageSnapshot]]] = []
 
             if user_api_key is not None:
-                request_count_api_key = f"{user_api_key}::{precise_minute}::request_count"
+                request_count_api_key = MinuteLimit(user_api_key, precise_minute)
 
-                current: dict[str, int] = await self.internal_usage_cache.async_get_cache(
+                current: UsageSnapshot = await self._limits.read(
                     key=request_count_api_key,
+                    empty_is_missing=True,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
                     "current_requests": 1,
@@ -588,7 +701,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # ------------
             # Update usage - model group + API Key
             # ------------
-            model_group: Final = get_model_group_from_litellm_kwargs(kwargs)
+            model_group: Final = get_model_group_from_litellm_kwargs(dict(kwargs))
             _success_tpm_limit: Final = (
                 get_key_model_tpm_limit(user_api_key_dict, model_name=model_group) if model_group is not None else None
             )
@@ -606,10 +719,11 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     or _success_rpm_limit is not None
                 )
             ):
-                request_count_api_key = f"{user_api_key}::{model_group}::{precise_minute}::request_count"
+                request_count_api_key = MinuteLimit(user_api_key, precise_minute, model_group)
 
-                current = await self.internal_usage_cache.async_get_cache(
+                current = await self._limits.read(
                     key=request_count_api_key,
+                    empty_is_missing=True,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
                     "current_requests": 1,
@@ -632,10 +746,11 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if user_api_key_user_id is not None:
                 total_tokens = _response_total_tokens(response_obj)
 
-                request_count_api_key = f"{user_api_key_user_id}::{precise_minute}::request_count"
+                request_count_api_key = MinuteLimit(user_api_key_user_id, precise_minute)
 
-                current = await self.internal_usage_cache.async_get_cache(
+                current = await self._limits.read(
                     key=request_count_api_key,
+                    empty_is_missing=True,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
                     "current_requests": 1,
@@ -658,10 +773,11 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if user_api_key_team_id is not None:
                 total_tokens = _response_total_tokens(response_obj)
 
-                request_count_api_key = f"{user_api_key_team_id}::{precise_minute}::request_count"
+                request_count_api_key = MinuteLimit(user_api_key_team_id, precise_minute)
 
-                current = await self.internal_usage_cache.async_get_cache(
+                current = await self._limits.read(
                     key=request_count_api_key,
+                    empty_is_missing=True,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
                     "current_requests": 1,
@@ -684,10 +800,11 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if user_api_key_end_user_id is not None:
                 total_tokens = _response_total_tokens(response_obj)
 
-                request_count_api_key = f"{user_api_key_end_user_id}::{precise_minute}::request_count"
+                request_count_api_key = MinuteLimit(user_api_key_end_user_id, precise_minute)
 
-                current = await self.internal_usage_cache.async_get_cache(
+                current = await self._limits.read(
                     key=request_count_api_key,
+                    empty_is_missing=True,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
                     "current_requests": 1,
@@ -704,7 +821,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 self.print_verbose(f"updated_value in success call: {new_val}, precise_minute: {precise_minute}")
                 values_to_update_in_cache.append((request_count_api_key, new_val))
 
-            await self.internal_usage_cache.async_batch_set_cache(
+            await self._limits.write_many(
                 cache_list=values_to_update_in_cache,
                 ttl=60,
                 litellm_parent_otel_span=litellm_parent_otel_span,
@@ -713,14 +830,17 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             self.print_verbose(e)
 
     @with_service_target("rate_limits")
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         try:
             self.print_verbose("Inside Max Parallel Request Failure Hook")
-            litellm_parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(kwargs=kwargs)
-            _metadata: Final = kwargs["litellm_params"].get("metadata", {}) or {}
-            released: Final = _slots_released(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # legacy callback kwargs are untyped
+            litellm_parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(kwargs=dict(kwargs))
+            params: Final = _CALLBACK_DATA.validate_python(kwargs["litellm_params"])
+            _metadata: Final = _CALLBACK_DATA.validate_python(params.get("metadata") or {})
+            released: Final = _slots_released(kwargs)
             global_max_parallel_requests: Final = _metadata.get("global_max_parallel_requests", None)
-            user_api_key: Final = _metadata.get("user_api_key", None)
+            user_api_key: Final = _optional_identity(_metadata.get("user_api_key"))
             self.print_verbose(f"user_api_key: [set={user_api_key is not None}]")
             if user_api_key is None:
                 return
@@ -753,13 +873,14 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
                 precise_minute: Final = _precise_minute(self._clock())
 
-                request_count_api_key: Final = f"{user_api_key}::{precise_minute}::request_count"
+                request_count_api_key: Final = MinuteLimit(user_api_key, precise_minute)
 
                 # ------------
                 # Update usage
                 # ------------
-                current: Final = await self.internal_usage_cache.async_get_cache(
+                current: Final = await self._limits.read(
                     key=request_count_api_key,
+                    empty_is_missing=True,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
                     "current_requests": 1,
@@ -774,7 +895,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 }
 
                 self.print_verbose(f"updated_value in failure call: {new_val}")
-                await self.internal_usage_cache.async_set_cache(
+                await self._limits.write(
                     request_count_api_key,
                     new_val,
                     ttl=60,
@@ -852,15 +973,15 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         """
         api_key: Final = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
         precise_minute: Final = _precise_minute(self._clock())
-        request_count_api_key: Final = f"{api_key}::{precise_minute}::request_count"
-        current: Final[CurrentItemRateLimit | None] = await self.internal_usage_cache.async_get_cache(
+        request_count_api_key: Final = MinuteLimit(str(api_key), precise_minute)
+        current: Final[UsageSnapshot | None] = await self._limits.read(
             key=request_count_api_key,
             litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
         )
 
-        key_remaining_rpm_limit: int | None = None
+        key_remaining_rpm_limit: int | float | None = None
         key_rpm_limit: int | None = None
-        key_remaining_tpm_limit: int | None = None
+        key_remaining_tpm_limit: int | float | None = None
         key_tpm_limit: int | None = None
         if current is not None:
             if user_api_key_dict.rpm_limit is not None:

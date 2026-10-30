@@ -2,12 +2,16 @@
 Unit Tests for the max parallel request limiter v1 for the proxy
 """
 
+import asyncio
 import itertools
 from collections.abc import Callable, Iterator, Mapping
 from datetime import datetime
+from functools import partial
 from typing import Final
 
+import fakeredis
 import pytest
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
@@ -16,7 +20,9 @@ from litellm.proxy.hooks.parallel_request_limiter import (
     PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
+from litellm.redis.stores.legacy_request_limits import MinuteLimit
 from litellm.types.utils import CallTypes, EmbeddingResponse, ModelResponse, TextCompletionResponse, Usage
+from tests._support.fake_redis import fake_redis_cache
 
 FROZEN_INSTANT: Final = datetime(2026, 1, 31, 23, 59, 30)
 LAST_MICROSECOND_OF_JANUARY: Final = datetime(2026, 1, 31, 23, 59, 59, 999999)
@@ -48,12 +54,8 @@ def _clock_rolling_over_after_first_read() -> Callable[[], datetime]:
     ],
 )
 @pytest.mark.asyncio
-async def test_model_per_key_rate_limit_error_carries_descriptor_key(
-    current: Mapping[str, int] | None, rpm_limit: int
-):
-    handler: Final = PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(DualCache())
-    )
+async def test_model_per_key_rate_limit_error_carries_descriptor_key(current: Mapping[str, int] | None, rpm_limit: int):
+    handler: Final = PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
 
     with pytest.raises(ProxyRateLimitError) as exc_info:
         await handler.check_key_in_limits(
@@ -65,7 +67,7 @@ async def test_model_per_key_rate_limit_error_carries_descriptor_key(
             tpm_limit=100,
             rpm_limit=rpm_limit,
             current=dict(current) if current is not None else None,
-            request_count_api_key="test-key:model_per_key",
+            request_count_api_key=MinuteLimit("test-key", LAST_MINUTE_OF_JANUARY, "model_per_key"),
             rate_limit_type="model_per_key",
             values_to_update_in_cache=[],
         )
@@ -160,10 +162,7 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(response_
             key=f"{scope_id}::{precise_minute}::request_count",
             litellm_parent_otel_span=None,
         )
-        assert current["current_tpm"] == 50, (
-            f"expected 50 tokens counted for {scope_id}, "
-            f"got {current['current_tpm']}"
-        )
+        assert current["current_tpm"] == 50, f"expected 50 tokens counted for {scope_id}, got {current['current_tpm']}"
 
 
 @pytest.mark.asyncio
@@ -183,9 +182,12 @@ async def test_a_pre_call_across_a_minute_rollover_lands_in_the_bucket_of_its_fi
         key=f"{api_key}::{LAST_MINUTE_OF_JANUARY}::request_count", litellm_parent_otel_span=None
     ) == {"current_requests": 1, "current_tpm": 0, "current_rpm": 1}
     for torn_minute in (FIRST_MINUTE_OF_FEBRUARY, TORN_MINUTE_OF_JANUARY):
-        assert await internal_usage_cache.async_get_cache(
-            key=f"{api_key}::{torn_minute}::request_count", litellm_parent_otel_span=None
-        ) is None
+        assert (
+            await internal_usage_cache.async_get_cache(
+                key=f"{api_key}::{torn_minute}::request_count", litellm_parent_otel_span=None
+            )
+            is None
+        )
 
 
 @pytest.mark.asyncio
@@ -202,11 +204,7 @@ async def test_a_success_event_across_a_minute_rollover_lands_in_the_bucket_of_i
     )
 
     await handler.async_log_success_event(
-        kwargs={
-            "litellm_params": {
-                "metadata": {"user_api_key": api_key, "user_api_key_model_max_budget": {}}
-            }
-        },
+        kwargs={"litellm_params": {"metadata": {"user_api_key": api_key, "user_api_key_model_max_budget": {}}}},
         response_obj=ModelResponse(usage=Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7)),
         start_time=LAST_MICROSECOND_OF_JANUARY,
         end_time=FIRST_MICROSECOND_OF_FEBRUARY,
@@ -216,9 +214,12 @@ async def test_a_success_event_across_a_minute_rollover_lands_in_the_bucket_of_i
         key=f"{api_key}::{LAST_MINUTE_OF_JANUARY}::request_count", litellm_parent_otel_span=None
     ) == {"current_requests": 0, "current_tpm": 7, "current_rpm": 1}
     for torn_minute in (FIRST_MINUTE_OF_FEBRUARY, TORN_MINUTE_OF_JANUARY):
-        assert await internal_usage_cache.async_get_cache(
-            key=f"{api_key}::{torn_minute}::request_count", litellm_parent_otel_span=None
-        ) is None
+        assert (
+            await internal_usage_cache.async_get_cache(
+                key=f"{api_key}::{torn_minute}::request_count", litellm_parent_otel_span=None
+            )
+            is None
+        )
 
 
 @pytest.mark.asyncio
@@ -248,9 +249,12 @@ async def test_a_failure_event_across_a_minute_rollover_lands_in_the_bucket_of_i
         key=f"{api_key}::{LAST_MINUTE_OF_JANUARY}::request_count", litellm_parent_otel_span=None
     ) == {"current_requests": 0, "current_tpm": 0, "current_rpm": 1}
     for torn_minute in (FIRST_MINUTE_OF_FEBRUARY, TORN_MINUTE_OF_JANUARY):
-        assert await internal_usage_cache.async_get_cache(
-            key=f"{api_key}::{torn_minute}::request_count", litellm_parent_otel_span=None
-        ) is None
+        assert (
+            await internal_usage_cache.async_get_cache(
+                key=f"{api_key}::{torn_minute}::request_count", litellm_parent_otel_span=None
+            )
+            is None
+        )
 
 
 @pytest.mark.asyncio
@@ -328,7 +332,9 @@ async def test_retry_after_is_the_seconds_until_the_next_minute_of_the_injected_
 @pytest.mark.asyncio
 async def test_websocket_turn_callbacks_keep_the_sockets_slot_until_the_disconnect_release():
     api_key = hash_token("sk-websocket")
-    handler = PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()), clock=_frozen_clock)
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), clock=_frozen_clock
+    )
     bucket = f"{api_key}::{FROZEN_INSTANT.strftime('%Y-%m-%d-%H-%M')}::request_count"
     await handler.internal_usage_cache.async_set_cache(
         key=bucket,
@@ -358,7 +364,9 @@ async def test_websocket_turn_callbacks_keep_the_sockets_slot_until_the_disconne
 @pytest.mark.asyncio
 async def test_a_rejected_realtime_attempt_does_not_free_a_slot_it_never_took():
     api_key = hash_token("sk-at-limit")
-    handler = PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()), clock=_frozen_clock)
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), clock=_frozen_clock
+    )
     bucket = f"{api_key}::{FROZEN_INSTANT.strftime('%Y-%m-%d-%H-%M')}::request_count"
     await handler.internal_usage_cache.async_set_cache(
         key=bucket,
@@ -376,3 +384,185 @@ async def test_a_rejected_realtime_attempt_does_not_free_a_slot_it_never_took():
     await proxy_logging_obj.arelease_responses_websocket_slot(auth)
     after_socket_close = await handler.internal_usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
     assert after_socket_close["current_requests"] == 0, after_socket_close
+
+
+@pytest.mark.asyncio
+async def test_remote_snapshot_blocks_a_cold_worker_and_supplies_response_headers() -> None:
+    server: Final = fakeredis.FakeServer()
+    redis: Final = fake_redis_cache(server, namespace="legacy")
+    auth: Final = UserAPIKeyAuth(api_key="legacy-key", rpm_limit=3, tpm_limit=100)
+    key: Final = f"legacy-key::{LAST_MINUTE_OF_JANUARY}::request_count"
+    await redis.async_set_cache(key, {"current_requests": 0, "current_tpm": 7, "current_rpm": 3}, ttl=60)
+    local: Final = DualCache()
+    handler: Final = PROXY_MaxParallelRequestsHandler(InternalUsageCache(local), clock=_frozen_clock)
+    local.attach_redis_cache(redis)
+    with pytest.raises(ProxyRateLimitError):
+        await handler.async_pre_call_hook(auth, DualCache(), {"model": "group"}, "completion")
+    response: Final = ModelResponse()
+    response._hidden_params = {}
+    await handler.async_post_call_success_hook({}, auth, response)
+    assert response._hidden_params["additional_headers"] == {
+        "x-ratelimit-remaining-requests": 0,
+        "x-ratelimit-limit-requests": 3,
+        "x-ratelimit-remaining-tokens": 93,
+        "x-ratelimit-limit-tokens": 100,
+    }
+
+
+@pytest.mark.asyncio
+async def test_duplicate_identity_pre_call_remains_non_atomic_and_global_gauge_stays_local() -> None:
+    server: Final = fakeredis.FakeServer()
+    redis: Final = fake_redis_cache(server, namespace="legacy")
+    raw: Final = fakeredis.FakeAsyncRedis(server=server)
+    local: Final = DualCache(redis_cache=redis)
+    handler: Final = PROXY_MaxParallelRequestsHandler(InternalUsageCache(local), clock=_frozen_clock)
+    auth: Final = UserAPIKeyAuth(
+        api_key="shared", team_id="shared", team_rpm_limit=10, max_parallel_requests=10, rpm_limit=10
+    )
+    await handler.async_pre_call_hook(
+        auth, DualCache(), {"model": "group", "metadata": {"global_max_parallel_requests": 5}}, "completion"
+    )
+    await asyncio.sleep(0)
+    assert await redis.async_get_cache(f"shared::{LAST_MINUTE_OF_JANUARY}::request_count") == {
+        "current_requests": 1,
+        "current_tpm": 0,
+        "current_rpm": 1,
+    }
+    assert await raw.get("legacy:global_max_parallel_requests") is None
+    assert local.in_memory_cache.get_cache("global_max_parallel_requests") == 1
+
+
+@pytest.mark.asyncio
+async def test_success_settles_all_minute_identities_including_model_and_failure_settles_key() -> None:
+    server: Final = fakeredis.FakeServer()
+    redis: Final = fake_redis_cache(server, namespace="legacy")
+    raw: Final = fakeredis.FakeAsyncRedis(server=server)
+    identities: Final = ("key", "key::group", "user", "team", "end-user")
+    for identity in identities:
+        await redis.async_set_cache(
+            f"{identity}::{LAST_MINUTE_OF_JANUARY}::request_count",
+            {"current_requests": 2, "current_tpm": 10, "current_rpm": 4},
+            ttl=60,
+        )
+    handler: Final = PROXY_MaxParallelRequestsHandler(
+        InternalUsageCache(DualCache(redis_cache=redis)), clock=_frozen_clock
+    )
+    kwargs: Final = {
+        "call_type": "acompletion",
+        "exception": ValueError("provider failed"),
+        "user": "end-user",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "key",
+                "user_api_key_user_id": "user",
+                "user_api_key_team_id": "team",
+                "user_api_key_metadata": {"model_rpm_limit": {"group": 10}},
+                "user_api_key_model_max_budget": {},
+                "model_group": "group",
+            }
+        },
+    }
+    response: Final = ModelResponse(usage=Usage(total_tokens=5))
+    await handler.async_log_success_event(kwargs, response, FROZEN_INSTANT, FROZEN_INSTANT)
+    for identity in identities:
+        key: Final = f"{identity}::{LAST_MINUTE_OF_JANUARY}::request_count"
+        assert await redis.async_get_cache(key) == {"current_requests": 1, "current_tpm": 15, "current_rpm": 4}, (
+            identity
+        )
+        assert 0 < await raw.pttl(f"legacy:{key}") <= 60000
+    await handler.async_log_failure_event(kwargs, None, FROZEN_INSTANT, FROZEN_INSTANT)
+    assert await redis.async_get_cache(f"key::{LAST_MINUTE_OF_JANUARY}::request_count") == {
+        "current_requests": 0,
+        "current_tpm": 15,
+        "current_rpm": 4,
+    }
+
+
+@pytest.mark.asyncio
+async def test_redis_outage_keeps_pre_call_local_admission_and_minute_rollover() -> None:
+    server: Final = fakeredis.FakeServer()
+    redis: Final = fake_redis_cache(server, namespace="legacy")
+    local: Final = DualCache(redis_cache=redis)
+    instants: Final = itertools.chain(
+        itertools.repeat(LAST_MICROSECOND_OF_JANUARY, 3), itertools.repeat(FIRST_MICROSECOND_OF_FEBRUARY)
+    )
+    handler: Final = PROXY_MaxParallelRequestsHandler(InternalUsageCache(local), clock=_clock_reading(instants))
+    auth: Final = UserAPIKeyAuth(api_key="key", rpm_limit=1)
+    server.connected = False
+    await handler.async_pre_call_hook(auth, DualCache(), {"model": "group"}, "completion")
+    await asyncio.sleep(0)
+    with pytest.raises(ProxyRateLimitError):
+        await handler.async_pre_call_hook(auth, DualCache(), {"model": "group"}, "completion")
+    await handler.async_pre_call_hook(auth, DualCache(), {"model": "group"}, "completion")
+    await asyncio.sleep(0)
+    assert local.in_memory_cache.get_cache(f"key::{FIRST_MINUTE_OF_FEBRUARY}::request_count") == {
+        "current_requests": 1,
+        "current_tpm": 0,
+        "current_rpm": 1,
+    }
+
+
+def _lost_set_reply(reply: object, *, applied: asyncio.Event, **kwargs: object) -> bool:
+    applied.set()
+    raise RedisTimeoutError("SET applied but reply lost")
+
+
+@pytest.mark.asyncio
+async def test_unacknowledged_background_set_keeps_local_limit_and_remote_write() -> None:
+    server: Final = fakeredis.FakeServer()
+    redis: Final = fake_redis_cache(server, namespace="legacy")
+    client: Final = redis.init_async_client()
+    assert isinstance(client, fakeredis.FakeAsyncRedis)
+    applied: Final = asyncio.Event()
+    client.set_response_callback("SET", partial(_lost_set_reply, applied=applied))
+    raw: Final = fakeredis.FakeAsyncRedis(server=server)
+    handler: Final = PROXY_MaxParallelRequestsHandler(
+        InternalUsageCache(DualCache(redis_cache=redis)), clock=_frozen_clock
+    )
+    auth: Final = UserAPIKeyAuth(api_key="key", rpm_limit=1)
+    await handler.async_pre_call_hook(auth, DualCache(), {"model": "group"}, "completion")
+    await asyncio.wait_for(applied.wait(), timeout=5)
+    assert await raw.get(f"legacy:key::{LAST_MINUTE_OF_JANUARY}::request_count") == (
+        b'{"current_requests": 1, "current_tpm": 0, "current_rpm": 1}'
+    )
+    with pytest.raises(ProxyRateLimitError):
+        await handler.async_pre_call_hook(auth, DualCache(), {"model": "group"}, "completion")
+
+
+@pytest.mark.parametrize("payload", [b"broken{", b"[]", b"0", b"null"])
+@pytest.mark.asyncio
+async def test_failure_settlement_preserves_missing_and_falsy_remote_default(payload: bytes) -> None:
+    server: Final = fakeredis.FakeServer()
+    redis: Final = fake_redis_cache(server, namespace="legacy")
+    raw: Final = fakeredis.FakeAsyncRedis(server=server)
+    key: Final = f"key::{LAST_MINUTE_OF_JANUARY}::request_count"
+    await raw.set(f"legacy:{key}", payload)
+    handler: Final = PROXY_MaxParallelRequestsHandler(
+        InternalUsageCache(DualCache(redis_cache=redis)), clock=_frozen_clock
+    )
+    await handler.async_log_failure_event(
+        {"exception": ValueError("provider failed"), "litellm_params": {"metadata": {"user_api_key": "key"}}},
+        None,
+        FROZEN_INSTANT,
+        FROZEN_INSTANT,
+    )
+    assert await redis.async_get_cache(key) == {"current_requests": 0, "current_tpm": 0, "current_rpm": 0}
+
+
+@pytest.mark.asyncio
+async def test_bad_batch_payload_keeps_pre_call_failure_after_local_backfill() -> None:
+    server: Final = fakeredis.FakeServer()
+    redis: Final = fake_redis_cache(server, namespace="legacy")
+    raw: Final = fakeredis.FakeAsyncRedis(server=server)
+    key: Final = f"key::{LAST_MINUTE_OF_JANUARY}::request_count"
+    await redis.async_set_cache(key, {"current_requests": 0, "current_tpm": 0, "current_rpm": 0}, ttl=60)
+    await raw.set(f"legacy:key::group::{LAST_MINUTE_OF_JANUARY}::request_count", "broken{")
+    handler: Final = PROXY_MaxParallelRequestsHandler(
+        InternalUsageCache(DualCache(redis_cache=redis)), clock=_frozen_clock
+    )
+    for _ in range(2):
+        with pytest.raises(ValueError, match="invalid legacy request limit snapshot"):
+            await handler.async_pre_call_hook(
+                UserAPIKeyAuth(api_key="key"), DualCache(), {"model": "group"}, "completion"
+            )
+    assert await redis.async_get_cache(key) == {"current_requests": 0, "current_tpm": 0, "current_rpm": 0}
