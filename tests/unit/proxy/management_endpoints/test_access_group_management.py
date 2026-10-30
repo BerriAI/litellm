@@ -687,6 +687,19 @@ class _FakeAccessGroupBudgetTable:
         return self.rows.pop(access_group_name, None)
 
 
+def _row_lock_not_available(held_model_ids):
+    import prisma
+
+    return prisma.errors.RawQueryError(
+        {
+            "user_facing_error": {
+                "error_code": "P2010",
+                "meta": {"code": "55P03", "message": f"could not obtain lock on row in relation for {held_model_ids}"},
+            }
+        }
+    )
+
+
 class _FakeModelTable:
     def __init__(self, journal: list[str], deployments, failing_model_ids=frozenset()) -> None:
         self.journal = journal
@@ -694,24 +707,35 @@ class _FakeModelTable:
         self.failing_model_ids = failing_model_ids
         self.updates: list[tuple[dict, dict]] = []
         self.rows_locked_by_another_session: frozenset[str] = frozenset()
-        self.edits_committed_while_waiting_for_the_lock: dict[str, dict] = {}
+        self.edits_the_other_session_commits: dict[str, dict] = {}
+        self.other_session_commits_after_refusals: int | None = None
+        self.lock_refusals = 0
 
     async def find_many(self, where=None, **kwargs):
         model_names = (where or {}).get("model_name", {}).get("in")
         return [d for d in self.deployments if model_names is None or d.model_name in model_names]
 
-    def lock_rows(self, model_ids):
+    def lock_rows(self, model_ids, nowait):
         held = sorted(self.rows_locked_by_another_session.intersection(model_ids))
-        if held:
+        if not held:
+            return
+        if not nowait:
             raise TimeoutError(f"timed out waiting for the row lock on {held}")
+        self.lock_refusals += 1
+        if self.lock_refusals == self.other_session_commits_after_refusals:
+            self._other_session_commits()
+        raise _row_lock_not_available(held)
+
+    def _other_session_commits(self):
         self.deployments = [
             _FakeDeployment(
                 model_id=d.model_id,
                 model_name=d.model_name,
-                model_info=self.edits_committed_while_waiting_for_the_lock.get(d.model_id, d.model_info),
+                model_info=self.edits_the_other_session_commits.get(d.model_id, d.model_info),
             )
             for d in self.deployments
         ]
+        self.rows_locked_by_another_session = frozenset()
 
     async def find_unique(self, where, include=None):
         return next((d for d in self.deployments if d.model_id == where["model_id"]), None)
@@ -767,7 +791,7 @@ class _FakeModelTableTx:
         if "FOR UPDATE" in query:
             model_ids = sorted(args[0] if args else (d.model_id for d in self.model_table.deployments))
             self.journal.append(f"model_table.lock:{','.join(model_ids)}")
-            self.model_table.lock_rows(model_ids)
+            self.model_table.lock_rows(model_ids, nowait="NOWAIT" in query)
             return [{"model_id": model_id} for model_id in model_ids]
         self.journal.append(f"model_table.query:{query}")
         return []
@@ -1595,7 +1619,7 @@ async def test_an_access_group_update_locks_the_rows_it_reads_and_tells_other_wo
         )
 
     assert journal == [
-        "access_group.lock:model_access_group:prod-models",
+        "access_group.lock:prod-models",
         "model_table.read",
         "model_table.lock:joins,leaves,stays",
         "model_table.read",
@@ -1642,7 +1666,7 @@ async def test_an_access_group_update_that_changes_no_membership_writes_and_anno
 
     assert response.models_updated == 2
     assert journal == [
-        "access_group.lock:model_access_group:prod-models",
+        "access_group.lock:prod-models",
         "model_table.read",
         "model_table.lock:also-stays,stays",
         "model_table.read",
@@ -1687,7 +1711,7 @@ async def test_an_access_group_update_goes_through_while_another_session_holds_a
 
 
 @pytest.mark.asyncio
-async def test_an_access_group_update_keeps_an_edit_committed_while_it_waited_for_the_row_lock():
+async def test_an_access_group_update_retries_a_locked_row_and_keeps_the_edit_committed_there():
     import json
 
     from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
@@ -1704,9 +1728,11 @@ async def test_an_access_group_update_keeps_an_edit_committed_while_it_waited_fo
             _deployment(model_id="joins", model_name="gpt-joins", access_groups=()),
         ],
     )
-    prisma.model_table.edits_committed_while_waiting_for_the_lock = {
+    prisma.model_table.rows_locked_by_another_session = frozenset({"joins"})
+    prisma.model_table.edits_the_other_session_commits = {
         "joins": {"access_groups": [], "description": "saved while the update waited"}
     }
+    prisma.model_table.other_session_commits_after_refusals = 1
 
     with _proxy_with_stubbed_reload(prisma):
         await update_access_group(
@@ -1720,7 +1746,7 @@ async def test_an_access_group_update_keeps_an_edit_committed_while_it_waited_fo
 
 
 @pytest.mark.asyncio
-async def test_an_access_group_emptied_while_the_update_waited_for_the_row_lock_answers_404_and_writes_nothing():
+async def test_an_access_group_emptied_while_the_update_retried_a_locked_row_answers_404_and_writes_nothing():
     from fastapi import HTTPException
 
     from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
@@ -1737,7 +1763,9 @@ async def test_an_access_group_emptied_while_the_update_waited_for_the_row_lock_
             _deployment(model_id="joins", model_name="gpt-joins", access_groups=()),
         ],
     )
-    prisma.model_table.edits_committed_while_waiting_for_the_lock = {"leaves": {"access_groups": []}}
+    prisma.model_table.rows_locked_by_another_session = frozenset({"leaves"})
+    prisma.model_table.edits_the_other_session_commits = {"leaves": {"access_groups": []}}
+    prisma.model_table.other_session_commits_after_refusals = 1
 
     with _proxy_with_stubbed_reload(prisma), pytest.raises(HTTPException) as raised:
         await update_access_group(
@@ -1747,6 +1775,45 @@ async def test_an_access_group_emptied_while_the_update_waited_for_the_row_lock_
         )
 
     assert raised.value.status_code == 404
+    assert prisma.model_table.updates == []
+
+
+@pytest.mark.asyncio
+async def test_an_access_group_update_answers_409_and_writes_nothing_while_another_session_keeps_a_member_row_locked():
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+        _rewrite_membership_once_its_rows_are_free,
+    )
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+        UpdateModelGroupRequest,
+    )
+
+    prisma = _FakePrismaClient(
+        [],
+        deployments=[
+            _deployment(model_id="stays", model_name="gpt-stays"),
+            _deployment(model_id="leaves", model_name="gpt-leaves"),
+        ],
+    )
+    prisma.model_table.rows_locked_by_another_session = frozenset({"leaves"})
+    slept = []
+
+    async def record_sleep(seconds):
+        slept.append(seconds)
+
+    with pytest.raises(HTTPException) as raised:
+        await _rewrite_membership_once_its_rows_are_free(
+            prisma_client=prisma,
+            access_group="prod-models",
+            data=UpdateModelGroupRequest(model_ids=["stays"]),
+            retry_delays_seconds=(0.1, 0.2),
+            sleep=record_sleep,
+        )
+
+    assert raised.value.status_code == 409
+    assert slept == [0.1, 0.2]
+    assert prisma.model_table.lock_refusals == 3
     assert prisma.model_table.updates == []
 
 

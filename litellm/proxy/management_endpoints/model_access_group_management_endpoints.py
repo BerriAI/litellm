@@ -12,9 +12,10 @@ Endpoints here:
 - DELETE /access_group/{access_group}/budget - Clear an access group's shared budget
 """
 
+import asyncio
 import contextlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Protocol
@@ -31,6 +32,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     model_access_group_cache_key,
     model_access_group_registry_cache_key,
 )
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient, writer_wrapper
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 
@@ -196,11 +198,15 @@ def _model_table(prisma_client: PrismaClient) -> _ModelTableClient:
     return ModelRepository(WriterPinnedClient(prisma_client.db)).table
 
 
-_SERIALIZE_ACCESS_GROUP_WRITES: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext($1))"
+_SERIALIZE_ACCESS_GROUP_WRITES: Final = (
+    "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext('model_access_group'), hashtext($1))"
+)
 _LOCK_MODEL_ROWS: Final = (
-    'SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_id = ANY($1::text[]) ORDER BY model_id FOR UPDATE'
+    'SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_id = ANY($1::text[]) '
+    "ORDER BY model_id FOR UPDATE NOWAIT"
 )
 _MEMBERSHIP_TX_TIMEOUT: Final = timedelta(seconds=30)
+_ROW_LOCK_RETRY_DELAYS_SECONDS: Final = (0.05, 0.1, 0.2, 0.4, 0.8, *(1.0,) * 9)
 
 
 def _model_table_tx(prisma_client: PrismaClient) -> contextlib.AbstractAsyncContextManager[_ModelTableTx]:
@@ -501,7 +507,7 @@ async def _rewrite_membership_under_row_locks(
     prisma_client: PrismaClient, access_group: str, data: UpdateModelGroupRequest
 ) -> tuple[tuple[_DeploymentRow, ...], tuple[tuple[str, Mapping[str, object]], ...]]:
     async with _model_table_tx(prisma_client) as tx:
-        await tx.query_raw(_SERIALIZE_ACCESS_GROUP_WRITES, f"model_access_group:{access_group}")
+        await tx.query_raw(_SERIALIZE_ACCESS_GROUP_WRITES, access_group)
         model_ids_to_lock: Final = _model_ids_to_lock(
             deployments=await tx.litellm_proxymodeltable.find_many(), access_group=access_group, data=data
         )
@@ -529,6 +535,38 @@ async def _rewrite_membership_under_row_locks(
                         where={"model_id": model_id}, data={"model_info": json.dumps(model_info)}
                     )
     return selected_deployments, rewrites
+
+
+async def _rewrite_membership_unless_a_row_is_locked(
+    prisma_client: PrismaClient, access_group: str, data: UpdateModelGroupRequest
+) -> tuple[tuple[_DeploymentRow, ...], tuple[tuple[str, Mapping[str, object]], ...]] | None:
+    try:
+        return await _rewrite_membership_under_row_locks(
+            prisma_client=prisma_client, access_group=access_group, data=data
+        )
+    except Exception as e:
+        if PrismaDBExceptionHandler.is_lock_timeout_error(e):
+            return None
+        raise
+
+
+async def _rewrite_membership_once_its_rows_are_free(
+    prisma_client: PrismaClient,
+    access_group: str,
+    data: UpdateModelGroupRequest,
+    retry_delays_seconds: Sequence[float] = _ROW_LOCK_RETRY_DELAYS_SECONDS,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> tuple[tuple[_DeploymentRow, ...], tuple[tuple[str, Mapping[str, object]], ...]]:
+    for delay in (*retry_delays_seconds, None):
+        if (
+            rewritten := await _rewrite_membership_unless_a_row_is_locked(
+                prisma_client=prisma_client, access_group=access_group, data=data
+            )
+        ) is not None:
+            return rewritten
+        if delay is not None:
+            await sleep(delay)
+    raise _http_error(409, f"Another edit holds a model in access group '{access_group}', try again")
 
 
 def _readable_model_info_or_raise(model_id: str, model_info: object) -> Mapping[str, object]:
@@ -1024,6 +1062,7 @@ async def update_access_group(
     Raises:
     - HTTPException 400: If any model names don't exist
     - HTTPException 404: If access group not found
+    - HTTPException 409: If another edit keeps one of the group's models locked for about 10 s
     """
     from litellm.proxy.proxy_server import llm_router, prisma_client
 
@@ -1066,7 +1105,7 @@ async def update_access_group(
             )
 
     try:
-        selected_deployments, rewrites = await _rewrite_membership_under_row_locks(
+        selected_deployments, rewrites = await _rewrite_membership_once_its_rows_are_free(
             prisma_client=prisma_client, access_group=access_group, data=data
         )
         if rewrites:
