@@ -99,6 +99,7 @@ from .llms.openai import (
     OpenAIRealtimeStreamList,
     ResponsesAPIResponse,
     WebSearchOptions,
+    _JsonValue,
 )
 from .rerank import RerankResponse as RerankResponse
 
@@ -4783,8 +4784,6 @@ class LiteLLMFineTuningJob(FineTuningJob):
         self._hidden_params = kwargs.get("_hidden_params", {})
 
 
-_BatchFieldValue: TypeAlias = object
-
 OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS: Final = MappingProxyType(
     {"pending": "validating", "running": "in_progress"}
 )
@@ -4797,20 +4796,20 @@ class LiteLLMBatch(Batch):
 
     @field_validator("object", mode="before")
     @classmethod
-    def _default_missing_object_type(cls, value: _BatchFieldValue) -> _BatchFieldValue:
+    def _default_missing_object_type(cls, value: _JsonValue) -> _JsonValue:
         return "batch" if value is None else value
 
     @field_validator("status", mode="before")
     @classmethod
-    def _map_vllm_router_status(cls, value: _BatchFieldValue) -> _BatchFieldValue:
+    def _map_vllm_router_status(cls, value: _JsonValue) -> _JsonValue:
         return OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS.get(value, value) if isinstance(value, str) else value
 
     @property
-    def hidden_params(self) -> dict[str, _BatchFieldValue]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, _JsonValue]:  # mutable-ok: API requires mutation
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, _BatchFieldValue]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, _JsonValue]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
     usage: Usage | None = None
