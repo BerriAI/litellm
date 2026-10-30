@@ -2814,6 +2814,9 @@ def test_build_json_schema_declares_names_inside_the_hoisted_copy() -> None:
         pytest.param({"$ref": "#/$defs/N", "anyOf": list(_NAME_BRANCHES), "required": ["name"]}, id="ref-node"),
         pytest.param({"type": "object", "required": ["name"]}, id="declared-nowhere"),
         pytest.param({"anyOf": list(_NAME_BRANCHES), "required": ["unknown"]}, id="not-in-any-branch"),
+        pytest.param(
+            {"additionalProperties": False, "anyOf": list(_NAME_BRANCHES), "required": ["name"]}, id="closed-node"
+        ),
         pytest.param({"anyOf": [{"properties": {"name": True}}], "required": ["name"]}, id="boolean-definition"),
         pytest.param({"anyOf": list(_NAME_BRANCHES), "required": [{"name": 1}]}, id="non-string-name"),
         pytest.param({"anyOf": list(_NAME_BRANCHES), "required": True}, id="required-not-a-list"),
@@ -2850,6 +2853,16 @@ def test_build_json_schema_declares_names_inside_the_hoisted_copy() -> None:
 )
 def test_build_json_schema_leaves_schemas_with_nothing_to_hoist_as_sent(schema: dict) -> None:
     assert build_json_schema(schema) == schema
+
+
+@pytest.mark.parametrize("additional_properties", [True, {"type": "string"}], ids=["true", "schema"])
+def test_build_json_schema_declares_names_beside_open_additional_properties(additional_properties: object) -> None:
+    built: Final = build_json_schema(
+        {"additionalProperties": additional_properties, "anyOf": list(_NAME_BRANCHES), "required": ["name"]}
+    )
+
+    assert built["properties"] == {"name": _NAME_AS_ENUMS}
+    assert built["additionalProperties"] == additional_properties
 
 
 def test_build_json_schema_does_not_change_its_input() -> None:

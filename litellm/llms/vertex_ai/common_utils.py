@@ -952,7 +952,7 @@ def _merged_definition(definitions: Iterable[JsonValue]) -> JsonValue:
 
 def _hoisted_properties(schema: Mapping[str, JsonValue], root: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
     required: Final = schema.get("required")
-    if "$ref" in schema or not isinstance(required, list):
+    if "$ref" in schema or schema.get("additionalProperties") is False or not isinstance(required, list):
         return {}
     declared: Final = schema.get("properties")
     missing: Final = frozenset(name for name in required if isinstance(name, str)) - frozenset(
@@ -1019,8 +1019,9 @@ def build_json_schema(parameters: Mapping[str, JsonValue]) -> JsonValue:
     node's own `properties`. So those definitions are copied up to the node, with
     `const` as a one-value `enum` because Gemini enforces `enum` and ignores
     `const`. The branches stay as sent. A name no branch defines stays undeclared,
-    and a path stops hoisting after _MAX_JSON_SCHEMA_HOISTS_PER_PATH nodes because
-    each hoist copies a subtree.
+    a node with `additionalProperties: false` stays as sent because no object can
+    satisfy it, and a path stops hoisting after _MAX_JSON_SCHEMA_HOISTS_PER_PATH
+    nodes because each hoist copies a subtree.
 
     Parameters:
         parameters: the JSON schema to process
