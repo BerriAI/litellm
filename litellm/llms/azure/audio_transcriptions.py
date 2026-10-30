@@ -1,7 +1,7 @@
 from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Final
 
-from openai import AsyncAzureOpenAI, AzureOpenAI
+from openai import AsyncOpenAI, OpenAI
 from pydantic import BaseModel
 
 from litellm._uuid import uuid
@@ -49,6 +49,7 @@ class AzureAudioTranscription(AzureChatCompletion):
                 timeout=timeout,
                 api_key=api_key,
                 api_base=api_base,
+                api_version=api_version,
                 client=client,
                 max_retries=max_retries,
                 logging_obj=logging_obj,
@@ -66,10 +67,10 @@ class AzureAudioTranscription(AzureChatCompletion):
             client=client,
             litellm_params=litellm_params,
         )
-        if not isinstance(azure_client, AzureOpenAI):
+        if not isinstance(azure_client, OpenAI):
             raise AzureOpenAIError(
                 status_code=500,
-                message="azure_client is not an instance of AzureOpenAI",
+                message="azure_client is not an instance of OpenAI",
             )
 
         ## LOGGING
@@ -137,10 +138,10 @@ class AzureAudioTranscription(AzureChatCompletion):
                 client=client,
                 litellm_params=litellm_params,
             )
-            if not isinstance(async_azure_client, AsyncAzureOpenAI):
+            if not isinstance(async_azure_client, AsyncOpenAI):
                 raise AzureOpenAIError(
                     status_code=500,
-                    message="async_azure_client is not an instance of AsyncAzureOpenAI",
+                    message="async_azure_client is not an instance of AsyncOpenAI",
                 )
 
             ## LOGGING
