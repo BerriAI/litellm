@@ -935,7 +935,10 @@ async def user_info(
         default=False, description="Include the caller's current admin MCP route permissions"
     ),
     mcp_tool: str | None = fastapi.Query(default=None, description="Admin MCP tool to authorize for this caller"),
-    mcp_path: str | None = fastapi.Query(default=None, description="Concrete management route used by the MCP tool"),
+    mcp_path: str | None = fastapi.Query(
+        default=None,
+        description="URL-encoded concrete management path used by the MCP tool, before query-string encoding",
+    ),
 ):
     """
     [10/07/2024]

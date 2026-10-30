@@ -12,7 +12,14 @@ from starlette.testclient import TestClient
 
 from litellm.constants import STANDARD_CUSTOMER_ID_HEADERS
 from litellm.proxy import proxy_server
-from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, ProxyException, SpecialHeaders, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
+    LitellmUserRoles,
+    ProxyException,
+    SpecialHeaders,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.admin_mcp import admin_mcp_lifespan, get_admin_mcp_permissions
 from litellm.proxy.auth.user_api_key_auth import get_api_key, get_api_key_from_custom_header
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -24,6 +31,7 @@ from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlStats,
 )
 from litellm.proxy.middleware.per_request_root_path_middleware import PerRequestRootPathMiddleware
+from litellm.proxy.utils import hash_token
 
 
 class KeyRequest(BaseModel):
@@ -578,6 +586,58 @@ async def test_oauth2_proxy_auth_preserves_native_identity_and_peer_trust(
 
 
 @pytest.fixture
+def user_info_http_app(monkeypatch: pytest.MonkeyPatch, grant: str) -> FastAPI:
+    user: Final = LiteLLM_UserTable(user_id="admin", user_role="proxy_admin", teams=[])
+
+    class EmptyTable:
+        async def find_many(self, **_: object) -> list[object]:
+            return []
+
+    class DatabaseTables:
+        litellm_teamtable: Final = EmptyTable()
+        litellm_teammembership: Final = EmptyTable()
+
+    class UserInfoDatabase:
+        db: Final = DatabaseTables()
+
+        async def get_data(
+            self, *, user_id: str | None = None, team_id: str | None = None, table_name: str | None = None, **_: object
+        ) -> LiteLLM_UserTable | LiteLLM_TeamTable | list[object]:
+            if team_id is not None:
+                return LiteLLM_TeamTable(team_id=team_id, metadata={})
+            return user if user_id == user.user_id and table_name is None else []
+
+    cache: Final = UserApiKeyCache()
+    token: Final = hash_token("sk-http-encoding-regression")
+    cache.set_cache(
+        token,
+        UserAPIKeyAuth(
+            api_key=token,
+            token=token,
+            user_id=user.user_id,
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            allowed_routes=["/user/info", grant],
+        ),
+    )
+    cache.set_cache(user.user_id, user)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "prisma_client", UserInfoDatabase())
+    monkeypatch.setattr(proxy_server, "master_key", "sk-distinct-synthetic-master")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    app: Final = FastAPI()
+    app.router.routes.extend(
+        route
+        for route in proxy_server.app.routes
+        if isinstance(route, APIRoute)
+        and route.path in {"/user/info", "/team/{team_id:path}/callback"}
+        and "GET" in route.methods
+    )
+    app.add_exception_handler(ProxyException, proxy_server.openai_exception_handler)
+    return app
+
+
+@pytest.fixture
 def permissions_request() -> Request:
     return Request({"type": "http", "method": "GET", "path": "/user/info", "headers": [], "app": proxy_server.app})
 
@@ -642,21 +702,57 @@ def test_admin_mcp_authorizes_slashes_using_the_registered_route(grant: str, per
     assert other.action_allowed is False
 
 
+@pytest.mark.asyncio
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
 @pytest.mark.parametrize(
-    "grant,path",
+    "grant,path,allowed",
     [
-        ("/team/team a/callback", "/team/team%20a/callback"),
-        ("/team/org/team-a/callback", "/team/org%2Fteam-a/callback"),
-        ("/team/team%2Fa/callback", "/team/team%252Fa/callback"),
+        ("/team/team a/callback", "/team/team%20a/callback", True),
+        ("/team/org/team-a/callback", "/team/org%2Fteam-a/callback", True),
+        ("/team/team%2Fa/callback", "/team/team%252Fa/callback", True),
+        ("/team/team+a/callback", "/team/team+a/callback", True),
+        ("/team/team-é/callback", "/team/team-%C3%A9/callback", True),
+        ("/team/team/a/callback", "/team/team%252Fa/callback", False),
+        ("/team/team a/callback", "/team/team+a/callback", False),
+        ("/team/team%41/callback", "/team/team%2541/callback", True),
     ],
 )
-def test_admin_mcp_decodes_the_action_path_once(grant: str, path: str, permissions_request: Request) -> None:
-    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, allowed_routes=["/user/info", grant])
-    own: Final = get_admin_mcp_permissions(auth, permissions_request, "get_team_callbacks", path)
-    other: Final = get_admin_mcp_permissions(auth, permissions_request, "get_team_callbacks", "/team/other/callback")
-    assert own.action_allowed is True
-    assert other.action_allowed is False
+async def test_user_info_decodes_mcp_path_after_query_parsing(
+    user_info_http_app: FastAPI,
+    path: str,
+    allowed: bool,
+) -> None:
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=user_info_http_app),
+        base_url="http://testserver",
+    ) as client:
+        own: Final = await client.get(
+            "/user/info",
+            params={
+                "user_id": "admin",
+                "admin_mcp": "true",
+                "mcp_tool": "get_team_callbacks",
+                "mcp_path": path,
+            },
+            headers={"Authorization": "Bearer sk-http-encoding-regression"},
+        )
+        native: Final = await client.get(path, headers={"Authorization": "Bearer sk-http-encoding-regression"})
+        sibling: Final = await client.get(
+            "/user/info",
+            params={
+                "user_id": "admin",
+                "admin_mcp": "true",
+                "mcp_tool": "get_team_callbacks",
+                "mcp_path": "/team/other/callback",
+            },
+            headers={"Authorization": "Bearer sk-http-encoding-regression"},
+        )
+    assert native.status_code == (200 if allowed else 403), native.text
+    assert own.status_code == 200, own.text
+    assert sibling.status_code == 200, sibling.text
+    assert "get_team_callbacks" in own.json()["admin_mcp_permissions"]["tools"]
+    assert own.json()["admin_mcp_permissions"]["action_allowed"] is allowed
+    assert sibling.json()["admin_mcp_permissions"]["action_allowed"] is False
 
 
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")

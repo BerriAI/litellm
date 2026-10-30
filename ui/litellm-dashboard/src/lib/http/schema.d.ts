@@ -76532,7 +76532,7 @@ export interface operations {
                 admin_mcp?: boolean;
                 /** @description Admin MCP tool to authorize for this caller */
                 mcp_tool?: string | null;
-                /** @description Concrete management route used by the MCP tool */
+                /** @description URL-encoded concrete management path used by the MCP tool, before query-string encoding */
                 mcp_path?: string | null;
             };
             header?: never;
