@@ -777,3 +777,32 @@ async def test_route_a2a_bridge_agent_call_is_attributed_to_the_agent(httpx_tran
     assert logging_obj.model_call_details["agent_id"] == "per-query-id"
     metadata: Final = logging_obj.model_call_details["litellm_params"]["metadata"]
     assert (metadata["model_group"], metadata["user_api_key_hash"]) == ("a2a/per-query", "key-hash")
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("route_type", "request_body"),
+    [
+        ("aresponses", {"input": "ping"}),
+        ("anthropic_messages", {"messages": [{"role": "user", "content": "ping"}], "max_tokens": 16}),
+    ],
+)
+async def test_route_a2a_bridge_agent_call_names_the_agent_on_litellm_metadata_routes(
+    httpx_transport: None, route_type: str, request_body: Mapping[str, object]
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+    logging_obj: Final = _proxy_logging_obj()
+    data: Final = {
+        "model": "a2a/per-query",
+        **request_body,
+        "litellm_metadata": {"user_api_key_hash": "key-hash"},
+        "litellm_logging_obj": logging_obj,
+    }
+    registry: Final = _registry_with(_priced_dbx_agent("per-query", PER_QUERY_PRICE))
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry):
+        await (await route_a2a_agent_request(data=data, route_type=route_type))
+
+    metadata: Final = logging_obj.model_call_details["litellm_params"]["metadata"]
+    assert (metadata["model_group"], metadata["user_api_key_hash"]) == ("a2a/per-query", "key-hash")

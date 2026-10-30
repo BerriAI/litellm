@@ -205,8 +205,12 @@ def _bridge_agent_request(
 
 
 def _model_group(data: Mapping[str, object]) -> Mapping[str, object]:
-    metadata: Final = as_str_mapping(data.get("metadata"))
-    return {} if metadata is None else {"metadata": {**metadata, "model_group": data.get("model")}}
+    metadata_by_key: Final = {key: as_str_mapping(data.get(key)) for key in ("metadata", "litellm_metadata")}
+    return {
+        key: {**metadata, "model_group": data.get("model")}
+        for key, metadata in metadata_by_key.items()
+        if metadata is not None
+    }
 
 
 def _call_route(route_type: str, request_data: Mapping[str, object]) -> object:
