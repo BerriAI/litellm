@@ -123,18 +123,36 @@ class PodLockManager:
             verbose_proxy_logger.debug("redis_cache is None, skipping release_lock")
             return
         verbose_proxy_logger.debug("Pod %s attempting to release Redis lock for cronjob_id=%s", self.pod_id, cronjob_id)
-        released: Final = await store.release(cronjob_id, self.pod_id)
-        if released is True:
+        released: Final = await self._release(store, cronjob_id)
+        if isinstance(released, RedisFailure):
+            verbose_proxy_logger.error("Error releasing Redis lock for %s: %s", cronjob_id, released.message)
+        elif released:
             verbose_proxy_logger.info(
                 "Pod %s successfully released Redis lock for cronjob_id=%s", self.pod_id, cronjob_id
             )
             self._emit_released_lock_event(cronjob_id=cronjob_id, pod_id=self.pod_id)
-        elif released is False:
+        else:
             verbose_proxy_logger.debug(
                 "Pod %s failed to release Redis lock for cronjob_id=%s (lock missing or held by another pod)",
                 self.pod_id,
                 cronjob_id,
             )
+
+    async def _release(self, store: PodLockStore, cronjob_id: str) -> bool | RedisFailure:
+        released: Final = await store.release(cronjob_id, self.pod_id)
+        if not isinstance(released, RedisFailure):
+            return released
+        verbose_proxy_logger.warning(
+            "Lua compare-and-delete failed for lock_key=%s, falling back to GET+DEL",
+            self.get_redis_lock_key(cronjob_id),
+        )
+        match await store.holder(cronjob_id):
+            case RedisFailure(kind="breaker_open") as refused:
+                return refused
+            case HeldBy(owner=owner) if owner == self.pod_id:
+                return await store.remove(cronjob_id)
+            case _:
+                return False
 
     @staticmethod
     def _emit_acquired_lock_event(cronjob_id: str, pod_id: str):

@@ -46,6 +46,8 @@ class PodLockStore(Protocol):
 
     async def release(self, cronjob_id: str, owner: str) -> bool | RedisFailure: ...
 
+    async def remove(self, cronjob_id: str) -> bool | RedisFailure: ...
+
 
 @dataclass(frozen=True, slots=True)
 class TransportPodLockStore:
@@ -74,6 +76,10 @@ class TransportPodLockStore:
     async def release(self, cronjob_id: str, owner: str) -> bool | RedisFailure:
         reply: Final = await self.transport.eval(_RELEASE, (lock_key(cronjob_id),), (_encode(owner),))
         return reply if isinstance(reply, RedisFailure) else reply == 1
+
+    async def remove(self, cronjob_id: str) -> bool | RedisFailure:
+        deleted: Final = await self.transport.delete(lock_key(cronjob_id))
+        return deleted if isinstance(deleted, RedisFailure) else deleted == 1
 
 
 def _encode(owner: str) -> str:

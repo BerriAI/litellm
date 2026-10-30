@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import fakeredis
 import pytest
+from redis.exceptions import ResponseError
 
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
@@ -125,6 +126,30 @@ async def test_release_survives_a_script_flush(server: fakeredis.FakeServer, raw
     await pod.release_lock(cronjob_id="test_job")
 
     assert await raw.exists(LOCK_KEY) == 0
+
+
+class _ScriptingDisabled(fakeredis.FakeAsyncRedis):
+    async def eval(self, *args: object) -> object:
+        raise ResponseError("ERR scripting is disabled")
+
+    async def evalsha(self, *args: object) -> object:
+        raise ResponseError("ERR scripting is disabled")
+
+
+@pytest.mark.asyncio
+async def test_release_falls_back_to_get_and_delete_when_scripts_cannot_run(server: fakeredis.FakeServer, raw) -> None:
+    cache = fake_redis_cache(server, client=_ScriptingDisabled)
+    holder = PodLockManager(redis_cache=cache)
+    other = PodLockManager(redis_cache=cache)
+    assert await holder.acquire_lock(cronjob_id="test_job") is True
+
+    await other.release_lock(cronjob_id="test_job")
+    assert await raw.get(LOCK_KEY) == json.dumps(holder.pod_id).encode()
+
+    with patch.object(holder, "_emit_released_lock_event") as emitted:
+        await holder.release_lock(cronjob_id="test_job")
+    assert await raw.exists(LOCK_KEY) == 0
+    emitted.assert_called_once_with(cronjob_id="test_job", pod_id=holder.pod_id)
 
 
 @pytest.mark.asyncio
