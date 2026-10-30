@@ -2706,6 +2706,30 @@ def test_build_vertex_schema_moves_fields_next_to_anyof_into_each_branch(object_
     }
 
 
+def test_build_vertex_schema_moves_scalar_fields_next_to_anyof_into_each_branch():
+    built: Final = build_vertex_schema(
+        {
+            "type": "object",
+            "properties": {
+                "field": {
+                    "type": "string",
+                    "description": "A short code",
+                    "pattern": "^a",
+                    "nullable": True,
+                    "anyOf": [{"maxLength": 3}, {"maxLength": 5}],
+                }
+            },
+        }
+    )
+
+    assert built["properties"]["field"] == {
+        "anyOf": [
+            {"type": "string", "description": "A short code", "pattern": "^a", "nullable": True, "maxLength": 3},
+            {"type": "string", "description": "A short code", "pattern": "^a", "nullable": True, "maxLength": 5},
+        ],
+    }
+
+
 def test_build_vertex_schema_unions_required_and_lets_a_branch_override_a_property():
     built: Final = build_vertex_schema(
         {
@@ -2852,6 +2876,56 @@ def test_build_vertex_schema_unwraps_a_one_item_type_list():
     built: Final = build_vertex_schema({"type": "object", "properties": {"field": {"type": ["string"]}}})
 
     assert built["properties"]["field"] == {"type": "string"}
+
+
+@pytest.mark.parametrize(
+    ("field", "expected_branches"),
+    [
+        (
+            {"anyOf": [{"const": ""}, {"type": "integer"}]},
+            [{"type": "string", "enum": [None]}, {"type": "integer"}],
+        ),
+        (
+            {"type": ["string", "null"], "anyOf": [{"const": ""}, {"const": "a"}]},
+            [
+                {"type": "string", "enum": [None], "nullable": True},
+                {"type": "string", "enum": ["a"], "nullable": True},
+            ],
+        ),
+        (
+            {"type": "string", "enum": ["", "a"], "anyOf": [{"minLength": 1}, {"maxLength": 3}]},
+            [
+                {"type": "string", "enum": [None, "a"], "minLength": 1},
+                {"type": "string", "enum": [None, "a"], "maxLength": 3},
+            ],
+        ),
+    ],
+)
+def test_build_vertex_schema_clears_empty_strings_from_anyof_enums(
+    field: dict[str, JsonValue], expected_branches: list[dict[str, JsonValue]]
+):
+    built: Final = build_vertex_schema({"type": "object", "properties": {"field": field}})
+
+    assert built["properties"]["field"] == {"anyOf": expected_branches}
+
+
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    [
+        ({"type": "string", "const": 3}, {"type": "string"}),
+        ({"type": "string", "enum": ["a", 1, None]}, {"type": "string", "enum": ["a", None]}),
+        (
+            {"type": ["string", "integer"], "enum": ["a", 1], "anyOf": [{"type": "string"}, {"type": "integer"}]},
+            {"anyOf": [{"type": "string", "enum": ["a"]}, {"type": "integer"}]},
+        ),
+    ],
+)
+def test_build_vertex_schema_drops_values_a_string_enum_cannot_hold(
+    field: dict[str, JsonValue], expected: dict[str, JsonValue]
+):
+    built: Final = build_vertex_schema({"type": "object", "properties": {"field": field}})
+
+    assert built["properties"]["field"] == expected
 
 
 def test_build_vertex_schema_keeps_a_boolean_anyof_branch():

@@ -684,6 +684,9 @@ def _fix_enum_empty_strings(schema, depth=0):
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise ValueError(f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.")
 
+    if not isinstance(schema, dict):
+        return
+
     if "enum" in schema and isinstance(schema["enum"], list):
         schema["enum"] = [None if value == "" else value for value in schema["enum"]]
 
@@ -696,6 +699,9 @@ def _fix_enum_empty_strings(schema, depth=0):
     items: Final = schema.get("items", None)
     if items is not None:
         _fix_enum_empty_strings(items, depth=depth + 1)
+
+    for branch in _list_field(schema, "anyOf"):
+        _fix_enum_empty_strings(branch, depth=depth + 1)
 
 
 GEMINI_MAX_ENUM_CHARACTERS: Final = 2000
@@ -793,7 +799,8 @@ def _fix_enum_types(schema, depth=0, send_integer_enums: bool = False):
         schema_type: Final = schema.get("type")
         keep_enum = False
         if isinstance(schema_type, str) and schema_type.lower() == "string":
-            keep_enum = True
+            schema["enum"] = [value for value in schema["enum"] if value is None or isinstance(value, str)]
+            keep_enum = bool(schema["enum"])
         else:
             anyof = schema.get("anyOf")
             if isinstance(anyof, list):
@@ -1180,6 +1187,14 @@ def _list_field(schema: Mapping[str, object], field: str) -> Sequence[object]:
     return cast("Sequence[object]", value) if isinstance(value, list) else ()  # cast-ok: a JSON Schema array
 
 
+def _fields_for_anyof_branches(node: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        key: value
+        for key, value in node.items()
+        if key not in _OBJECT_AND_ARRAY_FIELDS and key not in ("type", "anyOf")
+    }
+
+
 def _branch_of_type(type_branch: Mapping[str, object], branch: Mapping[str, object]) -> Mapping[str, object]:
     json_type: Final = type_branch["type"]
     fields: Final = {
@@ -1280,8 +1295,10 @@ def _convert_schema_types(schema: object, depth: int = 0) -> None:
                 for field in _OBJECT_AND_ARRAY_FIELDS:
                     node.pop(field, None)
 
+            parent_fields: Final = _fields_for_anyof_branches(node)
+            type_branches: Final = tuple({**parent_fields, **type_branch} for type_branch in any_of)
             node["anyOf"] = (
-                list(chain.from_iterable(_branches_for_types(branch, any_of) for branch in existing_branches))
+                list(chain.from_iterable(_branches_for_types(branch, type_branches) for branch in existing_branches))
                 if existing_branches
                 else any_of
             )
