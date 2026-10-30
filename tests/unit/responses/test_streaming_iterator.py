@@ -1745,38 +1745,75 @@ def test_process_chunk_requires_provider_config():
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
-def test_process_chunk_wraps_encrypted_content_with_model_id():
-    openai_types = streaming_module._get_openai_response_types()
+@pytest.mark.parametrize("affinity_enabled", [True, False])
+@pytest.mark.parametrize("terminal_type", ["response.completed", "response.incomplete"])
+@pytest.mark.asyncio
+async def test_encrypted_reasoning_keeps_one_id_across_stream_events(
+    affinity_enabled: bool,
+    terminal_type: str,
+) -> None:
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+    from litellm.responses.utils import ResponsesAPIRequestUtils
 
-    class _EncryptedConfig:
-        def transform_streaming_response(self, **kwargs):
-            return openai_types.OutputItemAddedEvent(
-                type=openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
-                output_index=0,
-                item=openai_types.BaseLiteLLMOpenAIResponseObject(
-                    id="rs_123",
-                    type="reasoning",
-                    encrypted_content="ciphertext",
-                ),
-            )
-
-    iterator = ResponsesAPIStreamingIterator(
-        response=httpx.Response(200),
-        model="test-model",
-        responses_api_provider_config=_EncryptedConfig(),
-        logging_obj=_FakeLoggingObj(),
-        litellm_metadata={
-            "encrypted_content_affinity_enabled": True,
-            "model_info": {"id": "model-123"},
+    item: Final = {"id": "rs_123", "type": "reasoning", "summary": []}
+    finished_item: Final = {**item, "encrypted_content": "ciphertext"}
+    metadata: Final = {
+        "encrypted_content_affinity_enabled": affinity_enabled,
+        "model_info": {"id": "model-123"},
+    }
+    response: Final = {
+        "id": "resp_123",
+        "created_at": 1,
+        "model": "gpt-5-mini",
+        "status": terminal_type.removeprefix("response."),
+        "output": [finished_item],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    payloads: Final = (
+        {"type": "response.output_item.added", "output_index": 0, "item": item},
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "summary_index": 0,
+            "item_id": item["id"],
+            "delta": "Thinking",
         },
-        request_data={"foo": "bar"},
+        {"type": "response.output_item.done", "output_index": 0, "item": finished_item},
+        {"type": terminal_type, "response": response},
+    )
+    iterator: Final = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="gpt-5-mini",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=_real_logging_obj(),
+        litellm_metadata=metadata,
+        request_data={"input": "hi"},
         call_type=CallTypes.responses.value,
     )
+    events: Final = tuple(
+        iterator._process_chunk(json.dumps({**payload, "sequence_number": index}))
+        for index, payload in enumerate(payloads)
+    )
+    assert all(event is not None for event in events)
+    added, delta, done, terminal = tuple(event.model_dump() for event in events if event is not None)
+    final_item: Final = terminal["response"]["output"][0]
+    assert added["item"]["id"] == delta["item_id"] == done["item"]["id"] == final_item["id"]
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import EncryptedContentAffinityCheck
 
-    event = iterator._process_chunk(json.dumps({"type": "response.output_item.added"}))
-
-    assert event.item.encrypted_content.startswith("litellm_enc:")
-    assert event.item.encrypted_content.endswith(";ciphertext")
+    assert EncryptedContentAffinityCheck._extract_model_id_from_input(
+        [{"type": "item_reference", "id": final_item["id"]}]
+    ) == ("model-123" if affinity_enabled else None)
+    assert done["item"] == final_item
+    expected_content: Final = (
+        ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("ciphertext", "model-123")
+        if affinity_enabled
+        else "ciphertext"
+    )
+    assert final_item["encrypted_content"] == expected_content
+    history: Final = {entry["id"]: entry for entry in (done["item"], final_item)}
+    assert ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(list(history.values())) == [
+        finished_item
+    ]
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")

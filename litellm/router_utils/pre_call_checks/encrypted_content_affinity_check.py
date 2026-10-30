@@ -10,7 +10,8 @@ error because the organization_id doesn't match.
 This callback solves the problem by encoding the originating deployment's ``model_id``
 into the response output items that carry ``encrypted_content``. Two encoding strategies:
 
-1. **Items with IDs**: Encode model_id into the item ID itself (e.g., ``encitem_...``)
+1. **Reasoning and compaction items with IDs**: Encode model_id before encrypted content arrives
+   so streamed events and final output share the same ``encitem_...`` ID
 2. **Items without IDs** (Codex): Wrap the encrypted_content with model_id metadata
    (e.g., ``litellm_enc:{base64_metadata};{original_encrypted_content}``)
 
