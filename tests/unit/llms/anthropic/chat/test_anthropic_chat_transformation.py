@@ -9922,3 +9922,32 @@ def test_claude_cache_control_cap_keeps_the_newest_hints_inside_one_message(
     assert sorted(_cached_texts(body["messages"])) == ["part 2", "part 3", "part 4", "part 5"]
     assert json.dumps(body).count('"cache_control"') == 4
     assert messages == messages_before
+
+
+def test_claude_cache_control_cap_does_not_count_a_message_level_hint_that_list_content_never_sends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = [
+        {"role": "system", "content": "system prompt", "cache_control": {"type": "ephemeral"}},
+        {"role": "user", "content": "turn 1", "cache_control": {"type": "ephemeral"}},
+        {"role": "assistant", "content": "answer 1"},
+        {"role": "user", "content": "turn 2", "cache_control": {"type": "ephemeral"}},
+        {"role": "assistant", "content": "answer 2"},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "turn 3", "cache_control": {"type": "ephemeral"}}],
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+
+    body: Final = AnthropicConfig().transform_request(
+        model="claude-haiku-5-5",
+        messages=messages,
+        optional_params={},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert sorted(_cached_texts(body)) == ["system prompt", "turn 1", "turn 2", "turn 3"]
+    assert json.dumps(body).count('"cache_control"') == 4

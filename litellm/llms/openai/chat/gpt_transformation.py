@@ -128,6 +128,23 @@ def _litellm_params_str(litellm_params: Mapping[str, object] | None, key: str) -
     return value if isinstance(value, str) else None
 
 
+def _drops_params(litellm_params: Mapping[str, object]) -> bool:
+    return litellm.drop_params is True or litellm_params.get("drop_params") is True
+
+
+def _claude_messages_within_cache_control_cap(
+    model: str,
+    messages: Sequence[AllMessageValues],
+    tools: Sequence["ChatCompletionToolParam"] | None,
+    litellm_params: Mapping[str, object],
+) -> Sequence[AllMessageValues]:
+    if "claude" not in model.lower() or not _drops_params(litellm_params):
+        return messages
+    from litellm.integrations.anthropic_cache_control_hook import messages_within_cache_control_cap
+
+    return messages_within_cache_control_cap(messages, tools)
+
+
 def _prompt_cache_options(optional_params: Mapping[str, object]) -> object | None:
     try:
         extra_body: Final = _OBJECT_MAPPING.validate_python(optional_params.get("extra_body"))
@@ -544,10 +561,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             model, custom_llm_provider, api_base, prompt_cache_options
         )
         if not reads_breakpoints and self._should_preserve_cache_control_for_endpoint(custom_llm_provider, api_base):
-            return messages, tools
-        drops_breakpoints: Final = not reads_breakpoints and (
-            litellm.drop_params is True or litellm_params.get("drop_params") is True
-        )
+            return _claude_messages_within_cache_control_cap(model, messages, tools, litellm_params), tools
+        drops_breakpoints: Final = not reads_breakpoints and _drops_params(litellm_params)
         renamed: Final = (
             [AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message) for message in messages]
             if reads_breakpoints
@@ -562,7 +577,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             if drops_breakpoints
             else list(tools)
         )
-        return self.remove_cache_control_flag_from_messages_and_tools(model=model, messages=renamed, tools=kept_tools)
+        sent_messages, sent_tools = self.remove_cache_control_flag_from_messages_and_tools(
+            model=model, messages=renamed, tools=kept_tools
+        )
+        return _claude_messages_within_cache_control_cap(model, sent_messages, sent_tools, litellm_params), sent_tools
 
     def _sanitized_tools_update_for_openai(
         self,

@@ -121,12 +121,24 @@ def _block_carries_cache_control(block: object) -> bool:
     return isinstance(block, dict) and _CONTENT_PART_ADAPTER.validate_python(block).get("cache_control") is not None
 
 
+_ROLES_SENDING_MESSAGE_MARK_WITH_LIST_CONTENT: Final = frozenset({"tool", "function"})
+
+
+def _message_mark_reaches_provider(fields: Mapping[str, object]) -> bool:
+    if fields.get("cache_control") is None:
+        return False
+    return (
+        not isinstance(fields.get("content"), list)
+        or fields.get("role") in _ROLES_SENDING_MESSAGE_MARK_WITH_LIST_CONTENT
+    )
+
+
 def cache_control_count(message: object) -> int:
     if not isinstance(message, dict):
         return 0
     fields: Final = _CONTENT_PART_ADAPTER.validate_python(message)
     block_marks: Final = sum(1 for block in _mark_carrying_blocks(fields) if _block_carries_cache_control(block))
-    return int(fields.get("cache_control") is not None) + block_marks
+    return int(_message_mark_reaches_provider(fields)) + block_marks
 
 
 def _fields_with_cache_control(fields: Mapping[str, object], rewrite: _CacheControlRewrite) -> Mapping[str, object]:

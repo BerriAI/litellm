@@ -2773,3 +2773,31 @@ def test_claude_json_schema_stream_split_across_json_tools_keeps_the_non_stream_
     choices: Final = _json_schema_stream_choices(respx_mock, call, split_stream)
 
     assert [choice.finish_reason for choice in choices if choice.finish_reason] == [answer.finish_reason]
+
+
+def test_databricks_claude_request_over_the_cache_control_cap_keeps_the_newest_four_hints_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    hint: Final = {"type": "ephemeral"}
+    messages: Final = [
+        {"role": "system", "content": "system prompt", "cache_control": hint},
+        {"role": "user", "content": "turn 1", "cache_control": hint},
+        {"role": "assistant", "content": "answer 1", "cache_control": hint},
+        {"role": "user", "content": "turn 2", "cache_control": hint},
+        {"role": "assistant", "content": "answer 2"},
+        {"role": "user", "content": "turn 3", "cache_control": hint},
+    ]
+    messages_before: Final = copy.deepcopy(messages)
+
+    body: Final = DatabricksConfig().transform_request(
+        model="databricks-claude-haiku-5-5",
+        messages=messages,
+        optional_params={},
+        litellm_params={"drop_params": True, "custom_llm_provider": "databricks"},
+        headers={},
+    )
+
+    assert "cache_control" not in json.dumps(body["messages"][0])
+    assert json.dumps(body["messages"]).count('"cache_control"') == 4
+    assert messages == messages_before
