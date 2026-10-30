@@ -2772,7 +2772,8 @@ def _apply_copilot_cache_counts(returned_usage: Usage, latest_usage_chunk: Usage
     )
     if not isinstance(copilot_usage, Mapping):
         return
-    cache_read, cache_write = copilot_cache_token_counts({"copilot_usage": copilot_usage})
+    copilot_usage_map: Mapping[str, object] = copilot_usage
+    cache_read, cache_write = copilot_cache_token_counts({"copilot_usage": copilot_usage_map})
     if not cache_read and not cache_write:
         return
     details: Final = returned_usage.prompt_tokens_details or PromptTokensDetailsWrapper()
@@ -2781,14 +2782,7 @@ def _apply_copilot_cache_counts(returned_usage: Usage, latest_usage_chunk: Usage
     if cache_write and not getattr(details, "cache_write_tokens", None):
         details.cache_write_tokens = cache_write
     returned_usage.prompt_tokens_details = details  # rebind-ok: attaches copilot cache counts to the aggregated usage
-    if cache_read and getattr(returned_usage, "cache_read_input_tokens", None) is None:
-        returned_usage.cache_read_input_tokens = (  # rebind-ok: attaches copilot cache counts to the aggregated usage
-            cache_read
-        )
-    if cache_write and getattr(returned_usage, "cache_creation_input_tokens", None) is None:
-        returned_usage.cache_creation_input_tokens = (  # rebind-ok: attaches copilot cache counts to the aggregated usage
-            cache_write
-        )
+    backfill_missing_cache_usage_fields(returned_usage)
 
 
 def generic_chunk_has_all_required_fields(chunk: dict) -> bool:
