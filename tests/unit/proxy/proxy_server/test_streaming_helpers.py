@@ -219,6 +219,53 @@ def test_responses_error_event_encodes_nested_error_fields_as_json_objects() -> 
     payload: Final = json.loads(frame.split("data: ", 1)[1])
     assert payload["error"]["provider_specific_fields"] == {"upstream": {"type": "overloaded_error"}}
 
+
+_UPSTREAM_HEADERS: Final = httpx.Headers({"authorization": "Bearer hook-canary", "x-request-id": "req_1"})
+
+
+def _responses_frame_payload(nested: object) -> Mapping[str, object]:
+    chunk_frame: Final = _format_responses_sse_chunk(
+        chunk=MappingProxyType({"type": "response.output_text.delta", "nested": nested})
+    )
+    error_frame: Final = ResponsesStreamErrorState().format_error({"message": "blocked", "nested": nested})
+    assert isinstance(chunk_frame, str)
+    chunk_payload: Final = json.loads(chunk_frame.removeprefix("data: "))
+    error_payload: Final = json.loads(error_frame.split("data: ", 1)[1])
+    assert chunk_payload["nested"] == error_payload["error"]["nested"]
+    return chunk_payload
+
+
+def test_responses_stream_frames_send_nested_header_mappings_in_their_masked_string_form() -> None:
+    assert _responses_frame_payload(_UPSTREAM_HEADERS)["nested"] == str(_UPSTREAM_HEADERS)
+
+
+def test_responses_stream_frames_turn_mapping_keys_json_cannot_take_into_strings() -> None:
+    assert _responses_frame_payload(MappingProxyType({("a", "b"): 1}))["nested"] == {str(("a", "b")): 1}
+
+
+def test_responses_sse_chunk_turns_top_level_keys_json_cannot_take_into_strings() -> None:
+    frame: Final = _format_responses_sse_chunk(
+        chunk=MappingProxyType({"type": "response.output_text.delta", ("a", "b"): "x"})
+    )
+
+    assert isinstance(frame, str)
+    assert json.loads(frame.removeprefix("data: ")) == {"type": "response.output_text.delta", str(("a", "b")): "x"}
+
+
+def _self_referencing_chunk() -> Mapping[str, object]:
+    chunk: Final[dict[str, object]] = {"type": "response.output_text.delta"}
+    chunk["self"] = chunk  # mutable-ok: a self-reference needs the dict to exist before it can hold itself
+    return chunk
+
+
+@pytest.mark.parametrize(
+    "chunk",
+    [{"type": "response.output_text.delta", "meta": {("a", "b"): 1}}, _self_referencing_chunk()],
+    ids=["nested_dict_tuple_key", "self_reference"],
+)
+def test_responses_sse_chunk_json_cannot_encode_streams_as_a_plain_data_frame(chunk: Mapping[str, object]) -> None:
+    assert _format_responses_sse_chunk(chunk=chunk) == _format_streaming_sse_chunk(chunk=chunk)
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("guardrail_error", "error_object"),

@@ -539,7 +539,7 @@ from litellm.proxy.common_utils.periodic_reload_schedule import (
 )
 from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
-from litellm.proxy.common_utils.responses_stream_errors import ResponsesStreamErrorState, jsonable_stream_value
+from litellm.proxy.common_utils.responses_stream_errors import ResponsesStreamErrorState, responses_chunk_json
 from litellm.proxy.common_utils.scheduled_job_stagger import (
     apply_scheduled_job_stagger,
     attach_job_timing_logger,
@@ -10203,9 +10203,8 @@ def _format_streaming_sse_chunk(chunk: object) -> str | bytes:
 
 
 def _format_responses_sse_chunk(chunk: object) -> str | bytes:
-    if isinstance(chunk, Mapping):
-        return f"data: {json.dumps(chunk, default=jsonable_stream_value)}\n\n"
-    return _format_streaming_sse_chunk(chunk=chunk)
+    data: Final = responses_chunk_json(chunk)
+    return _format_streaming_sse_chunk(chunk=chunk) if data is None else f"data: {data}\n\n"
 
 
 _SSE_FRAME_DELIMITERS: Final = ("\r\n\r\n", "\n\n", "\r\r")

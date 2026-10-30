@@ -74,12 +74,35 @@ def _is_mapping(
     return isinstance(value, Mapping)
 
 
-def jsonable_stream_value(value: object) -> object:
-    if _is_mapping(value):
-        return {**value}
+def _is_mapping_proxy(
+    value: object,
+) -> TypeIs[MappingProxyType[object, object]]:  # guard-ok: isinstance decides it, keys and values stay object
+    return isinstance(value, MappingProxyType)
+
+
+def _json_key(key: object) -> str | int | float | bool | None:
+    return key if key is None or isinstance(key, str | int | float | bool) else str(key)
+
+
+def _with_json_keys(value: Mapping[object, object]) -> Mapping[str | int | float | bool | None, object]:
+    return {_json_key(key): item for key, item in value.items()}
+
+
+def _jsonable_stream_value(value: object) -> object:
+    if _is_mapping_proxy(value):
+        return _with_json_keys(value)
     if isinstance(value, BaseModel):
         return value.model_dump()
     return str(value)
+
+
+def responses_chunk_json(chunk: object) -> str | None:
+    if not _is_mapping(chunk):
+        return None
+    try:
+        return json.dumps(_with_json_keys(chunk), default=_jsonable_stream_value)
+    except (TypeError, ValueError):
+        return None
 
 
 def sse_error_object(data: str | bytes) -> Mapping[str, object] | None:
@@ -206,7 +229,7 @@ class ResponsesStreamErrorState:
                 "sequence_number": self.sequence_number + 1,
                 "error": error,
             },
-            default=jsonable_stream_value,
+            default=_jsonable_stream_value,
         )
         return f"event: error\ndata: {payload}\n\n"
 
