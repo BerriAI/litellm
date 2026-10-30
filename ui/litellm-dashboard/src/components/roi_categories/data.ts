@@ -26,10 +26,22 @@ export interface SpendBucket {
   requests: number;
   unknown_cost_requests: number;
 }
+export interface SessionSpend {
+  session_key: string;
+  session_id: string;
+  user: string;
+  started_at: string;
+  excerpt: string;
+  category_ids: string[];
+  model_spend: Record<string, number>;
+  spend: number;
+  requests: number;
+}
 export interface Report {
   version: string;
   categories: Category[];
   buckets: SpendBucket[];
+  sessions?: SessionSpend[];
 }
 export interface Example {
   request_id: string;
@@ -113,4 +125,38 @@ export function roiTotals(report: Report | undefined) {
   const coverage = requests ? ((100 * categorized) / requests).toFixed(1) : "0";
   const unclassifiedSpend = rows.find((row) => row.id === "unclassified")?.spend ?? 0;
   return { rows, total, requests, categorized, unknownCosts, coverage, unclassifiedSpend };
+}
+
+const AREA_COLORS = ["#0f766e", "#df6428", "#203c62", "#8b7dd8", "#4b91a6", "#bd6488"];
+export function areaColor(id: string, categories: Category[]) {
+  if (id === "unclassified") return "#94a3b8";
+  return AREA_COLORS[
+    Math.max(
+      0,
+      categories.findIndex((category) => category.id === id),
+    ) % AREA_COLORS.length
+  ];
+}
+export function sessionTitle(session: SessionSpend) {
+  const quote = requestQuote(session.excerpt).replace(/\s+/g, " ").trim();
+  return quote ? quote.slice(0, 100) : session.session_id || "Standalone request";
+}
+export function sessionDetail(session: SessionSpend, categories: Category[]) {
+  return {
+    id: session.session_key,
+    name: sessionTitle(session),
+    description: session.category_ids
+      .map((id) => categories.find((category) => category.id === id)?.name ?? "Unclassified")
+      .join(" · "),
+    spend: session.spend,
+    requests: session.requests,
+    models: Object.entries(session.model_spend)
+      .map(([model, spend]) => ({ model, spend }))
+      .sort((a, b) => b.spend - a.spend),
+  };
+}
+
+export function selectedSessionDetail(report: Report | undefined, key: string | null) {
+  const session = report?.sessions?.find((item) => item.session_key === key);
+  return session && report ? sessionDetail(session, report.categories) : undefined;
 }

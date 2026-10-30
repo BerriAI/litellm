@@ -223,7 +223,10 @@ async def category_report(
     buckets: Final = await storage.report(settings, start, end, model, user)
     if len(buckets) > 10000:
         raise HTTPException(400, "Narrow the date range or model filter")
-    return Report(categories=settings.categories, buckets=buckets, version=settings.version)
+    sessions: Final = await storage.sessions(settings, start, end, model, user)
+    if len(sessions) > 1000:
+        raise HTTPException(400, "More than 1,000 sessions. Narrow the date range or model filter.")
+    return Report(categories=settings.categories, buckets=buckets, sessions=sessions, version=settings.version)
 
 
 @router.get("/examples", response_model=tuple[Example, ...])
@@ -232,13 +235,14 @@ async def category_examples(
     storage: Storage,
     start: AwareDatetime,
     end: AwareDatetime,
-    category_id: Annotated[str, Query(max_length=48)],
+    category_id: Annotated[str, Query(max_length=48)] = "",
     model: Annotated[str, Query(max_length=200)] = "",
     user: Annotated[str, Query(max_length=200)] = "",
+    session_key: Annotated[str, Query(max_length=2000)] = "",
 ) -> tuple[Example, ...]:
     """Return up to five highest-spend request excerpts for a category in the selected interval."""
     settings: Final = await active_settings(repository, start, end)
-    return await storage.examples(settings, start, end, category_id, model, user)
+    return await storage.examples(settings, start, end, category_id, model, user, session_key)
 
 
 async def complete(model: str, instructions: str, evidence: str) -> str:

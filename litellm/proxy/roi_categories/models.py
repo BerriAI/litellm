@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Final, Literal, TypeAlias
 
@@ -89,10 +90,24 @@ class Example(BaseModel):
     excerpt: Excerpt
 
 
+class SessionSpend(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    session_key: str
+    session_id: str
+    user: str
+    started_at: AwareDatetime
+    excerpt: Excerpt
+    category_ids: tuple[str, ...]
+    model_spend: Mapping[str, float]
+    spend: float
+    requests: int
+
+
 class Report(BaseModel):
     model_config = ConfigDict(frozen=True)
     categories: tuple[Category, ...]
     buckets: tuple[SpendBucket, ...]
+    sessions: tuple[SessionSpend, ...] = ()
     version: str
 
 

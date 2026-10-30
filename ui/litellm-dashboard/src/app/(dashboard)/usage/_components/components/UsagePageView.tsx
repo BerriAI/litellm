@@ -492,7 +492,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
           </div>
         </div>
       </header>
-      <AriaUsageComposer />
+      <div hidden={selectedTab === "roi"}>
+        <AriaUsageComposer />
+      </div>
       {aggregatedFailed && (
         <ErrorState title="Failed to load spend data" message={aggregatedError} onRetry={reloadAggregated} />
       )}

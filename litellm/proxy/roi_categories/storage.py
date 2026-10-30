@@ -5,7 +5,15 @@ from typing import Final, TypeVar
 import httpx
 from pydantic import BaseModel, TypeAdapter
 
-from litellm.proxy.roi_categories.models import Assignment, Example, Settings, SpendBucket, Traffic, utc_milliseconds
+from litellm.proxy.roi_categories.models import (
+    Assignment,
+    Example,
+    SessionSpend,
+    Settings,
+    SpendBucket,
+    Traffic,
+    utc_milliseconds,
+)
 from litellm.rust_bridge.clickhouse import SpendStorageConfig
 
 Row: Final = TypeVar("Row", bound=BaseModel)
@@ -19,6 +27,7 @@ _CLASSIFIABLE: Final = """
     AND NOT has(request_tags, 'litellm-internal')
     AND JSONExtractString(metadata, 'internal_call_origin') = ''
 """
+_SESSION_KEY: Final = "toJSONString(tuple(spend_logs.team_id, spend_logs.user, if(spend_logs.session_id = '', concat('request:', request_id), concat('session:', spend_logs.session_id))))"
 _JOIN: Final = """LEFT JOIN
     (SELECT request_id, category_id, attempts, completed
      FROM roi_category_assignments FINAL WHERE version = {version:String}) AS a USING request_id"""
@@ -113,10 +122,31 @@ class CategoryStorage:
             + _JOIN
             + " WHERE "
             + _ELIGIBLE
-            + " AND ({model:String} = '' OR model = {model:String}) AND ({user:String} = '' OR user = {user:String}) GROUP BY day, category_id, model "
+            + " AND ({model:String} = '' OR model = {model:String}) AND ({user:String} = '' OR spend_logs.user = {user:String}) GROUP BY day, category_id, model "
             "ORDER BY day, category_id, model LIMIT 10001",
             {**self.parameters(settings, start, end), "model": model, "user": user},
             SpendBucket,
+        )
+
+    async def sessions(
+        self, settings: Settings, start: datetime, end: datetime, model: str, user: str = ""
+    ) -> tuple[SessionSpend, ...]:
+        return await self.rows(
+            "SELECT "
+            + _SESSION_KEY
+            + " AS session_key, any(spend_logs.session_id) AS session_id, any(spend_logs.user) AS user, "
+            "toUnixTimestamp(min(start_time)) AS started_at, argMin(substringUTF8(messages, 1, 2000), start_time) AS excerpt, "
+            "groupUniqArray(if(a.category_id = '', 'unclassified', a.category_id)) AS category_ids, "
+            "sumMap(map(model, ifNull(spend_logs.spend, 0))) AS model_spend, "
+            "sum(ifNull(spend_logs.spend, 0)) AS spend, count() AS requests "
+            "FROM spend_logs FINAL "
+            + _JOIN
+            + " WHERE "
+            + _ELIGIBLE
+            + " AND ({model:String} = '' OR model = {model:String}) AND ({user:String} = '' OR spend_logs.user = {user:String}) "
+            "GROUP BY session_key ORDER BY spend DESC, session_key LIMIT 1001",
+            {**self.parameters(settings, start, end), "model": model, "user": user},
+            SessionSpend,
         )
 
     async def examples(
@@ -127,6 +157,7 @@ class CategoryStorage:
         category_id: str,
         model: str,
         user: str = "",
+        session_key: str = "",
     ) -> tuple[Example, ...]:
         return await self.rows(
             "SELECT request_id, model, spend, substringUTF8(messages, 1, 2000) AS excerpt "
@@ -134,8 +165,15 @@ class CategoryStorage:
             + _JOIN
             + " WHERE "
             + _ELIGIBLE
-            + " AND if(a.category_id = '', 'unclassified', a.category_id) = {category:String} "
-            "AND ({model:String} = '' OR model = {model:String}) AND ({user:String} = '' OR user = {user:String}) ORDER BY spend DESC, request_id LIMIT 5",
-            {**self.parameters(settings, start, end), "category": category_id, "model": model, "user": user},
+            + " AND ({category:String} = '' OR if(a.category_id = '', 'unclassified', a.category_id) = {category:String}) "
+            "AND ({session:String} = '' OR " + _SESSION_KEY + " = {session:String}) "
+            "AND ({model:String} = '' OR model = {model:String}) AND ({user:String} = '' OR spend_logs.user = {user:String}) ORDER BY spend DESC, request_id LIMIT 5",
+            {
+                **self.parameters(settings, start, end),
+                "category": category_id,
+                "model": model,
+                "user": user,
+                "session": session_key,
+            },
             Example,
         )

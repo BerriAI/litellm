@@ -42643,6 +42643,11 @@ export interface components {
             buckets: components["schemas"]["SpendBucket"][];
             /** Categories */
             categories: components["schemas"]["Category"][];
+            /**
+             * Sessions
+             * @default []
+             */
+            sessions: components["schemas"]["SessionSpend"][];
             /** Version */
             version: string;
         };
@@ -45527,6 +45532,32 @@ export interface components {
         SessionLogoutResponse: {
             /** Message */
             message: string;
+        };
+        /** SessionSpend */
+        SessionSpend: {
+            /** Category Ids */
+            category_ids: string[];
+            /** Excerpt */
+            excerpt: string;
+            /** Model Spend */
+            model_spend: {
+                [key: string]: number;
+            };
+            /** Requests */
+            requests: number;
+            /** Session Id */
+            session_id: string;
+            /** Session Key */
+            session_key: string;
+            /** Spend */
+            spend: number;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** User */
+            user: string;
         };
         /** Settings */
         Settings: {
@@ -71172,9 +71203,10 @@ export interface operations {
             query: {
                 start: string;
                 end: string;
-                category_id: string;
+                category_id?: string;
                 model?: string;
                 user?: string;
+                session_key?: string;
             };
             header?: never;
             path?: never;
