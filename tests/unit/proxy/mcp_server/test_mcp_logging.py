@@ -174,6 +174,20 @@ async def test_sdk_caller_errors_do_not_trigger_llm_alerts(
 
 
 @pytest.mark.asyncio
+async def test_sdk_initialization_errors_are_not_logged_as_tool_rejections(
+    sdk_rejection_logger: SDKRejectionLogger,
+) -> None:
+    async with Client(server, mode="legacy") as client:
+        with pytest.raises(MCPError) as rejected:
+            await client.session.send_request(Request(method="initialize", params=SDKRejectionParams()), EmptyResult)
+        assert rejected.value.code == -32602
+        await client.session.send_ping()
+    assert sdk_rejection_logger.pre_calls == 0
+    assert sdk_rejection_logger.failures == []
+    assert sdk_rejection_logger.post_failures == 0
+
+
+@pytest.mark.asyncio
 async def test_sdk_response_survives_failure_callback_error(sdk_rejection_logger: SDKRejectionLogger) -> None:
     sdk_rejection_logger.fail_post_hook = True
     async with Client(server, mode="legacy") as client:
