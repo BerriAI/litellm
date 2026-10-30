@@ -164,7 +164,7 @@ def is_chat_completion_request_web_search_tool(tool: Mapping[str, object]) -> bo
     return tool.get("type") == "web_search" or is_web_search_tool(dict(tool))
 
 
-def is_web_search_tool_chat_completion(tool: dict[str, Any]) -> bool:
+def is_web_search_tool_chat_completion(tool: Mapping[str, Any]) -> bool:
     """
     Check if a tool is a web search tool for Chat Completions API (strict check).
 
@@ -229,7 +229,7 @@ def is_anthropic_native_web_search_tool(tool: Mapping[str, object]) -> bool:
     return tool_type.startswith("web_search_") and tool_type != "function"
 
 
-def is_web_search_tool(tool: dict[str, Any]) -> bool:
+def is_web_search_tool(tool: Mapping[str, Any]) -> bool:
     """
     Check if a tool is a web search tool (native or LiteLLM standard).
 

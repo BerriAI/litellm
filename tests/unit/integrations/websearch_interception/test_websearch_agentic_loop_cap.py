@@ -37,6 +37,8 @@ from litellm.types.integrations.custom_logger import (
     AgenticLoopSafetyError,
 )
 
+from .conftest import FINAL_ANSWER, offered_tool_names, request_bodies
+
 INTERNAL_TOOL_NAME = "litellm_web_search"
 
 
@@ -885,3 +887,125 @@ class TestRebuiltStreamIsWellFormed:
 
         assert result_block["tool_use_id"] == "srvtoolu_01"
         assert result_block["content"][0]["url"] == "https://example.com/h100"
+
+
+WEATHER_TOOL = {
+    "name": "get_weather",
+    "description": "Get the current weather for a city",
+    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}
+
+
+class TestTheLastFollowUpTheCapAllowsAnswers:
+    """
+    The follow-up the cap allows last is sent without the search tool, so the
+    model answers from the results it already has instead of asking for a
+    search the loop would refuse.
+    """
+
+    @pytest.fixture(autouse=True)
+    def interception_capped_at_two(self, monkeypatch):
+        monkeypatch.setattr(
+            litellm,
+            "callbacks",
+            [WebSearchInterceptionLogger(enabled_providers=["anthropic"], max_agentic_loops=2)],
+        )
+
+    @staticmethod
+    async def _ask(**request) -> dict:
+        return await litellm.anthropic_interface.messages.acreate(
+            model="anthropic/claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "What's the latest AI news?"}],
+            max_tokens=1024,
+            **request,
+        )
+
+    @pytest.mark.asyncio
+    async def test_capped_turn_ends_with_the_model_answer(self, anthropic_model, perplexity_search):
+        response = await self._ask(tools=[get_litellm_web_search_tool(), WEATHER_TOOL])
+
+        assert [block.get("text") for block in response["content"] if block["type"] == "text"] == [FINAL_ANSWER]
+        assert response["stop_reason"] == "end_turn"
+        assert perplexity_search.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_only_the_last_follow_up_drops_the_search_tool(self, anthropic_model, perplexity_search):
+        await self._ask(tools=[get_litellm_web_search_tool(), WEATHER_TOOL])
+
+        assert [offered_tool_names(body) for body in request_bodies(anthropic_model)] == [
+            [INTERNAL_TOOL_NAME, "get_weather"],
+            [INTERNAL_TOOL_NAME, "get_weather"],
+            ["get_weather"],
+        ]
+
+    @pytest.mark.asyncio
+    async def test_last_follow_up_blocks_tool_calls_when_search_was_the_only_tool(
+        self, anthropic_model, perplexity_search
+    ):
+        response = await self._ask(tools=[get_litellm_web_search_tool()])
+
+        last_request = request_bodies(anthropic_model)[-1]
+        assert "tools" not in last_request
+        assert last_request["tool_choice"] == {"type": "none"}
+        assert [block.get("text") for block in response["content"] if block["type"] == "text"] == [FINAL_ANSWER]
+
+    @pytest.mark.asyncio
+    async def test_a_forced_search_choice_is_not_sent_once_search_is_gone(self, anthropic_model, perplexity_search):
+        await self._ask(
+            tools=[get_litellm_web_search_tool(), WEATHER_TOOL],
+            tool_choice={"type": "tool", "name": INTERNAL_TOOL_NAME},
+        )
+
+        bodies = request_bodies(anthropic_model)
+        assert [body.get("tool_choice") for body in bodies] == [
+            {"type": "tool", "name": INTERNAL_TOOL_NAME},
+            {"type": "tool", "name": INTERNAL_TOOL_NAME},
+            None,
+        ]
+        assert offered_tool_names(bodies[-1]) == ["get_weather"]
+
+    @pytest.mark.asyncio
+    async def test_a_choice_naming_a_client_tool_survives(self, anthropic_model, perplexity_search):
+        await self._ask(
+            tools=[get_litellm_web_search_tool(), WEATHER_TOOL],
+            tool_choice={"type": "tool", "name": "get_weather"},
+        )
+
+        assert request_bodies(anthropic_model)[-1]["tool_choice"] == {"type": "tool", "name": "get_weather"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "provider,incoming_depth,offers_search",
+        [
+            ("anthropic", 0, True),
+            ("anthropic", 1, False),
+            ("bedrock", 1, True),
+            ("azure", 1, True),
+        ],
+    )
+    async def test_plan_offers_search_until_the_last_follow_up_on_providers_verified_to_answer_without_it(
+        self, perplexity_search, provider, incoming_depth, offers_search
+    ):
+        plan = await WebSearchInterceptionLogger(max_agentic_loops=2).async_build_agentic_loop_plan(
+            tools={
+                "tool_calls": [_internal_tool_use_block()],
+                "tool_type": "websearch",
+                "provider": provider,
+                "response_format": "anthropic",
+            },
+            model="claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "who won the world cup"}],
+            response=_response_asking_for_another_search(),
+            anthropic_messages_provider_config=None,
+            anthropic_messages_optional_request_params={"tools": [get_litellm_web_search_tool()], "max_tokens": 100},
+            logging_obj=None,
+            stream=False,
+            kwargs={
+                "custom_llm_provider": provider,
+                "_agentic_loop_depth": incoming_depth,
+                "max_agentic_loops": 2,
+            },
+        )
+
+        assert plan.request_patch is not None
+        assert (INTERNAL_TOOL_NAME in offered_tool_names(plan.request_patch.optional_params)) is offers_search

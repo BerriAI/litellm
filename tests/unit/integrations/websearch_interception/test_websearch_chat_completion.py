@@ -16,8 +16,11 @@ import litellm
 from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )
+from litellm.integrations.websearch_interception.tools import get_litellm_web_search_tool_openai
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.utils import CallTypes, LlmProviders, ModelResponse
+
+from .conftest import FINAL_ANSWER, offered_tool_names, request_bodies
 
 
 @pytest.fixture
@@ -476,3 +479,132 @@ async def test_chat_followup_reuses_the_model_the_caller_requested(
     assert plan.request_patch is not None
     assert plan.request_patch.model == requested_model
     assert perplexity_search.call_count == 1
+
+
+WEATHER_FUNCTION_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get the current weather for a city",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    },
+}
+SEARCH_TOOL_NAME = "litellm_web_search"
+NEWS_QUESTION = [{"role": "user", "content": "What's the latest AI news?"}]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_chat_turn_capped_above_the_default_ends_with_the_model_answer(
+    monkeypatch, anthropic_model, perplexity_search
+):
+    """The callback's own ceiling, set above the default of 3, is the one the loop stops at."""
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["anthropic"], max_agentic_loops=4)]
+    )
+
+    response = await litellm.acompletion(
+        model="anthropic/claude-sonnet-5-5",
+        messages=NEWS_QUESTION,
+        tools=[get_litellm_web_search_tool_openai(), WEATHER_FUNCTION_TOOL],
+    )
+
+    assert response.choices[0].message.content == FINAL_ANSWER
+    assert not response.choices[0].message.tool_calls
+    assert [offered_tool_names(body) for body in request_bodies(anthropic_model)] == [
+        *[[SEARCH_TOOL_NAME, "get_weather"]] * 4,
+        ["get_weather"],
+    ]
+    assert perplexity_search.call_count == 4
+
+
+@pytest.mark.asyncio
+async def test_anthropic_chat_last_follow_up_blocks_tool_calls_when_search_was_the_only_tool(
+    monkeypatch, anthropic_model, perplexity_search
+):
+    """Claude can call a tool it saw earlier in the history even when the request offers none, so the call is blocked."""
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["anthropic"], max_agentic_loops=1)]
+    )
+
+    response = await litellm.acompletion(
+        model="anthropic/claude-sonnet-5-5",
+        messages=NEWS_QUESTION,
+        tools=[get_litellm_web_search_tool_openai()],
+    )
+
+    last_request = request_bodies(anthropic_model)[-1]
+    assert response.choices[0].message.content == FINAL_ANSWER
+    assert SEARCH_TOOL_NAME not in offered_tool_names(last_request)
+    assert last_request["tool_choice"] == {"type": "none"}
+
+
+@pytest.mark.asyncio
+async def test_openai_chat_turn_at_the_cap_ends_with_the_model_answer(monkeypatch, openai_chat_model, perplexity_search):
+    """reasoning_effort none keeps the request on /v1/chat/completions, where the loop runs inside the OpenAI handler."""
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"], max_agentic_loops=2)]
+    )
+
+    response = await litellm.acompletion(
+        model="openai/gpt-5.6",
+        messages=NEWS_QUESTION,
+        tools=[get_litellm_web_search_tool_openai(), WEATHER_FUNCTION_TOOL],
+        reasoning_effort="none",
+        api_key="test-openai-key-capped-chat",
+    )
+
+    assert response.choices[0].message.content == FINAL_ANSWER
+    assert [offered_tool_names(body) for body in request_bodies(openai_chat_model)] == [
+        [SEARCH_TOOL_NAME, "get_weather"],
+        [SEARCH_TOOL_NAME, "get_weather"],
+        ["get_weather"],
+    ]
+    assert perplexity_search.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_openai_chat_bridged_to_responses_at_the_cap_ends_with_the_model_answer(
+    monkeypatch, openai_responses_model, perplexity_search
+):
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"], max_agentic_loops=2)]
+    )
+
+    response = await litellm.acompletion(
+        model="openai/gpt-5.6",
+        messages=NEWS_QUESTION,
+        tools=[get_litellm_web_search_tool_openai(), WEATHER_FUNCTION_TOOL],
+        api_key="test-openai-key-bridged-chat",
+    )
+
+    assert response.choices[0].message.content == FINAL_ANSWER
+    assert [offered_tool_names(body) for body in request_bodies(openai_responses_model)] == [
+        [SEARCH_TOOL_NAME, "get_weather"],
+        [SEARCH_TOOL_NAME, "get_weather"],
+        ["get_weather"],
+    ]
+    assert perplexity_search.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_openai_chat_last_follow_up_sends_no_tools_when_search_was_the_only_one(
+    monkeypatch, openai_chat_model, perplexity_search
+):
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"], max_agentic_loops=1)]
+    )
+
+    response = await litellm.acompletion(
+        model="openai/gpt-5.6",
+        messages=NEWS_QUESTION,
+        tools=[get_litellm_web_search_tool_openai()],
+        tool_choice="required",
+        reasoning_effort="none",
+        api_key="test-openai-key-search-only-chat",
+    )
+
+    last_request = request_bodies(openai_chat_model)[-1]
+    assert response.choices[0].message.content == FINAL_ANSWER
+    assert "tools" not in last_request
+    assert "tool_choice" not in last_request
+    assert len(request_bodies(openai_chat_model)) == 2

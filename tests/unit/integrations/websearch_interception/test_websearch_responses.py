@@ -18,11 +18,14 @@ import litellm
 from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )
+from litellm.integrations.websearch_interception.tools import get_litellm_web_search_tool_responses
 from litellm.types.integrations.custom_logger import (
     RESPONSES_AGENTIC_SURFACE,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.utils import CallTypes, LlmProviders
+
+from .conftest import FINAL_ANSWER, offered_tool_names, request_bodies
 
 
 def _responses_output_with_web_search(call_id: str = "fc_1", query: str = "latest ai news"):
@@ -427,3 +430,65 @@ async def test_deployment_hook_responses_converts_stream_to_non_stream():
     assert result is not None
     assert result["stream"] is False
     assert result["_websearch_interception_converted_stream"] is True
+
+
+WEATHER_RESPONSES_TOOL = {
+    "type": "function",
+    "name": "get_weather",
+    "description": "Get the current weather for a city",
+    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}
+
+
+def _output_text(response) -> list[str]:
+    messages = [item for item in response.model_dump()["output"] if item["type"] == "message"]
+    return [part["text"] for message in messages for part in message["content"]]
+
+
+@pytest.mark.asyncio
+async def test_responses_turn_capped_above_the_default_ends_with_the_model_answer(
+    monkeypatch, openai_responses_model, perplexity_search
+):
+    """The callback's own ceiling, set above the default of 3, is the one the loop stops at."""
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"], max_agentic_loops=4)]
+    )
+
+    response = await litellm.aresponses(
+        model="openai/gpt-5.6",
+        input="What's the latest AI news?",
+        tools=[get_litellm_web_search_tool_responses(), WEATHER_RESPONSES_TOOL],
+        tool_choice="auto",
+        api_key="test-openai-key-capped-responses",
+    )
+
+    bodies = request_bodies(openai_responses_model)
+    assert _output_text(response) == [FINAL_ANSWER]
+    assert [offered_tool_names(body) for body in bodies] == [
+        *[["litellm_web_search", "get_weather"]] * 4,
+        ["get_weather"],
+    ]
+    assert [body.get("tool_choice") for body in bodies] == ["auto"] * 5
+    assert perplexity_search.call_count == 4
+
+
+@pytest.mark.asyncio
+async def test_responses_last_follow_up_blocks_tool_calls_when_search_was_the_only_tool(
+    monkeypatch, openai_responses_model, perplexity_search
+):
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"], max_agentic_loops=1)]
+    )
+
+    response = await litellm.aresponses(
+        model="openai/gpt-5.6",
+        input="What's the latest AI news?",
+        tools=[get_litellm_web_search_tool_responses()],
+        tool_choice="required",
+        api_key="test-openai-key-search-only-responses",
+    )
+
+    last_request = request_bodies(openai_responses_model)[-1]
+    assert _output_text(response) == [FINAL_ANSWER]
+    assert "tools" not in last_request
+    assert last_request["tool_choice"] == "none"
