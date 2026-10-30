@@ -292,5 +292,13 @@
       "preserve_cache_control": true
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "aistupidlevel": {
+    "base_url": "https://aistupidlevel.info/v1",
+    "api_key_env": "AISTUPIDLEVEL_API_KEY",
+    "api_base_env": "AISTUPIDLEVEL_API_BASE",
+    "provider_info": {
+      "supports_function_calling": true
+    }
   }
 }
