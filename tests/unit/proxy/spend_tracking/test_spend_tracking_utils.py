@@ -2396,6 +2396,39 @@ def test_get_logging_payload_includes_overhead_in_spend_logs_metadata():
 
 @patch("litellm.proxy.proxy_server.master_key", None)
 @patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_carries_upstream_provider_from_hidden_params_regression() -> None:
+    standard_logging_payload: Final = _make_standard_logging_payload_with_usage_object(usage_object={})
+    payload_with_provider: Final = {
+        **dict(standard_logging_payload),
+        "hidden_params": {
+            **dict(standard_logging_payload["hidden_params"]),
+            "upstream_provider": "serving-site-a",
+        },
+    }
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-5.6",
+            "call_type": "responses",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            "standard_logging_object": payload_with_provider,
+        },
+        response_obj={
+            "id": "resp-test",
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 10,
+                "total_tokens": 1010,
+            },
+        },
+        start_time=datetime.datetime(2025, 1, 1, tzinfo=timezone.utc),
+        end_time=datetime.datetime(2025, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+    )
+
+    assert json.loads(payload["metadata"]).get("upstream_provider") == "serving-site-a"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
 def test_get_logging_payload_strips_null_bytes_from_request_tags():
     """Regression for PostgreSQL 22P05: NUL bytes must be stripped from request_tags."""
     kwargs = {

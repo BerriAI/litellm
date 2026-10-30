@@ -910,6 +910,74 @@ def test_stream_chunk_builder_dict_snapshot_preserves_hidden_provider_fields():
     assert response._hidden_params["provider_specific_fields"]["traffic_type"] == "default"
 
 
+def test_stream_chunk_builder_finds_upstream_provider_in_later_chunk_regression() -> None:
+    first: Final = ModelResponseStream(
+        id="chatcmpl-provider",
+        created=1,
+        model="gpt-4.1-mini",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="hello", role="assistant"),
+            )
+        ],
+    )
+    later: Final = ModelResponseStream(
+        id="chatcmpl-provider",
+        created=1,
+        model="gpt-4.1-mini",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content=" world", role=None),
+            )
+        ],
+    )
+    first_hidden_params: Final = {"origin": "first"}
+    later_hidden_params: Final = {"upstream_provider": "serving-site-a"}
+    chunks: Final = [
+        {**first.model_dump(), "_hidden_params": first_hidden_params},
+        {**later.model_dump(), "_hidden_params": later_hidden_params},
+    ]
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert response._hidden_params.get("upstream_provider") == "serving-site-a"
+    assert chunks[0]["_hidden_params"] == first_hidden_params
+    assert chunks[1]["_hidden_params"] == later_hidden_params
+
+
+def test_stream_chunk_builder_does_not_mutate_provider_hidden_params_guard() -> None:
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-provider",
+        created=1,
+        model="gpt-4.1-mini",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="hello", role="assistant"),
+            )
+        ],
+    )
+    hidden_params: Final = {"upstream_provider": "serving-site-a"}
+    chunk_dict: Final = {**chunk.model_dump(), "_hidden_params": hidden_params}
+    original_chunk: Final = dict(chunk_dict)
+    original_hidden_params: Final = dict(hidden_params)
+
+    response: Final = stream_chunk_builder(chunks=[chunk_dict])
+
+    assert response is not None
+    assert chunk_dict == original_chunk
+    assert hidden_params == original_hidden_params
+
+
 def test_stream_chunk_builder_propagates_vertex_ai_metadata_from_chunks():
     """Vertex AI metadata on streaming chunks must appear on assembled response."""
     grounding_metadata = [{"webSearchQueries": ["weather in SF"]}]
