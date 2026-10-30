@@ -1,20 +1,32 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderToString } from "react-dom/server";
+import { useTranslation as useReactTranslation } from "react-i18next";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { PasswordInput } from "@/components/shared/PasswordInput";
-import LanguageProvider from "./LanguageProvider";
+import I18nProvider from "./I18nProvider";
 import { LANGUAGE_STORAGE_KEY } from ".";
+
+function WorkflowMessages() {
+  const { t } = useReactTranslation();
+  return (
+    <section>
+      <h1>{t("workflows.header.title")}</h1>
+      <p>{t("workflows.drawer.eventCount", { count: 2 })}</p>
+    </section>
+  );
+}
 
 function LanguageExample() {
   return (
-    <LanguageProvider>
+    <I18nProvider>
       <LanguageSwitcher />
       <LoadingScreen />
       <PasswordInput aria-label="API key" />
-    </LanguageProvider>
+      <WorkflowMessages />
+    </I18nProvider>
   );
 }
 
@@ -40,6 +52,8 @@ describe("dashboard language preference", () => {
     await selectChinese();
     expect(screen.getByText("加载中…")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "显示密码" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Workflow Runs" })).toBeInTheDocument();
+    expect(screen.getByText("2 events")).toBeInTheDocument();
     expect(screen.getByLabelText("API key")).toHaveValue("opaque-value");
     expect(document.documentElement).toHaveAttribute("lang", "zh-CN");
     expect(window.localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe("zh-CN");

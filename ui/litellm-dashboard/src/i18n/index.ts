@@ -17,7 +17,6 @@ export function createDashboardI18n(language: Language = "en") {
     supportedLngs: ["en", "zh-CN"],
     resources: { en: { translation: { ...en } }, "zh-CN": { translation: { ...zhCN } } },
     initAsync: false,
-    keySeparator: false,
     nsSeparator: false,
     interpolation: { escapeValue: false },
     react: { useSuspense: false },

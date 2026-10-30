@@ -6,10 +6,13 @@ and executes the search directly without routing through the backend LLM.
 """
 
 import json
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import respx
 
+import litellm
 from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )
@@ -29,6 +32,7 @@ class TestTryShortCircuitSearch:
             ("github_copilot", "github_copilot/claude-sonnet-5.5"),
             ("databricks", "databricks/databricks-claude-sonnet-5-5"),
             ("databricks", "databricks/system.ai.claude-sonnet-5-5"),
+            ("dashscope", "dashscope/qwen3.7-plus"),
         ],
     )
     async def test_short_circuits_single_web_search_tool(self, provider, model):
@@ -170,6 +174,27 @@ class TestTryShortCircuitSearch:
         assert result is None
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "empty_prompt",
+        [
+            "   ",
+            "Perform a web search for the query:   ",
+        ],
+    )
+    async def test_does_not_short_circuit_empty_or_whitespace_user_message(self, empty_prompt: str):
+        """User message that is whitespace or empty query → returns None without executing search."""
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+
+        result = await logger.try_short_circuit_search(
+            model="github_copilot/claude-sonnet-4",
+            messages=[{"role": "user", "content": empty_prompt}],
+            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}],
+            custom_llm_provider="github_copilot",
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
     async def test_search_failure_returns_error_text(self):
         """Search failure → response with error message, not exception"""
         logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
@@ -226,6 +251,46 @@ class TestTryShortCircuitSearch:
 # Query extraction tests
 # ---------------------------------------------------------------------------
 
+PERPLEXITY_SEARCH_URL: Final = "https://api.perplexity.ai/search"
+
+
+@pytest.fixture
+def perplexity_search(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> respx.Route:
+    monkeypatch.setenv("PERPLEXITYAI_API_KEY", "test-perplexity-key")
+    monkeypatch.delenv("PERPLEXITY_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    return respx_mock.post(PERPLEXITY_SEARCH_URL).respond(
+        json={"results": [{"title": "Releases", "url": "https://example.com/releases", "snippet": "Release notes"}]}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_message", "searched_query"),
+    [
+        ("Perform a web search for the query: litellm latest release", "litellm latest release"),
+        ('Perform a web search for the query: "litellm proxy"', '"litellm proxy"'),
+    ],
+)
+async def test_short_circuit_searches_the_query_inside_claude_codes_prompt(
+    perplexity_search: respx.Route, user_message: str, searched_query: str
+):
+    logger: Final = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+    result: Final = await logger.try_short_circuit_search(
+        model="bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": user_message}],
+        tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}],
+        custom_llm_provider="bedrock",
+    )
+
+    assert perplexity_search.call_count == 1
+    assert json.loads(perplexity_search.calls.last.request.content)["query"] == searched_query
+    assert result is not None
+    server_tool_use: Final = next(block for block in result["content"] if block["type"] == "server_tool_use")
+    assert server_tool_use["input"]["query"] == searched_query
+
 
 # ---------------------------------------------------------------------------
 # Integration with entry point
@@ -238,7 +303,7 @@ class TestShortCircuitEntryPoint:
     @pytest.mark.asyncio
     async def test_returns_none_when_no_callbacks(self):
         """No callbacks configured → returns None"""
-        from litellm.llms.anthropic.pass_through.messages.handler import (
+        from litellm.llms.anthropic.messages.native.handler import (
             _try_websearch_short_circuit,
         )
 
@@ -255,7 +320,7 @@ class TestShortCircuitEntryPoint:
     @pytest.mark.asyncio
     async def test_returns_dict_when_not_streaming(self):
         """Non-streaming short-circuit → returns dict"""
-        from litellm.llms.anthropic.pass_through.messages.handler import (
+        from litellm.llms.anthropic.messages.native.handler import (
             _try_websearch_short_circuit,
         )
 
@@ -280,10 +345,10 @@ class TestShortCircuitEntryPoint:
     @pytest.mark.asyncio
     async def test_returns_stream_iterator_when_streaming(self):
         """Streaming short-circuit → returns FakeAnthropicMessagesStreamIterator"""
-        from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
+        from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
             FakeAnthropicMessagesStreamIterator,
         )
-        from litellm.llms.anthropic.pass_through.messages.handler import (
+        from litellm.llms.anthropic.messages.native.handler import (
             _try_websearch_short_circuit,
         )
 
@@ -322,7 +387,7 @@ class TestShortCircuitEntryPoint:
         """Non-WebSearchInterceptionLogger callbacks are ignored"""
         from unittest.mock import MagicMock
 
-        from litellm.llms.anthropic.pass_through.messages.handler import (
+        from litellm.llms.anthropic.messages.native.handler import (
             _try_websearch_short_circuit,
         )
 
@@ -345,10 +410,10 @@ class TestShortCircuitEntryPoint:
         loop. The short-circuit must use the ORIGINAL stream value so streaming
         callers get SSE events instead of a plain dict.
         """
-        from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
+        from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
             FakeAnthropicMessagesStreamIterator,
         )
-        from litellm.llms.anthropic.pass_through.messages.handler import (
+        from litellm.llms.anthropic.messages.native.handler import (
             _try_websearch_short_circuit,
         )
 
@@ -378,7 +443,7 @@ class TestShortCircuitEntryPoint:
         still fire the short-circuit when the caller propagates the derived
         provider.
         """
-        from litellm.llms.anthropic.pass_through.messages.handler import (
+        from litellm.llms.anthropic.messages.native.handler import (
             _try_websearch_short_circuit,
         )
 
@@ -410,7 +475,7 @@ class TestShortCircuitSafeguardResults:
     NO_TOOL_USES_AVAILABLE = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": {}}}]
 
     async def _short_circuit(self, *, stream: bool, kwargs: dict | None):
-        from litellm.llms.anthropic.pass_through.messages.handler import (
+        from litellm.llms.anthropic.messages.native.handler import (
             _try_websearch_short_circuit,
         )
 

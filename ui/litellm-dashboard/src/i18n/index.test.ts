@@ -4,9 +4,10 @@ import en from "./locales/en.json";
 import zhCN from "./locales/zh-CN.json";
 
 describe("dashboard translations", () => {
-  it("keeps complete English and Chinese catalogs with matching interpolation fields and markup", () => {
-    expect(Object.keys(zhCN).sort()).toEqual(Object.keys(en).sort());
-    for (const key of Object.keys(en) as (keyof typeof en)[]) {
+  it("keeps complete navigation catalogs with matching interpolation fields and markup", () => {
+    const englishLabels = Object.fromEntries(Object.entries(en).filter(([, value]) => typeof value === "string"));
+    expect(Object.keys(zhCN).sort()).toEqual(Object.keys(englishLabels).sort());
+    for (const key of Object.keys(zhCN) as (keyof typeof zhCN)[]) {
       expect(zhCN[key].trim(), key).not.toBe("");
       expect(zhCN[key].match(/{{\w+}}|<\/?\w+>/g) ?? [], key).toEqual(en[key].match(/{{\w+}}|<\/?\w+>/g) ?? []);
     }
@@ -16,8 +17,16 @@ describe("dashboard translations", () => {
     const instance = createDashboardI18n("zh-CN");
     expect(instance.t("Access your LiteLLM Admin UI.")).toBe("登录 LiteLLM 管理界面。");
     instance.addResource("en", "translation", "English fallback.", "English fallback.");
-    expect(instance.t("English fallback.")).toBe("English fallback.");
-    expect(instance.t("An untranslated label")).toBe("An untranslated label");
+    expect(instance.t("English fallback.", { defaultValue: "Missing fallback" })).toBe("English fallback.");
+    expect(instance.t("An untranslated label", { defaultValue: "An untranslated label" })).toBe("An untranslated label");
+  });
+
+  it("keeps nested workflow messages and pluralization available alongside literal display keys", () => {
+    const instance = createDashboardI18n("zh-CN");
+    expect(instance.t("workflows.header.title")).toBe(en.workflows.header.title);
+    expect(instance.t("workflows.drawer.eventCount", { count: 1 })).toBe("1 event");
+    expect(instance.t("workflows.drawer.eventCount", { count: 2 })).toBe("2 events");
+    expect(instance.t("login.credentialsHelp")).toBe(zhCN["login.credentialsHelp"]);
   });
 
   it("keeps server-rendered and standalone instances independent of another user's selection", async () => {

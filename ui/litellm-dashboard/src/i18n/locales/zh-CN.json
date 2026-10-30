@@ -95,6 +95,7 @@
   "Switch workspace, current: {{workspace}}": "切换工作区，当前：{{workspace}}",
   "Tag Management": "标签管理",
   "Teams": "团队",
+  "Telemetry": "遥测",
   "Thanks for using LiteLLM!": "感谢使用 LiteLLM！",
   "The Admin UI has been disabled by the administrator. To re-enable it, please update the following environment variable:": "管理员已禁用管理界面。如需重新启用，请修改以下环境变量：",
   "Tier": "套餐",

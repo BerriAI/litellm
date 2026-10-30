@@ -67,9 +67,11 @@ const AnnouncementItem: React.FC<{ announcement: Announcement }> = ({ announceme
   const { t } = useTranslation();
   const read = useAnnouncementRead(announcement.readKey);
   return (
-    <article aria-label={t(announcement.title)} className="flex flex-col gap-2">
-      <p className="text-sm font-medium">{t(announcement.title)}</p>
-      <p className="text-sm leading-snug text-muted-foreground">{t(announcement.description)}</p>
+    <article aria-label={t(announcement.title, { defaultValue: announcement.title })} className="flex flex-col gap-2">
+      <p className="text-sm font-medium">{t(announcement.title, { defaultValue: announcement.title })}</p>
+      <p className="text-sm leading-snug text-muted-foreground">
+        {t(announcement.description, { defaultValue: announcement.description })}
+      </p>
       <div className="flex flex-wrap items-center gap-2">
         <a
           className={cn(buttonVariants({ size: "sm" }))}
@@ -77,7 +79,7 @@ const AnnouncementItem: React.FC<{ announcement: Announcement }> = ({ announceme
           target="_blank"
           rel="noopener noreferrer"
         >
-          {t(announcement.linkLabel)}
+          {t(announcement.linkLabel, { defaultValue: announcement.linkLabel })}
         </a>
         {read ? null : (
           <Button variant="link" size="sm" className="px-1!" onClick={() => markAnnouncementRead(announcement.readKey)}>

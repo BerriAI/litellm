@@ -6,6 +6,7 @@ import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
 import { useLogout } from "@/app/(dashboard)/hooks/useLogout";
 import { getProxyBaseUrl } from "@/components/networking";
+import { useTerminology } from "@/contexts/TerminologyContext";
 import { useTheme } from "@/contexts/ThemeContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -544,6 +545,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
 }) => {
   const { t } = useTranslation();
   const { userId, accessToken, userRole, isViewOnly } = useAuthorized();
+  const term = useTerminology();
   const isOrgAdmin = useIsOrgAdmin();
   const { data: teams } = useTeams();
   const { logoUrl, logoUrlDark } = useTheme();
@@ -617,7 +619,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   };
 
   const translatedLabel = (item: MenuItem) => {
-    const label = typeof item.label === "string" ? t(item.label) : item.label;
+    const label = typeof item.label === "string" ? term(t(item.label, { defaultValue: item.label })) : item.label;
     return item.badge ? (
       <span className="flex items-center gap-2">
         {label}
@@ -642,7 +644,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
           href={item.external_url}
           target="_blank"
           rel="noopener noreferrer"
-          title={collapsed ? t(labelText(item)) : undefined}
+          title={collapsed ? term(t(labelText(item), { defaultValue: labelText(item) })) : undefined}
           data-active={active || undefined}
           className={cn(sidebarMenuButtonVariants({ isActive: active, size }))}
         >
@@ -657,7 +659,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
       <Link
         key={item.key}
         href={uiHref(routeOf(item))}
-        title={collapsed ? t(labelText(item)) : undefined}
+        title={collapsed ? term(t(labelText(item), { defaultValue: labelText(item) })) : undefined}
         data-active={active || undefined}
         className={cn(sidebarMenuButtonVariants({ isActive: active, size }))}
       >
@@ -681,7 +683,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
           isActive={active}
           aria-expanded={open}
           onClick={() => toggleGroup(item.key)}
-          title={collapsed ? t(labelText(item)) : undefined}
+          title={collapsed ? term(t(labelText(item), { defaultValue: labelText(item) })) : undefined}
         >
           {item.icon}
           <span className="flex-1 truncate group-data-[collapsed=true]/sidebar:hidden">{translatedLabel(item)}</span>
@@ -751,7 +753,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
           {visibleGroups.map((group, gi) => (
             <SidebarGroup key={group.groupLabel}>
               {gi > 0 && <SidebarSeparator className="hidden group-data-[collapsed=true]/sidebar:block" />}
-              <SidebarGroupLabel>{t(group.groupLabel)}</SidebarGroupLabel>
+              <SidebarGroupLabel>{term(t(group.groupLabel, { defaultValue: group.groupLabel }))}</SidebarGroupLabel>
               <SidebarMenu>{group.items.map((item) => renderItem(item))}</SidebarMenu>
             </SidebarGroup>
           ))}

@@ -1,5 +1,5 @@
 import { useTranslation } from "@/i18n/useTranslation";
-import type { TFunction } from "i18next";
+import { useTerminology } from "@/contexts/TerminologyContext";
 import React from "react";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
@@ -32,11 +32,12 @@ function activeWorkspaceFor(
   isChatRoute: boolean,
   isMoyaiRoute: boolean,
   pluginLabel: string | undefined,
-  t: TFunction,
+  gatewayLabel: string,
+  chatLabel: string,
 ): { label: string; icon: WorkspaceIconName } {
-  if (isChatRoute) return { label: t("Chat"), icon: CHAT };
+  if (isChatRoute) return { label: chatLabel, icon: CHAT };
   if (isMoyaiRoute) return { label: "Moyai", icon: MOYAI };
-  return { label: pluginLabel ?? t("AI Gateway"), icon: GATEWAY };
+  return { label: pluginLabel ?? gatewayLabel, icon: GATEWAY };
 }
 
 function WorkspaceIcon({ workspace }: { workspace: WorkspaceIconName }) {
@@ -83,6 +84,7 @@ interface ViewSwitcherProps {
 
 export default function ViewSwitcher({ className, contentClassName }: ViewSwitcherProps) {
   const { t } = useTranslation();
+  const term = useTerminology();
   const { mode, setMode, plugins } = usePluginMode();
   const { data: uiSettings } = useUISettings();
   const pathname = usePathname();
@@ -95,15 +97,17 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
   const isMoyaiRoute = isWorkspaceRoute(normalizedPathname, MOYAI);
   const isStandaloneRoute = isChatRoute || isMoyaiRoute;
 
+  const gatewayLabel = term(t("AI Gateway"));
   const { label: activeLabel, icon: activeIcon } = activeWorkspaceFor(
     isChatRoute,
     isMoyaiRoute,
     plugins.find((p) => p.name === mode)?.display_name,
-    t,
+    gatewayLabel,
+    t("Chat"),
   );
 
   const modeEntries = [
-    { key: GATEWAY, label: t("AI Gateway") },
+    { key: GATEWAY, label: gatewayLabel },
     ...plugins.map((p) => ({ key: p.name, label: p.display_name })),
   ];
 

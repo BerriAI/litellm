@@ -4,12 +4,15 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from types import TracebackType
-from typing import Final
+from typing import Final, Protocol
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import openai
 import pytest
 import respx
+from websockets.exceptions import ConnectionClosedError
+from websockets.frames import Close
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -439,18 +442,96 @@ async def test_arealtime_without_live_start_preserves_openai_realtime_dispatch(
     assert captured.values["api_base"] == "https://realtime-gateway.example/v1"
 
 
+class _ServerEvents(Protocol):
+    async def recv(self) -> str: ...
+
+
+class _ScriptedConnection:
+    def __init__(self, *frames: str) -> None:
+        self._frames: Final = iter(frames)
+
+    async def recv(self) -> str:
+        return next(self._frames)
+
+
+class _SilentConnection:
+    async def recv(self) -> str:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+class _ConnectionClosedBeforeAnyEvent:
+    async def recv(self) -> str:
+        raise ConnectionClosedError(Close(3000, "invalid_api_key"), None)
+
+
+_OPENAI_INVALID_API_KEY_EVENT: Final = (
+    '{"type": "error", "event_id": "event_1", "error": {"type": "invalid_request_error", "code": "invalid_api_key", '
+    '"message": "Incorrect API key provided: sk-proj-****0000. You can find your API key at '
+    'https://platform.openai.com/account/api-keys.", "param": null, "event_id": null}}'
+)
+_OPENAI_MISSING_AUTH_EVENT: Final = (
+    '{"type": "error", "event_id": "event_2", "error": {"type": "invalid_request_error", "code": null, '
+    '"message": "Missing bearer or basic authentication in header", "param": null, "event_id": null}}'
+)
+_OPENAI_SERVER_ERROR_EVENT: Final = (
+    '{"type": "error", "event_id": "event_3", '
+    '"error": {"type": "server_error", "code": null, "message": "The server had an error", "param": null}}'
+)
+_OPENAI_RATE_LIMIT_EVENT: Final = (
+    '{"type": "error", "event_id": "event_5", "error": {"type": "tokens", "code": "rate_limit_exceeded", '
+    '"message": "Rate limit reached for gpt-realtime", "param": null, "event_id": null}}'
+)
+_OPENAI_INSUFFICIENT_QUOTA_EVENT: Final = (
+    '{"type": "error", "event_id": "event_6", "error": {"type": "insufficient_quota", "code": "insufficient_quota", '
+    '"message": "You exceeded your current quota", "param": null, "event_id": null}}'
+)
+_OPENAI_LIVE_MODEL_ON_REALTIME_EVENT: Final = (
+    '{"type": "error", "event_id": "event_7", "error": {"type": "invalid_request_error", "code": "invalid_model", '
+    '"message": "Model \\"gpt-live-1\\" is not supported in realtime mode.", "param": null, "event_id": null}}'
+)
+_OPENAI_CHAT_MODEL_ON_REALTIME_EVENT: Final = (
+    '{"type": "error", "event_id": "event_8", "error": {"type": "invalid_request_error", "code": "invalid_model", '
+    '"message": "Model \\"gpt-5.5\\" is not supported in realtime mode.", "param": null, "event_id": null}}'
+)
+_OPENAI_MODEL_NOT_FOUND_EVENT: Final = (
+    '{"type": "error", "event_id": "event_9", "error": {"type": "invalid_request_error", "code": "model_not_found", '
+    '"message": "The model gpt-realtime-2.1x does not exist or you do not have access to it.", "param": null, '
+    '"event_id": null}}'
+)
+_OPENAI_SESSION_CREATED_EVENT: Final = (
+    '{"type": "session.created", "event_id": "event_4", "session": {"type": "realtime", "model": "gpt-realtime"}}'
+)
+
+
+def _register_as_realtime_deployment(model: str, *supported_endpoints: str) -> None:
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "realtime-deployment",
+                "litellm_params": {"model": f"openai/{model}", "api_key": "sk-real"},
+                "model_info": {
+                    "mode": "realtime",
+                    **({"supported_endpoints": list(supported_endpoints)} if supported_endpoints else {}),
+                },
+            }
+        ]
+    )
+
+
 class _CapturingConnect:
-    def __init__(self) -> None:
+    def __init__(self, connection: _ServerEvents | None = None) -> None:
         self.url: str | None = None
         self.kwargs: dict[str, object] = {}
+        self._connection: Final = connection or _ScriptedConnection(_OPENAI_SESSION_CREATED_EVENT)
 
     def __call__(self, url: str, **kwargs: object) -> "_CapturingConnect":
         self.url = url
         self.kwargs = kwargs
         return self
 
-    async def __aenter__(self) -> MagicMock:
-        return MagicMock()
+    async def __aenter__(self) -> _ServerEvents:
+        return self._connection
 
     async def __aexit__(
         self,
@@ -537,7 +618,11 @@ async def test_bearer_health_check_sends_the_secret_behind_an_oidc_credential(
     monkeypatch.setattr(
         litellm,
         "credential_list",
-        [CredentialItem(credential_name="voice-sa", credential_values={"api_key": f"oidc/file/{token}"}, credential_info={})],
+        [
+            CredentialItem(
+                credential_name="voice-sa", credential_values={"api_key": f"oidc/file/{token}"}, credential_info={}
+            )
+        ],
     )
     connect: Final = _CapturingConnect()
     with patch("websockets.connect", connect):
@@ -650,6 +735,173 @@ async def test_azure_health_check_honors_env_realtime_protocol(monkeypatch):
             api_version="2024-10-01-preview",
         )
     assert connect.url == _AZURE_BETA_HEALTH_URL
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first_event", "expected_exception", "expected_status", "expected_message"),
+    [
+        (_OPENAI_INVALID_API_KEY_EVENT, litellm.AuthenticationError, 401, "Incorrect API key provided"),
+        (_OPENAI_SERVER_ERROR_EVENT, litellm.InternalServerError, 500, "The server had an error"),
+        (_OPENAI_RATE_LIMIT_EVENT, litellm.RateLimitError, 429, "Rate limit reached"),
+        (_OPENAI_INSUFFICIENT_QUOTA_EVENT, litellm.RateLimitError, 429, "You exceeded your current quota"),
+    ],
+)
+async def test_openai_health_check_reports_the_first_error_event_as_unhealthy(
+    first_event: str, expected_exception: type[openai.APIStatusError], expected_status: int, expected_message: str
+):
+    connect: Final = _CapturingConnect(_ScriptedConnection(first_event))
+    with patch("websockets.connect", connect), pytest.raises(expected_exception) as raised:
+        await realtime_main.realtime_health_check(
+            model="gpt-realtime", custom_llm_provider="openai", api_key="sk-wrong"
+        )
+    assert raised.value.status_code == expected_status
+    assert expected_message in str(raised.value)
+    assert connect.url == "wss://api.openai.com/v1/realtime?model=gpt-realtime"
+
+
+@pytest.mark.asyncio
+async def test_openai_health_check_without_an_api_key_sends_no_auth_header_and_fails_authentication():
+    connect: Final = _CapturingConnect(_ScriptedConnection(_OPENAI_MISSING_AUTH_EVENT))
+    with patch("websockets.connect", connect), pytest.raises(litellm.AuthenticationError) as raised:
+        await realtime_main.realtime_health_check(model="gpt-realtime", custom_llm_provider="openai", api_key=None)
+    assert connect.kwargs["additional_headers"] == {}
+    assert raised.value.status_code == 401
+    assert "Missing bearer or basic authentication" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_openai_health_check_is_healthy_once_session_created_arrives():
+    connect: Final = _CapturingConnect(_ScriptedConnection(_OPENAI_SESSION_CREATED_EVENT))
+    with patch("websockets.connect", connect):
+        assert await realtime_main.realtime_health_check(
+            model="gpt-realtime", custom_llm_provider="openai", api_key="sk-real"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["gpt-live-1", "gpt-4o-transcribe", "gpt-audio", "gpt-live-unreleased"])
+async def test_openai_health_check_is_healthy_for_a_model_served_outside_realtime_once_the_key_is_accepted(
+    local_model_cost_map, model: str
+):
+    connect: Final = _CapturingConnect(_ScriptedConnection(_OPENAI_LIVE_MODEL_ON_REALTIME_EVENT))
+    with patch("websockets.connect", connect):
+        assert await realtime_main.realtime_health_check(model=model, custom_llm_provider="openai", api_key="sk-real")
+
+
+@pytest.mark.asyncio
+async def test_openai_health_check_is_healthy_for_a_live_deployment_that_lists_the_live_sessions_endpoint(
+    local_model_cost_map,
+):
+    _register_as_realtime_deployment("gpt-live-1", "/v1/live/sessions")
+    connect: Final = _CapturingConnect(_ScriptedConnection(_OPENAI_LIVE_MODEL_ON_REALTIME_EVENT))
+    with patch("websockets.connect", connect):
+        assert await realtime_main.realtime_health_check(
+            model="gpt-live-1", custom_llm_provider="openai", api_key="sk-real"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "first_event", "expected_exception", "expected_message"),
+    [
+        (
+            "gpt-5.5",
+            _OPENAI_CHAT_MODEL_ON_REALTIME_EVENT,
+            litellm.BadRequestError,
+            'Model "gpt-5.5" is not supported in realtime mode',
+        ),
+        (
+            "gpt-realtime-2.1x",
+            _OPENAI_MODEL_NOT_FOUND_EVENT,
+            litellm.NotFoundError,
+            "The model gpt-realtime-2.1x does not exist",
+        ),
+    ],
+)
+async def test_openai_health_check_is_unhealthy_for_a_model_name_every_session_would_fail_on(
+    local_model_cost_map, model: str, first_event: str, expected_exception: type[Exception], expected_message: str
+):
+    _register_as_realtime_deployment(model)
+    connect: Final = _CapturingConnect(_ScriptedConnection(first_event))
+    with patch("websockets.connect", connect), pytest.raises(expected_exception) as raised:
+        await realtime_main.realtime_health_check(model=model, custom_llm_provider="openai", api_key="sk-real")
+    assert expected_message in str(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_api_base", "global_api_base"),
+    [("https://realtime-gateway.example/v1", None), (None, "https://realtime-gateway.example/v1")],
+)
+async def test_openai_health_check_through_a_compatible_gateway_is_healthy_when_it_sends_no_first_event(
+    monkeypatch: pytest.MonkeyPatch, deployment_api_base: str | None, global_api_base: str | None
+):
+    monkeypatch.setattr(litellm, "api_base", global_api_base)
+    connect: Final = _CapturingConnect(_SilentConnection())
+    with patch("websockets.connect", connect):
+        assert await asyncio.wait_for(
+            realtime_main.realtime_health_check(
+                model="gpt-realtime",
+                custom_llm_provider="openai",
+                api_key="sk-real",
+                api_base=deployment_api_base,
+                gateway_first_event_wait_seconds=0.01,
+            ),
+            timeout=5,
+        )
+    assert connect.url == "wss://realtime-gateway.example/v1/realtime?model=gpt-realtime"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("connection", "expected_exception"),
+    [
+        (_ScriptedConnection(_OPENAI_INVALID_API_KEY_EVENT), litellm.AuthenticationError),
+        (_ConnectionClosedBeforeAnyEvent(), ConnectionClosedError),
+    ],
+)
+async def test_openai_health_check_through_a_compatible_gateway_is_unhealthy_when_it_rejects_the_session(
+    connection: _ServerEvents, expected_exception: type[Exception]
+):
+    connect: Final = _CapturingConnect(connection)
+    with patch("websockets.connect", connect), pytest.raises(expected_exception):
+        await realtime_main.realtime_health_check(
+            model="gpt-realtime",
+            custom_llm_provider="openai",
+            api_key="sk-wrong",
+            api_base="https://realtime-gateway.example/v1",
+        )
+    assert connect.url == "wss://realtime-gateway.example/v1/realtime?model=gpt-realtime"
+
+
+@pytest.mark.asyncio
+async def test_openai_health_check_never_reports_healthy_before_the_first_event_arrives():
+    connect: Final = _CapturingConnect(_SilentConnection())
+    with patch("websockets.connect", connect), pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(
+            realtime_main.realtime_health_check(model="gpt-realtime", custom_llm_provider="openai", api_key="sk-real"),
+            timeout=0.05,
+        )
+
+
+@pytest.mark.asyncio
+async def test_openai_health_check_is_unhealthy_when_the_socket_closes_before_any_event():
+    connect: Final = _CapturingConnect(_ConnectionClosedBeforeAnyEvent())
+    with patch("websockets.connect", connect), pytest.raises(ConnectionClosedError):
+        await realtime_main.realtime_health_check(
+            model="gpt-realtime", custom_llm_provider="openai", api_key="sk-wrong"
+        )
+
+
+@pytest.mark.asyncio
+async def test_xai_health_check_trusts_the_handshake_without_reading_a_first_event():
+    connect: Final = _CapturingConnect(_ScriptedConnection())
+    with patch("websockets.connect", connect):
+        assert await realtime_main.realtime_health_check(
+            model="grok-voice-latest", custom_llm_provider="xai", api_key="sk-wrong"
+        )
+    assert connect.url == "wss://api.x.ai/v1/realtime?model=grok-voice-latest"
 
 
 class _ConnectThatStopsAfterCapturingTheUrl:
@@ -1199,3 +1451,98 @@ async def test_openai_realtime_health_check_sends_the_federated_bearer_for_a_key
             model_params={"model": "openai/gpt-realtime", **federated_deployment},
         )
     assert connect.kwargs["additional_headers"] == {"Authorization": "Bearer federated-bearer"}
+
+
+@pytest.mark.asyncio
+async def test_arealtime_routes_soniox_with_the_deployment_options(monkeypatch):
+    from litellm.llms.soniox.realtime.transformation import SonioxRealtimeConfig
+
+    captured: dict[str, object] = {}
+
+    async def mock_async_realtime(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(realtime_main.base_llm_http_handler, "async_realtime", mock_async_realtime)
+    await realtime_main._arealtime.__wrapped__(
+        model="soniox/stt-rt-v5",
+        websocket=MagicMock(),
+        litellm_logging_obj=FakeLogging(),
+        query_params={"model": "soniox/stt-rt-v5", "intent": "transcription"},
+        api_key="deployment-key",
+        language_hints=["de"],
+    )
+
+    provider_config = captured["provider_config"]
+    assert isinstance(provider_config, SonioxRealtimeConfig)
+    assert captured["model"] == "stt-rt-v5"
+    assert captured["api_key"] == "deployment-key"
+    start_request = provider_config.transform_realtime_request(
+        json.dumps({"type": "input_audio_buffer.commit"}), "stt-rt-v5"
+    )[0]
+    assert json.loads(start_request)["language_hints"] == ["de"]
+
+
+async def _serve_soniox(reply: str | None) -> tuple[object, list[object]]:
+    import websockets
+
+    received: list[object] = []
+
+    async def handler(connection) -> None:
+        received.append(connection.request.headers["Authorization"])
+        received.append(json.loads(await connection.recv()))
+        received.append(await connection.recv())
+        received.append(await connection.recv())
+        if reply is not None:
+            await connection.send(reply)
+
+    return await websockets.serve(handler, "127.0.0.1", 0), received
+
+
+@pytest.mark.asyncio
+async def test_soniox_realtime_health_check_starts_and_ends_a_stream_on_the_deployment_websocket():
+    server, received = await _serve_soniox(json.dumps({"tokens": [], "finished": True}))
+    port = next(iter(server.sockets)).getsockname()[1]
+    async with server:
+        healthy = await realtime_main.realtime_health_check(
+            model="stt-rt-v5",
+            custom_llm_provider="soniox",
+            api_key="soniox-key",
+            api_base=f"http://127.0.0.1:{port}",
+            model_params={"model": "soniox/stt-rt-v5", "language_hints": ["fa", "en"]},
+        )
+
+    assert healthy is True
+    assert received[0] == "Bearer soniox-key"
+    assert received[1]["model"] == "stt-rt-v5"
+    assert received[1]["language_hints"] == ["fa", "en"]
+    assert received[2] == bytes(len(received[2]))
+    assert len(received[2]) > 0
+    assert received[3] == ""
+
+
+@pytest.mark.asyncio
+async def test_soniox_realtime_health_check_fails_when_soniox_refuses_the_stream():
+    from litellm.llms.soniox.common_utils import SonioxException
+
+    server, _ = await _serve_soniox(json.dumps({"error_code": 401, "error_message": "Invalid API key."}))
+    port = next(iter(server.sockets)).getsockname()[1]
+    async with server:
+        with pytest.raises(SonioxException) as refused:
+            await realtime_main.realtime_health_check(
+                model="stt-rt-v5", custom_llm_provider="soniox", api_key="bad-key", api_base=f"ws://127.0.0.1:{port}"
+            )
+
+    assert refused.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_soniox_realtime_health_check_fails_when_soniox_closes_without_finishing_the_stream():
+    from litellm.llms.soniox.common_utils import SonioxException
+
+    server, _ = await _serve_soniox(None)
+    port = next(iter(server.sockets)).getsockname()[1]
+    async with server:
+        with pytest.raises(SonioxException):
+            await realtime_main.realtime_health_check(
+                model="stt-rt-v5", custom_llm_provider="soniox", api_key="soniox-key", api_base=f"ws://127.0.0.1:{port}"
+            )
