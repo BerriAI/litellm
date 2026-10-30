@@ -116,12 +116,12 @@ def configured_injection_points(value: object) -> Sequence[CacheControlInjection
     return tuple(cast(CacheControlInjectionPoint, entry) for entry in value if isinstance(entry, dict))
 
 
-def _served_provider_for_model(model: str) -> str | None:
+def _served_provider_for_model(model: str, api_base: object = None) -> str | None:
     from litellm.exceptions import BadRequestError
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
     try:
-        _, provider, _, _ = get_llm_provider(model=model)
+        _, provider, _, _ = get_llm_provider(model=model, api_base=api_base if isinstance(api_base, str) else None)
     except BadRequestError:
         return None
     return provider
@@ -536,7 +536,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if model is None:
             return False
         hosted_flag: Final = _hosted_openai_dialect_flag(
-            model, custom_llm_provider, AnthropicCacheControlHook._resolve_provider
+            model, custom_llm_provider, lambda name: AnthropicCacheControlHook._resolve_provider(name, api_base)
         )
         if hosted_flag is not None:
             return hosted_flag
@@ -559,8 +559,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
 
     @staticmethod
-    def _resolve_provider(model: str) -> str | None:
-        return _served_provider_for_model(model)
+    def _resolve_provider(model: str, api_base: object = None) -> str | None:
+        return _served_provider_for_model(model, api_base)
 
     @staticmethod
     def count_request_cache_breakpoints(

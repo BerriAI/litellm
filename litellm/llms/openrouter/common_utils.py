@@ -28,7 +28,7 @@ class OpenRouterException(BaseLLMException):
 
 
 def _mapping_or_none(value: object) -> object:
-    return value if isinstance(value, Mapping) else None
+    return value if issubclass(type(value), Mapping) else None
 
 
 class _TopProvider(BaseModel):

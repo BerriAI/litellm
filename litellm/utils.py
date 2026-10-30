@@ -94,6 +94,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 )
 from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry, GetModelCostMap
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
+from litellm.litellm_core_utils.model_retirement import is_hidden_as_retired
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
@@ -8849,6 +8850,12 @@ def _get_valid_models_from_provider_api(
             return []
 
 
+def bundled_provider_models(provider: str) -> tuple[str, ...]:
+    bundled: Final[tuple[str, ...]] = tuple(litellm.models_by_provider.get(provider, ()))
+    cost_map: Final = _builtin_cost_map()
+    return tuple(model for model in bundled if not is_hidden_as_retired(cost_map.get(model, {})))
+
+
 def get_valid_models(
     check_provider_endpoint: bool | None = None,
     custom_llm_provider: str | None = None,
@@ -8914,8 +8921,7 @@ def get_valid_models(
                     )
                 )
             else:
-                models_for_provider = copy.deepcopy(litellm.models_by_provider.get(provider, []))
-                valid_models.extend(models_for_provider)
+                valid_models.extend(bundled_provider_models(provider))
 
         return valid_models
     except Exception as e:
@@ -10958,7 +10964,7 @@ class ProviderConfigManager:
         if LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 
-            return GeminiRealtimeConfig()
+            return GeminiRealtimeConfig(drop_params=drop_params)
         if LlmProviders.META == provider:
             from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
 

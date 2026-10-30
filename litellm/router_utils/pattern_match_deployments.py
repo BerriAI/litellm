@@ -5,11 +5,12 @@ Class to handle llm wildcard routing and regex pattern matching
 import copy
 import itertools
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from re import Match
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_router_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
@@ -23,6 +24,14 @@ class _RoutedDeployment(BaseModel):
 
 
 _ROUTED_DEPLOYMENTS: Final = TypeAdapter(tuple[_RoutedDeployment, ...])
+
+
+class _PatternDeploymentParams(TypedDict):
+    model: ReadOnly[str]
+
+
+class _PatternDeployment(TypedDict):
+    litellm_params: ReadOnly[_PatternDeploymentParams]
 
 
 class PatternUtils:
@@ -286,9 +295,12 @@ class PatternMatchRouter:
                     litellm_deployment_litellm_model=deployment["litellm_params"]["model"],
                 ),
             )
-            for deployment in self.patterns.get(  # pyright: ignore[reportUnknownMemberType]  # untyped deployment dicts
-                pattern, ()
-            )
+            for deployment in self._deployments_of(pattern)
+        )
+
+    def _deployments_of(self, pattern: str) -> Sequence[_PatternDeployment]:
+        return self.patterns.get(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped deployments
+            pattern, ()
         )
 
     def get_models_by_pattern(self, model: str, custom_llm_provider: str | None = None) -> frozenset[str]:

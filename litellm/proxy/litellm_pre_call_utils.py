@@ -48,7 +48,7 @@ from litellm.constants import (
     VECTOR_STORE_CALLER_METADATA_KWARG,
     X_LITELLM_DISABLE_CALLBACKS,
 )
-from litellm.integrations.custom_guardrail import without_server_streaming_classification
+from litellm.integrations.custom_guardrail import merged_guardrail_entries, without_server_streaming_classification
 from litellm.litellm_core_utils.core_helpers import is_codex_user_agent, normalize_drop_params
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
@@ -2566,6 +2566,7 @@ def refresh_proxy_server_request_body_snapshot(
                 VECTOR_STORE_CALLER_METADATA_KWARG,
                 STREAM_USAGE_INJECTED_FIELD,
                 "_litellm_strip_stream_usage",
+                "_headroom_request_context",
             }
         )
         | _TRANSPORT_ONLY_CREDENTIAL_KEYS
@@ -3188,9 +3189,9 @@ def _fallback_lists(
 ) -> tuple[Sequence[object], ...]:
     """Every fallback list the router can route this request through: the three
     router-level lists, the same three keys from the request body (which replace
-    the router's when present, so the union is the safe superset), and the
-    key/team ``router_settings.fallbacks`` the proxy prefers over router-level
-    fallbacks in ``_configured_fallbacks``."""
+    the router's when present, so the union is the safe superset), and the same
+    three keys from key/team ``router_settings``, which the proxy forwards into
+    the request after this discovery runs."""
     lists: Final[list[Sequence[object]]] = []  # mutable-ok: accumulates each fallback list found
     configured: Final = llm_router.settings()
     for router_list in (
@@ -3205,11 +3206,12 @@ def _fallback_lists(
         if isinstance(entries, list):
             lists.append(cast("Sequence[object]", entries))  # cast-ok: request fallback lists hold mixed entry shapes
     for settings in (router_settings, team_router_settings):
-        key_fallbacks: object = settings.get("fallbacks") if settings is not None else None
-        if isinstance(key_fallbacks, list):
-            lists.append(
-                cast("Sequence[object]", key_fallbacks)  # cast-ok: settings fallback lists hold mixed entry shapes
-            )
+        for key in _REQUEST_FALLBACK_KEYS:
+            key_fallbacks: object = settings.get(key) if settings is not None else None
+            if isinstance(key_fallbacks, list):
+                lists.append(
+                    cast("Sequence[object]", key_fallbacks)  # cast-ok: settings fallback lists hold mixed entry shapes
+                )
     return tuple(lists)
 
 
@@ -3946,30 +3948,14 @@ def add_guardrails_from_key_or_team_metadata(
     """
     from litellm.proxy.utils import premium_user_check
 
-    # Initialize guardrails set (avoiding duplicates)
-    combined_guardrails: Final = set()
-
-    # Add key-level guardrails first
-    if key_metadata and "guardrails" in key_metadata:
-        if isinstance(key_metadata["guardrails"], list) and len(key_metadata["guardrails"]) > 0:
-            premium_user_check()
-            combined_guardrails.update(key_metadata["guardrails"])
-
-    # Add team-level guardrails (set automatically handles duplicates)
-    if team_metadata and "guardrails" in team_metadata:
-        if isinstance(team_metadata["guardrails"], list) and len(team_metadata["guardrails"]) > 0:
-            premium_user_check()
-            combined_guardrails.update(team_metadata["guardrails"])
-
-    # Add project-level guardrails (set automatically handles duplicates)
-    if project_metadata and "guardrails" in project_metadata:
-        if isinstance(project_metadata["guardrails"], list) and len(project_metadata["guardrails"]) > 0:
-            premium_user_check()
-            combined_guardrails.update(project_metadata["guardrails"])
-
-    # Set combined guardrails in metadata as list
-    if combined_guardrails:
-        data[metadata_variable_name]["guardrails"] = list(combined_guardrails)
+    configured_guardrails: Final = tuple(
+        metadata["guardrails"]
+        for metadata in (key_metadata, team_metadata, project_metadata)
+        if metadata and isinstance(metadata.get("guardrails"), list) and len(metadata["guardrails"]) > 0
+    )
+    if configured_guardrails:
+        premium_user_check()
+        data[metadata_variable_name]["guardrails"] = merged_guardrail_entries(*configured_guardrails)
 
 
 _add_guardrails_from_key_or_team_metadata: Final = add_guardrails_from_key_or_team_metadata
@@ -4064,14 +4050,10 @@ def _add_guardrails_from_policies_in_metadata(
     if metadata_variable_name not in data:
         data[metadata_variable_name] = {}
 
-    existing_guardrails = data[metadata_variable_name].get("guardrails", [])
-    if not isinstance(existing_guardrails, list):
-        existing_guardrails = []
-
-    # Combine existing guardrails with policy-resolved guardrails (no duplicates)
-    combined: Final = set(existing_guardrails)
-    combined.update(resolved_guardrails)
-    data[metadata_variable_name]["guardrails"] = list(combined)
+    existing_guardrails: Final = data[metadata_variable_name].get("guardrails", [])
+    data[metadata_variable_name]["guardrails"] = merged_guardrail_entries(
+        existing_guardrails if isinstance(existing_guardrails, list) else (), resolved_guardrails
+    )
 
     # Store applied policies in metadata for tracking
     if "applied_policies" not in data[metadata_variable_name]:
@@ -4306,10 +4288,11 @@ def _apply_resolved_guardrails_to_metadata(
         return
 
     existing_guardrails: Final = data[metadata_variable_name].get("guardrails", [])
-    existing_guardrails_list: Final = existing_guardrails if isinstance(existing_guardrails, list) else []
+    existing_guardrails_list: Final = (
+        _REQUEST_ENTRIES.validate_python(existing_guardrails) if isinstance(existing_guardrails, list) else ()
+    )
 
-    # Combine existing guardrails with policy-resolved guardrails (no duplicates)
-    combined: Final = list(dict.fromkeys((*existing_guardrails_list, *resolved_guardrails)))
+    combined: Final = merged_guardrail_entries(existing_guardrails_list, resolved_guardrails)
     data[metadata_variable_name]["guardrails"] = combined
 
     verbose_proxy_logger.debug("Policy engine: added guardrails to request metadata: %s", combined)
@@ -4326,7 +4309,7 @@ def _policy_match_tags(request_data: Mapping[str, object], metadata_variable_nam
 
 
 async def add_guardrails_from_policy_engine(
-    data: dict,
+    data: dict[str, object],  # mutable-ok: pops the request's policies and records the resolved guardrails in place
     metadata_variable_name: str,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
@@ -4369,11 +4352,13 @@ async def add_guardrails_from_policy_engine(
     all_tags: Final = _policy_match_tags(data, metadata_variable_name)
     _team_alias: Final = user_api_key_dict.team_alias
     _key_alias: Final = user_api_key_dict.key_alias
-    context: Final = PolicyMatchContext(
-        team_alias=_team_alias if isinstance(_team_alias, str) else None,
-        key_alias=_key_alias if isinstance(_key_alias, str) else None,
-        model=data.get("model"),
-        tags=all_tags,
+    context: Final = PolicyMatchContext.model_validate(
+        {
+            "team_alias": _team_alias if isinstance(_team_alias, str) else None,
+            "key_alias": _key_alias if isinstance(_key_alias, str) else None,
+            "model": data.get("model"),
+            "tags": all_tags,
+        }
     )
 
     verbose_proxy_logger.debug(
