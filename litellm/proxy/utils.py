@@ -139,6 +139,7 @@ from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import (
+    BudgetExceededError,
     GuardrailRaisedException,
     RejectedRequestError,
     SensitiveDataRouteException,
@@ -632,6 +633,16 @@ def _is_client_error_exception(exc: Exception) -> bool:
         return exc.status_code < 500
     if isinstance(exc, ProxyException):
         return not (exc.code.isdigit() and int(exc.code) >= 500)
+    if isinstance(exc, BudgetExceededError):
+        status = getattr(exc, "status_code", 422)
+        return status < 500
+    status_code = getattr(exc, "status_code", None)
+    if status_code is not None and not isinstance(status_code, bool):
+        try:
+            status = int(str(status_code))
+            return status < 500
+        except ValueError:
+            pass
     return False
 
 
