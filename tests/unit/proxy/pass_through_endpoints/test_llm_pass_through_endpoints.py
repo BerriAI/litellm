@@ -6813,6 +6813,30 @@ class TestVertexAILiveWebsocketPassthrough:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
+        "configured_by, default_vertex_config",
+        [
+            ("VERTEXAI_PROJECT", None),
+            ("DEFAULT_VERTEXAI_PROJECT", VertexPassThroughCredentials(vertex_location="europe-west4")),
+        ],
+        ids=["vertexai_project_env", "default_vertexai_project_env"],
+    )
+    async def test_with_nothing_pinned_the_caller_may_name_the_project_the_admin_configured(
+        self, monkeypatch, configured_by: str, default_vertex_config: VertexPassThroughCredentials | None
+    ):
+        self._pin_no_vertex_project(monkeypatch, {}, default_vertex_config)
+        monkeypatch.setattr(litellm, "vertex_project", None)
+        monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+        monkeypatch.setenv(configured_by, "proj-configured")
+
+        websocket, _, ws_passthrough = await self._open_live(
+            {"vertex_project": "proj-configured", "vertex_location": "europe-west4"}
+        )
+
+        websocket.close.assert_not_awaited()
+        assert ws_passthrough.await_args.kwargs["custom_headers"]["x-goog-user-project"] == "proj-configured"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
         "general_settings, query, expected_project, expected_location",
         [
             ({}, {"vertex_location": "europe-west4"}, "proj-env", "europe-west4"),

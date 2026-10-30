@@ -4026,6 +4026,28 @@ def _requested_vertex_live_target(
     )
 
 
+def _proxy_configured_vertex_projects() -> frozenset[str]:
+    return frozenset(
+        project
+        for project in (
+            litellm.vertex_project,
+            get_secret_str("VERTEXAI_PROJECT"),
+            get_secret_str("DEFAULT_VERTEXAI_PROJECT"),
+        )
+        if project
+    )
+
+
+def _names_an_unconfigured_project(
+    credentials: VertexPassThroughCredentials | None, vertex_project: str | None
+) -> bool:
+    return (
+        bool(vertex_project)
+        and (credentials is None or credentials.vertex_project is None)
+        and vertex_project not in _proxy_configured_vertex_projects()
+    )
+
+
 def _live_target_override_reason(
     target: _VertexLiveTarget,
     vertex_project: str | None,
@@ -4035,8 +4057,8 @@ def _live_target_override_reason(
     if allow_client_side_credentials:
         return None
     match target:
-        case _ConfiguredVertexLiveTarget(credentials=credentials) if vertex_project and (
-            credentials is None or credentials.vertex_project is None
+        case _ConfiguredVertexLiveTarget(credentials=credentials) if _names_an_unconfigured_project(
+            credentials, vertex_project
         ):
             return VERTEX_LIVE_UNPINNED_PROJECT_CLOSE_REASON
         case _ConfiguredVertexLiveTarget(credentials=VertexPassThroughCredentials() as credentials):
