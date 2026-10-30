@@ -4154,7 +4154,7 @@ class TestTemporaryMCPSessionEndpoints:
                     {},
                 ),
                 patch(
-                    "litellm.proxy.management_endpoints.mcp_management_endpoints.decrypt_value_helper",
+                    "litellm.redis.stores.temporary_mcp_servers.decrypt_value_helper",
                     return_value=serialized,
                 ),
                 patch(
@@ -4182,7 +4182,7 @@ class TestTemporaryMCPSessionEndpoints:
         mgmt_endpoints.litellm.cache = SimpleNamespace(cache=mock_cache_backend)
         try:
             with patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.encrypt_value_helper",
+                "litellm.redis.stores.temporary_mcp_servers.encrypt_value_helper",
                 return_value="encrypted-payload",
             ):
                 await _cache_temporary_mcp_server_in_redis(server, ttl_seconds=123)
@@ -4206,7 +4206,7 @@ class TestTemporaryMCPSessionEndpoints:
         mgmt_endpoints.litellm.cache = SimpleNamespace(cache=mock_cache_backend)
         try:
             with patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.encrypt_value_helper",
+                "litellm.redis.stores.temporary_mcp_servers.encrypt_value_helper",
                 return_value="encrypted-payload",
             ) as encrypt_mock:
                 await _cache_temporary_mcp_server_in_redis(server, ttl_seconds=60)
@@ -4230,7 +4230,7 @@ class TestTemporaryMCPSessionEndpoints:
         mgmt_endpoints.litellm.cache = SimpleNamespace(cache=mock_cache_backend)
         try:
             with patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.decrypt_value_helper",
+                "litellm.redis.stores.temporary_mcp_servers.decrypt_value_helper",
                 return_value=serialized,
             ) as decrypt_mock:
                 result = await _get_temporary_mcp_server_from_redis("from-redis-encrypted")
@@ -4253,7 +4253,7 @@ class TestTemporaryMCPSessionEndpoints:
         mgmt_endpoints.litellm.cache = SimpleNamespace(cache=mock_cache_backend)
         try:
             with patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.encrypt_value_helper",
+                "litellm.redis.stores.temporary_mcp_servers.encrypt_value_helper",
                 side_effect=Exception("boom"),
             ):
                 await _cache_temporary_mcp_server_in_redis(server, ttl_seconds=60)
@@ -4276,7 +4276,7 @@ class TestTemporaryMCPSessionEndpoints:
         mgmt_endpoints.litellm.cache = SimpleNamespace(cache=mock_cache_backend)
         try:
             with patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.encrypt_value_helper",
+                "litellm.redis.stores.temporary_mcp_servers.encrypt_value_helper",
                 return_value={"not": "a-string"},
             ):
                 await _cache_temporary_mcp_server_in_redis(server, ttl_seconds=60)
@@ -4298,7 +4298,7 @@ class TestTemporaryMCPSessionEndpoints:
         mgmt_endpoints.litellm.cache = SimpleNamespace(cache=mock_cache_backend)
         try:
             with patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.decrypt_value_helper",
+                "litellm.redis.stores.temporary_mcp_servers.decrypt_value_helper",
                 return_value="{not json}",
             ):
                 result = await _get_temporary_mcp_server_from_redis("bad-json")
@@ -4320,7 +4320,7 @@ class TestTemporaryMCPSessionEndpoints:
         mgmt_endpoints.litellm.cache = SimpleNamespace(cache=mock_cache_backend)
         try:
             with patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.decrypt_value_helper",
+                "litellm.redis.stores.temporary_mcp_servers.decrypt_value_helper",
                 return_value=None,
             ):
                 result = await _get_temporary_mcp_server_from_redis("decrypt-none")

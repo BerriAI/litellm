@@ -61,12 +61,8 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    decrypt_value_helper,
-    encrypt_value_helper,
-)
 from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
     id_jag_assertion_capture_gap,
 )
@@ -87,6 +83,15 @@ from litellm.proxy.mcp_server.utils import (
 from litellm.proxy.mcp_server.utils import (
     validate_and_normalize_mcp_server_payload as _base_validate_and_normalize_mcp_server_payload,
 )
+from litellm.redis.stores.temporary_mcp_servers import (
+    KEY_PREFIX,
+    TemporaryMCPServersStore,
+    TransportTemporaryMCPServersStore,
+    decode_server,
+    encode_server,
+    temporary_server_key,
+)
+from litellm.redis.transport.contract import RedisFailure
 from litellm.repositories.table_repositories import (
     MCPServerRepository,
     MCPUserCredentialsRepository,
@@ -97,7 +102,7 @@ router: Final = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 MCP_AVAILABLE: bool = True
 
 TEMPORARY_MCP_SERVER_TTL_SECONDS: Final = 300
-TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX: Final = "litellm:mcp:temporary_server"
+TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX: Final = KEY_PREFIX
 
 
 class _HasServerId(Protocol):
@@ -539,28 +544,22 @@ if MCP_AVAILABLE:
         if cache_backend is None or not hasattr(cache_backend, "async_set_cache"):
             return
 
-        payload: Final[dict[str, object]] = server.model_dump(mode="json")
-        payload_json: Final = json.dumps(payload)
-        try:
-            encrypted_payload: Final = encrypt_value_helper(payload_json)
-        except Exception as e:
-            verbose_proxy_logger.debug("Failed to encrypt temporary MCP server payload for Redis cache: %s", e)
+        if isinstance(cache_backend, RedisCache):
+            store: Final[TemporaryMCPServersStore] = TransportTemporaryMCPServersStore(cache_backend.transport())
+            await store.put(server, ttl=timedelta(seconds=max(1, ttl_seconds)))
             return
-
-        if not isinstance(encrypted_payload, str):
-            verbose_proxy_logger.debug("Encrypted temporary MCP payload is not a string; skipping Redis cache write")
+        encrypted_payload: Final = encode_server(server)
+        if isinstance(encrypted_payload, RedisFailure):
             return
 
         try:
             await cache_backend.async_set_cache(
-                key=f"{TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX}:{server.server_id}",
+                key=temporary_server_key(server.server_id),
                 value=encrypted_payload,
                 ttl=max(1, ttl_seconds),
             )
         except Exception as e:
             verbose_proxy_logger.debug("Failed to write temporary MCP server to Redis cache: %s", e)
-
-    _CACHED_VALUE: Final = TypeAdapter(object)
 
     @with_service_target(MCP_SERVERS_TARGET)
     async def _get_temporary_mcp_server_from_redis(
@@ -578,41 +577,18 @@ if MCP_AVAILABLE:
         if cache_backend is None or not hasattr(cache_backend, "async_get_cache"):
             return None
 
+        if isinstance(cache_backend, RedisCache):
+            store: Final[TemporaryMCPServersStore] = TransportTemporaryMCPServersStore(cache_backend.transport())
+            result: Final = await store.get(server_id)
+            return None if isinstance(result, RedisFailure) else result
         try:
-            cached_server: Final = _CACHED_VALUE.validate_python(
-                await cache_backend.async_get_cache(key=f"{TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX}:{server_id}")
-            )
+            cached_server: Final = await cache_backend.async_get_cache(key=temporary_server_key(server_id))
         except Exception as e:
             verbose_proxy_logger.debug("Failed reading temporary MCP server from Redis cache: %s", e)
             return None
 
-        if not isinstance(cached_server, str):
-            verbose_proxy_logger.debug(
-                "Temporary MCP Redis cache value must be an encrypted string; rejecting non-string payload"
-            )
-            return None
-
-        decrypted_json: Final = decrypt_value_helper(
-            value=cached_server,
-            key="temporary_mcp_server",
-            exception_type="debug",
-        )
-        if decrypted_json is None:
-            return None
-        try:
-            loaded: Final = _CACHED_VALUE.validate_python(json.loads(decrypted_json))
-        except Exception as e:
-            verbose_proxy_logger.debug("Invalid decrypted temporary MCP payload in Redis cache: %s", e)
-            return None
-        payload_dict: Final = as_str_mapping(loaded)
-        if payload_dict is None:
-            return None
-
-        try:
-            return MCPServer.model_validate(payload_dict)
-        except Exception as e:
-            verbose_proxy_logger.debug("Invalid temporary MCP server payload in Redis cache: %s", e)
-            return None
+        decoded: Final = decode_server(cached_server)
+        return None if isinstance(decoded, RedisFailure) else decoded
 
     def _get_prisma_client_or_none() -> "PrismaClient | None":
         """Non-throwing counterpart to ``get_prisma_client_or_throw`` for paths that degrade
