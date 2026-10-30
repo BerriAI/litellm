@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.streaming_handler import (
     _ProviderChunkParsed,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.ollama.completion.transformation import OllamaTextCompletionResponseIterator
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
 from litellm.responses.mcp.chat_completions_handler import _add_mcp_metadata_to_response
 from litellm.types.utils import (
@@ -5414,6 +5415,40 @@ async def test_dropped_before_done_while_choice_0_streams_beside_a_finished_choi
 
     with pytest.raises(MidStreamFallbackError):
         await _collect(wrapper, sync_mode)
+
+
+def _ollama_generate_lines_through_done_then(failure: Exception) -> Iterator[str]:
+    yield json.dumps({"model": "smollm2:135m", "response": "Hi", "done": False})
+    yield json.dumps(
+        {
+            "model": "smollm2:135m",
+            "response": "",
+            "done": True,
+            "done_reason": "stop",
+            "prompt_eval_count": 3,
+            "eval_count": 1,
+        }
+    )
+    raise failure
+
+
+@pytest.mark.asyncio
+@_SYNC_AND_ASYNC
+async def test_ollama_generate_stream_dropped_after_its_done_line_ends_cleanly(logging_obj: Logging, sync_mode: bool):
+    lines: Final = _ollama_generate_lines_through_done_then(_httpx2_read_error())
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=OllamaTextCompletionResponseIterator(
+            streaming_response=lines if sync_mode else _as_async(lines), sync_stream=sync_mode
+        ),
+        model="smollm2:135m",
+        custom_llm_provider="ollama",
+        logging_obj=logging_obj,
+    )
+
+    collected: Final = await _collect(wrapper, sync_mode)
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in collected if chunk.choices) == "Hi"
+    assert [chunk.choices[0].finish_reason for chunk in collected if chunk.choices[0].finish_reason] == ["stop"]
 
 
 @pytest.mark.asyncio

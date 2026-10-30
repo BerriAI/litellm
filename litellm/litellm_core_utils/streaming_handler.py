@@ -94,19 +94,18 @@ def _next_sync_or_exhausted(it: Iterator[object]) -> object:
         return _SYNC_ITER_EXHAUSTED
 
 
-_CHOICE_CHUNK_TYPES: Final = (ChatCompletionChunk, ModelResponseStream, Completion)
-
-
-def _choice_finish_reasons(
-    chunk: ChatCompletionChunk | ModelResponseStream | Completion | None,
-) -> tuple[tuple[int, str | None], ...]:
+def _choice_progress(chunk: object) -> tuple[tuple[int, bool], ...]:
     match chunk:
         case ChatCompletionChunk(choices=choices):
-            return tuple((choice.index, choice.finish_reason) for choice in choices or ())
+            return tuple((choice.index, bool(choice.finish_reason)) for choice in choices or ())
         case ModelResponseStream(choices=choices):
-            return tuple((choice.index, choice.finish_reason) for choice in choices or ())
+            return tuple((choice.index, bool(choice.finish_reason)) for choice in choices or ())
         case Completion(choices=choices):
-            return tuple((choice.index, choice.finish_reason) for choice in choices or ())
+            return tuple((choice.index, bool(choice.finish_reason)) for choice in choices or ())
+        case {"is_finished": bool() as is_finished, "index": int() as index}:
+            return ((index, is_finished),)
+        case {"is_finished": bool() as is_finished}:
+            return ((0, is_finished),)
         case _:
             return ()
 
@@ -1352,6 +1351,7 @@ class CustomStreamWrapper:
         completion_obj: dict[str, object],
     ) -> _ProviderChunkResult:
         response_obj: dict[str, Any] = {}
+        self._record_choice_progress(chunk)
         if (
             isinstance(chunk, ModelResponseStream)
             and self.custom_llm_provider is not None
@@ -1525,7 +1525,6 @@ class CustomStreamWrapper:
                 self.received_finish_reason = response_obj["finish_reason"]
         elif self.custom_llm_provider == "text-completion-openai":
             response_obj = self.handle_openai_text_completion_chunk(chunk)
-            self._record_choice_progress(chunk if isinstance(chunk, _CHOICE_CHUNK_TYPES) else None)
             completion_obj["content"] = response_obj["text"]
             print_verbose(f"completion obj content: {completion_obj['content']}")
             if response_obj["is_finished"]:
@@ -1565,7 +1564,6 @@ class CustomStreamWrapper:
                 )
         elif self.custom_llm_provider == "azure_text":
             response_obj = self.handle_azure_text_completion_chunk(chunk)
-            self._record_choice_progress(chunk if isinstance(chunk, _CHOICE_CHUNK_TYPES) else None)
             completion_obj["content"] = response_obj["text"]
             print_verbose(f"completion obj content: {completion_obj['content']}")
             if response_obj["is_finished"]:
@@ -1609,7 +1607,6 @@ class CustomStreamWrapper:
                 if isinstance(chunk, BaseModel) and hasattr(chunk, "model"):
                     # for azure, we need to pass the model from the original chunk
                     self.model = getattr(chunk, "model", self.model)
-            self._record_choice_progress(chunk if isinstance(chunk, _CHOICE_CHUNK_TYPES) else None)
             response_obj = self.handle_openai_chat_completion_chunk(chunk)
             if response_obj is None:
                 return _ProviderChunkEarlyReturn(None)
@@ -2279,11 +2276,11 @@ class CustomStreamWrapper:
                 raise
             raise StopIteration from e
 
-    def _record_choice_progress(self, chunk: ChatCompletionChunk | ModelResponseStream | Completion | None) -> None:
-        progress: Final = _choice_finish_reasons(chunk)
+    def _record_choice_progress(self, chunk: object) -> None:
+        progress: Final = _choice_progress(chunk)
         self._streamed_choice_indices = self._streamed_choice_indices.union(index for index, _ in progress)
         self._finished_choice_indices = self._finished_choice_indices.union(
-            index for index, finish_reason in progress if finish_reason
+            index for index, finished in progress if finished
         )
 
     def _every_choice_finished(self) -> bool:
