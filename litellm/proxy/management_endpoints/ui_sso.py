@@ -153,6 +153,12 @@ from litellm.proxy.utils import (
     get_server_root_path,
 )
 from litellm.redis.stores.login_codes import LoginCodeStore, TransportLoginCodeStore, login_code_key
+from litellm.redis.stores.pkce_verifiers import (
+    PKCEVerifierStore,
+    TransportPKCEVerifierStore,
+    pkce_state_from_key,
+    pkce_verifier_key,
+)
 from litellm.redis.transport.contract import RedisFailure
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import TableActions
@@ -3470,8 +3476,6 @@ class SSOAuthenticationHandler:
         """
         from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-        from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
-
         with generic_sso:
             # State is bound to the caller's browser via a ``litellm_oauth_state``
             # HttpOnly cookie set on the redirect response below; the SSO
@@ -3501,19 +3505,7 @@ class SSOAuthenticationHandler:
                 # Store code_verifier in cache (10 min TTL). Wrap in dict for proper
                 # JSON serialization in Redis. Use Redis when available so callbacks
                 # landing on another pod can retrieve it (multi-pod SSO).
-                cache_key: Final = f"pkce_verifier:{redirect_params['state']}"
-                if redis_usage_cache is not None:
-                    await redis_usage_cache.async_set_cache(
-                        key=cache_key,
-                        value={"code_verifier": code_verifier},
-                        ttl=600,
-                    )
-                else:
-                    await user_api_key_cache.async_set_cache(
-                        key=cache_key,
-                        value={"code_verifier": code_verifier},
-                        ttl=600,
-                    )
+                await SSOAuthenticationHandler.put_pkce_verifier(redirect_params["state"], code_verifier)
                 verbose_proxy_logger.debug("PKCE code_verifier stored in cache (TTL: 600s)")
 
                 # Add PKCE parameters to the authorization URL
@@ -4182,11 +4174,8 @@ class SSOAuthenticationHandler:
         if state and use_pkce:
             from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
 
-            cache_key: Final = f"pkce_verifier:{state}"
-            if redis_usage_cache is not None:
-                cached_data = _DECODED_JSON.validate_python(await redis_usage_cache.async_get_cache(key=cache_key))
-            else:
-                cached_data = _DECODED_JSON.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
+            cache_key: Final = pkce_verifier_key(state)
+            cached_data = _DECODED_JSON.validate_python(await SSOAuthenticationHandler.get_pkce_verifier(state))
 
             code_verifier = None
             # Track why code_verifier is absent for accurate strict-mode diagnostics.
@@ -4325,6 +4314,50 @@ class SSOAuthenticationHandler:
             )
 
     @staticmethod
+    async def put_pkce_verifier(state: str, verifier: str) -> None:
+        from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
+
+        if redis_usage_cache is None:
+            await user_api_key_cache.async_set_cache(
+                key=pkce_verifier_key(state), value={"code_verifier": verifier}, ttl=600, local_only=True
+            )
+        backend: Final = redis_usage_cache if redis_usage_cache is not None else user_api_key_cache.redis_cache
+        if backend is None:
+            return
+        store: Final[PKCEVerifierStore] = TransportPKCEVerifierStore(
+            backend.transport(), defer_writes=redis_usage_cache is None
+        )
+        result: Final = await store.put(state, verifier, ttl=timedelta(seconds=600))
+        if redis_usage_cache is not None and isinstance(result, RedisFailure) and result.kind == "breaker_open":
+            raise RedisCircuitBreakerOpenError(result.message)
+
+    @staticmethod
+    async def get_pkce_verifier(state: str) -> object:
+        from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
+
+        if redis_usage_cache is None:
+            local: Final = TypeAdapter(object).validate_python(
+                await user_api_key_cache.async_get_cache(key=pkce_verifier_key(state), local_only=True)
+            )
+            if local is not None:
+                return local
+        backend: Final = redis_usage_cache if redis_usage_cache is not None else user_api_key_cache.redis_cache
+        if backend is None:
+            return None
+        request_batch: Final = active_request_redis_batch(backend) if redis_usage_cache is None else None
+        if request_batch is not None and request_batch.read_as_missing(pkce_verifier_key(state)):
+            return None
+        store: Final[PKCEVerifierStore] = TransportPKCEVerifierStore(backend.transport())
+        result: Final = await store.get(state)
+        if isinstance(result, RedisFailure):
+            if redis_usage_cache is not None and result.kind == "breaker_open":
+                raise RedisCircuitBreakerOpenError(result.message)
+            return None
+        if redis_usage_cache is None and result is not None:
+            await user_api_key_cache.async_set_cache(key=pkce_verifier_key(state), value=result, local_only=True)
+        return result
+
+    @staticmethod
     @with_service_target(SSO_SESSIONS_TARGET)
     async def delete_pkce_verifier(cache_key: str) -> None:
         """Delete a single-use PKCE verifier from cache after a successful exchange.
@@ -4335,10 +4368,18 @@ class SSOAuthenticationHandler:
         from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
 
         try:
-            if redis_usage_cache is not None:
-                await redis_usage_cache.async_delete_cache(key=cache_key)
-            else:
-                await user_api_key_cache.async_delete_cache(key=cache_key)
+            state: Final = pkce_state_from_key(cache_key)
+            if redis_usage_cache is None:
+                user_api_key_cache.in_memory_cache.delete_cache(pkce_verifier_key(state))
+            backend: Final = redis_usage_cache if redis_usage_cache is not None else user_api_key_cache.redis_cache
+            if backend is not None:
+                store: Final[PKCEVerifierStore] = TransportPKCEVerifierStore(backend.transport())
+                result: Final = await store.delete(state)
+                match result:
+                    case RedisFailure(message=message):
+                        raise RuntimeError(message)
+                    case None:
+                        return
         except Exception as exc:
             verbose_proxy_logger.warning(
                 "PKCE: failed to delete verifier cache key '%s' (best-effort cleanup): %s",

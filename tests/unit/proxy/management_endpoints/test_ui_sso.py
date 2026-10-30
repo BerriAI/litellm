@@ -9,6 +9,7 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import fakeredis
 import pytest
 import respx
 from fastapi import HTTPException, Request
@@ -19,6 +20,7 @@ from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse, ProxyException
 from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.proxy.management_endpoints.ui_sso import (
@@ -44,6 +46,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     TeamMappings,
 )
 from tests._master_key import MASTER_KEY
+from tests._support.fake_redis import fake_redis_cache
 
 
 def _sso_http_handler(route: Callable[[httpx.Request], httpx.Response] | None = None) -> AsyncHTTPHandler:
@@ -2542,9 +2545,8 @@ async def test_get_generic_sso_response_pkce_merges_token_claims_and_excludes_cr
         }
     )
 
-    pkce_cache = MagicMock(redis_cache=None)
-    pkce_cache.async_get_cache = AsyncMock(return_value={"code_verifier": "test-code-verifier"})
-    pkce_cache.async_delete_cache = AsyncMock()
+    pkce_cache = UserApiKeyCache()
+    await pkce_cache.async_set_cache("pkce_verifier:test-state", {"code_verifier": "test-code-verifier"}, ttl=600)
 
     token_endpoint_response = MagicMock(status_code=200)
     token_endpoint_response.json.return_value = {
@@ -2590,7 +2592,7 @@ async def test_get_generic_sso_response_pkce_merges_token_claims_and_excludes_cr
     assert isinstance(result, CustomOpenID)
     assert result.email == "token-user@example.com"
     assert received_response == {"sub": "userinfo-user", "email": "token-user@example.com"}
-    pkce_cache.async_delete_cache.assert_awaited_once_with(key="pkce_verifier:test-state")
+    assert await pkce_cache.async_get_cache("pkce_verifier:test-state") is None
 
 
 @pytest.mark.asyncio
@@ -5746,13 +5748,9 @@ class TestPKCEFunctionality:
         test_state = "test_oauth_state_123"
         mock_request.query_params = {"state": test_state}
 
-        # Mock cache with async methods — use dict format (primary path)
-        mock_cache = MagicMock(redis_cache=None)
+        mock_cache = UserApiKeyCache()
         test_code_verifier = "test_code_verifier_abc123xyz"
-        mock_cache.async_get_cache = AsyncMock(
-            return_value={"code_verifier": test_code_verifier}
-        )
-        mock_cache.async_delete_cache = AsyncMock()
+        await mock_cache.async_set_cache(f"pkce_verifier:{test_state}", {"code_verifier": test_code_verifier}, ttl=600)
 
         with (
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
@@ -5772,12 +5770,9 @@ class TestPKCEFunctionality:
             # Cache key is returned for deferred deletion (after exchange succeeds)
             assert token_params["_pkce_cache_key"] == f"pkce_verifier:{test_state}"
 
-            # Verify cache was read but NOT deleted yet (deletion is deferred to after
-            # successful token exchange to preserve the verifier for retries)
-            mock_cache.async_get_cache.assert_called_once_with(
-                key=f"pkce_verifier:{test_state}"
-            )
-            mock_cache.async_delete_cache.assert_not_called()
+            assert await mock_cache.async_get_cache(f"pkce_verifier:{test_state}") == {
+                "code_verifier": test_code_verifier
+            }
 
     @pytest.mark.asyncio
     async def test_get_generic_sso_redirect_response_with_pkce(self):
@@ -5840,31 +5835,10 @@ class TestPKCEFunctionality:
         """
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
-        # In-memory mock of Redis (shared between "pods")
-        class MockRedisCache:
-            def __init__(self):
-                self._store = {}
-
-            async def async_set_cache(self, key, value, **kwargs):
-                self._store[key] = json.dumps(value)
-
-            async def async_get_cache(self, key, **kwargs):
-                val = self._store.get(key)
-                if val is None:
-                    return None
-                # Simulate RedisCache._get_cache_logic: stored as JSON string, return decoded
-                if isinstance(val, str):
-                    try:
-                        return json.loads(val)
-                    except (ValueError, TypeError):
-                        return val
-                return val
-
-            async def async_delete_cache(self, key):
-                self._store.pop(key, None)
-
-        mock_redis = MockRedisCache()
-        mock_in_memory = MagicMock()
+        server: Final = fakeredis.FakeServer()
+        raw: Final = fakeredis.FakeAsyncRedis(server=server)
+        mock_redis = fake_redis_cache(server)
+        mock_in_memory = UserApiKeyCache()
 
         mock_sso = MagicMock()
         mock_redirect_response = MagicMock()
@@ -5886,11 +5860,9 @@ class TestPKCEFunctionality:
                         state="multi_pod_state_xyz",
                         generic_authorization_endpoint="https://auth.example.com/authorize",
                     )
-                    mock_in_memory.async_set_cache.assert_not_called()
-                    # MockRedisCache is a real class; assert on state, not .assert_called_*
                     stored_key = "pkce_verifier:multi_pod_state_xyz"
-                    assert stored_key in mock_redis._store
-                    stored_value = mock_redis._store[stored_key]
+                    assert await mock_in_memory.async_get_cache(stored_key) is None
+                    stored_value = await raw.get(stored_key)
                     # Stored as JSON-serialized dict for Redis compatibility
                     stored_dict = json.loads(stored_value)
                     assert (
@@ -5908,9 +5880,8 @@ class TestPKCEFunctionality:
                     assert token_params["code_verifier"] == stored_dict["code_verifier"]
                     # Cache key returned for deferred deletion after successful exchange
                     assert token_params["_pkce_cache_key"] == stored_key
-                    mock_in_memory.async_get_cache.assert_not_called()
-                    # Deletion is deferred — key still present until exchange succeeds
-                    assert stored_key in mock_redis._store
+                    assert await raw.get(stored_key) == stored_value
+        await raw.aclose()
 
     @pytest.mark.asyncio
     async def test_pkce_fallback_in_memory_roundtrip_when_redis_none(self):
@@ -5922,22 +5893,7 @@ class TestPKCEFunctionality:
         """
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
-        # In-memory store (simulates user_api_key_cache on one pod)
-        in_memory_store = {}
-
-        async def async_set_cache(key, value, **kwargs):
-            in_memory_store[key] = value
-
-        async def async_get_cache(key, **kwargs):
-            return in_memory_store.get(key)
-
-        async def async_delete_cache(key):
-            in_memory_store.pop(key, None)
-
-        mock_in_memory = MagicMock()
-        mock_in_memory.async_set_cache = AsyncMock(side_effect=async_set_cache)
-        mock_in_memory.async_get_cache = AsyncMock(side_effect=async_get_cache)
-        mock_in_memory.async_delete_cache = AsyncMock(side_effect=async_delete_cache)
+        mock_in_memory = UserApiKeyCache()
 
         mock_sso = MagicMock()
         mock_redirect_response = MagicMock()
@@ -5959,12 +5915,8 @@ class TestPKCEFunctionality:
                         state="fallback_state_xyz",
                         generic_authorization_endpoint="https://auth.example.com/authorize",
                     )
-                    mock_in_memory.async_set_cache.assert_called_once()
-                    stored_key = mock_in_memory.async_set_cache.call_args.kwargs["key"]
-                    stored_value = mock_in_memory.async_set_cache.call_args.kwargs[
-                        "value"
-                    ]
-                    assert stored_key == "pkce_verifier:fallback_state_xyz"
+                    stored_key = "pkce_verifier:fallback_state_xyz"
+                    stored_value = await mock_in_memory.async_get_cache(stored_key)
                     assert (
                         isinstance(stored_value, dict)
                         and len(stored_value["code_verifier"]) == 43
@@ -5982,11 +5934,7 @@ class TestPKCEFunctionality:
                     )
                     # Cache key returned for deferred deletion after successful exchange
                     assert token_params["_pkce_cache_key"] == stored_key
-                    mock_in_memory.async_get_cache.assert_called_once_with(
-                        key=stored_key
-                    )
-                    # Deletion is deferred — not called by prepare_token_exchange_parameters
-                    mock_in_memory.async_delete_cache.assert_not_called()
+                    assert await mock_in_memory.async_get_cache(stored_key) == stored_value
 
     @pytest.mark.asyncio
     async def test_pkce_prepare_token_exchange_returns_nothing_when_no_state(self):
@@ -6412,14 +6360,14 @@ class TestPKCEFunctionality:
         """_delete_pkce_verifier must not raise when the cache delete fails
         (best-effort cleanup — a leftover verifier must not abort a successful SSO login).
         """
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import patch
 
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
-        failing_cache = MagicMock()
-        failing_cache.async_delete_cache = AsyncMock(
-            side_effect=Exception("Redis down")
-        )
+        server: Final = fakeredis.FakeServer()
+        failing_cache = UserApiKeyCache(redis_cache=fake_redis_cache(server))
+        await failing_cache.async_set_cache("pkce_verifier:test_state", {"code_verifier": "v"}, ttl=600)
+        server.connected = False
 
         # Should NOT raise even though the underlying cache delete fails
         with (
@@ -6430,9 +6378,9 @@ class TestPKCEFunctionality:
                 "pkce_verifier:test_state"
             )
 
-        failing_cache.async_delete_cache.assert_called_once_with(
-            key="pkce_verifier:test_state"
-        )
+        assert await failing_cache.async_get_cache("pkce_verifier:test_state", local_only=True) is None
+        server.connected = True
+        assert await failing_cache.async_get_cache("pkce_verifier:test_state") == {"code_verifier": "v"}
 
     @pytest.mark.asyncio
     async def test_pkce_cache_miss_unexpected_format_raises_proxy_exception(self):
@@ -6448,9 +6396,8 @@ class TestPKCEFunctionality:
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         # Cache returns an integer — unexpected format
-        mock_cache = MagicMock(redis_cache=None)
-        mock_cache.async_get_cache = AsyncMock(return_value=12345)
-        mock_cache.async_delete_cache = AsyncMock()
+        mock_cache = UserApiKeyCache()
+        await mock_cache.async_set_cache("pkce_verifier:bad_format_state", 12345, ttl=600)
 
         mock_request = MagicMock(spec=Request)
         mock_request.query_params = {"state": "bad_format_state"}
@@ -6475,7 +6422,7 @@ class TestPKCEFunctionality:
         )
         assert str(exc_info.value.code) == "401"
         # Strict mode should also clean up the corrupt cache entry before raising
-        mock_cache.async_delete_cache.assert_called_once()
+        assert await mock_cache.async_get_cache("pkce_verifier:bad_format_state") is None
 
     @pytest.mark.asyncio
     async def test_pkce_cache_miss_non_strict_logs_warning_and_continues(self, caplog):
@@ -6578,9 +6525,8 @@ class TestPKCEFunctionality:
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         # Cache returns an integer — unexpected format
-        mock_cache = MagicMock(redis_cache=None)
-        mock_cache.async_get_cache = AsyncMock(return_value=12345)
-        mock_cache.async_delete_cache = AsyncMock()
+        mock_cache = UserApiKeyCache()
+        await mock_cache.async_set_cache("pkce_verifier:bad_format_non_strict", 12345, ttl=600)
 
         mock_request = MagicMock(spec=Request)
         mock_request.query_params = {"state": "bad_format_non_strict"}
@@ -6605,8 +6551,6 @@ class TestPKCEFunctionality:
         # No raise in non-strict mode; verifier simply absent from params
         assert "code_verifier" not in result
         assert "_pkce_cache_key" not in result
-        # Cache was queried (the unexpected format was retrieved and logged at WARNING)
-        mock_cache.async_get_cache.assert_called_once()
         # Verify a warning was logged about the unexpected format or cache miss
         assert any(
             "verifier" in r.message.lower()
@@ -6616,7 +6560,7 @@ class TestPKCEFunctionality:
             if r.levelno >= logging.WARNING
         ), f"Expected a format/cache warning. Records: {[r.message for r in caplog.records]}"
         # Verify cleanup was attempted for the corrupt/stale cache entry
-        mock_cache.async_delete_cache.assert_called_once()
+        assert await mock_cache.async_get_cache("pkce_verifier:bad_format_non_strict") is None
 
     @pytest.mark.asyncio
     async def test_pkce_legacy_string_cache_format_backward_compat(self):
