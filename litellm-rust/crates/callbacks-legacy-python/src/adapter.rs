@@ -134,9 +134,10 @@ impl LegacyLogging {
     }
 
     fn logger(&self) -> PyResult<&PythonLogger> {
-        self.logger.as_ref().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("call logging is not initialized")
-        })
+        Ok(self
+            .logger
+            .as_ref()
+            .ok_or(crate::error::Error::LoggingNotInitialized)?)
     }
 
     /// The keyword view the rest of the call reads: a copy, so the deployment hook's own
@@ -924,11 +925,11 @@ assert all(value is failure for name, value in logger.calls if name.endswith('_h
 mod payload_tests {
     use std::ffi::CStr;
 
-    use litellm_auth::SecretValue;
     use litellm_host::hooks::CallHooks;
     use litellm_host::interceptors::{RawResponse, RequestContext, WireRequest};
     use litellm_host::lifecycle::ExecutionEvent;
     use litellm_host_python::{HookStep, PythonCallEvent, PythonOwned, to_py};
+    use litellm_secret_value::SecretValue;
     use proptest::prelude::*;
     use pyo3::gc::{PyTraverseError, PyVisit};
     use pyo3::prelude::*;

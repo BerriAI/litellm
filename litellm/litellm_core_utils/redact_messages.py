@@ -14,7 +14,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final
 
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
 from litellm.llms.vertex_ai.common_utils import (
     redact_vertex_ai_metadata_from_litellm_params,
     redact_vertex_ai_metadata_from_logged_object,
@@ -40,6 +41,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObject = _LiteLLMLoggingObject
 else:
     LiteLLMLoggingObject = Any
+
+MESSAGE_REDACTION_ENABLE_HEADERS: Final = ("litellm-enable-message-redaction", "x-litellm-enable-message-redaction")
 
 
 def _opted_out_of_message_logging(custom_logger: CustomLogger) -> bool:
@@ -117,11 +120,55 @@ def _redacted_streaming_response_copy(streaming_response: object) -> object:
     return _redact_streaming_response(redacted_response)
 
 
+BEDROCK_GUARDRAIL_TRACE_FIELDS: Final = ("trace", "amazon-bedrock-trace")
+_MATCHED_TEXT_KEYS: Final = frozenset({"match", "regex"})
+_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def _without_matched_text(trace: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    redacted: Final = dict(copy.deepcopy(trace))
+    stack: Final[list[JsonValue]] = [redacted]  # mutable-ok: iterative walk, recursive_detector bans recursion here
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            for key in _MATCHED_TEXT_KEYS & node.keys():
+                node[key] = "[REDACTED]"
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return redacted
+
+
+def _redacted_bedrock_trace(trace: object) -> object:
+    try:
+        return _without_matched_text(_JSON_OBJECT.validate_python(trace))
+    except ValidationError:
+        return trace
+
+
+def _redact_bedrock_guardrail_trace(response: object) -> None:
+    """A Bedrock guardrail trace echoes the matched text of its sensitive-information and word findings back."""
+    mapping: Final = _as_mapping(response)
+    if isinstance(response, dict):
+        traces: Final = {
+            field: _redacted_bedrock_trace(value)
+            for field, value in (mapping or {}).items()
+            if field in BEDROCK_GUARDRAIL_TRACE_FIELDS
+        }
+        response.update(traces)
+        return
+    for field, value in ((name, getattr(response, name, None)) for name in BEDROCK_GUARDRAIL_TRACE_FIELDS):
+        if value is not None:
+            setattr(response, field, _redacted_bedrock_trace(value))
+
+
 def _redact_streaming_response(streaming_response):
     if hasattr(streaming_response, "choices"):
         for choice in streaming_response.choices:
             _redact_choice_content(choice)
         redact_vertex_ai_metadata_from_logged_object(streaming_response)
+        if isinstance(streaming_response, litellm.ModelResponse):
+            _redact_bedrock_guardrail_trace(streaming_response)
     elif isinstance(streaming_response, litellm.ResponsesAPIResponse):
         return perform_redaction({}, streaming_response)
     elif hasattr(streaming_response, "output"):
@@ -195,33 +242,46 @@ def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[
     return {
         **fields,
         **({"reasoning_content": REDACTED_BY_LITELLM} if fields.get("reasoning_content") is not None else {}),
-        **{key: None for key in ("thinking_blocks", "reasoningContentBlocks", "citations") if key in fields},
+        **{
+            key: None
+            for key in (
+                "thinking_blocks",
+                "reasoningContentBlocks",
+                "citations",
+                "compaction_blocks",
+                "compaction_start",
+                "compaction_delta",
+            )
+            if key in fields
+        },
     }
+
+
+def _redact_field_when_present(item: object, field: str) -> None:
+    if getattr(item, field, None) is not None:
+        setattr(item, field, REDACTED_BY_LITELLM)
 
 
 def _redact_responses_api_output(output_items):
     """Helper to redact ResponsesAPIResponse output items."""
     for output_item in output_items:
+        output_type = stream_item_field(output_item, "type")
         if getattr(output_item, "text", None) is not None:
             output_item.text = REDACTED_BY_LITELLM
 
-        if hasattr(output_item, "content") and isinstance(output_item.content, list):
-            for content_part in output_item.content:
-                if getattr(content_part, "text", None) is not None:
-                    content_part.text = REDACTED_BY_LITELLM
-                if getattr(content_part, "refusal", None) is not None:
-                    content_part.refusal = REDACTED_BY_LITELLM
+        for content_part in stream_item_items(output_item, "content"):
+            _redact_field_when_present(content_part, "text")
+            _redact_field_when_present(content_part, "refusal")
 
-        # Redact reasoning items in output array
-        if hasattr(output_item, "type") and output_item.type == "reasoning":
-            if hasattr(output_item, "summary") and isinstance(output_item.summary, list):
-                for summary_item in output_item.summary:
-                    if getattr(summary_item, "text", None) is not None:
-                        summary_item.text = REDACTED_BY_LITELLM
+        if output_type == "reasoning":
+            for summary_item in stream_item_items(output_item, "summary"):
+                _redact_field_when_present(summary_item, "text")
 
-        if hasattr(output_item, "type") and output_item.type == "function_call" and hasattr(output_item, "arguments"):
+        if output_type == "compaction" and hasattr(output_item, "encrypted_content"):
+            output_item.encrypted_content = REDACTED_BY_LITELLM
+        if output_type == "function_call" and hasattr(output_item, "arguments"):
             output_item.arguments = REDACTED_BY_LITELLM
-        if hasattr(output_item, "type") and output_item.type == "custom_tool_call" and hasattr(output_item, "input"):
+        if output_type == "custom_tool_call" and hasattr(output_item, "input"):
             output_item.input = REDACTED_BY_LITELLM
 
 
@@ -260,6 +320,11 @@ def _redacted_responses_api_output_item(item: object, redacted_str: str) -> obje
                 ]
             }
             if item_mapping.get("type") == "reasoning" and isinstance(summary, list)
+            else {}
+        ),
+        **(
+            {"encrypted_content": redacted_str}
+            if item_mapping.get("type") == "compaction" and "encrypted_content" in item_mapping
             else {}
         ),
         **(
@@ -331,6 +396,7 @@ def _redact_standard_logging_object(
             if isinstance(response.get("choices"), list):
                 _redact_model_response_dict_choices(response["choices"], redacted_str)
             redact_vertex_ai_metadata_from_logged_object(response)
+            _redact_bedrock_guardrail_trace(response)
         elif isinstance(response, str):
             standard_logging_object["response"] = redacted_str
         else:
@@ -503,11 +569,13 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
                 for choice in _result.choices:
                     _redact_choice_content(choice)
             redact_vertex_ai_metadata_from_logged_object(_result)
+            _redact_bedrock_guardrail_trace(_result)
         elif isinstance(_result, dict) and "choices" in _result:
             # Handle dict representation of ModelResponse (e.g., from model_dump())
             if _result.get("choices") is not None:
                 _redact_model_response_dict_choices(_result["choices"], REDACTED_BY_LITELLM)
             redact_vertex_ai_metadata_from_logged_object(_result)
+            _redact_bedrock_guardrail_trace(_result)
         elif isinstance(_result, dict) and "output" in _result:
             return _redacted_responses_api_response(_result, redact_instructions=redact_streaming_responses)
         elif isinstance(_result, litellm.ResponsesAPIResponse):
@@ -556,13 +624,8 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
         # User explicitly disabled redaction via header
         return False
 
-    possible_enable_headers: Final = [
-        "litellm-enable-message-redaction",  # old header. maintain backwards compatibility
-        "x-litellm-enable-message-redaction",  # new header
-    ]
-
     is_redaction_enabled_via_header = False
-    for header in possible_enable_headers:
+    for header in MESSAGE_REDACTION_ENABLE_HEADERS:
         if bool(request_headers.get(header, False)):
             is_redaction_enabled_via_header = True
             break

@@ -364,6 +364,7 @@ export const buildPresetPrefill = (
       tier_distance_penalty: config.tier_distance_penalty,
       adaptive_eligible: config.adaptive_eligible,
       return_raw_model_name: config.return_raw_model_name,
+      max_tokens_from_tier_model: config.max_tokens_from_tier_model,
       dimension_weights: hydrateDimensionWeights(config.dimension_weights),
       custom_dimensions: hydrateCustomDimensions(config.custom_dimensions),
       tier_boundaries: hydrateTierBoundaries(config.tier_boundaries),

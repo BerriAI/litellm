@@ -218,7 +218,7 @@ def supported_decisions_providers() -> tuple[str, ...]:
     )
 
 
-def _provider_config(model: str, custom_llm_provider: str) -> BaseDecisionsConfig:
+def get_decisions_provider_config(model: str, custom_llm_provider: str) -> BaseDecisionsConfig:
     provider: Final = next((member for member in LlmProviders if member.value == custom_llm_provider), None)
     provider_config: Final = (
         None if provider is None else ProviderConfigManager.get_provider_decisions_config(model, provider)
@@ -408,7 +408,7 @@ def _provider_ir_request(
     return supported
 
 
-def _outbound_headers(
+def decisions_outbound_headers(
     extra_headers: Mapping[str, str] | None, custom_llm_provider: str, kwargs: Mapping[str, object]
 ) -> Mapping[str, str]:
     forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
@@ -456,13 +456,17 @@ def prepare_call(
     extra_headers: Mapping[str, str] | None,
     kwargs: Mapping[str, object],
 ) -> DecisionsCall:
+    base_url_alias: Final = kwargs.get("base_url")
+    call_api_base: Final = (
+        base_url_alias if api_base is None and isinstance(base_url_alias, str) and base_url_alias else api_base
+    )
     upstream_model, provider, dynamic_api_key, dynamic_api_base = litellm.get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
-        api_base=api_base,
+        api_base=call_api_base,
         api_key=api_key,
     )
-    provider_config: Final = _provider_config(upstream_model, provider)
+    provider_config: Final = get_decisions_provider_config(upstream_model, provider)
     if not upstream_model:
         raise litellm.BadRequestError(
             message="A model name is required for the Decisions API",
@@ -474,7 +478,7 @@ def prepare_call(
     except ValueError as error:
         raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
     try:
-        headers: Final = _outbound_headers(extra_headers, provider, kwargs)
+        headers: Final = decisions_outbound_headers(extra_headers, provider, kwargs)
         request_safety_identifier: Final = _request_safety_identifier(safety_identifier, provider_config, kwargs)
         request: Final = _fields_without_unsupported_media(
             fields, provider_config, canonical_model, provider, kwargs
@@ -488,7 +492,7 @@ def prepare_call(
 
     try:
         resolved_api_base, static_api_key = provider_config.resolve_connection(
-            dynamic_api_base or api_base, dynamic_api_key or api_key
+            dynamic_api_base or call_api_base, dynamic_api_key or api_key
         )
     except ValueError as error:
         raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
