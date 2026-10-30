@@ -1,5 +1,4 @@
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
-import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
@@ -239,12 +238,9 @@ vi.mock("@/components/EntityUsageExport", () => ({
   default: () => <div>Entity Usage Export Modal</div>,
 }));
 
-vi.mock("./UsageAIChatPanel", () => ({
-  default: () => <div data-testid="usage-ai-chat-panel">Usage AI Chat Panel</div>,
-}));
-
-vi.mock("@/app/(dashboard)/hooks/customers/useCustomers", () => ({
-  useCustomers: vi.fn(),
+vi.mock("@/components/liteadmin/LiteAdmin", () => ({
+  AriaUsageTrigger: () => <button aria-label="Open Aria Agent">Aria</button>,
+  AriaUsageComposer: () => <section aria-label="Ask Aria Agent">Shared Aria composer</section>,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/agents/useAgents", () => ({
@@ -282,7 +278,6 @@ describe("UsagePage", () => {
   const mockTagListCall = vi.mocked(networking.tagListCall);
   const mockGatewayDailyActivityCall = vi.mocked(networking.gatewayDailyActivityCall);
   const mockRequestErrorActivityCall = vi.mocked(networking.requestErrorActivityCall);
-  const mockUseCustomers = vi.mocked(useCustomers);
   const mockUseAgents = vi.mocked(useAgents);
   const mockUseAuthorized = vi.mocked(useAuthorized);
   const mockUseCurrentUser = vi.mocked(useCurrentUser);
@@ -402,19 +397,6 @@ describe("UsagePage", () => {
       teams: null,
       users: null,
       members: null,
-    },
-  ];
-
-  const mockCustomers = [
-    {
-      user_id: "customer-123",
-      alias: "Test Customer",
-      spend: 0,
-      blocked: false,
-      allowed_model_region: null,
-      default_model: null,
-      budget_id: null,
-      litellm_budget_table: null,
     },
   ];
 
@@ -589,11 +571,6 @@ describe("UsagePage", () => {
       isLoading: false,
     } as any);
     mockTagListCall.mockResolvedValue({});
-    mockUseCustomers.mockReturnValue({
-      data: [],
-      isLoading: false,
-      error: null,
-    } as any);
     mockUseAgents.mockReturnValue({
       data: { agents: [] },
       isLoading: false,
@@ -1025,12 +1002,6 @@ describe("UsagePage", () => {
   });
 
   it("should show customer usage view for admins", async () => {
-    mockUseCustomers.mockReturnValue({
-      data: mockCustomers,
-      isLoading: false,
-      error: null,
-    } as any);
-
     renderWithProviders(<UsagePage {...defaultProps} />);
 
     await waitFor(() => {
@@ -1048,9 +1019,7 @@ describe("UsagePage", () => {
     });
   });
 
-  it("should withhold the customer list while it is still loading", async () => {
-    mockUseCustomers.mockReturnValue({ data: undefined, isLoading: true, error: null } as any);
-
+  it("leaves customer discovery to the customer filter", async () => {
     renderWithProviders(<UsagePage {...defaultProps} />);
 
     act(() => {
@@ -1388,25 +1357,33 @@ describe("UsagePage", () => {
     });
   });
 
-  describe("Ask AI button", () => {
-    it("should render Ask AI button in global view", async () => {
+  describe("Aria Agent", () => {
+    it("should render the shared Aria prompt and entry point in global view", async () => {
       renderWithProviders(<UsagePage {...defaultProps} />);
 
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
-      expect(screen.getByText("Ask AI")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Open Aria Agent" })).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Ask Aria Agent" })).toBeVisible();
+      expect(screen.queryByText("Ask AI")).not.toBeInTheDocument();
     });
 
-    it("should render AI chat panel component", async () => {
+    it("should keep the shared Aria prompt available in entity usage views", async () => {
       renderWithProviders(<UsagePage {...defaultProps} />);
 
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
-      expect(screen.getByTestId("usage-ai-chat-panel")).toBeInTheDocument();
+      act(() => {
+        fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "team" } });
+      });
+
+      expect(await screen.findByText("Entity Usage")).toBeInTheDocument();
+      expect(screen.getAllByRole("region", { name: "Ask Aria Agent" })).toHaveLength(1);
+      expect(screen.getByRole("region", { name: "Ask Aria Agent" })).toBeVisible();
     });
   });
 
@@ -1547,12 +1524,6 @@ describe("UsagePage", () => {
 
   describe("customer usage banner", () => {
     it("should show and be dismissible in customer view", async () => {
-      mockUseCustomers.mockReturnValue({
-        data: mockCustomers,
-        isLoading: false,
-        error: null,
-      } as any);
-
       renderWithProviders(<UsagePage {...defaultProps} />);
 
       await waitFor(() => {
@@ -1904,6 +1875,61 @@ describe("UsagePage", () => {
         JSON.stringify(["User-Agent: Firefox/2.0"]),
       );
     });
+
+    it("queries the configured month and preserves later manual selections", async () => {
+      const now = new Date(2026, 9, 24, 12);
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(now);
+      try {
+        renderWithProviders(<UsagePage {...defaultProps} defaultTimeRange="month_to_date" />);
+        await waitFor(() =>
+          expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+            expect.objectContaining({
+              startTime: new Date(2026, 9, 1),
+              endTime: new Date(2026, 9, 24, 23, 59, 59, 999),
+            }),
+          ),
+        );
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
+        fireEvent.click(screen.getByTestId("pick-a-different-range"));
+        await waitFor(() =>
+          expect(mockUserDailyActivityAggregatedCall).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+              startTime: new Date(2024, 0, 1),
+              endTime: new Date(2024, 0, 8, 23, 59, 59, 999),
+            }),
+          ),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it.each(["?range=today", "?from=2025-03-01&to=2025-03-05"])(
+      "preserves explicit dates over configured defaults for %s",
+      async (searchParams) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(2026, 9, 24, 12));
+        try {
+          const view = renderWithProviders(<UsagePage {...defaultProps} defaultTimeRange="month_to_date" />, {
+            searchParams,
+          });
+          const startTime = searchParams.includes("range=today") ? new Date(2026, 9, 24) : new Date(2025, 2, 1);
+          const endTime = searchParams.includes("range=today")
+            ? new Date(2026, 9, 24, 23, 59, 59, 999)
+            : new Date(2025, 2, 5, 23, 59, 59, 999);
+          await waitFor(() =>
+            expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+              expect.objectContaining({ startTime, endTime }),
+            ),
+          );
+          view.rerender(<UsagePage {...defaultProps} defaultTimeRange="year_to_date" />);
+          expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
+        } finally {
+          vi.useRealTimers();
+        }
+      },
+    );
 
     it("fetches the custom range in the URL and writes a newly picked one", async () => {
       const { lastQuery } = renderAt("?from=2025-03-01&to=2025-03-05");

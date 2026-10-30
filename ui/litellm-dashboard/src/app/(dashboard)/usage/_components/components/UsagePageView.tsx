@@ -6,7 +6,7 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import { Download, Link2, Search, Sparkles, X } from "lucide-react";
+import { Download, Link2, Search, X } from "lucide-react";
 import { useQueryStates } from "nuqs";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -19,7 +19,6 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
-import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
@@ -72,7 +71,7 @@ import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import ModelViewToggle, { ModelViewType } from "./ModelViewToggle";
 import TopKeyView, { type TopKeyItem } from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import { getGlobalTopKeys } from "./EntityUsage/entityUsageAggregations";
-import UsageAIChatPanel from "./UsageAIChatPanel";
+import { AriaUsageComposer, AriaUsageTrigger } from "@/components/liteadmin/LiteAdmin";
 import { allowedUsageOptions, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
 import UserRecordLink from "./UserRecordLink";
 import {
@@ -82,6 +81,7 @@ import {
   clientDateRangePatch,
   clientPanelPatch,
   dateRangeFromParams,
+  defaultUsageDateRange,
   dateRangePatch,
   entitySelectionPatch,
   selectedEntitiesFromParams,
@@ -108,22 +108,23 @@ interface UsagePageProps {
   teams: Team[];
   organizations: Organization[];
   teamsLoading?: boolean;
+  defaultTimeRange?: string;
 }
 
-const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoading = false }) => {
+const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoading = false, defaultTimeRange }) => {
   const { accessToken, userRole, userId: userID, premiumUser, isLoading: authorizationLoading } = useAuthorized();
   const [gatewayActivityData, setGatewayActivityData] = useState<FetchedGatewayActivity | null>(null);
 
-  // Create initial dates outside of state to prevent recreation
-  const initialFromDate = useMemo(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), []);
-  const initialToDate = useMemo(() => new Date(), []);
+  const defaultRange = useMemo(() => defaultUsageDateRange(defaultTimeRange), [defaultTimeRange]);
 
   const [urlParams, setUrlParams] = useQueryStates(usageUrlParsers);
   const { range, from, to } = urlParams;
   const dateValue = useMemo<DateRangePickerValue>(
-    () => dateRangeFromParams({ range, from, to }) ?? { from: initialFromDate, to: initialToDate },
-    [range, from, to, initialFromDate, initialToDate],
+    () => dateRangeFromParams({ range, from, to }) ?? defaultRange.value,
+    [range, from, to, defaultRange],
   );
+
+  const presetShortLabel = range ?? (from === null && to === null ? defaultRange.preset : null);
 
   const { client_range, client_from, client_to } = urlParams;
   const clientDateValue = useMemo<DateRangePickerValue>(
@@ -136,9 +137,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
     clientStartTime?.getTime() === dateValue.from?.getTime() && clientEndTime?.getTime() === dateValue.to?.getTime();
 
   const [fetchedTags, setFetchedTags] = useState<FetchedForRange<EntityList[]> | null>(null);
-  // No [] default: an unresolved query must stay undefined so the customer
-  // filter reads as loading rather than as a range with no customers.
-  const { data: customers } = useCustomers();
   const { data: agentsResponse } = useAgents();
   const { data: currentUser } = useCurrentUser();
   const isAdmin = hasProxyWideSpendView(userRole);
@@ -154,7 +152,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   const [modelQuery, setModelQuery] = useState("");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
-  const [isAiChatOpen, setIsAiChatOpen] = useState(false);
   const selectedUsageView = usageViewFromParams(urlParams);
   const selectedTab = usageTabFromParams(urlParams, isAdmin);
   const usageView = allowedViews.includes(selectedUsageView) ? selectedUsageView : DEFAULT_USAGE_VIEW;
@@ -482,7 +479,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
             </div>
           )}
           <div className="flex items-center gap-2">
-            <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} presetShortLabel={urlParams.range} />
+            <AdvancedDatePicker
+              value={dateValue}
+              onValueChange={handleDateChange}
+              presetShortLabel={presetShortLabel}
+            />
             <Button variant="outline" onClick={() => void copyToClipboard(window.location.href, "Link copied")}>
               <Link2 />
               Copy Share Link
@@ -490,6 +491,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
           </div>
         </div>
       </header>
+      <AriaUsageComposer />
       {aggregatedFailed && (
         <ErrorState title="Failed to load spend data" message={aggregatedError} onRetry={reloadAggregated} />
       )}
@@ -530,10 +532,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                     )}
                   </TabsList>
                   <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={() => setIsAiChatOpen(true)}>
-                      <Sparkles />
-                      Ask AI
-                    </Button>
+                    <AriaUsageTrigger />
                     <Button variant="outline" size="sm" onClick={() => setIsGlobalExportModalOpen(true)}>
                       <Download />
                       Export Data
@@ -716,12 +715,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
               {...entitySelection("customer")}
               userID={userID}
               userRole={userRole}
-              entityList={
-                customers?.map((customer) => ({
-                  label: customer.alias || customer.user_id,
-                  value: customer.user_id,
-                })) || null
-              }
+              entityList={null}
               premiumUser={premiumUser}
               dateValue={dateValue}
             />
@@ -818,7 +812,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
           startTime={clientStartTime}
           endTime={clientEndTime}
           dateValue={clientDateValue}
-          presetShortLabel={client_range ?? (clientInheritsRange ? urlParams.range : null)}
+          presetShortLabel={client_range ?? (clientInheritsRange ? presetShortLabel : null)}
           onDateChange={(value, preset) => void setUrlParams(clientDateRangePatch(value, preset), { scroll: false })}
           agent={clientInheritsRange ? clientAgent : null}
           daily={clientInheritsRange ? tagDaily : []}
@@ -850,9 +844,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
         selectedFilters={[]}
         customTitle="Export Usage Data"
       />
-
-      {/* AI Chat Panel */}
-      <UsageAIChatPanel open={isAiChatOpen} onClose={() => setIsAiChatOpen(false)} accessToken={accessToken} />
     </div>
   );
 };

@@ -4,20 +4,21 @@ import gc
 import json
 import os
 import weakref
-from datetime import datetime, timezone
 from collections.abc import Iterator, Mapping
+from datetime import datetime, timezone
 from types import MethodType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import litellm
 import pytest
+
+import litellm
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS, ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
-from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.router_strategy.adaptive_router.hooks import AdaptiveRouterPostCallHook
 from litellm.types.litellm_params import RoutingStrategyName
@@ -801,9 +802,10 @@ async def test_deployment_callback_on_failure(model_list):
 
 def test_deployment_callback_respects_cooldown_time(model_list):
     """Ensure per-model cooldown_time is honored even when exception headers are present."""
-    import httpx
     import time
     from unittest.mock import patch
+
+    import httpx
 
     router = Router(model_list=model_list)
 
@@ -1156,7 +1158,7 @@ async def test_set_response_headers_passes_through_post_increment_counters(model
         _hidden_params: dict = {}
 
     router = Router(model_list=model_list)
-    router.get_remaining_model_group_usage = AsyncMock(
+    router._core_get_remaining_model_group_usage = AsyncMock(
         return_value={
             "x-ratelimit-remaining-tokens": 958,
             "x-ratelimit-limit-tokens": 1000,
@@ -1537,7 +1539,7 @@ async def test_get_remaining_model_group_usage_merges_io_and_tpm_headers(model_l
         )
     )
     router.get_model_group_io_token_usage = AsyncMock(return_value=(100, 40))
-    router.get_model_group_usage = AsyncMock(return_value=(500, 5))
+    router._core_get_model_group_usage = AsyncMock(return_value=(500, 5))
 
     headers = await router.get_remaining_model_group_usage("gpt-3.5-turbo")
 
@@ -1564,7 +1566,7 @@ async def test_set_response_headers_native_input_token_header_does_not_suppress_
         _hidden_params: dict = {}
 
     router = Router(model_list=model_list)
-    router.get_remaining_model_group_usage = AsyncMock(
+    router._core_get_remaining_model_group_usage = AsyncMock(
         return_value={
             "x-ratelimit-remaining-tokens": 1000,
             "x-ratelimit-remaining-requests": 100,
@@ -1594,7 +1596,7 @@ async def test_set_response_headers_native_token_header_does_not_suppress_io_hea
         _hidden_params: dict = {}
 
     router = Router(model_list=model_list)
-    router.get_remaining_model_group_usage = AsyncMock(
+    router._core_get_remaining_model_group_usage = AsyncMock(
         return_value={
             "x-ratelimit-remaining-tokens": 1000,
             "x-ratelimit-remaining-requests": 100,
@@ -1626,7 +1628,7 @@ async def test_set_response_headers_handles_missing_usage(model_list):
         _hidden_params: dict = {}
 
     router = Router(model_list=model_list)
-    router.get_remaining_model_group_usage = AsyncMock(
+    router._core_get_remaining_model_group_usage = AsyncMock(
         return_value={
             "x-ratelimit-remaining-tokens": 1000,
             "x-ratelimit-remaining-requests": 100,
@@ -1646,7 +1648,7 @@ async def test_set_response_headers_handles_missing_usage(model_list):
 async def test_set_response_headers_dict_anthropic_messages_response(model_list):
     """Anthropic /v1/messages returns a dict; IO rate-limit headers must attach."""
     router = Router(model_list=model_list)
-    router.get_remaining_model_group_usage = AsyncMock(
+    router._core_get_remaining_model_group_usage = AsyncMock(
         return_value={
             "x-ratelimit-limit-input-tokens": 25,
             "x-ratelimit-remaining-input-tokens": 20,
@@ -1686,7 +1688,7 @@ async def test_set_response_headers_wraps_bare_async_generator(model_list):
         yield {"type": "message_stop"}
 
     router = Router(model_list=model_list)
-    router.get_remaining_model_group_usage = AsyncMock(
+    router._core_get_remaining_model_group_usage = AsyncMock(
         return_value={
             "x-ratelimit-limit-input-tokens": 25,
             "x-ratelimit-remaining-input-tokens": 20,
@@ -1811,8 +1813,8 @@ def test_get_allowed_fails_from_policy(model_list, exception_type, exception_nam
 
 def test_initialize_alerting(model_list):
     """Test if the 'initialize_alerting' function is working correctly"""
-    from litellm.types.router import AlertingConfig
     from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+    from litellm.types.router import AlertingConfig
 
     router = Router(
         model_list=model_list, alerting_config=AlertingConfig(webhook_url="test")
@@ -2245,6 +2247,7 @@ def test_deployments_by_pattern(model_list):
 )
 def test_pattern_match_deployment_set_model_name(user_request_model, model_name, litellm_model, expected_model):
     from re import Match
+
     from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
 
     pattern_router = PatternMatchRouter()
@@ -2702,7 +2705,7 @@ def test_handle_clientside_credential_metadata_loading(model_list, function_name
 )
 def test_handle_clientside_credential_metadata_variable_name(model_list, function_name, metadata_key):
     """Test that _handle_clientside_credential uses the correct metadata variable name based on function name"""
-    from litellm.router_utils.batch_utils import get_router_metadata_variable_name
+    from litellm.litellm_core_utils.batch_utils import get_router_metadata_variable_name
 
     router = Router(model_list=model_list)
 

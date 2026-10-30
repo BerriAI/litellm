@@ -139,6 +139,7 @@ class AuthenticationError(openai.AuthenticationError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = 401
         self.message = f"litellm.AuthenticationError: {message}"
@@ -152,7 +153,7 @@ class AuthenticationError(openai.AuthenticationError):
             request=httpx.Request(method="GET", url="https://litellm.ai"),  # mock request object
         )
         super().__init__(
-            self.message, response=self.response, body=None
+            self.message, response=self.response, body=body
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):
@@ -189,6 +190,7 @@ class NotFoundError(openai.NotFoundError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = 404
         self.message = f"litellm.NotFoundError: {message}"
@@ -202,7 +204,7 @@ class NotFoundError(openai.NotFoundError):
             request=httpx.Request(method="GET", url="https://litellm.ai"),  # mock request object
         )
         super().__init__(
-            self.message, response=self.response, body=None
+            self.message, response=self.response, body=body
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):
@@ -232,7 +234,7 @@ class BadRequestError(openai.BadRequestError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
-        body: dict | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = 400
         self.message = f"litellm.BadRequestError: {message}"
@@ -276,7 +278,7 @@ class ImageFetchError(BadRequestError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
-        body: dict | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         super().__init__(
             message=message,
@@ -315,6 +317,21 @@ class VectorStoreSearchError(BadRequestError):
 
 class MalformedRequestFieldError(BadRequestError):
     pass
+
+
+class UnsupportedEndpointError(BadRequestError):
+    pass
+
+
+class EndpointNotSupportedByModelError(BadRequestError):
+    def __init__(self, message: str, model: str, llm_provider: str = "") -> None:
+        super().__init__(  # pyright: ignore[reportUnknownMemberType]  # inherited public exception constructor is untyped
+            message=message, model=model, llm_provider=llm_provider
+        )
+        self.message = message
+        self.type = "invalid_request_error"
+        self.param = "model"
+        self.code = "400"
 
 
 class UnprocessableEntityError(openai.UnprocessableEntityError):
@@ -556,6 +573,7 @@ class ContextWindowExceededError(BadRequestError):
         llm_provider,
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = 400
         self.model = model
@@ -567,6 +585,7 @@ class ContextWindowExceededError(BadRequestError):
             llm_provider=self.llm_provider,
             response=response,
             litellm_debug_info=self.litellm_debug_info,
+            body=body,
         )  # Call the base class constructor with the parameters it needs
 
         # set after, to make it clear the raised error is a context window exceeded error
@@ -685,7 +704,7 @@ class ContentPolicyViolationError(BadRequestError):
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
         provider_specific_fields: dict | None = None,
-        body: dict | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = 400
         self.message = f"litellm.ContentPolicyViolationError: {message}"
@@ -1054,6 +1073,7 @@ LITELLM_EXCEPTION_TYPES: Final = [
     BadRequestError,
     UnprocessableEntityError,
     UnsupportedParamsError,
+    UnsupportedEndpointError,
     Timeout,
     PermissionDeniedError,
     RateLimitError,
@@ -1273,7 +1293,7 @@ class MidStreamFallbackError(ServiceUnavailableError):
         self.message = _saved_message
         self.args = (_saved_message,)
 
-        original_headers: Final = getattr(original_exception, "litellm_response_headers", None)
+        original_headers: Final[object] = getattr(original_exception, "litellm_response_headers", None)
         if original_headers is not None:
             self.litellm_response_headers = original_headers
 
