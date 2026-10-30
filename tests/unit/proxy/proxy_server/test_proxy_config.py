@@ -6377,3 +6377,54 @@ async def test_proxy_config_privacy_precedes_database_settings_diagnostics(
     assert stored["general_settings"]["custom_auth"] == remote_module
     assert any(record.levelno == logging.WARNING for record in caplog.records)
     assert loaded["router_settings"] == stored["router_settings"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("privacy", [False, True])
+async def test_shadow_warning_survives_failed_config_load_and_emits_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, privacy: bool
+) -> None:
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy import utils as proxy_utils
+
+    async def get_generic_data(key: str, value: str, table_name: str) -> SimpleNamespace | None:
+        assert (key, table_name) == ("param_name", "config")
+        return (
+            SimpleNamespace(param_name=value, param_value={"max_parallel_requests": 2})
+            if value == "general_settings"
+            else None
+        )
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", False)
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(get_generic_data=get_generic_data))
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_utils, "litellm_config_cache", DualCache())
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setenv("LITELLM_QA_SHADOW_PRIVACY", "invalid-boolean")
+    config_file: Final = tmp_path / "shadow-warning.yaml"
+    config_file.write_text(
+        json.dumps(
+            {
+                "litellm_settings": {"redact_messages_in_debug_logs": "os.environ/LITELLM_QA_SHADOW_PRIVACY"},
+                "general_settings": {"max_parallel_requests": 5},
+            }
+        )
+    )
+    config: Final = ProxyConfig()
+    caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
+
+    with pytest.raises(ValidationError):
+        await config.get_config(str(config_file))
+    assert caplog.records == []
+
+    monkeypatch.setenv("LITELLM_QA_SHADOW_PRIVACY", str(privacy).lower())
+    loaded: Final = await config.get_config(str(config_file))
+    assert loaded["general_settings"]["max_parallel_requests"] == 5
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelno == logging.WARNING
+    assert ("max_parallel_requests" in caplog.records[0].getMessage()) is not privacy
+
+    caplog.clear()
+    await config.get_config(str(config_file))
+    assert caplog.records == []

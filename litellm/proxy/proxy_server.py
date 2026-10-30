@@ -201,7 +201,6 @@ from litellm.types.utils import (
     CountContextManagement,
     ModelResponse,
     ModelResponseStream,
-    StreamingChoices,
     TextCompletionResponse,
     TokenCountMessagesFormat,
     TokenCountResponse,
@@ -384,6 +383,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
     mask_sensitive_keys,
 )
+from litellm.litellm_core_utils.stream_usage_chunks import is_injected_stream_usage_artifact
 from litellm.llms.anthropic.messages.convertible_blocks import (
     deployment_drops_params,
     drop_non_string_tool_result_texts,
@@ -6464,6 +6464,8 @@ class ProxyConfig:
             _log_db_config_param(section, param_value)
         for message, args in pending_db_warnings:
             verbose_proxy_logger.warning(message, *args)
+        if prisma_client is not None and store_model_in_db is True:
+            self._warn_about_shadowed_db_settings()
 
         self.update_config_state(config=config)
 
@@ -8544,7 +8546,8 @@ class ProxyConfig:
                     self._prepared_db_settings_values(section, param_value, warning_sink=warning_sink),
                 )
 
-        self._warn_about_shadowed_db_settings(warning_sink=warning_sink)
+        if warning_sink is None:
+            self._warn_about_shadowed_db_settings()
         return self._config_with_resolved_settings(config)
 
     async def _apply_db_environment_variables_row(
@@ -8593,15 +8596,14 @@ class ProxyConfig:
         revision: Final = _config_row_revision(row)
         return revision is None or revision < applied_revision
 
-    def _warn_about_shadowed_db_settings(self, warning_sink: Callable[[_DbConfigWarning], None] | None = None) -> None:
+    def _warn_about_shadowed_db_settings(self) -> None:
         shadowed: Final[frozenset[tuple[Section, str]]] = frozenset(
             (section, key) for section, store in self._settings_stores.items() for key in store.shadowed_db_keys()
         )
         for section, key in sorted(shadowed - self._warned_shadowed_keys):
-            _warn_db_config(
+            verbose_proxy_logger.warning(
                 "%s",
                 config_ownership_message(section=section, key=key, shadows_db_value=True),
-                warning_sink=warning_sink,
             )
         self._warned_shadowed_keys = shadowed
 
@@ -10271,29 +10273,6 @@ def _serialize_streaming_chunk(chunk: BaseModel) -> str | bytes:
     return chunk.model_dump_json(exclude_none=True, exclude_unset=True)
 
 
-def _is_injected_stream_usage_artifact(chunk: object) -> bool:
-    if not isinstance(chunk, ModelResponseStream):
-        return False
-    if chunk.provider_specific_fields is not None:
-        return False
-    return all(_is_empty_streaming_choice(choice) for choice in chunk.choices or [])
-
-
-def _is_empty_streaming_choice(choice: StreamingChoices) -> bool:
-    if choice.finish_reason is not None:
-        return False
-    if getattr(choice, "logprobs", None) is not None:
-        return False
-    delta: Final = choice.delta if hasattr(choice, "delta") else None
-    if delta is None:
-        return True
-    return _all_values_none(delta.model_dump().values())
-
-
-def _all_values_none(values: Iterable[object]) -> bool:
-    return all(value is None for value in values)
-
-
 async def _apply_streaming_chunk_hooks(
     *,
     chunk: Any,
@@ -10673,7 +10652,7 @@ async def async_data_generator(
                 fallback_model_from_metadata=fallback_model_from_metadata,
             )
 
-            if strip_stream_usage and _is_injected_stream_usage_artifact(chunk):
+            if strip_stream_usage and is_injected_stream_usage_artifact(chunk):
                 if pending_fallback_event:
                     yield _format_fallback_metadata_sse_event(
                         fallback_model=fallback_model_from_metadata,
