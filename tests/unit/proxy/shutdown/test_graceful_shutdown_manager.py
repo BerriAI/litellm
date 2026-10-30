@@ -179,3 +179,107 @@ async def test_emits_periodic_drain_waiting_log_while_waiting():
         timeout=10, count_fn=count_fn, poll_interval=0, log_interval=0
     )
     assert drained == 3
+
+
+@pytest.mark.parametrize("elapsed, cap, expected", [(4, None, 26), (25, 2, 2), (29, 5, 1), (31, None, 0)])
+def test_remaining_budget_includes_time_before_lifespan(
+    monkeypatch: pytest.MonkeyPatch, elapsed: float, cap: float | None, expected: float
+) -> None:
+    monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "30")
+    GracefulShutdownManager.start_shutdown(clock=lambda: 100.0)
+    GracefulShutdownManager.start_shutdown(clock=lambda: 100.0 + elapsed)
+    assert GracefulShutdownManager.remaining(cap, clock=lambda: 100.0 + elapsed) == expected
+
+
+def test_remaining_budget_before_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "30")
+    assert GracefulShutdownManager.remaining(clock=lambda: 100.0) == 30.0
+    assert GracefulShutdownManager.remaining(-1, clock=lambda: 100.0) == 0.0
+
+
+@pytest.mark.parametrize("prestop", [False, True])
+def test_sigterm_stamps_before_chaining_and_restores_server_handler(
+    monkeypatch: pytest.MonkeyPatch, prestop: bool
+) -> None:
+    import signal
+    from queue import SimpleQueue
+    from types import FrameType
+    from typing import Final
+
+    monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "30")
+    calls: Final[SimpleQueue[float]] = SimpleQueue()
+
+    def server_handler(signum: int, frame: FrameType | None) -> None:
+        assert signum == signal.SIGTERM
+        calls.put(GracefulShutdownManager.remaining(clock=lambda: 105.0))
+
+    original: Final = signal.signal(signal.SIGTERM, server_handler)
+    try:
+        if prestop:
+            GracefulShutdownManager.start_shutdown(clock=lambda: 95.0)
+        with GracefulShutdownManager.capture_sigterm(clock=lambda: 100.0):
+            installed: Final = signal.getsignal(signal.SIGTERM)
+            with GracefulShutdownManager.capture_sigterm(clock=lambda: 102.0):
+                assert signal.getsignal(signal.SIGTERM) is installed
+                signal.raise_signal(signal.SIGTERM)
+                signal.raise_signal(signal.SIGTERM)
+            assert calls.get_nowait() == (20.0 if prestop else 25.0)
+            assert calls.get_nowait() == (20.0 if prestop else 25.0)
+            assert calls.empty()
+        assert signal.getsignal(signal.SIGTERM) is server_handler
+    finally:
+        signal.signal(signal.SIGTERM, original)
+
+
+def test_sigterm_capture_preserves_a_replacement_handler() -> None:
+    import signal
+    from types import FrameType
+    from typing import Final
+
+    def server_handler(signum: int, frame: FrameType | None) -> None:
+        pass
+
+    original: Final = signal.signal(signal.SIGTERM, server_handler)
+    try:
+        with GracefulShutdownManager.capture_sigterm():
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        assert signal.getsignal(signal.SIGTERM) is signal.SIG_IGN
+    finally:
+        signal.signal(signal.SIGTERM, original)
+
+
+@pytest.mark.parametrize("handler", ["SIG_DFL", "SIG_IGN"])
+def test_sigterm_capture_preserves_default_and_ignored_dispositions(handler: str) -> None:
+    import signal
+    from typing import Final
+
+    disposition: Final = signal.SIG_DFL if handler == "SIG_DFL" else signal.SIG_IGN
+    original: Final = signal.signal(signal.SIGTERM, disposition)
+    try:
+        with GracefulShutdownManager.capture_sigterm():
+            assert signal.getsignal(signal.SIGTERM) is disposition
+    finally:
+        signal.signal(signal.SIGTERM, original)
+
+
+def test_sigterm_capture_in_worker_thread_leaves_signal_ownership_unchanged() -> None:
+    import signal
+    from concurrent.futures import ThreadPoolExecutor
+    from typing import Final
+
+    original: Final = signal.getsignal(signal.SIGTERM)
+
+    def run_lifespan() -> None:
+        with GracefulShutdownManager.capture_sigterm():
+            assert signal.getsignal(signal.SIGTERM) is original
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        executor.submit(run_lifespan).result()
+    assert signal.getsignal(signal.SIGTERM) is original
+
+
+@pytest.mark.asyncio
+async def test_lifespan_request_drain_does_not_restart_an_exhausted_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "30")
+    GracefulShutdownManager.start_shutdown(clock=lambda: 100.0)
+    assert await GracefulShutdownManager.wait_for_drain(count_fn=lambda: 2, clock=lambda: 130.0) == 2
