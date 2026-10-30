@@ -2,7 +2,7 @@ import copy
 import json
 import re
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
@@ -27,7 +27,9 @@ from litellm.constants import (
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
+    invalid_type_message,
     is_object_schema,
+    is_present_non_string,
     sanitize_input_schema_for_anthropic,
     schema_fragment_ref,
     schema_grammar_branch_count,
@@ -176,34 +178,38 @@ NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS: Final = 24
 NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES: Final = 2048
 
 
-def _is_present_non_string(value: object) -> bool:
-    return value is not None and not isinstance(value, str)
+def _is_unhashable(value: object) -> bool:
+    return not isinstance(value, Hashable)
 
 
-def _non_string_tool_call_ids(index: int, tool_calls: object) -> Iterator[tuple[str, object]]:
+def _tool_call_ids_failing(
+    index: int, tool_calls: object, fails: Callable[[object], bool]
+) -> Iterator[tuple[str, object]]:
     ids: Final = ((position, message_field(tool_call, "id")) for position, tool_call in enumerate(parts_of(tool_calls)))
     return (
         (f"messages[{index}].tool_calls[{position}].id", tool_call_id)
         for position, tool_call_id in ids
-        if _is_present_non_string(tool_call_id)
+        if fails(tool_call_id)
     )
 
 
 def _non_string_roles(messages: Sequence[object]) -> Iterator[tuple[str, object]]:
     roles: Final = ((index, message_field(message, "role")) for index, message in enumerate(messages))
-    return ((f"messages[{index}].role", role) for index, role in roles if _is_present_non_string(role))
+    return ((f"messages[{index}].role", role) for index, role in roles if is_present_non_string(role))
 
 
-def _non_string_assistant_tool_call_ids(messages: Sequence[object]) -> Iterator[tuple[str, object]]:
+def _assistant_tool_call_ids_failing(
+    messages: Sequence[object], fails: Callable[[object], bool]
+) -> Iterator[tuple[str, object]]:
     assistant_turns: Final = (
         (index, message) for index, message in enumerate(messages) if message_field(message, "role") == "assistant"
     )
     return chain.from_iterable(
-        _non_string_tool_call_ids(index, message_field(message, "tool_calls")) for index, message in assistant_turns
+        _tool_call_ids_failing(index, message_field(message, "tool_calls"), fails) for index, message in assistant_turns
     )
 
 
-def _non_string_tool_answer_ids(messages: Sequence[object]) -> Iterator[tuple[str, object]]:
+def _unhashable_tool_answer_ids(messages: Sequence[object]) -> Iterator[tuple[str, object]]:
     answers: Final = (
         (index, message_field(message, "tool_call_id"))
         for index, message in enumerate(messages)
@@ -212,24 +218,27 @@ def _non_string_tool_answer_ids(messages: Sequence[object]) -> Iterator[tuple[st
     return (
         (f"messages[{index}].tool_call_id", tool_call_id)
         for index, tool_call_id in answers
-        if _is_present_non_string(tool_call_id)
+        if _is_unhashable(tool_call_id)
     )
+
+
+def _tool_call_ids_behind(messages: Sequence[object], error: Exception) -> Iterable[tuple[str, object]]:
+    match error:
+        case TypeError():
+            return chain(
+                _assistant_tool_call_ids_failing(messages, _is_unhashable), _unhashable_tool_answer_ids(messages)
+            )
+        case AttributeError():
+            return _assistant_tool_call_ids_failing(messages, is_present_non_string)
+        case _:
+            return ()
 
 
 def non_string_message_field_error(messages: Sequence[object], error: Exception) -> AnthropicError | None:
-    tool_call_ids: Final = (
-        chain(_non_string_assistant_tool_call_ids(messages), _non_string_tool_answer_ids(messages))
-        if isinstance(error, (TypeError, AttributeError))
-        else ()
-    )
-    malformed_field: Final = next(chain(_non_string_roles(messages), tool_call_ids), None)
+    malformed_field: Final = next(chain(_non_string_roles(messages), _tool_call_ids_behind(messages, error)), None)
     if malformed_field is None:
         return None
-    field_path, field_value = malformed_field
-    return AnthropicError(
-        status_code=400,
-        message=f"Invalid type for '{field_path}': expected a string, got {type(field_value).__name__}",
-    )
+    return AnthropicError(status_code=400, message=invalid_type_message(*malformed_field))
 
 
 def _tool_type(tool: object) -> str | None:

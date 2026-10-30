@@ -10057,6 +10057,47 @@ def test_chat_transform_request_keeps_a_conversion_error_that_a_dropped_orphan_a
     assert "Invalid Message passed in {'role': 'bogus'" in raised.value.message
 
 
+@pytest.mark.parametrize(
+    ("later_turn", "real_cause"),
+    [
+        pytest.param(
+            [{"role": "user", "content": ["hi", "there"]}],
+            "'str' object has no attribute 'get'",
+            id="string_content_parts",
+        ),
+        pytest.param(
+            [
+                {
+                    **_WEATHER_CALL,
+                    "tool_calls": [
+                        {
+                            **_WEATHER_CALL["tool_calls"][0],
+                            "function": {"name": "get_weather", "arguments": {"city": "Paris"}},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "toolu_01", "content": "rain"},
+            ],
+            "'dict' object has no attribute 'strip'",
+            id="object_tool_call_arguments",
+        ),
+    ],
+)
+def test_chat_transform_request_never_blames_a_numeric_tool_answer_id_for_another_failure(
+    local_model_cost_map,
+    monkeypatch: pytest.MonkeyPatch,
+    later_turn: list[dict[str, object]],
+    real_cause: str,
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    with pytest.raises(AnthropicError) as raised:
+        _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, [*_orphan_answer_with(7)[:3], *later_turn])
+
+    assert raised.value.status_code == 400
+    assert raised.value.message.startswith(real_cause)
+
+
 def test_chat_transform_request_names_no_field_for_a_failure_outside_roles_and_tool_call_ids(local_model_cost_map):
     list_part_type: Final = [
         _ASK,

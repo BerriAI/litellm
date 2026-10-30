@@ -7231,3 +7231,35 @@ def test_a_non_string_role_on_an_item_that_never_reads_it_still_bridges_to_anthr
     bridged: Final = _bridge_to(_ANTHROPIC_MODEL, history)
 
     assert [message_field(message, "role") for message in bridged["messages"]] == ["user", "assistant", "tool"]
+
+
+@pytest.mark.parametrize(
+    ("history", "field_path"),
+    [
+        pytest.param([_WEATHER_ASK, {"role": ["user"], "content": "Go on"}], "input[2].role", id="role"),
+        pytest.param(
+            [
+                _WEATHER_ASK,
+                _weather_call(call_id="call_weather"),
+                {"type": "function_call_output", "call_id": {"id": "call_weather"}, "output": "sunny"},
+            ],
+            "input[3].call_id",
+            id="tool_output_call_id",
+        ),
+    ],
+)
+def test_a_malformed_item_after_a_codex_additional_tools_item_is_named_by_its_index_in_the_request(
+    history: list[dict[str, object]], field_path: str
+) -> None:
+    tools_item: Final = {
+        "type": "additional_tools",
+        "role": "developer",
+        "tools": [{"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}}],
+    }
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        litellm.responses(
+            model=_ANTHROPIC_MODEL, api_key="sk-ant-test", input=cast(ResponseInputParam, [tools_item, *history])
+        )
+
+    assert f"'{field_path}'" in raised.value.message

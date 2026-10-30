@@ -55,7 +55,7 @@ class LiteLLMCompletionTransformationHandler:
         litellm_completion_request: Final[dict] = (
             LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
                 model=model,
-                input=bridged_input,
+                input=input,
                 responses_api_request=bridged_request,
                 custom_llm_provider=custom_llm_provider,
                 stream=stream,

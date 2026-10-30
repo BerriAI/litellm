@@ -57,6 +57,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.prompt_templates.common_utils import invalid_type_message, is_present_non_string
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -432,10 +433,6 @@ TOOL_CALL_OUTPUT_ITEM_TYPES: Final = frozenset(
 )
 
 
-def _is_present_non_string(value: object) -> bool:
-    return value is not None and not isinstance(value, str)
-
-
 def _read_positions(
     input_items: Sequence[_InputItemT], read_input: str | ResponseInputParam
 ) -> Iterator[tuple[int, _InputItemT]]:
@@ -468,7 +465,7 @@ def _carries_non_string_field(message: object) -> bool:
     tool_call_ids: Final = (
         message_field(tool_call, "id") for tool_call in parts_of(message_field(message, "tool_calls"))
     )
-    return _is_present_non_string(message_field(message, "role")) or any(map(_is_present_non_string, tool_call_ids))
+    return is_present_non_string(message_field(message, "role")) or any(map(is_present_non_string, tool_call_ids))
 
 
 def _non_string_item_fields(
@@ -479,7 +476,7 @@ def _non_string_item_fields(
     roles: Final = (("role", message_field(message, "role")) for message in messages)
     tool_calls: Final = chain.from_iterable(parts_of(message_field(message, "tool_calls")) for message in messages)
     tool_call_ids: Final = ((tool_call_id_field, message_field(tool_call, "id")) for tool_call in tool_calls)
-    return ((field, value) for field, value in chain(roles, tool_call_ids) if _is_present_non_string(value))
+    return ((field, value) for field, value in chain(roles, tool_call_ids) if is_present_non_string(value))
 
 
 def _indexed_non_string_item_fields(
@@ -502,11 +499,7 @@ def _non_string_input_item_field_error(
 
 
 def _invalid_input_type(field_path: str, value: object) -> BadRequestError:
-    return BadRequestError(
-        message=f"Invalid type for '{field_path}': expected a string, got {type(value).__name__}",
-        model="",
-        llm_provider="",
-    )
+    return BadRequestError(message=invalid_type_message(field_path, value), model="", llm_provider="")
 
 
 def _input_item_role(input_item: Mapping[str, object]) -> str:

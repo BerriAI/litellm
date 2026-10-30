@@ -118,6 +118,23 @@ async def test_claude_count_request_rejects_a_malformed_tool_flag_without_drop_p
 
 
 @pytest.mark.asyncio
+async def test_claude_count_request_names_a_malformed_item_by_its_index_counting_additional_tools_items() -> None:
+    flagged: Final = await _claude_count(
+        {
+            "input": [
+                {"type": "additional_tools", "tools": [_WEATHER_TOOL]},
+                _QUESTION,
+                {"role": ["user"], "content": "?"},
+            ]
+        },
+        DropPolicy(drop_params=False, additional_drop_params=frozenset()),
+    )
+
+    assert isinstance(flagged, ChatCountBridgeError)
+    assert "'input[2].role'" in flagged.message
+
+
+@pytest.mark.asyncio
 async def test_claude_count_request_leaves_out_tools_the_deployment_drops() -> None:
     policy: Final = DropPolicy(drop_params=False, additional_drop_params=frozenset({"tools"}))
 

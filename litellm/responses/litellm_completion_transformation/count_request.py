@@ -124,7 +124,6 @@ def _with_hoisted_additional_tools(responses_request: Mapping[str, object]) -> M
         return responses_request
     return {
         **responses_request,
-        "input": hoisted.input,
         "tools": [*_ITEMS.validate_python(responses_request.get("tools") or ()), *hoisted.hoisted],
     }
 
