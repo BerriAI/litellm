@@ -161,6 +161,28 @@ def test_get_openai_client_initialization_param_fields(client_type):
     assert "self" not in result
 
 
+def _loop_test_client_params(is_async: bool) -> dict[str, object]:
+    return {"api_key": "sk-loop-scope-test", "is_async": is_async}
+
+
+async def _cache_openai_client(client: openai.OpenAI | openai.AsyncOpenAI, is_async: bool) -> None:
+    BaseOpenAILLM.set_cached_openai_client(client, "openai", _loop_test_client_params(is_async))
+
+
+async def _cached_openai_client(is_async: bool) -> object:
+    return BaseOpenAILLM.get_cached_openai_client(_loop_test_client_params(is_async), "openai")
+
+
+def test_sync_openai_client_cached_in_one_loop_is_reused_by_the_next_while_async_is_not():
+    sync_client: Final = openai.OpenAI(api_key="sk-loop-scope-test")
+    async_client: Final = openai.AsyncOpenAI(api_key="sk-loop-scope-test")
+    asyncio.run(_cache_openai_client(sync_client, is_async=False))
+    asyncio.run(_cache_openai_client(async_client, is_async=True))
+
+    assert asyncio.run(_cached_openai_client(is_async=False)) is sync_client
+    assert asyncio.run(_cached_openai_client(is_async=True)) is None
+
+
 @pytest.mark.parametrize("client_type", ["openai", "azure"])
 def test_get_openai_client_cache_key(client_type):
     """Verify get_openai_client_cache_key doesn't raise on tuple + tuple concatenation."""
