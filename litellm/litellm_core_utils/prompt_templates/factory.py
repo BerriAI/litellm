@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from types import MappingProxyType
 from typing import Annotated, Any, Final, TypeAlias, TypedDict, TypeVar, cast, overload
+from urllib.parse import urlparse
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from pydantic import BaseModel, BeforeValidator, ConfigDict, JsonValue, TypeAdapter, ValidationError, model_validator
@@ -908,8 +909,30 @@ def convert_to_anthropic_image_obj(openai_image_url: str, format: str | None) ->
         )
 
 
+def _is_pdf_media_type(media_type: str) -> bool:
+    return media_type.split(";", 1)[0].strip().lower() == "application/pdf"
+
+
+def _anthropic_https_url_block(
+    image_url: str, image_format: str | None
+) -> AnthropicMessagesImageParam | AnthropicMessagesDocumentParam:
+    if not image_format and urlparse(image_url).path.lower().endswith(".pdf"):
+        return anthropic_content_element_factory(
+            convert_to_anthropic_image_obj(openai_image_url=image_url, format=None)
+        )
+    if image_format and _is_pdf_media_type(image_format):
+        return AnthropicMessagesDocumentParam(
+            type="document",
+            source=AnthropicContentParamSourceUrl(type="url", url=image_url),
+        )
+    return AnthropicMessagesImageParam(
+        type="image",
+        source=AnthropicContentParamSourceUrl(type="url", url=image_url),
+    )
+
+
 def create_anthropic_image_param(
-    image_url_input: str | dict,
+    image_url_input: str | Mapping[str, object],
     format: str | None = None,
     is_bedrock_invoke: bool = False,
 ) -> AnthropicMessagesImageParam | AnthropicMessagesDocumentParam:
@@ -918,13 +941,10 @@ def create_anthropic_image_param(
 
     Supports both URL references (for HTTP/HTTPS URLs) and base64 encoding.
     """
-    # Extract URL and format from input
-    if isinstance(image_url_input, str):
-        image_url = image_url_input
-    else:
-        image_url = image_url_input.get("url", "")
-        if format is None:
-            format = image_url_input.get("format")
+    url_value: Final = image_url_input if isinstance(image_url_input, str) else image_url_input.get("url")
+    format_value: Final = None if isinstance(image_url_input, str) else image_url_input.get("format")
+    image_url: Final = url_value if isinstance(url_value, str) else ""
+    image_format: Final = format if format is not None else (format_value if isinstance(format_value, str) else None)
 
     # Check if the image URL is an HTTP/HTTPS URL
     if image_url.startswith("http://") or image_url.startswith("https://"):
@@ -932,21 +952,14 @@ def create_anthropic_image_param(
         # as these providers don't support URL sources for images
         if is_bedrock_invoke or image_url.startswith("http://"):
             base64_url: Final = convert_url_to_base64(url=image_url)
-            image_chunk = convert_to_anthropic_image_obj(openai_image_url=base64_url, format=format)
-            return _anthropic_content_element_factory(image_chunk)
+            image_chunk = convert_to_anthropic_image_obj(openai_image_url=base64_url, format=image_format)
+            return anthropic_content_element_factory(image_chunk)
         else:
-            # HTTPS URL - pass directly for regular Anthropic
-            return AnthropicMessagesImageParam(
-                type="image",
-                source=AnthropicContentParamSourceUrl(
-                    type="url",
-                    url=image_url,
-                ),
-            )
+            return _anthropic_https_url_block(image_url, image_format)
     else:
         # Convert to base64 for data URIs or other formats
-        image_chunk = convert_to_anthropic_image_obj(openai_image_url=image_url, format=format)
-        return _anthropic_content_element_factory(image_chunk)
+        image_chunk = convert_to_anthropic_image_obj(openai_image_url=image_url, format=image_format)
+        return anthropic_content_element_factory(image_chunk)
 
 
 # The following XML functions will be deprecated once JSON schema support is available on Bedrock and Vertex
@@ -2181,16 +2194,16 @@ def add_cache_control_to_content(
     return anthropic_content_element
 
 
-def _anthropic_content_element_factory(
+def anthropic_content_element_factory(
     image_chunk: GenericImageParsingChunk,
 ) -> AnthropicMessagesImageParam | AnthropicMessagesDocumentParam:
-    if image_chunk["media_type"] == "application/pdf":
+    if _is_pdf_media_type(image_chunk["media_type"]):
         _anthropic_content_element: AnthropicMessagesDocumentParam | AnthropicMessagesImageParam = (
             AnthropicMessagesDocumentParam(
                 type="document",
                 source=AnthropicContentParamSource(
                     type="base64",
-                    media_type=image_chunk["media_type"],
+                    media_type="application/pdf",
                     data=image_chunk["data"],
                 ),
             )
