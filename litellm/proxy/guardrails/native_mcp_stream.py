@@ -38,9 +38,7 @@ class NativeMCPStreamValidator:
         self._attempt_id: str | None = None
         self._validated_calls: frozenset[str] = frozenset()
         self._pending_calls: frozenset[str] = frozenset()
-        self._held: deque[object] = (
-            deque()
-        )  # mutable-ok: bounded streaming queue avoids copying all held events for every chunk
+        self._held: deque[object] = deque()  # mutable-ok: bounded queue avoids copying all held events for every chunk
         self._held_bytes: int = 0
         self._pending_bytes: bytes = b""
 
