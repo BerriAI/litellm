@@ -926,9 +926,7 @@ async def hierarchical_router_settings_updates(
         try:
             return validate_router_weights(router_settings.get("weights"))
         except ValidationError:
-            verbose_proxy_logger.warning(
-                "Ignoring invalid saved router weights; update team/key router_settings"
-            )
+            verbose_proxy_logger.warning("Ignoring invalid saved router weights; update team/key router_settings")
             return None
 
     router_weights: Final = validated_router_weights()
