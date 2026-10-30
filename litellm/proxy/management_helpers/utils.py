@@ -5,7 +5,7 @@ from collections.abc import Set as AbstractSet
 from datetime import datetime
 from functools import wraps
 from types import MappingProxyType
-from typing import Any, Final, Protocol, TypeVar, cast
+from typing import Any, Final, ParamSpec, Protocol, TypeVar
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, TypeAdapter
@@ -767,10 +767,11 @@ async def _emit_management_endpoint_otel_span(
         )
 
 
-_Endpoint: Final = TypeVar("_Endpoint", bound=Callable[..., Awaitable[Any]])
+_P: Final = ParamSpec("_P")
+_R: Final = TypeVar("_R")
 
 
-def management_endpoint_wrapper(func: _Endpoint) -> _Endpoint:
+def management_endpoint_wrapper(func: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
     """
     This wrapper does the following:
 
@@ -780,24 +781,27 @@ def management_endpoint_wrapper(func: _Endpoint) -> _Endpoint:
     return _wrap_management_endpoint(func, log_payload=True)
 
 
-def management_endpoint_span_wrapper(func: _Endpoint) -> _Endpoint:
+def management_endpoint_span_wrapper(func: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
     """``management_endpoint_wrapper`` without request/response payloads on the span, for
     endpoints that serialize large or high-frequency responses (e.g. the model list)."""
     return _wrap_management_endpoint(func, log_payload=False)
 
 
-def _wrap_management_endpoint(endpoint: _Endpoint, *, log_payload: bool) -> _Endpoint:
+def _wrap_management_endpoint(
+    endpoint: Callable[_P, Awaitable[_R]], *, log_payload: bool
+) -> Callable[_P, Awaitable[_R]]:
     @wraps(endpoint)
-    async def wrapper(*args, **kwargs):
+    async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        request_kwargs: Final[dict[str, Any]] = dict(kwargs)  # mutable-ok: passed to dict-typed helpers
         start_time: Final = datetime.now()
         try:
             result: Final = await endpoint(*args, **kwargs)
             end_time = datetime.now()
             try:
-                user_api_key_dict: UserAPIKeyAuth = kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
+                user_api_key_dict: UserAPIKeyAuth = request_kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
 
                 await send_management_endpoint_alert(
-                    request_kwargs=kwargs,
+                    request_kwargs=request_kwargs,
                     user_api_key_dict=user_api_key_dict,
                     function_name=endpoint.__name__,
                 )
@@ -805,7 +809,7 @@ def _wrap_management_endpoint(endpoint: _Endpoint, *, log_payload: bool) -> _End
                 if parent_otel_span is not None:
                     await _emit_management_endpoint_otel_span(
                         func=endpoint,
-                        kwargs=kwargs,
+                        kwargs=request_kwargs,
                         parent_otel_span=parent_otel_span,
                         start_time=start_time,
                         end_time=end_time,
@@ -813,10 +817,10 @@ def _wrap_management_endpoint(endpoint: _Endpoint, *, log_payload: bool) -> _End
                     )
 
                 # Delete updated/deleted info from cache
-                _delete_api_key_from_cache(kwargs=kwargs)
-                _delete_user_id_from_cache(kwargs=kwargs)
-                _delete_team_id_from_cache(kwargs=kwargs)
-                _delete_customer_id_from_cache(kwargs=kwargs)
+                _delete_api_key_from_cache(kwargs=request_kwargs)
+                _delete_user_id_from_cache(kwargs=request_kwargs)
+                _delete_team_id_from_cache(kwargs=request_kwargs)
+                _delete_customer_id_from_cache(kwargs=request_kwargs)
             except Exception as e:
                 # Non-Blocking Exception
                 verbose_logger.debug("Error in management endpoint wrapper: %s", str(e))
@@ -825,13 +829,13 @@ def _wrap_management_endpoint(endpoint: _Endpoint, *, log_payload: bool) -> _End
         except Exception as e:
             end_time = datetime.now()
 
-            user_api_key_dict: UserAPIKeyAuth = kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
+            user_api_key_dict: UserAPIKeyAuth = request_kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
             parent_otel_span = getattr(user_api_key_dict, "parent_otel_span", None)
             if parent_otel_span is not None:
                 try:
                     await _emit_management_endpoint_otel_span(
                         func=endpoint,
-                        kwargs=kwargs,
+                        kwargs=request_kwargs,
                         parent_otel_span=parent_otel_span,
                         start_time=start_time,
                         end_time=end_time,
@@ -847,4 +851,4 @@ def _wrap_management_endpoint(endpoint: _Endpoint, *, log_payload: bool) -> _End
 
             raise e
 
-    return cast(_Endpoint, wrapper)  # cast-ok: wraps() preserves the endpoint's signature
+    return wrapper
