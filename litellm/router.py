@@ -220,10 +220,13 @@ from litellm.router_strategy.complexity_router.context_compaction import (
     surface_for_call,
 )
 from litellm.router_strategy.least_busy import (
+    CALL_IDENTITY,
     SELECTION_RESERVATION_MAX_KEYS,
     LeastBusyLoggingHandler,
+    call_id_of,
     pick_reserves,
     picks_reserve,
+    release_unstarted_picks,
 )
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
@@ -2655,6 +2658,7 @@ class Router(DeprecatedRouterMembers):
                     model_group=model,
                     healthy_deployments=healthy_deployments,
                     reserve=reserve,
+                    call_id=call_id_of(CALL_IDENTITY.validate_python(request_kwargs or {})),
                 )
             case "usage-based-routing":
                 # `LowestTPMLoggingHandler` (v1) only exposes the sync
@@ -2713,6 +2717,7 @@ class Router(DeprecatedRouterMembers):
                     model_group=model,
                     healthy_deployments=healthy_deployments,
                     reserve=reserve,
+                    call_id=call_id_of(CALL_IDENTITY.validate_python(request_kwargs or {})),
                 )
             case "usage-based-routing" | "usage-based-routing-v2":
                 return selector.get_available_deployments(
@@ -9241,6 +9246,10 @@ class Router(DeprecatedRouterMembers):
                 args,
                 kwargs,
                 include_fallback_errors=include_fallback_errors,
+            )
+        finally:
+            release_unstarted_picks(
+                self._core_least_busy_reservations, call_id_of(CALL_IDENTITY.validate_python(kwargs))
             )
 
     def _handle_mock_testing_fallbacks(

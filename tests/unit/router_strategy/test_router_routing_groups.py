@@ -497,11 +497,12 @@ def test_a_least_busy_group_pick_stops_counting_once_its_request_finishes(monkey
         routing_groups=[{"group_name": "fast", "models": ["filtered-model"], "routing_strategy": "least-busy"}],
     )
 
+    request: Final = _proxy_shaped_request(model="filtered-model")
     with picks_reserve(True):
-        first: Final = _filtered_model_pick(router)
+        first: Final = router.get_available_deployment("filtered-model", request_kwargs=request)["model_info"]["id"]
     kwargs: Final = {
         "litellm_params": {"metadata": {"model_group": "filtered-model"}, "model_info": {"id": first}},
-        "litellm_call_id": "call-1",
+        "litellm_call_id": request["litellm_call_id"],
     }
     for callback in litellm.input_callback:
         if isinstance(callback, CustomLogger):

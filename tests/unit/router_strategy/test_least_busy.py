@@ -26,6 +26,7 @@ from litellm.router_strategy.least_busy import (
     SELECTION_RESERVATION_TTL_SECONDS,
     LeastBusyLoggingHandler,
     picks_reserve,
+    release_unstarted_picks,
 )
 from litellm.types.utils import ModelResponse
 
@@ -573,7 +574,7 @@ class _StoreWhereThreadsReadBeforeWriting:
                 self._first_reads.wait()
         return value
 
-    def set_cache(self, key: str, value: tuple[float, ...], *, ttl: float) -> None:
+    def set_cache(self, key: str, value: tuple[object, ...], *, ttl: float) -> None:
         self._store.set_cache(key, value, ttl=ttl)
 
     def delete_cache(self, key: str) -> None:
@@ -701,6 +702,81 @@ def test_a_fallback_attempt_that_fails_before_reaching_its_provider_frees_its_pi
     worker.log_failure_event(second_attempt, None, None, None)
 
     assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+
+
+def test_ending_one_request_frees_only_the_picks_it_never_started() -> None:
+    reservations: Final = InMemoryCache()
+    worker: Final = LeastBusyLoggingHandler(router_cache=DualCache(), reservation_store=reservations)
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-b", "busy-call"))
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True, call_id="ended-call") is DEPLOYMENT_A
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True, call_id="running-call") is DEPLOYMENT_A
+
+    release_unstarted_picks(reservations, "ended-call")
+
+    assert [worker.get_available_deployments(GROUP, HEALTHY, reserve=True) for _ in range(2)] == [
+        DEPLOYMENT_A,
+        DEPLOYMENT_B,
+    ]
+
+
+def test_a_call_started_without_a_pick_of_its_own_leaves_another_calls_pick_reserved() -> None:
+    worker: Final = _worker(None)
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True, call_id="picked-call") is DEPLOYMENT_A
+
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "looked-up-call"))
+
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_B
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_B
+
+
+def _fallback_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "unreachable-group",
+                "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "key-unreachable"},
+                "model_info": {"id": "unreachable"},
+            },
+            *(
+                {
+                    "model_name": ROUTER_GROUP,
+                    "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": f"key-{deployment_id}"},
+                    "model_info": {"id": deployment_id},
+                }
+                for deployment_id in ROUTER_DEPLOYMENT_IDS
+            ),
+        ],
+        routing_strategy="least-busy",
+        num_retries=0,
+        fallbacks=[{"unreachable-group": [ROUTER_GROUP]}],
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_hop_rejected_before_its_provider_frees_its_pick_when_every_hop_shares_one_logging_object(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(500, json={"error": {"message": "upstream down"}})
+    )
+    router: Final = _fallback_router()
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.datetime.now(),
+        model="unreachable-group",
+        messages=[{"role": "user", "content": "hi"}],
+        logit_bias={"1": 1},
+        litellm_call_id="fallback-call",
+    )
+
+    with pytest.raises(litellm.InternalServerError):
+        await router.acompletion(**request, litellm_logging_obj=logging_obj)
+    await _drain_logging()
+
+    assert {call.request.headers["authorization"] for call in route.calls} == {"Bearer key-unreachable"}
+    assert _router_pick(router) == ROUTER_DEPLOYMENT_IDS[0]
 
 
 def test_a_retry_that_starts_before_the_failed_attempt_is_logged_counts_each_attempt_once() -> None:
