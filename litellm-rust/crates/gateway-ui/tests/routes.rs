@@ -108,8 +108,20 @@ async fn discovery_describes_local_login(app: App, #[case] path: &str) {
 }
 
 #[rstest]
+#[case::session_info(
+    "/session/info",
+    json!({"user_id": "admin", "user_role": "proxy_admin"})
+)]
+#[case::current_user(
+    "/management/v1/users/me",
+    json!({"user_id": "admin", "user_role": "proxy_admin", "user_email": null})
+)]
 #[tokio::test]
-async fn login_sets_bounded_session_and_requires_cookie_with_csrf(app: App) {
+async fn login_sets_bounded_session_and_requires_cookie_with_csrf(
+    app: App,
+    #[case] path: &str,
+    #[case] expected: Value,
+) {
     let started = OffsetDateTime::now_utc();
     let response = login(&app, None).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -164,12 +176,9 @@ async fn login_sets_bounded_session_and_requires_cookie_with_csrf(app: App) {
     );
     assert!(record.expiry_date >= started + Duration::hours(24));
     assert!(record.expiry_date <= OffsetDateTime::now_utc() + Duration::hours(24));
-    let response = protected(&app, "/session/info", "GET", &cookie.to_string(), csrf).await;
+    let response = protected(&app, path, "GET", &cookie.to_string(), csrf).await;
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        body(response).await,
-        json!({"user_id": "admin", "user_role": "proxy_admin"})
-    );
+    assert_eq!(body(response).await, expected);
     assert_eq!(
         app.store
             .load(&record.id)
@@ -180,13 +189,11 @@ async fn login_sets_bounded_session_and_requires_cookie_with_csrf(app: App) {
         record.expiry_date
     );
     assert_eq!(
-        protected(&app, "/session/info", "GET", "", csrf)
-            .await
-            .status(),
+        protected(&app, path, "GET", "", csrf).await.status(),
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(
-        protected(&app, "/session/info", "GET", &cookie.to_string(), "wrong")
+        protected(&app, path, "GET", &cookie.to_string(), "wrong")
             .await
             .status(),
         StatusCode::UNAUTHORIZED
@@ -194,8 +201,10 @@ async fn login_sets_bounded_session_and_requires_cookie_with_csrf(app: App) {
 }
 
 #[rstest]
+#[case::session_info("/session/info")]
+#[case::current_user("/management/v1/users/me")]
 #[tokio::test]
-async fn logout_revokes_only_the_presented_session(app: App) {
+async fn logout_revokes_only_the_presented_session(app: App, #[case] path: &str) {
     let first = login(&app, None).await;
     let first_cookie = session_cookie(&first);
     let first_claims = claims(first).await;
@@ -234,27 +243,15 @@ async fn logout_revokes_only_the_presented_session(app: App) {
     assert_eq!(removed.max_age(), Some(Duration::ZERO));
     assert_eq!(session_cookie(&response).max_age(), Some(Duration::ZERO));
     assert_eq!(
-        protected(
-            &app,
-            "/session/info",
-            "GET",
-            &first_cookie.to_string(),
-            first_csrf
-        )
-        .await
-        .status(),
+        protected(&app, path, "GET", &first_cookie.to_string(), first_csrf)
+            .await
+            .status(),
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(
-        protected(
-            &app,
-            "/session/info",
-            "GET",
-            &second_cookie.to_string(),
-            second_csrf
-        )
-        .await
-        .status(),
+        protected(&app, path, "GET", &second_cookie.to_string(), second_csrf)
+            .await
+            .status(),
         StatusCode::OK
     );
 }

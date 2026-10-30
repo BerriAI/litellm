@@ -30,11 +30,11 @@ Open `/ui/login/` to sign in. HTTPS cookies are enabled by default. For local HT
 
 `POST /v2/login` accepts JSON credentials and returns the dashboard's token and redirect URL. `axum-login` handles authenticated sessions through `tower-sessions`. Login rotates the session, sets an absolute 24-hour expiry, and issues an HttpOnly `litellm_session` cookie. The JavaScript-readable `token` cookie contains display claims and a CSRF token in its `key` field. It contains neither the master key nor the session ID
 
-`GET /session/info` and `POST /session/logout` require both the session cookie and `Authorization: Bearer <key>` from the dashboard token. The session's stored user determines authorization; client-supplied JWT claims do not. Logout deletes the server-side session and clears both cookies. JSON-only login prevents cross-origin form submissions, and login attempts use a shared token bucket with a burst of ten and a refill rate of ten per minute per gateway process
+`GET /session/info`, `GET /management/v1/users/me`, and `POST /session/logout` require both the session cookie and `Authorization: Bearer <key>` from the dashboard token. The current-user endpoint returns the authenticated local administrator's ID and role, with a null email, so the dashboard can validate the login. The session's stored user determines authorization. Client-supplied JWT claims do not. Logout deletes the server-side session and clears both cookies. JSON-only login prevents cross-origin form submissions, and login attempts use a shared token bucket with a burst of ten and a refill rate of ten per minute per gateway process
 
 The gateway uses a process-local Moka session store with expiry and a capacity of 10,000 sessions. Restarts invalidate sessions, and capacity eviction can sign users out early. Multi-process deployments need a shared `SessionStore` supplied to the router
 
-The current scope is local administrator login, sessions, discovery, and static assets. SSO, database-backed users, cross-origin workers, custom URL prefixes, and management APIs are not implemented. Dashboard screens that call management APIs still require those routes. UI request and response bodies are excluded from the inference gateway's debug body logger
+The current scope is local administrator login, sessions, current-user lookup, discovery, and static assets. SSO, database-backed users, cross-origin workers, custom URL prefixes, and other management APIs are not implemented. Dashboard screens that call those management APIs still require their routes. UI request and response bodies are excluded from the inference gateway's debug body logger
 
 Run the regression suite from `litellm-rust` without a browser, dashboard build, running proxy, or provider credentials:
 
