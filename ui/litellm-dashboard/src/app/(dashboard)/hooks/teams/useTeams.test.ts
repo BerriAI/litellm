@@ -263,7 +263,10 @@ describe("useTeams", () => {
       expect(result.current.isLoading).toBe(false);
     });
 
-    expect(teamsFetchMock).toHaveBeenCalledWith("/v2/team/list?user_id=custom-user-id&page=1&page_size=100", expect.anything());
+    expect(teamsFetchMock).toHaveBeenCalledWith(
+      "/v2/team/list?user_id=custom-user-id&page=1&page_size=100",
+      expect.anything(),
+    );
   });
 
   it("should handle null userId", async () => {

@@ -55,7 +55,9 @@ describe("PolicyTestPanel", () => {
 
   it("loads teams, keys and models for the dropdowns", async () => {
     setup();
-    await waitFor(() => expect(teamHooks.fetchAllTeamsPaged).toHaveBeenCalledWith("test-token", { userID: "admin-user-id" }));
+    await waitFor(() =>
+      expect(teamHooks.fetchAllTeamsPaged).toHaveBeenCalledWith("test-token", { userID: "admin-user-id" }),
+    );
     expect(networking.keyListCall).toHaveBeenCalledWith("test-token", null, null, null, null, null, 1, 100);
     expect(networking.modelAvailableCall).toHaveBeenCalledWith("test-token", "admin-user-id", "Admin");
   });
