@@ -10,6 +10,7 @@ from types import MethodType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import fakeredis
 import httpx
 import pytest
 import respx
@@ -33,6 +34,7 @@ from litellm.types.utils import (
     StandardLoggingModelInformation,
     StandardLoggingPayload,
 )
+from tests._support.fake_redis import fake_redis_cache
 
 
 def create_standard_logging_payload() -> StandardLoggingPayload:
@@ -458,9 +460,7 @@ async def test_deployment_callback_on_success(sync_mode):
     ]
     router = Router(model_list=model_list)
     # Get the actual deployment ID that was generated
-    gpt_deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-5-mini"
-    )
+    gpt_deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-mini")
     deployment_id = gpt_deployment["model_info"]["id"]
 
     standard_logging_payload = create_standard_logging_payload()
@@ -565,9 +565,16 @@ async def _finish_35_token_websocket_turn(routed: Mapping[str, object], call_id:
         litellm_call_id=call_id,
         function_id=call_id,
     )
-    turn.update_environment_variables(litellm_params={"litellm_metadata": routed["litellm_metadata"]}, optional_params={})
+    turn.update_environment_variables(
+        litellm_params={"litellm_metadata": routed["litellm_metadata"]}, optional_params={}
+    )
     await turn.dispatch_success_handlers(
-        [{"type": "response.completed", "response": {"usage": {"input_tokens": 20, "output_tokens": 15, "total_tokens": 35}}}],
+        [
+            {
+                "type": "response.completed",
+                "response": {"usage": {"input_tokens": 20, "output_tokens": 15, "total_tokens": 35}},
+            }
+        ],
         prefer_async_handlers=True,
     )
 
@@ -1327,9 +1334,7 @@ async def test_routing_strategy_pre_call_checks(model_list, sync_mode):
 
     router = Router(model_list=model_list)
 
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-5-mini"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-mini")
 
     litellm_logging_obj = Logging(
         model="gpt-5-mini",
@@ -1344,9 +1349,7 @@ async def test_routing_strategy_pre_call_checks(model_list, sync_mode):
         router.routing_strategy_pre_call_checks(deployment)
     else:
         ## NO EXCEPTION
-        await router.async_routing_strategy_pre_call_checks(
-            deployment, litellm_logging_obj
-        )
+        await router.async_routing_strategy_pre_call_checks(deployment, litellm_logging_obj)
 
         ## WITH EXCEPTION - rate limit error
         with patch.object(
@@ -1361,27 +1364,19 @@ async def test_routing_strategy_pre_call_checks(model_list, sync_mode):
             ),
         ):
             with pytest.raises(litellm.RateLimitError):
-                await router.async_routing_strategy_pre_call_checks(
-                    deployment, litellm_logging_obj
-                )
+                await router.async_routing_strategy_pre_call_checks(deployment, litellm_logging_obj)
 
         ## WITH EXCEPTION - generic error
-        with patch.object(
-            callback, "async_pre_call_check", AsyncMock(side_effect=Exception("Error"))
-        ):
+        with patch.object(callback, "async_pre_call_check", AsyncMock(side_effect=Exception("Error"))):
             with pytest.raises(Exception, match="Error"):
-                await router.async_routing_strategy_pre_call_checks(
-                    deployment, litellm_logging_obj
-                )
+                await router.async_routing_strategy_pre_call_checks(deployment, litellm_logging_obj)
 
 
 @pytest.mark.parametrize(
     "set_supported_environments, supported_environments, is_supported",
     [(True, ["staging"], True), (False, None, True), (True, ["development"], False)],
 )
-def test_create_deployment(
-    model_list, set_supported_environments, supported_environments, is_supported
-):
+def test_create_deployment(model_list, set_supported_environments, supported_environments, is_supported):
     """Test if the '_create_deployment' function is working correctly"""
     router = Router(model_list=model_list)
 
@@ -1415,20 +1410,14 @@ def test_deployment_is_active_for_environment(
 ):
     """Test if the '_deployment_is_active_for_environment' function is working correctly"""
     router = Router(model_list=model_list)
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-5-mini"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-mini")
     if set_supported_environments:
         os.environ["LITELLM_ENVIRONMENT"] = "staging"
     deployment["model_info"]["supported_environments"] = supported_environments
     if is_supported:
-        assert (
-            router.deployment_is_active_for_environment(deployment=deployment) is True
-        )
+        assert router.deployment_is_active_for_environment(deployment=deployment) is True
     else:
-        assert (
-            router.deployment_is_active_for_environment(deployment=deployment) is False
-        )
+        assert router.deployment_is_active_for_environment(deployment=deployment) is False
 
 
 def test_set_model_list(model_list):
@@ -1755,31 +1744,14 @@ def test_deployment_tracks_usage_for_every_limit_source(
     assert router._deployment_tracks_usage(deployment_id, "my-unmapped-model") is tracks
 
 
-def _shared_redis_stub(store: dict) -> MagicMock:
-    from litellm.caching.redis_cache import RedisCache
-
-    async def increment_pipeline(increment_list, **kwargs):
-        for op in increment_list:
-            store[op["key"]] = store.get(op["key"], 0.0) + op["increment_value"]
-        return [store[op["key"]] for op in increment_list]
-
-    async def batch_get(keys, **kwargs):
-        return {key: store.get(key) for key in keys}
-
-    redis_stub = MagicMock(spec=RedisCache)
-    redis_stub.async_increment_pipeline = increment_pipeline
-    redis_stub.async_batch_get_cache = batch_get
-    return redis_stub
-
-
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("router_minute_pinned")
 async def test_headers_on_fresh_worker_reflect_shared_redis_usage():
-    store: dict = {}
+    server: Final = fakeredis.FakeServer()
     worker_a = _rpm_tpm_router("lit-3058-workers")
     worker_b = _rpm_tpm_router("lit-3058-workers")
-    worker_a.cache = DualCache(redis_cache=_shared_redis_stub(store), in_memory_cache=InMemoryCache())
-    worker_b.cache = DualCache(redis_cache=_shared_redis_stub(store), in_memory_cache=InMemoryCache())
+    worker_a.cache = DualCache(redis_cache=fake_redis_cache(server), in_memory_cache=InMemoryCache())
+    worker_b.cache = DualCache(redis_cache=fake_redis_cache(server), in_memory_cache=InMemoryCache())
 
     messages = [{"role": "user", "content": "hi"}]
     tokens_on_a = 0
@@ -1840,27 +1812,19 @@ async def test_get_model_group_io_token_usage_sums_across_deployments():
     minute = get_utc_datetime().strftime("%H-%M")
     keys_and_values = [
         (
-            RouterCacheEnum.ITPM.value.format(
-                id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute
-            ),
+            RouterCacheEnum.ITPM.value.format(id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute),
             30,
         ),
         (
-            RouterCacheEnum.OTPM.value.format(
-                id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute
-            ),
+            RouterCacheEnum.OTPM.value.format(id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute),
             10,
         ),
         (
-            RouterCacheEnum.ITPM.value.format(
-                id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute
-            ),
+            RouterCacheEnum.ITPM.value.format(id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute),
             70,
         ),
         (
-            RouterCacheEnum.OTPM.value.format(
-                id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute
-            ),
+            RouterCacheEnum.OTPM.value.format(id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute),
             20,
         ),
     ]
@@ -2182,9 +2146,7 @@ def test_initialize_alerting(model_list):
     from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
     from litellm.types.router import AlertingConfig
 
-    router = Router(
-        model_list=model_list, alerting_config=AlertingConfig(webhook_url="test")
-    )
+    router = Router(model_list=model_list, alerting_config=AlertingConfig(webhook_url="test"))
     router._initialize_alerting()
 
     callback_added = False
@@ -2459,7 +2421,6 @@ async def test_discard_releases_per_request_override_selector():
     assert selector_ref() is None
 
 
-
 def test_discard_registers_the_selector_of_a_same_strategy_survivor_built_without_a_model_list():
     retired: Final = Router(model_list=[], routing_strategy="latency-based-routing")
     survivor: Final = Router(routing_strategy="latency-based-routing")
@@ -2537,6 +2498,7 @@ async def test_discard_releases_its_router_budget_limiter():
 
     assert budget_limiter_ref() is None
 
+
 def test_initialize_assistants_endpoint(model_list):
     """Test if the 'initialize_assistants_endpoint' function is working correctly"""
     router = Router(model_list=model_list)
@@ -2612,7 +2574,6 @@ def test_deployments_by_pattern(model_list):
     ],
 )
 def test_pattern_match_deployment_set_model_name(user_request_model, model_name, litellm_model, expected_model):
-    from re import Match
 
     from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
 
@@ -2667,7 +2628,6 @@ def test_add_optional_pre_call_checks(model_list):
 
 @pytest.mark.asyncio
 async def test_async_callback_filter_deployments(model_list):
-    from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 
     router = Router(model_list=model_list)
 
@@ -2699,7 +2659,7 @@ def test_cached_get_model_group_info(model_list):
 
 def test_init_responses_api_endpoints(model_list):
     """Test if the '_init_responses_api_endpoints' function is working correctly"""
-    from typing import Callable
+    from collections.abc import Callable
 
     router = Router(model_list=model_list)
 
@@ -3553,6 +3513,7 @@ def test_resolve_model_name_from_model_id_keeps_a_wildcard_name_only_for_the_ids
 ):
     router = Router(model_list=[{"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "sk-fake"}}])
     assert router.resolve_model_name_from_model_id(model_id, custom_llm_provider) == expected
+
 
 def test_get_valid_args():
     """Test get_valid_args static method returns valid Router.__init__ arguments"""

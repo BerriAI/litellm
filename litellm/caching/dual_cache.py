@@ -336,6 +336,9 @@ class DualCache(BaseCache):
                 else:
                     self.last_redis_batch_access_time[key] = previous_time
 
+    def rollback_redis_batch_reads(self, previous_access_times: Mapping[str, float | None]) -> None:
+        self._rollback_redis_batch_key_reservations(dict(previous_access_times))
+
     async def _prepare_batch_get(
         self, keys: list[str], local_only: bool, throttle_redis: bool = True, **kwargs: object
     ) -> PendingBatchRead:

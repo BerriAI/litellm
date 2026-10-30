@@ -175,6 +175,8 @@ ignored_function_names = [
     "_cannot_run_batches",  # Tested through the Azure and OpenAI mixed-group acreate_batch tests in test_router.py
     "_responses_continuation",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
     "_responses_continuation_ceilings",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
+    "_read_global_usage_remote",  # Tested through the shared Redis usage header tests in test_router_helper_utils.py
+    "_set_global_usage_local",  # Tested through the shared Redis usage header tests in test_router_helper_utils.py
     "_team_deployments_named",  # Tested through the team lookups in the concurrent delete tests in test_router.py
     "_served_openai_models",  # Cached as served_openai_models, tested through the pre-call check token count tests in test_router.py
     "priority_header_update",  # Tested through the priority header tests in test_common_request_processing.py
