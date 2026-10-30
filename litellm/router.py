@@ -83,7 +83,6 @@ from litellm.caching.caching import (
     RedisCache,
     RedisClusterCache,
 )
-from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import (
     BAGGAGE_MAPPED_TAGS_METADATA_KEY,
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
@@ -181,6 +180,13 @@ from litellm.llms.openai_like.model_info import (
     MODEL_INFO_REFRESH_CONCURRENCY,
     MODEL_INFO_REFRESH_SECONDS,
     get_openai_compatible_model_info,
+)
+from litellm.redis.stores.claude_code_router_binding import (
+    ClaudeCodeRouterBindingStore,
+    SessionRouterScope,
+    TransportClaudeCodeRouterBindingStore,
+    binding_key,
+    binding_scope,
 )
 from litellm.redis.stores.router_global_usage import (
     GlobalUsageCounter,
@@ -16238,6 +16244,10 @@ class Router(DeprecatedRouterMembers):
         )
 
     def _claude_code_session_router_cache_key(self, request_kwargs: Mapping[str, object]) -> str | None:
+        scope: Final = self._claude_code_session_router_scope(request_kwargs)
+        return None if scope is None else binding_key(scope)
+
+    def _claude_code_session_router_scope(self, request_kwargs: Mapping[str, object]) -> SessionRouterScope | None:
         session_id: Final = self._request_header(request_kwargs, "x-claude-code-session-id")
         if session_id is None or _CLAUDE_CODE_SESSION_ID_RE.fullmatch(session_id) is None:
             return None
@@ -16248,33 +16258,52 @@ class Router(DeprecatedRouterMembers):
         caller_scope: Final = metadata.get("user_api_key_hash")
         if not isinstance(caller_scope, str) or not caller_scope:
             return None
-        return f"claude_code_session_router:v1:{caller_scope}:{session_id}"
+        return SessionRouterScope(caller_scope, session_id)
 
     @with_service_target(CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET)
-    async def _delete_claude_code_session_router_binding(self, cache_key: str) -> None:
+    async def _delete_claude_code_session_router_binding(self, cache_key: SessionRouterScope | str) -> None:
+        scope: Final = binding_scope(cache_key) if isinstance(cache_key, str) else cache_key
+        if scope is None:
+            return
         try:
-            await self._claude_code_session_router_cache.async_delete_cache(key=cache_key)
-        except Exception as e:  # noqa: BLE001  # cache cleanup must not fail an otherwise routable request
-            verbose_router_logger.warning(
-                "Failed to delete Claude Code session router binding; the binding may remain until its TTL expires: %s",
-                e,
-            )
+            session_cache: Final = self._claude_code_session_router_cache
+            session_cache.in_memory_cache.delete_cache(binding_key(scope))
+            redis: Final = session_cache.redis_cache
+            if redis is not None:
+                store: Final[ClaudeCodeRouterBindingStore] = TransportClaudeCodeRouterBindingStore(redis.transport())
+                await store.remove_binding(scope)
+        except Exception as e:  # noqa: BLE001  # local cache cleanup must not fail an otherwise routable request
+            verbose_router_logger.warning("Failed to delete Claude Code session router binding: %s", e)
 
     @with_service_target(CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET)
-    async def _get_claude_code_session_router_binding(self, cache_key: str) -> object:
-        session_cache: Final = self._claude_code_session_router_cache
-        try:
-            if session_cache.redis_cache is None:
-                return await session_cache.async_get_cache(key=cache_key)
-            return await session_cache.redis_cache.async_get_cache(key=cache_key)
-        except Exception as e:  # noqa: BLE001  # an optional binding must not make routing depend on Redis
-            log_redis_failure(
-                verbose_router_logger,
-                logging.WARNING,
-                "Failed to read Claude Code session router binding; using the requested model",
-                e,
-            )
+    async def _get_claude_code_session_router_binding(self, cache_key: SessionRouterScope | str) -> str | None:
+        scope: Final = binding_scope(cache_key) if isinstance(cache_key, str) else cache_key
+        if scope is None:
             return None
+        session_cache: Final = self._claude_code_session_router_cache
+        redis: Final = session_cache.redis_cache
+        if redis is None:
+            local: Final = _OPAQUE_VALUE_ADAPTER.validate_python(
+                await session_cache.async_get_cache(key=binding_key(scope), local_only=True)
+            )
+            return local if isinstance(local, str) else None
+        store: Final[ClaudeCodeRouterBindingStore] = TransportClaudeCodeRouterBindingStore(redis.transport())
+        shared: Final = await store.read_binding(scope)
+        return None if isinstance(shared, RedisFailure) else shared
+
+    @with_service_target(CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET)
+    async def _bind_claude_code_session_router(self, scope: SessionRouterScope, model: str) -> None:
+        session_cache: Final = self._claude_code_session_router_cache
+        await session_cache.async_set_cache(
+            key=binding_key(scope),
+            value=model,
+            ttl=_CLAUDE_CODE_SESSION_ROUTER_TTL_SECONDS,
+            local_only=True,
+        )
+        redis: Final = session_cache.redis_cache
+        if redis is not None:
+            store: Final[ClaudeCodeRouterBindingStore] = TransportClaudeCodeRouterBindingStore(redis.transport())
+            await store.bind_router(scope, model, ttl=timedelta(seconds=_CLAUDE_CODE_SESSION_ROUTER_TTL_SECONDS))
 
     @with_service_target(CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET)
     async def _resolve_claude_code_session_router(
@@ -16294,36 +16323,28 @@ class Router(DeprecatedRouterMembers):
             )
         ):
             return registered_model_name
-        cache_key: Final = self._claude_code_session_router_cache_key(request_kwargs)
-        if cache_key is None or not isinstance(request_kwargs, dict):
+        scope: Final = self._claude_code_session_router_scope(request_kwargs)
+        if scope is None or not isinstance(request_kwargs, dict):
             return registered_model_name
         if request_kwargs.get("fallback_depth") not in (None, 0):
             return registered_model_name
 
         agent_id: Final = self._request_header(request_kwargs, "x-claude-code-agent-id")
         if agent_id is not None:
-            bound_model: Final = await self._get_claude_code_session_router_binding(cache_key)
+            bound_model: Final = await self._get_claude_code_session_router_binding(scope)
             if not isinstance(bound_model, str):
                 return registered_model_name
             bound_registered_model: Final = self._core_get_model_from_alias(model=bound_model) or bound_model
             if self._select_pre_routing_strategy(bound_registered_model, request_kwargs) is None:
-                await self._delete_claude_code_session_router_binding(cache_key)
+                await self._delete_claude_code_session_router_binding(scope)
                 return registered_model_name
-            await self._claude_code_session_router_cache.async_set_cache(
-                key=cache_key,
-                value=bound_model,
-                ttl=_CLAUDE_CODE_SESSION_ROUTER_TTL_SECONDS,
-            )
+            await self._bind_claude_code_session_router(scope, bound_model)
             self._stamp_or_clear_metadata_key(request_kwargs, "model_group", bound_model)
             return bound_registered_model
 
         if self._select_pre_routing_strategy(registered_model_name, request_kwargs) is None:
             return registered_model_name
-        await self._claude_code_session_router_cache.async_set_cache(
-            key=cache_key,
-            value=model,
-            ttl=_CLAUDE_CODE_SESSION_ROUTER_TTL_SECONDS,
-        )
+        await self._bind_claude_code_session_router(scope, model)
         return registered_model_name
 
     async def _core_async_pre_routing_hook(
