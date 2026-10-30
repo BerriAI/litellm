@@ -14,6 +14,42 @@ use crate::{
     request::{self, Path},
 };
 
+const DEPLOYMENT_DEFAULT_PARAMS: &[&str] = &[
+    "functions",
+    "function_call",
+    "temperature",
+    "top_p",
+    "n",
+    "stream_options",
+    "stop",
+    "max_completion_tokens",
+    "modalities",
+    "prediction",
+    "audio",
+    "max_tokens",
+    "presence_penalty",
+    "frequency_penalty",
+    "logit_bias",
+    "user",
+    "response_format",
+    "seed",
+    "tools",
+    "tool_choice",
+    "parallel_tool_calls",
+    "logprobs",
+    "top_logprobs",
+    "reasoning_effort",
+    "thinking",
+    "web_search_options",
+    "include_server_side_tool_invocations",
+    "service_tier",
+    "prompt_cache_key",
+    "prompt_cache_retention",
+    "safety_identifier",
+    "verbosity",
+    "store",
+];
+
 pub(crate) async fn create(
     State(gateway): State<Arc<Gateway>>,
     identity: AuthenticatedRequest,
@@ -46,6 +82,10 @@ async fn handle(
     let deployment = request::resolve_deployment(gateway, "/chat/completions", &body)?;
     request::authorize_model(identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
+    let body: Map<String, Value> =
+        request::deployment_defaults(deployment, DEPLOYMENT_DEFAULT_PARAMS)
+            .chain(body)
+            .collect();
     let route = gateway.chat_completions.clone();
     let route = match &gateway.cache {
         Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(

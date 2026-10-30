@@ -4,8 +4,39 @@ use axum::{Json, body::Bytes, extract::State, response::Response};
 use litellm_gateway_auth::AuthenticatedRequest;
 use litellm_host_http::Sse;
 use litellm_inference_responses::{route::Responses, types::ResponsesCall};
+use serde_json::{Map, Value};
 
 use crate::{Error, Gateway, JsonObject, request};
+
+const DEPLOYMENT_DEFAULT_PARAMS: &[&str] = &[
+    "include",
+    "instructions",
+    "max_output_tokens",
+    "parallel_tool_calls",
+    "previous_response_id",
+    "reasoning",
+    "store",
+    "background",
+    "temperature",
+    "text",
+    "tool_choice",
+    "tools",
+    "top_p",
+    "truncation",
+    "user",
+    "service_tier",
+    "safety_identifier",
+    "prompt",
+    "max_tool_calls",
+    "prompt_cache_key",
+    "prompt_cache_retention",
+    "prompt_cache_options",
+    "moderation",
+    "stream_options",
+    "top_logprobs",
+    "partial_images",
+    "context_management",
+];
 
 pub(crate) async fn create(
     State(gateway): State<Arc<Gateway>>,
@@ -15,6 +46,10 @@ pub(crate) async fn create(
     let deployment = request::resolve_deployment(&gateway, "/responses", &body)?;
     request::authorize_model(&identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(&identity, body)?;
+    let body: Map<String, Value> =
+        request::deployment_defaults(deployment, DEPLOYMENT_DEFAULT_PARAMS)
+            .chain(body)
+            .collect();
     let route = gateway.responses.clone();
     let route = match &gateway.cache {
         Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(

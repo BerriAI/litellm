@@ -52,6 +52,41 @@ async fn responses_aliases_run_the_core_route(
 }
 
 #[rstest]
+#[case::deployment_fills_unset_params(json!({}), json!({"max_output_tokens": 300}))]
+#[case::client_params_win(json!({"max_output_tokens": 50}), json!({"max_output_tokens": 50}))]
+#[tokio::test]
+async fn responses_send_deployment_litellm_params_the_client_leaves_unset(
+    #[case] client_params: serde_json::Value,
+    #[case] sent_params: serde_json::Value,
+) {
+    let upstream = MockServer::start().await;
+    let sent = json!({"model": "test-model", "input": "hello"});
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .and(body_json(support::merged(sent, sent_params)))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"id": "response-1", "model": "test-model", "output": []})),
+        )
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let app = support::app_with_litellm_params(
+        "openai/test-model",
+        &upstream.uri(),
+        json!({
+            "model": "openai/test-model",
+            "max_output_tokens": 300,
+            "metadata": {"team": "search"},
+            "input_cost_per_token": 0.000001,
+        }),
+    );
+    let body = json!({"model": "public/model", "input": "hello"});
+    let response = support::post(app, "/v1/responses", support::merged(body, client_params)).await;
+    assert_eq!(response.status(), 200);
+}
+
+#[rstest]
 #[case::missing_input(json!({"model": "public/model"}), 400)]
 #[case::invalid_stream(json!({"model": "public/model", "input": "hello", "stream": "yes"}), 400)]
 #[case::unknown_model(json!({"model": "unknown", "input": "hello"}), 400)]

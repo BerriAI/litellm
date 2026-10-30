@@ -141,6 +141,16 @@ pub(crate) fn resolve_deployment<'a>(
         })
 }
 
+pub(crate) fn deployment_defaults<'a>(
+    deployment: &'a Deployment,
+    names: &'static [&'static str],
+) -> impl Iterator<Item = (String, Value)> + 'a {
+    names.iter().filter_map(|name| {
+        let value = deployment.litellm_params.extra.get(*name)?;
+        (!value.is_null()).then(|| ((*name).to_owned(), value.clone()))
+    })
+}
+
 async fn parse_multipart(mut multipart: Multipart) -> Result<InferenceBody, Error> {
     let mut fields = Map::new();
     let mut upload = None;

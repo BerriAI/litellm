@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{body_partial_json, method},
+    matchers::{body_json, body_partial_json, method},
 };
 
 #[rstest]
@@ -65,6 +65,52 @@ async fn chat_aliases_call_core_and_use_the_body_model_before_the_path(
         support::json(response).await["choices"][0]["message"]["content"],
         "hello"
     );
+}
+
+#[rstest]
+#[case::deployment_fills_unset_params(json!({}), json!({"temperature": 0.2, "max_tokens": 40}))]
+#[case::client_params_win(
+    json!({"temperature": 0.7, "max_tokens": 16}),
+    json!({"temperature": 0.7, "max_tokens": 16})
+)]
+#[tokio::test]
+async fn chat_sends_deployment_litellm_params_the_client_leaves_unset(
+    #[case] client_params: Value,
+    #[case] sent_params: Value,
+) {
+    let upstream = MockServer::start().await;
+    let sent = json!({
+        "model": "test-model",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+    });
+    Mock::given(method("POST"))
+        .and(body_json(support::merged(sent, sent_params)))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "msg_test", "model": "test-model", "content": [{"type": "text", "text": "hello"}],
+            "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1}
+        })))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let app = support::app_with_litellm_params(
+        "anthropic/test-model",
+        &upstream.uri(),
+        json!({
+            "model": "anthropic/test-model",
+            "temperature": 0.2,
+            "max_tokens": 40,
+            "top_p": null,
+            "input_cost_per_token": 0.000001,
+        }),
+    );
+    let body = json!({"model": "public/model", "messages": [{"role": "user", "content": "hi"}]});
+    let response = support::post(
+        app,
+        "/v1/chat/completions",
+        support::merged(body, client_params),
+    )
+    .await;
+    assert_eq!(response.status(), 200);
 }
 
 #[rstest]
