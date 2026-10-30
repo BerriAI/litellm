@@ -65,8 +65,8 @@ def _http_error_status(value: object) -> int | None:
             return None
         case int() if value in _HTTP_ERROR_STATUSES:
             return value
-        case str() if len(value) == 3 and value.isascii() and value.isdigit():
-            return _http_error_status(int(value))
+        case str() if len(value) == 3 and value.isascii() and value.isdigit() and int(value) in _HTTP_ERROR_STATUSES:
+            return int(value)
         case _:
             return None
 
