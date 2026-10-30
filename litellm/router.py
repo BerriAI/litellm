@@ -9447,6 +9447,8 @@ class Router(DeprecatedRouterMembers):
                     return response
 
                 except Exception as e:
+                    if is_guardrail_intervention(e):
+                        raise
                     # Always track the latest error so we raise the most
                     # recent exception instead of the first one.
                     original_exception = e
