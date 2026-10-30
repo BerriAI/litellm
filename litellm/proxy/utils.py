@@ -4225,6 +4225,9 @@ class ProxyLogging:
                     response = callback_response
         except Exception as e:
             raise e
+        from litellm.proxy.auth.native_mcp_policy import check_native_mcp_response
+
+        check_native_mcp_response(user_api_key_dict, TypeAdapter(Mapping[str, object]).validate_python(data), response)
         return response
 
     async def _run_parallel_post_call_guardrails(

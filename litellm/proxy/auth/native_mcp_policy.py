@@ -188,3 +188,21 @@ def check_native_mcp_request(identity: NativeMCPIdentity, data: Mapping[str, obj
     from litellm.proxy.guardrails.tool_name_extraction import extract_request_mcp_accesses
 
     raise_native_mcp_denial(evaluate_native_mcp_policy(policy, extract_request_mcp_accesses(data)))
+
+
+def check_native_mcp_response(identity: NativeMCPIdentity, data: Mapping[str, object], response: object) -> None:
+    policy: Final = resolve_native_mcp_policy(identity)
+    if policy is None:
+        return
+    from litellm.proxy.guardrails.tool_name_extraction import (
+        extract_request_mcp_accesses,
+        extract_response_mcp_accesses,
+    )
+
+    request_accesses: Final = extract_request_mcp_accesses(data)
+    raise_native_mcp_denial(evaluate_native_mcp_policy(policy, request_accesses))
+    if isinstance(request_accesses, NativeMCPDenial) or is_gateway_only(request_accesses):
+        return
+    raise_native_mcp_denial(
+        evaluate_native_mcp_policy(policy, extract_response_mcp_accesses(response, request_accesses))
+    )

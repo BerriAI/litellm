@@ -8,6 +8,7 @@ from litellm.proxy.auth.native_mcp_policy import (
     NativeMCPAccess,
     NativeMCPDenial,
     check_native_mcp_request,
+    check_native_mcp_response,
     evaluate_native_mcp_policy,
     resolve_native_mcp_policy,
 )
@@ -238,3 +239,54 @@ def test_native_tool_denial_uses_existing_guardrail_stop_routing_classification(
         check_native_mcp_request(identity(), request(["delete_repo"]))
     assert is_guardrail_intervention(error.value)
     assert not is_guardrail_intervention(ProxyException("provider unavailable", "server_error", None, 503))
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"output": [{"type": "mcp_call", "server_label": "github", "name": "delete_repo"}]},
+        {"content": [{"type": "mcp_tool_use", "server_name": "github", "name": "delete_repo"}]},
+        {"output": [{"type": "mcp_call", "server_label": "other", "name": "search_code"}]},
+        {"output": [{"type": "mcp_call", "server_label": "github"}]},
+    ],
+)
+def test_response_policy_blocks_ungranted_calls(response: dict[str, object]) -> None:
+    with pytest.raises(ProxyException):
+        check_native_mcp_response(identity(), request(), response)
+
+
+def test_gateway_only_response_keeps_existing_controls() -> None:
+    caller: Final = UserAPIKeyAuth(metadata={"native_mcp_policy": {}})
+    gateway: Final = request(None, "litellm_proxy/mcp/github")
+    assert check_native_mcp_request(caller, gateway) is None
+    assert (
+        check_native_mcp_response(
+            caller, gateway, {"output": [{"type": "mcp_call", "server_label": "litellm", "name": "search_code"}]}
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_existing_success_hook_rejects_ungranted_native_response() -> None:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    response: Final = ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_test",
+            "created_at": 1,
+            "model": "test-model",
+            "object": "response",
+            "output": [
+                {"id": "call-1", "type": "mcp_call", "server_label": "github", "name": "delete_repo", "arguments": "{}"}
+            ],
+            "parallel_tool_calls": False,
+            "tool_choice": "auto",
+            "tools": [],
+        }
+    )
+    with pytest.raises(ProxyException, match="delete_repo"):
+        await logging.post_call_success_hook(data=request(), response=response, user_api_key_dict=identity())

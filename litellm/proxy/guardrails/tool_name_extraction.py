@@ -222,3 +222,39 @@ def _is_gateway_mcp_url(url: object) -> bool:
     from litellm.responses.mcp.tool_precheck import LITELLM_PROXY_MCP_SERVER_URL
 
     return isinstance(url, str) and url.startswith(LITELLM_PROXY_MCP_SERVER_URL)
+
+
+def _response_mcp_access(
+    item: Mapping[str, object], request_accesses: tuple[NativeMCPAccess, ...]
+) -> NativeMCPExtraction:
+    kind: Final = item.get("type")
+    if kind not in ("mcp_call", "mcp_tool_use", "mcp_approval_request", "mcp_list_tools"):
+        return ()
+    name: Final = item.get("server_name") if kind == "mcp_tool_use" else item.get("server_label")
+    matching: Final = tuple(access for access in request_accesses if access.server_name == name)
+    if not matching:
+        return NativeMCPDenial("Native MCP response references a server absent from the validated request")
+    try:
+        tool_names: Final = () if kind == "mcp_list_tools" else _MCP_NAMES.validate_python((item.get("name"),))
+        return (NativeMCPAccess(matching[0].server_name, matching[0].server_url, tool_names, matching[0].source),)
+    except ValidationError:
+        return NativeMCPDenial("Native MCP response has no readable tool name")
+
+
+def extract_response_mcp_accesses(
+    response: object, request_accesses: tuple[NativeMCPAccess, ...]
+) -> NativeMCPExtraction:
+    data: Final = as_str_mapping(response.model_dump() if isinstance(response, BaseModel) else response)
+    if data is None:
+        return NativeMCPDenial("Cannot read the response for native MCP policy validation")
+    try:
+        items: Final = (*_mcp_entries(data, "output"), *_mcp_entries(data, "content"))
+    except ValidationError:
+        return NativeMCPDenial("Cannot read native MCP response items")
+    results: Final = tuple(_response_mcp_access(item, request_accesses) for item in items)
+    failure: Final = next((result for result in results if isinstance(result, NativeMCPDenial)), None)
+    if failure is not None:
+        return failure
+    from itertools import chain
+
+    return tuple(chain.from_iterable(result for result in results if isinstance(result, tuple)))

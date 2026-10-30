@@ -60,10 +60,16 @@ An omitted or empty attachment allowlist is treated conservatively as unbounded 
 
 The proxy checks every offered native MCP server and tool. Any denial rejects the entire request with HTTP 400 and `tool_access_denied`, naming the denied server or tools. It does not strip tools or rewrite the request's tool restrictions. A caller cannot substitute another URL under an approved label.
 
+## Response enforcement
+
+Native MCP call records in non-streaming responses are checked against the same policy before returning the response. Response server labels are bound to the URLs from the validated request. A call with an unknown server or unreadable tool name is rejected.
+
+Streaming response enforcement is added in the dependent change.
+
+Response enforcement cannot undo a tool the provider already executed. Request-side restrictions are what constrain the tools the provider is authorized to execute.
+
 ## Scope
 
 This policy covers `/v1/chat/completions`, `/v1/responses`, and `/v1/messages`, including their existing aliases. It does not add enforcement to direct provider passthrough routes such as `/bedrock/...`, stored-response retrieval, or SDK-only calls.
 
 Ordinary function tools, provider built-ins, and local tools named `mcp__server__tool` keep their existing controls. The existing `metadata.allowed_tools` list remains independent and still applies when configured. Requests containing only `litellm_proxy` MCP attachments keep the existing MCP gateway permissions and response handling. When a native policy is active, mixing gateway and provider-native attachments in one request returns HTTP 400. Use separate requests for the two execution paths. Registries, reusable named policies, and a management UI are outside this version.
-
-Response enforcement, including streaming, is added in the dependent changes.
