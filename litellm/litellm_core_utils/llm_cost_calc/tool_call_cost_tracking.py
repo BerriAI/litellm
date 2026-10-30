@@ -613,12 +613,26 @@ class StandardBuiltInToolCostTracking:
                 message: Message | None = getattr(choice, "message", None)
                 if message is None:
                     continue
-                annotations: list[ChatCompletionAnnotation] | None = getattr(message, "annotations", None)
-                if annotations:
-                    for annotation in annotations:
-                        if annotation.get("type", None) == annotation_type:
-                            return True
+                for annotation in StandardBuiltInToolCostTracking._message_annotations(message):
+                    if annotation.get("type", None) == annotation_type:
+                        return True
         return False
+
+    @staticmethod
+    def _message_annotations(message: Message) -> list[ChatCompletionAnnotation]:
+        """Every annotation on the message, wherever the split put it.
+
+        `Message.annotations` is typed for `url_citation` only, so file citations travel
+        under `provider_specific_fields["annotations"]` and were invisible to the cost
+        detector, which billed streamed file search at 0.0.
+        """
+        annotations: list[ChatCompletionAnnotation] = list(getattr(message, "annotations", None) or [])
+        provider_specific_fields = getattr(message, "provider_specific_fields", None)
+        if isinstance(provider_specific_fields, Mapping):
+            nested = cast("Mapping[str, object]", provider_specific_fields).get("annotations")
+            if isinstance(nested, list):
+                annotations.extend(cast("list[ChatCompletionAnnotation]", nested))
+        return annotations
 
     @staticmethod
     def response_includes_output_type(

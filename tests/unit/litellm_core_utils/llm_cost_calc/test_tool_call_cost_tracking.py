@@ -1060,3 +1060,45 @@ def test_azure_ai_non_claude_web_search_keeps_generic_fallback() -> None:
 def test_built_in_tool_lookups_ignore_malformed_request_values(kwargs: dict[str, object]) -> None:
     assert StandardBuiltInToolCostTracking.get_web_search_options(kwargs) is None
     assert StandardBuiltInToolCostTracking.get_file_search_tool_call(kwargs) is None
+
+
+def _response_with_annotations(**message_kwargs) -> ModelResponse:
+    from litellm.types.utils import Choices, Message
+
+    message = Message(content="", role="assistant", **message_kwargs)
+    return ModelResponse(choices=[Choices(message=message)], model="gpt-4o")
+
+
+def test_file_citation_under_provider_specific_fields_is_a_file_search_call():
+    """A streamed file citation must still be billed.
+
+    `Message.annotations` is typed for `url_citation` only, so file citations sit in
+    `provider_specific_fields["annotations"]` after the provider-specific split. The
+    detector only read the former, so streamed file search was priced at 0.
+    """
+    response = _response_with_annotations(
+        provider_specific_fields={
+            "annotations": [{"type": "file_citation", "file_id": "file-abc123", "filename": "doc.pdf", "index": 0}]
+        }
+    )
+
+    assert StandardBuiltInToolCostTracking.response_object_includes_file_search_call(response) is True
+
+
+def test_url_citation_is_not_a_file_search_call():
+    """A url citation is a web search result, not a file search one."""
+    response = _response_with_annotations(
+        provider_specific_fields={
+            "annotations": [
+                {
+                    "type": "url_citation",
+                    "url": "https://example.com",
+                    "title": "example",
+                    "start_index": 0,
+                    "end_index": 1,
+                }
+            ]
+        }
+    )
+
+    assert StandardBuiltInToolCostTracking.response_object_includes_file_search_call(response) is False
