@@ -2,9 +2,9 @@ from typing import Final
 
 import httpx
 
-import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.openai_like.model_info import list_openai_compatible_model_ids
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import add_path_to_api_base
@@ -61,24 +61,19 @@ class VLLMModelInfo(BaseLLMModelInfo):
         return model
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
-        api_base = VLLMModelInfo.get_api_base(api_base)
-        api_key = VLLMModelInfo.get_api_key(api_key)
-        endpoint: Final = "/v1/models"
-        if api_base is None or api_key is None:
+        """
+        Reads the server and key the same way `hosted_vllm` chat calls do. `get_api_key` above always answers None
+        (the passthrough route sends no key), so model listing must not lean on it or every listing fails.
+        """
+        resolved_api_base: Final = api_base or get_secret_str("HOSTED_VLLM_API_BASE") or get_secret_str("VLLM_API_BASE")
+        if resolved_api_base is None:
             raise ValueError(
-                "VLLM_API_BASE or VLLM_API_KEY is not set. Please set the environment variable, to query VLLM's `/models` endpoint."
+                "Set api_base (or HOSTED_VLLM_API_BASE / VLLM_API_BASE) to list the models a vLLM server serves."
             )
-
-        url: Final = add_path_to_api_base(api_base, endpoint)
-        response: Final = litellm.module_level_client.get(
-            url=url,
+        return list_openai_compatible_model_ids(
+            models_url=add_path_to_api_base(resolved_api_base, "/v1/models"),
+            api_key=api_key or get_secret_str("HOSTED_VLLM_API_KEY"),
         )
-
-        response.raise_for_status()
-
-        models: Final = response.json()["data"]
-
-        return [model["id"] for model in models]
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return VLLMError(status_code=status_code, message=error_message, headers=headers)
