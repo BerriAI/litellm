@@ -2,15 +2,16 @@
 Integration tests for BaseManagedResource listing and access control.
 """
 
-from typing import List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from litellm.caching.dual_cache import DualCache
 from litellm.llms.base_llm.managed_resources.base_managed_resource import (
     BaseManagedResource,
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.utils import InternalUsageCache
 
 
 class _StubResource(BaseManagedResource):
@@ -24,18 +25,14 @@ class _StubResource(BaseManagedResource):
     def table_name(self) -> str:
         return "litellm_test_resource_table"
 
-    def get_unified_resource_id_format(
-        self, resource_object, target_model_names_list
-    ) -> str:
+    def get_unified_resource_id_format(self, resource_object, target_model_names_list) -> str:
         return "test"
 
-    async def create_resource_for_model(
-        self, llm_router, model, request_data, litellm_parent_otel_span
-    ):
+    async def create_resource_for_model(self, llm_router, model, request_data, litellm_parent_otel_span):
         return {"id": "test"}
 
 
-def _make_resource(records: List = None) -> _StubResource:
+def _make_resource(records: list[object] | None = None) -> _StubResource:
     cache = MagicMock()
     cache.async_get_cache = AsyncMock(return_value=None)
 
@@ -68,9 +65,7 @@ async def test_list_user_filters_by_user_id():
 
     await resource.list_user_resources(user_api_key_dict=user)
 
-    where = resource.prisma_client.db.litellm_test_resource_table.find_many.await_args.kwargs[
-        "where"
-    ]
+    where = resource.prisma_client.db.litellm_test_resource_table.find_many.await_args.kwargs["where"]
     assert where["created_by"] == "alice"
     assert "team_id" not in where
 
@@ -82,9 +77,7 @@ async def test_list_service_account_filters_by_team_id():
 
     await resource.list_user_resources(user_api_key_dict=service_account)
 
-    where = resource.prisma_client.db.litellm_test_resource_table.find_many.await_args.kwargs[
-        "where"
-    ]
+    where = resource.prisma_client.db.litellm_test_resource_table.find_many.await_args.kwargs["where"]
     assert where["team_id"] == "team-eng"
     assert "created_by" not in where
 
@@ -114,18 +107,17 @@ async def test_list_identity_less_caller_returns_empty_without_query():
     [("team-eng", True), ("team-sales", False), (None, False)],
 )
 async def test_can_access_uses_team_id_for_service_account(caller_team_id, expected):
-    cache = MagicMock()
-    cache.async_get_cache = AsyncMock(
-        return_value={
+    cache = DualCache()
+    await cache.async_set_cache(
+        key="rid",
+        value={
             "created_by": None,
             "team_id": "team-eng",
-        }
+        },
     )
     prisma = MagicMock()
-    resource = _StubResource(internal_usage_cache=cache, prisma_client=prisma)
+    resource = _StubResource(internal_usage_cache=InternalUsageCache(cache), prisma_client=prisma)
 
-    caller = (
-        UserAPIKeyAuth(team_id=caller_team_id) if caller_team_id else UserAPIKeyAuth()
-    )
+    caller = UserAPIKeyAuth(team_id=caller_team_id) if caller_team_id else UserAPIKeyAuth()
 
     assert await resource.can_user_access_unified_resource_id("rid", caller) is expected
