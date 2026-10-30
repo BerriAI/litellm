@@ -10265,11 +10265,8 @@ class _BroadcastRecordingRedis:
         self.broadcast_keys: list[str] = []
         self._round_trip_seconds = round_trip_seconds
 
-    def _init_pubsub_client(self) -> "_BroadcastRecordingRedis":
-        return self
-
     def _pubsub_client(self) -> "_BroadcastRecordingRedis":
-        return self._init_pubsub_client()
+        return self
 
     async def send(self, messages: Sequence[str]) -> None:
         if self._round_trip_seconds:

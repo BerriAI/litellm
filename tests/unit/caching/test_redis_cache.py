@@ -175,6 +175,26 @@ def test_deprecated_attribute_assignment_warns_and_reads_back(factory_backends, 
         assert getattr(factory_backends.cache, name) is replacement
 
 
+@pytest.mark.filterwarnings("ignore:.*raw redis-py client:DeprecationWarning")
+def test_patch_object_on_redis_client_serves_reads_and_restores(factory_backends) -> None:
+    replacement: Final = MagicMock()
+    replacement.get.return_value = '"from-patch"'
+
+    with patch.object(factory_backends.cache, "redis_client", replacement):
+        assert factory_backends.cache.get_cache("patched-key") == "from-patch"
+
+    factory_backends.sync_client.get.return_value = '"from-original"'
+    assert factory_backends.cache.get_cache("patched-key") == "from-original"
+
+
+@pytest.mark.filterwarnings("ignore:.*raw redis-py client:DeprecationWarning")
+@pytest.mark.parametrize("name", ["redis_client", "redis_async_client", "async_redis_conn_pool"])
+def test_deleted_deprecated_attribute_is_absent_like_a_plain_attribute(factory_backends, name: str) -> None:
+    delattr(factory_backends.cache, name)
+
+    assert not hasattr(factory_backends.cache, name)
+
+
 def test_assigned_sync_redis_client_serves_sync_reads(factory_backends) -> None:
     replacement: Final = MagicMock()
     replacement.get.return_value = '"from-assigned-client"'

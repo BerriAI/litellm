@@ -744,6 +744,11 @@ class RedisCache(BaseCache):
     def redis_client(self, value: _SyncRedisClient) -> None:
         self._redis_client = value
 
+    @redis_client.deleter
+    @deprecated(_RAW_REDIS_CLIENT_DEPRECATION_MESSAGE)
+    def redis_client(self) -> None:
+        del self._redis_client
+
     @property
     @deprecated(_RAW_REDIS_CLIENT_DEPRECATION_MESSAGE)
     def redis_async_client(self) -> async_redis_client | async_redis_cluster_client | None:
@@ -754,6 +759,11 @@ class RedisCache(BaseCache):
     def redis_async_client(self, value: async_redis_client | async_redis_cluster_client | None) -> None:
         self._redis_async_client = value
 
+    @redis_async_client.deleter
+    @deprecated(_RAW_REDIS_CLIENT_DEPRECATION_MESSAGE)
+    def redis_async_client(self) -> None:
+        del self._redis_async_client
+
     @property
     @deprecated(_RAW_REDIS_CLIENT_DEPRECATION_MESSAGE)
     def async_redis_conn_pool(self) -> redis_conn_pool | None:
@@ -763,6 +773,11 @@ class RedisCache(BaseCache):
     @deprecated(_RAW_REDIS_CLIENT_DEPRECATION_MESSAGE)
     def async_redis_conn_pool(self, value: redis_conn_pool | None) -> None:
         self._async_redis_conn_pool = value
+
+    @async_redis_conn_pool.deleter
+    @deprecated(_RAW_REDIS_CLIENT_DEPRECATION_MESSAGE)
+    def async_redis_conn_pool(self) -> None:
+        del self._async_redis_conn_pool
 
     def _admit_async_call(self, call: Callable[[], Awaitable[_RedisCallResult]]) -> Awaitable[_RedisCallResult]:
         return call()
@@ -897,19 +912,16 @@ class RedisCache(BaseCache):
     def init_pubsub_client(self) -> async_redis_client:  # pyright: ignore[reportUnknownParameterType]  # redis generics
         return self._init_pubsub_client()
 
+    def _overrides(self, name: str, base: object) -> bool:
+        return name in vars(self) or getattr(type(self), name) is not base
+
     def _async_client(self) -> async_redis_client | async_redis_cluster_client:
-        if (
-            "init_async_client" in vars(self)
-            or type(self).init_async_client is not _BASE_INIT_ASYNC_CLIENT  # pyright: ignore[reportDeprecated]  # override probe
-        ):
+        if self._overrides("init_async_client", _BASE_INIT_ASYNC_CLIENT):
             return self.init_async_client()  # pyright: ignore[reportDeprecated]  # honors a legacy subclass override
         return self._init_async_client()
 
     def _pubsub_client(self) -> async_redis_client:  # pyright: ignore[reportUnknownParameterType]  # redis generics
-        if (
-            "init_pubsub_client" in vars(self)
-            or type(self).init_pubsub_client is not _BASE_INIT_PUBSUB_CLIENT  # pyright: ignore[reportDeprecated]  # override probe
-        ):
+        if self._overrides("init_pubsub_client", _BASE_INIT_PUBSUB_CLIENT):
             return self.init_pubsub_client()  # pyright: ignore[reportDeprecated, reportUnknownVariableType]  # honors a legacy subclass override
         return self._init_pubsub_client()  # pyright: ignore[reportUnknownVariableType]  # redis generics
 

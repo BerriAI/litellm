@@ -16,11 +16,8 @@ from litellm.proxy.mcp_server.byok_credential_cache import (
 class _FakeRedisCache:
     namespace = None
 
-    def _init_pubsub_client(self) -> object:
-        return object()
-
     def _pubsub_client(self) -> object:
-        return self._init_pubsub_client()
+        return object()
 
 
 @pytest.fixture(autouse=True)
