@@ -890,6 +890,10 @@ class ContentFilterPattern(LiteLLMBaseModel):
         description="Name for this pattern (used in logging and error messages)",
     )
     action: ContentFilterAction = Field(description="Action to take when pattern matches (BLOCK or MASK)")
+    prefix_pattern: str | None = Field(
+        default=None,
+        description="Optional regex pattern indicating a partial or open prefix of this pattern at stream boundaries",
+    )
 
 
 class ContentFilterConfigModel(LiteLLMBaseModel):
