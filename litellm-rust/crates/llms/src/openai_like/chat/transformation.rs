@@ -273,6 +273,8 @@ fn normalize_choice(position: usize, choice: &Value) -> Result<ChatCompletionsCh
                 .unwrap_or("assistant")
                 .to_string(),
             content: content.and_then(Value::as_str).map(str::to_string),
+            reasoning_content: None,
+            thinking_blocks: None,
         },
         finish_reason: choice
             .get("finish_reason")

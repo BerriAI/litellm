@@ -67,6 +67,43 @@ async fn chat_aliases_call_core_and_use_the_body_model_before_the_path(
     );
 }
 
+#[tokio::test]
+async fn chat_answers_a_claude_thinking_response_with_its_reasoning() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "msg_test", "model": "test-model",
+            "content": [{"type": "thinking", "thinking": "", "signature": "sig"}],
+            "stop_reason": "max_tokens", "usage": {"input_tokens": 1, "output_tokens": 16}
+        })))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let response = support::app("anthropic/test-model", &upstream.uri())
+        .oneshot(
+            Request::post("/v1/chat/completions")
+                .body(Body::from(
+                    json!({"model": "public/model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let choice = &support::json(response).await["choices"][0];
+    assert_eq!(choice["finish_reason"], "length");
+    assert_eq!(
+        choice["message"],
+        json!({
+            "role": "assistant",
+            "content": null,
+            "reasoning_content": "",
+            "thinking_blocks": [{"type": "thinking", "thinking": "", "signature": "sig"}]
+        })
+    );
+}
+
 #[rstest]
 #[case::streaming(json!({"messages": [{"role": "user", "content": "hi"}], "stream": true}), 501)]
 #[case::missing_messages(json!({}), 400)]

@@ -6,7 +6,8 @@ use litellm_core_utils::{
 };
 use litellm_llms_types::{
     formats::chat_completions::{
-        ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse, ChatMessage,
+        ChatCompletionThinkingBlock, ChatCompletionsChoice, ChatCompletionsChoiceMessage,
+        ChatCompletionsResponse, ChatMessage,
     },
     providers::anthropic::DEFAULT_HEADERS,
 };
@@ -49,21 +50,63 @@ const SUPPORTED_PARAMS: &[(&str, &str)] = &[
 ];
 
 #[derive(Deserialize)]
-struct TextResponseProjection {
+struct ResponseProjection {
     model: String,
-    content: Vec<TextResponseBlock>,
+    content: Vec<ResponseBlock>,
     usage: ResponseUsageProjection,
     stop_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum TextResponseBlock {
+enum ResponseBlock {
     Text {
         text: String,
     },
+    Thinking {
+        #[serde(default)]
+        thinking: Option<String>,
+        #[serde(default)]
+        signature: Option<String>,
+    },
+    RedactedThinking {
+        #[serde(default)]
+        data: Option<String>,
+    },
     #[serde(other)]
     Other,
+}
+
+impl ResponseBlock {
+    fn thinking_block(&self) -> Option<ChatCompletionThinkingBlock> {
+        match self {
+            Self::Thinking {
+                thinking,
+                signature,
+            } => Some(ChatCompletionThinkingBlock::Thinking {
+                thinking: thinking.clone(),
+                signature: signature.clone(),
+                cache_control: None,
+            }),
+            Self::RedactedThinking { data } => {
+                Some(ChatCompletionThinkingBlock::RedactedThinking {
+                    data: data.clone(),
+                    cache_control: None,
+                })
+            }
+            Self::Text { .. } | Self::Other => None,
+        }
+    }
+}
+
+fn reasoning_text(blocks: &[ChatCompletionThinkingBlock]) -> String {
+    blocks
+        .iter()
+        .filter_map(|block| match block {
+            ChatCompletionThinkingBlock::Thinking { thinking, .. } => thinking.as_deref(),
+            ChatCompletionThinkingBlock::RedactedThinking { .. } => None,
+        })
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -123,25 +166,29 @@ impl BaseConfig for AnthropicConfig {
         _model: &str,
         response: ProviderChatResponseData,
     ) -> Result<ChatCompletionsResponse, Error> {
-        let body: TextResponseProjection =
-            serde_json::from_value(response.body).map_err(|error| {
-                Error::InvalidResponse(crate::ErrorDetail::invalid("messages response", error))
-            })?;
+        let body: ResponseProjection = serde_json::from_value(response.body).map_err(|error| {
+            Error::InvalidResponse(crate::ErrorDetail::invalid("messages response", error))
+        })?;
         if body
             .content
             .iter()
-            .any(|block| matches!(block, TextResponseBlock::Other))
+            .any(|block| matches!(block, ResponseBlock::Other))
         {
             return Err(Error::InvalidResponse(crate::ErrorDetail::Unhandled(
                 "non-text response content block",
             )));
         }
+        let thinking_blocks: Vec<ChatCompletionThinkingBlock> = body
+            .content
+            .iter()
+            .filter_map(ResponseBlock::thinking_block)
+            .collect();
         let text: String = body
             .content
-            .into_iter()
-            .map(|block| match block {
-                TextResponseBlock::Text { text } => text,
-                TextResponseBlock::Other => String::new(),
+            .iter()
+            .filter_map(|block| match block {
+                ResponseBlock::Text { text } => Some(text.as_str()),
+                _ => None,
             })
             .collect();
 
@@ -153,6 +200,9 @@ impl BaseConfig for AnthropicConfig {
                 message: ChatCompletionsChoiceMessage {
                     role: "assistant".to_string(),
                     content: (!text.is_empty()).then_some(text),
+                    reasoning_content: (!thinking_blocks.is_empty())
+                        .then(|| reasoning_text(&thinking_blocks)),
+                    thinking_blocks: (!thinking_blocks.is_empty()).then_some(thinking_blocks),
                 },
                 finish_reason: finish_reason_for(body.stop_reason.as_deref().unwrap_or(""))
                     .to_string(),
@@ -645,6 +695,82 @@ mod tests {
             value.get("id").is_none(),
             "the rust response must not carry an id, got {value}"
         );
+    }
+
+    #[test]
+    fn a_thinking_response_returns_reasoning_content_and_thinking_blocks_like_python() {
+        let response = transform_response(json!({
+            "model": "claude-sonnet-4-5",
+            "content": [
+                {"type": "thinking", "thinking": "step one. ", "signature": "sig-1"},
+                {"type": "redacted_thinking", "data": "opaque"},
+                {"type": "thinking", "thinking": "step two.", "signature": "sig-2"},
+                {"type": "text", "text": "pong"}
+            ],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 3, "output_tokens": 9}
+        }))
+        .expect("a thinking response transforms");
+        let message = serde_json::to_value(&response.choices[0].message).expect("serializable");
+        assert_eq!(
+            message,
+            json!({
+                "role": "assistant",
+                "content": "pong",
+                "reasoning_content": "step one. step two.",
+                "thinking_blocks": [
+                    {"type": "thinking", "thinking": "step one. ", "signature": "sig-1"},
+                    {"type": "redacted_thinking", "data": "opaque"},
+                    {"type": "thinking", "thinking": "step two.", "signature": "sig-2"}
+                ]
+            })
+        );
+    }
+
+    #[rstest]
+    #[case::empty_thinking(
+        json!([{"type": "thinking", "thinking": "", "signature": "sig"}]),
+        json!([{"type": "thinking", "thinking": "", "signature": "sig"}])
+    )]
+    #[case::redacted_only(
+        json!([{"type": "redacted_thinking", "data": "opaque"}]),
+        json!([{"type": "redacted_thinking", "data": "opaque"}])
+    )]
+    fn thinking_cut_off_by_max_tokens_answers_with_empty_reasoning_and_no_content(
+        #[case] content: Value,
+        #[case] thinking_blocks: Value,
+    ) {
+        let response = transform_response(json!({
+            "model": "claude-sonnet-4-5",
+            "content": content,
+            "stop_reason": "max_tokens",
+            "usage": {"input_tokens": 3, "output_tokens": 16}
+        }))
+        .expect("a thinking-only response transforms");
+        let message = serde_json::to_value(&response.choices[0].message).expect("serializable");
+        assert_eq!(
+            message,
+            json!({
+                "role": "assistant",
+                "content": null,
+                "reasoning_content": "",
+                "thinking_blocks": thinking_blocks
+            })
+        );
+        assert_eq!(response.choices[0].finish_reason, "length");
+    }
+
+    #[test]
+    fn a_text_response_carries_no_reasoning_fields() {
+        let response = transform_response(json!({
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1}
+        }))
+        .expect("response transforms");
+        let message = serde_json::to_value(&response.choices[0].message).expect("serializable");
+        assert_eq!(message, json!({"role": "assistant", "content": "hi"}));
     }
 
     #[test]

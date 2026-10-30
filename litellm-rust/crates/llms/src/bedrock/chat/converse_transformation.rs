@@ -201,6 +201,8 @@ impl BaseConfig for AmazonConverseConfig {
                     // Anthropic. A caller calling `.strip()` on it would break
                     // on this path alone.
                     content: Some(text),
+                    reasoning_content: None,
+                    thinking_blocks: None,
                 },
                 finish_reason: finish_reason_for(
                     ConverseStopReason::parse(response.stop_reason)
