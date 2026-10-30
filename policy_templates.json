@@ -2708,5 +2708,192 @@
       "FIPPA"
     ],
     "estimated_latency_ms": 1
+  },
+  {
+    "id": "uk-pii-protection",
+    "title": "UK PII Protection (UK GDPR)",
+    "description": "Protects UK personal data under UK GDPR and the Data Protection Act 2018. Masks National Insurance Numbers, NHS numbers, driving licence numbers, Unique Taxpayer References, bank details, postcodes, phone numbers, and education identifiers.",
+    "icon": "ShieldCheckIcon",
+    "iconColor": "text-red-500",
+    "iconBg": "bg-red-50",
+    "guardrails": [
+      "uk-pii-government-identifiers",
+      "uk-pii-health-drivers",
+      "uk-pii-financial",
+      "uk-pii-contact-information",
+      "uk-pii-education-identifiers"
+    ],
+    "complexity": "Medium",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "uk-pii-government-identifiers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "uk_nino",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "uk_utr",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_uk",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks UK National Insurance Numbers, Unique Taxpayer References, and passport numbers"
+        }
+      },
+      {
+        "guardrail_name": "uk-pii-health-drivers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "uk_nhs_number",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "uk_driving_licence",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks UK NHS numbers and DVLA driving licence numbers"
+        }
+      },
+      {
+        "guardrail_name": "uk-pii-financial",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "uk_sort_code",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "uk_bank_account",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "credit_card",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "visa",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "mastercard",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "amex",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "iban",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks UK sort codes, bank account numbers, and payment card and IBAN details"
+        }
+      },
+      {
+        "guardrail_name": "uk-pii-contact-information",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "email",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "uk_phone",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "uk_postcode",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks email addresses, UK phone numbers, and postcodes"
+        }
+      },
+      {
+        "guardrail_name": "uk-pii-education-identifiers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "uk_upn",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "uk_uln",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks Unique Pupil Numbers and Unique Learner Numbers"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "uk-pii-protection",
+      "description": "UK PII protection policy under UK GDPR and the Data Protection Act 2018. Masks National Insurance Numbers, NHS numbers, driving licences, Unique Taxpayer References, bank details, postcodes, phone numbers, and education identifiers.",
+      "guardrails_add": [
+        "uk-pii-government-identifiers",
+        "uk-pii-health-drivers",
+        "uk-pii-financial",
+        "uk-pii-contact-information",
+        "uk-pii-education-identifiers"
+      ],
+      "guardrails_remove": []
+    },
+    "tags": [
+      "PII Protection",
+      "Regulatory",
+      "UK",
+      "UK GDPR"
+    ],
+    "estimated_latency_ms": 1
   }
 ]
