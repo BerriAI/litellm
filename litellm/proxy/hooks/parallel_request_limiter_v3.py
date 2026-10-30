@@ -3312,7 +3312,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if key_agent_id:
             return key_agent_id
         metadata: Final = data.get("metadata") or {}
-        return metadata.get("agent_id")
+        litellm_metadata: Final = data.get("litellm_metadata") or {}
+        return metadata.get("agent_id") or litellm_metadata.get("agent_id")
 
     def _get_session_id_from_data(self, data: dict) -> str | None:
         """Extract session_id from request metadata or litellm_session_id."""
