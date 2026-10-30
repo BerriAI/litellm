@@ -443,6 +443,7 @@ from litellm.proxy.auth.model_checks import (
     get_key_models,
     get_mcp_server_ids,
     get_team_models,
+    model_info_cost_map_entry,
     wildcard_row_priced_model,
 )
 from litellm.proxy.auth.password_policy import validate_password_not_breached, validate_password_policy
@@ -16149,30 +16150,12 @@ def _enrich_model_info_with_litellm_data(
     priced_model: Final = (
         model if priced_as is None else {**model, "litellm_params": {**model["litellm_params"], "model": priced_as}}
     )
-    litellm_model_info = get_litellm_model_info(model=priced_model)
-
-    # 2nd pass on the model, try seeing if we can find model in litellm model_cost map
-    if litellm_model_info == {}:
-        # use litellm_param model_name to get model_info
-        litellm_params = priced_model.get("litellm_params", {})
-        litellm_model = litellm_params.get("model", None)
-        try:
-            litellm_model_info = litellm.get_model_info(model=litellm_model)
-        except Exception:
-            litellm_model_info = {}
-    # 3rd pass on the model, try seeing if we can find model but without the "/" in model cost map
-    if litellm_model_info == {}:
-        # use litellm_param model_name to get model_info
-        litellm_params = priced_model.get("litellm_params", {})
-        litellm_model = litellm_params.get("model", None)
-        if litellm_model:
-            split_model: Final = litellm_model.split("/")
-            if len(split_model) > 0:
-                litellm_model = split_model[-1]
-            try:
-                litellm_model_info = litellm.get_model_info(model=litellm_model, custom_llm_provider=split_model[0])
-            except Exception:
-                litellm_model_info = {}
+    priced_litellm_model: Final = priced_model.get("litellm_params", {}).get("model")
+    litellm_model_info: Final = get_litellm_model_info(model=priced_model) or (
+        model_info_cost_map_entry(priced_litellm_model)
+        if isinstance(priced_litellm_model, str)
+        else MappingProxyType({})
+    )
     discovered_model_info: Final = (
         llm_router.registry().discovered_model_info(model_info.get("id"))
         if llm_router is not None

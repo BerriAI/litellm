@@ -888,6 +888,152 @@ def test_model_info_prices_a_team_wildcard_row_by_the_route_its_team_takes(
     _invalidate_model_cost_lowercase_map()
 
 
+def _catch_all_and_shadowed_wildcard_router(monkeypatch: pytest.MonkeyPatch) -> litellm.Router:
+    from litellm.proxy.auth import model_checks
+
+    catalog: Final = {
+        "gpt-5.6-acme": {
+            "input_cost_per_token": 3e-07,
+            "output_cost_per_token": 4e-07,
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+        "fireworks_ai/accounts/fireworks/models/acme-pro": {
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 2.5e-07,
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+        },
+        "deepseek/acme-lite": {
+            "input_cost_per_token": 7e-07,
+            "output_cost_per_token": 8e-07,
+            "litellm_provider": "deepseek",
+            "mode": "chat",
+        },
+    }
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
+    _invalidate_model_cost_lowercase_map()
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: {
+            "openai": ["gpt-5.6-acme"],
+            "fireworks_ai": ["fireworks_ai/accounts/fireworks/models/acme-pro"],
+        }.get(provider, []),
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "*",
+                "litellm_params": {"model": "openai/*", "api_key": "x"},
+                "model_info": {"id": "openai-catch-all"},
+            },
+            {
+                "model_name": "my-fw/*",
+                "litellm_params": {"model": "fireworks_ai/accounts/fireworks/models/*", "api_key": "x"},
+                "model_info": {"id": "fireworks-wildcard"},
+            },
+            {
+                "model_name": "acme-lite",
+                "litellm_params": {"model": "deepseek/acme-lite", "api_key": "x"},
+                "model_info": {"id": "deepseek-acme-lite"},
+            },
+        ],
+        model_group_alias={"my-fw/acme-pro": "acme-lite"},
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    return router
+
+
+def _expanded_wildcard_rows(client: TestClient) -> dict[str, dict[str, object]]:
+    response: Final = client.get("/model/info")
+    assert response.status_code == 200, response.text
+    return {
+        row["model_name"]: row
+        for row in response.json()["data"]
+        if row["model_info"]["id"] != "deepseek-acme-lite" and "*" not in row["model_name"]
+    }
+
+
+def test_model_info_prices_a_catch_all_row_named_with_its_provider_as_the_listed_model(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """A catch-all over ``openai/*`` lists ``openai/gpt-5.6-acme``. Filling the wildcard with that name repeats
+    the provider, so the row must keep the price of the model it names, the one calls to ``gpt-5.6-acme`` are
+    billed at."""
+    router: Final = _catch_all_and_shadowed_wildcard_router(monkeypatch)
+
+    with auth_as():
+        rows: Final = _expanded_wildcard_rows(client)
+
+    shown: Final = rows["openai/gpt-5.6-acme"]["model_info"]
+    assert (shown.get("input_cost_per_token"), shown.get("output_cost_per_token")) == (3e-07, 4e-07)
+    call: Final = router.completion(
+        model="gpt-5.6-acme", messages=[{"role": "user", "content": "hi"}], mock_response="hello there"
+    )
+    assert call._hidden_params["response_cost"] == pytest.approx(
+        shown["input_cost_per_token"] * call.usage.prompt_tokens
+        + shown["output_cost_per_token"] * call.usage.completion_tokens
+    )
+    _invalidate_model_cost_lowercase_map()
+
+
+def test_saving_a_replayed_model_info_wildcard_row_stores_none_of_its_shown_metadata(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """An API client that saves a ``/model/info`` row back unchanged, apart from one edit, must not pin the
+    cost-map metadata the row showed onto the wildcard, whether the row is a catch-all name carrying its
+    provider or a name an alias sends to another deployment."""
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment
+
+    router: Final = _catch_all_and_shadowed_wildcard_router(monkeypatch)
+    with auth_as():
+        rows: Final = _expanded_wildcard_rows(client)
+
+    assert sorted(rows) == ["my-fw/acme-pro", "openai/gpt-5.6-acme"]
+    sources: Final = {
+        deployment["model_info"]["id"]: deployment for deployment in router.get_model_list() or []
+    }
+    stored: Final = {
+        name: json.loads(
+            update_db_model(
+                db_model=Deployment(
+                    model_name=sources[row["model_info"]["id"]]["model_name"],
+                    litellm_params=LiteLLM_Params(model=sources[row["model_info"]["id"]]["litellm_params"]["model"]),
+                    model_info=ModelInfo(id=row["model_info"]["id"]),
+                ),
+                updated_patch=updateDeployment(
+                    model_name=name, model_info=ModelInfo(**{**row["model_info"], "access_groups": ["prod"]})
+                ),
+                llm_router=router,
+            )["model_info"]
+        )
+        for name, row in rows.items()
+    }
+    shown_metadata: Final = {
+        name: set(row["model_info"]) - set(sources[row["model_info"]["id"]]["model_info"]) for name, row in rows.items()
+    }
+    assert all(shown_metadata.values()), shown_metadata
+    assert {name: info["access_groups"] for name, info in stored.items()} == {
+        "my-fw/acme-pro": ["prod"],
+        "openai/gpt-5.6-acme": ["prod"],
+    }
+    assert {name: shown_metadata[name] & set(info) for name, info in stored.items()} == {
+        "my-fw/acme-pro": set(),
+        "openai/gpt-5.6-acme": set(),
+    }
+    _invalidate_model_cost_lowercase_map()
+
+
 # ---------------------------------------------------------------------------
 # GET /model/info — team BYOK scoping (issue #30983)
 # ---------------------------------------------------------------------------

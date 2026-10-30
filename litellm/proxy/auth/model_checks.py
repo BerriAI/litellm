@@ -13,6 +13,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+from litellm.proxy.common_utils.token_count_settings import cost_map_entry
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.router import Router
 from litellm.router_api import RouterRegistry
@@ -578,9 +579,37 @@ def wildcard_row_priced_model(row: Mapping[str, object], llm_router: Router | No
     source_model: Final = _litellm_model(source)
     if not isinstance(source_pattern, str) or not isinstance(source_model, str) or _litellm_model(row) == source_model:
         return None
-    if model_id not in registry.names(listed_name, kind="route_candidates", team_id=_deployment_team_id(row)):
-        return source_model
-    return wildcard_filled_model(source_pattern, source_model, listed_name) or source_model
+    return wildcard_listed_priced_model(
+        source_pattern,
+        source_model,
+        listed_name,
+        routes_through_wildcard=routes_through_deployment(llm_router, model_id, listed_name, _deployment_team_id(row)),
+    )
+
+
+def wildcard_listed_priced_model(
+    model_name_pattern: str, wildcard_model: str, listed_name: str, routes_through_wildcard: bool
+) -> str | None:
+    if not routes_through_wildcard:
+        return wildcard_model
+    filled: Final = wildcard_filled_model(model_name_pattern, wildcard_model, listed_name)
+    if filled is None:
+        return wildcard_model
+    return None if _repeats_listed_provider_prefix(filled, listed_name) else filled
+
+
+def _repeats_listed_provider_prefix(filled_model: str, listed_name: str) -> bool:
+    listed_provider, separator, _ = listed_name.partition("/")
+    return separator != "" and filled_model == f"{listed_provider}/{listed_name}"
+
+
+def routes_through_deployment(llm_router: Router, model_id: str, listed_name: str, team_id: str | None) -> bool:
+    return model_id in llm_router.registry().names(listed_name, kind="route_candidates", team_id=team_id)
+
+
+def model_info_cost_map_entry(model: str) -> Mapping[str, object]:
+    provider, _, _ = model.partition("/")
+    return cost_map_entry(model) or cost_map_entry(model.rsplit("/", 1)[-1], custom_llm_provider=provider)
 
 
 def _get_wildcard_models(
