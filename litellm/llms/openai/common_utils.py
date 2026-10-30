@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from aiohttp import ClientSession
 
 import litellm
+from litellm.exceptions import error_response_without_credentials
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
 from litellm.litellm_core_utils.token_counter import token_counter, usage_tokenizer_model
@@ -104,6 +105,19 @@ def is_openai_backed_api_base(api_base: str) -> bool:
     return hostname is not None and (hostname == _OPENAI_API_HOST or hostname.endswith(f".{_OPENAI_API_HOST}"))
 
 
+_OPENAI_AGENTS_API_RESOURCES: Final = frozenset({"agents", "vaults"})
+
+
+def openai_api_resource(path: str) -> str | None:
+    segments: Final = tuple(segment for segment in path.split("/") if segment)
+    resource_segments: Final = segments[1:] if segments[:1] == ("v1",) else segments
+    return next(iter(resource_segments), None)
+
+
+def is_openai_agents_api_path(path: str) -> bool:
+    return openai_api_resource(path) in _OPENAI_AGENTS_API_RESOURCES
+
+
 class OpenAIError(BaseLLMException):
     def __init__(
         self,
@@ -133,6 +147,14 @@ class OpenAIError(BaseLLMException):
             response=self.response,
             body=body,
         )
+
+
+def upstream_error_response(error: Exception) -> httpx.Response | None:
+    if not isinstance(error, (openai.APIStatusError, httpx.HTTPStatusError)):
+        return None
+    return error_response_without_credentials(
+        error.response.status_code, error.response, "https://docs.litellm.ai/docs"
+    )
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -262,6 +284,10 @@ def build_output_token_limit_response(
     return e.response.headers, (_aiter_once(chunk) if is_async else _iter_once(chunk))
 
 
+def _is_loop_bound(client_initialization_params: Mapping[str, object]) -> bool:
+    return client_initialization_params.get("is_async") is not False
+
+
 class BaseOpenAILLM:
     """
     Base class for OpenAI LLMs for getting their httpx clients and SSL verification settings
@@ -276,7 +302,9 @@ class BaseOpenAILLM:
             client_initialization_params=client_initialization_params,
             client_type=client_type,
         )
-        _cached_client: Final = litellm.in_memory_llm_clients_cache.get_cache(_cache_key)
+        _cached_client: Final = litellm.in_memory_llm_clients_cache.get_cache(
+            _cache_key, loop_bound=_is_loop_bound(client_initialization_params)
+        )
         return _cached_client
 
     @staticmethod
@@ -317,6 +345,7 @@ class BaseOpenAILLM:
             value=openai_client,
             ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
             litellm_owned_client=litellm_owned_client,
+            loop_bound=_is_loop_bound(client_initialization_params),
         )
 
     @staticmethod
