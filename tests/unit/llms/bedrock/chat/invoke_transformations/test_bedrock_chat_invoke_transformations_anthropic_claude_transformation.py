@@ -2095,6 +2095,23 @@ def test_bedrock_invoke_claude_default_max_tokens_yields_to_anthropic_config(loc
     assert body["max_tokens"] == configured_max_tokens, f"AnthropicConfig(max_tokens) was ignored, got {body['max_tokens']}"
 
 
+@pytest.mark.parametrize(("configured_max_tokens", "deployment_cap"), [(100000, 50), (1000, 8192)])
+def test_bedrock_invoke_claude_default_max_tokens_is_the_lower_of_anthropic_config_and_the_deployments_cap(
+    local_model_cost_map, monkeypatch, configured_max_tokens: int, deployment_cap: int
+):
+    monkeypatch.setattr(litellm.AnthropicConfig, "max_tokens", configured_max_tokens)
+
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=f"invoke/us.{BEDROCK_HAIKU_45_BASE_ID}",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={"model_info": {"max_output_tokens": deployment_cap}},
+        headers={},
+    )
+
+    assert body["max_tokens"] == min(configured_max_tokens, deployment_cap), f"got {body['max_tokens']}"
+
+
 def test_bedrock_invoke_claude_default_max_tokens_reads_an_inference_profile_arns_base_model(local_model_cost_map):
     mapped_cap: Final = litellm.get_max_tokens(BEDROCK_HAIKU_45_BASE_ID)
     assert mapped_cap != DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS, "the model's mapped cap must differ from the fallback"

@@ -266,10 +266,17 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             ),
         )
 
-    def _default_max_tokens(self, model: str, litellm_params: Mapping[str, object]) -> int:
+    def _default_max_tokens(self, model: str, litellm_params: Mapping[str, object]) -> int | None:
+        configured_max_tokens: Final = litellm.AnthropicConfig.max_tokens
         match deployment_model_info(litellm_params).get("max_output_tokens"):
             case int() as deployment_max_tokens:
-                return deployment_max_tokens
+                return (
+                    deployment_max_tokens
+                    if configured_max_tokens is None
+                    else min(deployment_max_tokens, configured_max_tokens)
+                )
+            case _ if configured_max_tokens is not None:
+                return None
             case _:
                 return next(
                     (
@@ -299,13 +306,13 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                 output_config=filtered_params["output_config"],
             )
         normalized_params: Final = self._normalize_bedrock_tool_search_tools(filtered_params)
+        default_max_tokens: Final = (
+            None
+            if "max_tokens" in normalized_params
+            else self._default_max_tokens(model, _LITELLM_PARAMS.validate_python(litellm_params))
+        )
         request_params: Final = (
-            normalized_params
-            if "max_tokens" in normalized_params or litellm.AnthropicConfig.max_tokens is not None
-            else {
-                **normalized_params,
-                "max_tokens": self._default_max_tokens(model, _LITELLM_PARAMS.validate_python(litellm_params)),
-            }
+            normalized_params if default_max_tokens is None else {**normalized_params, "max_tokens": default_max_tokens}
         )
 
         anthropic_request: Final = AnthropicConfig.transform_request(
