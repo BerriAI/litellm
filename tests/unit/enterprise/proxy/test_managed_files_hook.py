@@ -1380,8 +1380,9 @@ def _make_object_store_instance():
         PROXY_LiteLLMManagedFiles,
     )
 
-    mock_cache = MagicMock()
-    mock_cache.async_set_cache = AsyncMock()
+    from litellm.caching.dual_cache import DualCache
+
+    cache = DualCache()
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_managedobjecttable.upsert = AsyncMock()
@@ -1389,7 +1390,7 @@ def _make_object_store_instance():
 
     return (
         PROXY_LiteLLMManagedFiles(
-            internal_usage_cache=mock_cache,
+            internal_usage_cache=cache,
             prisma_client=mock_prisma,
         ),
         mock_prisma,
@@ -1498,7 +1499,9 @@ async def test_a_stored_background_response_names_its_creators_end_user_and_hold
     )
 
     written = mock_prisma.db.litellm_managedobjecttable.upsert.await_args.kwargs["data"]
-    cached = managed_files.internal_usage_cache.async_set_cache.await_args.kwargs["value"]
+    cached: object = await managed_files.internal_usage_cache.async_get_cache(
+        "resp_unified", litellm_parent_otel_span=None
+    )
     assert generated_text not in json.dumps(written, default=str)
     assert generated_text not in json.dumps(cached, default=str)
     assert json.loads(written["create"]["file_object"])["status"] == "completed"
