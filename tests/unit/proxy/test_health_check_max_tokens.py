@@ -1620,3 +1620,26 @@ async def test_run_model_health_check_probes_a_legacy_sagemaker_embedding_at_the
     assert "error" not in result, result
     assert invoke_endpoint.call_count == 1
     assert invoke_endpoint.call_args.kwargs.get("InferenceComponentName") == probed_component
+
+
+@pytest.mark.asyncio
+async def test_run_model_health_check_reports_why_a_string_configurable_clientside_auth_params_fails() -> None:
+    invoke_endpoint: Final = MagicMock()
+    deployment: Final = {
+        "litellm_params": {
+            "model": "sagemaker/openai/embed-endpoint",
+            "model_id": "own-component",
+            "aws_region_name": "us-east-1",
+            "aws_access_key_id": "test-key",
+            "aws_secret_access_key": "test-secret",
+        },
+        "model_info": {"mode": "embedding", "health_check_params": {"configurable_clientside_auth_params": "model_id"}},
+    }
+
+    client: Final = MagicMock(invoke_endpoint=invoke_endpoint)
+
+    with patch("boto3.Session", return_value=MagicMock(client=MagicMock(return_value=client))):
+        result: Final = await hc_module._run_model_health_check(deployment)
+
+    assert "configurable_clientside_auth_params" in result["error"]
+    invoke_endpoint.assert_not_called()

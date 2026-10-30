@@ -351,6 +351,18 @@ def test_inference_component_travels_only_in_the_header(monkeypatch: pytest.Monk
     assert "model_id" not in client.request_body
 
 
+def test_inference_component_header_keeps_header_keys_that_are_not_strings():
+    headers = SagemakerChatConfig().validate_environment(
+        headers={7: "other", "x-amzn-sagemaker-inference-component": "client-component"},
+        model="my-endpoint",
+        messages=[],
+        optional_params={"model_id": "my-inference-component"},
+        litellm_params={},
+    )
+
+    assert headers == {7: "other", _INFERENCE_COMPONENT_HEADER: "my-inference-component"}
+
+
 def test_body_model_stays_the_endpoint_name_when_hf_model_name_is_unset(monkeypatch):
     """Without `hf_model_name` the body must keep the model it has today."""
     client = _invoke_sagemaker_chat(monkeypatch)

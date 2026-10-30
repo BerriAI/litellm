@@ -36,7 +36,6 @@ _V = TypeVar("_V")
 MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
 ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors", MID_STREAM_CONTINUATION_KWARG})
 _OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
-_CLIENTSIDE_PARAMS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 _DEPLOYMENT_ROWS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
     tuple[Mapping[str, object], ...]
 )
@@ -525,10 +524,8 @@ _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def deployment_model_id_pin(deployment_litellm_params: Mapping[str, object]) -> object | None:
-    clientside_params: Final = _CLIENTSIDE_PARAMS_ADAPTER.validate_python(
-        deployment_litellm_params.get("configurable_clientside_auth_params") or ()
-    )
-    if "model_id" in clientside_params:
+    clientside_params: Final = deployment_litellm_params.get("configurable_clientside_auth_params")
+    if isinstance(clientside_params, list | tuple) and "model_id" in clientside_params:
         return None
     own_model_id: Final = deployment_litellm_params.get("model_id")
     if own_model_id is not None:

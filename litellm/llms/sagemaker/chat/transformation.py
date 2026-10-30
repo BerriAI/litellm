@@ -28,7 +28,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import LlmProviders
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
-from ..common_utils import INFERENCE_COMPONENT_HEADER, STR_KEYED_MAPPING, AWSEventStreamDecoder, SagemakerError
+from ..common_utils import INFERENCE_COMPONENT_HEADER, OBJECT_KEYED_MAPPING, AWSEventStreamDecoder, SagemakerError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -61,8 +61,8 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             return headers
         other_headers: Final = {
             name: value
-            for name, value in STR_KEYED_MAPPING.validate_python(headers).items()
-            if name.lower() != INFERENCE_COMPONENT_HEADER.lower()
+            for name, value in OBJECT_KEYED_MAPPING.validate_python(headers).items()
+            if not isinstance(name, str) or name.lower() != INFERENCE_COMPONENT_HEADER.lower()
         }
         return {**other_headers, INFERENCE_COMPONENT_HEADER: inference_component_name}
 
