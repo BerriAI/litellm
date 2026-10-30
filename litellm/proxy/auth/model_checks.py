@@ -14,7 +14,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
-from litellm.proxy.common_utils.model_listing_utils import CallerAliases, alias_map, served_model
+from litellm.proxy.common_utils.model_listing_utils import CallerAliases, alias_map, dispatched_model
 from litellm.proxy.common_utils.token_count_settings import cost_map_entry
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.responses.main import strip_responses_routing_prefix
@@ -642,7 +642,7 @@ def wildcard_deployment_priced_model(
     llm_router: Router, deployment: WildcardDeployment, listed_name: str, caller_aliases: CallerAliases
 ) -> str | RoutedElsewhere:
     registry: Final = llm_router.registry()
-    served_name: Final = served_model(listed_name, _without_deleted_team_targets(caller_aliases, registry))
+    served_name: Final = dispatched_model(listed_name, _without_deleted_team_targets(caller_aliases, registry))
     routed_name: Final = routed_model_name(llm_router, served_name)
     priced: Final = wildcard_listed_priced_model(deployment.model_name_pattern, deployment.litellm_model, routed_name)
     candidates: Final = registry.names(

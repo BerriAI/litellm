@@ -84,7 +84,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.proxy.common_utils.model_listing_utils import CallerAliases, served_model
+from litellm.proxy.common_utils.model_listing_utils import CallerAliases, dispatched_model
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
@@ -1286,7 +1286,7 @@ def _live_cost_map_model(
     model_id: Final = db_model.model_info.id
     if llm_router is None or model_id is None:
         return wildcard_listed_priced_model(
-            db_model.model_name, stored_model, served_model(listed_name, caller_aliases)
+            db_model.model_name, stored_model, dispatched_model(listed_name, caller_aliases)
         )
     priced: Final = wildcard_deployment_priced_model(
         llm_router,

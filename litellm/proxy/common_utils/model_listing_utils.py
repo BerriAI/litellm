@@ -220,7 +220,7 @@ def caller_alias_maps(
 
 def alias_map(aliases: object) -> Mapping[str, str]:
     try:
-        entries: Final = _ALIAS_ENTRIES.validate_python(aliases, strict=True)
+        entries: Final = _ALIAS_ENTRIES.validate_python(aliases)
     except ValidationError:
         return _NO_ALIASES
     return MappingProxyType(
@@ -288,9 +288,13 @@ def _dispatch(model_id: str, layers: Sequence[_AliasLayer]) -> tuple[str, bool]:
     return reduce(_through_layer, layers, (model_id, False))
 
 
-def served_model(model_id: str, aliases: CallerAliases) -> str:
+def dispatched_model(model_id: str, aliases: CallerAliases) -> str:
     target, _ = _dispatch(model_id, _alias_layers(aliases))
     return target
+
+
+def requestable_alias_names(aliases: CallerAliases) -> frozenset[str]:
+    return frozenset(chain.from_iterable(layer.aliases for layer in _alias_layers(aliases)))
 
 
 def _lookup_id(name: str, lookup_by_response: Mapping[str, str], lookup_ids: Container[str]) -> str | None:
