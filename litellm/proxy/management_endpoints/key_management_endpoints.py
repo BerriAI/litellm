@@ -44,14 +44,6 @@ from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.credentials import CredentialItem
 from litellm.models.project import LiteLLM_ProjectTable
-from litellm.proxy._experimental.mcp_server.db import (
-    rotate_mcp_server_credentials_master_key,
-    rotate_mcp_user_credentials_master_key,
-    rotate_mcp_user_env_vars_master_key,
-)
-from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
-    rotate_sso_identity_assertions_master_key,
-)
 from litellm.proxy._types import *
 from litellm.proxy._types import Litellm_EntityType, LiteLLM_VerificationToken, hash_token
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
@@ -84,6 +76,7 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
+from litellm.proxy.common_utils.openai_error_payload import openai_error_param, proxy_exception_for
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
@@ -154,6 +147,14 @@ from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.proxy.mcp_server.db import (
+    rotate_mcp_server_credentials_master_key,
+    rotate_mcp_user_credentials_master_key,
+    rotate_mcp_user_env_vars_master_key,
+)
+from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
+    rotate_sso_identity_assertions_master_key,
+)
 from litellm.proxy.search_endpoints.search_tool_registry import rotate_search_tools_master_key
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET
@@ -168,6 +169,7 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     handle_exception_on_proxy,
     hash_token_if_needed,
     is_valid_api_key,
+    require_enterprise_license,
 )
 from litellm.repositories.base_repository import BaseRepository, record_to_dict
 from litellm.repositories.budget_repository import BudgetRepository
@@ -212,6 +214,7 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 _RepositoryModelT = TypeVar("_RepositoryModelT", bound=BaseModel)
+_RawRowT = TypeVar("_RawRowT")
 
 
 class _UserRowLike(Protocol):
@@ -233,6 +236,12 @@ class _UserRowLike(Protocol):
 
 class _TxTables(Protocol):
     litellm_proxymodeltable: TableActions[object]
+
+
+class _ModelReencryptTransaction(Protocol):
+    async def __aenter__(self) -> _TxTables: ...
+
+    async def __aexit__(self, *exc_info: object) -> None: ...
 
 
 class _ModelParamsUpdate(TypedDict):
@@ -333,6 +342,14 @@ def _credentials_table(prisma_client: PrismaClient) -> TableActions[CredentialIt
     return cast(  # cast-ok: the rotation loop reads and rewrites these rows through CredentialItem names only
         "TableActions[CredentialItem]", CredentialsRepository(prisma_client).table
     )
+
+
+async def _query_raw_rows(prisma_client: PrismaClient, query: str, *args: object) -> Sequence[_RawRowT]:
+    return await prisma_client.db.query_raw(query, *args)
+
+
+def _model_reencrypt_transaction(prisma_client: PrismaClient) -> _ModelReencryptTransaction:
+    return prisma_client.db.tx(timeout=timedelta(minutes=2))
 
 
 def _config_table(prisma_client: PrismaClient, *, use_writer: bool = False) -> _ConfigTableActions:
@@ -1314,11 +1331,6 @@ async def validate_team_id_used_in_service_account_request(
     return True
 
 
-_BUDGET_NUMERIC_KEYS = frozenset(
-    ["max_budget", "soft_budget", "max_parallel_requests", "tpm_limit", "rpm_limit", "tpd_limit"]
-)
-
-
 def _enforce_upperbound_key_params(
     data: GenerateKeyRequest | UpdateKeyRequest,
     fill_defaults: bool = True,
@@ -1333,13 +1345,20 @@ def _enforce_upperbound_key_params(
     # (GHSA-2rv4-xv66-fpjg): float('nan') passes every `< 0` check because
     # nan < 0 is False, and spend >= nan is always False, permanently disabling
     # budget enforcement for any key that carries it.
-    for elem in data:
-        key, value = elem
-        if key in _BUDGET_NUMERIC_KEYS and value is not None:
-            if not math.isfinite(value):
+    budget_numeric_fields: Final = (
+        ("max_budget", data.max_budget),
+        ("max_parallel_requests", data.max_parallel_requests),
+        ("tpm_limit", data.tpm_limit),
+        ("rpm_limit", data.rpm_limit),
+        ("tpd_limit", data.tpd_limit),
+        ("soft_budget", data.soft_budget),
+    )
+    for field_name, field_value in budget_numeric_fields:
+        if field_value is not None:
+            if not math.isfinite(field_value):
                 raise HTTPException(
                     status_code=400,
-                    detail={"error": f"{key} must be a finite number. Received: {value}"},
+                    detail={"error": f"{field_name} must be a finite number. Received: {field_value}"},
                 )
 
     if litellm.upperbound_key_generate_params is None:
@@ -2311,7 +2330,7 @@ async def generate_key_fn(
     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Supported Claude models on Anthropic, Bedrock, Vertex AI, and Azure AI only.
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
-    - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
+    - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets keyed by model name, `*` pattern like "claude-opus*", or model access group, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
@@ -2521,7 +2540,7 @@ async def generate_service_account_key_fn(
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - guardrails: Optional[List[str]] - List of active guardrails for the key
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
-    - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
+    - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets keyed by model name, `*` pattern like "claude-opus*", or model access group, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
@@ -3838,7 +3857,7 @@ async def update_key_fn(
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
     - spend: Optional[float] - Amount spent by key
     - max_budget: Optional[float] - Max budget for key
-    - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+    - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets keyed by model name, `*` pattern like "claude-opus*", or model access group, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
     - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached. Set to null to remove the soft budget.
@@ -4070,21 +4089,9 @@ async def update_key_fn(
         # update based on remaining passed in values
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_key_fn(): Exception occured - %s", e)
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        if isinstance(e, ProxyException):
+            raise
+        raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
 
 
 @router.post(
@@ -4953,7 +4960,7 @@ async def info_key_fn(
         raise ProxyException(
             message="Internal server error from /key/info. Details are in the proxy server logs.",
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -4980,7 +4987,7 @@ def _check_model_access_group(models: list[str] | None, llm_router: Router | Non
         return True
 
     for model in models:
-        if llm_router.is_model_access_group_for_wildcard_route(model_access_group=model):
+        if llm_router.registry().resolve(model, kind="wildcard_access_group"):
             if not premium_user:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -5243,10 +5250,13 @@ async def generate_key_helper_fn(
         if isinstance(saved_token["metadata"], str):
             saved_token["metadata"] = json.loads(saved_token["metadata"])
         if isinstance(saved_token["permissions"], str):
-            if "get_spend_routes" in saved_token["permissions"] and premium_user is not True:
-                raise ValueError("get_spend_routes permission is only available for LiteLLM Enterprise users")
-
             saved_token["permissions"] = json.loads(saved_token["permissions"])
+        if (
+            isinstance(saved_token["permissions"], dict)
+            and "get_spend_routes" in saved_token["permissions"]
+            and premium_user is not True
+        ):
+            require_enterprise_license("get_spend_routes")
         if isinstance(saved_token["model_max_budget"], str):
             saved_token["model_max_budget"] = json.loads(saved_token["model_max_budget"])
         router_settings = cast(dict | None, saved_token.get("router_settings"))
@@ -5747,8 +5757,7 @@ async def rotate_master_key(
             ]
         )
         verbose_proxy_logger.debug("Re-encrypting litellm_params on %s model rows", len(reencrypted_models))
-        async with prisma_client.db.tx(timeout=timedelta(minutes=2)) as tx_ctx:
-            tx: Final[_TxTables] = tx_ctx
+        async with _model_reencrypt_transaction(prisma_client) as tx:
             for reencrypted_model in reencrypted_models:
                 await tx.litellm_proxymodeltable.update_many(
                     data=_ModelParamsUpdate(litellm_params=prisma.Json(reencrypted_model.litellm_params)),
@@ -6284,7 +6293,7 @@ async def regenerate_key_fn(
         - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
         - spend: Optional[float] - Amount spent by key
         - max_budget: Optional[float] - Max budget for key
-        - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+        - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets keyed by model name, `*` pattern like "claude-opus*", or model access group, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
         - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
         - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
@@ -7225,21 +7234,9 @@ async def list_keys(
 
     except Exception as e:
         verbose_proxy_logger.exception("Error in list_keys: %s", e)
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"error({e})"),
-                type=ProxyErrorTypes.internal_server_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.internal_server_error,
-            param=getattr(e, "param", "None"),
-            code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        if isinstance(e, ProxyException):
+            raise
+        raise proxy_exception_for(e, default_status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR) from e
 
 
 async def _apply_non_admin_alias_scope(
@@ -7345,7 +7342,7 @@ async def key_aliases(
         where_sql: Final = " AND ".join(where_parts)
 
         count_sql: Final = f'SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken" WHERE {where_sql}'
-        count_rows: Final[Sequence[Mapping[str, int]]] = await prisma_client.db.query_raw(count_sql, *query_params)
+        count_rows: Final[Sequence[Mapping[str, int]]] = await _query_raw_rows(prisma_client, count_sql, *query_params)
         total_count: Final = int(count_rows[0]["count"]) if count_rows else 0
 
         aliases_params: Final = query_params + [size, (page - 1) * size]
@@ -7358,7 +7355,9 @@ async def key_aliases(
             f" ORDER BY key_alias ASC"
             f" LIMIT ${limit_idx} OFFSET ${offset_idx}"
         )
-        alias_rows: Final[Sequence[Mapping[str, str]]] = await prisma_client.db.query_raw(aliases_sql, *aliases_params)
+        alias_rows: Final[Sequence[Mapping[str, str]]] = await _query_raw_rows(
+            prisma_client, aliases_sql, *aliases_params
+        )
         aliases: Final[list[str]] = [row["key_alias"] for row in alias_rows if row.get("key_alias")]
 
         total_pages: Final = -(-total_count // size) if total_count > 0 else 0
@@ -7381,37 +7380,31 @@ async def key_aliases(
 
     except Exception as e:
         verbose_proxy_logger.exception("Error in key_aliases: %s", e)
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"error({e})"),
-                type=ProxyErrorTypes.internal_server_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.internal_server_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        if isinstance(e, ProxyException):
+            raise
+        raise proxy_exception_for(e, default_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from e
 
 
-def _validate_sort_params(sort_by: str | None, sort_order: str) -> dict[str, str] | None:
-    order_by: Final[dict[str, str]] = {}
-
+def _validate_sort_params(
+    sort_by: str | None, sort_order: str
+) -> Mapping[str, object] | Sequence[Mapping[str, object]] | None:
     if sort_by is None:
         return None
     # Validate sort_by is a valid column
-    valid_columns: Final = [
+    valid_columns: Final = (
         "spend",
         "max_budget",
         "created_at",
         "updated_at",
         "token",
         "key_alias",
-    ]
+        "expires",
+        "last_active",
+        "budget_reset_at",
+        "total_spend",
+        "tpm_limit",
+        "rpm_limit",
+    )
     if sort_by not in valid_columns:
         raise HTTPException(
             status_code=400,
@@ -7425,9 +7418,14 @@ def _validate_sort_params(sort_by: str | None, sort_order: str) -> dict[str, str
             detail={"error": "Invalid sort order. Must be 'asc' or 'desc'"},
         )
 
-    order_by[sort_by] = sort_order.lower()
-
-    return order_by
+    direction: Final = sort_order.lower()
+    nullable_sort_columns: Final = ("expires", "last_active", "budget_reset_at", "tpm_limit", "rpm_limit")
+    if sort_by not in (*nullable_sort_columns, "total_spend"):
+        return {sort_by: direction}
+    return [
+        {sort_by: {"sort": direction, "nulls": "last"}} if sort_by in nullable_sort_columns else {sort_by: direction},
+        {"token": "asc"},
+    ]
 
 
 def _build_expires_where_clause(expires_filter: str, now: datetime) -> dict[str, object]:
@@ -7669,7 +7667,7 @@ async def list_key_helper(
 
     verbose_proxy_logger.debug("Pagination: skip=%s, take=%s", skip, size)
 
-    order_by: Final[dict[str, str] | None] = (
+    order_by: Final = (
         _validate_sort_params(sort_by, sort_order) if sort_by is not None and isinstance(sort_by, str) else None
     )
 
@@ -8159,7 +8157,7 @@ async def key_health(
         raise ProxyException(
             message=f"Key health check failed: {e}",
             type=ProxyErrorTypes.internal_server_error,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 

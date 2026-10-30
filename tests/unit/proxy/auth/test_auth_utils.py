@@ -875,7 +875,7 @@ class TestGetKeyModelTpmLimit:
         """Deployments with non-integer-parseable limit values are skipped without raising."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "model1",
                 "litellm_params": {"default_api_key_tpm_limit": "not-a-number"},
@@ -1028,6 +1028,40 @@ def test_oss_native_model_cannot_implicitly_select_an_unauthorized_checkpoint(pr
     assert denied.value.status_code == 400
 
 
+# eu-jev.com/docs (read 2026-10-21): an omitted model means eu-jeff-latest, and the legacy names
+# jeff-latest and jeff-1.0.0 answer with the current release.
+@pytest.mark.parametrize(
+    ("request_data", "permission_model"),
+    [
+        ({}, "eu_jev/eu-jeff-latest"),
+        ({"model": None}, "eu_jev/eu-jeff-latest"),
+        ({"model": "eu-jeff-latest"}, "eu_jev/eu-jeff-latest"),
+        ({"model": "jeff-latest"}, "eu_jev/eu-jeff-latest"),
+        ({"model": "jeff-1.0.0"}, "eu_jev/eu-jeff-latest"),
+        ({"model": "eu-jeff-1.0.0"}, "eu_jev/eu-jeff-1.0.0"),
+        ({"model": "eu_jev/eu-jeff-1.0.0"}, "eu_jev/eu-jeff-1.0.0"),
+        ({"model": "eu_jev/jeff-latest"}, "eu_jev/eu-jeff-latest"),
+    ],
+)
+@pytest.mark.parametrize("suffix", ["", "/"])
+def test_eu_jev_decision_is_checked_against_the_model_eu_jev_runs(
+    request_data: dict[str, object], permission_model: str, suffix: str
+) -> None:
+    assert get_model_from_request(request_data=request_data, route=f"/eu_jev/v1/systemone{suffix}") == permission_model
+
+
+@pytest.mark.parametrize("model", [["eu-jeff-latest"], 7, {"name": "eu-jeff-latest"}])
+def test_eu_jev_decision_rejects_a_model_that_is_not_a_string(model: object) -> None:
+    with pytest.raises(HTTPException) as denied:
+        get_model_from_request(request_data={"model": model}, route="/eu_jev/v1/systemone")
+    assert denied.value.status_code == 400
+
+
+@pytest.mark.usefixtures("configured_eu_jev_route")
+def test_a_pass_through_configured_at_the_eu_jev_decision_path_keeps_the_requested_model() -> None:
+    assert get_model_from_request(request_data={"model": "jeff-latest"}, route="/eu_jev/v1/systemone") == "jeff-latest"
+
+
 def test_laya_model_normalization_does_not_change_other_provider_routes() -> None:
     assert get_model_from_request(request_data={"model": "jev-latest"}, route="/typesafe/v1/systemone") == "jev-latest"
     assert get_model_from_request(request_data={}, route="/laya/health") is None
@@ -1122,7 +1156,7 @@ def _cache_prediction_auth_app(
             request_data=request_data,
             route=request.url.path,
             request=request,
-            llm_model_list=router.get_model_list(),
+            llm_model_list=router.registry().deployments(),
             llm_router=router,
         )
         return token
@@ -1138,7 +1172,7 @@ def _cache_prediction_auth_app(
     monkeypatch.setattr(proxy_server, "user_custom_auth", None)
     monkeypatch.setattr(proxy_server, "general_settings", {})
     monkeypatch.setattr(proxy_server, "llm_router", router)
-    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.registry().deployments())
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
     logging = ProxyLogging(user_api_key_cache=DualCache())
@@ -2062,7 +2096,7 @@ def test_get_model_from_request_resolves_character_id_model_with_router():
         model_id="veo-3.1-generate-001",
     )
     llm_router = MagicMock()
-    llm_router.resolve_model_name_from_model_id.return_value = "gcp/google/veo-3.1-generate-001"
+    llm_router.registry.return_value.resolve.return_value = "gcp/google/veo-3.1-generate-001"
 
     assert (
         get_model_from_request(
@@ -2072,7 +2106,7 @@ def test_get_model_from_request_resolves_character_id_model_with_router():
         )
         == "gcp/google/veo-3.1-generate-001"
     )
-    llm_router.resolve_model_name_from_model_id.assert_called_once_with("veo-3.1-generate-001")
+    llm_router.registry.return_value.resolve.assert_called_once_with("veo-3.1-generate-001", kind="from_id")
 
 
 def test_get_model_from_request_only_runs_media_decoders_for_matching_fields():
@@ -2624,7 +2658,7 @@ class TestGetEndUserIdDropsMalformedBodyValues:
 
 
 def _make_deployment_dict(model_name: str, tpm: Optional[int] = None, rpm: Optional[int] = None) -> dict:
-    """Helper to build a minimal deployment dict as returned by router.get_model_list."""
+    """Helper to build a minimal deployment dict as returned by router.registry().deployments()."""
     litellm_params: dict = {"model": model_name}
     if tpm is not None:
         litellm_params["default_api_key_tpm_limit"] = tpm
@@ -2643,7 +2677,7 @@ class TestDeploymentDefaultRpmLimit:
         """Case 2 from spec: key has no model-specific limits, falls back to deployment default."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", rpm=200)]
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", rpm=200)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 200}
@@ -2655,7 +2689,7 @@ class TestDeploymentDefaultRpmLimit:
             metadata={"model_rpm_limit": {"model1": 10}},
         )
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", rpm=200)]
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", rpm=200)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 10}
@@ -2664,7 +2698,7 @@ class TestDeploymentDefaultRpmLimit:
         """Returns None when neither the key nor the deployment has any rpm limit."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             _make_deployment_dict("model1")  # no rpm default
         ]
         with patch(_ROUTER_PATCH, mock_router):
@@ -2675,7 +2709,7 @@ class TestDeploymentDefaultRpmLimit:
         """No model_name means deployment fallback is skipped."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", rpm=200)]
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", rpm=200)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_rpm_limit(user_api_key_dict)
         assert result is None
@@ -2691,7 +2725,7 @@ class TestDeploymentDefaultRpmLimit:
         """When multiple deployments share a model name, the minimum rpm limit is used."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             _make_deployment_dict("model1", rpm=200),
             _make_deployment_dict("model1", rpm=50),
             _make_deployment_dict("model1", rpm=150),
@@ -2704,7 +2738,7 @@ class TestDeploymentDefaultRpmLimit:
         """Deployments missing the field are skipped; min is taken over those that have it."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             _make_deployment_dict("model1"),  # no rpm default
             _make_deployment_dict("model1", rpm=75),
         ]
@@ -2716,7 +2750,7 @@ class TestDeploymentDefaultRpmLimit:
         """Deployments with non-integer-parseable limit values are skipped without raising."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "model1",
                 "litellm_params": {"default_api_key_rpm_limit": "not-a-number"},
@@ -2736,7 +2770,7 @@ class TestDeploymentDefaultTpmLimit:
         """Case 2 from spec: key has no model-specific limits, falls back to deployment default."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", tpm=100)]
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", tpm=100)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 100}
@@ -2748,7 +2782,7 @@ class TestDeploymentDefaultTpmLimit:
             metadata={"model_tpm_limit": {"model1": 20}},
         )
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", tpm=100)]
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", tpm=100)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 20}
@@ -2757,7 +2791,7 @@ class TestDeploymentDefaultTpmLimit:
         """Returns None when neither the key nor the deployment has any tpm limit."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             _make_deployment_dict("model1")  # no tpm default
         ]
         with patch(_ROUTER_PATCH, mock_router):
@@ -2768,7 +2802,7 @@ class TestDeploymentDefaultTpmLimit:
         """No model_name means deployment fallback is skipped."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", tpm=100)]
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", tpm=100)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_tpm_limit(user_api_key_dict)
         assert result is None
@@ -2784,7 +2818,7 @@ class TestDeploymentDefaultTpmLimit:
         """When multiple deployments share a model name, the minimum tpm limit is used."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             _make_deployment_dict("model1", tpm=1000),
             _make_deployment_dict("model1", tpm=300),
             _make_deployment_dict("model1", tpm=700),
@@ -2797,7 +2831,7 @@ class TestDeploymentDefaultTpmLimit:
         """Deployments missing the field are skipped; min is taken over those that have it."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             _make_deployment_dict("model1"),  # no tpm default
             _make_deployment_dict("model1", tpm=400),
         ]
@@ -3566,6 +3600,7 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
         "field",
         [
             "aws_bedrock_runtime_endpoint",
+            "aws_bedrock_control_plane_endpoint",
             "langsmith_base_url",
             "langfuse_host",
             "posthog_host",
@@ -3624,6 +3659,18 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
             is True
         )
 
+
+@pytest.mark.parametrize("allow_client_side_credentials", [False, True])
+@pytest.mark.parametrize("nested", [False, True])
+def test_request_cannot_select_chatgpt_auth_file(allow_client_side_credentials: bool, nested: bool) -> None:
+    selector: Final = {"chatgpt_auth_file": "/tokens/account-b/auth.json"}
+    with pytest.raises(ValueError, match="chatgpt_auth_file"):
+        is_request_body_safe(
+            request_body={"model": "chatgpt-account-a", **({"extra_body": selector} if nested else selector)},
+            general_settings={"allow_client_side_credentials": allow_client_side_credentials},
+            llm_router=None,
+            model="chatgpt-account-a",
+        )
 
 class TestIsRequestBodySafeBlocksBedrockProjectOverride:
     """``aws_bedrock_project_id`` pins a deployment to a Bedrock project so
@@ -3899,6 +3946,38 @@ class TestIsRequestBodySafeBlocksNVCFFunctionOverride:
             )
             is True
         )
+
+
+def test_riva_offline_in_request_body_is_rejected() -> None:
+    with pytest.raises(ValueError, match="riva_offline"):
+        is_request_body_safe(
+            request_body={"model": "nvidia_riva/parakeet", "riva_offline": True},
+            general_settings={},
+            llm_router=None,
+            model="nvidia_riva/parakeet",
+        )
+
+
+def test_admin_opt_in_proxy_wide_allows_riva_offline() -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"model": "nvidia_riva/parakeet", "riva_offline": True},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="nvidia_riva/parakeet",
+        )
+        is True
+    )
+
+
+def test_api_base_override_keeps_the_deployments_riva_offline_mode() -> None:
+    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+
+    out: Final = get_dynamic_litellm_params(
+        litellm_params={"model": "nvidia_riva/nvidia/parakeet-0.6b-tdt", "riva_offline": True},
+        request_kwargs={"api_base": "caller-riva:50051"},
+    )
+    assert (out["api_base"], out["riva_offline"]) == ("caller-riva:50051", True)
 
 
 class TestIsRequestBodySafeBlocksRivaUseSsl:
@@ -5087,7 +5166,7 @@ def test_get_model_from_request_vertex_ai_passthrough(request_data, route, expec
 
 @pytest.mark.parametrize(
     "field",
-    ["github_copilot_auth_type", "user_provider_credentials", "github_copilot_user_session"],
+    ["github_copilot_auth_type", "github_copilot_host", "user_provider_credentials", "github_copilot_user_session"],
 )
 def test_per_user_credential_slots_in_request_body_are_rejected(field: str) -> None:
     """The per-user Copilot mode is decided by the stored credential's values and the caller's
@@ -5271,3 +5350,27 @@ async def test_a_non_numeric_max_request_size_mb_is_ignored_without_premium():
         patch("litellm.proxy.proxy_server.premium_user", False),
     ):
         assert await check_if_request_size_is_safe(request=_request_with_content_length(1024)) is True
+
+
+@pytest.mark.parametrize("allow_client_side_credentials", [False, True])
+@pytest.mark.parametrize("route", ["/model/new", "/model/update", "/model/account-a/update", "/health/test_connection"])
+def test_chatgpt_model_configuration_reaches_role_authorization(
+    allow_client_side_credentials: bool, route: str
+) -> None:
+    body: Final = {"litellm_params": {"model": "chatgpt/gpt-6-luna", "chatgpt_auth_file": "/tokens/account-a/auth.json"}}
+    assert is_request_body_safe(
+        request_body=body,
+        general_settings={"allow_client_side_credentials": allow_client_side_credentials},
+        llm_router=None,
+        model="",
+        route=route,
+    )
+    for inference_route in ("/v1/chat/completions", "/v1/responses"):
+        with pytest.raises(ValueError, match="chatgpt_auth_file"):
+            is_request_body_safe(
+                request_body=body,
+                general_settings={"allow_client_side_credentials": allow_client_side_credentials},
+                llm_router=None,
+                model="",
+                route=inference_route,
+            )

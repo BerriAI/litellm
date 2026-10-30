@@ -4,8 +4,11 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
+import functools
+import re
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -64,6 +67,10 @@ from .utils import (
 )
 
 AllowedModelRegion: TypeAlias = Literal["eu", "us"]
+
+
+class SilentExperimentFlag(TypedDict, total=False):
+    is_silent_experiment: ReadOnly[bool]
 
 
 class FallbackSkipReason(str, enum.Enum):
@@ -265,6 +272,7 @@ def _whole_float_as_int(value: object) -> object:
 
 
 class ModelInfo(MirroredPricingParams):
+    enforce_supported_endpoints: bool | None = None
     id: str | None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
     updated_at: datetime.datetime | None = None
@@ -274,6 +282,7 @@ class ModelInfo(MirroredPricingParams):
     created_by: str | None = None
 
     base_model: str | None = None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
+    pricing_provider: str | None = None  # provider whose cost-map rows price this deployment, else custom_llm_provider
     tier: Literal["free", "paid"] | None = None
 
     """
@@ -413,6 +422,7 @@ class CredentialLiteLLMParams(LiteLLMBaseModel):
     aws_external_id: str | None = None
     aws_session_tags: Sequence[AwsSessionTag] | None = None
     aws_bedrock_runtime_endpoint: str | None = None
+    aws_bedrock_control_plane_endpoint: str | None = None
     aws_bedrock_project_id: str | None = None
     s3_bucket_name: str | None = None
     s3_endpoint_url: str | None = None
@@ -516,6 +526,19 @@ def holds_secret_pointer(param_name: str) -> bool:
 _RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})
 
 
+_DAILY_RESET_TIME_PATTERN: Final = re.compile(r"\d{2}:\d{2}")
+
+
+def parse_daily_reset_time(value: str | None) -> datetime.timedelta:
+    """`daily_reset_time` is "HH:MM" in UTC, when the rpd/tpd window starts over; unset means midnight UTC."""
+    if value is None:
+        return datetime.timedelta(0)
+    if _DAILY_RESET_TIME_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"daily_reset_time must be HH:MM in UTC, got {value!r}")
+    parsed: Final = datetime.time.fromisoformat(value)
+    return datetime.timedelta(hours=parsed.hour, minutes=parsed.minute)
+
+
 class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     """
     LiteLLM Params without 'model' arg (used across completion / assistants api)
@@ -531,6 +554,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     rpm: int | None = None
     itpm: int | None = None
     otpm: int | None = None
+    tpd: int | None = None
+    rpd: int | None = None
+    daily_reset_time: str | None = None
     timeout: float | str | httpx.Timeout | SDKTimeout | None = None  # if str, pass in as os.environ/
     # read timeout of a live stream, a faked stream takes the longer of this and timeout. If str, pass in as os.environ/
     stream_timeout: float | str | None = None
@@ -569,6 +595,10 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     use_xai_oauth: bool | None = Field(
         default=False,
         description="Use stored xAI OAuth credentials when no xAI API key is configured.",
+    )
+    chatgpt_auth_file: str | None = Field(
+        default=None,
+        description="Path to a ChatGPT OAuth auth.json for this deployment.",
     )
     fireworks_forward_user_id: bool | None = Field(
         default=None,
@@ -617,6 +647,13 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     valkey_ssl: bool | None = None
     valkey_text_field: str | None = None
     valkey_embedding_field: str | None = None
+
+    @field_validator("daily_reset_time")
+    @classmethod
+    def _daily_reset_time_is_utc_hh_mm(cls, value: str | None) -> str | None:
+        if value is not None:
+            parse_daily_reset_time(value)
+        return value
 
     @field_validator("timeout")
     @classmethod
@@ -732,6 +769,9 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     rpm: int | None
     itpm: int | None
     otpm: int | None
+    tpd: ReadOnly[int | None]
+    rpd: ReadOnly[int | None]
+    daily_reset_time: ReadOnly[str | None]
     order: int | None
     weight: int | None
     max_parallel_requests: int | None
@@ -951,9 +991,10 @@ class AlertingConfig(LiteLLMBaseModel):
     alerting_threshold: float | None = 300
 
 
+@functools.cache
 def _resolved_annotations(model_class: type[object]) -> Mapping[str, object]:
     """Resolve a class's annotations, keeping each resolved annotation opaque."""
-    return get_type_hints(model_class)
+    return MappingProxyType(get_type_hints(model_class))
 
 
 class ModelGroupInfo(LiteLLMBaseModel):
@@ -1182,6 +1223,8 @@ class RouterModelGroupAliasItem(TypedDict):
 class RetryAttemptRecord(TypedDict):
     model_group: ReadOnly[str | None]
     deployment_id: ReadOnly[str | None]
+    model: ReadOnly[str | None]
+    base_model: ReadOnly[str | None]
     exception_type: ReadOnly[str]
     exception_string: ReadOnly[str]
     attempted_retries: ReadOnly[int | None]
