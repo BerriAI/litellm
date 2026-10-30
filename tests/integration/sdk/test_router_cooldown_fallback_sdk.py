@@ -12,6 +12,7 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm import Router
+from litellm.router_utils.cooldown_handlers import async_get_cooldown_deployments
 from litellm.types.router import DeploymentTypedDict
 
 _MODEL: Final = "gpt-5.4"
@@ -118,3 +119,30 @@ async def test_cooldown_skips_only_the_failed_duplicate_model_deployment() -> No
         "/primary/chat/completions",
         "/backup/chat/completions",
     )
+
+
+@pytest.mark.parametrize(
+    "fallbacks",
+    [[{"primary": "backup"}], [{"*": "backup"}]],
+    ids=["string_fallback_target", "string_catch_all_target"],
+)
+@pytest.mark.asyncio
+async def test_string_valued_fallbacks_still_cool_down_the_failing_primary(fallbacks: list[dict[str, object]]) -> None:
+    with wire_server(_peer) as wire:
+        router: Final = Router(
+            model_list=[
+                _deployment("primary", f"{wire.url}/primary", "primary-deployment"),
+                _deployment("backup", f"{wire.url}/backup", "backup-deployment"),
+            ],
+            allowed_fails=0,
+            num_retries=0,
+        )
+        router.fallbacks = fallbacks
+        with pytest.raises(litellm.AuthenticationError):
+            await router.acompletion(
+                model="primary",
+                messages=[{"role": "user", "content": f"cooldown {uuid.uuid4().hex}"}],
+            )
+        cooled: Final = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+
+    assert tuple(cooled) == ("primary-deployment",)

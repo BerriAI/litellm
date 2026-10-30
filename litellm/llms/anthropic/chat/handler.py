@@ -17,6 +17,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm.anthropic_beta_gated_fields import strip_beta_gated_request_body
 from litellm.anthropic_beta_headers_manager import (
     update_request_with_filtered_beta,
 )
@@ -38,6 +39,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
 )
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.types.llms.anthropic import (
     ContentBlockDelta,
     ContentBlockStart,
@@ -233,7 +235,7 @@ async def make_call(
         raise AnthropicError(status_code=500, message=str(e))
 
     completion_stream: Final = ModelResponseIterator(
-        streaming_response=response.aiter_lines(),
+        streaming_response=aiter_sse_lines(response.aiter_text()),
         sync_stream=False,
         json_mode=json_mode,
         speed=speed,
@@ -304,7 +306,7 @@ def make_sync_call(
         )
 
     completion_stream: Final = ModelResponseIterator(
-        streaming_response=response.iter_lines(),
+        streaming_response=iter_sse_lines(response.iter_text()),
         sync_stream=True,
         json_mode=json_mode,
         speed=speed,
@@ -505,10 +507,19 @@ class AnthropicChatCompletion(BaseLLM):
             The pair stays mutable because the streaming path rewrites it in
             place (`data["stream"] = True`) before sending.
             """
-            request_headers, data = update_request_with_filtered_beta(
+            request_headers, filtered_data = update_request_with_filtered_beta(
                 headers=headers,
                 request_data=request_data,
                 provider=custom_llm_provider,
+            )
+            data: Final = dict(
+                strip_beta_gated_request_body(
+                    filtered_data,
+                    request_headers,
+                    drop_params=litellm_params.get("drop_params"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # litellm_params is the handler's bare dict
+                    model=model,
+                    provider=custom_llm_provider,
+                )
             )
             logging_obj.pre_call(
                 input=messages,

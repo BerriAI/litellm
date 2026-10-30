@@ -5384,6 +5384,28 @@ def test_get_logging_payload_router_rejected_request_takes_provider_from_model_g
     assert payload["custom_llm_provider"] == expected_provider
 
 
+@pytest.mark.parametrize("client_model_group", [7, ["embed-only"], {"name": "embed-only"}])
+def test_get_logging_payload_drops_a_client_model_group_that_is_not_a_string(client_model_group: object):
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "embed-only",
+            "litellm_params": {
+                "metadata": {"user_api_key": "test-key", "model_group": client_model_group, "status": "failure"}
+            },
+            "standard_logging_object": {
+                **_make_failed_request_standard_logging_payload(),
+                "model_group": client_model_group,
+            },
+        },
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+        llm_router=None,
+    )
+
+    assert payload["model_group"] == ""
+
+
 def test_get_logging_payload_router_rejected_request_without_router_leaves_provider_empty():
     assert _router_rejected_failure_payload("openai-group", None)["custom_llm_provider"] == ""
 
@@ -6830,7 +6852,7 @@ def test_spend_logs_payload(model_id: str | None):
     )
 
     assert len(payload["request_id"]) > 0
-    expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys()
+    expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys() - {"is_silent_experiment"}
 
     assert "metadata" in payload
     assert isinstance(payload["metadata"], str)
