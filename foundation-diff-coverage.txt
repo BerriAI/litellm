@@ -1,0 +1,15 @@
+/home/ubuntu/repos/wt-fnd/.venv/lib/python3.12/site-packages/diff_cover/diff_cover_tool.py:315: UserWarning: The --json-report option is deprecated. Use --format json:/home/ubuntu/t5_verify/artifacts/r3cov_fnd_diff_cover.json instead.
+  warnings.warn(
+-------------
+Diff Coverage
+Diff: ccc56d27adeeece2a1069bde587c76486ba9ab39...HEAD, staged and unstaged changes
+-------------
+litellm/proxy/db/accounting_ledger.py (100%)
+litellm/proxy/db/exception_handler.py (100%)
+litellm/proxy/spend_tracking/usage_meter.py (98.8%): Missing lines 165,219
+-------------
+Total:   206 lines
+Missing: 2 lines
+Coverage: 99%
+-------------
+

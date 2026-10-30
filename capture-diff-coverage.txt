@@ -1,0 +1,31 @@
+/home/ubuntu/repos/wt-head/.venv/lib/python3.12/site-packages/diff_cover/diff_cover_tool.py:315: UserWarning: The --json-report option is deprecated. Use --format json:/home/ubuntu/t5_verify/artifacts/r3cov_cap_diff_cover.json instead.
+  warnings.warn(
+-------------
+Diff Coverage
+Diff: b368c432d03de80d5b6efc2dd6d6389c4d9c9b11...HEAD, staged and unstaged changes
+-------------
+litellm/_internal_context.py (100%)
+litellm/batches/batch_utils.py (87.0%): Missing lines 325-327
+litellm/litellm_core_utils/litellm_logging.py (96.2%): Missing lines 2675,2869,6983
+litellm/litellm_core_utils/realtime_streaming.py (50.0%): Missing lines 545
+litellm/llms/vertex_ai/batches/transformation.py (100%)
+litellm/proxy/_types.py (100%)
+litellm/proxy/common_request_processing.py (100%)
+litellm/proxy/hooks/proxy_track_cost_callback.py (89.7%): Missing lines 334-335,339,631
+litellm/proxy/proxy_server.py (100%)
+litellm/proxy/spend_tracking/cost_finalization.py (100%)
+litellm/proxy/spend_tracking/spend_tracking_utils.py (100%)
+litellm/proxy/spend_tracking/usage_capture.py (98.6%): Missing lines 305,571,574,594
+litellm/proxy/utils.py (100%)
+litellm/rag/main.py (100%)
+litellm/responses/main.py (0.0%): Missing lines 437,514
+litellm/responses/mcp/chat_completions_handler.py (100%)
+litellm/router.py (100%)
+litellm/types/utils.py (100%)
+litellm/utils.py (100%)
+-------------
+Total:   508 lines
+Missing: 17 lines
+Coverage: 96%
+-------------
+
