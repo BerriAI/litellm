@@ -1438,6 +1438,7 @@ def _make_object_store_instance():
     mock_prisma.db.litellm_managedobjecttable.upsert = AsyncMock()
     mock_prisma.db.litellm_managedobjecttable.update_many = AsyncMock()
     mock_prisma.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=None)
+    mock_prisma.db.writer = mock_prisma.db
 
     return (
         PROXY_LiteLLMManagedFiles(
@@ -2214,6 +2215,34 @@ async def test_poll_refresh_keeps_the_stored_creating_deployment():
     written = json.loads(mock_prisma.db.litellm_managedobjecttable.update_many.await_args.kwargs["data"]["file_object"])
     assert written["model_id"] == "deploy-team-b"
     assert written["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_poll_refresh_reads_the_stored_creating_deployment_from_the_writer():
+    """With a read replica configured, a retrieve that lands before the replica has the create
+    must still find the create-time model_id, so the lookup goes to the writer."""
+    managed_files, mock_prisma = _make_object_store_instance()
+    stored_row = MagicMock()
+    stored_row.file_object = json.dumps({**json.loads(_make_batch_response(status="validating").model_dump_json()), "model_id": "deploy-team-b"})
+    mock_prisma.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=None)
+    mock_prisma.db.writer = MagicMock()
+    mock_prisma.db.writer.litellm_managedobjecttable.find_first = AsyncMock(return_value=stored_row)
+    observer = UserAPIKeyAuth(api_key="sk-team-b", user_id="bob", team_id="team-b", parent_otel_span=None)
+
+    await managed_files.store_unified_object_id(
+        unified_object_id="projects/123/locations/us/batchPredictionJobs/456",
+        file_object=_make_batch_response(status="completed"),
+        litellm_parent_otel_span=None,
+        model_object_id="projects/123/locations/us/batchPredictionJobs/456",
+        file_purpose="batch",
+        user_api_key_dict=observer,
+        persist_attribution=False,
+        create_if_missing=False,
+    )
+
+    written = json.loads(mock_prisma.db.litellm_managedobjecttable.update_many.await_args.kwargs["data"]["file_object"])
+    assert written["model_id"] == "deploy-team-b"
+    mock_prisma.db.litellm_managedobjecttable.find_first.assert_not_awaited()
 
 
 @pytest.mark.asyncio

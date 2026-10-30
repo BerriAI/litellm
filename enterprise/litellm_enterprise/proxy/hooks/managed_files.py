@@ -21,6 +21,7 @@ from typing import (
     TypedDict,
     Union,
     cast,
+    runtime_checkable,
 )
 from uuid import NAMESPACE_URL, uuid5
 
@@ -374,6 +375,12 @@ class _ManagedResourcePrismaClient(Protocol):
     def db(self) -> _ManagedResourceDatabase: ...
 
 
+@runtime_checkable
+class _WriterRoutedDatabase(Protocol):
+    @property
+    def writer(self) -> _ManagedResourceDatabase: ...
+
+
 class _SchedulerWithJobLookup(Protocol):
     def get_job(self, job_id: str) -> object: ...
 
@@ -477,6 +484,12 @@ def _iter_provider_file_id_pairs(
 
 def _managed_object_table(prisma_client: _ManagedResourcePrismaClient) -> _ManagedObjectTableActions:
     return prisma_client.db.litellm_managedobjecttable
+
+
+def _writer_managed_object_table(prisma_client: _ManagedResourcePrismaClient) -> _ManagedObjectTableActions:
+    """Reads that feed a write must see the create that just happened; a lagging read replica may not"""
+    db: Final = prisma_client.db
+    return (db.writer if isinstance(db, _WriterRoutedDatabase) else db).litellm_managedobjecttable
 
 
 _JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
@@ -751,7 +764,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         preserved_model_id: Final = (
             creating_model_id
             if creating_model_id is not None or create_if_missing
-            else await _stored_model_id(managed_object_table, unified_object_id)
+            else await _stored_model_id(_writer_managed_object_table(self.prisma_client), unified_object_id)
         )
         stored_object: Final = _with_model_id(_without_model_output(file_object), preserved_model_id)
         litellm_managed_object = LiteLLM_ManagedObjectTable(
