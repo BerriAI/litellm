@@ -52,6 +52,18 @@ from litellm.redis.stores.alert_daily_metrics import (
     metric_key,
     metric_number,
 )
+from litellm.redis.stores.alert_region_outages import (
+    AlertRegionOutagesStore,
+    InvalidRegionOutage,
+    RegionOutage,
+    RegionOutageState,
+    TransportAlertRegionOutagesStore,
+    prepare_region_outage,
+    region_outage_cache_value,
+    region_outage_key,
+    region_outage_state,
+    restore_region_outage,
+)
 from litellm.redis.transport.contract import RedisFailure
 from litellm.repositories.table_repositories import InvitationLinkRepository
 from litellm.repositories.team_repository import TeamRepository
@@ -191,26 +203,11 @@ class SlackAlerting(CustomBatchLogger):
         if llm_router is not None:
             self.llm_router = llm_router
 
-    def _prepare_outage_value_for_cache(self, outage_value: dict | ProviderRegionOutageModel | OutageModel) -> dict:
-        """
-        Helper method to prepare outage value for Redis caching.
-        Converts set objects to lists for JSON serialization.
-        """
-        # Convert to dict for processing
-        cache_value: Final = dict(outage_value)
+    def _prepare_outage_value_for_cache(self, outage_value: Mapping[str, object]) -> Mapping[str, object]:
+        return prepare_region_outage(outage_value)
 
-        if "deployment_ids" in cache_value and isinstance(cache_value["deployment_ids"], set):
-            cache_value["deployment_ids"] = list(cache_value["deployment_ids"])
-        return cache_value
-
-    def _restore_outage_value_from_cache(self, outage_value: dict | None) -> dict | None:
-        """
-        Helper method to restore outage value after retrieving from cache.
-        Converts list objects back to sets for proper handling.
-        """
-        if outage_value and isinstance(outage_value.get("deployment_ids"), list):
-            outage_value["deployment_ids"] = set(outage_value["deployment_ids"])
-        return outage_value
+    def _restore_outage_value_from_cache(self, outage_value: object) -> ProviderRegionOutageModel | None:
+        return None if outage_value is None else restore_region_outage(outage_value)
 
     async def deployment_in_cooldown(self):
         pass
@@ -853,6 +850,43 @@ class SlackAlerting(CustomBatchLogger):
 *Last Check:* `{round(time.time() - outage_value["last_updated_at"], 4)}s ago`\n\n
 """
 
+    def _region_outages_store(self) -> AlertRegionOutagesStore | None:
+        redis: Final = self.internal_usage_cache.redis_cache
+        return None if redis is None else TransportAlertRegionOutagesStore(redis.transport())
+
+    async def _read_region_outage(self, region: RegionOutage) -> RegionOutageState | None:
+        key: Final = region_outage_key(region)
+        cached: Final = _CACHED_ALERT_VALUE.validate_python(
+            await self.internal_usage_cache.async_get_cache(key, local_only=True)
+        )
+        if cached is not None:
+            return region_outage_state(cached)
+        store: Final = self._region_outages_store()
+        if store is None or self._alert_redis_read_is_missing(key):
+            return None
+        reply: Final = await store.read_region_outage(region)
+        if isinstance(reply, RedisFailure):
+            return None
+        if isinstance(reply, InvalidRegionOutage):
+            raise reply.error
+        if reply is not None:
+            await self.internal_usage_cache.async_set_cache(key, region_outage_cache_value(reply), local_only=True)
+        return reply
+
+    async def _replace_region_outage(
+        self, region: RegionOutage, value: RegionOutageState, *, ttl: float | None = None
+    ) -> None:
+        cache_value: Final = region_outage_cache_value(value)
+        if ttl is None:
+            await self.internal_usage_cache.async_set_cache(region_outage_key(region), cache_value, local_only=True)
+        else:
+            await self.internal_usage_cache.async_set_cache(
+                region_outage_key(region), cache_value, ttl=ttl, local_only=True
+            )
+        store: Final = self._region_outages_store()
+        if store is not None:
+            await store.replace_region_outage(region, value, ttl=self._alert_cache_ttl(ttl))
+
     async def region_outage_alerts(
         self,
         exception: APIError,
@@ -889,13 +923,9 @@ class SlackAlerting(CustomBatchLogger):
             return
 
         ### UNIQUE CACHE KEY ###
-        cache_key: Final = provider + region_name
-
-        outage_value: ProviderRegionOutageModel | None = await self.internal_usage_cache.async_get_cache(key=cache_key)
-
-        # Convert deployment_ids back to set if it was stored as a list
-        if outage_value is not None:
-            outage_value = self._restore_outage_value_from_cache(outage_value)
+        region: Final = RegionOutage(provider, region_name)
+        state: Final = await self._read_region_outage(region)
+        outage_value: ProviderRegionOutageModel | None = None if state is None else state.outage
 
         if (
             getattr(exception, "status_code", None) is None
@@ -908,7 +938,7 @@ class SlackAlerting(CustomBatchLogger):
             _deployment_set = set()
             _deployment_set.add(deployment_id)
             outage_value = ProviderRegionOutageModel(
-                provider_region_id=cache_key,
+                provider_region_id=region_outage_key(region),
                 alerts=[exception.status_code],
                 minor_alert_sent=False,
                 major_alert_sent=False,
@@ -917,11 +947,9 @@ class SlackAlerting(CustomBatchLogger):
             )
 
             ## add to cache ##
-            # Convert set to list for JSON serialization
-            cache_value = self._prepare_outage_value_for_cache(outage_value)
-            await self.internal_usage_cache.async_set_cache(
-                key=cache_key,
-                value=cache_value,
+            await self._replace_region_outage(
+                region,
+                RegionOutageState(outage_value, {}),
                 ttl=self.alerting_args.region_outage_alert_ttl,
             )
             return
@@ -985,9 +1013,9 @@ class SlackAlerting(CustomBatchLogger):
             outage_value["major_alert_sent"] = True
 
         ## update cache ##
-        # Convert set to list for JSON serialization
-        cache_value = self._prepare_outage_value_for_cache(outage_value)
-        await self.internal_usage_cache.async_set_cache(key=cache_key, value=cache_value)
+        await self._replace_region_outage(
+            region, RegionOutageState(outage_value, {} if state is None else state.original)
+        )
 
     async def outage_alerts(
         self,
