@@ -8,6 +8,7 @@
 import asyncio
 import contextvars
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from functools import partial
 from typing import Final, cast
 
@@ -94,11 +95,39 @@ def _responses_mode_is_lost_by_prefix_strip(
     ) and not _bridges_to_responses_api(resolved_model, custom_llm_provider, deployment_model_info)
 
 
-def _bridge_model(requested_model: str, resolved_model: str, custom_llm_provider: str) -> str:
-    requested_provider: Final = requested_model.partition("/")[0]
+@dataclass(frozen=True, slots=True)
+class _BridgeTarget:
+    model: str
+    api_key: str | None
+    api_base: str | None
+
+
+def _resolve_requested_provider(
+    model: str, custom_llm_provider: str | None, litellm_params: GenericLiteLLMParams
+) -> tuple[str, str, str | None, str | None]:
+    resolved: Final = litellm.get_llm_provider(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=litellm_params.api_base,
+        api_key=litellm_params.api_key,
+        litellm_params=litellm_params,
+    )
+    requested_provider: Final = model.partition("/")[0]
+    if custom_llm_provider in (None, requested_provider) or requested_provider not in LlmProvidersSet:
+        return resolved
+    own: Final = litellm.get_llm_provider(model=model, api_base=litellm_params.api_base, api_key=litellm_params.api_key)
+    return own if own[1] == custom_llm_provider else resolved
+
+
+def _bridge_target(requested: _BridgeTarget, resolved: _BridgeTarget, custom_llm_provider: str) -> _BridgeTarget:
+    requested_provider: Final = requested.model.partition("/")[0]
     if requested_provider == custom_llm_provider or requested_provider not in LlmProvidersSet:
-        return requested_model
-    return f"{custom_llm_provider}/{resolved_model}"
+        return requested
+    return _BridgeTarget(
+        model=f"{custom_llm_provider}/{resolved.model}",
+        api_key=resolved.api_key,
+        api_base=resolved.api_base,
+    )
 
 
 def _should_route_to_responses_api(
@@ -629,13 +658,7 @@ def anthropic_messages_handler(
         custom_llm_provider,
         dynamic_api_key,
         dynamic_api_base,
-    ) = litellm.get_llm_provider(
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        api_base=litellm_params.api_base,
-        api_key=litellm_params.api_key,
-        litellm_params=litellm_params,
-    )
+    ) = _resolve_requested_provider(model, custom_llm_provider, litellm_params)
 
     # Store agentic loop params in logging object for agentic hooks
     # This provides original request context needed for follow-up calls
@@ -698,6 +721,11 @@ def anthropic_messages_handler(
         model, custom_llm_provider, kwargs.get("model_info"), api_base
     )
     if anthropic_messages_provider_config is None:
+        bridge: Final = _bridge_target(
+            _BridgeTarget(model=original_model, api_key=api_key, api_base=api_base),
+            _BridgeTarget(model=model, api_key=dynamic_api_key, api_base=dynamic_api_base),
+            custom_llm_provider,
+        )
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
         if kwargs.get("compaction") is None and _should_route_to_responses_api(
             custom_llm_provider, original_model, model, kwargs.get("model_info"), stop_sequences=stop_sequences
@@ -705,7 +733,7 @@ def anthropic_messages_handler(
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
                 max_tokens=max_tokens,
                 messages=messages,
-                model=_bridge_model(original_model, model, custom_llm_provider),
+                model=bridge.model,
                 metadata=metadata,
                 stop_sequences=stop_sequences,
                 stream=stream,
@@ -721,8 +749,8 @@ def anthropic_messages_handler(
                 top_k=top_k,
                 top_p=top_p,
                 _is_async=is_async,
-                api_key=api_key,
-                api_base=api_base,
+                api_key=bridge.api_key,
+                api_base=bridge.api_base,
                 client=client,
                 custom_llm_provider=custom_llm_provider,
                 **kwargs,
@@ -735,7 +763,7 @@ def anthropic_messages_handler(
         return LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
             max_tokens=max_tokens,
             messages=messages,
-            model=_bridge_model(original_model, model, custom_llm_provider),
+            model=bridge.model,
             metadata=metadata,
             stop_sequences=stop_sequences,
             stream=stream,
@@ -749,8 +777,8 @@ def anthropic_messages_handler(
             top_k=top_k,
             top_p=top_p,
             _is_async=is_async,
-            api_key=api_key,
-            api_base=api_base,
+            api_key=bridge.api_key,
+            api_base=bridge.api_base,
             client=client,
             custom_llm_provider=custom_llm_provider,
             **kwargs,

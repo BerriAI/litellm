@@ -1148,9 +1148,21 @@ _GET_WEATHER_TOOL: Final = {
     ],
     ids=["function_tool_bridged_to_responses", "no_tools_on_chat"],
 )
-async def test_azure_ai_on_azure_openai_host_streams_natively_with_the_bare_deployment(tools, expected_path, monkeypatch):
+@pytest.mark.parametrize("credentials_from_env", [False, True], ids=["credentials_in_params", "credentials_from_env"])
+async def test_azure_ai_on_azure_openai_host_streams_natively_with_the_bare_deployment(
+    tools, expected_path, credentials_from_env, monkeypatch
+):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
+    monkeypatch.delenv("AZURE_API_BASE", raising=False)
+    monkeypatch.delenv("AZURE_API_KEY", raising=False)
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://qa-resource.cognitiveservices.azure.com")
+    monkeypatch.setenv("AZURE_AI_API_KEY", "env-api-key")
+    credentials: Final = (
+        {}
+        if credentials_from_env
+        else {"api_base": "https://qa-resource.cognitiveservices.azure.com", "api_key": "params-api-key"}
+    )
 
     with respx.mock(assert_all_called=True) as respx_mock:
         upstream: Final = respx_mock.route(host="qa-resource.cognitiveservices.azure.com").mock(
@@ -1161,14 +1173,14 @@ async def test_azure_ai_on_azure_openai_host_streams_natively_with_the_bare_depl
                 max_tokens=100,
                 messages=[{"role": "user", "content": "What is the weather in Berlin?"}],
                 model="azure_ai/gpt-6-luna",
-                api_base="https://qa-resource.cognitiveservices.azure.com",
-                api_key="test-api-key",
                 stream=True,
                 tools=tools,
+                **credentials,
             )
 
     bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
     assert {call.request.url.path for call in upstream.calls} == {expected_path}
+    assert {call.request.headers["api-key"] for call in upstream.calls} == {credentials.get("api_key", "env-api-key")}
     assert {body["model"] for body in bodies} == {"gpt-6-luna"}
     assert all(body["stream"] is True for body in bodies)
 
@@ -1189,6 +1201,27 @@ async def test_bridged_messages_keep_the_region_of_a_regional_bedrock_mantle_mod
             )
 
     assert {call.request.url.host for call in upstream.calls} == {"bedrock-mantle.eu-west-1.api.aws"}
+
+
+@pytest.mark.asyncio
+async def test_bridged_messages_keep_the_callers_explicit_provider_over_the_model_prefix(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises(openai.APIError):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "ping"}],
+                model="anthropic/claude-sonnet-5-5",
+                custom_llm_provider="openai",
+                api_base="https://gateway.example.com/v1",
+                api_key="test-api-key",
+            )
+
+    assert {call.request.url.host for call in upstream.calls} == {"gateway.example.com"}
+    assert {json.loads(call.request.content)["model"] for call in upstream.calls} == {"anthropic/claude-sonnet-5-5"}
 
 
 @pytest.mark.asyncio
