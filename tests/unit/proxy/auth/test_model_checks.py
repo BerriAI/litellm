@@ -1606,6 +1606,20 @@ def test_every_listed_partial_wildcard_id_routes_to_the_catalog_model_it_names(
         assert listed_model_info_names == sorted(reachable)
 
 
+def test_inference_provider_route_lists_every_id_the_plain_provider_wildcard_lists() -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    plain: Final = get_known_models_from_wildcard("huggingface/*", LiteLLM_Params(model="huggingface/*"))
+    routed: Final = get_known_models_from_wildcard(
+        "huggingface/*", LiteLLM_Params(model="huggingface/featherless-ai/*")
+    )
+
+    assert plain
+    assert [model for model in plain if "/" not in model.removeprefix("huggingface/")] == []
+    assert sorted(routed) == sorted(plain)
+
+
 def test_catch_all_lists_no_id_a_more_specific_sibling_wildcard_routes_elsewhere() -> None:
     from litellm import Router
     from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list

@@ -22,6 +22,7 @@ from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, get_valid_models, potential_model_names_in_lookup_order
 
 LLM_PROVIDER_PREFIXES: Final = frozenset(llm_provider.value for llm_provider in LlmProviders)
+_PROVIDERS_SENDING_THE_DEPLOYMENT_PATH_AS_THE_MODEL_ID: Final = frozenset({LlmProviders.TOGETHER_AI.value})
 
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
@@ -342,19 +343,11 @@ def _resolves_to_catalog_model(model: str, provider: str, provider_model_ids: fr
     )
 
 
-def _routed_catalog_id_has_namespace(model: str, provider: str, routing_prefix: str) -> bool:
-    return "/" in model.removeprefix(f"{provider}/").removeprefix(routing_prefix)
-
-
 def _routes_to_catalog_model(
-    routes_to_model: Callable[[str, str], bool], provider: str, routing_prefix: str, provider_model_ids: frozenset[str]
+    routes_to_model: Callable[[str, str], bool], provider: str, provider_model_ids: frozenset[str]
 ) -> Callable[[str, str], bool]:
     return lambda listed_id, model: (
-        routes_to_model(listed_id, model)
-        and (
-            not _routed_catalog_id_has_namespace(model, provider, routing_prefix)
-            or _resolves_to_catalog_model(model, provider, provider_model_ids)
-        )
+        routes_to_model(listed_id, model) and _resolves_to_catalog_model(model, provider, provider_model_ids)
     )
 
 
@@ -377,8 +370,8 @@ def _ids_routing_to_catalog_models(
     )
     routing_prefix: Final = deployment_model_pattern_without_provider.removesuffix(catalog_pattern)
     reaches_catalog_model: Final = (
-        _routes_to_catalog_model(routes_to_model, provider, routing_prefix, frozenset(provider_model_ids))
-        if routing_prefix
+        _routes_to_catalog_model(routes_to_model, provider, frozenset(provider_model_ids))
+        if routing_prefix and provider in _PROVIDERS_SENDING_THE_DEPLOYMENT_PATH_AS_THE_MODEL_ID
         else routes_to_model
     )
     deployment_model_pattern: Final = f"{provider_id_prefix}{catalog_pattern}"
