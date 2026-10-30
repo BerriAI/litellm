@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 from unittest.mock import MagicMock
 
 import litellm
@@ -2379,3 +2380,69 @@ class TestVertexClaudeBatch:
         (row,) = (json.loads(line) for line in body.splitlines())
         assert row["custom_id"] == "a"
         assert row["response"]["body"]["choices"][0]["message"]["content"] == "first"
+
+
+def _chat_entry(model: str, knobs: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            "custom_id": "request-1",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 5, **knobs},
+        }
+    )
+
+
+_ANSWER_SCHEMA: Final = MappingProxyType(
+    {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}
+)
+_JSON_SCHEMA_KNOBS: Final = MappingProxyType(
+    {"response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": dict(_ANSWER_SCHEMA)}}}
+)
+
+
+def _request_of(row: Mapping[str, object]) -> dict[str, object]:
+    return TypeAdapter(dict[str, object]).validate_python(row["request"])
+
+
+def _config_columns(row: Mapping[str, object]) -> frozenset[str]:
+    return frozenset(_request_of(row)) & {"generationConfig", "generation_config"}
+
+
+@pytest.mark.parametrize(
+    "plain_knobs",
+    [{}, {"temperature": 0.2}, {"response_format": {"type": "json_object"}}, {"response_format": {"type": "text"}}],
+    ids=["max_tokens", "temperature", "json_object", "text"],
+)
+def test_a_plain_row_shares_no_config_column_with_a_json_schema_row(plain_knobs: Mapping[str, object]) -> None:
+    """Vertex loads a batch file as one table, so a shared column gives the plain row a null response_json_schema,
+    which fails it with 'response_mime_type must be set when response_json_schema is set'"""
+    (plain_row, schema_row) = _wrap_entries(
+        [_chat_entry("gemini-2.5-flash", plain_knobs), _chat_entry("gemini-2.5-flash", _JSON_SCHEMA_KNOBS)]
+    )
+    assert _config_columns(plain_row).isdisjoint(_config_columns(schema_row))
+
+
+def test_a_json_schema_row_keeps_its_whole_generation_config() -> None:
+    (row,) = _wrap_entries([_chat_entry("gemini-2.5-flash", _JSON_SCHEMA_KNOBS)])
+    assert _request_of(row)["generation_config"] == {
+        "max_output_tokens": 5,
+        "response_mime_type": "application/json",
+        "response_json_schema": dict(_ANSWER_SCHEMA),
+    }
+
+
+def test_a_responses_row_with_a_json_schema_uses_the_same_column_as_a_chat_row() -> None:
+    (responses_row, chat_row) = _wrap_entries(
+        [
+            _responses_entry(
+                {
+                    "model": "gemini-2.5-flash",
+                    "input": "hi",
+                    "text": {"format": {"type": "json_schema", "name": "answer", "schema": dict(_ANSWER_SCHEMA)}},
+                }
+            ),
+            _chat_entry("gemini-2.5-flash", _JSON_SCHEMA_KNOBS),
+        ]
+    )
+    assert _config_columns(responses_row) == _config_columns(chat_row) == {"generation_config"}
