@@ -107,6 +107,28 @@ def compatibility(tool: Tool) -> Mapping[str, JsonValue]:
     )
 
 
+def _code_reference(tool: Tool) -> str:
+    from litellm.proxy.mcp_server.tool_search import mcp_proxy_tool_id
+
+    try:
+        return mcp_proxy_tool_id(tool)
+    except TypeError:
+        return tool.name
+
+
+def code_description(tool: Tool) -> str:
+    """Publish a reference clients can copy even when they rename the tool."""
+    if not settings().enabled:
+        return tool.description or ""
+    support: Final = compatibility(tool)
+    hint: Final = (
+        f"Code mode unsupported: {support['reason']}"
+        if support["status"] == "unsupported"
+        else f"Code mode tool_id: {json.dumps(_code_reference(tool))}."
+    )
+    return f"{hint}\n\n{tool.description}" if tool.description else hint
+
+
 def code_tool() -> Tool:
     from litellm.proxy.mcp_server.code_runtime import CodeExecutionLimits
 
@@ -115,7 +137,8 @@ def code_tool() -> Tool:
         name=CODE_TOOL_NAME,
         description=(
             "Run JavaScript to compose MCP tool calls. Use await tools.call_tool({tool_id, arguments}); "
-            "tool_id is an ID from search_tools or an exact tool name from the catalog. "
+            "Copy the exact Code mode tool_id from the tool description, or tool_id from search_tools. "
+            "Do not rename, normalize or prefix this reference. "
             "Each call returns the full MCP envelope: structuredContent, content and isError. "
             "Inspect isError before using results. Emit only needed results with text(value). "
             "No filesystem, network, imports, persistent state or interactive continuations. "
@@ -135,7 +158,13 @@ def with_code_tool(
     if any(tool.name == CODE_TOOL_NAME for tool in tools):
         raise MCPError(code=-32602, message="MCP tool name conflicts with the reserved code execution tool")
     annotated: Final = [
-        tool.model_copy(update={"meta": {**(tool.meta or {}), CODE_MODE_META: compatibility(tool)}}) for tool in tools
+        tool.model_copy(
+            update={
+                "meta": {**(tool.meta or {}), CODE_MODE_META: compatibility(tool)},
+                "description": code_description(tool),
+            }
+        )
+        for tool in tools
     ]
     return [*annotated, *([code_tool()] if first_page else [])]
 
@@ -281,7 +310,12 @@ async def _execute_script(arguments: Mapping[str, object], context: OperationCon
             return serialize_tool_result(error_result("Nested orchestration tools are unsupported"))
         selected: Final = await find_tool(tool_id)
         if selected is None:
-            return serialize_tool_result(error_result("Unknown, ambiguous or unauthorized tool"))
+            return serialize_tool_result(
+                error_result(
+                    "Unknown, ambiguous or unauthorized tool. Copy the exact Code mode tool_id from "
+                    "the tool description, or tool_id returned by search_tools."
+                )
+            )
         support: Final = compatibility(selected)
         if support["status"] == "unsupported":
             return serialize_tool_result(error_result(f"Tool is unsupported in code mode: {support['reason']}"))

@@ -839,12 +839,11 @@ if MCP_AVAILABLE:
         from litellm.proxy.mcp_server.code_execution import CODE_TOOL_NAME
         from litellm.proxy.mcp_server.tool_search import with_mcp_proxy_identity
 
-        identified: Final = with_mcp_proxy_identity(tool, server.server_id)
-        if tool.name == CODE_TOOL_NAME:
-            return identified.model_copy(
-                update={"name": add_server_prefix_to_name(tool.name, get_server_prefix(server))}
-            )
-        return identified
+        canonical: Final = tool.model_copy(
+            update={"name": add_server_prefix_to_name(tool.name, get_server_prefix(server))}
+        )
+        identified: Final = with_mcp_proxy_identity(canonical, server.server_id)
+        return identified if tool.name == CODE_TOOL_NAME else identified.model_copy(update={"name": tool.name})
 
     async def fetch_pinnable_tool_catalog(
         server: MCPServer, request: Request, user_api_key_dict: UserAPIKeyAuth

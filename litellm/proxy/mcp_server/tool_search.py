@@ -188,11 +188,11 @@ def mcp_tool_search_settings() -> MCPToolSearchSettings | ValidationError:
 
 
 def _tool_result(tool: Tool) -> ToolSearchResult:
-    from litellm.proxy.mcp_server.code_execution import compatibility, settings
+    from litellm.proxy.mcp_server.code_execution import code_description, compatibility, settings
 
     base: Final[ToolSearchResult] = {
         "name": tool.name,
-        "description": tool.description or "",
+        "description": code_description(tool),
         "inputSchema": tool.input_schema,
     }
     return {**base, "code_mode": compatibility(tool)} if settings().enabled else base
@@ -228,12 +228,12 @@ def mcp_proxy_tool_id(tool: Tool) -> str:
 
 
 def _proxy_search_result(hit: MCPToolSearchHit) -> MCPProxySearchResult:
-    from litellm.proxy.mcp_server.code_execution import compatibility, settings
+    from litellm.proxy.mcp_server.code_execution import code_description, compatibility, settings
 
     base: Final[MCPProxySearchResult] = {
         "tool_id": mcp_proxy_tool_id(hit.tool),
         "name": hit.tool.name,
-        "description": hit.tool.description or "",
+        "description": code_description(hit.tool),
     }
     annotated: Final[MCPProxySearchResult] = (
         {**base, "code_mode": compatibility(hit.tool)} if settings().enabled else base
@@ -242,12 +242,12 @@ def _proxy_search_result(hit: MCPToolSearchHit) -> MCPProxySearchResult:
 
 
 def _proxy_schema_result(tool: Tool) -> MCPProxySchemaResult:
-    from litellm.proxy.mcp_server.code_execution import compatibility, settings
+    from litellm.proxy.mcp_server.code_execution import code_description, compatibility, settings
 
     base: Final[MCPProxySchemaResult] = {
         "tool_id": mcp_proxy_tool_id(tool),
         "name": tool.name,
-        "description": tool.description or "",
+        "description": code_description(tool),
         "inputSchema": tool.input_schema,
     }
     annotated: Final[MCPProxySchemaResult] = {**base, "code_mode": compatibility(tool)} if settings().enabled else base

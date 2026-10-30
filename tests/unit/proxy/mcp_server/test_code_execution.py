@@ -220,7 +220,9 @@ async def test_disabled_code_name_falls_through_to_existing_tool_routing(monkeyp
 
 
 def test_rest_keeps_nested_code_tool_visible_without_name_collision(monkeypatch: pytest.MonkeyPatch) -> None:
-    from litellm.proxy.mcp_server.rest_endpoints import _code_mode_rest_tool
+    from litellm.proxy.mcp_server.rest_endpoints import (
+        _code_mode_rest_tool,  # pyright: ignore[reportPrivateUsage]  # exercise the REST wire-format boundary
+    )
     from litellm.types.mcp import MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -232,8 +234,82 @@ def test_rest_keeps_nested_code_tool_visible_without_name_collision(monkeypatch:
         transport=MCPTransport.http,
         url="https://example.com/mcp",
     )
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
     nested = _code_mode_rest_tool(Tool(name=CODE_TOOL_NAME, input_schema={}), server)
     listed = with_code_tool([nested])
     assert [tool.name for tool in listed] == ["gateway-litellm_execute_code", CODE_TOOL_NAME]
     assert listed[0].meta is not None
     assert listed[0].meta[CODE_MODE_META]["status"] == "unsupported"
+
+
+def test_visible_code_reference_survives_client_renaming_and_matches_rest(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.mcp_server.rest_endpoints import (
+        _code_mode_rest_tool,  # pyright: ignore[reportPrivateUsage]  # exercise the REST wire-format boundary
+    )
+    from litellm.proxy.mcp_server.tool_search import mcp_proxy_tool_id, with_mcp_proxy_identity
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.setattr(litellm, "mcp_code_mode", True)
+    server = MCPServer(
+        server_id="visible-code-reference",
+        name="math",
+        alias="math",
+        transport=MCPTransport.http,
+        url="https://example.com/mcp",
+        tool_name_to_display_name={"add": "Friendly Add"},
+    )
+    monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
+    original_description = "Add two numbers."
+    raw = Tool(name="add", description=original_description, input_schema={})
+    canonical = with_mcp_proxy_identity(raw.model_copy(update={"name": "math-add"}), server.server_id)
+    expected_id = mcp_proxy_tool_id(canonical)
+    displayed = canonical.model_copy(update={"name": "Friendly Add"})
+    rest = _code_mode_rest_tool(raw, server)
+    assert rest.name == "add"
+    for tool in (canonical, displayed, rest):
+        assert mcp_proxy_tool_id(tool) == expected_id
+        advertised = with_code_tool([tool])[0]
+        renamed_by_client = advertised.model_copy(update={"name": "mcp__qa__math_add"})
+        assert renamed_by_client.description == f'Code mode tool_id: "{expected_id}".\n\n{original_description}'
+        assert renamed_by_client.description == advertised.description
+
+
+def test_search_shapes_publish_reference_and_unsupported_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.mcp_server.tool_search import (
+        MCPToolSearchHit,
+        _proxy_schema_result,  # pyright: ignore[reportPrivateUsage]  # exercise the search wire-format boundary
+        _proxy_search_result,  # pyright: ignore[reportPrivateUsage]  # exercise the search wire-format boundary
+        _tool_result,  # pyright: ignore[reportPrivateUsage]  # exercise the search wire-format boundary
+        mcp_proxy_tool_id,
+        with_mcp_proxy_identity,
+    )
+
+    monkeypatch.setattr(litellm, "mcp_code_mode", True)
+    tool = with_mcp_proxy_identity(
+        Tool(name="math-add", description="Original tool description", input_schema={}), "visible-code-reference"
+    )
+    expected_prefix = f'Code mode tool_id: "{mcp_proxy_tool_id(tool)}".'
+    descriptions = (
+        _tool_result(tool)["description"],
+        _proxy_search_result(MCPToolSearchHit(tool=tool))["description"],
+        _proxy_schema_result(tool)["description"],
+    )
+    assert all(description.startswith(expected_prefix) for description in descriptions)
+    assert all(description.endswith("Original tool description") for description in descriptions)
+    monkeypatch.setattr(
+        litellm,
+        "mcp_code_mode",
+        {
+            "enabled": True,
+            "excluded_tools": {"math-add": "Human confirmation required"},
+        },
+    )
+    unsupported = with_code_tool([tool])[0]
+    assert unsupported.description == "Code mode unsupported: Human confirmation required\n\nOriginal tool description"
+    assert _tool_result(tool)["description"] == unsupported.description
+    assert _proxy_search_result(MCPToolSearchHit(tool=tool))["description"] == unsupported.description
+    assert _proxy_schema_result(tool)["description"] == unsupported.description
