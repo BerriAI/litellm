@@ -213,10 +213,6 @@ class AzureAIStudioConfig(OpenAIConfig):
                 f"api_base is required for Azure AI Studio. Please set the api_base parameter. Passed `api_base={api_base}`"
             )
         original_url: Final = httpx.URL(api_base)
-        v1_root: Final = foundry_v1_root(original_url)
-        if v1_root is not None:
-            v1_chat_path: Final = "/" + "/".join((*v1_root, *CHAT_COMPLETIONS_PATH))
-            return str(original_url.copy_with(path=v1_chat_path).copy_remove_param("api-version"))
 
         # Extract api_version or use default
         api_version: Final = cast(str | None, litellm_params.get("api_version"))
@@ -227,6 +223,11 @@ class AzureAIStudioConfig(OpenAIConfig):
         # Add api_version if needed
         if "api-version" not in query_params and api_version:
             query_params["api-version"] = api_version
+
+        v1_root: Final = foundry_v1_root(original_url)
+        if v1_root is not None:
+            v1_chat_path: Final = "/" + "/".join((*v1_root, *CHAT_COMPLETIONS_PATH))
+            return str(original_url.copy_with(path=v1_chat_path, params=query_params))
 
         # Add the path to the base URL
         if "services.ai.azure.com" in api_base:

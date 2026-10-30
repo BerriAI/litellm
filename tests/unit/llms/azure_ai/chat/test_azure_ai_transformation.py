@@ -174,7 +174,11 @@ CHAT_COMPLETION_PAYLOAD: Final = {
         ),
         pytest.param(FOUNDRY_PROJECT_BASE, None, FOUNDRY_PROJECT_CHAT_PATH, b"", id="project"),
         pytest.param(
-            FOUNDRY_PROJECT_BASE, "2024-05-01-preview", FOUNDRY_PROJECT_CHAT_PATH, b"", id="project-with-api-version"
+            FOUNDRY_PROJECT_BASE,
+            "preview",
+            FOUNDRY_PROJECT_CHAT_PATH,
+            b"api-version=preview",
+            id="project-keeps-user-api-version",
         ),
         pytest.param(
             f"{FOUNDRY_PROJECT_BASE}/openai/v1/", None, FOUNDRY_PROJECT_CHAT_PATH, b"", id="project-openai-v1"
@@ -183,8 +187,8 @@ CHAT_COMPLETION_PAYLOAD: Final = {
             f"{FOUNDRY_RESOURCE_BASE}/openai/v1?api-version=preview&subscription-key=gateway-key",
             "2024-05-01-preview",
             "/openai/v1/chat/completions",
-            b"subscription-key=gateway-key",
-            id="resource-openai-v1-with-api-version",
+            b"api-version=preview&subscription-key=gateway-key",
+            id="resource-openai-v1-keeps-base-query",
         ),
         pytest.param(
             f"{FOUNDRY_RESOURCE_BASE}/gateway/openai/v1/chat/completions",
