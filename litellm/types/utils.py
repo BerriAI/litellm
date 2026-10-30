@@ -2131,7 +2131,7 @@ class StreamingChoices(OpenAIObject):
         index: int
         delta: Delta
         enhancements: object
-        logprobs: ChoiceLogprobs | None
+        logprobs: ChoiceLogprobs | JsonValue
 
     def __init__(
         self,
