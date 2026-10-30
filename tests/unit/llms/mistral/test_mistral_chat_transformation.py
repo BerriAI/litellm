@@ -1,3 +1,5 @@
+import copy
+import json
 from typing import Final, List, cast
 from unittest.mock import MagicMock, patch
 
@@ -1665,3 +1667,15 @@ def test_mistral_transform_request_drops_an_empty_tool_message_whose_call_id_is_
     )
 
     assert [m.get("role") for m in request["messages"]] == ["user", "assistant"]
+
+
+def test_mistral_request_drops_a_user_name_without_touching_the_callers_message() -> None:
+    messages: Final = [{"role": "user", "content": "Hi"}, {"role": "user", "content": "", "name": "alice"}]
+    messages_before: Final = copy.deepcopy(messages)
+
+    body: Final = MistralConfig().transform_request(
+        model="mistral-medium-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert "name" not in json.dumps(body["messages"])
+    assert messages == messages_before

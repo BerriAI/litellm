@@ -1,3 +1,4 @@
+import copy
 import json
 from collections.abc import Callable
 from typing import Final
@@ -2462,3 +2463,43 @@ def test_translate_developer_role_follows_the_deployment_model_info_over_the_cos
     )
 
     assert [message["role"] for message in messages] == expected_roles
+
+
+def test_fireworks_request_rewrites_tools_without_touching_the_callers_tool() -> None:
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "create_thing",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"thing": {"$ref": "#/definitions/Thing"}},
+                    "definitions": {"Thing": {"type": "object", "properties": {"id": {"type": "string"}}}},
+                },
+            },
+        }
+    ]
+    tools_before: Final = copy.deepcopy(tools)
+
+    request: Final = FireworksAIConfig().transform_request(
+        model="accounts/fireworks/models/gpt-oss-120b",
+        messages=[{"role": "user", "content": "Make a thing"}],
+        optional_params={"tools": tools},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "create_thing",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"thing": {"type": "object", "properties": {"id": {"type": "string"}}}},
+                },
+            },
+        }
+    ]
+    assert tools == tools_before

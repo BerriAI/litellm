@@ -628,7 +628,8 @@ class MistralConfig(OpenAIGPTConfig):
         if _name is not None:
             # Remove name if not a tool message
             if message["role"] != "tool" or isinstance(_name, str) and len(_name.strip()) == 0:
-                message.pop("name", None)
+                message_without_name: Final = {k: v for k, v in message.items() if k != "name"}
+                return cast(AllMessageValues, message_without_name)  # cast-ok: the same message minus name
 
         return message
 

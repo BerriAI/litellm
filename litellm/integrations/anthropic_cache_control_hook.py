@@ -14,7 +14,7 @@ import itertools
 import os
 import re
 from collections.abc import Callable, Container, Iterable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypeVar, cast
 from urllib.parse import urlparse
 
 from pydantic import TypeAdapter, ValidationError
@@ -99,6 +99,88 @@ def _validated_object_list(value: object) -> list[object] | None:
         return _OBJECT_LIST_ADAPTER.validate_python(value)
     except ValidationError:
         return None
+
+
+_MessageT: Final = TypeVar("_MessageT")
+_CacheControlRewrite: TypeAlias = Callable[[object], ChatCompletionCachedContent | None]
+_MARK_CARRYING_MESSAGE_FIELDS: Final = ("content", "tool_calls")
+
+
+def _mark_carrying_blocks(fields: Mapping[str, object]) -> Sequence[object]:
+    lists: Final = tuple(fields.get(key) for key in _MARK_CARRYING_MESSAGE_FIELDS)
+    return tuple(
+        itertools.chain.from_iterable(
+            _OBJECT_LIST_ADAPTER.validate_python(value) for value in lists if isinstance(value, list)
+        )
+    )
+
+
+def _block_carries_cache_control(block: object) -> bool:
+    return isinstance(block, dict) and _CONTENT_PART_ADAPTER.validate_python(block).get("cache_control") is not None
+
+
+def cache_control_count(message: object) -> int:
+    if not isinstance(message, dict):
+        return 0
+    fields: Final = _CONTENT_PART_ADAPTER.validate_python(message)
+    block_marks: Final = sum(1 for block in _mark_carrying_blocks(fields) if _block_carries_cache_control(block))
+    return int(fields.get("cache_control") is not None) + block_marks
+
+
+def _fields_with_cache_control(fields: Mapping[str, object], rewrite: _CacheControlRewrite) -> Mapping[str, object]:
+    others: Final = {key: value for key, value in fields.items() if key != "cache_control"}
+    if "cache_control" not in fields:
+        return others
+    cache_control: Final = rewrite(fields["cache_control"])
+    return others if cache_control is None else {**others, "cache_control": cache_control}
+
+
+def block_with_cache_control(block: object, rewrite: _CacheControlRewrite) -> object:
+    if not isinstance(block, dict):
+        return block
+    return _fields_with_cache_control(_CONTENT_PART_ADAPTER.validate_python(block), rewrite)
+
+
+def with_cache_control(message: _MessageT, rewrite: _CacheControlRewrite) -> _MessageT:
+    if not isinstance(message, dict):
+        return message
+    fields: Final = _CONTENT_PART_ADAPTER.validate_python(message)
+    blocks_rewritten: Final = {
+        key: (
+            [block_with_cache_control(block, rewrite) for block in _OBJECT_LIST_ADAPTER.validate_python(value)]
+            if key in _MARK_CARRYING_MESSAGE_FIELDS and isinstance(value, list)
+            else value
+        )
+        for key, value in fields.items()
+    }
+    return cast(  # cast-ok: the same message shape with each cache marker rewritten or dropped
+        _MessageT, _fields_with_cache_control(blocks_rewritten, rewrite)
+    )
+
+
+def dropped_cache_control(_: object) -> None:
+    return None
+
+
+def _kept_within_budget(state: tuple[int, bool], marks: int) -> tuple[int, bool]:
+    remaining, _ = state
+    if marks > remaining:
+        return remaining, False
+    return remaining - marks, True
+
+
+def messages_within_cache_control_limit(messages: Sequence[_MessageT], reserved_marks: int) -> Sequence[_MessageT]:
+    budget: Final = max(MAX_CACHE_CONTROL_BLOCKS - reserved_marks, 0)
+    newest_first: Final = tuple(reversed(messages))
+    budget_after_each: Final = itertools.accumulate(
+        (cache_control_count(message) for message in newest_first), _kept_within_budget, initial=(budget, True)
+    )
+    kept_flags: Final = tuple(kept for _, kept in itertools.islice(budget_after_each, 1, None))
+    kept_newest_first: Final = tuple(
+        message if kept else with_cache_control(message, dropped_cache_control)
+        for message, kept in zip(newest_first, kept_flags)
+    )
+    return tuple(reversed(kept_newest_first))
 
 
 def _part_with_cache_control_renamed(part: object) -> object:
@@ -1418,3 +1500,25 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 llm_router=None,
             )
         return None
+
+
+def messages_within_cache_control_cap(
+    messages: Sequence[_MessageT], tools: object, cache_control: object = None, request_kwargs: object = None
+) -> Sequence[_MessageT]:
+    """Under drop_params, drop the oldest message hints the provider's cache_control cap has no room for.
+
+    Tool hints and a top-level ``cache_control`` stay on the wire, so they are reserved first.
+    """
+    reserved_marks: Final = AnthropicCacheControlHook.count_external_cache_breakpoints(
+        _validated_object_list(tools), cache_control, request_kwargs
+    )
+    kept: Final = messages_within_cache_control_limit(messages, reserved_marks)
+    dropped: Final = sum(map(cache_control_count, messages)) - sum(map(cache_control_count, kept))
+    if dropped > 0:
+        verbose_logger.warning(
+            "Dropped %d cache_control hint(s) from the oldest messages because drop_params is on and the "
+            "provider accepts at most %d cache_control blocks per request",
+            dropped,
+            MAX_CACHE_CONTROL_BLOCKS,
+        )
+    return kept

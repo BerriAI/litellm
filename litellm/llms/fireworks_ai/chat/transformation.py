@@ -22,6 +22,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolParam,
+    ChatCompletionToolParamFunctionChunk,
     OpenAIChatCompletionToolParam,
 )
 from litellm.types.utils import (
@@ -475,15 +476,23 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         return (("response_format", _json_schema_response_format(choice_schema, "choice")),)
 
     def _transform_tools(self, tools: list[OpenAIChatCompletionToolParam]) -> list[OpenAIChatCompletionToolParam]:
-        for tool in tools:
-            if tool.get("type") != "function":
-                continue
-            function = tool["function"]
-            function.pop("strict", None)
-            params = function.get("parameters")
-            if isinstance(params, dict):
-                unpack_legacy_defs(params)
-        return tools
+        return [self._fireworks_tool(tool) for tool in tools]
+
+    @staticmethod
+    def _fireworks_tool(tool: OpenAIChatCompletionToolParam) -> OpenAIChatCompletionToolParam:
+        if tool.get("type") != "function":
+            return tool
+        function: Final = tool["function"]
+        params: Final = function.get("parameters")
+        unstrict_function: Final = cast(  # cast-ok: the same function definition minus `strict`
+            ChatCompletionToolParamFunctionChunk, {key: value for key, value in function.items() if key != "strict"}
+        )
+        new_function: Final[ChatCompletionToolParamFunctionChunk] = (
+            {**unstrict_function, "parameters": unpack_legacy_defs(params, copy=True)}
+            if isinstance(params, dict)
+            else unstrict_function
+        )
+        return {**tool, "function": new_function}
 
     def _transform_messages_helper(
         self, messages: list[AllMessageValues], model: str, litellm_params: dict

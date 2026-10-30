@@ -311,52 +311,58 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         return content_copy
 
     async def _async_handle_pdf_url(self, content_item: ChatCompletionFileObjectFile) -> ChatCompletionFileObjectFile:
-        file_id: Final = content_item.get("file_id")
+        content_copy: Final = content_item.copy()
+        file_id: Final = content_copy.get("file_id")
         if file_id is not None:  # check for file id being url done in _handle_pdf_url
             base64_data: Final = await async_convert_url_to_base64(file_id)
-            content_item["file_data"] = base64_data
-            content_item["filename"] = "my_file.pdf"
-            content_item.pop("file_id")
-        return content_item
+            content_copy["file_data"] = base64_data
+            content_copy["filename"] = "my_file.pdf"
+            content_copy.pop("file_id")
+        return content_copy
 
     def _common_file_data_check(self, content_item: ChatCompletionFileObjectFile) -> ChatCompletionFileObjectFile:
         file_data: Final = content_item.get("file_data")
         filename: Final = content_item.get("filename")
         if file_data is not None and filename is None:
-            content_item["filename"] = "my_file.pdf"
+            return {**content_item, "filename": "my_file.pdf"}
         return content_item
+
+    @staticmethod
+    def _image_item_for_openai(content_item: ChatCompletionImageObject) -> ChatCompletionImageObject:
+        image_url: Final = content_item["image_url"]
+        if isinstance(image_url, str):
+            return {**content_item, "image_url": {"url": image_url}}
+        if not isinstance(image_url, dict):
+            return content_item
+        new_image_url_obj: Final = cast(
+            ChatCompletionImageUrlObject,
+            {k: v for k, v in image_url.items() if k not in {"format", "video_metadata"}},
+        )
+        return {**content_item, "image_url": new_image_url_obj}
+
+    @staticmethod
+    def _file_item_for_openai(content_item: ChatCompletionFileObject) -> ChatCompletionFileObject:
+        litellm_specific_params: Final = {"format", "detail", "video_metadata"}
+        file_obj: Final = content_item.get("file")
+        if file_obj is None:
+            raise litellm.BadRequestError(
+                message="Content block has type='file' but is missing the required 'file' field",
+                model=None,
+                llm_provider="openai",
+            )
+        new_file_obj: Final = ChatCompletionFileObjectFile(
+            **{k: v for k, v in file_obj.items() if k not in litellm_specific_params}
+        )
+        return {**content_item, "file": new_file_obj}
 
     def _apply_common_transform_content_item(
         self,
         content_item: OpenAIMessageContentListBlock,
     ) -> OpenAIMessageContentListBlock:
-        litellm_specific_params: Final = {"format", "detail", "video_metadata"}
         if content_item.get("type") == "image_url":
-            content_item = cast(ChatCompletionImageObject, content_item)
-            if isinstance(content_item["image_url"], str):
-                content_item["image_url"] = {
-                    "url": content_item["image_url"],
-                }
-            elif isinstance(content_item["image_url"], dict):
-                new_image_url_obj: Final = cast(
-                    ChatCompletionImageUrlObject,
-                    {k: v for k, v in content_item["image_url"].items() if k not in {"format", "video_metadata"}},
-                )
-                content_item["image_url"] = new_image_url_obj
-        elif content_item.get("type") == "file":
-            content_item = cast(ChatCompletionFileObject, content_item)
-            file_obj: Final = content_item.get("file")
-            if file_obj is None:
-                raise litellm.BadRequestError(
-                    message="Content block has type='file' but is missing the required 'file' field",
-                    model=None,
-                    llm_provider="openai",
-                )
-            new_file_obj: Final = ChatCompletionFileObjectFile(
-                **{k: v for k, v in file_obj.items() if k not in litellm_specific_params}
-            )
-            content_item["file"] = new_file_obj
-
+            return self._image_item_for_openai(cast(ChatCompletionImageObject, content_item))
+        if content_item.get("type") == "file":
+            return self._file_item_for_openai(cast(ChatCompletionFileObject, content_item))
         return content_item
 
     def _transform_content_item(
@@ -419,31 +425,34 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         hoisted_messages: Final = hoist_images_from_tool_messages(stripped_messages)
 
         async def _async_transform():
-            for message in hoisted_messages:
-                message_content = message.get("content")
-                message_role = message.get("role")
-
-                if message_role == "user" and message_content and isinstance(message_content, list):
-                    message_content_types = cast(list[OpenAIMessageContentListBlock], message_content)
-                    for i, content_item in enumerate(message_content_types):
-                        message_content_types[i] = await self._async_transform_content_item(
-                            cast(OpenAIMessageContentListBlock, content_item),
-                        )
-            return hoisted_messages
+            return [await self._async_user_message_for_openai(message) for message in hoisted_messages]
 
         if is_async:
             return _async_transform()
-        else:
-            for message in hoisted_messages:
-                message_content = message.get("content")
-                message_role = message.get("role")
-                if message_role == "user" and message_content and isinstance(message_content, list):
-                    message_content_types = cast(list[OpenAIMessageContentListBlock], message_content)
-                    for i, content_item in enumerate(message_content):
-                        message_content_types[i] = self._transform_content_item(
-                            cast(OpenAIMessageContentListBlock, content_item)
-                        )
-            return hoisted_messages
+        return [self._user_message_for_openai(message) for message in hoisted_messages]
+
+    @staticmethod
+    def _user_content_parts(message: AllMessageValues) -> Sequence[OpenAIMessageContentListBlock] | None:
+        message_content: Final = message.get("content")
+        if message.get("role") != "user" or not message_content or not isinstance(message_content, list):
+            return None
+        return cast(Sequence[OpenAIMessageContentListBlock], message_content)
+
+    def _user_message_for_openai(self, message: AllMessageValues) -> AllMessageValues:
+        parts: Final = self._user_content_parts(message)
+        if parts is None:
+            return message
+        return cast(  # cast-ok: the same user message with each content part rebuilt for OpenAI
+            AllMessageValues, {**message, "content": [self._transform_content_item(part) for part in parts]}
+        )
+
+    async def _async_user_message_for_openai(self, message: AllMessageValues) -> AllMessageValues:
+        parts: Final = self._user_content_parts(message)
+        if parts is None:
+            return message
+        return cast(  # cast-ok: the same user message with each content part rebuilt for OpenAI
+            AllMessageValues, {**message, "content": [await self._async_transform_content_item(part) for part in parts]}
+        )
 
     def transform_messages(
         self,

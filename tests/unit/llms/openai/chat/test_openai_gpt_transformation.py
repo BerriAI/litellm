@@ -2006,3 +2006,53 @@ def test_completion_leaves_the_callers_closing_developer_message_unchanged_on_a_
     )
     assert json.loads(chat.calls.last.request.content)["messages"][-1]["role"] == "user"
     assert messages == sent
+
+
+def _user_turn_with_litellm_only_media_fields() -> list[dict[str, object]]:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe these"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/cat.png", "format": "image/png"}},
+                {"type": "image_url", "image_url": "https://example.com/dog.png"},
+                {
+                    "type": "file",
+                    "file": {"file_data": "data:application/pdf;base64,JVBERi0=", "format": "application/pdf"},
+                },
+            ],
+        }
+    ]
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_openai_request_rewrites_media_parts_without_touching_the_callers_message(
+    is_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None, raising=False)
+    config: Final = OpenAIGPTConfig()
+    messages: Final = _user_turn_with_litellm_only_media_fields()
+    messages_before: Final = copy.deepcopy(messages)
+    request_kwargs: Final = {
+        "model": "gpt-5.5",
+        "messages": messages,
+        "optional_params": {},
+        "litellm_params": {"custom_llm_provider": "openai", "api_base": None},
+        "headers": {},
+    }
+
+    body: Final = (
+        await config.async_transform_request(**request_kwargs)
+        if is_async
+        else config.transform_request(**request_kwargs)
+    )
+
+    assert body["messages"][0]["content"] == [
+        {"type": "text", "text": "Describe these"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+        {"type": "image_url", "image_url": {"url": "https://example.com/dog.png"}},
+        {"type": "file", "file": {"file_data": "data:application/pdf;base64,JVBERi0=", "filename": "my_file.pdf"}},
+    ]
+    assert messages == messages_before

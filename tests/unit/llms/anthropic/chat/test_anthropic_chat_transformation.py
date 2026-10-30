@@ -1,5 +1,6 @@
 import copy
 import json
+from collections.abc import Iterator
 from itertools import chain
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -9807,3 +9808,89 @@ def test_transform_request_tool_config_point_without_tools_drops_the_key():
     assert "cache_control_injection_points" not in data
     assert "tools" not in data
     assert litellm_params["metadata"] == {}
+
+
+def _five_cache_hint_conversation() -> list[dict[str, object]]:
+    return [
+        {"role": "system", "content": [{"type": "text", "text": "system prompt", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "user", "content": [{"type": "text", "text": "turn 1", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "answer 1", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "user", "content": [{"type": "text", "text": "turn 2", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "assistant", "content": "answer 2"},
+        {"role": "user", "content": [{"type": "text", "text": "turn 3", "cache_control": {"type": "ephemeral"}}]},
+    ]
+
+
+def _cached_texts(node: object) -> Iterator[str]:
+    if isinstance(node, dict):
+        yield from ((node["text"],) if "cache_control" in node and "text" in node else ())
+        yield from (text for value in node.values() for text in _cached_texts(value))
+    elif isinstance(node, list):
+        yield from (text for item in node for text in _cached_texts(item))
+
+
+@pytest.mark.parametrize(
+    ("config", "model"),
+    [
+        (AnthropicConfig(), "claude-haiku-5-5"),
+        (VertexAIAnthropicConfig(), "claude-haiku-5-5"),
+        (AmazonAnthropicClaudeConfig(), "anthropic.claude-haiku-5-5"),
+        (AzureAnthropicConfig(), "claude-haiku-5-5"),
+    ],
+    ids=["anthropic", "vertex_ai", "bedrock_invoke", "azure_ai"],
+)
+@pytest.mark.parametrize(
+    ("drop_params", "expected_cached_texts"),
+    [
+        (True, ["answer 1", "turn 1", "turn 2", "turn 3"]),
+        (False, ["answer 1", "system prompt", "turn 1", "turn 2", "turn 3"]),
+    ],
+    ids=["drop_params_keeps_the_newest_four", "without_drop_params_all_five_pass_through"],
+)
+def test_claude_request_over_the_cache_control_cap_drops_the_oldest_hints_only_under_drop_params(
+    config: AnthropicConfig,
+    model: str,
+    drop_params: bool,
+    expected_cached_texts: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = _five_cache_hint_conversation()
+    messages_before: Final = copy.deepcopy(messages)
+
+    body: Final = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params={},
+        litellm_params={"drop_params": drop_params},
+        headers={},
+    )
+
+    assert sorted(_cached_texts(body)) == expected_cached_texts
+    assert json.dumps(body).count('"cache_control"') == len(expected_cached_texts)
+    assert messages == messages_before
+
+
+def test_claude_cache_control_cap_keeps_a_cached_tool_and_drops_the_oldest_message_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    messages: Final = _five_cache_hint_conversation()[1:]
+    tool: Final = {
+        "name": "get_weather",
+        "description": "Get the weather",
+        "input_schema": {"type": "object", "properties": {}},
+        "cache_control": {"type": "ephemeral"},
+    }
+
+    body: Final = AnthropicConfig().transform_request(
+        model="claude-haiku-5-5",
+        messages=messages,
+        optional_params={"tools": [tool]},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["tools"][0]["cache_control"] == {"type": "ephemeral"}
+    assert sorted(_cached_texts(body["messages"])) == ["answer 1", "turn 2", "turn 3"]
+    assert json.dumps(body).count('"cache_control"') == 4
