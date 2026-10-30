@@ -1399,12 +1399,20 @@ class TestToolPermissionGuardrailAnthropicMessages:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("rule_tool_type", "call_type"),
-        [(r"^custom$", "responses"), (r"^function$", "anthropic_messages")],
-        ids=["responses_custom_stays_custom", "anthropic_custom_reads_as_function"],
+        ("tool_fields", "rule_tool_type", "call_type"),
+        [
+            ({"format": {"type": "text"}}, r"^custom$", "responses"),
+            ({"input_schema": {"type": "object", "properties": {}}}, r"^function$", "anthropic_messages"),
+            ({"input_schema": {"type": "object", "properties": {}}}, r"^function$", "pass_through_endpoint"),
+        ],
+        ids=[
+            "responses_custom_stays_custom",
+            "anthropic_custom_reads_as_function",
+            "anthropic_custom_reads_as_function_on_a_pass_through_route",
+        ],
     )
     async def test_pre_call_tool_type_rules_follow_the_request_format(
-        self, rule_tool_type: str, call_type: CallTypesLiteral
+        self, tool_fields: dict[str, object], rule_tool_type: str, call_type: CallTypesLiteral
     ) -> None:
         guardrail = ToolPermissionGuardrail(
             guardrail_name=f"tool-type-{call_type}",
@@ -1417,7 +1425,7 @@ class TestToolPermissionGuardrailAnthropicMessages:
         data = {
             "model": "claude-sonnet-4-5",
             "messages": [{"role": "user", "content": "hi"}],
-            "tools": [{"type": "custom", "name": "apply_patch", "input_schema": {"type": "object", "properties": {}}}],
+            "tools": [{"type": "custom", "name": "apply_patch", **tool_fields}],
         }
 
         with pytest.raises(HTTPException) as excinfo:
@@ -2189,8 +2197,18 @@ class TestToolPermissionGuardrailAnthropicMessages:
                 {"function_calling_config": {"mode": "NONE"}},
             ),
             ({"functionCallingConfig": {"mode": "ANY"}}, {"functionCallingConfig": {"mode": "ANY"}}),
+            (
+                {"functionCallingConfig": {"mode": "AUTO", "allowedFunctionNames": []}},
+                {"functionCallingConfig": {"mode": "AUTO", "allowedFunctionNames": []}},
+            ),
         ],
-        ids=["some_allowed_names_left", "every_allowed_name_removed", "snake_case_fields", "no_allowed_names"],
+        ids=[
+            "some_allowed_names_left",
+            "every_allowed_name_removed",
+            "snake_case_fields",
+            "no_allowed_names",
+            "empty_allowed_names_list",
+        ],
     )
     async def test_pre_call_rewrite_drops_removed_functions_from_a_gemini_tool_config(
         self, tool_config: dict[str, object], rewritten_tool_config: dict[str, object]
@@ -2223,6 +2241,65 @@ class TestToolPermissionGuardrailAnthropicMessages:
 
         assert result["tools"] == [{"googleSearch": {}}]
         assert result["toolConfig"] == {"functionCallingConfig": {"mode": "NONE"}}
+
+    @pytest.mark.asyncio
+    async def test_pre_call_blocks_a_tool_whose_type_is_not_a_string_by_its_name(self) -> None:
+        guardrail = self._pre_call(
+            [
+                {"id": "allow_search", "tool_type": r"^web_search$", "decision": "allow"},
+                {"id": "deny_read", "tool_name": r"^Read$", "decision": "deny"},
+            ],
+            "block",
+        )
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": ["custom"], "name": "Read", "input_schema": {"type": "object"}}],
+        }
+
+        with pytest.raises(HTTPException) as excinfo:
+            await self._run_pre_call(guardrail, data, "anthropic_messages")
+
+        assert excinfo.value.status_code == 400
+        assert excinfo.value.detail["detection_message"] == "Tool 'Read' denied by rule 'deny_read'"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("malformed_tool", "tool_choice", "call_type"),
+        [
+            ({"type": ["custom"], "name": "Read", "input_schema": {"type": "object"}}, None, "anthropic_messages"),
+            ({"type": "function", "name": "Read"}, {"type": {"a": 1}}, "responses"),
+        ],
+        ids=["tool_type_is_a_list", "tool_choice_type_is_an_object"],
+    )
+    async def test_pre_call_rewrite_strips_a_denied_tool_and_leaves_malformed_fields_for_the_provider(
+        self, malformed_tool: dict[str, object], tool_choice: dict[str, object] | None, call_type: CallTypesLiteral
+    ) -> None:
+        guardrail = self._pre_call([{"id": "deny_read", "tool_name": r"^Read$", "decision": "deny"}], "rewrite")
+        bash = {"type": "function", "name": "Bash"}
+        data = {
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [bash, malformed_tool],
+            **({"tool_choice": tool_choice} if tool_choice is not None else {}),
+        }
+
+        result = await self._run_pre_call(guardrail, data, call_type)
+
+        assert result["tools"] == [bash]
+        assert result.get("tool_choice") == tool_choice
+
+    @pytest.mark.asyncio
+    async def test_pre_call_judges_a_tool_with_a_null_type_by_its_nested_function_name(self) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_read", "tool_name": r"^Read$", "decision": "allow"}], "block", default_action="deny"
+        )
+        tool = {"type": None, "function": {"name": "Read", "parameters": {"type": "object"}}}
+        data = {"model": "gpt-5", "messages": [{"role": "user", "content": "hi"}], "tools": [tool]}
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [tool]
 
     @pytest.mark.asyncio
     async def test_pre_call_rewrite_drops_a_removed_hosted_tool_from_allowed_tools(self) -> None:

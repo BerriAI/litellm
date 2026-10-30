@@ -2454,6 +2454,41 @@ class TestResponsesWSFirstFrameModelAuth:
         assert (sent["tools"], sent["tool_choice"]) == ([], "none")
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("nested", [True, False])
+    async def test_frame_guard_forwards_the_extra_body_tools_a_rewrite_guardrail_stripped(self, nested: bool):
+        from litellm.proxy.guardrails.guardrail_hooks.tool_permission import ToolPermissionGuardrail
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="ws-rewrite",
+            rules=[{"id": "deny_shell", "tool_name": r"^shell$", "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action="rewrite",
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+        )
+
+        async def pre_call_hook(user_api_key_dict, data, call_type, guardrails_only):
+            return await guardrail.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict, cache=MagicMock(), data=data, call_type=call_type
+            )
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj, MagicMock()
+        )
+        weather = {"type": "function", "name": "get_weather"}
+        body = {"input": "hi", "extra_body": {"tools": [weather, {"type": "function", "name": "shell"}]}}
+        frame = {"type": "response.create", "response": body} if nested else {"type": "response.create", **body}
+
+        guarded = json.loads((await guard(json.dumps(frame))).frame)
+
+        sent = guarded["response"] if nested else guarded
+        assert sent["extra_body"] == {"tools": [weather]}
+
+    @pytest.mark.asyncio
     async def test_frame_guard_strips_the_proxy_owned_metadata_keys_a_client_sends(self):
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
 

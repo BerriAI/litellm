@@ -2154,6 +2154,7 @@ _GUARDRAIL_INFORMATION: Final = TypeAdapter(list[dict[str, object]])
 _PII_TOKENS: Final = TypeAdapter(dict[str, str])
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 _GUARDED_FRAME_FIELDS: Final = ("input", "instructions", "tools", "tool_choice")
+_REWRITTEN_FRAME_FIELDS: Final = (*_GUARDED_FRAME_FIELDS, "extra_body")
 _CLIENT_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
 # the guardrail list is merged from key, team and the admission frame; a later frame cannot shrink it
 _CLIENT_GUARDRAIL_SELECTORS: Final = ("guardrails", "guardrail_config", "policies")
@@ -2226,8 +2227,8 @@ def _responses_ws_frame_guard(
             await _bill_rejected_frame(rejected_frame_auth, rerouted, frame_data)
             raise rerouted
         # a guardrail may delete a field (the Responses translation pops ``instructions``), so start without them
-        guarded_fields: Final = {key: guarded_data[key] for key in _GUARDED_FRAME_FIELDS if key in guarded_data}
-        kept: Final = {key: value for key, value in body.items() if key not in _GUARDED_FRAME_FIELDS}
+        guarded_fields: Final = {key: guarded_data[key] for key in _REWRITTEN_FRAME_FIELDS if key in guarded_data}
+        kept: Final = {key: value for key, value in body.items() if key not in _REWRITTEN_FRAME_FIELDS}
         rewritten: Final = (
             {**frame_obj, "response": {**kept, **guarded_fields}}
             if isinstance(nested, dict)
