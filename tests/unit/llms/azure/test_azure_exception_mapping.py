@@ -1,3 +1,4 @@
+import datetime
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Final
@@ -679,6 +680,26 @@ async def _azure_image_generation() -> None:
     litellm.image_generation(model="azure/gpt-image-2", prompt="a cat", **_AZURE_ARGS)
 
 
+async def _azure_text_completion() -> None:
+    litellm.text_completion(model="azure_text/gpt-35-turbo-instruct", prompt="hi", **_AZURE_ARGS)
+
+
+async def _azure_text_completion_stream() -> None:
+    list(litellm.text_completion(model="azure_text/gpt-35-turbo-instruct", prompt="hi", stream=True, **_AZURE_ARGS))
+
+
+async def _azure_atext_completion() -> None:
+    await litellm.atext_completion(model="azure_text/gpt-35-turbo-instruct", prompt="hi", **_AZURE_ARGS)
+
+
+async def _azure_atext_completion_stream() -> None:
+    stream: Final = await litellm.atext_completion(
+        model="azure_text/gpt-35-turbo-instruct", prompt="hi", stream=True, **_AZURE_ARGS
+    )
+    async for _ in stream:
+        pass
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "route",
@@ -690,6 +711,10 @@ async def _azure_image_generation() -> None:
         _azure_embedding,
         _azure_aembedding,
         _azure_image_generation,
+        _azure_text_completion,
+        _azure_text_completion_stream,
+        _azure_atext_completion,
+        _azure_atext_completion_stream,
     ),
     ids=lambda route: route.__name__.removeprefix("_azure_"),
 )
@@ -727,6 +752,37 @@ async def test_azure_error_keeps_the_upstream_body_without_the_api_key(
     for exposed in (error_response.request, getattr(raised.value, "request")):
         assert _AZURE_KEY not in str(exposed.headers)
         assert exposed.content == b""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    (
+        _azure_completion,
+        _azure_completion_stream,
+        _azure_acompletion,
+        _azure_acompletion_stream,
+        _azure_embedding,
+        _azure_aembedding,
+        _azure_text_completion,
+        _azure_atext_completion,
+        _azure_atext_completion_stream,
+    ),
+    ids=lambda route: route.__name__.removeprefix("_azure_"),
+)
+@respx.mock
+async def test_azure_error_response_keeps_the_upstream_elapsed_time(
+    route: Callable[[], Awaitable[None]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx.post(url__regex=r"https://azure-upstream\.openai\.azure\.com/.*").mock(
+        return_value=httpx.Response(400, content=_AZURE_REFUSAL_BODY, headers={"content-type": "application/json"})
+    )
+
+    with pytest.raises(BadRequestError) as raised:
+        await route()
+
+    assert raised.value.response.elapsed > datetime.timedelta(0)
 
 
 def test_azure_client_side_missing_key_error_keeps_the_empty_placeholder_response() -> None:

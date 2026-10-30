@@ -9,6 +9,7 @@
 
 ## LiteLLM versions of the OpenAI Exception Types
 
+import datetime
 import enum
 from collections.abc import Mapping, Sequence
 from typing import Any, Final
@@ -137,6 +138,15 @@ def _request_without_credentials(upstream: object, fallback_url: str) -> httpx.R
     )
 
 
+def _upstream_elapsed(upstream: object) -> datetime.timedelta | None:
+    if not isinstance(upstream, httpx.Response):
+        return None
+    try:
+        return upstream.elapsed
+    except RuntimeError:
+        return None
+
+
 def error_response_without_credentials(status_code: int, upstream: object, fallback_url: str) -> httpx.Response:
     response: Final = httpx.Response(
         status_code=status_code,
@@ -145,6 +155,9 @@ def error_response_without_credentials(status_code: int, upstream: object, fallb
     )
     _ = response.read()
     response.headers = httpx.Headers(upstream.headers if isinstance(upstream, httpx.Response) else None)
+    elapsed: Final = _upstream_elapsed(upstream)
+    if elapsed is not None:
+        response.elapsed = elapsed
     return response
 
 

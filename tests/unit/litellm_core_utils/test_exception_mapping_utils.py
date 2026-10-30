@@ -24,6 +24,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.common_utils import OpenAIError
+from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.proxy.common_utils.openai_error_payload import openai_error_type
 from litellm.types.utils import LlmProviders
 
@@ -2965,3 +2966,18 @@ def test_bedrock_server_error_keeps_the_aws_body_without_the_signed_request() ->
     assert raised.value.response.headers["x-amzn-requestid"] == "req-aws"
     assert "AKIDSIGNED" not in str(raised.value.request.headers)
     assert raised.value.request.content == b""
+
+
+@pytest.mark.parametrize("provider", ("gemini", "vertex_ai"))
+def test_gemini_server_error_response_carries_the_upstream_error_body(provider: str) -> None:
+    body: Final = '{"error":{"code":500,"message":"Internal error encountered.","status":"INTERNAL"}}'
+
+    with pytest.raises(litellm.InternalServerError) as raised:
+        exception_type(
+            model="gemini-3.1-pro",
+            original_exception=VertexAIError(status_code=500, message=body, headers=None),
+            custom_llm_provider=provider,
+        )
+
+    assert raised.value.response.status_code == 500
+    assert raised.value.response.json() == json.loads(body)
