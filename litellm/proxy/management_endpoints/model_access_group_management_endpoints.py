@@ -200,17 +200,17 @@ def _model_table(prisma_client: PrismaClient) -> _ModelTableClient:
     return ModelRepository(WriterPinnedClient(prisma_client.db)).table
 
 
-_SERIALIZE_ACCESS_GROUP_WRITES: Final = (
-    "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext('model_access_group'), hashtext($1))"
+_TRY_LOCK_ACCESS_GROUP: Final = (
+    "SELECT pg_try_advisory_xact_lock(hashtext('model_access_group'), hashtext($1)) AS locked"
 )
 _LOCK_MODEL_ROWS: Final = (
     'SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_id = ANY($1::text[]) '
     "ORDER BY model_id FOR UPDATE SKIP LOCKED"
 )
 _MEMBERSHIP_TX_TIMEOUT: Final = timedelta(seconds=30)
-_ROW_LOCK_RETRY_BUDGET_SECONDS: Final = _MEMBERSHIP_TX_TIMEOUT.total_seconds()
-_ROW_LOCK_BACKOFF_SECONDS: Final = (0.05, 0.1, 0.2, 0.4, 0.8)
-_ROW_LOCK_LONGEST_RETRY_DELAY_SECONDS: Final = 1.0
+_LOCK_RETRY_BUDGET_SECONDS: Final = _MEMBERSHIP_TX_TIMEOUT.total_seconds()
+_LOCK_RETRY_BACKOFF_SECONDS: Final = (0.05, 0.1, 0.2, 0.4, 0.8)
+_LOCK_RETRY_LONGEST_DELAY_SECONDS: Final = 1.0
 
 
 class _LockedModelRow(BaseModel):
@@ -220,6 +220,15 @@ class _LockedModelRow(BaseModel):
 
 
 _LOCKED_MODEL_ROWS: Final = TypeAdapter(tuple[_LockedModelRow, ...])
+
+
+class _AccessGroupLock(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    locked: bool
+
+
+_ACCESS_GROUP_LOCK: Final = TypeAdapter(tuple[_AccessGroupLock])
 
 
 def _model_table_tx(prisma_client: PrismaClient) -> contextlib.AbstractAsyncContextManager[_ModelTableTx]:
@@ -516,11 +525,13 @@ async def _raise_404_unless_the_primary_carries(access_group: str, prisma_client
         raise _http_error(404, f"Access group '{access_group}' not found")
 
 
-async def _rewrite_membership_unless_a_row_is_locked(
+async def _rewrite_membership_unless_locked(
     prisma_client: PrismaClient, access_group: str, data: UpdateModelGroupRequest
 ) -> tuple[tuple[_DeploymentRow, ...], tuple[tuple[str, Mapping[str, object]], ...]] | None:
     async with _model_table_tx(prisma_client) as tx:
-        await tx.query_raw(_SERIALIZE_ACCESS_GROUP_WRITES, access_group)
+        (group_lock,) = _ACCESS_GROUP_LOCK.validate_python(await tx.query_raw(_TRY_LOCK_ACCESS_GROUP, access_group))
+        if not group_lock.locked:
+            return None
         model_ids_to_lock: Final = _model_ids_to_lock(
             deployments=await tx.litellm_proxymodeltable.find_many(), access_group=access_group, data=data
         )
@@ -554,22 +565,22 @@ async def _rewrite_membership_unless_a_row_is_locked(
     return selected_deployments, rewrites
 
 
-def _row_lock_retry_delays() -> Iterator[float]:
-    return itertools.chain(_ROW_LOCK_BACKOFF_SECONDS, itertools.repeat(_ROW_LOCK_LONGEST_RETRY_DELAY_SECONDS))
+def _lock_retry_delays() -> Iterator[float]:
+    return itertools.chain(_LOCK_RETRY_BACKOFF_SECONDS, itertools.repeat(_LOCK_RETRY_LONGEST_DELAY_SECONDS))
 
 
-async def _rewrite_membership_once_its_rows_are_free(
+async def _rewrite_membership_once_unlocked(
     prisma_client: PrismaClient,
     access_group: str,
     data: UpdateModelGroupRequest,
-    retry_budget_seconds: float = _ROW_LOCK_RETRY_BUDGET_SECONDS,
+    retry_budget_seconds: float = _LOCK_RETRY_BUDGET_SECONDS,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> tuple[tuple[_DeploymentRow, ...], tuple[tuple[str, Mapping[str, object]], ...]]:
     deadline: Final = clock() + retry_budget_seconds
-    for delay in _row_lock_retry_delays():
+    for delay in _lock_retry_delays():
         if (
-            rewritten := await _rewrite_membership_unless_a_row_is_locked(
+            rewritten := await _rewrite_membership_unless_locked(
                 prisma_client=prisma_client, access_group=access_group, data=data
             )
         ) is not None:
@@ -577,7 +588,7 @@ async def _rewrite_membership_once_its_rows_are_free(
         if clock() + delay > deadline:
             break
         await sleep(delay)
-    raise _http_error(409, f"Another edit holds a model in access group '{access_group}', try again")
+    raise _http_error(409, f"Another edit holds access group '{access_group}' or one of its models, try again")
 
 
 def _readable_model_info_or_raise(model_id: str, model_info: object) -> Mapping[str, object]:
@@ -1073,7 +1084,7 @@ async def update_access_group(
     Raises:
     - HTTPException 400: If any model names don't exist
     - HTTPException 404: If access group not found
-    - HTTPException 409: If another edit keeps one of the group's models locked for 30 s
+    - HTTPException 409: If another edit holds the group or one of its models for 30 s
     """
     from litellm.proxy.proxy_server import llm_router, prisma_client
 
@@ -1116,7 +1127,7 @@ async def update_access_group(
             )
 
     try:
-        selected_deployments, rewrites = await _rewrite_membership_once_its_rows_are_free(
+        selected_deployments, rewrites = await _rewrite_membership_once_unlocked(
             prisma_client=prisma_client, access_group=access_group, data=data
         )
         if rewrites:

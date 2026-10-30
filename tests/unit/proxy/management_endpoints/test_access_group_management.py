@@ -707,6 +707,7 @@ class _FakeModelTable:
         self.failing_model_ids = failing_model_ids
         self.updates: list[tuple[dict, dict]] = []
         self.rows_locked_by_another_session: frozenset[str] = frozenset()
+        self.group_locked_by_another_session = False
         self.edits_the_other_session_commits: dict[str, dict] = {}
         self.other_session_commits_after_refusals: int | None = None
         self.lock_refusals = 0
@@ -715,16 +716,27 @@ class _FakeModelTable:
         model_names = (where or {}).get("model_name", {}).get("in")
         return [d for d in self.deployments if model_names is None or d.model_name in model_names]
 
+    def lock_group(self, wait):
+        if not self.group_locked_by_another_session:
+            return True
+        if wait:
+            raise TimeoutError("lock_timeout expired waiting for the access group lock")
+        self._refuse_lock()
+        return False
+
     def lock_rows(self, model_ids, skip_locked):
         held = self.rows_locked_by_another_session.intersection(model_ids)
         if not held:
             return list(model_ids)
         if not skip_locked:
             raise TimeoutError(f"timed out waiting for the row lock on {sorted(held)}")
+        self._refuse_lock()
+        return [model_id for model_id in model_ids if model_id not in held]
+
+    def _refuse_lock(self):
         self.lock_refusals += 1
         if self.lock_refusals == self.other_session_commits_after_refusals:
             self._other_session_commits()
-        return [model_id for model_id in model_ids if model_id not in held]
 
     def _other_session_commits(self):
         self.deployments = [
@@ -736,6 +748,7 @@ class _FakeModelTable:
             for d in self.deployments
         ]
         self.rows_locked_by_another_session = frozenset()
+        self.group_locked_by_another_session = False
 
     async def find_unique(self, where, include=None):
         return next((d for d in self.deployments if d.model_id == where["model_id"]), None)
@@ -785,9 +798,9 @@ class _FakeModelTableTx:
         self.litellm_proxymodeltable = SimpleNamespace(find_many=self._find_many)
 
     async def query_raw(self, query, *args):
-        if "pg_advisory_xact_lock" in query:
+        if "advisory_xact_lock" in query:
             self.journal.append(f"access_group.lock:{args[0]}")
-            return [{"locked": 1}]
+            return [{"locked": self.model_table.lock_group(wait="pg_try_" not in query)}]
         if "FOR UPDATE" in query:
             model_ids = sorted(args[0] if args else (d.model_id for d in self.model_table.deployments))
             self.journal.append(f"model_table.lock:{','.join(model_ids)}")
@@ -1781,12 +1794,25 @@ async def test_an_access_group_emptied_while_the_update_retried_a_locked_row_ans
     assert prisma.model_table.updates == []
 
 
+def _another_session_holds_a_member_row(model_table):
+    model_table.rows_locked_by_another_session = frozenset({"leaves"})
+
+
+def _another_edit_holds_the_group(model_table):
+    model_table.group_locked_by_another_session = True
+
+
 @pytest.mark.asyncio
-async def test_an_access_group_update_answers_409_and_writes_nothing_while_another_session_keeps_a_member_row_locked():
+@pytest.mark.parametrize(
+    "hold", [_another_session_holds_a_member_row, _another_edit_holds_the_group], ids=["member_row", "group"]
+)
+async def test_an_access_group_update_answers_409_and_writes_nothing_while_another_session_keeps_a_lock_it_needs(
+    hold,
+):
     from fastapi import HTTPException
 
     from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
-        _rewrite_membership_once_its_rows_are_free,
+        _rewrite_membership_once_unlocked,
     )
     from litellm.types.proxy.management_endpoints.model_management_endpoints import (
         UpdateModelGroupRequest,
@@ -1799,11 +1825,11 @@ async def test_an_access_group_update_answers_409_and_writes_nothing_while_anoth
             _deployment(model_id="leaves", model_name="gpt-leaves"),
         ],
     )
-    prisma.model_table.rows_locked_by_another_session = frozenset({"leaves"})
+    hold(prisma.model_table)
     clock = _FakeClock()
 
     with pytest.raises(HTTPException) as raised:
-        await _rewrite_membership_once_its_rows_are_free(
+        await _rewrite_membership_once_unlocked(
             prisma_client=prisma,
             access_group="prod-models",
             data=UpdateModelGroupRequest(model_ids=["stays"]),
@@ -1819,9 +1845,12 @@ async def test_an_access_group_update_answers_409_and_writes_nothing_while_anoth
 
 
 @pytest.mark.asyncio
-async def test_an_access_group_update_waits_out_a_member_row_held_for_over_ten_seconds_and_writes_the_edit():
+@pytest.mark.parametrize(
+    "hold", [_another_session_holds_a_member_row, _another_edit_holds_the_group], ids=["member_row", "group"]
+)
+async def test_an_access_group_update_waits_out_a_lock_held_for_over_ten_seconds_and_writes_the_edit(hold):
     from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
-        _rewrite_membership_once_its_rows_are_free,
+        _rewrite_membership_once_unlocked,
     )
     from litellm.types.proxy.management_endpoints.model_management_endpoints import (
         UpdateModelGroupRequest,
@@ -1834,11 +1863,11 @@ async def test_an_access_group_update_waits_out_a_member_row_held_for_over_ten_s
             _deployment(model_id="leaves", model_name="gpt-leaves"),
         ],
     )
-    prisma.model_table.rows_locked_by_another_session = frozenset({"leaves"})
+    hold(prisma.model_table)
     prisma.model_table.other_session_commits_after_refusals = 20
     clock = _FakeClock()
 
-    _, rewrites = await _rewrite_membership_once_its_rows_are_free(
+    _, rewrites = await _rewrite_membership_once_unlocked(
         prisma_client=prisma,
         access_group="prod-models",
         data=UpdateModelGroupRequest(model_ids=["stays"]),
