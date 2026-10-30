@@ -683,17 +683,19 @@ def normalize_tool_input_schema_types_for_bedrock_invoke(request_body: dict) -> 
 
 def ensure_bedrock_anthropic_messages_tool_names(request_body: dict) -> None:
     """
-    Bedrock Invoke (Anthropic Messages) requires each tool to include ``name``.
+    Bedrock Invoke (Anthropic Messages) requires each custom tool to include ``name``.
     Some clients send only ``input_schema``; Bedrock then errors with
     ``tools.0.custom.name: Field required``.
 
-    In-place: set ``name`` to ``litellm_unnamed_tool_{index}`` when missing or blank.
+    In-place: set ``name`` to ``litellm_unnamed_tool_{index}`` on a custom tool whose name
+    is missing or blank. Typed tools pass through as sent, since a toolset entry refuses
+    any name and a dated tool accepts only its fixed one.
     """
     tools: Final = request_body.get("tools")
     if not tools or not isinstance(tools, list):
         return
-    for i, tool in enumerate(tools):
-        if not isinstance(tool, dict):
+    for i, tool in enumerate(_TOOL_ITEMS_ADAPTER.validate_python(tools)):
+        if not _is_str_keyed_dict(tool) or tool.get("type") not in (None, "custom"):
             continue
         name = tool.get("name")
         if name is None or (isinstance(name, str) and not name.strip()):
