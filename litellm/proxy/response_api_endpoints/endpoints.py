@@ -34,6 +34,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import EMPTY_MAPPING, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY, TERMINAL_RESPONSE_STATUSES
+from litellm.exceptions import EndpointNotSupportedByModelError
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
@@ -78,6 +79,7 @@ from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decry
 from litellm.proxy.litellm_pre_call_utils import (
     _CLIENT_PRICING_METADATA_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
     _UNTRUSTED_METADATA_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
+    is_chat_completions_body,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_request_data,
@@ -212,13 +214,6 @@ def _normalize_tool_dialect(
     return {**data, **{key: value for key, value in replaceable if key in data}}
 
 
-def _is_chat_completions_body(data: Mapping[str, object]) -> bool:
-    messages: Final = data.get("messages")
-    if isinstance(messages, list) and messages:
-        return True
-    return "messages" in data and "input" not in data
-
-
 _CURSOR_THINKING_SEPARATOR: Final = "-thinking-"
 _CURSOR_FAST_SUFFIX: Final = "-fast"
 _CURSOR_THINKING_LEVELS: Final[frozenset[str]] = frozenset(get_args(REASONING_EFFORT))
@@ -240,11 +235,12 @@ def _parse_cursor_model_variant(model: str) -> _CursorModelVariant:
 def _router_can_serve(model: str, llm_router: "Router | None") -> bool:
     if llm_router is None:
         return False
-    if llm_router.is_recognized_model(model):
+    registry: Final = llm_router.registry()
+    if registry.resolve(model, kind="recognized"):
         return True
-    if model in llm_router.team_public_model_names:
+    if model in registry.names(kind="team_public"):
         return True
-    return bool(llm_router.pattern_router.get_pattern(model))
+    return bool(registry.patterns().get_pattern(model))
 
 
 def _resolve_cursor_model_variant(
@@ -259,7 +255,7 @@ def _resolve_cursor_model_variant(
     resolved: Final = {**data, "model": variant.base_model}
     if variant.reasoning_effort is None:
         return resolved
-    if _is_chat_completions_body(data):
+    if is_chat_completions_body(data):
         if "reasoning_effort" in data:
             return resolved
         return {**resolved, "reasoning_effort": variant.reasoning_effort}
@@ -644,7 +640,7 @@ async def cursor_chat_completions(
 
     raw_body: Final = await read_request_body(request=request)
 
-    if _is_chat_completions_body(raw_body):
+    if is_chat_completions_body(raw_body):
         # Genuine chat completions body (Cursor sends these for models whose BYOK it
         # already fixed); delegate so behavior matches /chat/completions exactly.
         # Keyed on messages CONTENT, not key presence: Cursor can send a null or
@@ -2086,6 +2082,14 @@ def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, objec
 
 
 def _responses_ws_failure_frame(failure: Exception) -> str:
+    if isinstance(failure, EndpointNotSupportedByModelError):
+        return json.dumps(
+            {
+                "type": "error",
+                "status": 400,
+                "error": {"type": "invalid_request_error", "message": failure.message.split("\n\n", 1)[0]},
+            }
+        )
     proxy_exception: Final = handle_exception_on_proxy(failure)
     status: Final = int(proxy_exception.code) if str(proxy_exception.code).isdigit() else 500
     error_type: Final = (
@@ -2444,7 +2448,12 @@ async def _responses_websocket_session(
             with contextlib.suppress(Exception):
                 await websocket.send_text(_responses_ws_failure_frame(e))
             with contextlib.suppress(Exception):
-                await websocket.close(code=1011, reason="Internal server error")
+                await websocket.close(
+                    code=1008 if isinstance(e, EndpointNotSupportedByModelError) else 1011,
+                    reason="Pre-call error"
+                    if isinstance(e, EndpointNotSupportedByModelError)
+                    else "Internal server error",
+                )
             return crash_row
         return bill_socket_failure(outcome) if isinstance(outcome, Exception) else None
 

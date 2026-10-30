@@ -40,7 +40,7 @@ class _ProxyError(BaseModel):
 
     message: str
     type: str
-    param: str
+    param: str | None
     code: str
 
 
@@ -260,12 +260,12 @@ def _control_error(response: httpx.Response) -> _ProxyError:
 def test_requests_without_an_sk_key_keep_their_own_401(gateway: Gateway, peer: Gateway, side: Side) -> None:
     client: Final = _side(gateway, peer, side).client
     assert _control_error(client.get("/v1/models")) == _ProxyError(
-        message="Authentication Error, No api key passed in.", type="auth_error", param="None", code="401"
+        message="Authentication Error, No api key passed in.", type="auth_error", param=None, code="401"
     )
     assert _control_error(client.get("/v1/models", headers={"Authorization": "Bearer not-a-real-key"})) == _ProxyError(
         message="LiteLLM Virtual Key expected. Received=not-****-key, expected to start with 'sk-'.",
         type="auth_error",
-        param="None",
+        param=None,
         code="401",
     )
 
@@ -277,7 +277,7 @@ def test_a_blocked_key_keeps_its_own_401_on_both_proxies(gateway: Gateway, peer:
         expected: Final = _ProxyError(
             message="Authentication Error, Key is blocked. Update via `/key/unblock` if you're an admin.",
             type="auth_error",
-            param="None",
+            param=None,
             code="401",
         )
         for candidate in (gateway, peer):

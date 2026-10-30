@@ -5,7 +5,7 @@ use indexmap::IndexMap;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::error::{Error, Loaded, Rejects, Repr};
+use crate::error::{Error, Loaded, Rejects, Repr, pointer_child, pointer_for_key};
 use crate::fallback::{FallbackGeneralizations, FallbackRule};
 use crate::model::Model;
 use crate::store::{Rows, Store};
@@ -211,6 +211,36 @@ impl Catalog {
         })
     }
 
+    pub fn problems(body: &[u8]) -> Vec<Error> {
+        let Loaded {
+            value: catalog,
+            errors,
+        } = match Self::parse(body) {
+            Ok(loaded) => loaded,
+            Err(fatal) => return vec![fatal],
+        };
+        let unread = catalog.rows().entries.iter().flat_map(|(model, entry)| {
+            EntryWire::read(entry.fields())
+                .unknown
+                .into_iter()
+                .map(move |(key, _)| {
+                    Error::new(
+                        pointer_child(&pointer_for_key(model), &key),
+                        Repr::UnreadField,
+                    )
+                })
+        });
+        let no_fallback_rules = catalog
+            .fallback_rules()
+            .is_none_or(<[_]>::is_empty)
+            .then(|| Error::from_key(FALLBACK_GENERALIZATIONS, Repr::NoFallbackRules));
+        errors
+            .into_iter()
+            .chain(unread)
+            .chain(no_fallback_rules)
+            .collect()
+    }
+
     pub fn row_errors(model: &str, fields: &Fields) -> Vec<Error> {
         let (_, _, errors) = read_row(fields);
         errors
@@ -403,4 +433,86 @@ fn unknown_timezone(wire: &EntryWire) -> Option<Error> {
             },
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    const RULES: &str = r#""fallback_generalizations":{"rules":[{"name":"family","pattern":"^new-","model_info":{"mode":"chat"}}]}"#;
+
+    #[rstest]
+    #[case::clean(format!(r#"{{{RULES},"m":{{"litellm_provider":"test"}}}}"#), vec![])]
+    #[case::not_json("{".to_owned(), vec![("", "json")])]
+    #[case::row_error(format!(r#"{{{RULES},"m":{{}}}}"#), vec![("/m/litellm_provider", "missing_provider")])]
+    #[case::unread_key(
+        format!(r#"{{{RULES},"m":{{"litellm_provider":"test","typo_cost":1}}}}"#),
+        vec![("/m/typo_cost", "unread_field")]
+    )]
+    #[case::empty_model_key(
+        format!(r#"{{{RULES},"":{{"litellm_provider":"test","future_field":true}}}}"#),
+        vec![("//future_field", "unread_field")]
+    )]
+    #[case::unread_key_on_invalid_row(
+        format!(r#"{{{RULES},"m":{{"typo_cost":1}}}}"#),
+        vec![("/m/litellm_provider", "missing_provider"), ("/m/typo_cost", "unread_field")]
+    )]
+    #[case::escaped_unread_key_on_invalid_row(
+        format!(r#"{{{RULES},"open/router~v1":{{"typo/cost~":1}}}}"#),
+        vec![("/open~1router~0v1/litellm_provider", "missing_provider"), ("/open~1router~0v1/typo~1cost~0", "unread_field")]
+    )]
+    #[case::no_rules(
+        r#"{"m":{"litellm_provider":"test"}}"#.to_owned(),
+        vec![("/fallback_generalizations", "no_fallback_rules")]
+    )]
+    #[case::empty_rules(
+        r#"{"fallback_generalizations":{"rules":[]},"m":{"litellm_provider":"test"}}"#.to_owned(),
+        vec![("/fallback_generalizations", "no_fallback_rules")]
+    )]
+    fn problems_list_what_a_cost_map_change_must_fix(
+        #[case] body: String,
+        #[case] expected: Vec<(&str, &str)>,
+    ) {
+        let problems: Vec<_> = Catalog::problems(body.as_bytes())
+            .iter()
+            .map(|problem| (problem.path().to_owned(), <&str>::from(problem.kind())))
+            .collect();
+        let expected: Vec<_> = expected
+            .into_iter()
+            .map(|(path, kind)| (path.to_owned(), kind))
+            .collect();
+        assert_eq!(problems, expected);
+    }
+
+    #[rstest]
+    fn runtime_parsing_preserves_custom_fields_and_recovers_valid_rows() {
+        let body = br#"{
+            "good":{"litellm_provider":"test","custom_metadata":true},
+            "bad":{"litellm_provider":"test","input_cost_per_token":"wrong"}
+        }"#;
+        let loaded = Catalog::parse(body).unwrap();
+        assert_eq!(loaded.errors.len(), 1);
+        assert_eq!(loaded.errors[0].path(), "/bad/input_cost_per_token");
+        let (catalog, rejected) = loaded.value.without_rejected(&loaded.errors);
+        assert_eq!(rejected.len(), 1);
+        assert!(catalog.lookup("bad").is_none());
+        let good = catalog.lookup("good").unwrap();
+        assert!(good.entry.model().is_some());
+        assert_eq!(
+            good.entry.field("custom_metadata"),
+            Some(&Value::Bool(true))
+        );
+        assert!(
+            Catalog::problems(body)
+                .iter()
+                .any(|problem| problem.kind() == crate::ErrorKind::UnreadField)
+        );
+        assert!(
+            Catalog::problems(body)
+                .iter()
+                .any(|problem| problem.kind() == crate::ErrorKind::NoFallbackRules)
+        );
+    }
 }
