@@ -40,6 +40,9 @@ from litellm.constants import (
 from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
+    UPSTREAM_USAGE_COST,
+    as_str_mapping,
+    finite_cost,
     process_response_headers,
     provider_reported_usage_cost,
     set_response_cost_in_hidden_params,
@@ -1859,10 +1862,14 @@ def stamp_responses_usage_cost(
     priced: Final = response_obj.model_copy(
         update={"usage": ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_obj)}
     )
-    priced.hidden_params = {}
-    set_response_cost_in_hidden_params(
-        priced, provider_reported_usage_cost(usage_obj, logging_obj.model_call_details.get("custom_llm_provider"))
+    hidden: Final = as_str_mapping(getattr(response_obj, "_hidden_params", None))
+    upstream_cost: Final = (
+        finite_cost(hidden[UPSTREAM_USAGE_COST])
+        if hidden is not None and UPSTREAM_USAGE_COST in hidden
+        else provider_reported_usage_cost(usage_obj, logging_obj.model_call_details.get("custom_llm_provider"))
     )
+    priced.hidden_params = {UPSTREAM_USAGE_COST: upstream_cost}
+    set_response_cost_in_hidden_params(priced, upstream_cost)
     try:
         bill: Final = logging_obj.response_cost_calculator(result=priced)
     except Exception:  # noqa: BLE001  # a pricing failure leaves the client usage as the upstream sent it

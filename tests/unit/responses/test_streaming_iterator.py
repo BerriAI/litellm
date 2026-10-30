@@ -874,6 +874,26 @@ def test_stamp_responses_usage_cost_bills_the_spend_row_price_over_the_provider_
     assert response_cost_in_hidden_params(priced) == pytest.approx(0.5), "the reported cost reaches the calculator"
 
 
+@pytest.mark.parametrize("upstream_cost", [None, 0.5])
+def test_stamp_responses_usage_cost_prices_the_saved_upstream_cost_not_an_earlier_bill(upstream_cost: float | None):
+    from litellm.litellm_core_utils.core_helpers import response_cost_in_hidden_params
+    from litellm.responses.streaming_iterator import stamp_responses_usage_cost
+
+    response = _responses_api_response_with_usage()
+    setattr(response.usage, "cost", 0.00048)
+    response._hidden_params = {"response_cost": 0.00048, "upstream_usage_cost": upstream_cost}
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+    logging_obj.model_call_details = {"custom_llm_provider": "anthropic"}
+    logging_obj.response_cost_calculator.return_value = 0.00048
+
+    stamp_responses_usage_cost(response, logging_obj)
+
+    priced = logging_obj.response_cost_calculator.call_args.kwargs["result"]
+    assert response_cost_in_hidden_params(priced) == upstream_cost, "the chat bridge's bill is not the upstream's charge"
+    assert priced.hidden_params["upstream_usage_cost"] == upstream_cost
+    assert response._hidden_params["upstream_usage_cost"] == upstream_cost
+
+
 def _unvalidated_response_with_dict_usage(usage: dict) -> ResponsesAPIResponse:
     return ResponsesAPIResponse.model_construct(
         id="resp_lit7391",
