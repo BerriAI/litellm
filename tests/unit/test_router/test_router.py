@@ -17196,6 +17196,36 @@ class TestAzureBaseModelFallbackLogging:
         )
         assert model_info["max_input_tokens"] == litellm.model_cost["azure/gpt-4o-mini"]["max_input_tokens"]
 
+    def test_gpt5_series_selector_resolves_the_underlying_model(self):
+        router = self._router_with_azure_deployment("azure/gpt5_series/gpt-5.6-sol")
+
+        model_info = router.get_router_model_info(
+            deployment=None, received_model_name="my-group", id="azure-base-model-test-id"
+        )
+
+        assert model_info["max_input_tokens"] == litellm.model_cost["azure/gpt-5.6-sol"]["max_input_tokens"]
+        assert model_info["input_cost_per_token"] == litellm.model_cost["azure/gpt-5.6-sol"]["input_cost_per_token"]
+
+    def test_gpt5_series_selector_cannot_bypass_the_context_window_check(self):
+        router = self._router_with_azure_deployment("azure/gpt5_series/gpt-5.6-sol")
+        limit = litellm.model_cost["azure/gpt-5.6-sol"]["max_input_tokens"]
+        messages = [{"role": "user", "content": "hi"}]
+
+        with patch.object(litellm, "token_counter", return_value=limit):
+            router._pre_call_checks(model="my-group", healthy_deployments=router.model_list, messages=messages)
+        with patch.object(litellm, "token_counter", return_value=limit + 1):
+            with pytest.raises(litellm.ContextWindowExceededError):
+                router._pre_call_checks(model="my-group", healthy_deployments=router.model_list, messages=messages)
+
+    def test_gpt5_series_selector_does_not_give_an_unknown_deployment_any_limits(self):
+        router = self._router_with_azure_deployment("azure/gpt5_series/my-custom-deployment-name")
+
+        model_info = router.get_router_model_info(
+            deployment=None, received_model_name="my-group", id="azure-base-model-test-id"
+        )
+
+        assert model_info.get("max_input_tokens") is None
+
 def test_model_group_info_intersects_supported_reasoning_efforts():
     router = litellm.Router(
         model_list=[

@@ -223,6 +223,7 @@ from litellm.litellm_core_utils.token_counter import (
 )
 from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, drop_policy
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, anthropic_error_frame_exception
+from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
 from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
 from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
@@ -12885,13 +12886,17 @@ class PythonCore(DeprecatedRouterMembers):
             # Router init auto-registers every deployment name into
             # litellm.model_cost as a zeroed stub, so membership alone can't
             # tell a resolvable name apart; require usable limits/costs.
-            _azure_fallback_key = _model if _model.startswith("azure/") else f"azure/{_model}"
+            _metadata_model: Final = _model.removeprefix(AzureOpenAIGPT5Config.GPT5_SERIES_ROUTE)
+            _azure_fallback_key: Final = (
+                _metadata_model if _metadata_model.startswith("azure/") else f"azure/{_metadata_model}"
+            )
             _fallback_entry = self._host.dynamic().model_cost.get(_azure_fallback_key)
             _fallback_resolves = isinstance(_fallback_entry, Mapping) and (
                 (_fallback_entry.get("max_input_tokens") or 0) > 0
                 or (_fallback_entry.get("input_cost_per_token") or 0) > 0
             )
             if _fallback_resolves:
+                model = _metadata_model
                 verbose_router_logger.debug(
                     "Azure deployment '%s' has no base_model set; using '%s' from the model cost map for max tokens, cost tracking, etc.",
                     _model,
