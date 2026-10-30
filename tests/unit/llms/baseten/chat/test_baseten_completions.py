@@ -8,7 +8,7 @@ import respx
 
 import litellm
 from litellm.llms.baseten.chat import BasetenConfig
-from litellm.utils import get_valid_models
+from litellm.utils import _model_cache, get_valid_models
 
 
 class TestBasetenRouting:
@@ -92,6 +92,20 @@ class TestBasetenModelDiscovery:
             litellm.baseten_models.discard(model)
             litellm.add_known_models({})
 
+    def test_wildcard_drops_a_model_whose_retirement_date_passes_while_running(self, monkeypatch: pytest.MonkeyPatch):
+        model: Final = "baseten/acme/retires-while-running"
+        monkeypatch.setitem(litellm.model_cost, model, {"litellm_provider": "baseten", "deprecation_date": "2999-01-01"})
+        try:
+            litellm.add_known_models({model: litellm.model_cost[model]})
+            assert model in get_valid_models(custom_llm_provider="baseten")
+
+            monkeypatch.setitem(litellm.model_cost, model, {"litellm_provider": "baseten", "deprecation_date": "2000-01-01"})
+
+            assert model not in get_valid_models(custom_llm_provider="baseten")
+        finally:
+            litellm.baseten_models.discard(model)
+            litellm.add_known_models({})
+
     @pytest.mark.parametrize(
         "value, expected",
         [
@@ -155,6 +169,18 @@ class TestBasetenModelDiscovery:
         models: Final = get_valid_models(check_provider_endpoint=True, custom_llm_provider="baseten")
 
         assert models == ["baseten/brand-new/model"]
+
+    @patch.dict(os.environ, {"BASETEN_API_KEY": "test-key"})
+    def test_live_catalog_keeps_a_model_the_cost_map_dates_as_retired(self, respx_mock: respx.MockRouter) -> None:
+        assert litellm._is_past_deprecation_date(litellm.model_cost["baseten/zai-org/GLM-5"])
+        _model_cache.flush_cache()
+        respx_mock.get("https://inference.baseten.co/v1/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "zai-org/GLM-5"}]})
+        )
+
+        models: Final = get_valid_models(check_provider_endpoint=True, custom_llm_provider="baseten")
+
+        assert models == ["baseten/zai-org/GLM-5"]
 
 
 class TestBasetenReasoningEffort:

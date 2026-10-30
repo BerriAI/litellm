@@ -151,10 +151,12 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
     Returns:
         list[str]: A list of the n cheapest chat models.
     """
+    from litellm.utils import bundled_provider_models
+
     if custom_llm_provider not in litellm.models_by_provider:
         return []
 
-    known_models: Final[Iterable[str]] = litellm.models_by_provider.get(custom_llm_provider, ())
+    known_models: Final = bundled_provider_models(custom_llm_provider)
     ranked_rows: Final = (
         (route_rank, cost, model)
         for model, cost in _chat_row_costs(known_models, custom_llm_provider)

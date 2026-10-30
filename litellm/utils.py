@@ -8785,6 +8785,12 @@ def _get_valid_models_from_provider_api(
         return []
 
 
+def bundled_provider_models(provider: str) -> tuple[str, ...]:
+    bundled: Final[tuple[str, ...]] = tuple(litellm.models_by_provider.get(provider, ()))
+    cost_map: Final = _builtin_cost_map()
+    return tuple(model for model in bundled if not is_hidden_as_retired(cost_map.get(model, {})))
+
+
 def get_valid_models(
     check_provider_endpoint: bool | None = None,
     custom_llm_provider: str | None = None,
@@ -8850,11 +8856,9 @@ def get_valid_models(
                     )
                 )
             else:
-                models_for_provider = copy.deepcopy(litellm.models_by_provider.get(provider, []))
-                valid_models.extend(models_for_provider)
+                valid_models.extend(bundled_provider_models(provider))
 
-        cost_map: Final = _builtin_cost_map()
-        return [model for model in valid_models if not is_hidden_as_retired(cost_map.get(model, {}))]
+        return valid_models
     except Exception as e:
         verbose_logger.warning("Error getting valid models: %s", e)
         return []  # NON-Blocking
