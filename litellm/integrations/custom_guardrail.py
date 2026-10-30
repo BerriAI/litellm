@@ -923,8 +923,7 @@ class CustomGuardrail(CustomLogger):
             policy_state[PRE_CALL_EXECUTED_GUARDRAILS_KEY] = [marker]
         elif marker not in recorded:
             cast("list[object]", recorded).append(marker)  # cast-ok: markers are only compared as strings
-        requested: Final = next((bucket.get("guardrails") for bucket in buckets if "guardrails" in bucket), None)
-        if name not in _str_collection(requested):
+        if not any(name in _str_collection(bucket.get("guardrails")) for bucket in buckets):
             return
         named_lists: Final = tuple(
             cast("list[object]", bucket["applied_guardrails"])  # cast-ok: entries are only compared with names

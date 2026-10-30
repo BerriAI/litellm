@@ -1847,6 +1847,27 @@ async def test_deployment_hook_names_a_pipeline_step_it_ran_before_any_guardrail
 
 
 @pytest.mark.asyncio
+async def test_deployment_hook_names_a_pipeline_step_requested_only_in_the_other_metadata_bucket() -> None:
+    guardrail: Final = _PipelineStepGuardrail("second", "pre_call")
+    kwargs: Final[dict[str, object]] = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "guardrails": ["second"],
+        "metadata": {
+            "guardrails": ["first"],
+            "applied_guardrails": ["first"],
+            "_pipeline_managed_guardrails": frozenset({"first", "second"}),
+        },
+        "litellm_metadata": {"guardrails": ["second"]},
+    }
+
+    await guardrail.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.completion)
+
+    assert guardrail.calls == 1
+    assert sorted(get_logging_caching_headers(kwargs)["x-litellm-applied-guardrails"].split(",")) == ["first", "second"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("named_bucket", ["metadata", "litellm_metadata"])
 async def test_deployment_hook_names_a_pipeline_step_next_to_the_steps_already_named_when_both_buckets_exist(
     named_bucket: str,
