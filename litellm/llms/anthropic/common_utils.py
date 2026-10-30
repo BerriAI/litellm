@@ -1415,7 +1415,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if is_vertex_request is True:
             # Vertex AI requires web search beta header for web search to work
             if web_search_tool_used:
-                headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
+                headers["anthropic-beta"] = merge_anthropic_beta_headers(
+                    user_anthropic_beta_headers, ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
+                )
         elif len(all_betas) > 0:
             headers["anthropic-beta"] = ",".join(all_betas)
 

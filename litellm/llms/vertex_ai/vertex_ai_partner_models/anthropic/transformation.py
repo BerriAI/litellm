@@ -2,7 +2,7 @@
 ## Handler file for calling claude-3 on vertex ai
 import base64
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -15,6 +15,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 from ....anthropic.chat.transformation import AnthropicConfig
+from ....anthropic.common_utils import merge_anthropic_beta_headers
 from .output_params_utils import sanitize_vertex_anthropic_output_params
 
 if TYPE_CHECKING:
@@ -23,6 +24,11 @@ if TYPE_CHECKING:
 _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _VERTEX_LABELS_HEADER: Final = "X-Vertex-AI-Labels"
 _LABELS: Final = TypeAdapter(Mapping[object, object])
+_BETA_HEADER_VALUE: Final = TypeAdapter(str | Sequence[str] | None)
+
+
+def _anthropic_beta(headers: Mapping[str, object]) -> str | Sequence[str] | None:
+    return _BETA_HEADER_VALUE.validate_python(headers.get("anthropic-beta"))
 
 
 def _vertex_labels_header(labels: object, header_names: Mapping[str, object]) -> str | None:
@@ -157,21 +163,19 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         if context_management:
             self._add_context_management_beta_headers(beta_set, context_management)
 
-        extra_headers: Final = optional_params.get("extra_headers") or {}
-        anthropic_beta_value: Final = extra_headers.get("anthropic-beta", "")
-        if isinstance(anthropic_beta_value, str) and anthropic_beta_value:
-            for beta in anthropic_beta_value.split(","):
-                beta = beta.strip()
-                if beta:
-                    beta_set.add(beta)
-        elif isinstance(anthropic_beta_value, list):
-            beta_set.update(anthropic_beta_value)
+        extra_headers: Final = _NON_DEFAULT_PARAMS.validate_python(
+            _NON_DEFAULT_PARAMS.validate_python(optional_params).get("extra_headers") or {}
+        )
+        caller_betas: Final = merge_anthropic_beta_headers(
+            _anthropic_beta(_NON_DEFAULT_PARAMS.validate_python(headers)), _anthropic_beta(extra_headers)
+        )
+        merged_betas: Final = merge_anthropic_beta_headers(caller_betas, sorted(beta_set))
 
         data.pop("extra_headers", None)
 
-        if beta_set:
-            data["anthropic_beta"] = list(beta_set)
-            headers["anthropic-beta"] = ",".join(beta_set)
+        if merged_betas:
+            data["anthropic_beta"] = merged_betas.split(",")
+            headers["anthropic-beta"] = merged_betas
 
         return data
 

@@ -636,6 +636,109 @@ async def test_vertex_ai_anthropic_prompt_caching_does_not_add_beta_header(
     assert "anthropic_beta" not in json.loads(request.content)
 
 
+_CALLER_BETA: Final = "interleaved-thinking-2025-05-14"
+
+
+@pytest.mark.parametrize(
+    "caller_beta, feature_params, expected_betas",
+    [
+        pytest.param(
+            "computer-use-2025-11-24",
+            {
+                "tools": [
+                    {
+                        "type": "computer_20251124",
+                        "function": {
+                            "name": "computer",
+                            "parameters": {"display_width_px": 1024, "display_height_px": 768},
+                        },
+                    }
+                ]
+            },
+            {"computer-use-2025-11-24"},
+            id="computer_20251124",
+        ),
+        pytest.param(
+            _CALLER_BETA,
+            {
+                "tools": [
+                    {
+                        "type": "computer_20250124",
+                        "function": {
+                            "name": "computer",
+                            "parameters": {"display_width_px": 1024, "display_height_px": 768},
+                        },
+                    }
+                ]
+            },
+            {_CALLER_BETA, "computer-use-2025-01-24"},
+            id="computer_20250124",
+        ),
+        pytest.param(
+            _CALLER_BETA,
+            {"context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]}},
+            {_CALLER_BETA, "context-management-2025-06-27"},
+            id="context_management",
+        ),
+        pytest.param(
+            _CALLER_BETA,
+            {"web_search_options": {}},
+            {_CALLER_BETA, "web-search-2025-03-05"},
+            id="web_search",
+        ),
+    ],
+)
+def test_vertex_ai_anthropic_keeps_caller_beta_next_to_auto_betas(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    local_beta_headers_config: None,
+    caller_beta: str,
+    feature_params: dict[str, object],
+    expected_betas: set[str],
+) -> None:
+    from litellm.main import vertex_partner_models_chat_completion
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(
+        vertex_partner_models_chat_completion._credentials_project_mapping,
+        ("test-vertex-credentials", "test-project"),
+        (Credentials(token="test-vertex-token"), "test-project"),
+    )
+    route: Final = respx_mock.post(
+        "https://us-east5-aiplatform.googleapis.com/v1/projects/test-project/locations/us-east5/"
+        "publishers/anthropic/models/claude-opus-4-5@20251101:rawPredict"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg-betas",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-4-5-20251101",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 4, "output_tokens": 1},
+            },
+        )
+    )
+
+    litellm.completion(
+        model="vertex_ai/claude-opus-4-5@20251101",
+        messages=[{"role": "user", "content": "Hello"}],
+        vertex_project="test-project",
+        vertex_location="us-east5",
+        vertex_credentials="test-vertex-credentials",
+        max_retries=0,
+        extra_headers={"anthropic-beta": caller_beta},
+        **feature_params,
+    )
+
+    assert route.call_count == 1
+    request: Final = route.calls[0].request
+    assert set(request.headers["anthropic-beta"].split(",")) == expected_betas
+    assert set(json.loads(request.content)["anthropic_beta"]) == expected_betas
+
+
 def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_header():
     """
     Test that remove_unsupported_beta correctly filters out prompt-caching-scope-2026-01-05
