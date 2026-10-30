@@ -1669,7 +1669,6 @@ def test_code_mode_blocks_legacy_elicitation_but_preserves_ordinary_consent(tmp_
                 assert child["isError"] is True, child
                 assert "elicitation" in json.dumps(child).lower(), child
                 assert "unsupported" in json.dumps(child).lower(), child
-                # The request-local restriction must not leak into a subsequent ordinary call.
                 recovered = await session.call_tool("peer-elicit", {"question": "Confirm again"})
                 assert not recovered.is_error and recovered.content[0].text == "elicited:accept", recovered
                 assert consent_requests == ["Confirm again"]
