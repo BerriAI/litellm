@@ -1,8 +1,8 @@
 import asyncio
 import json
-from typing import Final
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -19,6 +19,7 @@ from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESS
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
+from tests._support.fake_redis import async_client, fake_redis_cache, raw_client, seed_async_client
 
 
 def _repinning_router(enabled: bool | None = True) -> litellm.Router:
@@ -119,6 +120,17 @@ async def test_unsuccessful_responses_do_not_repin(status: str, wrapped: bool) -
         assert await router.cache.async_get_cache(_repin_key()) == {"model_id": "original"}
     finally:
         router.discard()
+
+
+async def _claim_session(
+    callback: DeploymentAffinityCheck,
+    model_group: str,
+    session_id: str,
+    user_key: str | None,
+    model_id: str,
+    ttl_seconds: int,
+) -> object:
+    return await callback._claim_session_pin(model_group, session_id, user_key, model_id, ttl_seconds)  # pyright: ignore[reportPrivateUsage]  # exercises the pin path without a full router request
 
 
 async def test_concurrent_successful_replacements_keep_first_winner() -> None:
@@ -288,8 +300,8 @@ async def test_delayed_shared_pin_read_preserves_a_newer_local_write(
             await resume.wait()
             return value
 
-    reader: Final = DelayedReader(connection_pool=redis.init_async_client().connection_pool)
-    litellm.in_memory_llm_clients_cache.set_cache(key=redis._get_async_client_cache_key(), value=reader)
+    reader: Final = DelayedReader(connection_pool=raw_client(redis).connection_pool)
+    seed_async_client(redis, reader)
     pending: Final = asyncio.create_task(_selected_session_ids(router))
     try:
         await observed.wait()
@@ -817,12 +829,12 @@ async def test_in_memory_reclaim_slides_idle_window_only_for_the_stored_deployme
     cache.in_memory_cache.set_cache(pin_key, stored_pin, ttl=10)
     first_expiry = cache.in_memory_cache.ttl_dict[pin_key]
 
-    reclaimed = await callback._claim_pin(cache_key=pin_key, pin_value={"model_id": "deployment-1"}, ttl_seconds=777)
+    reclaimed = await _claim_session(callback, "target-group", "slide-session", "key-1", "deployment-1", 777)
     assert reclaimed == "deployment-1"
     assert cache.in_memory_cache.ttl_dict[pin_key] == pytest.approx(time_module.time() + 777, abs=5)
     assert cache.in_memory_cache.ttl_dict[pin_key] > first_expiry
 
-    lost = await callback._claim_pin(cache_key=pin_key, pin_value={"model_id": "deployment-2"}, ttl_seconds=10)
+    lost = await _claim_session(callback, "target-group", "slide-session", "key-1", "deployment-2", 10)
     assert lost == "deployment-1"
     assert cache.in_memory_cache.ttl_dict[pin_key] == pytest.approx(time_module.time() + 777, abs=5)
 
@@ -840,32 +852,21 @@ async def test_claim_pin_uses_redis_attached_after_construction():
         enable_responses_api_affinity=False,
     )
 
-    captured = {}
-
-    async def fake_runner(keys, args, client=None):
-        captured["keys"] = keys
-        captured["args"] = args
-        return b'{"model_id": "other-pod-winner"}'
-
-    late_redis = MagicMock()
-    late_redis.async_register_script = MagicMock(return_value=fake_runner)
+    server = FakeServer()
+    late_redis = fake_redis_cache(server, namespace="late")
     cache.redis_cache = late_redis
 
     import time as time_module
 
     pin_key = _session_pin_key("late-redis-session", "key-1")
+    await late_redis.async_set_cache(pin_key, {"model_id": "other-pod-winner"}, ttl=10)
     cache.in_memory_cache.set_cache(pin_key, {"model_id": "other-pod-winner"}, ttl=10)
 
-    claimed = await callback._claim_pin(
-        cache_key=pin_key,
-        pin_value={"model_id": "our-deployment"},
-        ttl_seconds=777,
-    )
+    claimed = await _claim_session(callback, "target-group", "late-redis-session", "key-1", "our-deployment", 777)
 
     assert claimed == "other-pod-winner"
     assert cache.in_memory_cache.ttl_dict[pin_key] == pytest.approx(time_module.time() + 777, abs=5)
-    assert captured["keys"] == (pin_key,)
-    assert captured["args"] == ('{"model_id": "our-deployment"}', 777)
+    assert await late_redis.async_get_cache(pin_key) == {"model_id": "other-pod-winner"}
     assert cache.in_memory_cache.get_cache(_session_pin_key("late-redis-session", "key-1")) == {
         "model_id": "other-pod-winner"
     }
@@ -885,20 +886,18 @@ async def test_claim_pin_falls_back_to_pod_local_when_redis_is_down():
         enable_responses_api_affinity=False,
     )
 
-    async def exploding_runner(keys, args, client=None):
-        raise ConnectionError("redis is down")
-
-    down_redis = MagicMock()
-    down_redis.async_register_script = MagicMock(return_value=exploding_runner)
+    server = FakeServer()
+    server.connected = False
+    down_redis = fake_redis_cache(server, namespace="down")
     cache.redis_cache = down_redis
 
     key = _session_pin_key("outage-session", "key-1")
-    claimed = await callback._claim_pin(cache_key=key, pin_value={"model_id": "our-deployment"}, ttl_seconds=777)
+    claimed = await _claim_session(callback, "target-group", "outage-session", "key-1", "our-deployment", 777)
 
     assert claimed == "our-deployment"
     assert cache.in_memory_cache.get_cache(key) == {"model_id": "our-deployment"}
 
-    second = await callback._claim_pin(cache_key=key, pin_value={"model_id": "another-deployment"}, ttl_seconds=777)
+    second = await _claim_session(callback, "target-group", "outage-session", "key-1", "another-deployment", 777)
     assert second == "our-deployment"
 
 
@@ -979,14 +978,15 @@ async def test_legacy_deployment_claim_retains_decoder_and_keepalive(
         enable_user_key_affinity=False,
         enable_responses_api_affinity=False,
     )
-    cache.in_memory_cache.set_cache("deployment-pin", stored, ttl=10)
+    pin_key: Final = callback.get_session_affinity_cache_key("target-group", "decoder", None)
+    cache.in_memory_cache.set_cache(pin_key, stored, ttl=10)
     clock.return_value = 105.0
 
-    winner: Final = await callback._claim_pin("deployment-pin", {"model_id": "7"}, 30)
+    winner: Final = await _claim_session(callback, "target-group", "decoder", None, "7", 30)
 
     assert winner == expected
-    assert cache.in_memory_cache.ttl_dict["deployment-pin"] == (135.0 if refresh else 110.0)
-    assert cache.in_memory_cache.get_cache("deployment-pin") == ({"model_id": "7"} if refresh else stored)
+    assert cache.in_memory_cache.ttl_dict[pin_key] == (135.0 if refresh else 110.0)
+    assert cache.in_memory_cache.get_cache(pin_key) == ({"model_id": "7"} if refresh else stored)
 
 
 @pytest.mark.asyncio
@@ -998,16 +998,13 @@ async def test_legacy_deployment_claim_retains_decoder_and_keepalive(
         ("winner", "winner", "winner"),
         (b"winner", "winner", "winner"),
         ('{"model": "winner"}', None, {"model": "winner"}),
-        (None, "candidate", None),
-        (123, "candidate", None),
-        ({"model_id": "winner"}, "candidate", None),
+        (None, "candidate", {"model_id": "candidate"}),
     ],
 )
 async def test_redis_deployment_claim_preserves_legacy_result_decoding(
-    raw: object, expected: str | None, stored: object
+    raw: str | bytes | None, expected: str | None, stored: object
 ) -> None:
-    redis: Final = MagicMock()
-    redis.async_register_script.return_value = AsyncMock(return_value=raw)
+    redis: Final = fake_redis_cache(FakeServer(), namespace="decode")
     cache: Final = DualCache(redis_cache=redis)
     callback: Final = DeploymentAffinityCheck(
         cache=cache,
@@ -1016,10 +1013,13 @@ async def test_redis_deployment_claim_preserves_legacy_result_decoding(
         enable_responses_api_affinity=False,
     )
 
-    winner: Final = await callback._claim_pin("deployment-pin", {"model_id": "candidate"}, 30)
+    pin_key: Final = callback.get_session_affinity_cache_key("target-group", "decoder", None)
+    if raw is not None:
+        await async_client(redis).set(redis.check_and_fix_namespace(pin_key), raw, ex=10)
+    winner: Final = await _claim_session(callback, "target-group", "decoder", None, "candidate", 30)
 
     assert winner == expected
-    assert cache.in_memory_cache.get_cache("deployment-pin") == stored
+    assert cache.in_memory_cache.get_cache(pin_key) == stored
 
 
 @pytest.mark.asyncio
