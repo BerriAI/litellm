@@ -997,12 +997,15 @@ def test_sync_web_search_request_goes_to_the_other_deployment_once_the_capable_o
 
 
 @pytest.mark.asyncio
-async def test_web_search_request_never_goes_to_a_capable_deployment_whose_enforced_rpm_is_zero() -> None:
+@pytest.mark.parametrize("zero_limit", ["rpm", "itpm", "otpm"])
+async def test_web_search_request_never_goes_to_a_capable_deployment_whose_enforced_limit_is_zero(
+    zero_limit: str,
+) -> None:
     router: Final = Router(
         model_list=[
             {
                 "model_name": "mixed",
-                "litellm_params": {"model": "openai/gpt-x", "api_key": "fake-key", "mock_response": "hi", "rpm": 0},
+                "litellm_params": {"model": "openai/gpt-x", "api_key": "fake-key", "mock_response": "hi", zero_limit: 0},
                 "model_info": {"id": "search"},
             },
             {

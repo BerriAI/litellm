@@ -34,6 +34,7 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     async_io_token_refund_failure,
     deployment_has_io_token_limits,
     get_io_token_rate_limit_request_kwargs,
+    io_token_limits_by_cache_key,
     io_token_pre_call_check,
     io_token_reconcile_success,
     io_token_refund_failure,
@@ -129,18 +130,18 @@ class _LimitCounter:
     model_id: str
     key: str
     limit: float
-    counts_requests: bool
+    increments_first: bool
 
     def reached(self, usage: object) -> bool:
-        if isinstance(usage, (int, float)):
-            return usage >= self.limit
-        return self.counts_requests and self.limit <= 0
+        if self.increments_first:
+            return (usage if isinstance(usage, (int, float)) else 0) + 1 > self.limit
+        return isinstance(usage, (int, float)) and usage >= self.limit
 
 
 def _counters_with_limits(model_id: str, counters: Sequence[tuple[str, object, bool]]) -> tuple[_LimitCounter, ...]:
     return tuple(
-        _LimitCounter(model_id, key, limit, counts_requests)
-        for key, limit, counts_requests in counters
+        _LimitCounter(model_id, key, limit, increments_first)
+        for key, limit, increments_first in counters
         if isinstance(limit, (int, float))
     )
 
@@ -336,21 +337,21 @@ class ModelRateLimitingCheck(CustomLogger):
         if not isinstance(model_id, str):
             return ()
         tpm_limit, rpm_limit = self._get_deployment_limits(deployment)
-        tpm_key, rpm_key = self._get_cache_keys(deployment, now.strftime("%H-%M"))
+        current_minute: Final = now.strftime("%H-%M")
+        tpm_key, rpm_key = self._get_cache_keys(deployment, current_minute)
+        minute_counters: Final = (
+            (tpm_key, tpm_limit, False),
+            (rpm_key, rpm_limit, True),
+            *((key, limit, True) for key, limit in io_token_limits_by_cache_key(deployment, current_minute)),
+        )
         try:
             daily: Final = _DailyLimitDeployment.model_validate(deployment)
         except ValidationError:
-            return _counters_with_limits(model_id, ((tpm_key, tpm_limit, False), (rpm_key, rpm_limit, True)))
+            return _counters_with_limits(model_id, minute_counters)
         tpd_limit, rpd_limit = daily.limits()
         tpd_key, rpd_key = daily.cache_keys(now)
         return _counters_with_limits(
-            model_id,
-            (
-                (tpm_key, tpm_limit, False),
-                (rpm_key, rpm_limit, True),
-                (tpd_key, tpd_limit, False),
-                (rpd_key, rpd_limit, True),
-            ),
+            model_id, (*minute_counters, (tpd_key, tpd_limit, False), (rpd_key, rpd_limit, True))
         )
 
     def _counters_of(

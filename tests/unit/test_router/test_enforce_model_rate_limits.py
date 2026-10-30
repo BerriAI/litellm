@@ -18,6 +18,7 @@ import litellm
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import io_token_limits_by_cache_key
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
@@ -523,7 +524,18 @@ async def _async_rejects(check: ModelRateLimitingCheck, deployment: dict[str, ob
     return False
 
 
-_FRESH_LIMITS: Final = ({"rpm": 0}, {"rpm": 0.0}, {"rpm": False}, {"rpd": 0}, {"tpm": 0}, {"tpd": 0}, {"rpm": 1, "tpm": 1})
+_FRESH_LIMITS: Final = (
+    {"rpm": 0},
+    {"rpm": 0.0},
+    {"rpm": 0.5},
+    {"rpm": False},
+    {"rpd": 0},
+    {"tpm": 0},
+    {"tpd": 0},
+    {"itpm": 0},
+    {"otpm": 0},
+    {"rpm": 1, "tpm": 1},
+)
 
 
 def _redis_batch_answering(usage: int) -> Callable[[list[str]], dict[str, int]]:
@@ -672,6 +684,25 @@ class TestDailyLimits:
 
         assert check.deployment_ids_at_limit([spent, _deployment_with({"rpd": 2})]) == frozenset({"spent-test-id"})
         assert rpm_key not in redis_cache.batch_get_cache.call_args.kwargs["key_list"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("limit_kind", ["itpm", "otpm"])
+    @pytest.mark.parametrize(("used", "reported"), [(99, False), (100, True)], ids=["room-left", "used-up"])
+    async def test_a_deployment_is_reported_at_its_token_limit_once_no_token_is_left(
+        self, limit_kind: str, used: int, reported: bool
+    ):
+        deployment = _deployment_with({limit_kind: 100})
+        dual_cache = DualCache()
+        check = ModelRateLimitingCheck(dual_cache=dual_cache, clock=Clock(DAY_ONE))
+        token_key = next(
+            key
+            for key, limit in io_token_limits_by_cache_key(deployment, DAY_ONE.strftime("%H-%M"))
+            if limit is not None
+        )
+        dual_cache.set_cache(key=token_key, value=used, local_only=True)
+
+        assert ("limit-test-id" in check.deployment_ids_at_limit([deployment])) is reported
+        assert ("limit-test-id" in await check.async_deployment_ids_at_limit([deployment], None)) is reported
 
     @pytest.mark.parametrize("limits", _FRESH_LIMITS, ids=lambda limits: ",".join(f"{kind}={value!r}" for kind, value in limits.items()))
     def test_a_deployment_is_reported_at_its_limit_exactly_when_its_next_request_is_rejected(
