@@ -2142,7 +2142,17 @@ class TestResponsesWSFirstFrameModelAuth:
             patch.object(litellm, "callbacks", [rate_limiter, spend_logger]),
             pytest.raises(ValueError, match="blocked"),
         ):
-            await guard(json.dumps({"type": "response.create", "input": "hi"}))
+            await guard(
+                json.dumps(
+                    {
+                        "type": "response.create",
+                        "input": "hi",
+                        "instructions": "be brief",
+                        "tools": [{"type": "function", "name": "lookup"}],
+                        "previous_response_id": "resp_1",
+                    }
+                )
+            )
 
         proxy_logging_obj.post_call_failure_hook.assert_not_awaited()
         rate_limiter.async_post_call_failure_hook.assert_not_awaited()
@@ -2155,7 +2165,7 @@ class TestResponsesWSFirstFrameModelAuth:
             {"guardrail_cost": 0.5}
         ]
         assert failure["request_data"]["input"] == "hi"
-        assert failure["request_data"]["proxy_server_request"] == {"body": {"input": "hi"}}
+        assert failure["request_data"]["proxy_server_request"] == {"body": {"previous_response_id": "resp_1"}}
         assert len(failure["request_data"]["litellm_call_id"]) == 36
 
     @pytest.mark.asyncio
@@ -2575,7 +2585,10 @@ class TestResponsesWSFirstFrameModelAuth:
             return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": "alpha"})
         )
         ws.close = AsyncMock()
-        connection_request = {"url": "ws://testserver/v1/responses", "body": {"model": "gpt-4o-mini"}}
+        connection_request = {
+            "url": "ws://testserver/v1/responses",
+            "body": {"model": "gpt-4o-mini", "user": "proxy-set-end-user"},
+        }
         processor = MagicMock()
         processor.common_processing_pre_call_logic = AsyncMock(
             return_value=(
@@ -2632,9 +2645,9 @@ class TestResponsesWSFirstFrameModelAuth:
         assert booked["original_exception"] is failure
         assert booked["request_data"]["proxy_server_request"] == {
             "url": "ws://testserver/v1/responses",
-            "body": {"input": "beta"},
+            "body": {"input": "beta", "user": "proxy-set-end-user"},
         }
-        assert connection_request["body"] == {"model": "gpt-4o-mini"}
+        assert connection_request["body"] == {"model": "gpt-4o-mini", "user": "proxy-set-end-user"}
 
     def test_close_time_failure_row_keeps_the_request_of_each_failure_it_can_bill(self):
         from litellm.exceptions import RateLimitError

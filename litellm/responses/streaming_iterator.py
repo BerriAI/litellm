@@ -10,7 +10,7 @@ import uuid
 from collections.abc import AsyncIterable, Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
-from functools import lru_cache
+from functools import lru_cache, partial
 from itertools import chain
 from types import MappingProxyType
 from typing import (
@@ -50,7 +50,7 @@ from litellm.litellm_core_utils.internal_call_metadata import (
     requests_background,
     without_budget_reservation,
 )
-from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
+from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend, with_connection_end_user
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
@@ -2244,23 +2244,29 @@ class GuardedResponsesWsFrame:
     pii_tokens: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     bill_refusal: Callable[[Exception], None] | None = None
     bill_failed_request: Callable[[Exception, Mapping[str, object]], None] | None = None
+    keeps_failed_request: Callable[[Exception], bool] = lambda _failure: True
 
 
 ResponsesWsFrameGuard: TypeAlias = Callable[[str], Awaitable[GuardedResponsesWsFrame]]
+
+
+async def _built(request_body: Mapping[str, object]) -> Mapping[str, object]:
+    return request_body
 
 
 async def _reject_guarded_turn(
     websocket: ResponsesClientWebSocket,
     guarded: GuardedResponsesWsFrame,
     rejection: Exception,
-    request_body: Mapping[str, object],
+    request_body: Callable[[], Awaitable[Mapping[str, object]]],
 ) -> None:
     """Answers the refused turn and leaves its guardrail records to the connection's close-time failure row, which
-    runs every failure hook once per socket, like the first refusal it records."""
+    runs every failure hook once per socket, like the first refusal it records. The request is built only when that
+    row keeps it."""
     if guarded.bill_refusal is not None:
         guarded.bill_refusal(rejection)
-    if guarded.bill_failed_request is not None:
-        guarded.bill_failed_request(rejection, request_body)
+    if guarded.bill_failed_request is not None and guarded.keeps_failed_request(rejection):
+        guarded.bill_failed_request(rejection, await request_body())
     with contextlib.suppress(Exception):
         await websocket.send_text(_turn_rejection_frame(rejection))
 
@@ -2493,6 +2499,7 @@ class ResponsesWebSocketStreaming:
         self.custom_llm_provider: str | None = custom_llm_provider
         self._open_turns: tuple[_ResponsesWsTurn, ...] = ()
         self._failure: Exception | None = None
+        self._bill_failed_request: Callable[[Exception, Mapping[str, object]], None] | None = None
         self.first_message = first_message
         self.guardrail_callbacks: Sequence[PresidioGuardrailCallback] = guardrail_callbacks or []
         self.output_guardrail_callbacks: list[PresidioGuardrailCallback] = output_guardrail_callbacks or []
@@ -2515,6 +2522,8 @@ class ResponsesWebSocketStreaming:
             litellm_call_id=str(uuid.uuid4()), start_time=start_time, request_body=request_body
         )
         self._detach_budget_reservation()
+        if bill_failed_request is not None:
+            self._bill_failed_request = bill_failed_request
         _set_turn_guardrail_information(turn_logging_obj, guardrail_information)
         turn_logging_obj.model_call_details["messages"] = list(_logged_user_messages(client_frame))
         turn_logging_obj.pre_call(input=client_frame, api_key="")
@@ -2613,7 +2622,7 @@ class ResponsesWebSocketStreaming:
         if event_obj is None or event_obj.get("type") not in RESPONSES_WS_LOGGED_EVENT_TYPES:
             return
         if not self._open_turns:
-            self._start_turn(None, _NO_REQUEST_BODY)
+            self._start_turn(None, _NO_REQUEST_BODY, bill_failed_request=self._bill_failed_request)
         turn: Final = self._open_turns[0].with_event(event_obj)
         if event_obj.get("type") in _RESPONSES_WS_TERMINAL_EVENT_TYPES:
             self._open_turns = self._open_turns[1:]
@@ -3007,7 +3016,7 @@ class ResponsesWebSocketStreaming:
         if self._failure is None:
             self._failure = rejection
         await _reject_guarded_turn(
-            self.websocket, guarded, rejection, await self._refused_turn_request_body(guarded.frame)
+            self.websocket, guarded, rejection, partial(self._refused_turn_request_body, guarded.frame)
         )
         return False
 
@@ -3458,9 +3467,9 @@ class ManagedResponsesWebSocketHandler:
         connection_request: Final = (
             call_kwargs.get("proxy_server_request") or metadata.get("proxy_server_request") or {}
         )
-        if not isinstance(connection_request, dict):
+        if not _is_json_object(connection_request):
             return
-        turn_request: Final = {**connection_request, "body": dict(request_body)}
+        turn_request: Final = {**connection_request, "body": with_connection_end_user(connection_request, request_body)}
         call_kwargs["litellm_metadata"] = {**metadata, "proxy_server_request": turn_request}
         call_kwargs["proxy_server_request"] = turn_request
 
@@ -3579,7 +3588,7 @@ class ManagedResponsesWebSocketHandler:
         if rejection is not None:
             if self._failure is None:
                 self._failure = rejection
-            await _reject_guarded_turn(self.websocket, guarded, rejection, request_body)
+            await _reject_guarded_turn(self.websocket, guarded, rejection, partial(_built, request_body))
             return
         if guarded.pii_tokens:
             self._pii_tokens = {**self._pii_tokens, **guarded.pii_tokens}

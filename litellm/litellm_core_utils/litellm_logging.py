@@ -563,6 +563,19 @@ def _resolve_mantle_region_for_cost(
 
 _PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"})
 _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
+
+
+def with_connection_end_user(
+    connection_request: Mapping[str, object], request_body: Mapping[str, object]
+) -> Mapping[str, object]:
+    """A turn's request body with the ``user`` of the connection's request, the end user its rows were billed to."""
+    connection_body: Final = connection_request.get("body")
+    end_user: Final = (
+        _LITELLM_PARAMS.validate_python(connection_body).get("user") if isinstance(connection_body, dict) else None
+    )
+    return {**request_body, "user": end_user} if end_user is not None else dict(request_body)
+
+
 _REDACTED_RESULT: Final = TypeAdapter(object)
 
 
@@ -853,7 +866,11 @@ class Logging(LiteLLMLoggingBaseClass):
         connection_params: Final = _LITELLM_PARAMS.validate_python(
             self.litellm_params  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped
         )
-        connection_request: Final = connection_params.get("proxy_server_request")
+        connection_request: Final = (
+            _LITELLM_PARAMS.validate_python(connection_params["proxy_server_request"])
+            if isinstance(connection_params.get("proxy_server_request"), dict)
+            else None
+        )
         litellm_params: Final[dict[str, object]] = {
             **connection_params,
             **{
@@ -864,11 +881,11 @@ class Logging(LiteLLMLoggingBaseClass):
             **(
                 {
                     "proxy_server_request": {
-                        **_LITELLM_PARAMS.validate_python(connection_request),
-                        "body": dict(request_body),
+                        **connection_request,
+                        "body": with_connection_end_user(connection_request, request_body),
                     }
                 }
-                if isinstance(connection_request, dict)
+                if connection_request is not None
                 else {}
             ),
             "litellm_call_id": litellm_call_id,

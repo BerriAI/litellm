@@ -377,7 +377,10 @@ class TestManagedWebSocketHandlerIntegration:
                 function_id="test-func",
             ),
             litellm_metadata={"model_group": "haiku"},
-            proxy_server_request={"url": "ws://proxy/v1/responses", "body": {"first_message": "warmup"}},
+            proxy_server_request={
+                "url": "ws://proxy/v1/responses",
+                "body": {"first_message": "warmup", "user": "proxy-set-end-user"},
+            },
         )
 
         continued_turn: Final = {"input": "second question", "instructions": "be brief", "previous_response_id": "resp_turn1"}
@@ -393,8 +396,8 @@ class TestManagedWebSocketHandlerIntegration:
         ]
         stored: Final = [call.kwargs["proxy_server_request"] for call in aresponses.await_args_list]
         assert stored == [
-            {"url": "ws://proxy/v1/responses", "body": {"input": "first question"}},
-            {"url": "ws://proxy/v1/responses", "body": continued_turn},
+            {"url": "ws://proxy/v1/responses", "body": {"input": "first question", "user": "proxy-set-end-user"}},
+            {"url": "ws://proxy/v1/responses", "body": {**continued_turn, "user": "proxy-set-end-user"}},
         ]
         assert [call.kwargs["litellm_metadata"]["proxy_server_request"] for call in aresponses.await_args_list] == stored
 
@@ -2003,6 +2006,7 @@ class TestWebSocketTurnAdmission:
         first, second, third = _turn_frames()
         refusal: Final = RateLimitError(message="crossed budget", llm_provider="", model="")
         bill_refusal: Final = MagicMock()
+        bill_failed_request: Final = MagicMock()
         handler: Final = ManagedResponsesWebSocketHandler(
             websocket=_ClientSocket(second, third),
             model="test-model",
@@ -2016,7 +2020,7 @@ class TestWebSocketTurnAdmission:
                 function_id="test-func",
             ),
             first_message=first,
-            frame_guard=_guard_recording(bill_refusal),
+            frame_guard=_guard_recording(bill_refusal, bill_failed_request),
             turn_admission=AsyncMock(side_effect=[refusal, None]),
         )
 
@@ -2024,6 +2028,7 @@ class TestWebSocketTurnAdmission:
 
         assert answered == ["one", "three"]
         bill_refusal.assert_called_once_with(refusal)
+        bill_failed_request.assert_called_once_with(refusal, {"input": "two"})
         assert close_time_failure is refusal
 
     @pytest.mark.asyncio
@@ -2662,9 +2667,10 @@ class _FakeWSGuardrail:
     path can reverse it. ``_unmask_pii_text`` performs that reversal.
     """
 
-    def __init__(self, mask_map=None, blocked_entities=()):
+    def __init__(self, mask_map=None, blocked_entities=(), checked=None):
         self.mask_map = mask_map or {"alice@example.com": "<EMAIL_ADDRESS_1>"}
         self.blocked_entities = blocked_entities
+        self.checked = checked if checked is not None else []
         self.output_parse_pii = True
         self.apply_to_output = True
 
@@ -2672,6 +2678,7 @@ class _FakeWSGuardrail:
         return None
 
     async def check_pii(self, text, output_parse_pii, presidio_config, request_data):
+        self.checked.append(text)
         if any(entity in text for entity in self.blocked_entities):
             raise ValueError("blocked entity found")
         masked = text
@@ -2757,6 +2764,48 @@ class TestNativeWebSocketGuardrailMasking:
 
         backend_ws.send.assert_not_awaited()
         bill_failed_request.assert_called_once_with(refusal, {"input": "email <EMAIL_ADDRESS_1>"})
+
+    @pytest.mark.asyncio
+    async def test_only_the_refused_turn_whose_request_the_failure_row_keeps_is_masked(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.exceptions import RateLimitError
+        from litellm.responses.streaming_iterator import GuardedResponsesWsFrame
+
+        first_refusal, later_refusal = (
+            RateLimitError(message=word, llm_provider="", model="") for word in ("first", "later")
+        )
+        answered_and_masked: list[object] = []
+        bill_failed_request = MagicMock()
+
+        async def guard(frame: str) -> GuardedResponsesWsFrame:
+            return GuardedResponsesWsFrame(
+                frame=frame,
+                bill_failed_request=bill_failed_request,
+                keeps_failed_request=lambda failure: failure is first_refusal,
+            )
+
+        websocket = MagicMock()
+        websocket.send_text = AsyncMock(side_effect=lambda frame: answered_and_masked.append(json.loads(frame)["status"]))
+        websocket.receive_text = AsyncMock(
+            side_effect=[
+                json.dumps({"type": "response.create", "input": "email alice@example.com"}),
+                json.dumps({"type": "response.create", "input": "again alice@example.com"}),
+                Exception("stop"),
+            ]
+        )
+        handler = _make_streaming(
+            websocket=websocket,
+            request_data={},
+            guardrail_callbacks=[_FakeWSGuardrail(checked=answered_and_masked)],
+            frame_guard=guard,
+            turn_admission=AsyncMock(side_effect=[first_refusal, later_refusal]),
+        )
+
+        await handler.client_to_backend()
+
+        assert answered_and_masked == ["email alice@example.com", 429, 429]
+        bill_failed_request.assert_called_once_with(first_refusal, {"input": "email <EMAIL_ADDRESS_1>"})
 
     @pytest.mark.asyncio
     async def test_a_refused_turn_whose_text_cannot_be_masked_is_answered_and_the_socket_keeps_relaying(self):
@@ -4263,6 +4312,54 @@ class TestNativeWebSocketEncryptedContentAffinity:
         assert expected_message in str(exception)
 
     @pytest.mark.asyncio
+    async def test_a_provider_failure_with_no_open_turn_is_billed_with_the_empty_request_its_row_stores(self):
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        websocket = MagicMock()
+        websocket.send_text = AsyncMock()
+        backend_ws = MagicMock()
+        backend_ws.recv = AsyncMock(
+            side_effect=[
+                json.dumps(
+                    {
+                        "type": "response.completed",
+                        "response": {"id": "resp_1", "status": "completed", "output": []},
+                    }
+                ),
+                json.dumps({"type": "error", "error": {"type": "invalid_request_error", "message": "session over"}}),
+                Exception("stop"),
+            ]
+        )
+        logging_obj = MagicMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.copy_for_new_call.return_value = logging_obj
+        logging_obj.dispatch_failure_handlers = AsyncMock()
+        logging_obj.response_cost_calculator = MagicMock(return_value=0.0)
+        bill_failed_request = MagicMock()
+        handler = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            logging_obj=logging_obj,
+            request_data={},
+            authorized_model="gpt-5.6",
+            custom_llm_provider="openai",
+        )
+        handler._record_client_frame(
+            json.dumps({"type": "response.create", "input": "first question"}),
+            {"input": "first question"},
+            (),
+            bill_failed_request,
+        )
+
+        await handler.backend_to_client()
+        await asyncio.sleep(0)
+
+        exception = logging_obj.dispatch_failure_handlers.await_args[0][0]
+        assert "session over" in str(exception)
+        bill_failed_request.assert_called_once_with(exception, {})
+
+    @pytest.mark.asyncio
     async def test_backend_to_client_logs_each_turn_as_its_own_call(self, monkeypatch):
         import asyncio
         import time
@@ -4410,7 +4507,10 @@ class TestNativeWebSocketEncryptedContentAffinity:
             function_id="connection-call",
         )
         connection_logging.litellm_params = {
-            "proxy_server_request": {"url": "ws://proxy/v1/responses", "body": {"first_message": "warmup"}}
+            "proxy_server_request": {
+                "url": "ws://proxy/v1/responses",
+                "body": {"first_message": "warmup", "user": "proxy-set-end-user"},
+            }
         }
         backend_ws = MagicMock()
         backend_ws.send = AsyncMock()
@@ -4426,7 +4526,7 @@ class TestNativeWebSocketEncryptedContentAffinity:
         (turn,) = handler._open_turns
         assert turn.logging_obj.litellm_params["proxy_server_request"] == {
             "url": "ws://proxy/v1/responses",
-            "body": sent,
+            "body": {**sent, "user": "proxy-set-end-user"},
         }
 
     @pytest.mark.asyncio

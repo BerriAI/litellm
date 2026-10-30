@@ -38,7 +38,7 @@ from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup, with_connection_end_user
 from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, first_validation_error
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
@@ -2140,6 +2140,7 @@ def _responses_ws_frame_guard(
             pii_tokens=_recorded_pii_tokens(guarded_data.get("metadata")),
             bill_refusal=partial(failed_turns.add, guardrail_information),
             bill_failed_request=failed_turns.add_request,
+            keeps_failed_request=failed_turns.keeps_request,
         )
 
     return guard
@@ -2149,8 +2150,12 @@ def _with_frame_request(
     frame_data: dict[str, object],  # mutable-ok: the spend logger stamps the failure row on the request dict
     frame: str,
 ) -> dict[str, object]:  # mutable-ok: the spend logger stamps the failure row on the request dict
-    """A rejected frame's failure row stores the frame as its request, as an HTTP request a guardrail blocks does."""
-    return {**frame_data, "proxy_server_request": {"body": dict(responses_ws_turn_request_body(frame))}}
+    """A rejected frame's failure row stores the frame as its request, without the fields the guardrails read, so
+    text a guardrail refused is never stored unmasked."""
+    stored: Final = {
+        key: value for key, value in responses_ws_turn_request_body(frame).items() if key not in _GUARDED_FRAME_FIELDS
+    }
+    return {**frame_data, "proxy_server_request": {"body": stored}}
 
 
 def _without_untrusted_metadata(key: str, value: object) -> object:
@@ -2209,8 +2214,11 @@ class _FailedTurns:
         if self.first is None:
             self.first = refusal
 
+    def keeps_request(self, failure: Exception) -> bool:
+        return not self.requests or failure is self.first
+
     def add_request(self, failure: Exception, request: Mapping[str, object]) -> None:
-        if not self.requests or failure is self.first:
+        if self.keeps_request(failure):
             self.requests = (*self.requests, (failure, request))
 
     def billed_on(self, request_data: Mapping[str, object], failure: Exception) -> Mapping[str, object]:
@@ -2231,9 +2239,13 @@ class _FailedTurns:
         proxy_server_request: Final = request_data.get("proxy_server_request")
         if request is None or not isinstance(proxy_server_request, dict):
             return request_data
+        connection_request: Final = _WS_FRAME.validate_python(proxy_server_request)
         return {
             **request_data,
-            "proxy_server_request": {**_WS_FRAME.validate_python(proxy_server_request), "body": dict(request)},
+            "proxy_server_request": {
+                **connection_request,
+                "body": with_connection_end_user(connection_request, request),
+            },
         }
 
 
