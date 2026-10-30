@@ -12,7 +12,9 @@ from types import MappingProxyType
 from typing import Any, Final, NamedTuple
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.responses.mcp.request_context import MCPRequestContext
+from litellm.responses.mcp.round_billing import accumulate_completed_round, completed_rounds_billed_on_failure
 from litellm.types.llms.anthropic import (
     AnthropicMessagesTool,
     AnthropicMessagesToolResultParam,
@@ -149,6 +151,8 @@ async def anthropic_messages_with_mcp(
         messages=list(working_messages), stream=False, **loop_call_args
     )
 
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
+    billed_rounds: BilledRoundsSpend | None = None  # rebind-ok: accrues completed rounds of the tool loop
     for _ in range(MAX_MCP_TOOL_USE_ITERATIONS):
         if _get_stop_reason(response) != "tool_use":
             break
@@ -157,20 +161,22 @@ async def anthropic_messages_with_mcp(
         if not tool_use_blocks:
             break
 
-        tool_results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
-            tool_server_map=tool_server_map,
-            served_tools=deduplicated_mcp_tools,
-            tool_calls=list(tool_use_blocks),
-            user_api_key_auth=context.user_api_key_auth,
-            mcp_auth_header=context.mcp_auth_header,
-            mcp_server_auth_headers=context.mcp_server_auth_headers,
-            oauth2_headers=context.oauth2_headers,
-            raw_headers=context.raw_headers,
-            litellm_call_id=context.litellm_call_id,
-            litellm_trace_id=context.litellm_trace_id,
-            request_tags=list(context.request_tags) if context.request_tags else None,
-            guardrail_context=context.guardrail_context,
-        )
+        billed_rounds = accumulate_completed_round(logging_obj, response, billed_rounds) if not stream else None
+        with completed_rounds_billed_on_failure(logging_obj, billed_rounds):
+            tool_results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+                tool_server_map=tool_server_map,
+                served_tools=deduplicated_mcp_tools,
+                tool_calls=list(tool_use_blocks),
+                user_api_key_auth=context.user_api_key_auth,
+                mcp_auth_header=context.mcp_auth_header,
+                mcp_server_auth_headers=context.mcp_server_auth_headers,
+                oauth2_headers=context.oauth2_headers,
+                raw_headers=context.raw_headers,
+                litellm_call_id=context.litellm_call_id,
+                litellm_trace_id=context.litellm_trace_id,
+                request_tags=list(context.request_tags) if context.request_tags else None,
+                guardrail_context=context.guardrail_context,
+            )
 
         # Every tool call was skipped, so there is nothing to feed back; a
         # tool_result message with empty content is rejected by Anthropic.

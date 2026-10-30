@@ -1,11 +1,20 @@
 from collections.abc import Mapping
+from datetime import datetime
 from types import MappingProxyType
 from typing import Final
 
 import pytest
 
+import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.responses.mcp.round_billing import billed_for_every_round, merged_round_usage, summed_cost_breakdown
+from litellm.responses.mcp.round_billing import (
+    accumulate_completed_round,
+    billed_for_every_round,
+    completed_rounds_billed_on_failure,
+    merged_round_usage,
+    summed_cost_breakdown,
+)
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import CostBreakdown, ModelResponse, Usage
 
@@ -285,3 +294,66 @@ def test_billed_chat_usage_sums_every_provider_counter_and_adds_no_field_the_rou
         and isinstance(final_value := final_usage.prompt_tokens_details.model_dump()[key], int)
     } | {"cache_creation_token_details": {"ephemeral_5m_input_tokens": 50, "ephemeral_1h_input_tokens": 0}}
     assert billed["service_tier"] == "priority"
+
+
+@pytest.mark.parametrize("cached_second_round", [False, True])
+def test_messages_mcp_failure_bills_completed_rounds_without_charging_cached_rounds(
+    monkeypatch: pytest.MonkeyPatch,
+    cached_second_round: bool,
+) -> None:
+    model: Final = "mcp-round-billing-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+            "input_cost_per_token": 0.01,
+            "output_cost_per_token": 0.02,
+        },
+    )
+    logger: Final = Logging(
+        model=model,
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="mcp-billing",
+        function_id="mcp-billing",
+    )
+    logger.update_environment_variables(litellm_params={}, optional_params={}, custom_llm_provider="anthropic")
+    first: Final = accumulate_completed_round(
+        logger,
+        {
+            "id": "msg-10",
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "stop_reason": "tool_use",
+            "model": model,
+            "usage": {"input_tokens": 10, "output_tokens": 3},
+        },
+        None,
+    )
+    logger.model_call_details["cache_hit"] = cached_second_round
+    total: Final = accumulate_completed_round(
+        logger,
+        {
+            "id": "msg-20",
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "stop_reason": "tool_use",
+            "model": model,
+            "usage": {"input_tokens": 20, "output_tokens": 5},
+        },
+        first,
+    )
+    with pytest.raises(ValueError, match="tool blocked"):
+        with completed_rounds_billed_on_failure(logger, total):
+            raise ValueError("tool blocked")
+    expected_input: Final = 10 if cached_second_round else 30
+    expected_output: Final = 3 if cached_second_round else 8
+    usage: Final = logger.model_call_details["combined_usage_object"]
+    assert (usage.prompt_tokens, usage.completion_tokens) == (expected_input, expected_output)
+    assert logger.model_call_details["response_cost"] == pytest.approx(expected_input * 0.01 + expected_output * 0.02)

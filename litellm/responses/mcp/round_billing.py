@@ -7,7 +7,9 @@ from typing import Final, TypeVar
 from pydantic import BaseModel, TypeAdapter
 from pydantic_core import to_jsonable_python
 
+from litellm.cost_calculator import get_usage_object
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, served_from_cache, set_hidden_params
+from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
@@ -175,4 +177,47 @@ def first_round_billed_on_failure(logging_obj: object, first: ResponsesAPIRespon
             logging_obj.record_partial_usage_for_failure(
                 first_usage, float(first_cost) if isinstance(first_cost, (int, float)) else 0.0
             )
+        raise
+
+
+def accumulate_completed_round(
+    logging_obj: object, response: object, earlier: BilledRoundsSpend | None
+) -> BilledRoundsSpend | None:
+    if not isinstance(logging_obj, LiteLLMLoggingObj):
+        return earlier
+    if served_from_cache(response) or logging_obj.model_call_details.get("cache_hit") is True:
+        return earlier
+    usage: Final = get_usage_object(response)
+    if usage is None:
+        return earlier
+    cost: Final = logging_obj.response_cost_calculator(result=response) or 0.0
+    breakdown: Final = logging_obj.cost_breakdown
+    if earlier is None:
+        return BilledRoundsSpend(usage, cost, breakdown)
+    repeated_margin: Final = (
+        min(earlier.cost_breakdown.get("margin_fixed_amount", 0.0), breakdown.get("margin_fixed_amount", 0.0))
+        if earlier.cost_breakdown is not None and breakdown is not None
+        else 0.0
+    )
+    combined_breakdown: Final = (
+        _COST_BREAKDOWN.validate_python(
+            _less_repeated_fixed_margin(_summed_mapping(earlier.cost_breakdown, breakdown), repeated_margin)
+        )
+        if earlier.cost_breakdown is not None and breakdown is not None
+        else None
+    )
+    return BilledRoundsSpend(
+        merged_chat_usage(earlier.usage, usage), earlier.cost + cost - repeated_margin, combined_breakdown
+    )
+
+
+@contextmanager
+def completed_rounds_billed_on_failure(
+    logging_obj: object, spend: BilledRoundsSpend | None
+) -> Generator[None, None, None]:
+    try:
+        yield
+    except (Exception, CancelledError):
+        if isinstance(logging_obj, LiteLLMLoggingObj) and spend is not None:
+            logging_obj.record_billed_rounds_for_failure(spend)
         raise
