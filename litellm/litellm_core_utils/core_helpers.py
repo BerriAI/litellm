@@ -982,25 +982,36 @@ def _usage_field(usage: object, name: str) -> object:
     return getattr(usage, name, None)
 
 
-def _cost_number(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, int | float):
+def finite_cost(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
         return None
     return float(value)
+
+
+def single_log_line(value: object) -> str:
+    return str(value).replace("\r", "").replace("\n", "")
+
+
+def finite_reported_cost(value: object) -> float | None:
+    cost: Final = finite_cost(value)
+    if cost is None and isinstance(value, float):
+        verbose_logger.warning("Ignoring a non-finite provider-reported cost %s", value)
+    return cost
 
 
 def _reported_cost_value(value: object) -> float | None:
     """A reported cost is a number, or a breakdown whose total lives under ``total_cost``."""
     raw: Final[object] = value
     if isinstance(value, Mapping):
-        return _cost_number(_usage_field(raw, "total_cost"))
-    return _cost_number(value)
+        return finite_reported_cost(_usage_field(raw, "total_cost"))
+    return finite_reported_cost(value)
 
 
 def response_cost_in_hidden_params(response: _CarriesHiddenParams) -> float | None:
     additional_headers: Final[object] = response.hidden_params.get("additional_headers")
     if not isinstance(additional_headers, Mapping):
         return None
-    return _cost_number(_USAGE_BLOCK_ADAPTER.validate_python(additional_headers).get(RESPONSE_COST_HEADER))
+    return finite_reported_cost(_USAGE_BLOCK_ADAPTER.validate_python(additional_headers).get(RESPONSE_COST_HEADER))
 
 
 def override_stamped_response_cost(response: _CarriesHiddenParams, cost: float) -> None:
