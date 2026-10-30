@@ -756,7 +756,13 @@ ANTHROPIC_BATCHES_ROUTE: Final = "/v1/messages/batches"
 ANTHROPIC_IMAGE_MAX_LONG_EDGE_PX: Final = 1568
 ANTHROPIC_IMAGE_MAX_PIXELS: Final = 1_150_000
 ANTHROPIC_IMAGE_PIXELS_PER_TOKEN: Final = 750
+OPENAI_PDF_TEXT_PAGE_FRAMING_TOKENS: Final = 13
+OPENAI_CHAT_PDF_FILE_TOKENS: Final = 192
 PDF_DATA_URL_PREFIX: Final = "data:application/pdf;base64,"
+PDF_MAX_FORM_XOBJECT_DEPTH: Final = 32
+PDF_MAX_XOBJECT_DRAWS_PER_PAGE: Final = 10_000
+OPENAI_MODEL_NAME_MAX_DASHES: Final = 16
+OPENAI_CHAT_MODES: Final = frozenset({"chat", "responses"})
 VERTEX_BATCH_PREDICTION_JOBS_ROUTE: Final = "batchPredictionJobs"
 ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES: Final = {
     "low": 1,
@@ -816,6 +822,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "ollama",
     "ollama_chat",
     "deepinfra",
+    "clf_ai_gateway",
     "perplexity",
     "mistral",
     "groq",
@@ -1015,6 +1022,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "api.perplexity.ai",
     "api.endpoints.anyscale.com/v1",
     "api.deepinfra.com/v1/openai",
+    "api.clfaigateway.dev/v1",
     "api.mistral.ai/v1",
     "codestral.mistral.ai/v1/chat/completions",
     "codestral.mistral.ai/v1/fim/completions",
@@ -1086,6 +1094,7 @@ openai_compatible_providers: Final[list[str]] = [
     "deepseek",
     "tencent",
     "deepinfra",
+    "clf_ai_gateway",
     "perplexity",
     "xinference",
     "xai",

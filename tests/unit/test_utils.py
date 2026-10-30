@@ -4391,7 +4391,7 @@ class TestBedrockBaseModelLabelKeepsTools:
         from litellm.utils import get_optional_params
 
         result = get_optional_params(
-            model="eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
             custom_llm_provider="bedrock",
             base_model="claude-haiku-4-5",
             tools=self.TOOLS,

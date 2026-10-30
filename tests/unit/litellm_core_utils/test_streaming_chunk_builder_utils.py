@@ -1304,10 +1304,116 @@ def test_stream_chunk_builder_keeps_each_choices_tool_call_arguments_apart():
         ]
     )
 
-    assert [(tool_call.id, tool_call.function.arguments) for tool_call in response.choices[0].message.tool_calls] == [
-        ("call_a", '{"fruit": "persimmon"}'),
-        ("call_b", '{"fruit": "durian"}'),
+    assert [
+        (choice.index, [(tool_call.id, tool_call.function.arguments) for tool_call in choice.message.tool_calls])
+        for choice in response.choices
+    ] == [
+        (0, [("call_a", '{"fruit": "persimmon"}')]),
+        (1, [("call_b", '{"fruit": "durian"}')]),
     ]
+
+
+def test_stream_chunk_builder_rebuilds_each_choice_of_a_multi_choice_text_stream_on_its_own():
+    def chunk(choice_index: int, content: str, finish_reason: str | None = None) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-123",
+            object="chat.completion.chunk",
+            created=1234567890,
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(index=choice_index, delta=Delta(content=content), finish_reason=finish_reason)],
+        )
+
+    response = stream_chunk_builder(
+        chunks=[
+            chunk(0, "The persim"),
+            chunk(1, "The"),
+            chunk(1, " persimmon is"),
+            chunk(0, "mon is ripe.", finish_reason="stop"),
+            chunk(1, " ripe and", finish_reason="length"),
+        ]
+    )
+
+    assert [(choice.index, choice.message.content, choice.finish_reason) for choice in response.choices] == [
+        (0, "The persimmon is ripe.", "stop"),
+        (1, "The persimmon is ripe and", "length"),
+    ]
+
+
+def test_stream_chunk_builder_gives_a_choice_without_a_finish_chunk_the_finish_reason_its_content_implies():
+    def chunk(choice_index: int, delta: Delta, finish_reason: str | None = None) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-123",
+            object="chat.completion.chunk",
+            created=1234567890,
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(index=choice_index, delta=delta, finish_reason=finish_reason)],
+        )
+
+    def tool_call(call_id: str) -> list[ChatCompletionDeltaToolCall]:
+        return [
+            ChatCompletionDeltaToolCall(
+                id=call_id, index=0, type="function", function=Function(name="lookup_fruit", arguments="{}")
+            )
+        ]
+
+    response = stream_chunk_builder(
+        chunks=[
+            chunk(0, Delta(tool_calls=tool_call("call_a"))),
+            chunk(1, Delta(tool_calls=tool_call("call_b"))),
+            chunk(2, Delta(content="Kiwis are fuzzy.")),
+            chunk(0, Delta(), finish_reason="tool_calls"),
+        ]
+    )
+
+    assert [(choice.index, choice.finish_reason) for choice in response.choices] == [
+        (0, "tool_calls"),
+        (1, "tool_calls"),
+        (2, "stop"),
+    ]
+
+
+def test_stream_chunk_builder_keeps_each_choices_function_call_annotations_and_images_on_that_choice():
+    def chunk(choice_index: int, delta: Delta) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-123",
+            object="chat.completion.chunk",
+            created=1234567890,
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(index=choice_index, delta=delta, finish_reason=None)],
+        )
+
+    citation: Final = {
+        "type": "url_citation",
+        "url_citation": {"start_index": 0, "end_index": 5, "url": "https://example.com/kiwi", "title": "Kiwi"},
+    }
+    image: Final = {"type": "image_url", "index": 0, "image_url": {"url": "data:image/png;base64,a2l3aQ=="}}
+
+    response = stream_chunk_builder(
+        chunks=[
+            chunk(0, Delta(function_call={"name": "lookup_fruit", "arguments": '{"fruit": '})),
+            chunk(1, Delta(content="Kiwis are")),
+            chunk(0, Delta(function_call={"arguments": '"kiwi"}'})),
+            chunk(1, Delta(content=" fuzzy.", annotations=[citation])),
+            chunk(1, Delta(images=[image])),
+        ]
+    )
+
+    function_choice, cited_choice = response.choices
+    assert (
+        function_choice.index,
+        function_choice.message.content,
+        function_choice.message.function_call.name,
+        function_choice.message.function_call.arguments,
+        getattr(function_choice.message, "annotations", None),
+        getattr(function_choice.message, "images", None),
+    ) == (0, None, "lookup_fruit", '{"fruit": "kiwi"}', None, None)
+    assert (
+        cited_choice.index,
+        cited_choice.message.content,
+        cited_choice.message.function_call,
+        cited_choice.message.annotations,
+        cited_choice.message.images,
+    ) == (1, "Kiwis are fuzzy.", None, [citation], [image])
 
 
 def test_get_combined_tool_content_joins_many_dict_shaped_argument_fragments_in_order():
@@ -2531,7 +2637,7 @@ def _vllm_chat_chunk(index: int, content: str, finish_reason: str | None = None,
 
 
 @pytest.mark.parametrize("finish_content", ["", "4"], ids=["finish-only", "content-then-finish"])
-def test_stream_chunk_builder_keeps_the_vllm_stop_reason_and_every_token_id_of_the_first_choice(
+def test_stream_chunk_builder_keeps_the_vllm_stop_reason_and_every_token_id_of_each_choice(
     finish_content: str,
 ) -> None:
     built: Final = stream_chunk_builder(
@@ -2544,8 +2650,13 @@ def test_stream_chunk_builder_keeps_the_vllm_stop_reason_and_every_token_id_of_t
     )
 
     assert built is not None
-    assert built.model_dump()["choices"][0]["stop_reason"] == ",5"
-    assert built.model_dump()["choices"][0]["token_ids"] == [16, 11, 17, 11, 18, 19]
+    assert [
+        {field: choice[field] for field in ("index", "stop_reason", "token_ids")}
+        for choice in built.model_dump()["choices"]
+    ] == [
+        {"index": 0, "stop_reason": ",5", "token_ids": [16, 11, 17, 11, 18, 19]},
+        {"index": 1, "stop_reason": None, "token_ids": [22, 11]},
+    ]
 
 
 def test_stream_chunk_builder_keeps_null_vllm_fields_and_adds_none_for_other_providers() -> None:
