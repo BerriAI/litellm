@@ -28,8 +28,11 @@ def _provider_default_api_base(
     deployment_model_info: object = None,
 ) -> str | None:
     if custom_llm_provider == "gemini":
+        from litellm.litellm_core_utils.url_utils import ensure_api_route
+        from litellm.llms.gemini.common_utils import GeminiModelInfo
         from litellm.responses.bridge_check import should_route_to_interactions_api
 
+        gemini_base: Final = GeminiModelInfo.get_api_base().removesuffix("?alt=sse")
         if should_route_to_interactions_api(
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -38,9 +41,9 @@ def _provider_default_api_base(
             deployment_model_info=deployment_model_info,
         ):
             suffix: Final = "?alt=sse" if stream else ""
-            return f"https://generativelanguage.googleapis.com/v1beta/interactions{suffix}"
+            return f"{ensure_api_route(gemini_base, 'v1beta/interactions')}{suffix}"
         action: Final = "streamGenerateContent" if stream else "generateContent"
-        return f"https://generativelanguage.googleapis.com/v1beta/models/{model}:{action}"
+        return ensure_api_route(gemini_base, f"v1beta/models/{model}:{action}")
     if custom_llm_provider == "openai":
         return "https://api.openai.com"
     return None
@@ -138,23 +141,23 @@ def get_api_base(model: str, optional_params: dict | LiteLLM_Params) -> str | No
             sse_suffix: Final = "?alt=sse" if stream else ""
             return f"{vertex_host}/v1beta1/projects/{vertex_project}/locations/{effective_location}/interactions{sse_suffix}"
 
-    if _optional_params.vertex_location is not None and _optional_params.vertex_project is not None:
+    if vertex_location is not None and vertex_project is not None:
         from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
         from litellm.types.llms.vertex_ai import VertexPartnerProvider
 
         if "claude" in model:
             _api_base = VertexBase.create_vertex_url(
-                vertex_location=_optional_params.vertex_location,
-                vertex_project=_optional_params.vertex_project,
+                vertex_location=vertex_location,
+                vertex_project=vertex_project,
                 model=model,
                 stream=stream,
                 partner=VertexPartnerProvider.claude,
             )
         else:
             if stream:
-                _api_base = f"{_optional_params.vertex_location}-aiplatform.googleapis.com/v1/projects/{_optional_params.vertex_project}/locations/{_optional_params.vertex_location}/publishers/google/models/{model}:streamGenerateContent"
+                _api_base = f"{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:streamGenerateContent"
             else:
-                _api_base = f"{_optional_params.vertex_location}-aiplatform.googleapis.com/v1/projects/{_optional_params.vertex_project}/locations/{_optional_params.vertex_location}/publishers/google/models/{model}:generateContent"
+                _api_base = f"{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:generateContent"
         return _api_base
 
     return _provider_default_api_base(
