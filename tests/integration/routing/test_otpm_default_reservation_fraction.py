@@ -22,7 +22,7 @@ from integration.routing.test_payment_required_mapping import OPENAI_MODEL, is_m
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
-GROUP: Final = "otpm-fraction-group"
+GROUPS: Final = ("otpm-fraction-first", "otpm-fraction-retry")
 OTPM_LIMIT: Final = 1000
 FRACTION: Final = 0.5
 DEFAULT_RESERVATION: Final = int(OTPM_LIMIT * FRACTION)
@@ -60,15 +60,16 @@ def _config(directory: Path, upstream: Wire) -> Path:
         directory,
         [
             {
-                "model_name": GROUP,
+                "model_name": group,
                 "litellm_params": {
                     "model": OPENAI_MODEL,
                     "api_base": upstream.url + "/v1",
                     "api_key": "synthetic-openai-key",
                     "otpm": OTPM_LIMIT,
                 },
-                "model_info": {"id": "otpm-fraction"},
+                "model_info": {"id": group},
             }
+            for group in GROUPS
         ],
         litellm_settings={"cache": False},
         router_settings={"optional_pre_call_checks": ["enforce_model_rate_limits"], "num_retries": 0},
@@ -92,11 +93,11 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
         yield Rig(owned, upstream, gates)
 
 
-def _chat(rig: Rig, **params: int | bool) -> httpx.Response:
+def _chat(rig: Rig, group: str, **params: int | bool) -> httpx.Response:
     return rig.owned.gateway.request(
         "POST",
         "/v1/chat/completions",
-        {"model": GROUP, "messages": [{"role": "user", "content": f"fraction {uuid.uuid4().hex}"}], **params},
+        {"model": group, "messages": [{"role": "user", "content": f"fraction {uuid.uuid4().hex}"}], **params},
     )
 
 
@@ -109,16 +110,16 @@ def _utc_minute() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
 
 
-def _admissions_beside_a_held_stream(rig: Rig) -> Admissions:
+def _admissions_beside_a_held_stream(rig: Rig, group: str) -> Admissions:
     release: Final = threading.Event()
     rig.gates.put(release)
     started: Final = _utc_minute()
     with ThreadPoolExecutor(max_workers=1) as pool:
-        held: Final = pool.submit(_chat, rig, stream=True)
+        held: Final = pool.submit(_chat, rig, group, stream=True)
         try:
             forwarded: Final = JSON_OBJECT.validate_json(_await_forwarded_chat(rig.upstream).body)
-            over: Final = _chat(rig, max_tokens=OTPM_LIMIT - DEFAULT_RESERVATION + 1)
-            fits: Final = _chat(rig, max_tokens=DEFAULT_RESERVATION // 2)
+            over: Final = _chat(rig, group, max_tokens=OTPM_LIMIT - DEFAULT_RESERVATION + 1)
+            fits: Final = _chat(rig, group, max_tokens=OTPM_LIMIT - DEFAULT_RESERVATION)
             ended: Final = _utc_minute()
         finally:
             release.set()
@@ -130,7 +131,7 @@ def _admissions_beside_a_held_stream(rig: Rig) -> Admissions:
 
 
 def test_reservation_fraction_env_var_sets_what_a_request_without_max_tokens_holds(rig: Rig) -> None:
-    first: Final = _admissions_beside_a_held_stream(rig)
-    admissions: Final = first if first.one_minute else _admissions_beside_a_held_stream(rig)
+    first: Final = _admissions_beside_a_held_stream(rig, GROUPS[0])
+    admissions: Final = first if first.one_minute else _admissions_beside_a_held_stream(rig, GROUPS[1])
 
     assert admissions == Admissions(held_forwarded_max_tokens=False, statuses=(429, 200, 200), one_minute=True)
