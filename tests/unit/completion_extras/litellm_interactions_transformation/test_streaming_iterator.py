@@ -10,7 +10,15 @@ from litellm.completion_extras.litellm_interactions_transformation import (
     InteractionsChatStreamingIterator,
     transform_chat_to_interactions_request,
 )
-from litellm.exceptions import APIConnectionError, MidStreamFallbackError
+from litellm.exceptions import (
+    APIConnectionError,
+    AuthenticationError,
+    BadRequestError,
+    MidStreamFallbackError,
+    NotFoundError,
+    PermissionDeniedError,
+    RateLimitError,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
     stream_chunk_builder,  # pyright: ignore[reportUnknownVariableType]  # upstream signature uses bare list
@@ -177,6 +185,14 @@ async def test_async_parallel_tool_call_stream_rebuilds_and_roundtrips_turn2() -
             'data: {"event_type": "interaction.completed", "interaction": {"id": "v1_fail2", "status": "failed", "error": {"message": "Completed in failed state"}}}',
             "Completed in failed state",
         ),
+        (
+            'data: {"event_type": "interaction.status_update", "status": "failed", "error": {"code": "internal", "message": "Status update failed"}}',
+            "[internal] Status update failed",
+        ),
+        (
+            'data: {"event_type": "interaction.completed", "interaction": {"id": "v1_cancel", "status": "cancelled"}}',
+            "[cancelled] Interaction stream was cancelled",
+        ),
     ),
 )
 def test_sync_mid_stream_error_events_close_response_and_raise(
@@ -311,3 +327,91 @@ def test_late_thought_signature_delta_backfills_tool_call_id_and_unsigned_though
     assert isinstance(noleak_choice, Choices)
     noleak_calls: Final = noleak_choice.message.tool_calls or []
     assert [tc.id for tc in noleak_calls] == ["call_1__thought__STALE_SIG_1", "call_2"]
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_cls"),
+    (
+        ("invalid_argument", BadRequestError),
+        ("unauthenticated", AuthenticationError),
+        ("permission_denied", PermissionDeniedError),
+        ("not_found", NotFoundError),
+    ),
+)
+def test_sse_4xx_error_codes_surface_directly_through_stream_wrapper(
+    code: str,
+    expected_cls: type[Exception],
+) -> None:
+    sse_lines: Final = (
+        'data: {"event_type": "interaction.created", "interaction": {"id": "v1_code_map"}}',
+        f'data: {{"event_type": "error", "error": {{"code": "{code}", "message": "Fault {code}"}}}}',
+    )
+    iterator: Final = InteractionsChatStreamingIterator(
+        model="gemini-3-flash-preview",
+        custom_llm_provider="gemini",
+        sync_lines=iter(sse_lines),
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iterator,
+        model="gemini-3-flash-preview",
+        custom_llm_provider="gemini",
+        logging_obj=_logging_stub("gemini-3-flash-preview"),
+    )
+
+    with pytest.raises(expected_cls) as direct_exc:
+        next(wrapper)
+    assert not isinstance(direct_exc.value, MidStreamFallbackError)
+
+
+def test_sse_resource_exhausted_wraps_rate_limit_error_for_router_fallback() -> None:
+    sse_lines: Final = (
+        'data: {"event_type": "interaction.created", "interaction": {"id": "v1_429_map"}}',
+        'data: {"event_type": "error", "error": {"code": "resource_exhausted", "message": "Quota hit"}}',
+    )
+    iterator: Final = InteractionsChatStreamingIterator(
+        model="gemini-3-flash-preview",
+        custom_llm_provider="gemini",
+        sync_lines=iter(sse_lines),
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iterator,
+        model="gemini-3-flash-preview",
+        custom_llm_provider="gemini",
+        logging_obj=_logging_stub("gemini-3-flash-preview"),
+    )
+
+    with pytest.raises(MidStreamFallbackError) as wrapped_exc:
+        next(wrapper)
+    assert isinstance(wrapped_exc.value.original_exception, RateLimitError)
+
+
+def test_multisegment_late_thought_signature_deltas_backfill_matching_tool_slots() -> None:
+    sse_lines: Final = (
+        'data: {"event_type": "interaction.created", "interaction": {"id": "v1_multiseg"}}',
+        'data: {"event_type": "step.start", "index": 0, "step": {"type": "thought", "signature": ""}}',
+        'data: {"event_type": "step.start", "index": 1, "step": {"id": "call_a", "type": "function_call", "name": "bash"}}',
+        'data: {"event_type": "step.delta", "index": 1, "delta": {"type": "arguments_delta", "arguments": "{\\"cmd\\":\\"ls a\\"}"}}',
+        'data: {"event_type": "step.start", "index": 2, "step": {"type": "thought", "signature": ""}}',
+        'data: {"event_type": "step.start", "index": 3, "step": {"id": "call_b", "type": "function_call", "name": "bash"}}',
+        'data: {"event_type": "step.delta", "index": 3, "delta": {"type": "arguments_delta", "arguments": "{\\"cmd\\":\\"ls b\\"}"}}',
+        'data: {"event_type": "step.delta", "index": 2, "delta": {"type": "thought_signature", "signature": "SIG_SEG_B"}}',
+        'data: {"event_type": "step.delta", "index": 0, "delta": {"type": "thought_signature", "signature": "SIG_SEG_A"}}',
+        'data: {"event_type": "interaction.completed", "interaction": {"id": "v1_multiseg", "status": "requires_action"}}',
+        "data: [DONE]",
+    )
+    iterator: Final = InteractionsChatStreamingIterator(
+        model="gemini-3-flash-preview",
+        sync_lines=iter(sse_lines),
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iterator,
+        model="gemini-3-flash-preview",
+        custom_llm_provider="gemini",
+        logging_obj=_logging_stub("gemini-3-flash-preview"),
+    )
+    rebuilt: Final = stream_chunk_builder(list(wrapper))  # pyright: ignore[reportUnknownVariableType,reportUnknownArgumentType]  # stream_chunk_builder parameter lacks element type
+    assert rebuilt is not None
+    choice: Final = rebuilt.choices[0]
+    assert isinstance(choice, Choices)
+    tool_calls: Final = choice.message.tool_calls or []
+    assert [tc.id for tc in tool_calls] == ["call_a__thought__SIG_SEG_A", "call_b__thought__SIG_SEG_B"]
