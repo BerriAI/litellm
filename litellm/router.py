@@ -58,7 +58,7 @@ from collections.abc import (
 )
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache, partial
 from itertools import chain
 from types import MappingProxyType
@@ -182,6 +182,13 @@ from litellm.llms.openai_like.model_info import (
     MODEL_INFO_REFRESH_SECONDS,
     get_openai_compatible_model_info,
 )
+from litellm.redis.stores.router_global_usage import (
+    GlobalUsageCounter,
+    RouterGlobalUsageStore,
+    TransportRouterGlobalUsageStore,
+    usage_key,
+)
+from litellm.redis.transport.contract import RedisFailure
 from litellm.responses.bridge_check import keep_registered_mode
 from litellm.responses.retrieve_stream_query import requests_streamed_retrieval, without_retrieve_stream_defaults
 from litellm.router_api import (
@@ -683,6 +690,7 @@ _DEPLOYMENT_PARAMS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | GenericLite
     Mapping[str, object] | GenericLiteLLMParams
 )
 _OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
+_GLOBAL_USAGE_LOCAL_VALUES: Final[TypeAdapter[list[object] | None]] = TypeAdapter(list[object] | None)
 _DEPLOYMENT_SELECTED_EVENT: Final = "litellm.request.deployment_selected"
 _CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 _DEPLOYMENTS_ADAPTER: Final = TypeAdapter(Sequence[Mapping[str, object]])
@@ -9861,25 +9869,34 @@ class Router(DeprecatedRouterMembers):
             return None
 
         current_minute: Final = get_utc_datetime().strftime("%H-%M")  # use the same timezone regardless of system clock
-        tpm_key: Final = RouterCacheEnum.TPM.value.format(
-            id=deployment_id, current_minute=current_minute, model=deployment_name
-        )
-        rpm_key: Final = RouterCacheEnum.RPM.value.format(
-            id=deployment_id, current_minute=current_minute, model=deployment_name
-        )
+        tpm_key: Final = usage_key(GlobalUsageCounter(deployment_id, deployment_name, current_minute, "tpm"))
+        rpm_key: Final = usage_key(GlobalUsageCounter(deployment_id, deployment_name, current_minute, "rpm"))
         pipeline_operations: Final[list[RedisPipelineIncrementOperation]] = [
             RedisPipelineIncrementOperation(key=key, increment_value=increment_value, ttl=RoutingArgs.ttl.value)
             for key, increment_value in ((tpm_key, total_tokens), (rpm_key, rpm_increment))
         ]
-        post_increment_values: Final = await self._core_cache.async_increment_cache_pipeline(
-            increment_list=pipeline_operations,
-            parent_otel_span=parent_otel_span,
+        local_values: Final = await self._core_cache.async_increment_cache_pipeline(
+            increment_list=pipeline_operations, local_only=True, parent_otel_span=parent_otel_span
         )
-        if post_increment_values is not None and self._core_cache.redis_cache is not None:
-            for operation, value in zip(pipeline_operations, post_increment_values):
-                await self._core_cache.async_set_cache(
-                    operation["key"], int(value), local_only=True, ttl=RoutingArgs.ttl.value
-                )
+        redis: Final = self._core_cache.redis_cache
+        if redis is not None:
+            store: Final[RouterGlobalUsageStore] = TransportRouterGlobalUsageStore(redis.transport())
+            shared_values: Final = await store.record_global_usage(
+                deployment_id,
+                deployment_name,
+                current_minute,
+                tokens=total_tokens,
+                requests=rpm_increment,
+                ttl=timedelta(seconds=RoutingArgs.ttl.value),
+            )
+            post_increment_values: Final = (
+                (None if shared_values.kind == "breaker_open" else local_values)
+                if isinstance(shared_values, RedisFailure)
+                else shared_values
+            )
+            if post_increment_values is not None:
+                for operation, value in zip(pipeline_operations, post_increment_values):
+                    await self._set_global_usage_local(operation["key"], int(value), ttl=RoutingArgs.ttl.value)
         return tpm_key
 
     def _deployment_tracks_usage(self, deployment_id: str, model_group: str) -> bool:
@@ -10098,15 +10115,26 @@ class Router(DeprecatedRouterMembers):
         dt: Final = get_utc_datetime()
         current_minute: Final = dt.strftime("%H-%M")  # use the same timezone regardless of system clock
 
-        ## RPM
-        rpm_key: Final = RouterCacheEnum.RPM.value.format(id=id, current_minute=current_minute, model=deployment_name)
+        counter: Final = GlobalUsageCounter(
+            str(_OPAQUE_VALUE_ADAPTER.validate_python(id)),
+            None if deployment_name is None else str(_OPAQUE_VALUE_ADAPTER.validate_python(deployment_name)),
+            current_minute,
+            "rpm",
+        )
         with service_target(ROUTER_USAGE_TARGET):
             await self._core_cache.async_increment_cache(
-                key=rpm_key,
+                key=usage_key(counter),
                 value=1,
+                local_only=True,
                 parent_otel_span=parent_otel_span,
                 ttl=RoutingArgs.ttl.value,
             )
+            redis: Final = self._core_cache.redis_cache
+            if redis is not None:
+                store: Final[RouterGlobalUsageStore] = TransportRouterGlobalUsageStore(redis.transport())
+                await store.record_global_failure(
+                    counter.deployment_id, counter.model, counter.minute, ttl=timedelta(seconds=RoutingArgs.ttl.value)
+                )
 
     def _get_metadata_variable_name_from_kwargs(self, kwargs: dict) -> Literal["metadata", "litellm_metadata"]:
         """
@@ -13204,60 +13232,59 @@ class Router(DeprecatedRouterMembers):
         """
         dt: Final = get_utc_datetime()
         current_minute: Final = dt.strftime("%H-%M")  # use the same timezone regardless of system clock
-        tpm_keys: Final[list[str]] = []
-        rpm_keys: Final[list[str]] = []
-
         model_list: Final = self._core_get_model_list(model_name=model_group)
-        if model_list is None:  # no matching deployments
+        if model_list is None:
             return None, None
-
-        for model in model_list:
-            id: str | None = model.get("model_info", {}).get("id")
-            litellm_model: str | None = model["litellm_params"].get(
-                "model"
-            )  # USE THE MODEL SENT TO litellm.completion() - consistent with how global_router cache is written.
-            if id is None or litellm_model is None:
-                continue
-            tpm_keys.append(
-                RouterCacheEnum.TPM.value.format(
-                    id=id,
-                    model=litellm_model,
-                    current_minute=current_minute,
-                )
+        identities: Final = tuple(
+            (
+                _OPAQUE_VALUE_ADAPTER.validate_python(model.get("model_info", {}).get("id")),
+                _OPAQUE_VALUE_ADAPTER.validate_python(model["litellm_params"].get("model")),
             )
-            rpm_keys.append(
-                RouterCacheEnum.RPM.value.format(
-                    id=id,
-                    model=litellm_model,
-                    current_minute=current_minute,
-                )
-            )
-        combined_tpm_rpm_keys: Final = tpm_keys + rpm_keys
-
-        combined_tpm_rpm_values: Final = await self._core_cache.async_batch_get_cache(keys=combined_tpm_rpm_keys)
-        if combined_tpm_rpm_values is None:
+            for model in model_list
+        )
+        tpm_counters: Final = tuple(
+            GlobalUsageCounter(str(deployment_id), model_name, current_minute, "tpm")
+            for deployment_id, model_name in identities
+            if deployment_id is not None and isinstance(model_name, str)
+        )
+        rpm_counters: Final = tuple(
+            GlobalUsageCounter(counter.deployment_id, counter.model, counter.minute, "rpm") for counter in tpm_counters
+        )
+        counters: Final = tpm_counters + rpm_counters
+        keys: Final = tuple(usage_key(counter) for counter in counters)
+        local: Final = _GLOBAL_USAGE_LOCAL_VALUES.validate_python(
+            await self._core_cache.async_batch_get_cache(keys=list(keys), local_only=True)
+        )
+        if local is None:
             return None, None
+        remote: Final = await self._read_global_usage_remote(counters)
+        values: Final = tuple(remote.get(key, value) for key, value in zip(keys, local))
+        tpm_values: Final = tuple(value for value in values[: len(tpm_counters)] if isinstance(value, int))
+        rpm_values: Final = tuple(value for value in values[len(tpm_counters) :] if isinstance(value, int))
+        return (sum(tpm_values) if tpm_values else None, sum(rpm_values) if rpm_values else None)
 
-        tpm_usage_list: Final[list | None] = combined_tpm_rpm_values[: len(tpm_keys)]
-        rpm_usage_list: Final[list | None] = combined_tpm_rpm_values[len(tpm_keys) :]
+    async def _read_global_usage_remote(self, counters: Sequence[GlobalUsageCounter]) -> Mapping[str, object]:
+        keys: Final = tuple(usage_key(counter) for counter in counters)
+        due_keys, previous_access_times = self._core_cache.reserve_redis_batch_reads(keys)
+        due: Final = frozenset(due_keys)
+        redis: Final = self._core_cache.redis_cache
+        if redis is None or not due:
+            return {}
+        requested: Final = tuple(counter for counter in counters if usage_key(counter) in due)
+        store: Final[RouterGlobalUsageStore] = TransportRouterGlobalUsageStore(redis.transport())
+        shared: Final = await store.read_global_usage(requested)
+        if isinstance(shared, RedisFailure):
+            if shared.kind == "breaker_open":
+                self._core_cache.rollback_redis_batch_reads(previous_access_times)
+            return {}
+        remote: Final = MappingProxyType(dict(zip((usage_key(counter) for counter in requested), shared.values)))
+        for key, value in remote.items():
+            if value is not None:
+                await self._set_global_usage_local(key, value, ttl=self._core_cache.default_in_memory_ttl)
+        return remote
 
-        ## TPM
-        tpm_usage: int | None = None
-        if tpm_usage_list is not None:
-            for t in tpm_usage_list:
-                if isinstance(t, int):
-                    if tpm_usage is None:
-                        tpm_usage = 0
-                    tpm_usage += t
-        ## RPM
-        rpm_usage: int | None = None
-        if rpm_usage_list is not None:
-            for t in rpm_usage_list:
-                if isinstance(t, int):
-                    if rpm_usage is None:
-                        rpm_usage = 0
-                    rpm_usage += t
-        return tpm_usage, rpm_usage
+    async def _set_global_usage_local(self, key: str, value: object, *, ttl: float | None) -> None:
+        await self._core_cache.async_set_cache(key=key, value=value, local_only=True, ttl=ttl)
 
     async def get_model_group_io_token_usage(self, model_group: str) -> tuple[int | None, int | None]:
         """
