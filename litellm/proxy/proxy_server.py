@@ -15335,23 +15335,31 @@ def _count_context_management(
     )
 
 
-def _applies_context_edits_in_gateway(deployment: _TokenCountDeployment, request_model: str) -> bool:
+_GATEWAY_EDIT_ROUTES: Final = frozenset({Target.CHAT_COMPLETIONS, Target.RESPONSES})
+
+
+def _messages_route(deployment: _TokenCountDeployment, request_model: str) -> Target:
     params: Final = deployment.get("litellm_params", {})
-    route: Final = messages_target(
+    return messages_target(
         _non_empty_str(params.get("model")) or request_model,
         _non_empty_str(params.get("custom_llm_provider")),
         deployment.get("model_info"),
         _deployment_api_base(deployment),
     )
-    return route is Target.CHAT_COMPLETIONS
 
 
-async def _gateway_edited_request(
+def _rejected_view(status_code: int, message: str) -> ProxyException:
+    return ProviderCountFailure(
+        status_code=status_code, message=message, rejected_before_provider_call=True
+    ).to_proxy_exception()
+
+
+async def _bridged_request_view(
     messages: Sequence[Mapping[str, object]],
     system: object,
     tools: Sequence[Mapping[str, object]] | None,
     messages_format: TokenCountMessagesFormat,
-    edits: CountContextManagement,
+    edits: CountContextManagement | None,
     deployment: _TokenCountDeployment,
     fallback_model: str,
 ) -> InferenceRequestView:
@@ -15363,11 +15371,54 @@ async def _gateway_edited_request(
     )
     match view:
         case InferenceRequestViewError(error_message=message, status_code=status_code):
-            raise ProviderCountFailure(
-                status_code=status_code, message=message, rejected_before_provider_call=True
-            ).to_proxy_exception()
+            raise _rejected_view(status_code, message)
         case InferenceRequestView():
             return view
+
+
+async def _responses_request_view(
+    messages: Sequence[Mapping[str, object]],
+    system: object,
+    tools: Sequence[Mapping[str, object]] | None,
+    edits: CountContextManagement,
+    deployment: _TokenCountDeployment,
+    fallback_model: str,
+) -> InferenceRequestView:
+    from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
+    from litellm.llms.anthropic.messages.responses_adapters.handler import count_view_messages
+
+    try:
+        edited: Final = await count_view_messages(
+            model=_non_empty_str(deployment.get("litellm_params", {}).get("model")) or fallback_model,
+            messages=messages,
+            tools=tools,
+            system=system,
+            context_management=edits,
+        )
+    except AnthropicContextManagementError as error:
+        raise _rejected_view(error.status_code, error.message) from error
+    return InferenceRequestView(messages=edited, system=system)
+
+
+async def _gateway_request_view(
+    route: Target,
+    messages: Sequence[Mapping[str, object]],
+    system: object,
+    tools: Sequence[Mapping[str, object]] | None,
+    messages_format: TokenCountMessagesFormat,
+    edits: CountContextManagement | None,
+    deployment: _TokenCountDeployment,
+    fallback_model: str,
+) -> InferenceRequestView | None:
+    match route:
+        case Target.CHAT_COMPLETIONS:
+            return await _bridged_request_view(
+                messages, system, tools, messages_format, edits, deployment, fallback_model
+            )
+        case Target.RESPONSES if edits is not None:
+            return await _responses_request_view(messages, system, tools, edits, deployment, fallback_model)
+        case _:
+            return None
 
 
 def _responses_routing_kwargs(responses_request: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -15570,22 +15621,23 @@ async def _count_request_tokens(
         else ProxyException(message=local_count_error, type="token_counting_error", param="messages", code=400)
     )
     context_edits: Final = _count_context_management(context_management, request.model, request_litellm_params)
-    gateway_edits: Final = (
-        context_edits
-        if context_edits is not None and _applies_context_edits_in_gateway(deployment_view, request.model)
+    route: Final = (
+        _messages_route(deployment_view, request.model)
+        if request_messages is not None and messages_format == "anthropic"
         else None
     )
-    if gateway_edits is not None and malformed_messages is not None:
+    if context_edits is not None and route in _GATEWAY_EDIT_ROUTES and malformed_messages is not None:
         raise malformed_messages
     edited_request: Final = (
         None
-        if gateway_edits is None or request_messages is None
-        else await _gateway_edited_request(
+        if route is None or request_messages is None
+        else await _gateway_request_view(
+            route,
             request_messages,
             system,
             _COUNT_TOOLS.validate_python(tools),
             messages_format,
-            gateway_edits,
+            context_edits,
             deployment_view,
             model_to_use,
         )
