@@ -714,6 +714,15 @@ def test_maybe_raise_for_response_failed_event_maps_image_code_to_400():
     assert not isinstance(exc_info.value, MidStreamFallbackError)
 
 
+def test_maybe_raise_for_response_failed_event_maps_invalid_parameter_to_400() -> None:
+    iterator = _make_iterator()
+    chunk = _make_failed_chunk({"code": "InvalidParameter", "message": "unrelated provider message"})
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        iterator._maybe_raise_for_error_event(chunk)
+    assert exc_info.value.status_code == 400
+    assert not isinstance(exc_info.value, MidStreamFallbackError)
+
+
 def test_maybe_raise_for_error_event_maps_vector_store_timeout_to_retriable_504():
     iterator = _make_iterator()
     chunk = _make_error_chunk("server_error", "vector_store_timeout", "vector store timed out")

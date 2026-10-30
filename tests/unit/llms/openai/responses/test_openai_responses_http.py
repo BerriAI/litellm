@@ -659,3 +659,197 @@ async def test_router_responses_alias_stream_uses_underlying_model(sync_mode: bo
     assert len(requests) == 1
     request_body: Final = _JSON_OBJECT.validate_json(requests[0].request.content)
     assert request_body["model"] == "gpt-4o"
+
+
+_COMPATIBLE_API_BASE: Final = "https://compatible.example.com/v1"
+_COMPATIBLE_URL: Final = f"{_COMPATIBLE_API_BASE}/responses"
+_TITLE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"title": {"type": "string"}, "description": {"type": "string"}},
+    "required": ["title", "description"],
+    "additionalProperties": False,
+}
+_JSON_SCHEMA_TEXT: Final = {
+    "format": {"type": "json_schema", "name": "title", "strict": True, "schema": _TITLE_SCHEMA},
+    "verbosity": "low",
+}
+_JSON_OBJECT_TEXT: Final = {"format": {"type": "json_object"}, "verbosity": "low"}
+_FORMAT_UNAVAILABLE: Final = (
+    "<400> InternalError.Algo.InvalidParameter: This text.format type is unavailable now"
+)
+
+
+def _sent_requests(route: respx.Route) -> tuple[httpx.Request, ...]:
+    return tuple(request for call in route.calls if isinstance(request := call.request, httpx.Request))
+
+
+def _format_type(request: httpx.Request) -> object:
+    text: Final = _JSON_OBJECT.validate_json(request.content).get("text")
+    return _json_object(_json_object(text)["format"])["type"] if isinstance(text, dict) else None
+
+
+def _failed_format_stream() -> httpx.Response:
+    error: Final = {"code": "InvalidParameter", "message": _FORMAT_UNAVAILABLE}
+    failed_response: Final = {
+        **_response_body("resp_failed"),
+        "status": "failed",
+        "error": error,
+        "output": [],
+    }
+    return _sse_reply(
+        _sse(({"type": "response.failed", "sequence_number": 0, "response": failed_response},))
+    )
+
+
+def _json_object_only_host(request: httpx.Request) -> httpx.Response:
+    request_body: Final = _JSON_OBJECT.validate_json(request.content)
+    if _format_type(request) == "json_schema":
+        if request_body.get("stream") is True:
+            return _failed_format_stream()
+        return httpx.Response(
+            status_code=400,
+            json={"error": {"code": "InvalidParameter", "message": _FORMAT_UNAVAILABLE}},
+        )
+    if request_body.get("stream") is True:
+        return _sse_reply(_response_sse("resp_json"))
+    return httpx.Response(status_code=200, json=_response_body("resp_json"))
+
+
+async def _call_responses_with_schema(
+    sync_mode: bool,
+    stream: bool,
+    api_base: str | None = _COMPATIBLE_API_BASE,
+    text: dict[str, object] | None = _JSON_SCHEMA_TEXT,
+) -> object:
+    kwargs: Final[dict[str, object]] = {
+        "model": "openai/gpt-4o",
+        "api_key": "sk-test",
+        "api_base": api_base,
+        "input": "hello",
+        "instructions": "Answer in English",
+        "stream": stream,
+        **({"text": text} if text is not None else {}),
+    }
+    if sync_mode:
+        response: Final = litellm.responses(**kwargs)
+        return tuple(response) if stream else response
+    awaited: Final = await litellm.aresponses(**kwargs)
+    return tuple([event async for event in awaited]) if stream else awaited
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_json_schema_retries_with_json_object_and_preserves_instructions(sync_mode: bool) -> None:
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post(_COMPATIBLE_URL).mock(side_effect=_json_object_only_host)
+        response: Final = await _call_responses_with_schema(sync_mode=sync_mode, stream=False)
+        requests: Final = _sent_requests(route)
+
+    assert len(requests) == 2
+    assert [_format_type(request) for request in requests] == ["json_schema", "json_object"]
+    assert isinstance(response, ResponsesAPIResponse)
+    assert response.output_text == _OUTPUT_TEXT
+    retried: Final = _JSON_OBJECT.validate_json(requests[1].content)
+    instructions: Final = str(retried["instructions"])
+    assert instructions.startswith("Answer in English\n\n")
+    assert "title" in instructions
+    assert "description" in instructions
+    assert "json" in instructions.lower()
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_json_schema_stream_retries_before_response_failed(sync_mode: bool) -> None:
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post(_COMPATIBLE_URL).mock(side_effect=_json_object_only_host)
+        events: Final = await _call_responses_with_schema(sync_mode=sync_mode, stream=True)
+        requests: Final = _sent_requests(route)
+
+    assert len(requests) == 2
+    assert [_format_type(request) for request in requests] == ["json_schema", "json_object"]
+    assert isinstance(events, tuple)
+    assert isinstance(events[-1], ResponseCompletedEvent)
+    assert events[-1].response.id == "resp_json"
+
+
+@pytest.mark.asyncio
+async def test_openai_api_schema_rejection_is_not_retried() -> None:
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post(_OPENAI_URL).mock(
+            return_value=httpx.Response(
+                status_code=400,
+                json={"error": {"code": "InvalidParameter", "message": _FORMAT_UNAVAILABLE}},
+            )
+        )
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            _ = await _call_responses_with_schema(sync_mode=False, stream=False, api_base=None)
+        requests: Final = _sent_requests(route)
+
+    assert len(requests) == 1
+    assert exc_info.value.status_code == 400
+    assert [_format_type(request) for request in requests] == ["json_schema"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_schema_rejection_without_unsupported_message_is_not_retried() -> None:
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post(_COMPATIBLE_URL).mock(
+            return_value=httpx.Response(
+                status_code=400,
+                json={
+                    "error": {
+                        "code": "invalid_json_schema",
+                        "message": "Invalid JSON schema for response_format 'title': invalid property",
+                    }
+                },
+            )
+        )
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            _ = await _call_responses_with_schema(sync_mode=False, stream=False)
+        requests: Final = _sent_requests(route)
+
+    assert len(requests) == 1
+    assert exc_info.value.status_code == 400
+    assert [_format_type(request) for request in requests] == ["json_schema"]
+
+
+@pytest.mark.parametrize(("text", "expected_format"), ((_JSON_OBJECT_TEXT, "json_object"), (None, None)))
+@pytest.mark.asyncio
+async def test_json_object_and_plain_requests_keep_their_request_body(
+    text: dict[str, object] | None, expected_format: str | None
+) -> None:
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post(_COMPATIBLE_URL).mock(side_effect=_json_object_only_host)
+        response: Final = await _call_responses_with_schema(sync_mode=False, stream=False, text=text)
+        requests: Final = _sent_requests(route)
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert len(requests) == 1
+    request_body: Final = _JSON_OBJECT.validate_json(requests[0].content)
+    expected_body: Final = {
+        "model": "gpt-4o",
+        "input": "hello",
+        "instructions": "Answer in English",
+        "stream": False,
+        **({"text": text} if text is not None else {}),
+    }
+    assert request_body == expected_body
+    assert _format_type(requests[0]) == expected_format
+
+
+@pytest.mark.asyncio
+async def test_rejected_json_object_retry_stops_after_two_requests() -> None:
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post(_COMPATIBLE_URL).mock(
+            return_value=httpx.Response(
+                status_code=400,
+                json={"error": {"code": "InvalidParameter", "message": _FORMAT_UNAVAILABLE}},
+            )
+        )
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            _ = await _call_responses_with_schema(sync_mode=False, stream=False)
+        requests: Final = _sent_requests(route)
+
+    assert len(requests) == 2
+    assert exc_info.value.status_code == 400
+    assert [_format_type(request) for request in requests] == ["json_schema", "json_object"]
