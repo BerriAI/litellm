@@ -246,9 +246,11 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             )
         except HTTPException:
             return MappingProxyType({})
-        return MappingProxyType(
-            {batch_row_model_for_deployment(credentials["model"], credentials["custom_llm_provider"]): routing_alias}
-        )
+        deployment_model: Final = credentials.get("model")
+        provider: Final = credentials.get("custom_llm_provider")
+        if not isinstance(deployment_model, str) or not isinstance(provider, str):
+            return MappingProxyType({})
+        return MappingProxyType({batch_row_model_for_deployment(deployment_model, provider): routing_alias})
 
     def _resolve_batch_provider(self, batch_model: str | None) -> str | None:
         """Resolve the provider from the deployment that serves ``batch_model``.
