@@ -43,6 +43,7 @@ from litellm.litellm_core_utils.core_helpers import (
     process_response_headers,
     provider_reported_usage_cost,
     set_response_cost_in_hidden_params,
+    stamp_litellm_bill_on_usage,
 )
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
 from litellm.litellm_core_utils.internal_call_metadata import (
@@ -71,6 +72,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
+    replayable_responses_input,
 )
 from litellm.types.responses.main import GenericResponseOutputItem, OutputText
 from litellm.types.utils import CallTypes, ModelResponse
@@ -226,7 +228,7 @@ async def drain_logging_tasks(timeout: float = 5.0) -> None:
         return
     _, pending = await asyncio.wait(tuple(_PENDING_LOGGING_TASKS), timeout=timeout)
     if pending:
-        verbose_logger.warning("Timed out draining %d logging tasks on shutdown, dropping them", len(pending))
+        verbose_logger.warning("Timed out draining logging tasks on shutdown: %d tasks still alive", len(pending))
 
 
 _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
@@ -375,6 +377,7 @@ class BaseResponsesAPIStreamingIterator:
     _pending_logging_tasks: tuple[asyncio.Task[object], ...] = ()
     _started_tool_call: bool = False
     _earlier_rounds_spend: BilledRoundsSpend | None = None
+    _replays_stored_stream: bool = False
 
     def __init__(
         self,
@@ -573,7 +576,7 @@ class BaseResponsesAPIStreamingIterator:
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
                 ):
                     _response_obj: Final[object] = getattr(openai_responses_api_chunk, "response", None)
-                    _estimate_wanted: Final[bool] = _chunk_type in (
+                    _estimate_wanted: Final[bool] = not self._replays_stored_stream and _chunk_type in (
                         openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
                         openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
                     )
@@ -994,6 +997,7 @@ class BaseResponsesAPIStreamingIterator:
         generated_text: Final = self._generated_content + self._generated_tool_arguments
         if (
             not generated_text
+            or self._replays_stored_stream
             or requests_background(self.request_data)
             or is_background_response(self._created_response)
             or self._completed_response_logged
@@ -1109,7 +1113,7 @@ class BaseResponsesAPIStreamingIterator:
         """
         created: Final = self._created_response
         generated: Final = self._generated_content + self._generated_tool_arguments
-        if created is None or not generated or self._billed_without_disconnect():
+        if self._replays_stored_stream or created is None or not generated or self._billed_without_disconnect():
             return None
         usage: Final = _estimate_usage_safely(
             self.model or "",
@@ -1161,6 +1165,8 @@ class BaseResponsesAPIStreamingIterator:
     def _raise_if_ended_without_terminal_event(self) -> None:
         if self.completed_response is not None:
             return
+        if self._replays_stored_stream and not self._yielded_first_chunk:
+            return
         error: Final = self._stream_ended_early_error()
         self._handle_failure(error)
         if self._output_started:
@@ -1208,6 +1214,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         custom_llm_provider: str | None = None,
         request_data: dict[str, object] | None = None,
         call_type: str | None = None,
+        replays_stored_stream: bool = False,
     ):
         super().__init__(
             response,
@@ -1219,6 +1226,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             request_data,
             call_type,
         )
+        self._replays_stored_stream = replays_stored_stream
         self.stream_iterator = SSEDecoder().aiter_bytes(response.aiter_bytes())
 
     def __aiter__(self):
@@ -1230,6 +1238,9 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         except Exception:
             await self._await_pending_logging()
             raise
+
+    async def aclose(self) -> None:
+        await self.response.aclose()
 
     async def _next_event(self) -> ResponsesAPIStreamingResponse:
         try:
@@ -1303,6 +1314,7 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         custom_llm_provider: str | None = None,
         request_data: dict[str, object] | None = None,
         call_type: str | None = None,
+        replays_stored_stream: bool = False,
     ):
         super().__init__(
             response,
@@ -1314,10 +1326,14 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             request_data,
             call_type,
         )
+        self._replays_stored_stream = replays_stored_stream
         self.stream_iterator = SSEDecoder().iter_bytes(response.iter_bytes())
 
     def __iter__(self):
         return self
+
+    def close(self) -> None:
+        self.response.close()
 
     def __next__(self):
         try:
@@ -1854,7 +1870,7 @@ def stamp_responses_usage_cost(
     if isinstance(bill, bool) or not isinstance(bill, (int, float)):
         return
     if bill > 0 or isinstance(getattr(usage_obj, "cost", None), (int, float)):
-        setattr(usage_obj, "cost", float(bill))
+        stamp_litellm_bill_on_usage(response_obj, usage_obj, float(bill))
 
 
 def opening_item_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
@@ -2365,15 +2381,17 @@ def _ws_event_error(event: Mapping[str, object]) -> object:
     return response.get("error") if _is_json_object(response) else None
 
 
-def _restore_input_item_ids(items: Sequence[object]) -> Sequence[object]:
-    return ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(copy.deepcopy(list(items)))
+def _replayable_input_items(items: Sequence[object]) -> object:
+    return replayable_responses_input(
+        ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(copy.deepcopy(list(items)))
+    )
 
 
 def _restored_container_fields(container: Mapping[str, object]) -> Mapping[str, object]:
     input_items: Final = container.get("input")
     previous_response_id: Final = container.get("previous_response_id")
     restored: Final = {
-        "input": _restore_input_item_ids(input_items) if _is_json_array(input_items) else input_items,
+        "input": _replayable_input_items(input_items) if _is_json_array(input_items) else input_items,
         "previous_response_id": (
             ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(previous_response_id)
             if isinstance(previous_response_id, str)

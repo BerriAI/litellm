@@ -13,7 +13,7 @@ import pytest
 import yaml
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 
 import litellm
 from litellm.constants import PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
@@ -6538,7 +6538,7 @@ async def test_list_keys_with_invalid_status():
             )
 
         # Verify ProxyException properties
-        assert exc_info.value.code == "400"
+        assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
         assert "Invalid status value" in str(exc_info.value.message)
         assert "deleted" in str(exc_info.value.message)
 
@@ -7597,6 +7597,7 @@ async def test_generate_key_with_router_settings(monkeypatch):
         "num_retries": 3,
         "model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}},
         "weights": {"gpt-4": {"weighted-id": 1}},
+        "content_policy_fallbacks": [{"gpt-4": ["gpt-4o", "gpt-4o-mini"]}],
     }
 
     request_data = GenerateKeyRequest(
@@ -7734,6 +7735,19 @@ async def test_update_key_with_router_settings(
     )
     assert cleared["team_id"] == target_team
     assert json.loads(cleared["router_settings"]) == {}
+
+
+@pytest.mark.parametrize("request_type", [GenerateKeyRequest, UpdateKeyRequest])
+@pytest.mark.parametrize("dict_target", [{"model": "gpt-4o-mini"}, {}])
+def test_a_key_content_policy_rule_can_only_name_fallback_models(
+    request_type: type[GenerateKeyRequest] | type[UpdateKeyRequest],
+    dict_target: dict[str, str],
+):
+    with pytest.raises(ValidationError, match="must be model names"):
+        request_type(
+            key="sk-key",
+            router_settings={"content_policy_fallbacks": [{"gpt-4": ["gpt-4o", dict_target]}]},
+        )
 
 
 @pytest.mark.asyncio
@@ -23377,3 +23391,90 @@ def test_key_info_database_not_connected_sanitized_500(
         assert "Database not connected" in caplog.text
     finally:
         proxy_server.app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_key_health_failure_body_carries_a_json_null_param():
+    import litellm.proxy.proxy_server as ps
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="hashed-key", metadata={"logging": ["not-a-callback-object"]}
+    )
+    try:
+        response = client.post("/key/health", headers={"Authorization": "Bearer sk-test"})
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 500
+    error = response.json()["error"]
+    assert error["type"] == "internal_server_error"
+    assert error["param"] is None
+
+
+@pytest.mark.asyncio
+async def test_update_key_reports_a_bad_budget_duration_as_a_request_error_not_an_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import update_key_fn
+
+    monkeypatch.setattr(  # test-quality-ok: the endpoint reads proxy_server.prisma_client itself, no parameter to inject
+        "litellm.proxy.proxy_server.prisma_client", MagicMock()
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_key_fn(
+            request=MagicMock(spec=Request),
+            data=UpdateKeyRequest(key="sk-whatever", budget_duration="not-a-duration"),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
+    assert "Authentication Error" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_update_key_passes_its_own_rejection_through_without_making_it_its_own_cause(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import update_key_fn
+
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr(  # test-quality-ok: the endpoint reads proxy_server.prisma_client itself, no parameter to inject
+        "litellm.proxy.proxy_server.prisma_client", prisma_client
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_key_fn(
+            request=MagicMock(spec=Request),
+            data=UpdateKeyRequest(key="sk-missing", max_budget=5),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("404", "not_found_error")
+    assert exc_info.value.__cause__ is None
+
+
+@pytest.mark.asyncio
+async def test_key_aliases_answers_503_when_the_database_is_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    import prisma.errors
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import key_aliases
+
+    unreachable_db: Final = MagicMock()
+    unreachable_db.db.query_raw = AsyncMock(
+        side_effect=prisma.errors.PrismaError("Can't reach database server at `db:5432`")
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", unreachable_db)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await key_aliases(
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+            page=1,
+            size=50,
+            search=None,
+            team_id=None,
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("503", "no_db_connection")

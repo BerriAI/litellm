@@ -5,16 +5,18 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections import Counter
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, TypeAlias, TypeVar
+from typing import Final, Literal, TypeAlias, TypeVar
+from urllib.parse import urlsplit
 
 import click
 import requests
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 from litellm.proxy.common_utils.codex_model_catalog import (
     CODEX_BASE_INSTRUCTIONS_PATH,
@@ -39,6 +41,7 @@ from .pi import (
     LITELLM_PROXY_API_KEY_ENV,
     PI_PROVIDER_NAME,
     ListingFailure,
+    ModelLimits,
     PiSyncError,
     fetch_model_ids,
     fetch_model_limits,
@@ -497,14 +500,139 @@ def _fetch_model_listing(
     return listing.data
 
 
+class _DeploymentParams(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model: str
+    custom_llm_provider: str | None = None
+    api_base: str | None = None
+    litellm_credential_name: str | None = None
+    reasoning_effort: JsonValue = None
+
+
+class _DeploymentInfo(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    team_public_model_name: str | None = None
+    blocked: bool | None = None
+
+
+class _Deployment(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model_name: str
+    litellm_params: _DeploymentParams
+    model_info: _DeploymentInfo | None = None
+
+
+class _DeploymentListing(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    data: tuple[_Deployment, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ModelUpstream:
+    """The OpenAI model every deployment behind a public name routes to, and the reasoning effort they all pin."""
+
+    model: str
+    reasoning_effort: str | None = None
+
+
+_NO_UPSTREAMS: Final[Mapping[str, ModelUpstream]] = MappingProxyType({})
+_Pinned: Final = TypeVar("_Pinned", bound=Hashable)
+
+
+def _public_name(deployment: _Deployment) -> str:
+    team_name: Final = deployment.model_info.team_public_model_name if deployment.model_info is not None else None
+    return team_name or deployment.model_name
+
+
+def _is_paused(deployment: _Deployment) -> bool:
+    return deployment.model_info is not None and deployment.model_info.blocked is True
+
+
+def _is_openai_host(params: _DeploymentParams) -> bool:
+    if params.api_base is None:
+        return not params.litellm_credential_name
+    host: Final = urlsplit(params.api_base).hostname or ""
+    return host == "api.openai.com" or host.endswith(".api.openai.com")
+
+
+def _openai_model(params: _DeploymentParams) -> str | None:
+    if params.custom_llm_provider not in (None, "openai") or not _is_openai_host(params):
+        return None
+    provider, slash, name = params.model.partition("/")
+    if not slash:
+        return params.model
+    return name if provider == "openai" else None
+
+
+def _pinned_effort(params: _DeploymentParams) -> str | None:
+    return params.reasoning_effort if isinstance(params.reasoning_effort, str) else None
+
+
+def _shared_by_every_deployment(values: Iterable[tuple[str, _Pinned]]) -> Mapping[str, _Pinned]:
+    distinct: Final = frozenset(values)
+    values_per_name: Final = Counter(name for name, _ in distinct)
+    return MappingProxyType({name: value for name, value in distinct if values_per_name[name] == 1})
+
+
+def _upstreams_by_public_name(deployments: Sequence[_Deployment]) -> Mapping[str, ModelUpstream]:
+    live: Final = tuple(d for d in deployments if not _is_paused(d))
+    models: Final = _shared_by_every_deployment((_public_name(d), _openai_model(d.litellm_params)) for d in live)
+    efforts: Final = _shared_by_every_deployment((_public_name(d), _pinned_effort(d.litellm_params)) for d in live)
+    return MappingProxyType(
+        {name: ModelUpstream(model, efforts.get(name)) for name, model in models.items() if model is not None}
+    )
+
+
+def _fetch_model_upstreams(
+    base_url: str,
+    api_key: str,
+    *,
+    get: Callable[..., requests.Response],
+) -> Mapping[str, ModelUpstream]:
+    url: Final = base_url.rstrip("/") + "/v1/model/info"
+    try:
+        resp: Final = get(url, headers=MappingProxyType({"Authorization": f"Bearer {api_key}"}), timeout=10)
+    except requests.RequestException:
+        return _NO_UPSTREAMS
+    if resp.status_code != 200:
+        return _NO_UPSTREAMS
+    try:
+        listing: Final = _DeploymentListing.model_validate_json(resp.content)
+    except ValidationError:
+        return _NO_UPSTREAMS
+    return _upstreams_by_public_name(listing.data)
+
+
 class _OpenCodeLimit(LiteLLMBaseModel):
     context: int
     output: int
 
 
+class _OpenCodeVariant(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    reasoningEffort: str
+
+
+class _OpenCodeReasoningOption(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["effort"] = "effort"
+    values: tuple[str, ...]
+
+
 class _OpenCodeModel(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     name: str
     limit: _OpenCodeLimit | None = None
+    reasoning: Literal[True] | None = None
+    reasoning_options: tuple[_OpenCodeReasoningOption, ...] | None = None
+    variants: Mapping[str, _OpenCodeVariant] | None = None
 
 
 class _OpenCodeProviderOptions(LiteLLMBaseModel):
@@ -523,15 +651,43 @@ class _OpenCodeConfig(LiteLLMBaseModel):
     provider: Mapping[str, _OpenCodeProvider]
 
 
-def _opencode_model_entry(model: ListedModel) -> _OpenCodeModel:
-    if model.max_input_tokens is None or model.max_output_tokens is None:
-        return _OpenCodeModel(name=model.id)
+_NO_GROUPS: Final[Mapping[str, ModelLimits]] = MappingProxyType({})
+
+
+def _reasoning_efforts(model_id: str, groups: Mapping[str, ModelLimits]) -> tuple[str, ...] | None:
+    group: Final = groups.get(model_id)
+    return group.supported_reasoning_efforts if group is not None else None
+
+
+def _opencode_model_entry(model: ListedModel, groups: Mapping[str, ModelLimits]) -> _OpenCodeModel:
+    """One OpenCode model entry, with the model group's reasoning efforts as its variants when known.
+
+    OpenCode 1.x builds its own variants for a reasoning model and replaces them only through
+    `reasoning_options`. 2.x ignores `reasoning` and `reasoning_options` and builds its own variants
+    unless the entry lists some, so the efforts go in all three, and a model with none lists an
+    empty `variants`."""
+    limit: Final = (
+        _OpenCodeLimit(context=model.max_input_tokens, output=model.max_output_tokens)
+        if model.max_input_tokens is not None and model.max_output_tokens is not None
+        else None
+    )
+    efforts: Final = _reasoning_efforts(model.id, groups)
+    if efforts is None:
+        return _OpenCodeModel(name=model.id, limit=limit)
+    if not efforts:
+        return _OpenCodeModel(name=model.id, limit=limit, variants=MappingProxyType({}))
     return _OpenCodeModel(
-        name=model.id, limit=_OpenCodeLimit(context=model.max_input_tokens, output=model.max_output_tokens)
+        name=model.id,
+        limit=limit,
+        reasoning=True,
+        reasoning_options=(_OpenCodeReasoningOption(values=efforts),),
+        variants=MappingProxyType({effort: _OpenCodeVariant(reasoningEffort=effort) for effort in efforts}),
     )
 
 
-def opencode_provider_config(base_url: str, models: Sequence[ListedModel]) -> str:
+def opencode_provider_config(
+    base_url: str, models: Sequence[ListedModel], groups: Mapping[str, ModelLimits] = _NO_GROUPS
+) -> str:
     """OPENCODE_CONFIG_CONTENT declaring the proxy as OpenCode provider `litellm`.
 
     One model entry per chat-capable /v1/models row (mode chat, responses, or
@@ -539,6 +695,7 @@ def opencode_provider_config(base_url: str, models: Sequence[ListedModel]) -> st
     is read back through {env:OPENAI_API_KEY}, which build_agent_env exports, so
     it never lands in the config text. OpenCode merges this inline config over
     the user's own files, leaving unrelated keys and providers untouched.
+    `groups` is /model_group/info by model group, where the reasoning efforts come from.
     """
     chat_models: Final = _chat_models(models)
     provider: Final = _OpenCodeProvider(
@@ -548,7 +705,7 @@ def opencode_provider_config(base_url: str, models: Sequence[ListedModel]) -> st
             baseURL=base_url.rstrip("/") + "/v1",
             apiKey=f"{{env:{OPENAI_API_KEY_ENV}}}",
         ),
-        models=MappingProxyType({m.id: _opencode_model_entry(m) for m in chat_models}),
+        models=MappingProxyType({m.id: _opencode_model_entry(m, groups) for m in chat_models}),
     )
     config: Final = _OpenCodeConfig(provider=MappingProxyType({OPENCODE_PROVIDER_ID: provider}))
     return config.model_dump_json(exclude_none=True)
@@ -563,7 +720,8 @@ def opencode_model_sync_env(
 ) -> Mapping[str, str] | ModelSyncSkipped:
     """Env addition that hands OpenCode the proxy's model list, or why it was skipped.
 
-    Fetches /v1/models with the key and packs it into OPENCODE_CONFIG_CONTENT.
+    Fetches /v1/models with the key, and /model_group/info for each model's reasoning
+    efforts, and packs them into OPENCODE_CONFIG_CONTENT.
     An OPENCODE_CONFIG_CONTENT already in the environment is left alone, and a
     failed fetch is reported rather than raised: OpenCode still launches on the
     plain OPENAI_* env, just without a synced model list.
@@ -573,11 +731,30 @@ def opencode_model_sync_env(
     listing: Final = _fetch_model_listing(base_url, api_key, get=get)
     if isinstance(listing, ModelSyncSkipped):
         return listing
-    return MappingProxyType({OPENCODE_CONFIG_CONTENT_ENV: opencode_provider_config(base_url, listing)})
+    groups: Final = fetch_model_limits(base_url, api_key, get=get)
+    return MappingProxyType({OPENCODE_CONFIG_CONTENT_ENV: opencode_provider_config(base_url, listing, groups)})
+
+
+def _codex_row(
+    model: ListedModel, upstream: ModelUpstream | None, groups: Mapping[str, ModelLimits]
+) -> CodexCatalogRow:
+    return CodexCatalogRow(
+        id=model.id,
+        mode=model.mode,
+        max_input_tokens=model.max_input_tokens,
+        upstream_model=upstream.model if upstream is not None else None,
+        reasoning_effort=upstream.reasoning_effort if upstream is not None else None,
+        supported_reasoning_efforts=_reasoning_efforts(model.id, groups),
+    )
 
 
 def codex_model_catalog(
-    models: Sequence[ListedModel], stock: Sequence[CodexStockModel], instructions: str
+    models: Sequence[ListedModel],
+    stock: Sequence[CodexStockModel],
+    instructions: str,
+    upstreams: Mapping[str, ModelUpstream],
+    groups: Mapping[str, ModelLimits] = _NO_GROUPS,
+    client_version: str | None = None,
 ) -> str | None:
     """The `model_catalog_json` body listing the proxy's chat models, or None if there are none.
 
@@ -586,14 +763,25 @@ def codex_model_catalog(
     installed Codex knows keeps that Codex's own entry and the proxy only
     decides its place in the picker: the listing orders it, lists it even when
     Codex hides it or keeps it off the API, and keeps Codex's upgrade nudge only
-    when the model it points at is served too. A model Codex does not know gets the fallback
+    when the model it points at is served too. An alias of such a model, per
+    `upstreams`, takes that entry too, minus the defaults Codex picks for the
+    model: no service tier or upgrade nudge, the reasoning effort its
+    deployments pin, and a window no larger than its listed max_input_tokens.
+    A model Codex does not know gets the fallback
     entry, with the same base instructions Codex itself uses so the agent never
-    runs without a system prompt. The catalog is the one `/v1/models?client_version=...`
-    serves, built from the installed Codex's own entries instead of the proxy's vendored ones.
+    runs without a system prompt, and offers the reasoning efforts `groups` gives its model group
+    that the installed Codex, at `client_version`, can parse. Apart from aliases, the catalog is
+    the one `/v1/models?client_version=...` serves, built from the installed Codex's own entries
+    instead of the proxy's vendored ones.
     """
-    rows: Final = tuple(CodexCatalogRow(id=m.id, mode=m.mode, max_input_tokens=m.max_input_tokens) for m in models)
+    rows: Final = tuple(_codex_row(m, upstreams.get(m.id), groups) for m in models)
     body: Final = codex_models_response_json(
-        rows, stock=MappingProxyType({m.slug: m for m in stock}), instructions=instructions, byte_limit=None
+        rows,
+        stock=MappingProxyType({m.slug: m for m in stock}),
+        instructions=instructions,
+        byte_limit=None,
+        alias_defaults="deployment",
+        client_version=client_version,
     )
     return body.json if body.listed else None
 
@@ -640,7 +828,7 @@ def _codex_debug_models(
             encoding="utf-8",
             timeout=_CODEX_PREFLIGHT_TIMEOUT_SECONDS,
         )
-    except (OSError, subprocess.TimeoutExpired) as e:
+    except (OSError, subprocess.TimeoutExpired, UnicodeError) as e:
         return ModelSyncSkipped(f"`{name} debug models` failed: {e}")
     if completed.returncode == 0:
         return completed.stdout
@@ -662,6 +850,25 @@ def _stock_codex_models(
         return ModelSyncSkipped(f"`{name} debug models` printed no model catalog: {e.errors()[0]['msg']}")
 
 
+def _codex_version(
+    binary: str, env: Mapping[str, str], *, run: Callable[..., subprocess.CompletedProcess[str]]
+) -> str | None:
+    """The version `codex --version` prints (`codex-cli 0.165.0`), or None when it cannot be read."""
+    try:
+        completed: Final = run(
+            _windows_command(binary, (binary, "--version")),
+            env=dict(env),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            encoding="utf-8",
+            timeout=_CODEX_PREFLIGHT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired, UnicodeError):
+        return None
+    words: Final = completed.stdout.split()
+    return words[-1] if completed.returncode == 0 and words else None
+
+
 def codex_model_sync_args(
     base_env: Mapping[str, str],
     base_url: str,
@@ -678,12 +885,15 @@ def codex_model_sync_args(
     Codex has no env or inline equivalent of OPENCODE_CONFIG_CONTENT: the catalog
     must be a file, so it is written under $CODEX_HOME (default ~/.codex) and
     atomically replaced on every launch. The Codex at `binary` first lists its
-    own models, so the ones the proxy serves keep that Codex's entries, and then
+    own models, so the ones the proxy serves keep that Codex's entries, an alias
+    included when every unpaused deployment /v1/model/info lists for it routes
+    to the same OpenAI model and Codex knows that model, and its version, so a
+    model it does not know offers only reasoning efforts it can parse, and then
     reads the file back once before it is handed over. The key never lands in
     the file. A failed fetch, read, listing, write or read-back is reported
     rather than raised: Codex still launches with its built-in catalog and takes
     a proxy model by name via -m, and a rejected file stays on disk to be looked
-    at.
+    at. An unavailable /v1/model/info only leaves every alias on the fallback entry.
     """
     listing: Final = _fetch_model_listing(base_url, api_key, get=get)
     if isinstance(listing, ModelSyncSkipped):
@@ -700,7 +910,10 @@ def codex_model_sync_args(
     stock: Final = _stock_codex_models(binary, base_env, run=run)
     if isinstance(stock, ModelSyncSkipped):
         return stock
-    catalog: Final = codex_model_catalog(listing, stock, instructions)
+    upstreams: Final = _fetch_model_upstreams(base_url, api_key, get=get)
+    groups: Final = fetch_model_limits(base_url, api_key, get=get)
+    version: Final = _codex_version(binary, base_env, run=run)
+    catalog: Final = codex_model_catalog(listing, stock, instructions, upstreams, groups, version)
     if catalog is None:
         return ModelSyncSkipped(f"{base_url.rstrip('/')}/v1/models lists no chat models")
     try:
