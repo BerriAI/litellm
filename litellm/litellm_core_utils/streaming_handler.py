@@ -22,6 +22,7 @@ from typing_extensions import NotRequired, TypedDict
 
 import litellm
 from litellm import verbose_logger
+from litellm.constants import STREAM_SSE_DONE_STRING
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import (
@@ -727,14 +728,22 @@ class CustomStreamWrapper:
         is_finished = False
         finish_reason = ""
         try:
+            stripped_chunk = CustomStreamWrapper.strip_sse_data_from_chunk(chunk)
+            if stripped_chunk is not None and stripped_chunk.strip() == STREAM_SSE_DONE_STRING:
+                return {
+                    "text": "",
+                    "is_finished": True,
+                    "finish_reason": "stop",
+                }
+
             if self.model and "dolphin" in self.model:
                 chunk = self.process_chunk(chunk=chunk)
             else:
                 data_json: Final[_NlpCloudStreamData] = json.loads(chunk)
                 chunk = data_json["generated_text"]
             text = chunk
-            if "[DONE]" in text:
-                text = text.replace("[DONE]", "")
+            if text.strip() == STREAM_SSE_DONE_STRING:
+                text = ""
                 is_finished = True
                 finish_reason = "stop"
             return {

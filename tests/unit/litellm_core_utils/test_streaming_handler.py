@@ -8794,3 +8794,86 @@ def test_chunk_creator_usage_only_chunk_with_dict_usage_keeps_details(
     assert usage.prompt_tokens_details.cached_tokens == 80
     assert usage.completion_tokens_details is not None
     assert usage.completion_tokens_details.reasoning_tokens == 5
+
+
+@pytest.mark.parametrize(
+    ("chunk", "expected_text", "expected_finished", "expected_finish_reason"),
+    [
+        pytest.param(
+            '{"generated_text": "Checklist: - [DONE] write tests - [ ] ship it"}',
+            "Checklist: - [DONE] write tests - [ ] ship it",
+            False,
+            "",
+            id="done-in-content-is-not-truncated-or-edited",
+        ),
+        pytest.param(
+            '{"generated_text": "The protocol sentinel is [DONE]"}',
+            "The protocol sentinel is [DONE]",
+            False,
+            "",
+            id="done-sentinel-in-explanation-preserved",
+        ),
+        pytest.param(
+            '{"generated_text": "[DONE]"}',
+            "",
+            True,
+            "stop",
+            id="exact-done-in-json-payload-terminates-stream",
+        ),
+        pytest.param(
+            '{"generated_text": "  [DONE]  \\n"}',
+            "",
+            True,
+            "stop",
+            id="exact-done-with-whitespace-in-json-terminates-stream",
+        ),
+        pytest.param(
+            "data: [DONE]",
+            "",
+            True,
+            "stop",
+            id="raw-sse-done-marker-terminates-stream",
+        ),
+        pytest.param(
+            "[DONE]",
+            "",
+            True,
+            "stop",
+            id="raw-done-marker-terminates-stream",
+        ),
+    ],
+)
+def test_handle_nlp_cloud_chunk_done_handling(
+    chunk: str,
+    expected_text: str,
+    expected_finished: bool,
+    expected_finish_reason: str,
+    logging_obj: Logging,
+) -> None:
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="nlp_cloud/finetuned-llama-3-70b",
+        logging_obj=logging_obj,
+        custom_llm_provider="nlp_cloud",
+    )
+    result = wrapper.handle_nlp_cloud_chunk(chunk)
+    assert result["text"] == expected_text
+    assert result["is_finished"] is expected_finished
+    assert result["finish_reason"] == expected_finish_reason
+
+
+def test_handle_nlp_cloud_chunk_dolphin_model_done_handling(logging_obj: Logging) -> None:
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="nlp_cloud/dolphin",
+        logging_obj=logging_obj,
+        custom_llm_provider="nlp_cloud",
+    )
+    res1 = wrapper.handle_nlp_cloud_chunk("Task status: [DONE]")
+    assert res1["text"] == "Task status: [DONE]"
+    assert res1["is_finished"] is False
+
+    res2 = wrapper.handle_nlp_cloud_chunk("[DONE]")
+    assert res2["text"] == ""
+    assert res2["is_finished"] is True
+    assert res2["finish_reason"] == "stop"
