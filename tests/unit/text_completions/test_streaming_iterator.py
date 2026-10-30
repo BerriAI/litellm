@@ -142,3 +142,90 @@ def test_sync_text_completion_stream_maps_upstream_failure_after_content() -> No
         next(wrapper)
 
     assert (error.value.model, error.value.llm_provider) == ("test-model", "openai")
+
+
+def _stream_with_trailing_usage_chunk() -> tuple[ModelResponseStream, ...]:
+    return (
+        ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="Hi"))]),
+        ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="length")]),
+        ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta())],
+            usage=Usage(prompt_tokens=19, completion_tokens=5, total_tokens=24),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_stream", (False, True))
+@pytest.mark.parametrize(
+    ("usage_injected_by_proxy", "expected_frames", "expected_usage"),
+    (
+        (True, [("Hi", None), (None, "length")], [None, None]),
+        (False, [("Hi", None), (None, "length"), (None, None)], [None, None, (19, 5)]),
+    ),
+)
+async def test_text_completion_stream_hides_only_the_usage_chunk_the_proxy_asked_for(
+    async_stream: bool,
+    usage_injected_by_proxy: bool,
+    expected_frames: list[tuple[str | None, str | None]],
+    expected_usage: list[tuple[int, int] | None],
+) -> None:
+    async def chunks() -> AsyncIterator[ModelResponseStream]:
+        for chunk in _stream_with_trailing_usage_chunk():
+            yield chunk
+
+    wrapper: Final = TextCompletionStreamWrapper(
+        completion_stream=chunks() if async_stream else iter(_stream_with_trailing_usage_chunk()),
+        model="gpt-5.4-mini",
+        stream_options={"include_usage": True},
+        usage_injected_by_proxy=usage_injected_by_proxy,
+    )
+    frames: Final = [frame async for frame in wrapper] if async_stream else list(wrapper)
+
+    assert [(frame.choices[0].text, frame.choices[0].finish_reason) for frame in frames] == expected_frames
+    assert [
+        None if frame.usage is None else (frame.usage.prompt_tokens, frame.usage.completion_tokens) for frame in frames
+    ] == expected_usage
+
+
+def test_text_completion_stream_keeps_a_finish_frame_but_hides_the_usage_the_proxy_asked_for() -> None:
+    finish_with_usage: Final = ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")],
+        usage=Usage(prompt_tokens=27, completion_tokens=5, total_tokens=32),
+    )
+    wrapper: Final = TextCompletionStreamWrapper(
+        completion_stream=iter((finish_with_usage,)),
+        model="claude-haiku-4-5",
+        stream_options={"include_usage": True},
+        usage_injected_by_proxy=True,
+    )
+
+    frames: Final = list(wrapper)
+
+    assert [(frame.choices[0].finish_reason, frame.usage) for frame in frames] == [("stop", None)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_stream", (False, True))
+async def test_text_completion_stream_hides_the_empty_prompt_filter_frame_when_the_proxy_asked_for_usage(
+    async_stream: bool,
+) -> None:
+    prompt_filter_frame: Final = ModelResponseStream(id="", choices=[])
+    upstream: Final = (prompt_filter_frame, *_stream_with_trailing_usage_chunk())
+
+    async def chunks() -> AsyncIterator[ModelResponseStream]:
+        for chunk in upstream:
+            yield chunk
+
+    wrapper: Final = TextCompletionStreamWrapper(
+        completion_stream=chunks() if async_stream else iter(upstream),
+        model="gpt-5.4-mini",
+        stream_options={"include_usage": True},
+        usage_injected_by_proxy=True,
+    )
+    frames: Final = [frame async for frame in wrapper] if async_stream else list(wrapper)
+
+    assert [(frame.choices[0].text, frame.choices[0].finish_reason) for frame in frames] == [
+        ("Hi", None),
+        (None, "length"),
+    ]

@@ -121,6 +121,23 @@ class TestGetMetadataVariableName:
         request = self._make_request("/chat/completions")
         assert get_metadata_variable_name(request) == "metadata"
 
+    @pytest.mark.parametrize(
+        "body, expected",
+        [
+            ({"messages": [{"role": "user", "content": "hi"}]}, "metadata"),
+            ({"messages": []}, "metadata"),
+            ({"input": [{"role": "user", "content": "hi"}]}, "litellm_metadata"),
+            ({"input": "hi", "messages": []}, "litellm_metadata"),
+        ],
+    )
+    def test_cursor_route_picks_the_metadata_field_by_body_shape(self, body, expected):
+        request = self._make_request("/cursor/chat/completions")
+        assert get_metadata_variable_name(request, body) == expected
+
+    def test_cursor_route_without_a_body_keeps_the_route_answer(self):
+        request = self._make_request("/cursor/chat/completions")
+        assert get_metadata_variable_name(request) == "metadata"
+
     def test_returns_metadata_for_completions(self):
         request = self._make_request("/v1/completions")
         assert get_metadata_variable_name(request) == "metadata"
@@ -682,6 +699,45 @@ async def test_add_litellm_data_to_request_rejects_non_object_metadata(field, va
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/chat/completions", "/v1/responses", "/cursor/chat/completions"])
+@pytest.mark.parametrize("value, received_type", [("junk", "a string"), (5, "an integer"), ([1], "an array")])
+async def test_invalid_litellm_metadata_answers_400_when_metadata_carries_tags(route, value, received_type):
+    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.proxy.utils import ProxyLogging
+
+    data = {"model": "gpt-4o", "input": "hi", "metadata": {"tags": ["client-tag"]}, "litellm_metadata": value}
+    request = _batches_request_mock()
+    await common_checks(
+        request_body=data,
+        team_object=None,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route=route,
+        llm_router=None,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+        valid_token=UserAPIKeyAuth(api_key="hashed-key"),
+        request=request,
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.message == (
+        f"Invalid type for 'litellm_metadata': expected an object, but got {received_type} instead."
+    )
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_removes_every_invalid_metadata_field_before_raising():
     """When both fields are invalid, the raise for the first must not leave the
     second invalid value in data, or failure-logging hooks that inspect the body
@@ -1203,24 +1259,35 @@ def test_body_snapshot_excludes_team_callback_credentials() -> None:
     }, proxy_request
 
 
-def test_body_snapshot_keeps_the_stream_usage_injection_marker_out_of_the_stored_request() -> None:
+@pytest.mark.parametrize(
+    ("route_type", "request_input"),
+    [
+        ("acompletion", {"messages": [{"role": "user", "content": "hi"}]}),
+        ("atext_completion", {"prompt": "hi"}),
+    ],
+)
+def test_body_snapshot_keeps_the_stream_usage_injection_marker_out_of_the_stored_request(
+    route_type: str, request_input: dict[str, object]
+) -> None:
     from litellm.proxy.common_request_processing import stream_usage_tracking_updates
     from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
     from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 
-    request: Final = {"model": "gpt-5-mini", "messages": [{"role": "user", "content": "hi"}], "stream": True}
+    request: Final = {"model": "gpt-5-mini", **request_input, "stream": True}
     proxy_request: Final = {"body": dict(request)}
     data: Final = {
         **request,
-        **stream_usage_tracking_updates(request, {}, "acompletion", lambda: True),
+        **stream_usage_tracking_updates(request, {}, route_type, lambda: True),
         "proxy_server_request": proxy_request,
     }
 
     refresh_proxy_server_request_body_snapshot(data)
 
     assert data[STREAM_USAGE_INJECTED_FIELD] is True
+    assert data["_litellm_strip_stream_usage"] is True
     assert proxy_request["body"]["stream_options"] == {"include_usage": True}
     assert STREAM_USAGE_INJECTED_FIELD not in proxy_request["body"]
+    assert "_litellm_strip_stream_usage" not in proxy_request["body"]
 
 
 @pytest.mark.asyncio
@@ -11087,3 +11154,15 @@ def test_mapped_baggage_tags_keep_non_string_client_tags_as_sent():
     data: Final[dict[str, object]] = {"metadata": {"tags": [1, {"team": "x"}, "client-tag", "client-tag"]}}
     LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, data)
     assert data["metadata"]["tags"] == [1, {"team": "x"}, "client-tag", "client-tag", "tenant:a"]
+
+
+@pytest.mark.parametrize("caller_metadata", ({"tags": ["client-tag"]}, json.dumps({"tags": ["client-tag"]})))
+def test_caller_tags_reach_litellm_metadata_whether_metadata_is_a_dict_or_a_json_string(caller_metadata):
+    data: Final[dict[str, object]] = {
+        "input": "hi",
+        "metadata": caller_metadata,
+        "litellm_metadata": {"tags": ["key-tag"]},
+    }
+    LiteLLMProxyRequestSetup.merge_caller_body_tags(request_data=data)
+    assert set(data["litellm_metadata"]["tags"]) == {"key-tag", "client-tag"}
+    assert data["metadata"] == caller_metadata

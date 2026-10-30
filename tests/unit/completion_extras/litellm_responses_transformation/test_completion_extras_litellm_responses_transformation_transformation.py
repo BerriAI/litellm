@@ -418,6 +418,45 @@ def test_openai_responses_chunk_parser_reasoning_summary():
     assert delta.function_call is None
 
 
+def test_bridged_reasoning_summary_parts_rebuild_into_the_one_choice_they_streamed_on():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    events = (
+        {"type": "response.reasoning_summary_part.added", "output_index": 0, "summary_index": 0},
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "delta": "First part.",
+            "output_index": 0,
+            "summary_index": 0,
+        },
+        {"type": "response.reasoning_summary_part.done", "output_index": 0, "summary_index": 0},
+        {"type": "response.reasoning_summary_part.added", "output_index": 0, "summary_index": 1},
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "delta": "Second part.",
+            "output_index": 0,
+            "summary_index": 1,
+        },
+        {"type": "response.reasoning_summary_part.added", "output_index": 1, "summary_index": 0},
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "delta": "Next item.",
+            "output_index": 1,
+            "summary_index": 0,
+        },
+        {"type": "response.output_text.delta", "delta": "Answer", "output_index": 2, "content_index": 0},
+    )
+
+    rebuilt = litellm.stream_chunk_builder(chunks=[iterator.chunk_parser(event) for event in events])
+
+    assert [(choice.index, choice.message.reasoning_content, choice.message.content) for choice in rebuilt.choices] == [
+        (0, "First part. Second part. Next item.", "Answer")
+    ]
+
+
 def test_chunk_parser_string_output_text_delta_produces_text():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
