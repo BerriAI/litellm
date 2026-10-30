@@ -117,6 +117,9 @@ class BaseResponsesAPIConfig(ABC):
     def reasoning_field_values(self) -> ReasoningFieldValues | None:
         return None
 
+    def unresolved_model_reasoning_field_values(self, model: str) -> ReasoningFieldValues | None:
+        return None
+
     def ignores_unsupported_reasoning_fields(self) -> bool:
         return False
 

@@ -1,7 +1,7 @@
 import base64
 import os
 import re
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import reduce
 from types import MappingProxyType
@@ -1479,15 +1479,32 @@ def _with_declared_reasoning_values(
     return MappingProxyType({**(ANY_REASONING_FIELD_VALUES if defaults is None else defaults), **overrides})
 
 
-def _openai_catalog_family(name: str) -> str | None:
+def _hyphen_runs_longest_first(name: str) -> Iterator[str]:
     parts: Final = name.rsplit("/", 1)[-1].split("-")
-    prefixes: Final = ("-".join(parts[:end]) for end in range(len(parts), 0, -1))
-    return next((prefix for prefix in prefixes if OpenAIGPTConfig.is_openai_catalog_model(prefix)), None)
+    for length in range(len(parts), 0, -1):
+        yield from ("-".join(parts[start : start + length]) for start in range(len(parts) - length + 1))
+
+
+def _openai_catalog_family(name: str) -> str | None:
+    runs: Final = _hyphen_runs_longest_first(name)
+    return next((run for run in runs if OpenAIGPTConfig.is_openai_catalog_model(run)), None)
 
 
 def _openai_catalog_model(model: str, base_model: str | None) -> str | None:
     families: Final = (_openai_catalog_family(name) for name in (base_model, model) if name)
     return next((family for family in families if family is not None), None)
+
+
+def _default_reasoning_field_values(
+    model: str, base_model: str | None, responses_config: BaseResponsesAPIConfig | None
+) -> ReasoningFieldValues | None:
+    declared: Final = None if responses_config is None else responses_config.reasoning_field_values()
+    if declared is not None:
+        return declared
+    catalog_model: Final = _openai_catalog_model(model, base_model)
+    if catalog_model is not None:
+        return _openai_reasoning_field_values(catalog_model)
+    return None if responses_config is None else responses_config.unresolved_model_reasoning_field_values(model)
 
 
 def _reasoning_field_values(
@@ -1497,9 +1514,7 @@ def _reasoning_field_values(
     responses_config: BaseResponsesAPIConfig | None,
     deployment_model_info: Mapping[str, object] | None,
 ) -> ReasoningFieldValues | None:
-    declared: Final = None if responses_config is None else responses_config.reasoning_field_values()
-    catalog_model: Final = None if declared is not None else _openai_catalog_model(model, base_model)
-    defaults: Final = declared if catalog_model is None else _openai_reasoning_field_values(catalog_model)
+    defaults: Final = _default_reasoning_field_values(model, base_model, responses_config)
     return _with_declared_reasoning_values(defaults, model, custom_llm_provider, deployment_model_info)
 
 
