@@ -1,5 +1,5 @@
 import hashlib
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Final, Protocol, TypeVar
@@ -128,6 +128,27 @@ def _int_reply(reply: object) -> int | RedisFailure:
 
 
 def _eval_reply(reply: object) -> EvalReply | RedisFailure:
+    frames: Final[list[tuple[Iterator[object], list[EvalReply]]]] = [  # mutable-ok: linear-time traversal stack
+        (iter((reply,)), [])
+    ]
+    while frames:
+        pending, values = frames[-1]
+        for item in pending:
+            if (array := _array(item)) is not None:
+                frames.append((iter(array), []))
+                break
+            if isinstance(scalar := _eval_scalar(item), RedisFailure):
+                return scalar
+            values.append(scalar)
+        else:
+            frames.pop()
+            if not frames:
+                return values[0]
+            frames[-1][1].append(tuple(values))
+    return _decode_failure(reply)
+
+
+def _eval_scalar(reply: object) -> int | bytes | None | RedisFailure:
     if isinstance(reply, RedisFailure) or reply is None or isinstance(reply, bytes):
         return reply
     if isinstance(reply, bool):
@@ -136,9 +157,4 @@ def _eval_reply(reply: object) -> EvalReply | RedisFailure:
         return reply
     if isinstance(reply, str):
         return reply.encode()
-    array: Final = _array(reply)
-    if array is None:
-        return _decode_failure(reply)
-    items: Final = tuple(_eval_reply(item) for item in array)
-    failure: Final = next((item for item in items if isinstance(item, RedisFailure)), None)
-    return failure if failure is not None else tuple(item for item in items if not isinstance(item, RedisFailure))
+    return _decode_failure(reply)

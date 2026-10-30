@@ -154,6 +154,22 @@ async def test_eval_namespaces_keys_and_returns_nested_replies(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("decode_responses", (False, True))
+async def test_eval_preserves_empty_arrays_and_sibling_order(
+    server: fakeredis.FakeServer, decode_responses: bool
+) -> None:
+    raw = fakeredis.FakeAsyncRedis(server=server, decode_responses=decode_responses)
+    transport = fake_redis_transport(raw, failure_threshold=1)
+
+    assert await transport.eval('return {{}, {1, {"hello", {}}}, {}, 0}', (), ()) == (
+        (),
+        (1, (b"hello", ())),
+        (),
+        0,
+    )
+
+
+@pytest.mark.asyncio
 async def test_eval_survives_a_script_flush(server: fakeredis.FakeServer, raw: fakeredis.FakeAsyncRedis) -> None:
     transport = fake_redis_cache(server).transport()
 
