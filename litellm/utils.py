@@ -307,7 +307,7 @@ except (ImportError, AttributeError, TypeError):
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
-from collections.abc import AsyncIterator, Callable, Collection, Iterable, Iterator, Mapping, Sequence, Sized
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Iterable, Iterator, Mapping, Sequence, Sized
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 
 from typing_extensions import assert_never
@@ -1689,9 +1689,8 @@ async def _client_async_logging_helper(
         )
 
 
-_COMPLETION_RETRY_CALL_PAIRS: Final[Mapping[CallTypes, CallTypes]] = MappingProxyType(
+_DECISION_RETRY_CALL_PAIRS: Final[Mapping[CallTypes, CallTypes]] = MappingProxyType(
     {
-        CallTypes.completion: CallTypes.acompletion,
         CallTypes.decisions: CallTypes.adecisions,
         CallTypes.systemone: CallTypes.asystemone,
     }
@@ -1998,6 +1997,26 @@ def _is_litellm_router_call(kwargs: Mapping[str, object], *, is_async: bool) -> 
     return any(isinstance(bucket, Mapping) and "model_group" in bucket for bucket in metadata_buckets)
 
 
+def _sdk_retry_kwargs(
+    kwargs: Mapping[str, object], num_retries: int | None, error: Exception, *, is_async: bool
+) -> Mapping[str, object] | None:
+    if not num_retries or _is_litellm_router_call(kwargs, is_async=is_async):
+        return None
+    if isinstance(error, ImportError):
+        return None
+    if not is_async and not isinstance(error, openai.APIError):
+        return None
+    return MappingProxyType(
+        {
+            **kwargs,
+            "num_retries": num_retries,
+            "retry_strategy": "exponential_backoff_retry"
+            if is_async and isinstance(error, openai.RateLimitError)
+            else "constant_retry",
+        }
+    )
+
+
 def client(original_function):
     from litellm.litellm_core_utils.core_helpers import max_retries_per_request_hit
 
@@ -2227,7 +2246,10 @@ def client(original_function):
             # RETURN RESULT
             return result
         except Exception as e:
-            if call_type in _COMPLETION_RETRY_CALL_PAIRS:
+            completion_retry: Final = cast(  # cast-ok: legacy retry helper forwards arbitrary SDK arguments
+                "Callable[..., object]", litellm.completion_with_retries
+            )
+            if call_type == CallTypes.completion.value:
                 num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
                 if kwargs.get("retry_policy", None):
                     get_num_retries_from_retry_policy: Callable[..., int | None] = (
@@ -2252,16 +2274,9 @@ def client(original_function):
                         or isinstance(e, openai.APIConnectionError)
                     ):
                         kwargs["num_retries"] = num_retries
-                        return litellm.completion_with_retries(
-                            *args,
-                            original_function=original_function
-                            if call_type != CallTypes.completion.value
-                            else litellm.completion,
-                            **kwargs,
-                        )
+                        return completion_retry(*args, **kwargs)
                 elif (
-                    call_type == CallTypes.completion.value
-                    and isinstance(e, litellm.exceptions.ContextWindowExceededError)
+                    isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict
                     and model in context_window_fallback_dict
                     and not is_completion_litellm_router_call
@@ -2294,6 +2309,16 @@ def client(original_function):
                     ):
                         kwargs["num_retries"] = num_retries
                         return litellm.responses_with_retries(*args, **kwargs)
+            elif call_type in _DECISION_RETRY_CALL_PAIRS:
+                decision_request_kwargs: Final[dict[str, object]] = {**kwargs}  # mutable-ok: resets retry policy
+                decision_num_retries, decision_kwargs = _get_wrapper_num_retries(
+                    kwargs=decision_request_kwargs, exception=e
+                )
+                decision_retry_kwargs: Final = _sdk_retry_kwargs(
+                    decision_kwargs, decision_num_retries, e, is_async=False
+                )
+                if decision_retry_kwargs is not None:
+                    return completion_retry(*args, original_function=original_function, **decision_retry_kwargs)
             traceback_exception: Final = traceback.format_exc()
             end_time = datetime.datetime.now()
 
@@ -2431,11 +2456,21 @@ def client(original_function):
                     print_verbose(f"Error while checking max token limit: {e}")
 
             # MODEL CALL
-            call_kwargs: Final = (
+            model_call_kwargs: Final[dict[str, object]] = (  # mutable-ok: hooks require a dict
                 {**kwargs, "input": _caching_handler_response.embedding_uncached_input}
                 if _caching_handler_response is not None
                 and _caching_handler_response.embedding_uncached_input is not None
-                else kwargs
+                else {**kwargs}
+            )
+            call_kwargs: Final[dict[str, object]] = (  # mutable-ok: hooks require a dict
+                {**model_call_kwargs, "num_retries": 0, "max_retries": 0, "retry_policy": None}
+                if call_type == CallTypes.anthropic_messages.value
+                and (
+                    model_call_kwargs.get("num_retries") is not None
+                    or litellm.num_retries is not None
+                    or model_call_kwargs.get("retry_policy") is not None
+                )
+                else model_call_kwargs
             )
             try:
                 result = await original_function(*args, **call_kwargs)
@@ -2562,9 +2597,12 @@ def client(original_function):
                 except Exception as e:
                     raise e
 
+            async_completion_retry: Final = cast(  # cast-ok: legacy retry helper forwards arbitrary SDK arguments
+                "Callable[..., Awaitable[object]]", litellm.acompletion_with_retries
+            )
             retry_call_type: Final = _get_call_type_from_public_name(original_function.__name__)
             num_retries, kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)
-            if retry_call_type in _COMPLETION_RETRY_CALL_PAIRS.values():
+            if retry_call_type == CallTypes.acompletion.value:
                 context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
 
                 is_acompletion_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
@@ -2580,14 +2618,13 @@ def client(original_function):
                             kwargs["retry_strategy"] = "exponential_backoff_retry"
                         elif isinstance(e, openai.APIError):  # generic api error
                             kwargs["retry_strategy"] = "constant_retry"
-                        result = await litellm.acompletion_with_retries(*args, **kwargs)
+                        result = await async_completion_retry(*args, **kwargs)
                     except Exception:
                         pass
                     else:
                         return result
                 elif (
-                    retry_call_type == CallTypes.acompletion.value
-                    and isinstance(e, litellm.exceptions.ContextWindowExceededError)
+                    isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict
                     and model in context_window_fallback_dict
                     and not is_acompletion_litellm_router_call
@@ -2614,6 +2651,29 @@ def client(original_function):
                             kwargs["retry_strategy"] = "constant_retry"
                         result = await litellm.aresponses_with_retries(*args, **kwargs)
                     except Exception:
+                        pass
+                    else:
+                        return result
+
+            elif retry_call_type in _DECISION_RETRY_CALL_PAIRS.values():
+                decision_retry_kwargs: Final = _sdk_retry_kwargs(kwargs, num_retries, e, is_async=True)
+                if decision_retry_kwargs is not None:
+                    try:
+                        result = await async_completion_retry(  # rebind-ok: finally needs the retried stream for correlation cleanup
+                            *args, original_function=original_function, **decision_retry_kwargs
+                        )
+                    except Exception:  # noqa: BLE001, S110  # preserve the original SDK error and annotate its retry metadata below
+                        pass
+                    else:
+                        return result
+            elif retry_call_type == CallTypes.anthropic_messages.value:
+                messages_retry_kwargs: Final = _sdk_retry_kwargs(kwargs, num_retries, e, is_async=True)
+                if messages_retry_kwargs is not None:
+                    try:
+                        result = await async_completion_retry(  # rebind-ok: finally needs the retried stream for correlation cleanup
+                            *args, original_function=original_function, **messages_retry_kwargs
+                        )
+                    except Exception:  # noqa: BLE001, S110  # preserve the original SDK error and annotate its retry metadata below
                         pass
                     else:
                         return result

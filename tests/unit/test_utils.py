@@ -13,7 +13,7 @@ import queue
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import AsyncIterable, Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import partial
@@ -5789,6 +5789,133 @@ async def test_decisions_sdk_retries(
     bodies: Final = tuple(json.loads(request.content) for request, _ in route.calls)
     assert all(body == bodies[0] for body in bodies)
     assert "num_retries" not in bodies[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["complete", "stream"])
+@pytest.mark.parametrize(
+    "num_retries,global_retries,upstream_failures,expected_attempts,router_call",
+    [
+        pytest.param(2, None, 1, 2, False, id="recovers"),
+        pytest.param(2, None, 3, 3, False, id="exhausts"),
+        pytest.param(0, None, 1, 1, False, id="disabled"),
+        pytest.param(None, None, 1, 1, False, id="omitted"),
+        pytest.param(2, None, 1, 1, True, id="router-owns-retries"),
+        pytest.param(None, 2, 1, 2, False, id="global-default"),
+        pytest.param(0, 2, 1, 1, False, id="disabled-overrides-global"),
+    ],
+)
+async def test_messages_sdk_retries(
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
+    num_retries: int | None,
+    global_retries: int | None,
+    upstream_failures: int,
+    expected_attempts: int,
+    router_call: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "num_retries", global_retries)
+    retry_kwargs: Final = {} if num_retries is None else {"num_retries": num_retries}
+    body: Final = {
+        "id": "msg_retry",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": [{"type": "text", "text": "retry succeeded"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 4, "output_tokens": 2},
+    }
+    events: Final = (
+        {"type": "message_start", "message": {**body, "content": []}},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "retry succeeded"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 2}},
+        {"type": "message_stop"},
+    )
+    success: Final = (
+        httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events),
+        )
+        if stream
+        else httpx.Response(200, json=body)
+    )
+    responses: Final = tuple(
+        httpx.Response(
+            503, json={"type": "error", "error": {"type": "overloaded_error", "message": "temporary outage"}}
+        )
+        for _ in range(upstream_failures)
+    ) + (success,)
+    request: Final = partial(
+        litellm.anthropic.messages.acreate,
+        model="anthropic/claude-sonnet-5-5",
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hello"}],
+        api_base="https://messages-retry.local",
+        api_key="test-key",
+        max_retries=0,
+        stream=stream,
+        litellm_metadata={"model_group": "messages-retry"} if router_call else None,
+        **retry_kwargs,
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post("https://messages-retry.local/v1/messages").mock(side_effect=responses)
+        if upstream_failures < expected_attempts:
+            response: Final = await request()
+            if stream:
+                assert isinstance(response, AsyncIterable)
+                chunks: Final = [chunk async for chunk in response]
+                raw: Final = b"".join(chunk for chunk in chunks if isinstance(chunk, bytes))
+                assert b"retry succeeded" in raw
+                assert raw.count(b"event: message_start") == 1
+                assert b"event: message_stop" in raw
+            else:
+                assert isinstance(response, Mapping)
+                assert response["content"] == body["content"]
+        else:
+            with pytest.raises(litellm.InternalServerError, match="temporary outage"):
+                await request()
+
+    assert route.call_count == expected_attempts
+    bodies: Final = tuple(json.loads(request.content) for request, _ in route.calls)
+    assert all(body == bodies[0] for body in bodies)
+    assert "num_retries" not in bodies[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model,endpoint", [("mistral/mistral-small-latest", "chat/completions"), ("openai/gpt-5.6", "responses")]
+)
+@pytest.mark.parametrize("num_retries,global_retries,expected_attempts", [(2, None, 3), (None, 2, 3), (0, 2, 1)])
+async def test_messages_bridge_has_one_sdk_retry_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    endpoint: str,
+    num_retries: int | None,
+    global_retries: int | None,
+    expected_attempts: int,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "num_retries", global_retries)
+    retry_kwargs: Final = {} if num_retries is None else {"num_retries": num_retries}
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post(f"https://messages-bridge-retry.local/v1/{endpoint}").respond(
+            503, json={"error": {"message": "temporary outage", "type": "server_error"}}
+        )
+        with pytest.raises(litellm.ServiceUnavailableError, match="temporary outage"):
+            await litellm.anthropic.messages.acreate(
+                model=model,
+                messages=[{"role": "user", "content": "hello"}],
+                max_tokens=16,
+                api_base="https://messages-bridge-retry.local/v1",
+                api_key="test-key",
+                max_retries=0,
+                **retry_kwargs,
+            )
+    assert route.call_count == expected_attempts
 
 
 @pytest.mark.asyncio
