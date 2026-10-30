@@ -539,27 +539,29 @@ async def test_deployment_callback_on_success_counts_a_responses_websocket_turn(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("realtime_model", ["bedrock/amazon.nova-sonic-v1:0", "openai/gpt-realtime-2.1"])
 @pytest.mark.parametrize(("clean_sessions", "cooled_down"), [(10, False), (3, True)])
 async def test_realtime_cooldown_reads_the_failure_rate_of_the_sessions_a_deployment_served(
-    clean_sessions: int, cooled_down: bool
+    realtime_model: str, clean_sessions: int, cooled_down: bool
 ) -> None:
     import time
 
+    provider, _, provider_model = realtime_model.partition("/")
     router: Final = Router(
         model_list=[
             {
-                "model_name": "nova-sonic",
-                "litellm_params": {"model": "bedrock/amazon.nova-sonic-v1:0", "order": order},
+                "model_name": "realtime-voice",
+                "litellm_params": {"model": realtime_model, "order": order},
                 "model_info": {"id": deployment_id},
             }
-            for order, deployment_id in ((1, "sonic-a"), (2, "sonic-b"))
+            for order, deployment_id in ((1, "realtime-a"), (2, "realtime-b"))
         ],
         num_retries=0,
     )
     drop: Final = litellm.ServiceUnavailableError(
-        message="Bedrock realtime stream ended before the session closed",
-        llm_provider="bedrock",
-        model="amazon.nova-sonic-v1:0",
+        message="realtime provider stream ended before the session closed",
+        llm_provider=provider,
+        model=provider_model,
     )
 
     def realtime_session(failure: Exception | None):
@@ -567,7 +569,7 @@ async def test_realtime_cooldown_reads_the_failure_rate_of_the_sessions_a_deploy
             await router.deployment_callback_on_success(
                 kwargs={
                     "call_type": "_arealtime",
-                    "litellm_params": {"metadata": {"model_group": "nova-sonic"}, "model_info": kwargs["model_info"]},
+                    "litellm_params": {"metadata": {"model_group": "realtime-voice"}, "model_info": kwargs["model_info"]},
                     "standard_logging_object": create_standard_logging_payload(),
                 },
                 completion_response=None,
@@ -580,15 +582,15 @@ async def test_realtime_cooldown_reads_the_failure_rate_of_the_sessions_a_deploy
         return _arealtime
 
     for _ in range(clean_sessions):
-        await router._ageneric_api_call_with_fallbacks(model="nova-sonic", original_function=realtime_session(None))
+        await router._ageneric_api_call_with_fallbacks(model="realtime-voice", original_function=realtime_session(None))
 
     async def drop_session() -> bool:
         with pytest.raises(litellm.ServiceUnavailableError):
-            await router._ageneric_api_call_with_fallbacks(model="nova-sonic", original_function=realtime_session(drop))
+            await router._ageneric_api_call_with_fallbacks(model="realtime-voice", original_function=realtime_session(drop))
         return router.deployment_callback_on_failure(
             kwargs={
                 "exception": drop,
-                "litellm_params": {"metadata": {"model_group": "nova-sonic"}, "model_info": {"id": "sonic-a"}},
+                "litellm_params": {"metadata": {"model_group": "realtime-voice"}, "model_info": {"id": "realtime-a"}},
             },
             completion_response=None,
             start_time=time.time(),

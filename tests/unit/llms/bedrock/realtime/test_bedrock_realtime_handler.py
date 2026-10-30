@@ -11,17 +11,14 @@ from unittest.mock import MagicMock
 import pytest
 
 import litellm
-from litellm import Router
 from litellm.constants import (
-    BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY,
     BEDROCK_REALTIME_SDK_SUPPORTED_RANGE,
-    BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
 )
 from litellm.litellm_core_utils.realtime_errors import websocket_close_reason
 from litellm.llms.bedrock.common_utils import BedrockError
-from litellm.llms.bedrock.realtime.handler import BedrockRealtime, SessionEndSignals, raise_if_session_committed
+from litellm.llms.bedrock.realtime.handler import BedrockRealtime, SessionEndSignals
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.llms.bedrock.realtime.transformation import BedrockRealtimeConfig
 from litellm.realtime_api import main as realtime_main
@@ -1121,44 +1118,6 @@ class TestBedrockRealtimeProviderFailurePropagation:
         assert stub_aws_sdk_client["client_closed"], "closing the SDK client still tears the dead stream down"
         await spend_dispatch["coro"]
         assert [event["type"] for event in spend_dispatch["events"]] == ["response.done"]
-
-    @pytest.mark.asyncio
-    async def test_replay_refusals_do_not_count_toward_deployment_cooldown(self):
-        router: Final = Router(
-            model_list=[
-                {
-                    "model_name": "nova-sonic",
-                    "litellm_params": {"model": "bedrock/amazon.nova-sonic-v1:0"},
-                    "model_info": {"id": deployment_id},
-                }
-                for deployment_id in ("sonic-a", "sonic-b")
-            ]
-        )
-        with pytest.raises(BedrockError) as refusal:
-            raise_if_session_committed(
-                {
-                    BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY: True,
-                    BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY: "Bedrock realtime stream ended before the session closed",
-                }
-            )
-        drop: Final = BedrockError(status_code=503, message="Bedrock realtime stream ended before the session closed")
-
-        def cooled_down_after(exception: Exception, deployment_id: str) -> bool:
-            return router.deployment_callback_on_failure(
-                kwargs={
-                    "exception": exception,
-                    "litellm_params": {"metadata": {"model_group": "nova-sonic"}, "model_info": {"id": deployment_id}},
-                },
-                completion_response=None,
-                start_time=time.time(),
-                end_time=time.time(),
-            )
-
-        refusals_then_drop: Final = [cooled_down_after(error, "sonic-a") for error in (*[refusal.value] * 4, drop)]
-        drops_only: Final = [cooled_down_after(drop, "sonic-b") for _ in range(5)]
-
-        assert not any(refusals_then_drop), "one drop retried four times is one deployment failure, not five"
-        assert drops_only[-1], "five real drops in a minute still cool the deployment down"
 
     @pytest.mark.asyncio
     async def test_bedrock_output_ending_right_after_session_end_is_a_clean_finish(

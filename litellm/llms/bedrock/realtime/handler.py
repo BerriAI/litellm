@@ -192,18 +192,14 @@ def raise_if_session_committed(scope: Mapping[str, object] | None) -> None:
     """A fallback attempt on a websocket whose Bedrock stream already took input would silently start over."""
     if scope is None or not _is_session_committed(scope):
         return
-    from litellm.router_utils.cooldown_handlers import mark_deployment_selection_failure
-
     committed_failure: Final = scope.get(BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY)
-    refusal: Final = BedrockError(
+    raise BedrockError(
         status_code=400,
         message=(
             (f"{committed_failure}. " if committed_failure else "")
             + "Bedrock realtime session already committed to a provider stream; it cannot be replayed"
         ),
     )
-    mark_deployment_selection_failure(refusal)
-    raise refusal
 
 
 def _pending_opening_message(scope: Mapping[str, object]) -> str | None:
