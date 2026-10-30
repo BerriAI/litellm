@@ -659,6 +659,8 @@ async def test_completed_passthrough_cancellation_preserves_accounting(
     from unittest.mock import create_autospec
 
     import anyio
+    import fakeredis
+    from redis.asyncio.client import Pipeline
 
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy import proxy_server
@@ -667,20 +669,29 @@ async def test_completed_passthrough_cancellation_preserves_accounting(
     from litellm.proxy.spend_tracking.budget_reservation import release_unbound_budget_reservation
     from litellm.proxy.utils import ProxyLogging
     from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+    from tests._support.fake_redis import fake_redis_cache
 
-    class AllowanceCounter:
-        def __init__(self) -> None:
-            self.started = asyncio.Event()
-            self.release = asyncio.Event()
-            self.calls = 0
-            self.units = 0.0
+    allowance_started: Final = asyncio.Event()
+    allowance_release: Final = asyncio.Event()
+    executions: Final[list[int]] = []  # mutable-ok: counts pipeline flushes observed by the gated fake client
 
-        async def async_increment(self, key: str, value: float, ttl: int | None = None) -> float:
-            self.started.set()
-            await self.release.wait()
-            self.calls += 1
-            self.units += value
-            return self.units
+    class GatedClient(fakeredis.FakeAsyncRedis):
+        def pipeline(self, transaction: bool = True, shard_hint: str | None = None) -> "Pipeline[bytes]":
+            pipe: Final = super().pipeline(transaction=transaction, shard_hint=shard_hint)  # pyright: ignore[reportUnknownVariableType]  # fakeredis pipeline is untyped
+            native_execute: Final = pipe.execute  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # redis-py pipeline.execute reply is untyped
+
+            async def gated_execute(raise_on_error: bool = True) -> list[object]:
+                allowance_started.set()
+                await allowance_release.wait()
+                executions.append(1)
+                return await native_execute(raise_on_error=raise_on_error)  # pyright: ignore[reportUnknownVariableType]  # redis-py erases the reply type
+
+            monkeypatch.setattr(pipe, "execute", gated_execute)  # pyright: ignore[reportUnknownArgumentType]  # fakeredis pipeline is untyped
+            return pipe  # pyright: ignore[reportUnknownVariableType]  # fakeredis pipeline is untyped
+
+    server: Final = fakeredis.FakeServer()
+    allowance: Final = fake_redis_cache(server, client=GatedClient)  # pyright: ignore[reportUnknownArgumentType]  # fakeredis client class is partially untyped
+    verifier: Final = fakeredis.FakeAsyncRedis(server=server)
 
     now: Final = datetime(2026, 10, 20, tzinfo=timezone.utc)
     model: Final = "passthrough-cancellation-test"
@@ -714,7 +725,6 @@ async def test_completed_passthrough_cancellation_preserves_accounting(
     writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
     proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
     proxy_logging.db_spend_update_writer = writer
-    allowance: Final = AllowanceCounter()
     monkeypatch.setattr(proxy_logging.internal_usage_cache.dual_cache, "redis_cache", allowance)
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging)
     logging_obj: Final = LiteLLMLoggingObj(
@@ -771,7 +781,7 @@ async def test_completed_passthrough_cancellation_preserves_accounting(
     pending: Final = asyncio.create_task(dispatch())
     await entered.wait()
     if cancel_phase == "allocation":
-        await allowance.started.wait()
+        await allowance_started.wait()
     if cancel_mode == "scope":
         scope.cancel()
     elif cancel_mode != "none":
@@ -781,7 +791,7 @@ async def test_completed_passthrough_cancellation_preserves_accounting(
             pending.cancel()
     if cancel_phase == "lock":
         logging_obj.cost_finalization_lock.release()
-    allowance.release.set()
+    allowance_release.set()
     if cancel_mode in ("once", "twice"):
         with pytest.raises(asyncio.CancelledError):
             await pending
@@ -791,8 +801,9 @@ async def test_completed_passthrough_cancellation_preserves_accounting(
     assert reservation["callback_bound"] is True
     await release_unbound_budget_reservation(reservation)
     await GLOBAL_LOGGING_WORKER.flush()
-    assert allowance.calls == 1
-    assert allowance.units == 3
+    assert executions == [1]
+    (allocation_key,) = await verifier.keys("*")  # pyright: ignore[reportUnknownVariableType]  # fakeredis replies are untyped
+    assert await verifier.get(allocation_key) == b"3"  # pyright: ignore[reportUnknownArgumentType]  # fakeredis replies are untyped
     assert writer.update_database.await_count == 1
     recorded: Final = writer.update_database.call_args.kwargs
     assert recorded["response_cost"] == pytest.approx(0.48)
