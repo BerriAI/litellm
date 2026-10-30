@@ -3313,7 +3313,10 @@ async def websocket_passthrough_request(
                 lanes_in_flight: Final = (
                     () if upstream_frame_kind is None else _lanes_in_flight(upstream_frame_kind, websocket_messages)
                 )
-                log_turn(next(iter(lanes_in_flight), None), _every_frame)
+                *earlier_lanes, last_lane = lanes_in_flight or (None,)
+                for lane in earlier_lanes:
+                    log_turn(lane, _frames_of_lane(lane))
+                log_turn(last_lane, _every_frame)
 
             # Call the proxy logging success hook
             if proxy_logging_obj:

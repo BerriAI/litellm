@@ -137,7 +137,7 @@ async def _serve(
     user_api_key_dict: UserAPIKeyAuth,
     general_settings: Mapping[str, object],
 ) -> _Served:
-    served = _Served(relay=_FakeRelay(), frame_model_gate=_FakeFrameModelGate())
+    served: Final = _Served(relay=_FakeRelay(), frame_model_gate=_FakeFrameModelGate())
     await openai_websocket_proxy_route(
         websocket=websocket,
         endpoint=endpoint,
@@ -153,7 +153,7 @@ async def _serve(
 @pytest.mark.parametrize("prefix", ["openai", "openai_passthrough"])
 async def test_openai_websocket_forwards_query_and_keeps_provider_auth(prefix, monkeypatch):
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
-    websocket = _FakeWebSocket(f"/{prefix}/v1/realtime", "model=gpt-realtime-2.1")
+    websocket: Final = _FakeWebSocket(f"/{prefix}/v1/realtime", "model=gpt-realtime-2.1")
 
     with patch(GET_CREDENTIALS, return_value="sk-provider"):
         served = await _serve(websocket, "v1/realtime", UserAPIKeyAuth(), ENABLED)
@@ -178,10 +178,10 @@ async def test_openai_websocket_forwards_query_and_keeps_provider_auth(prefix, m
 async def test_openai_websocket_reports_its_route_without_the_proxy_root_path(monkeypatch):
     """Route allowlists and spend rows key on the route the proxy serves, which a root path prefix is not part of"""
     monkeypatch.setenv("SERVER_ROOT_PATH", "/litellm")
-    websocket = _FakeWebSocket("/litellm/openai/v1/responses", "")
+    websocket: Final = _FakeWebSocket("/litellm/openai/v1/responses", "")
 
     with patch(GET_CREDENTIALS, return_value="sk-provider"):
-        served = await _serve(websocket, "v1/responses", UserAPIKeyAuth(), ENABLED)
+        served: Final = await _serve(websocket, "v1/responses", UserAPIKeyAuth(), ENABLED)
 
     assert [call.endpoint for call in served.relay.calls] == ["/openai/v1/responses"]
 
@@ -263,7 +263,7 @@ async def test_openai_websocket_closes_cleanly_when_workload_identity_exchange_f
 
 @pytest.mark.asyncio
 async def test_openai_websocket_closes_cleanly_when_provider_credentials_missing():
-    websocket = _FakeWebSocket("/openai/v1/realtime", "model=gpt-realtime-2.1")
+    websocket: Final = _FakeWebSocket("/openai/v1/realtime", "model=gpt-realtime-2.1")
 
     with patch(GET_CREDENTIALS, return_value=None):
         served = await _serve(websocket, "v1/realtime", UserAPIKeyAuth(), ENABLED)
@@ -279,7 +279,7 @@ async def test_openai_websocket_closes_cleanly_when_provider_credentials_missing
 @pytest.mark.parametrize("prefix", ["openai", "openai_passthrough"])
 @pytest.mark.parametrize("general_settings", DISABLED_SETTINGS)
 async def test_openai_websocket_refused_unless_explicitly_enabled(prefix, general_settings):
-    websocket = _FakeWebSocket(f"/{prefix}/v1/realtime", "model=gpt-realtime-2.1")
+    websocket: Final = _FakeWebSocket(f"/{prefix}/v1/realtime", "model=gpt-realtime-2.1")
 
     served = await _serve(websocket, "v1/realtime", UserAPIKeyAuth(), general_settings)
 
@@ -320,11 +320,11 @@ async def test_openai_websocket_refusal_echoes_requested_subprotocol():
     [["gpt-5.4-mini"], ["gpt-realtime-2.1", "gpt-5.4"], []],
 )
 async def test_openai_websocket_connects_model_restricted_keys(key_models):
-    websocket = _FakeWebSocket("/openai/v1/responses", "")
-    user_api_key_dict = UserAPIKeyAuth(models=key_models, token="hashed-fake", user_id="user-fake")
+    websocket: Final = _FakeWebSocket("/openai/v1/responses", "")
+    user_api_key_dict: Final = UserAPIKeyAuth(models=key_models, token="hashed-fake", user_id="user-fake")
 
     with patch(GET_CREDENTIALS, return_value="sk-provider"):
-        served = await _serve(websocket, "v1/responses", user_api_key_dict, ENABLED)
+        served: Final = await _serve(websocket, "v1/responses", user_api_key_dict, ENABLED)
 
     assert len(served.relay.calls) == 1
     assert served.relay.calls[0].client_frame_model_gate is served.frame_model_gate
