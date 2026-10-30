@@ -67,9 +67,11 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
 from litellm.proxy.utils import ProxyLogging
 from litellm.types import utils as types_utils
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import CallTypes
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
@@ -8605,6 +8607,7 @@ async def _run_passthrough_failure(
     user_api_key_dict: UserAPIKeyAuth | None = None,
     dispatched_endpoint: Callable[..., object] | None = None,
     guardrail: CustomGuardrail | None = None,
+    body: bytes = b'{"contents": "not a list"}',
 ) -> _RecordedFailure:
     recorder: Final = _FailureHookRecorder()
     with (
@@ -8632,7 +8635,7 @@ async def _run_passthrough_failure(
             "path": proxy_url.path,
             **({"endpoint": dispatched_endpoint} if dispatched_endpoint is not None else {}),
         }
-        mock_request.body = AsyncMock(return_value=b'{"contents": "not a list"}')
+        mock_request.body = AsyncMock(return_value=body)
         mock_request.headers = Headers({"content-type": "application/json"})
         mock_request.query_params = QueryParams({})
         try:
@@ -8788,29 +8791,32 @@ class _ModifyResponseOnPreCallGuardrail(CustomGuardrail):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "target, custom_llm_provider, expected_model, expected_provider",
+    "target, custom_llm_provider, body, expected_model, expected_provider",
     [
-        (_GEMINI_FLASH_TARGET, "gemini", "gemini-3.8-flash", "gemini"),
-        (_VERTEX_FLASH_TARGET, None, "gemini-3.8-flash", "vertex_ai"),
+        (_GEMINI_FLASH_TARGET, "gemini", b'{"contents": "not a list"}', "gemini-3.8-flash", "gemini"),
+        (_VERTEX_FLASH_TARGET, None, b'{"contents": "not a list"}', "gemini-3.8-flash", "vertex_ai"),
+        (_VERTEX_FLASH_TARGET, None, b'{"custom_llm_provider": "gemini"}', "gemini-3.8-flash", "vertex_ai"),
     ],
 )
 async def test_passthrough_guardrail_block_logs_model_from_url(
-    target: str, custom_llm_provider: str | None, expected_model: str, expected_provider: str
+    target: str, custom_llm_provider: str | None, body: bytes, expected_model: str, expected_provider: str
 ):
     guardrail: Final = _ModifyResponseOnPreCallGuardrail(
         guardrail_name="block-policy", event_hook=GuardrailEventHooks.pre_call, default_on=True
     )
     failure: Final = await _run_passthrough_failure(
-        target, custom_llm_provider, _upstream_400(target), guardrail=guardrail
+        target, custom_llm_provider, _upstream_400(target), guardrail=guardrail, body=body
     )
     assert isinstance(failure.original_exception, ModifyResponseException)
     assert failure.request_data["model"] == expected_model
     assert failure.request_data["custom_llm_provider"] == expected_provider
     assert PrometheusLogger._extract_api_provider_from_request_data(failure.request_data) == expected_provider
+    assert get_spend_logs_id(CallTypes.pass_through.value, {}, failure.request_data) is not None
 
 
 @pytest.mark.asyncio
-async def test_passthrough_guardrail_block_on_a_user_defined_route_gets_no_url_attribution():
+@pytest.mark.parametrize("body", [b'{"contents": "not a list"}', b'{"custom_llm_provider": "vertex_ai"}'])
+async def test_passthrough_guardrail_block_on_a_user_defined_route_gets_no_url_attribution(body: bytes):
     guardrail: Final = _ModifyResponseOnPreCallGuardrail(
         guardrail_name="block-policy", event_hook=GuardrailEventHooks.pre_call, default_on=True
     )
@@ -8820,6 +8826,7 @@ async def test_passthrough_guardrail_block_on_a_user_defined_route_gets_no_url_a
         _upstream_400(_GEMINI_FLASH_TARGET),
         dispatched_endpoint=_marked_pass_through_endpoint(),
         guardrail=guardrail,
+        body=body,
     )
     assert isinstance(failure.original_exception, ModifyResponseException)
     assert failure.request_data["model"] == ""
@@ -8899,7 +8906,8 @@ async def _run_websocket_connect_failure(
         ({"contents": []}, _GEMINI_FLASH_TARGET, "gemini", "gemini-3.8-flash", "gemini"),
         ({"contents": []}, _VERTEX_FLASH_TARGET, None, "gemini-3.8-flash", "vertex_ai"),
         ({"contents": []}, _VERTEX_FLASH_TARGET, "anthropic", "gemini-3.8-flash", "anthropic"),
-        ({"custom_llm_provider": "from-body"}, _VERTEX_FLASH_TARGET, None, "gemini-3.8-flash", "from-body"),
+        ({"custom_llm_provider": "from-body"}, _VERTEX_FLASH_TARGET, None, "gemini-3.8-flash", "vertex_ai"),
+        ({"custom_llm_provider": "gemini"}, _VERTEX_FLASH_TARGET, "anthropic", "gemini-3.8-flash", "anthropic"),
         ({"contents": []}, _GEMINI_FLASH_TARGET, None, "gemini-3.8-flash", "gemini"),
         (
             {},

@@ -32,6 +32,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm import get_llm_provider
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
     AWS_ERROR_TYPE_HEADER,
@@ -3986,6 +3987,7 @@ async def vertex_ai_live_websocket_passthrough(
                     "model": model or "",
                     "custom_llm_provider": litellm.LlmProviders.VERTEX_AI.value,
                     "call_type": CallTypes.pass_through.value,
+                    "litellm_call_id": str(uuid.uuid4()),
                 },
             )
         if websocket.client_state != WebSocketState.DISCONNECTED:

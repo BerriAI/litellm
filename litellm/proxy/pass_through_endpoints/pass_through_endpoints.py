@@ -933,7 +933,8 @@ def _build_passthrough_failure_request_payload(
     if "model" not in request_payload:
         request_payload["model"] = _passthrough_google_model(url_route, google_provider) or ""
     resolved_provider: Final = custom_llm_provider or google_provider
-    if "custom_llm_provider" not in request_payload and resolved_provider:
+    request_payload.pop("custom_llm_provider", None)
+    if resolved_provider:
         request_payload["custom_llm_provider"] = resolved_provider
     if upstream_usage is not None:
         request_payload["response_cost"] = upstream_usage.response_cost or 0.0
@@ -2014,7 +2015,7 @@ async def pass_through_request(
                 original_exception=e,
                 request_data=_build_passthrough_failure_request_payload(
                     parsed_body=e.request_data,
-                    kwargs={"call_type": CallTypes.pass_through.value},
+                    kwargs={"call_type": CallTypes.pass_through.value, "litellm_call_id": litellm_call_id},
                     logging_obj=None,
                     custom_llm_provider=custom_llm_provider,
                     url=url,

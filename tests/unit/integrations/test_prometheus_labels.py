@@ -262,7 +262,7 @@ _PASS_THROUGH_CALL_TYPE: Final = "pass_through_endpoint"
     ],
 )
 def test_extract_api_provider_reads_the_request_declared_provider_only_on_pass_through_failures(
-    request_data: dict, expected_provider: str
+    request_data: dict[str, object], expected_provider: str
 ):
     from litellm.integrations.prometheus import PrometheusLogger
 
