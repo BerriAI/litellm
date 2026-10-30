@@ -9729,21 +9729,24 @@ class TestOpenSearchProxyRoute:
             pytest.param("_msearch", b'{}\n{"query":{"match_all":{}}}\n{"preference":"a"}\n{}\n', id="msearch"),
         ],
     )
+    @pytest.mark.parametrize("content_type", [NDJSON_TYPE, "application/json"])
     def test_an_ndjson_body_without_index_references_is_sent_byte_for_byte(
-        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, api: str, body: bytes
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, api: str, body: bytes, content_type: str
     ) -> None:
-        _act_as(monkeypatch, _opensearch_caller("read", "write"))
+        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", SHARED_MASTER_KEY)
         with respx.mock(assert_all_called=True) as upstream:
             route = upstream.post(f"{DOCS_UPSTREAM}/{api}").mock(
                 return_value=httpx.Response(200, json={"errors": False, "items": []})
             )
             response = opensearch_client.post(
-                f"/opensearch/docs/{api}", content=body, headers={"Content-Type": NDJSON_TYPE}
+                f"/opensearch/docs/{api}",
+                content=body,
+                headers={"Content-Type": content_type, "Authorization": f"Bearer {SHARED_MASTER_KEY}"},
             )
 
         assert response.status_code == 200
         sent: Final = route.calls.last.request
-        assert (sent.content, sent.headers["content-type"]) == (body, NDJSON_TYPE)
+        assert (sent.content, sent.headers["content-type"]) == (body, content_type)
         assert _verified_sigv4_scope(sent) == ("aoss", "us-east-1")
 
     @pytest.mark.parametrize(

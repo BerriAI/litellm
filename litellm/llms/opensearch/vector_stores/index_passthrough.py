@@ -87,6 +87,15 @@ INDEX_OPERATIONS: Final = (
 )
 
 
+_NDJSON_APIS: Final = frozenset(
+    operation.api for operation in INDEX_OPERATIONS if operation.body in ("bulk", "msearch")
+)
+
+
+def carries_ndjson_body(route: str, media_type: str) -> bool:
+    return media_type == NDJSON_CONTENT_TYPE or route.rpartition("/")[2] in _NDJSON_APIS
+
+
 def _endpoint_patterns(permission: IndexPermission) -> Iterator[tuple[IndexHttpMethod, str]]:
     for operation in INDEX_OPERATIONS:
         if operation.permission == permission:

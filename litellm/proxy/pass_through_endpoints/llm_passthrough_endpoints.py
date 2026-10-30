@@ -1015,8 +1015,8 @@ async def opensearch_proxy_route(  # noqa: ANN201  # returns create_pass_through
     `write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.
     """
     from litellm.llms.opensearch.vector_stores.index_passthrough import (
-        NDJSON_CONTENT_TYPE,
         IndexRefusal,
+        carries_ndjson_body,
         index_operation,
         parse_index_path,
         prepare_index_request,
@@ -1060,7 +1060,7 @@ async def opensearch_proxy_route(  # noqa: ANN201  # returns create_pass_through
     )
     setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, prepared.body)
     setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, {})
-    if prepared.media_type == NDJSON_CONTENT_TYPE:
+    if carries_ndjson_body(endpoint, prepared.media_type):
         safe_set_request_parsed_body(request, {})
     return await endpoint_func(request, fastapi_response, user_api_key_dict)
 

@@ -143,7 +143,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_query_params,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_set_request_parsed_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    is_opaque_audio_pass_through_request,
+    is_opaque_pass_through_request,
     populate_request_with_path_params,
     read_raw_json_body,
     read_request_body,
@@ -2045,7 +2045,7 @@ async def _read_request_body_deferring_parse_failure(
     must run (resolving identity onto the request's trace) before the 400 goes
     out; the caller re-raises the returned exception once identity is seeded.
     """
-    if is_opaque_audio_pass_through_request(
+    if is_opaque_pass_through_request(
         route=get_request_route(request=request),
         content_type=safe_get_request_headers(request=request).get("content-type", ""),
     ):
