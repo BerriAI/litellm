@@ -43,7 +43,7 @@ _FOLLOWUP_INTERNAL_PARAMS: Final = frozenset(
 )
 
 
-def _gate_overridden(callback: CustomLogger) -> bool:
+def runs_in_chat_completion_agentic_loop(callback: CustomLogger) -> bool:
     base: Final = CustomLogger.async_should_run_agentic_loop
     func: Final = type(callback).async_should_run_agentic_loop
     return getattr(func, "__func__", func) is not getattr(base, "__func__", base)
@@ -267,7 +267,7 @@ async def maybe_run_chat_completion_agentic_loop(
         if not isinstance(callback, CustomLogger):
             continue
 
-        if not _gate_overridden(callback):
+        if not runs_in_chat_completion_agentic_loop(callback):
             continue
 
         hook_kwargs = {

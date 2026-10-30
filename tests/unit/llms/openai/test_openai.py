@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 import litellm
 from litellm import create_thread, get_thread
 from litellm.caching.caching import Cache, LiteLLMCacheType
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.openai.openai import (
     AssistantEventHandler,
     AsyncAssistantEventHandler,
@@ -2320,3 +2321,80 @@ def test_openai_config_hoists_a_later_developer_message_only_for_a_model_off_ope
         model_info=None,
     )
     assert [message["role"] for message in messages] == expected_roles
+
+
+class _ChatCompletionOnlyAgenticLoop(CustomLogger):
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict,
+    ) -> tuple[bool, dict]:
+        return isinstance(response, ModelResponse) and response.choices[0].finish_reason == "tool_calls", {}
+
+    async def async_run_chat_completion_agentic_loop(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        optional_params: dict,
+        logging_obj: object,
+        stream: bool,
+        kwargs: dict,
+    ) -> ModelResponse:
+        return ModelResponse(
+            choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "order shipped"}}]
+        )
+
+
+@pytest.mark.asyncio
+async def test_openai_runs_a_callback_that_only_implements_the_chat_completion_agentic_loop(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [_ChatCompletionOnlyAgenticLoop()])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post("https://openai-compatible.example/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-lookup",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.6",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_lookup",
+                                    "type": "function",
+                                    "function": {"name": "lookup_order", "arguments": '{"order_id": "42"}'},
+                                }
+                            ],
+                        },
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "Where is order 42?"}],
+        tools=[{"type": "function", "function": {"name": "lookup_order", "parameters": {"type": "object"}}}],
+        api_key="sk-test",
+        api_base="https://openai-compatible.example/v1",
+    )
+
+    assert response.choices[0].message.content == "order shipped"

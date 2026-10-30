@@ -29,6 +29,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.exceptions import UnsupportedParamsError
 from litellm.files.types import FileContentStreamingResult
+from litellm.litellm_core_utils.chat_completion_agentic_loop import runs_in_chat_completion_agentic_loop
 from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
@@ -678,7 +679,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
         for callback in callbacks:
             try:
-                if isinstance(callback, CustomLogger):
+                if isinstance(callback, CustomLogger) and not runs_in_chat_completion_agentic_loop(callback):
                     # Check if the callback has the chat completion agentic loop methods
                     if not hasattr(callback, "async_should_run_chat_completion_agentic_loop"):
                         continue
