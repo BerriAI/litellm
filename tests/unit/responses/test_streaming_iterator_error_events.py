@@ -44,6 +44,8 @@ from litellm.responses.streaming_iterator import (
     ResponsesWebSocketStreaming,
     SyncResponsesAPIStreamingIterator,
     _status_code_for_error_fields,
+    aopen_stream_events,
+    open_stream_events,
 )
 from litellm.utils import ProviderConfigManager
 from litellm.types.utils import StandardLoggingPayload
@@ -73,6 +75,30 @@ def _make_iterator() -> BaseResponsesAPIStreamingIterator:
 def _make_error_chunk(error_type: str, code: str, message: str = "err") -> ErrorEvent:
     error_obj = ErrorEventError(type=error_type, code=code, message=message)
     return ErrorEvent(type=ResponsesAPIStreamEvents.ERROR, sequence_number=0, error=error_obj)
+
+
+@pytest.mark.asyncio
+async def test_open_stream_event_helpers_replay_lifecycle_events_in_order() -> None:
+    stream_content: Final = (
+        b'data: {"type":"response.created"}\n\n'
+        b'data: {"type":"response.in_progress"}\n\n'
+        b'data: {"type":"response.output_text.delta","delta":"hello"}\n\n'
+        b'data: {"type":"response.completed"}\n\n'
+    )
+    expected_data: Final = (
+        '{"type":"response.created"}',
+        '{"type":"response.in_progress"}',
+        '{"type":"response.output_text.delta","delta":"hello"}',
+        '{"type":"response.completed"}',
+    )
+    sync_response: Final = httpx.Response(200, content=stream_content)
+    sync_events: Final = list(open_stream_events(sync_response, checks_format_rejection=True))
+    async_response: Final = httpx.Response(200, content=stream_content)
+    async_events: Final = await aopen_stream_events(async_response, checks_format_rejection=True)
+
+    assert tuple(event.data for event in sync_events) == expected_data
+    async_data: Final = tuple([event.data async for event in async_events])
+    assert async_data == expected_data
 
 
 @pytest.mark.parametrize("provider", ("openai", "azure", "bedrock"))
