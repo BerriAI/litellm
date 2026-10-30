@@ -229,3 +229,21 @@ class TestInteractionByIdRequests:
 
         assert url == f"{GLOBAL_BASE}/abc123:cancel"
         assert request_body == {}
+
+
+class TestCreateRequest:
+    def test_resume_sends_continuation_token_to_vertex(self, config, litellm_params):
+        request_body = config.transform_request(
+            model="gemini-4-argon",
+            agent=None,
+            input=None,
+            optional_params={"previous_interaction_id": "interaction-hop-1", "continuation_token": "dG9rLTE="},
+            litellm_params=litellm_params,
+            headers={},
+        )
+
+        assert request_body == {
+            "model": "gemini-4-argon",
+            "previous_interaction_id": "interaction-hop-1",
+            "continuation_token": "dG9rLTE=",
+        }

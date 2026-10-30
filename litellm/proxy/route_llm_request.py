@@ -301,6 +301,12 @@ class MissingBodyParam:
     model_deployments_loaded: bool
 
 
+def _required_present_body_params(route_type: str, data: Mapping[str, object]) -> tuple[str, ...]:
+    if route_type == "acreate_interaction" and data.get("continuation_token") is not None:
+        return ()
+    return REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE.get(route_type, ())
+
+
 def _find_missing_required_body_param(
     route_type: str,
     data: Mapping[str, object],
@@ -316,7 +322,7 @@ def _find_missing_required_body_param(
     if missing_merge_base_param is not None:
         return MissingBodyParam(name=missing_merge_base_param, model_deployments_loaded=True)
     missing_present_params: Final = tuple(
-        param for param in REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE.get(route_type, ()) if param not in data
+        param for param in _required_present_body_params(route_type, data) if param not in data
     )
     if not missing_present_params:
         return None

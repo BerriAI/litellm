@@ -10,13 +10,15 @@ billing: it schedules a poll task that fetches the interaction until it
 reaches a terminal status and logs the final usage as a single success event
 attributed to the original request.
 
-``requires_action`` is terminal for the interaction it names. The API has no
-operation that resumes one: a caller answers a tool request by creating a new
-interaction whose ``previous_interaction_id`` points at it, and that new
-interaction bills itself. The paused interaction keeps the tokens it already
-spent producing the tool request, so it is billed and settled where it stops
-rather than polled until the timeout, which would both lose that usage and
-hold its budget reservation open for the whole timeout window.
+``requires_action`` and ``requires_continuation`` are terminal for the
+interaction they name. The API has no operation that resumes one: a caller
+answers a tool request, or continues a long decode, by creating a new
+interaction that points at it (``previous_interaction_id``, plus the
+``continuation_token`` for a long decode), and that new interaction bills
+itself. The paused interaction keeps the tokens it already spent, so it is
+billed and settled where it stops rather than polled until the timeout, which
+would both lose that usage and hold its budget reservation open for the whole
+timeout window.
 
 Deleting an interaction makes every subsequent poll fail, which would let a
 caller retrieve the completed output themselves and then delete it before the
@@ -71,12 +73,12 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _TERMINAL_STATUSES: Final = frozenset(
-    {"completed", "failed", "cancelled", "incomplete", "budget_exceeded", "requires_action"}
+    {"completed", "failed", "cancelled", "incomplete", "budget_exceeded", "requires_action", "requires_continuation"}
 )
 
 _POLLABLE_STATUSES: Final = frozenset({"in_progress", "queued"})
 
-_STATUSES_THAT_PRODUCED_OUTPUT: Final = frozenset({"completed", "requires_action"})
+_STATUSES_THAT_PRODUCED_OUTPUT: Final = frozenset({"completed", "requires_action", "requires_continuation"})
 
 SettlementOutcome: TypeAlias = Literal["billed", "released", "unsettled"]
 
@@ -632,8 +634,8 @@ def missing_usage_is_expected(response: InteractionsAPIResponse) -> bool:
     stopped at ``failed``, ``cancelled``, ``incomplete`` or ``budget_exceeded``,
     has nothing to charge for and should not raise a cost-tracking alarm.
 
-    ``completed`` and ``requires_action`` both mean the model produced output,
-    so a usage block is always expected with them. If one arrives without it
+    ``completed``, ``requires_action`` and ``requires_continuation`` all mean
+    the model produced output, so a usage block is always expected with them. If one arrives without it
     the charge for real work has been lost, which is precisely what the
     proxy's cost-tracking alert exists to surface.
     """

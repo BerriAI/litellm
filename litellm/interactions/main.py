@@ -103,6 +103,7 @@ async def acreate(
     custom_llm_provider: str | None = None,
     *,
     agent_config: Mapping[str, object] | None = None,
+    continuation_token: str | None = None,
     **kwargs,
 ) -> InteractionsAPIResponse | AsyncIterator[InteractionsAPIStreamingResponse]:
     """
@@ -129,6 +130,7 @@ async def acreate(
         response_format: JSON schema for response format
         response_mime_type: MIME type of the response
         previous_interaction_id: ID of previous interaction for continuation
+        continuation_token: Token from a ``requires_continuation`` interaction, sent back unchanged to resume its decode
         extra_headers: Additional headers
         extra_body: Additional body parameters
         timeout: Request timeout
@@ -164,6 +166,7 @@ async def acreate(
             response_format=response_format,
             response_mime_type=response_mime_type,
             previous_interaction_id=previous_interaction_id,
+            continuation_token=continuation_token,
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout,
@@ -232,6 +235,7 @@ def create(
     custom_llm_provider: str | None = None,
     *,
     agent_config: Mapping[str, object] | None = None,
+    continuation_token: str | None = None,
     **kwargs,
 ) -> (
     InteractionsAPIResponse
@@ -262,6 +266,7 @@ def create(
         response_format: JSON schema for response format
         response_mime_type: MIME type of the response
         previous_interaction_id: ID of previous interaction for continuation
+        continuation_token: Token from a ``requires_continuation`` interaction, sent back unchanged to resume its decode
         extra_headers: Additional headers
         extra_body: Additional body parameters
         timeout: Request timeout
@@ -308,11 +313,13 @@ def create(
         # Check if this is a bridge provider (litellm_responses) - similar to responses API
         # Either provider is explicitly "litellm_responses" or no config found (bridge to responses)
         if custom_llm_provider == "litellm_responses" or interactions_api_config is None:
-            if optional_params.get("agent_config") is not None and not drops_unsupported_params(
-                kwargs.get("drop_params")
-            ):
+            unsupported_bridge_param: Final = next(
+                (param for param in ("agent_config", "continuation_token") if optional_params.get(param) is not None),
+                None,
+            )
+            if unsupported_bridge_param is not None and not drops_unsupported_params(kwargs.get("drop_params")):
                 raise litellm.UnsupportedParamsError(
-                    message=f"'agent_config' is not supported for {custom_llm_provider} interactions. "
+                    message=f"'{unsupported_bridge_param}' is not supported for {custom_llm_provider} interactions. "
                     "Set drop_params to drop it.",
                     llm_provider=custom_llm_provider,
                     model=model,

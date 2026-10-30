@@ -152,6 +152,25 @@ def test_interaction_forwards_native_body_to_gemini(gateway: Gateway, prefix: st
 
 
 @pytest.mark.parametrize("prefix", ["/v1beta/interactions", "/interactions"])
+def test_interaction_resumes_a_long_decode_with_its_continuation_token(gateway: Gateway, prefix: str) -> None:
+    resume: Final = {"previous_interaction_id": "interaction-prev-123", "continuation_token": "dG9rLTE="}
+    reply: Final = {**_INTERACTION_REPLY, "status": "requires_continuation", "continuation_token": "dG9rLTI="}
+
+    def respond(request: Request) -> Reply:
+        assert json.loads(request.body) == {"model": "gemini-2.5-flash", **resume}
+        return Reply(body=json.dumps(reply).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_GEMINI_MODEL, api_base=wire.url, api_key=_GEMINI_DEPLOYMENT_KEY)
+        key: Final = scenario.key(models=[model])
+        response: Final = gateway.request("POST", prefix, {"model": model, **resume}, key=key)
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "requires_continuation", response.text
+        assert response.json()["continuation_token"] == "dG9rLTI=", response.text
+        assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions")], response.text
+
+
+@pytest.mark.parametrize("prefix", ["/v1beta/interactions", "/interactions"])
 def test_interaction_authenticates_google_key_header(gateway: Gateway, prefix: str) -> None:
     def respond(request: Request) -> Reply:
         assert request.method == "POST"

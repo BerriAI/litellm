@@ -1399,7 +1399,9 @@ async def test_route_request_applies_override_fallbacks_when_request_carries_cre
 @pytest.mark.parametrize(
     "router_only_setting",
     [
-        pytest.param({"model_group_retry_policy": {"gpt-4": {"TimeoutErrorRetries": 1}}}, id="model-group-retry-policy"),
+        pytest.param(
+            {"model_group_retry_policy": {"gpt-4": {"TimeoutErrorRetries": 1}}}, id="model-group-retry-policy"
+        ),
         pytest.param({"context_window_fallbacks": [{"gpt-4": ["gpt-3.5-turbo"]}]}, id="context-window-fallbacks"),
         pytest.param({"content_policy_fallbacks": [{"gpt-4": ["gpt-3.5-turbo"]}]}, id="content-policy-fallbacks"),
     ],
@@ -1819,6 +1821,7 @@ def test_required_present_body_param_ignores_non_mapping_router_defaults(llm_rou
         ("acreate_interaction", {"input": "hi"}, "model"),
         ("acreate_interaction", {"model": None, "agent": None, "input": "hi"}, "model"),
         ("acreate_interaction", {"model": "gemini-3-pro-preview"}, "input"),
+        ("acreate_interaction", {"model": "gemini-4-argon", "continuation_token": None}, "input"),
     ],
 )
 def test_raise_if_required_body_param_missing_names_each_missing_param(route_type, data, param):
@@ -1852,6 +1855,14 @@ def test_raise_if_required_body_param_missing_names_each_missing_param(route_typ
         ("acreate_eval", {"data_source_config": {"type": "custom"}, "testing_criteria": []}),
         ("acreate_interaction", {"model": "gemini-3-pro-preview", "input": "hi"}),
         ("acreate_interaction", {"agent": "deep-research", "input": "hi"}),
+        (
+            "acreate_interaction",
+            {
+                "model": "gemini-4-argon",
+                "previous_interaction_id": "interaction-hop-1",
+                "continuation_token": "dG9rLTE=",
+            },
+        ),
         ("acreate_agent", {"id": "sentinel"}),
         ("acreate_agent", {"name": "sentinel"}),
         ("aimage_generation", {"model": "gpt-image-1", "prompt": "a cat"}),
@@ -2605,7 +2616,9 @@ async def test_a_user_config_adaptive_request_answers_with_the_model_it_picked()
                 },
                 {
                     **_mock_deployment("smart"),
-                    "model_info": {"adaptive_router_preferences": {"quality_tier": 3, "strengths": ["code_generation"]}},
+                    "model_info": {
+                        "adaptive_router_preferences": {"quality_tier": 3, "strengths": ["code_generation"]}
+                    },
                 },
             ]
         },

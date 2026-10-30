@@ -347,33 +347,59 @@ class TestGoogleInteractionsCreate:
 
         assert json.loads(route.calls.last.request.content) == {**expected_target, "input": "Say hi in one word."}
 
+    @pytest.mark.parametrize(
+        ("param", "value"),
+        [
+            pytest.param("agent_config", {"type": "antigravity", "model": "gemini-3.8-flash"}, id="agent-config"),
+            pytest.param("continuation_token", "dG9rLTE=", id="continuation-token"),
+        ],
+    )
     @pytest.mark.usefixtures("fake_provider_credentials")
-    def test_create_rejects_agent_config_a_bridged_provider_cannot_take(self, respx_mock: MockRouter) -> None:
+    def test_create_rejects_gemini_only_params_a_bridged_provider_cannot_take(
+        self, respx_mock: MockRouter, param: str, value: object
+    ) -> None:
         route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
             return_value=httpx.Response(200, json=_openai_response_body("resp-agent-config", "Hi"))
         )
 
-        with pytest.raises(litellm.UnsupportedParamsError, match="'agent_config' is not supported for openai") as e:
+        with pytest.raises(litellm.UnsupportedParamsError, match=f"'{param}' is not supported for openai") as e:
             interactions.create(
                 model="gpt-5.6",
-                agent_config={"type": "antigravity", "model": "gemini-3.8-flash"},
                 input="Say hi in one word.",
                 api_key="sk-offline",
+                **{param: value},
             )
 
         assert e.value.status_code == 400
         assert not route.called
 
     @pytest.mark.parametrize(
-        "drop_kwargs",
+        ("param", "value", "drop_kwargs"),
         [
-            pytest.param({"drop_params": True}, id="drop-params"),
-            pytest.param({"additional_drop_params": ["agent_config"]}, id="additional-drop-params"),
+            pytest.param(
+                "agent_config",
+                {"type": "antigravity", "model": "gemini-3.8-flash"},
+                {"drop_params": True},
+                id="agent-config-drop-params",
+            ),
+            pytest.param(
+                "agent_config",
+                {"type": "antigravity", "model": "gemini-3.8-flash"},
+                {"additional_drop_params": ["agent_config"]},
+                id="agent-config-additional-drop-params",
+            ),
+            pytest.param("continuation_token", "dG9rLTE=", {"drop_params": True}, id="continuation-token-drop-params"),
+            pytest.param(
+                "continuation_token",
+                "dG9rLTE=",
+                {"additional_drop_params": ["continuation_token"]},
+                id="continuation-token-additional-drop-params",
+            ),
         ],
     )
     @pytest.mark.usefixtures("fake_provider_credentials")
-    def test_create_with_drop_params_drops_agent_config_a_bridged_provider_cannot_take(
-        self, respx_mock: MockRouter, drop_kwargs: Mapping[str, object]
+    def test_create_with_drop_params_drops_gemini_only_params_a_bridged_provider_cannot_take(
+        self, respx_mock: MockRouter, param: str, value: object, drop_kwargs: Mapping[str, object]
     ) -> None:
         route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
             return_value=httpx.Response(200, json=_openai_response_body("resp-agent-config", "Hi"))
@@ -381,9 +407,9 @@ class TestGoogleInteractionsCreate:
 
         interactions.create(
             model="gpt-5.6",
-            agent_config={"type": "antigravity", "model": "gemini-3.8-flash"},
             input="Say hi in one word.",
             api_key="sk-offline",
+            **{param: value},
             **drop_kwargs,
         )
 
@@ -559,29 +585,51 @@ class TestInteractionsAcreateOffline:
 
     @pytest.mark.usefixtures("fake_provider_credentials")
     @pytest.mark.asyncio
-    async def test_acreate_gemini_keeps_continuation_token_out_of_the_request(self, respx_mock: MockRouter) -> None:
+    @pytest.mark.parametrize(
+        ("resume_params", "expected_body"),
+        [
+            pytest.param(
+                {"previous_interaction_id": "interaction-hop-1"},
+                {
+                    "model": "gemini-4-argon",
+                    "previous_interaction_id": "interaction-hop-1",
+                    "continuation_token": "dG9rLTE=",
+                },
+                id="stateful",
+            ),
+            pytest.param(
+                {"input": "Prove it", "store": False},
+                {"model": "gemini-4-argon", "input": "Prove it", "store": False, "continuation_token": "dG9rLTE="},
+                id="stateless",
+            ),
+        ],
+    )
+    async def test_acreate_gemini_sends_continuation_token_to_resume_a_long_decode(
+        self, respx_mock: MockRouter, resume_params: Mapping[str, object], expected_body: Mapping[str, object]
+    ) -> None:
         route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
             return_value=httpx.Response(
                 200,
                 json={
-                    "id": "interaction-offline",
+                    "id": "interaction-hop-2",
                     "object": "interaction",
-                    "model": "gemini-3.8-flash",
-                    "status": "completed",
-                    "steps": [{"type": "model_output", "content": [{"type": "text", "text": "Hi"}]}],
-                    "usage": {"input_tokens": 6, "output_tokens": 3},
+                    "model": "gemini-4-argon",
+                    "status": "requires_continuation",
+                    "continuation_token": "dG9rLTI=",
+                    "steps": [{"type": "model_output", "content": [{"type": "text", "text": "and more"}]}],
+                    "usage": {"input_tokens": 1093, "output_tokens": 3},
                 },
             )
         )
         response: Final = await interactions.acreate(
-            model="gemini/gemini-3.8-flash",
-            input="Prove it",
+            model="gemini/gemini-4-argon",
             continuation_token="dG9rLTE=",
             api_key="gemini-offline",
+            **resume_params,
         )
-        # The Interactions API answered 400 "Unknown parameter 'continuation_token'." on 2026-10-13
-        assert json.loads(route.calls.last.request.content) == {"model": "gemini-3.8-flash", "input": "Prove it"}
-        assert response.status == "completed"
+        assert json.loads(route.calls.last.request.content) == expected_body
+        assert response.status == "requires_continuation"
+        assert response.model_dump()["continuation_token"] == "dG9rLTI="
 
     @pytest.mark.usefixtures("fake_provider_credentials")
     @pytest.mark.asyncio
@@ -746,9 +794,7 @@ def test_create_with_system_instruction_for_google_and_responses(
 def test_create_streaming_returns_interaction_events(
     respx_mock: MockRouter,
 ) -> None:
-    route: Final = respx_mock.post(
-        "https://generativelanguage.googleapis.com/v1beta/interactions?alt=sse"
-    ).mock(
+    route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions?alt=sse").mock(
         return_value=httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},

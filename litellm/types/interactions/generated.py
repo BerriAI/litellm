@@ -176,6 +176,7 @@ class Status1(Enum):
     incomplete = "incomplete"
     budget_exceeded = "budget_exceeded"
     queued = "queued"
+    requires_continuation = "requires_continuation"
 
 
 class InteractionStatusUpdate(LiteLLMBaseModel):
@@ -185,6 +186,10 @@ class InteractionStatusUpdate(LiteLLMBaseModel):
     event_id: str | None = Field(
         None,
         description="The event_id token to be used to resume the interaction stream, from\nthis event.",
+    )
+    continuation_token: str | None = Field(
+        None,
+        description="An optional opaque continuation token used to resume decoding from the\nlatest checkpoint after a disconnected stream.",
     )
 
 
@@ -343,6 +348,7 @@ class Status3(Enum):
     INCOMPLETE = "incomplete"
     BUDGET_EXCEEDED = "budget_exceeded"
     QUEUED = "queued"
+    REQUIRES_CONTINUATION = "requires_continuation"
 
 
 class ModelOption(RootModel[str]):
@@ -787,6 +793,10 @@ class Interaction(LiteLLMBaseModel):
         description="The mime type of the response. This is required if response_format is set.",
     )
     previous_interaction_id: str | None = Field(None, description="The ID of the previous interaction, if any.")
+    continuation_token: str | None = Field(
+        None,
+        description="Opaque token to resume a long decode. Output: set when status is\nREQUIRES_CONTINUATION and decoding can be resumed. Input: pass the latest\ntoken back unchanged in CreateInteraction to continue decoding.",
+    )
     input: str | list[Content] | list[Turn] | Content | None = Field(
         None, description="The inputs for the interaction."
     )
@@ -843,6 +853,10 @@ class CreateModelInteractionParams(LiteLLMBaseModel):
         description="The mime type of the response. This is required if response_format is set.",
     )
     previous_interaction_id: str | None = Field(None, description="The ID of the previous interaction, if any.")
+    continuation_token: str | None = Field(
+        None,
+        description="Opaque token to resume a long decode. Output: set when status is\nREQUIRES_CONTINUATION and decoding can be resumed. Input: pass the latest\ntoken back unchanged in CreateInteraction to continue decoding.",
+    )
     input: str | list[Content] | list[Turn] | Content = Field(..., description="The inputs for the interaction.")
     generation_config: GenerationConfig | None = Field(
         None,
@@ -894,6 +908,10 @@ class CreateAgentInteractionParams(LiteLLMBaseModel):
         description="The mime type of the response. This is required if response_format is set.",
     )
     previous_interaction_id: str | None = Field(None, description="The ID of the previous interaction, if any.")
+    continuation_token: str | None = Field(
+        None,
+        description="Opaque token to resume a long decode. Output: set when status is\nREQUIRES_CONTINUATION and decoding can be resumed. Input: pass the latest\ntoken back unchanged in CreateInteraction to continue decoding.",
+    )
     input: str | list[Content] | list[Turn] | Content = Field(..., description="The inputs for the interaction.")
     agent_config: DynamicAgentConfig | DeepResearchAgentConfig | None = Field(
         None, description="Configuration for the agent.", discriminator="type"

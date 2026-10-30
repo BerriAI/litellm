@@ -23,6 +23,8 @@ import pytest
 from openapi_core import OpenAPI
 from pydantic import BaseModel, TypeAdapter
 
+from litellm.llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig
+
 OPENAPI_SPEC_URL = "https://ai.google.dev/static/api/interactions.openapi.json"
 OPENAPI_SPEC_SNAPSHOT: Final = Path(__file__).with_name("interactions.openapi.json")
 SPEC_URL_OPTION: Final = TypeAdapter(str | None)
@@ -53,12 +55,15 @@ def _load_openapi_spec(live_url: str | None) -> LoadedSpec:
     return LoadedSpec(source=str(response.url), spec=response.json())
 
 
-def _model_create_request_schema(spec_dict: Dict[str, Any]) -> Dict[str, Any]:
+def _create_request_variants(spec_dict: Dict[str, Any]) -> tuple[Dict[str, Any], ...]:
     schemas = spec_dict["components"]["schemas"]
     create_path = next(path for path in spec_dict["paths"] if path.endswith("/interactions"))
     body_schema = spec_dict["paths"][create_path]["post"]["requestBody"]["content"]["application/json"]["schema"]
-    variants = [schemas[option["$ref"].split("/")[-1]] for option in body_schema.get("oneOf", []) if "$ref" in option]
-    return next(variant for variant in variants if "model" in variant.get("properties", {}))
+    return tuple(schemas[option["$ref"].split("/")[-1]] for option in body_schema.get("oneOf", []) if "$ref" in option)
+
+
+def _model_create_request_schema(spec_dict: Dict[str, Any]) -> Dict[str, Any]:
+    return next(variant for variant in _create_request_variants(spec_dict) if "model" in variant.get("properties", {}))
 
 
 def _interaction_resource_path(spec_dict: Dict[str, Any], method: str) -> str | None:
@@ -116,24 +121,13 @@ class TestRequestCompliance:
         assert "model" in schema["required"]
         assert "input" in schema["properties"]
 
-        # Check our supported optional fields exist in spec
-        our_optional_fields = [
-            "tools",
-            "system_instruction",
-            "generation_config",
-            "stream",
-            "store",
-            "background",
-            "response_modalities",
-            "response_format",
-            "response_mime_type",
-            "previous_interaction_id",
-        ]
+    def test_every_param_the_gemini_config_supports_exists_in_a_create_schema(self, spec_dict):
+        spec_properties: Final = frozenset().union(
+            *(variant.get("properties", {}) for variant in _create_request_variants(spec_dict))
+        )
+        supported: Final = GoogleAIStudioInteractionsConfig().get_supported_params(model="gemini-2.5-flash")
 
-        spec_properties = schema["properties"]
-        for field in our_optional_fields:
-            assert field in spec_properties, f"Field '{field}' not in OpenAPI spec"
-            print(f"✓ Field '{field}' exists in spec")
+        assert [param for param in supported if param not in spec_properties] == []
 
     def test_input_types_match_spec(self, spec_dict):
         """Verify input field supports string, Content, Content[], Turn[]."""
