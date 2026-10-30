@@ -13,18 +13,25 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.token_counter import served_openai_models, unresolved_tokenizer_model
+from litellm.constants import OPENAI_CHAT_PDF_FILE_TOKENS, PDF_DATA_URL_PREFIX
+from litellm.litellm_core_utils.token_counter import (
+    deployment_openai_model,
+    pdf_page_pricing,
+    reads_pdf_pages,
+    unresolved_tokenizer_model,
+)
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     billable_input_since_newest_compaction,
     holds_compaction_summary,
 )
-from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.router_utils.deployment_pricing import deployment_pricing_models, str_keyed
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.token_counter import (
@@ -40,6 +47,8 @@ if TYPE_CHECKING:
 
 TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS: Final = 30_000
 
+_OPENAI_PREFIX: Final = "openai/"
+
 _INPUT_SIZE_FIELDS: Final = ("messages", "prompt", "input", "query", "documents", "tools", "tool_choice")
 
 
@@ -50,25 +59,6 @@ def _approximate_input_size(request_body: Mapping[str, object]) -> int:
     and rendering rather than walking keeps mapping keys in the total, which a
     tool schema's property names are."""
     return sum(len(str(request_body.get(field, ""))) for field in _INPUT_SIZE_FIELDS)
-
-
-def tokenizer_models(model: str, llm_router: Router | None) -> tuple[str, ...]:
-    """The names to count a request for `model` with, keeping the largest count.
-
-    An alias resolves to its target group. A group served only by OpenAI models counts as those models, so it gets
-    their tokenizer. Any other group counts as its OpenAI models, if any, and as the requested name with the encoding
-    tiktoken gives that name as written, so its other deployments keep that count without loading their vendor's
-    tokenizer. A name the router does not index counts as written."""
-    if llm_router is None:
-        return (model,)
-    group: Final = resolve_model_group_alias(llm_router.model_group_alias, model) or model
-    served: Final = served_openai_models(llm_router.deployments_named(group) or ())
-    if not served:
-        return (model,)
-    openai_served: Final = tuple(served_model for served_model in served if served_model is not None)
-    if len(openai_served) == len(served):
-        return openai_served
-    return (unresolved_tokenizer_model(model), *openai_served)
 
 
 async def count_input_tokens(
@@ -152,6 +142,83 @@ def _count_input_tokens_for_models(
             if (tokens := count_input_tokens_for_model(request_body=request_body, model=model)) is not None
         }
     )
+
+
+def models_counted_for(model: str, llm_router: Router | None, team_id: str | None) -> tuple[str, ...]:
+    """The names to count a request for `model` from `team_id` with, keeping the largest count, one per deployment
+    routing would serve it from: the team's or else the shared ones named `model`, its alias target, or its routing
+    group's members, else those of the one wildcard route that serves it.
+
+    An OpenAI deployment counts as its OpenAI model, so it gets that model's tokenizer and PDF page pricing, prefixed
+    `openai/` when OpenAI itself serves it, so `openai_chat_pdf_file_tokens` can add what its chat completions bills. A
+    deployment that reads PDF pages and prices them unlike `model` counts as its model minus the provider prefix, the
+    name `/v1/messages/count_tokens` counts with. Any other deployment counts as the requested name with the encoding
+    tiktoken gives that name as written, without loading its vendor's tokenizer. A name no deployment serves counts as
+    written."""
+    deployments: Final = _routed_deployments(model, llm_router, team_id) if llm_router else ()
+    return tuple(dict.fromkeys(_counted_name(model, deployment) for deployment in deployments)) or (model,)
+
+
+def _routed_deployments(model: str, llm_router: Router, team_id: str | None) -> Sequence[object]:
+    registry: Final = llm_router.registry()
+    resolved: Final = registry.resolve(model, kind="alias") or model
+    routing_group: Final = llm_router.get_routing_group(resolved)
+    members: Final = routing_group.models if routing_group is not None else (resolved,)
+    named: Final = tuple(
+        chain.from_iterable(registry.deployments(member, source="all", team_id=team_id) for member in members)
+    )
+    return named or registry.deployments(resolved, source="wildcard", team_id=team_id)
+
+
+def openai_chat_pdf_file_tokens(counted_model: str, pdf_files: int) -> int:
+    """What OpenAI chat completions bills on top of the counted pages of `pdf_files` inline PDF files, when
+    `counted_model`, a name from `models_counted_for`, is served by OpenAI itself."""
+    return OPENAI_CHAT_PDF_FILE_TOKENS * pdf_files if counted_model.startswith(_OPENAI_PREFIX) else 0
+
+
+def inline_pdf_file_count(messages: object) -> int:
+    return sum(1 for part in _content_parts(messages) if _is_inline_pdf_file(part))
+
+
+def _content_parts(messages: object) -> Iterator[Mapping[str, object]]:
+    contents: Final = (_as_list(str_keyed(message).get("content")) for message in _as_list(messages))
+    return (str_keyed(part) for part in chain.from_iterable(contents))
+
+
+def _as_list(value: object) -> Sequence[object]:
+    return value if isinstance(value, list) else ()
+
+
+def _is_inline_pdf_file(part: Mapping[str, object]) -> bool:
+    file_data: Final = str_keyed(part.get("file")).get("file_data")
+    return part.get("type") == "file" and isinstance(file_data, str) and file_data.startswith(PDF_DATA_URL_PREFIX)
+
+
+def _counted_name(model: str, deployment: object) -> str:
+    openai_model: Final = deployment_openai_model(deployment)
+    if openai_model is not None and _served_by_openai(deployment):
+        return _OPENAI_PREFIX + openai_model.removeprefix(_OPENAI_PREFIX)
+    if openai_model is not None:
+        return openai_model
+    served: Final = next(iter(deployment_pricing_models(deployment)), model)
+    if pdf_page_pricing(served) != pdf_page_pricing(model) and reads_pdf_pages(served):
+        return served.partition("/")[2] or served
+    return unresolved_tokenizer_model(model)
+
+
+def _served_by_openai(deployment: object) -> bool:
+    params: Final = str_keyed(str_keyed(deployment).get("litellm_params"))
+    model: Final = params.get("model")
+    provider: Final = params.get("custom_llm_provider")
+    if not isinstance(model, str):
+        return False
+    try:
+        _, served_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=provider if isinstance(provider, str) else None
+        )
+    except litellm.exceptions.BadRequestError:
+        return False
+    return served_provider == "openai"
 
 
 def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:

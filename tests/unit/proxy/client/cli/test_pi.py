@@ -152,16 +152,25 @@ class TestFetchModelLimits:
                 200,
                 {
                     "data": [
-                        {"model_group": "m-a", "max_input_tokens": 131072, "max_output_tokens": 8192},
+                        {
+                            "model_group": "m-a",
+                            "max_input_tokens": 131072,
+                            "max_output_tokens": 8192,
+                            "supported_reasoning_efforts": ["low", "high", "max"],
+                        },
                         {"model_group": "m-b", "max_input_tokens": None, "max_output_tokens": None},
+                        {"model_group": "m-c", "supported_reasoning_efforts": []},
                     ]
                 },
             )
 
         limits = fetch_model_limits("http://localhost:4000/", "sk-key", get=fake_get)
         assert captured["url"] == "http://localhost:4000/model_group/info"
-        assert limits["m-a"] == ModelLimits(context_window=131072, max_tokens=8192)
-        assert limits["m-b"] == ModelLimits(context_window=None, max_tokens=None)
+        assert limits["m-a"] == ModelLimits(
+            context_window=131072, max_tokens=8192, supported_reasoning_efforts=("low", "high", "max")
+        )
+        assert limits["m-b"] == ModelLimits(context_window=None, max_tokens=None, supported_reasoning_efforts=None)
+        assert limits["m-c"].supported_reasoning_efforts == ()
 
     def test_non_200_degrades_to_no_limits(self):
         assert fetch_model_limits("http://localhost:4000", "sk-key", get=lambda *a, **k: _FakeResponse(403)) == {}
@@ -218,6 +227,61 @@ class TestProviderBlock:
             {"id": "m-1", "contextWindow": 131072, "maxTokens": 8192},
             {"id": "m-2"},
         ]
+
+    @pytest.mark.parametrize(
+        ("efforts", "thinking_level_map"),
+        [
+            (
+                ("low", "medium", "high", "xhigh", "max"),
+                {
+                    "off": None,
+                    "minimal": None,
+                    "low": "low",
+                    "medium": "medium",
+                    "high": "high",
+                    "xhigh": "xhigh",
+                    "max": "max",
+                },
+            ),
+            (
+                ("none", "low", "high", "max"),
+                {"off": "none", "minimal": None, "low": "low", "medium": None, "high": "high", "max": "max"},
+            ),
+            (
+                ("none", "minimal", "low", "medium", "high"),
+                {"off": "none", "minimal": "minimal", "low": "low", "medium": "medium", "high": "high"},
+            ),
+            (
+                ("high", "turbo"),
+                {"off": None, "minimal": None, "low": None, "medium": None, "high": "high"},
+            ),
+        ],
+    )
+    def test_reasoning_efforts_become_pi_thinking_levels_and_keep_the_system_role(self, efforts, thinking_level_map):
+        block = provider_block(
+            "http://localhost:4000",
+            ("m-1",),
+            {"m-1": ModelLimits(context_window=131072, max_tokens=8192, supported_reasoning_efforts=efforts)},
+        )
+        assert block["models"] == [
+            {
+                "id": "m-1",
+                "contextWindow": 131072,
+                "maxTokens": 8192,
+                "reasoning": True,
+                "thinkingLevelMap": thinking_level_map,
+                "compat": {"supportsDeveloperRole": False},
+            }
+        ]
+
+    @pytest.mark.parametrize("efforts", [None, ()])
+    def test_unknown_or_no_reasoning_efforts_leave_the_entry_as_it_was(self, efforts):
+        block = provider_block(
+            "http://localhost:4000",
+            ("m-1",),
+            {"m-1": ModelLimits(context_window=131072, max_tokens=8192, supported_reasoning_efforts=efforts)},
+        )
+        assert block["models"] == [{"id": "m-1", "contextWindow": 131072, "maxTokens": 8192}]
 
 
 class TestSyncModelsJson:
