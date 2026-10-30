@@ -8,6 +8,12 @@ from litellm.constants import PROVIDER_REQUEST_ID_HEADERS
 
 _HEADERS: Final = TypeAdapter(Mapping[str, str])
 _REQUEST_ID_HEADERS: Final = ("request-id", "x-request-id", "llm_provider-request-id", "llm_provider-x-request-id")
+_PROVIDER_HEADERS_TO_PASSTHROUGH: Final[frozenset[str]] = frozenset(
+    {
+        "anthropic-ratelimit-unified-status",
+        "retry-after",
+    }
+)
 
 
 def get_provider_request_id(headers: object) -> str | None:
@@ -58,7 +64,10 @@ def get_response_headers(_response_headers: Mapping[str, str] | None = None) -> 
     llm_provider_headers: Final = _get_llm_provider_headers(_response_headers)
     request_id: Final = get_provider_request_id(_response_headers)
     native_headers: Final = {"request-id": request_id} if request_id is not None else {}
-    return {**llm_provider_headers, **openai_headers, **native_headers}
+    passthrough_headers: Final = {
+        key: value for key, value in _response_headers.items() if key.lower() in _PROVIDER_HEADERS_TO_PASSTHROUGH
+    }
+    return {**llm_provider_headers, **openai_headers, **native_headers, **passthrough_headers}
 
 
 def _get_llm_provider_headers(response_headers: Mapping[str, str]) -> dict:

@@ -17,6 +17,7 @@ from litellm.anthropic_interface.exceptions import (
     AnthropicErrorResponse,
     AnthropicExceptionMapping,
 )
+from litellm.constants import UNSAFE_PROXY_RESPONSE_HEADERS
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.tool_fields import first_validation_error
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
@@ -57,6 +58,45 @@ from litellm.router import Router
 from litellm.types.utils import TokenCountResponse
 
 router: Final = APIRouter()
+
+_FORWARDABLE_UPSTREAM_HEADERS: Final[frozenset[str]] = frozenset({"retry-after", "request-id"})
+_FORWARDABLE_UPSTREAM_PREFIX: Final[str] = "anthropic-"
+
+
+def _extract_upstream_anthropic_headers(e: Exception) -> dict[str, str]:
+    """Return the upstream provider's Anthropic-native rate-limit and protocol headers from a
+    mapped LiteLLM exception, so they survive the proxy's error wrapping (#37754).
+
+    The ``/v1/messages`` endpoint speaks the Anthropic protocol, so safe headers
+    (``retry-after``, ``request-id``, ``anthropic-*``) are forwarded unprefixed.
+    Keys are lowercased and filtered to avoid exposing unsafe browser framing headers or
+    letting an upstream forge proxy-owned ``x-litellm-*`` metadata.
+    """
+    raw = getattr(e, "litellm_response_headers", None) or getattr(e, "headers", None)
+    if not raw:
+        _response = getattr(e, "response", None)
+        raw = getattr(_response, "headers", None) if _response is not None else None
+    if not raw and hasattr(e, "original_exception"):
+        orig = getattr(e, "original_exception")
+        if orig is not None:
+            raw = (
+                getattr(orig, "litellm_response_headers", None)
+                or getattr(orig, "headers", None)
+                or getattr(getattr(orig, "response", None), "headers", None)
+            )
+    if not raw:
+        return {}
+    try:
+        items = raw.items()
+    except AttributeError:
+        return {}
+    return {
+        key: str(v)
+        for k, v in items
+        if (key := str(k).lower()) not in UNSAFE_PROXY_RESPONSE_HEADERS
+        and not key.startswith("x-litellm-")
+        and (key in _FORWARDABLE_UPSTREAM_HEADERS or key.startswith(_FORWARDABLE_UPSTREAM_PREFIX))
+    }
 
 _NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
@@ -268,7 +308,12 @@ async def anthropic_response(
         )
         log_llm_api_exception(e, base_llm_response_processor.litellm_call_id)
 
+        # Preserve upstream rate-limit headers so clients can fail fast on 429 (#37754).
+        upstream_headers: Final = _extract_upstream_anthropic_headers(e)
+
         if isinstance(e, ProxyException):
+            if upstream_headers:
+                e.headers = {**upstream_headers, **(e.headers or {})}
             return _anthropic_error_json_response(
                 with_litellm_call_id(e, base_llm_response_processor.litellm_call_id), request
             )
@@ -279,7 +324,7 @@ async def anthropic_response(
         model_id: Final = model_info.get("id", "") or ""
 
         # Get headers
-        headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
+        custom_headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
             call_id=base_llm_response_processor.litellm_call_id,
             model_id=model_id,
@@ -290,6 +335,7 @@ async def anthropic_response(
             timeout=getattr(e, "timeout", None),
             litellm_logging_obj=None,
         )
+        headers: Final = {**upstream_headers, **custom_headers}
 
         if isinstance(e, HTTPException):
             return _anthropic_error_json_response(proxy_exception_from_http_exception(e, headers), request)

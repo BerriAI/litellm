@@ -118,7 +118,7 @@ async def _blocked_messages_reply(
 ) -> tuple[object, str]:
     import litellm
     import litellm.proxy.anthropic_endpoints.endpoints as ep
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
     from litellm.proxy.utils import ProxyLogging
 
     blocker: Final = _BlockEveryRequest(
@@ -173,8 +173,8 @@ class TestBlockedResponseUsage:
         from unittest.mock import AsyncMock, MagicMock
 
         import litellm.proxy.anthropic_endpoints.endpoints as ep
-        import litellm.proxy.proxy_server as proxy_server
         from litellm.integrations.custom_guardrail import ModifyResponseException
+        from litellm.proxy import proxy_server
 
         exc = ModifyResponseException(
             message="blocked by guardrail",
@@ -255,7 +255,7 @@ class TestProxyExceptionAnthropicEnvelope:
         Anthropic's documented {"type": "error", "error": {...}} envelope with the
         original status and message, not the OpenAI {"error": {...}} envelope."""
         import litellm.proxy.anthropic_endpoints.endpoints as ep
-        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy import proxy_server
         from litellm.proxy._types import ProxyErrorTypes, ProxyException
 
         exc = ProxyException(
@@ -386,7 +386,7 @@ class TestHttpExceptionDictDetail:
         from fastapi import HTTPException
 
         import litellm.proxy.anthropic_endpoints.endpoints as ep
-        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy import proxy_server
         from litellm.proxy._types import UserAPIKeyAuth
 
         detail = {
@@ -435,7 +435,7 @@ class TestFailureHookRequestData:
         object the failure hook needs to lift token usage from); the exception
         handler must pass that replaced dict, not the raw request body dict."""
         import litellm.proxy.anthropic_endpoints.endpoints as ep
-        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy import proxy_server
         from litellm.proxy._types import UserAPIKeyAuth
 
         captured = {}
@@ -487,7 +487,7 @@ class TestErrorLogCarriesCallId:
     @pytest.mark.asyncio
     async def test_messages_failure_log_carries_call_id(self, caplog: pytest.LogCaptureFixture):
         import litellm.proxy.anthropic_endpoints.endpoints as ep
-        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy import proxy_server
         from litellm.proxy._types import UserAPIKeyAuth
 
         call_id = "messages-call-7836"
@@ -526,7 +526,7 @@ class TestErrorLogCarriesCallId:
     @pytest.mark.asyncio
     async def test_messages_already_shaped_failure_answers_with_the_call_id(self):
         import litellm.proxy.anthropic_endpoints.endpoints as ep
-        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy import proxy_server
         from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 
         call_id = "messages-call-7836-shaped"
@@ -562,7 +562,7 @@ class TestErrorLogCarriesCallId:
     @pytest.mark.asyncio
     async def test_count_tokens_failure_log_carries_callers_call_id(self, caplog: pytest.LogCaptureFixture):
         import litellm.proxy.anthropic_endpoints.endpoints as ep
-        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy import proxy_server
         from litellm.proxy._types import UserAPIKeyAuth
 
         call_id = "count-tokens-call-7836"
@@ -596,7 +596,7 @@ class TestCountTokensCompactedHistory:
     @pytest.mark.asyncio
     async def test_count_tokens_counts_a_compaction_block_like_its_summary_text(self):
         import litellm.proxy.anthropic_endpoints.endpoints as ep
-        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy import proxy_server
         from litellm.proxy._types import UserAPIKeyAuth
 
         summary = "The user is building a recipe app and asked for one-sentence class descriptions."
@@ -661,7 +661,7 @@ _SEVEN_TOKENS: Final = TokenCountResponse(
 )
 async def test_count_tokens_answers_400_for_malformed_tools_without_counting(model: str, tools: object) -> None:
     import litellm.proxy.anthropic_endpoints.endpoints as ep
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
     from litellm.proxy._types import UserAPIKeyAuth
 
     request: Final = MagicMock()
@@ -684,7 +684,7 @@ async def test_count_tokens_answers_400_for_malformed_tools_without_counting(mod
 @pytest.mark.asyncio
 async def test_count_tokens_counts_malformed_tool_entries_for_a_model_the_router_cannot_name() -> None:
     import litellm.proxy.anthropic_endpoints.endpoints as ep
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
     from litellm.proxy._types import UserAPIKeyAuth
 
     request: Final = MagicMock()
@@ -717,7 +717,7 @@ async def test_count_tokens_drops_malformed_tools_when_drop_params_is_set(
     dropping: dict[str, object], headers: dict[str, str]
 ) -> None:
     import litellm.proxy.anthropic_endpoints.endpoints as ep
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
     from litellm.proxy._types import UserAPIKeyAuth
 
     request: Final = MagicMock()
@@ -741,7 +741,7 @@ async def test_count_tokens_drops_malformed_tools_when_drop_params_is_set(
 @pytest.mark.asyncio
 async def test_count_tokens_keeps_claude_code_malformed_tools_when_operator_sets_drop_params_false() -> None:
     import litellm.proxy.anthropic_endpoints.endpoints as ep
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
     from litellm.proxy._types import UserAPIKeyAuth
 
     operator_config: Final = proxy_server.ProxyConfig()
@@ -767,8 +767,8 @@ async def test_count_tokens_keeps_claude_code_malformed_tools_when_operator_sets
 @pytest.mark.asyncio
 async def test_count_tokens_drops_malformed_tools_the_counted_deployment_drops_even_with_fallbacks() -> None:
     import litellm.proxy.anthropic_endpoints.endpoints as ep
-    import litellm.proxy.proxy_server as proxy_server
     from litellm import Router
+    from litellm.proxy import proxy_server
     from litellm.proxy._types import UserAPIKeyAuth
 
     router: Final = Router(
@@ -809,9 +809,9 @@ def _count_on_claude(
 ) -> httpx.Response:
     from fastapi import FastAPI
 
-    import litellm.proxy.proxy_server as proxy_server
     from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy import proxy_server
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.anthropic_endpoints.endpoints import router
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -923,7 +923,7 @@ def test_count_tokens_provider_rejection_logs_its_status_and_answers_the_same_er
 def _count_on_local_model(monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object]) -> httpx.Response:
     from fastapi import FastAPI
 
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.anthropic_endpoints.endpoints import router
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -1108,3 +1108,118 @@ class TestStripTotalTokensFeatureFlag(unittest.TestCase):
         import litellm
 
         assert litellm.strip_anthropic_total_tokens is False
+
+
+
+class TestUpstreamRateLimitHeaderPassthrough:
+    """Issue #37754: on a 429 from an Anthropic-compatible upstream (e.g. GLM),
+    the `/v1/messages` endpoint must forward the upstream's Anthropic-native
+    rate-limit headers (`retry-after`, `anthropic-ratelimit-unified-status`)
+    to the client. Without them, Claude Code treats the 429 as a transient
+    throttle and retries forever.
+    """
+
+    def _build_upstream_ratelimit_exception(self):
+        """Produce the exception the proxy sees when an Anthropic-compatible
+        upstream returns 429, through the real litellm exception mapping so
+        `litellm_response_headers` is populated exactly as in production."""
+        import httpx
+
+        from litellm.llms.anthropic.common_utils import AnthropicError
+
+        upstream_headers = httpx.Headers(
+            {
+                "anthropic-ratelimit-unified-status": "rejected",
+                "retry-after": "287441",
+                "request-id": "20260821091810b67f7ae6443d450c",
+                "anthropic-ratelimit-requests-limit": "1000",
+                "set-cookie": "secret=1; HttpOnly",
+                "access-control-allow-origin": "*",
+                "content-type": "application/json",
+            }
+        )
+        return AnthropicError(
+            status_code=429,
+            message="Rate limit exceeded",
+            headers=upstream_headers,
+        )
+
+    @pytest.mark.asyncio
+    async def test_anthropic_response_forwards_upstream_rate_limit_headers(self):
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        mapped = self._build_upstream_ratelimit_exception()
+
+        req = _messages_request({"model": "glm", "messages": [{"role": "user", "content": "hi"}]})
+        with patch.object(
+            ep.ProxyBaseLLMRequestProcessing,
+            "base_process_llm_request",
+            new=AsyncMock(side_effect=mapped),
+        ):
+            response = await ep.anthropic_response(
+                fastapi_response=MagicMock(),
+                request=req,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        headers = {k.lower(): v for k, v in response.headers.items()}
+        assert response.status_code == 429
+        assert headers.get("anthropic-ratelimit-unified-status") == "rejected"
+        assert headers.get("retry-after") == "287441"
+        assert headers.get("anthropic-ratelimit-requests-limit") == "1000"
+        assert headers.get("request-id") == "20260821091810b67f7ae6443d450c"
+        assert "set-cookie" not in headers
+        assert "access-control-allow-origin" not in headers
+        assert "x-litellm-call-id" in headers or "x-litellm-version" in headers
+
+    @pytest.mark.asyncio
+    async def test_upstream_cannot_spoof_litellm_headers(self):
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        mapped = self._build_upstream_ratelimit_exception()
+        mapped.litellm_response_headers = {
+            "retry-after": "287441",
+            "x-litellm-version": "spoofed",
+            "X-LiteLLM-Model-ID": "forged-model",
+            "x-litellm-call-id": "fake-call-id",
+        }
+
+        req = _messages_request({"model": "glm", "messages": [{"role": "user", "content": "hi"}]})
+        with patch.object(
+            ep.ProxyBaseLLMRequestProcessing,
+            "base_process_llm_request",
+            new=AsyncMock(side_effect=mapped),
+        ):
+            response = await ep.anthropic_response(
+                fastapi_response=MagicMock(),
+                request=req,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        headers = {k.lower(): v for k, v in response.headers.items()}
+        assert headers.get("retry-after") == "287441"
+        assert headers.get("x-litellm-version") != "spoofed"
+        assert headers.get("x-litellm-model-id") != "forged-model"
+
+    def test_extract_upstream_headers_edge_cases(self):
+        from litellm.proxy.anthropic_endpoints.endpoints import _extract_upstream_anthropic_headers
+
+        e = Exception("plain error")
+        assert _extract_upstream_anthropic_headers(e) == {}
+
+        e.litellm_response_headers = "not-a-dict"
+        assert _extract_upstream_anthropic_headers(e) == {}
+
+        e.litellm_response_headers = {
+            "retry-after": "60",
+            "Anthropic-RateLimit-Unified-Status": "rejected",
+            "set-cookie": "secret",
+            "cross-origin-opener-policy": "same-origin",
+        }
+        res = _extract_upstream_anthropic_headers(e)
+        assert res == {
+            "retry-after": "60",
+            "anthropic-ratelimit-unified-status": "rejected",
+        }
