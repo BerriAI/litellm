@@ -128,6 +128,8 @@ from ..common_utils import (
     bedrock_model_accepts_cache_points,
     bedrock_reasoning_effort_disabled,
     bedrock_rejects_stop_sequences,
+    bedrock_service_error,
+    bedrock_service_error_type,
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
     is_bedrock_application_inference_profile_arn,
@@ -2747,13 +2749,17 @@ class AmazonConverseConfig(BaseConfig):
         )
         ## RESPONSE OBJECT
         try:
-            completion_response: Final = ConverseResponseBlock(**response.json())
+            response_json: Final = response.json()
+            completion_response: Final = ConverseResponseBlock(**response_json)
         except Exception as e:
             raise BedrockError(
                 message=f"Error converting to valid response block={e}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues",
                 status_code=422,
                 headers=response.headers,
             )
+        service_error_type: Final = bedrock_service_error_type(response_json)
+        if service_error_type is not None:
+            raise bedrock_service_error(service_error_type, response.headers)
 
         """
         Bedrock Response Object has optional message block

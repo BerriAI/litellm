@@ -5600,13 +5600,14 @@ def get_optional_params(
             drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "bedrock":
+        from litellm.llms.bedrock.common_utils import bedrock_capability_model
+
         bedrock_model_info: Final[type[BedrockModelInfo]] = litellm_utils.BedrockModelInfo
         bedrock_base_model: Final = bedrock_model_info.get_base_model(model)
+        capability_model: Final = bedrock_capability_model(model, base_model)
         if bedrock_route == "converse" or bedrock_route == "converse_like":
-            from litellm.llms.bedrock.common_utils import bedrock_capability_model
-
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
-                model=bedrock_capability_model(model, base_model),
+                model=capability_model,
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 drop_params=bool(drop_params),
@@ -5631,14 +5632,14 @@ def get_optional_params(
                 optional_params = litellm.AmazonAnthropicClaudeConfig(model_info=model_info).map_openai_params(
                     non_default_params=non_default_params,
                     optional_params=optional_params,
-                    model=model,
+                    model=capability_model,
                     drop_params=bool(drop_params),
                 )
         elif provider_config is not None:
             optional_params = provider_config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
-                model=model,
+                model=capability_model,
                 drop_params=bool(drop_params),
             )
             if bedrock_route == "claude_platform":

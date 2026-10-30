@@ -26,6 +26,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_TRACE_FIELD,
     apply_bedrock_invoke_structured_output,
+    bedrock_capability_model,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
     bedrock_error_in_success_body,
@@ -193,8 +194,11 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        capability_model: Final = bedrock_capability_model(
+            model, _LITELLM_PARAMS.validate_python(litellm_params).get("base_model")
+        )
         _anthropic_request: Final = self._build_bedrock_anthropic_request_base(
-            model=model,
+            model=capability_model,
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
@@ -203,7 +207,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         self._convert_document_url_sources_to_base64(_anthropic_request)
         beta_list: Final = self._compute_bedrock_invoke_beta_headers(
-            model=model,
+            model=capability_model,
             messages=messages,
             optional_params=optional_params,
             headers=headers,
@@ -217,7 +221,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                 _anthropic_request,  # pyright: ignore[reportUnknownArgumentType]  # built by the base signature's bare dict transform
                 {},
                 drop_params=litellm_params.get("drop_params"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # litellm_params is the base signature's bare dict
-                model=model,
+                model=capability_model,
                 provider="bedrock_invoke",
             )
         )

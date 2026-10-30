@@ -2063,10 +2063,26 @@ def test_event_decoder_reports_only_missing_aws_dependency(missing):
             "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/profile-id",
         ),
         ("us.anthropic.claude-opus-4-8", "anthropic.claude-sonnet-4-5", "us.anthropic.claude-opus-4-8"),
+        (
+            "invoke/anthropic/arn:aws:bedrock:us-east-1:000000000000:provisioned-model/abc123",
+            "bedrock/us.anthropic.claude-opus-4-8",
+            "us.anthropic.claude-opus-4-8",
+        ),
+        (
+            "arn:aws:bedrock:us-east-1:000000000000:inference-profile/us.anthropic.claude-opus-4-8",
+            "anthropic.claude-sonnet-4-5",
+            "arn:aws:bedrock:us-east-1:000000000000:inference-profile/us.anthropic.claude-opus-4-8",
+        ),
     ],
-    ids=["profile-arn-with-base-model", "profile-arn-without-base-model", "named-model-keeps-its-name"],
+    ids=[
+        "profile-arn-with-base-model",
+        "profile-arn-without-base-model",
+        "named-model-keeps-its-name",
+        "provisioned-arn-with-base-model",
+        "system-profile-arn-keeps-the-model-it-names",
+    ],
 )
-def test_bedrock_capability_model_reads_base_model_only_for_application_profile_arns(model, base_model, expected):
+def test_bedrock_capability_model_reads_base_model_only_for_arns_that_name_no_model(model, base_model, expected):
     from litellm.llms.bedrock.common_utils import bedrock_capability_model
 
     assert bedrock_capability_model(model, base_model) == expected

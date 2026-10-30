@@ -1987,6 +1987,7 @@ def test_invoke_stream_decoder_carries_the_guardrail_trace_of_the_message_stop_c
 
 _ARN_ACCOUNT: Final = "arn:aws:bedrock:us-east-1:123456789012"
 _APPLICATION_PROFILE_ARN: Final = f"{_ARN_ACCOUNT}:application-inference-profile/a1b2c3d4e5f6"
+_NOVA_LOOKING_PROFILE_ARN: Final = f"{_ARN_ACCOUNT}:application-inference-profile/nova1meta2ab"
 _CLAUDE_INVOKE_ANSWER: Final = json.dumps(
     {
         "id": "msg_1",
@@ -2080,6 +2081,12 @@ def _answer_text(response: object) -> str:
             id="model-info-base-model",
         ),
         pytest.param(
+            f"bedrock/invoke/{_APPLICATION_PROFILE_ARN}",
+            _APPLICATION_PROFILE_ARN,
+            {"base_model": "claude-haiku-5-5"},
+            id="claude-base-model-without-a-bedrock-prefix",
+        ),
+        pytest.param(
             f"bedrock/invoke/{_ARN_ACCOUNT}:custom-model/anthropic.claude-haiku-5-5/a1b2c3d4e5f6",
             f"{_ARN_ACCOUNT}:custom-model/anthropic.claude-haiku-5-5/a1b2c3d4e5f6",
             {"base_model": "bedrock/meta.llama3-70b-instruct-v1:0"},
@@ -2090,6 +2097,18 @@ def _answer_text(response: object) -> str:
             f"{_ARN_ACCOUNT}:custom-model/anthropic.claude-haiku-5-5/a1b2c3d4e5f6",
             {},
             id="custom-model-under-unlisted-spec",
+        ),
+        pytest.param(
+            f"bedrock/invoke/anthropic/{_NOVA_LOOKING_PROFILE_ARN}",
+            _NOVA_LOOKING_PROFILE_ARN,
+            {},
+            id="spec-over-provider-name-in-profile-id",
+        ),
+        pytest.param(
+            f"bedrock/invoke/{_NOVA_LOOKING_PROFILE_ARN}",
+            _NOVA_LOOKING_PROFILE_ARN,
+            {"base_model": "bedrock/us.anthropic.claude-haiku-5-5"},
+            id="base-model-over-provider-name-in-profile-id",
         ),
     ],
 )
@@ -2147,8 +2166,8 @@ def _unknown_operation_upstream() -> httpx.MockTransport:
     )
 
 
-def _assert_unknown_operation_is_a_bad_request(error: litellm.BadRequestError) -> None:
-    assert error.status_code == 400
+def _assert_unknown_operation_is_not_found(error: litellm.NotFoundError) -> None:
+    assert error.status_code == 404
     assert "com.amazon.coral.service#UnknownOperationException" in error.message
 
 
@@ -2159,10 +2178,14 @@ def _assert_unknown_operation_is_a_bad_request(error: litellm.BadRequestError) -
         "bedrock/invoke/anthropic.claude-haiku-5-5",
         "bedrock/invoke/mistral.mistral-large-2407-v1:0",
         "bedrock/invoke/cohere.command-r-plus-v1:0",
+        "bedrock/invoke/us.amazon.nova-pro-v1:0",
+        "bedrock/converse/us.anthropic.claude-haiku-5-5",
     ],
 )
-def test_a_200_unknown_operation_body_is_a_bad_request(_aws_test_credentials: None, model: str, stream: bool) -> None:
-    with pytest.raises(litellm.BadRequestError) as exc_info:
+def test_a_200_unknown_operation_body_is_a_not_found_error(
+    _aws_test_credentials: None, model: str, stream: bool
+) -> None:
+    with pytest.raises(litellm.NotFoundError) as exc_info:
         _answer_text(
             litellm.completion(
                 model=model,
@@ -2173,7 +2196,7 @@ def test_a_200_unknown_operation_body_is_a_bad_request(_aws_test_credentials: No
             )
         )
 
-    _assert_unknown_operation_is_a_bad_request(exc_info.value)
+    _assert_unknown_operation_is_not_found(exc_info.value)
 
 
 async def _drain_async_unknown_operation_stream() -> None:
@@ -2188,11 +2211,13 @@ async def _drain_async_unknown_operation_stream() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_200_unknown_operation_body_is_a_bad_request_on_an_async_stream(_aws_test_credentials: None) -> None:
-    with pytest.raises(litellm.BadRequestError) as exc_info:
+async def test_a_200_unknown_operation_body_is_a_not_found_error_on_an_async_stream(
+    _aws_test_credentials: None,
+) -> None:
+    with pytest.raises(litellm.NotFoundError) as exc_info:
         await _drain_async_unknown_operation_stream()
 
-    _assert_unknown_operation_is_a_bad_request(exc_info.value)
+    _assert_unknown_operation_is_not_found(exc_info.value)
 
 
 def test_a_tool_call_whose_arguments_carry_a_type_key_is_not_read_as_a_bedrock_error(
@@ -2228,3 +2253,74 @@ def test_a_tool_call_whose_arguments_carry_a_type_key_is_not_read_as_a_bedrock_e
     tool_calls: Final = response.choices[0].message.tool_calls
     assert tool_calls is not None
     assert json.loads(tool_calls[0].function.arguments) == arguments
+
+
+def _sent_invoke_body(model: str, deployment: Mapping[str, object]) -> object:
+    sent: Final[list[object]] = []  # mutable-ok: the scripted upstream records each body it receives
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(
+            200, content=_CLAUDE_INVOKE_ANSWER, headers={"content-type": "application/json"}, request=request
+        )
+
+    _ = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=3000,
+        reasoning_effort="low",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(answer))),
+        **deployment,
+    )
+    (body,) = sent
+    return body
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "model",
+    [
+        f"bedrock/invoke/{_APPLICATION_PROFILE_ARN}",
+        f"bedrock/invoke/anthropic/{_APPLICATION_PROFILE_ARN}",
+        f"bedrock/invoke/{_ARN_ACCOUNT}:provisioned-model/nova1meta2ab",
+    ],
+    ids=["arn", "arn-under-spec", "provisioned-arn"],
+)
+def test_an_arn_with_base_model_sends_the_body_the_base_model_would_send(
+    _aws_test_credentials: None, model: str
+) -> None:
+    base_model: Final = "us.anthropic.claude-haiku-5-5"
+
+    arn_body: Final = _sent_invoke_body(model, {"base_model": f"bedrock/{base_model}"})
+
+    assert arn_body == _sent_invoke_body(f"bedrock/invoke/{base_model}", {})
+
+
+_CONVERSE_ANSWER: Final = json.dumps(
+    {
+        "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        "metrics": {"latencyMs": 1},
+    }
+).encode()
+
+
+def test_a_provider_spec_before_an_arn_on_converse_is_left_out_of_the_model_id(_aws_test_credentials: None) -> None:
+    expected_path: Final = f"/model/{urllib.parse.quote(_APPLICATION_PROFILE_ARN, safe='')}/converse"
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.url.raw_path.decode() != expected_path:
+            return httpx.Response(404, json={"message": f"unexpected path {request.url.raw_path}"}, request=request)
+        return httpx.Response(
+            200, content=_CONVERSE_ANSWER, headers={"content-type": "application/json"}, request=request
+        )
+
+    response: Final = litellm.completion(
+        model=f"bedrock/anthropic/{_APPLICATION_PROFILE_ARN}",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10,
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(answer))),
+    )
+
+    assert _answer_text(response) == "hi"

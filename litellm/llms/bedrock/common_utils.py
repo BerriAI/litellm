@@ -130,6 +130,17 @@ class _BedrockServiceErrorBody(BaseModel):
     Output: _BedrockServiceErrorOutput
 
 
+def bedrock_service_error(error_type: str, headers: httpx.Headers) -> BedrockError:
+    return BedrockError(
+        status_code=404,
+        message=(
+            f"Bedrock answered HTTP 200 with the error {error_type}, which usually means the model id in the "
+            "model string does not name a Bedrock model or profile this route can call."
+        ),
+        headers=headers,
+    )
+
+
 def bedrock_error_in_success_body(response: httpx.Response) -> BedrockError | None:
     if b'"__type"' not in response.content:
         return None
@@ -137,14 +148,16 @@ def bedrock_error_in_success_body(response: httpx.Response) -> BedrockError | No
         error_type: Final = _BedrockServiceErrorBody.model_validate_json(response.content).Output.error_type
     except ValidationError:
         return None
-    return BedrockError(
-        status_code=400,
-        message=(
-            f"Bedrock answered HTTP 200 with the error {error_type}, which usually means the model id in the "
-            "model string does not name a Bedrock model or profile this route can call."
-        ),
-        headers=response.headers,
-    )
+    return bedrock_service_error(error_type, response.headers)
+
+
+def bedrock_service_error_type(body: object) -> str | None:
+    if not isinstance(body, dict) or "Output" not in body:
+        return None
+    try:
+        return _BedrockServiceErrorBody.model_validate(body).Output.error_type
+    except ValidationError:
+        return None
 
 
 def bedrock_answered_json(response: httpx.Response) -> bool:
@@ -1098,10 +1111,23 @@ def is_bedrock_application_inference_profile_arn(model: str) -> bool:
     return ":application-inference-profile/" in model
 
 
+_BEDROCK_ARN_RESOURCES_NAMING_NO_MODEL: Final = (
+    ":application-inference-profile/",
+    ":provisioned-model/",
+    ":imported-model/",
+    ":custom-model-deployment/",
+)
+
+
+def bedrock_arn_names_no_model(model: str) -> bool:
+    return any(resource in model for resource in _BEDROCK_ARN_RESOURCES_NAMING_NO_MODEL)
+
+
 def bedrock_capability_model(model: str, base_model: object) -> str:
     """The model id to look capabilities up by: the deployment's ``base_model`` for an
-    application inference profile ARN, since the ARN names no model, else ``model``."""
-    if isinstance(base_model, str) and base_model and is_bedrock_application_inference_profile_arn(model):
+    ARN whose resource id names no model (an application inference profile, a provisioned
+    or imported model, a custom model deployment), else ``model``."""
+    if isinstance(base_model, str) and base_model and bedrock_arn_names_no_model(model):
         return strip_bedrock_routing_prefix(base_model)
     return model
 
@@ -1114,10 +1140,13 @@ def invoke_model_with_base_model_provider(model: str, base_model: object) -> str
         not isinstance(base_model, str)
         or not model_id.startswith("arn:")
         or BedrockModelInfo.get_bedrock_route(model) != "invoke"
-        or BaseAWSLLM.get_bedrock_invoke_provider(model) is not None
+        or (not bedrock_arn_names_no_model(model_id) and BaseAWSLLM.get_bedrock_invoke_provider(model) is not None)
     ):
         return model
-    provider: Final = BaseAWSLLM.get_bedrock_invoke_provider(strip_bedrock_routing_prefix(base_model))
+    base_model_id: Final = strip_bedrock_routing_prefix(base_model)
+    provider: Final = BaseAWSLLM.get_bedrock_invoke_provider(base_model_id) or (
+        "anthropic" if "claude" in base_model_id.lower() else None
+    )
     return model if provider is None else f"invoke/{provider}/{model_id}"
 
 

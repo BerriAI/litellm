@@ -622,6 +622,10 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         if model.startswith("invoke/"):
             model = model.replace("invoke/", "", 1)
 
+        spec_provider: Final = BaseAWSLLM._get_provider_from_model_path(model)
+        if spec_provider is not None:
+            return spec_provider
+
         # Special case: Check for "nova" in model name first (before "amazon")
         # This handles amazon.nova-* models which would otherwise match "amazon" (Titan)
         if "nova" in model.lower():
@@ -631,11 +635,6 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         _split_model: Final = model.split(".")[0]
         if _split_model in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
             return cast(BEDROCK_INVOKE_PROVIDERS_LITERAL, _split_model)
-
-        # If not a known provider, check for pattern with two slashes
-        provider = BaseAWSLLM._get_provider_from_model_path(model)
-        if provider is not None:
-            return provider
 
         invoke_providers: Final[tuple[BEDROCK_INVOKE_PROVIDERS_LITERAL, ...]] = get_args(
             BEDROCK_INVOKE_PROVIDERS_LITERAL
@@ -669,7 +668,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             # like "bedrock/invoke/arn:..." are fully stripped in one call.
             from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
 
-            model_id = BaseAWSLLM._without_invoke_provider_spec(strip_bedrock_routing_prefix(model_id))
+            model_id = BaseAWSLLM.without_provider_spec(strip_bedrock_routing_prefix(model_id))
             # URL-encode ARNs so colons and slashes are safe in the URL path.
             if model_id.startswith("arn:"):
                 model_id = BaseAWSLLM.encode_model_id(model_id=model_id)
@@ -697,7 +696,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         return model_id
 
     @staticmethod
-    def _without_invoke_provider_spec(model_id: str) -> str:
+    def without_provider_spec(model_id: str) -> str:
         _, _, arn = model_id.partition("/")
         return arn if arn.startswith("arn:") else model_id
 
