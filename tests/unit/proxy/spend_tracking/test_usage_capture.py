@@ -880,3 +880,59 @@ async def test_response_ack_timeout_preserves_success_and_later_commits(monkeypa
         assert database.transactions == 1
     finally:
         await runtime.stop(1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["generate_content", "agenerate_content"])
+@pytest.mark.parametrize("tokens", [None, 0, 7])
+async def test_prepared_native_google_capture_preserves_reported_usage(
+    call_type: str, tokens: int | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+
+    import litellm
+    from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
+
+    database: Final = StoredUsage()
+    meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    logger: Final = _logger(call_type)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "capture-model",
+        {"input_cost_per_token": 0.1, "output_cost_per_token": 0.2, "litellm_provider": "openai", "mode": "chat"},
+    )
+    reported: Final = (
+        {"trafficType": "ON_DEMAND"}
+        if tokens is None
+        else {
+            "promptTokenCount": tokens,
+            "candidatesTokenCount": tokens,
+            "totalTokenCount": 2 * tokens,
+            "cachedContentTokenCount": tokens,
+            "promptTokensDetails": [{"modality": "DOCUMENT", "tokenCount": tokens}],
+            "cacheTokensDetails": [{"modality": "document", "token_count": tokens}],
+        }
+    )
+    response: Final = {
+        "responseId": "native-google",
+        "candidates": [{"content": {"parts": [{"text": "answer"}], "role": "model"}, "finishReason": "STOP"}],
+        "usageMetadata": reported,
+    }
+    native_response: Final = httpx.Response(200, json=response)
+    logger.model_call_details["httpx_response"] = native_response
+    prepared: Final = logger.prepare_response_cost(response, NOW)
+    assert prepared is not None
+    capture_logging_usage(meter, logger, response, NOW, NOW)
+    await meter.close()
+    envelope: Final = json.loads(database.rows[-1].envelope)
+    assert (None if envelope["usage"] is None else envelope["usage"]["total_tokens"]) == (
+        None if tokens is None else 2 * tokens
+    )
+    assert (None if envelope["usage"] is None else envelope["usage"]["prompt_tokens_details"]["text_tokens"]) == tokens
+    assert (
+        None
+        if envelope["usage"] is None
+        else envelope["usage"]["prompt_tokens_details"]["cached_tokens_details"]["text_tokens"]
+    ) == tokens
+    assert envelope["usage_source"] == ("unknown" if tokens is None else "measured")
+    assert response == native_response.json()

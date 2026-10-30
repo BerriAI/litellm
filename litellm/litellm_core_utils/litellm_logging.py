@@ -165,6 +165,7 @@ from litellm.types.llms.openai import (
     ResponseIncompleteEvent,
     ResponsesAPIResponse,
 )
+from litellm.types.llms.vertex_ai import GenerateContentResponseBody, UsageMetadata
 from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.rerank import RerankResponse, get_rerank_usage
@@ -575,6 +576,7 @@ def _resolve_mantle_region_for_cost(
 _PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"})
 _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
 _SERVED_ANTHROPIC_BODY: Final = TypeAdapter(dict[str, object])
+_GOOGLE_USAGE_FIELDS: Final = frozenset(UsageMetadata.__annotations__)
 _REDACTED_RESULT: Final = TypeAdapter(object)
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 
@@ -7010,6 +7012,13 @@ class StandardLoggingPayloadSetup:
             return _empty
         _raw: Final = response_obj.get("usage", None)
         if _raw is None:
+            google_usage: Final[object] = response_obj.get("usageMetadata")
+            if isinstance(google_usage, dict) and _GOOGLE_USAGE_FIELDS.intersection(google_usage):
+                return litellm.VertexGeminiConfig.calculate_usage(
+                    cast(  # cast-ok: retain converter-supported modalities and token_count aliases
+                        GenerateContentResponseBody, response_obj
+                    )
+                ).model_dump()
             reported: Final = response_obj.get("usage_info")
             if isinstance(reported, BaseModel):
                 return reported.model_dump(exclude_none=True)
