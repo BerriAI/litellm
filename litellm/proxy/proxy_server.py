@@ -10204,7 +10204,7 @@ def _format_streaming_sse_chunk(chunk: object) -> str | bytes:
 
 def _format_responses_sse_chunk(chunk: object) -> str | bytes:
     if isinstance(chunk, Mapping):
-        return f"data: {json.dumps(chunk, default=str)}\n\n"
+        return f"data: {json.dumps({**chunk}, default=str)}\n\n"
     return _format_streaming_sse_chunk(chunk=chunk)
 
 

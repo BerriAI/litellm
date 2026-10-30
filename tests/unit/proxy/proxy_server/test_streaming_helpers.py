@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Callable, Mapping
+from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
 
@@ -148,8 +149,14 @@ async def test_responses_stream_dispatches_named_events_without_a_chat_done_sent
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("as_mapping", [False, True])
-async def test_responses_stream_sends_no_failure_event_after_an_upstream_error_event(as_mapping: bool) -> None:
+@pytest.mark.parametrize(
+    "as_chunk",
+    [lambda event: event, lambda event: event.model_dump(), lambda event: MappingProxyType(event.model_dump())],
+    ids=["model", "dict", "mapping_proxy"],
+)
+async def test_responses_stream_sends_no_failure_event_after_an_upstream_error_event(
+    as_chunk: Callable[[ErrorEvent], BaseModel | Mapping[str, object]],
+) -> None:
     response: Final = ResponsesAPIResponse(id="resp_error_then_raise", created_at=1, model="local-model", output=[])
     created: Final = ResponseCreatedEvent.model_validate(
         {"type": "response.created", "sequence_number": 0, "response": response}
@@ -160,7 +167,7 @@ async def test_responses_stream_sends_no_failure_event_after_an_upstream_error_e
 
     async def upstream() -> AsyncIterator[BaseModel | Mapping[str, object]]:
         yield created
-        yield error_event.model_dump() if as_mapping else error_event
+        yield as_chunk(error_event)
         raise litellm.APIError(status_code=500, message="Stream close failed", llm_provider="openai", model="local-model")
 
     frames: Final = tuple(
