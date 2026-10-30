@@ -6341,6 +6341,107 @@ async def test_an_invalid_stream_chunk_size_is_rejected_before_any_prompt_hook_r
     on_prompt.assert_not_called()
 
 
+ONE_WORD_INSTRUCTION: Final[AllMessageValues] = {"role": "system", "content": "Answer in one word."}
+
+
+class _SyncOnlyOneWordPromptManager(CustomPromptManagement):
+    def get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        non_default_params: dict,
+        prompt_id: str | None,
+        prompt_variables: dict | None,
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: PromptSpec | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        ignore_prompt_manager_model: bool | None = False,
+        ignore_prompt_manager_optional_params: bool | None = False,
+    ) -> tuple[str, list[AllMessageValues], dict]:
+        return model, [ONE_WORD_INSTRUCTION, *messages], non_default_params
+
+
+class _OneWordPromptManager(_SyncOnlyOneWordPromptManager):
+    async def async_get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        non_default_params: dict,
+        prompt_id: str | None,
+        prompt_variables: dict | None,
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        litellm_logging_obj: LiteLLMLogging,
+        prompt_spec: PromptSpec | None = None,
+        tools: list[dict] | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        ignore_prompt_manager_model: bool | None = False,
+        ignore_prompt_manager_optional_params: bool | None = False,
+    ) -> tuple[str, list[AllMessageValues], dict]:
+        return model, [ONE_WORD_INSTRUCTION, *messages], non_default_params
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prompt_manager", [_OneWordPromptManager, _SyncOnlyOneWordPromptManager], ids=["both-hooks", "sync-hook-only"]
+)
+@pytest.mark.parametrize(
+    ("model", "fallbacks", "sent_models"),
+    [
+        ("openai/backup", None, ("backup",)),
+        ("openai/primary", ["openai/backup"], ("primary", "backup")),
+    ],
+    ids=["direct", "after-a-failed-attempt"],
+)
+async def test_acompletion_sends_the_prompt_managers_template_to_the_provider_once(
+    prompt_manager: type[CustomPromptManagement],
+    model: str,
+    fallbacks: list[str] | None,
+    sent_models: tuple[str, ...],
+) -> None:
+    requests: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.put_nowait(request)
+        if json.loads(request.content)["model"] == "primary":
+            return httpx.Response(
+                401,
+                json={"error": {"message": "invalid key", "type": "authentication_error", "param": None, "code": None}},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-one-word",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "backup",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Blue"}, "finish_reason": "stop"}],
+            },
+        )
+
+    user_message: Final = {"role": "user", "content": "What color is the sky?"}
+    async with AsyncOpenAI(
+        api_key="test-key",
+        base_url="https://api.openai.com/v1",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    ) as client:
+        response: Final = await litellm.acompletion(
+            model=model,
+            messages=[user_message],
+            prompt_id="one-word",
+            callbacks=[prompt_manager()],
+            fallbacks=fallbacks,
+            client=client,
+        )
+
+    assert response.choices[0].message.content == "Blue"
+    sent_bodies: Final = tuple(json.loads(requests.get_nowait().content) for _ in range(requests.qsize()))
+    assert sent_bodies == tuple(
+        {"model": sent_model, "messages": [ONE_WORD_INSTRUCTION, user_message]} for sent_model in sent_models
+    )
+
+
 def _completion_logging_obj(call_id: str) -> LiteLLMLogging:
     return LiteLLMLogging(
         model="gpt-4.1-mini",

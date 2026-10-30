@@ -55,6 +55,7 @@ RoutingStrategyName: TypeAlias = Literal[
 TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
 ADDRESSED_RESPONSE_ID_FIELD: Final = "_litellm_addressed_response_id"
 STREAM_USAGE_INJECTED_FIELD: Final = "_litellm_stream_usage_injected"
+PROMPT_MANAGEMENT_APPLIED_FIELD: Final = "_litellm_prompt_management_applied"
 
 WIRE_NAME: Final = "wire_name"
 
@@ -348,6 +349,7 @@ class CallState:
     cache_key: str | None = None
     stream_response: "Mapping[str, ModelResponse] | None" = None
     context_compaction_state: "CompactionState | None" = field(default=None, metadata=wire("_context_compaction_state"))
+    prompt_management_applied: bool | None = field(default=None, metadata=wire(PROMPT_MANAGEMENT_APPLIED_FIELD))
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

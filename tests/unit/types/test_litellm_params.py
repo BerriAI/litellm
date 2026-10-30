@@ -256,6 +256,7 @@ INTERNAL_STATE_NAMES: Final = (
     "cache_key",
     "stream_response",
     "_context_compaction_state",
+    "_litellm_prompt_management_applied",
     *AGENTIC_LOOP_STATE_NAMES,
     "_router_weights",
     "_encrypted_content_affinity_pinned",
