@@ -9,6 +9,7 @@ from fastapi import HTTPException, Request
 from starlette.datastructures import State
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.utils import get_docs_url, get_openapi_url, get_redoc_url
 from litellm.types.guardrails import GuardrailEventHooks
 
@@ -3716,3 +3717,193 @@ async def test_evict_config_param_clears_the_local_layer_and_survives_a_redis_ou
     await evict_config_param("router_settings", cache=cache)
 
     assert await cache.in_memory_cache.async_get_cache(_config_cache_key("router_settings")) is None
+
+
+class _ShippedGuardrail(CustomGuardrail):
+    """Stands in for a guardrail litellm ships: records the messages each call was sent."""
+
+    __module__ = "litellm.proxy.guardrails.guardrail_hooks.shipped_double"
+
+    def __init__(self, name: str = "shipped", run_in_parallel: bool = False, default_on: bool = True) -> None:
+        super().__init__(
+            guardrail_name=name,
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=default_on,
+            run_in_parallel=run_in_parallel,
+        )
+        self.seen: Final[list[object]] = []
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.seen.append(data.get("messages"))
+        return data
+
+
+class _OperatorGuardrail(_ShippedGuardrail):
+    """A guardrail from the operator's own module."""
+
+    __module__ = "operator_guardrails.checks"
+
+
+class _ShippedHook(CustomLogger):
+    """Stands in for a pre-call hook litellm ships that is not a guardrail, such as a rate limiter."""
+
+    __module__ = "litellm.proxy.hooks.shipped_hook_double"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: Final[list[object]] = []
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.seen.append(data.get("messages"))
+        return data
+
+
+_SECRET_PROMPT: Final = [{"role": "user", "content": "my card is 4111 1111 1111 1111"}]
+
+
+def _unroutable_model_probe():
+    from litellm.proxy.route_llm_request import UnroutableModelProbe
+
+    return UnroutableModelProbe(
+        llm_router=Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-mini",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test", "mock_response": "pong"},
+                }
+            ]
+        ),
+        user_model=None,
+        route_type="acompletion",
+        user_api_key_dict=None,
+    )
+
+
+async def _walk(monkeypatch, callbacks, model: str, probe) -> dict:
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    monkeypatch.setattr(litellm, "callbacks", list(callbacks))
+    ProxyLogging._callback_capabilities_cache.clear()
+    return await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+        data={"model": model, "messages": [dict(message) for message in _SECRET_PROMPT]},
+        call_type="completion",
+        routing_probe=probe,
+    )
+
+
+@pytest.mark.parametrize("run_in_parallel", [False, True], ids=["sequential", "parallel"])
+async def test_pre_call_hook_skips_a_shipped_guardrail_only_for_a_model_routing_refuses(monkeypatch, run_in_parallel):
+    from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+
+    unknown_guardrail: Final = _ShippedGuardrail(run_in_parallel=run_in_parallel)
+    unknown_probe: Final = _unroutable_model_probe()
+    await _walk(monkeypatch, [unknown_guardrail], "no-such-model", unknown_probe)
+    known_guardrail: Final = _ShippedGuardrail(run_in_parallel=run_in_parallel)
+    known_probe: Final = _unroutable_model_probe()
+    await _walk(monkeypatch, [known_guardrail], "gpt-4o-mini", known_probe)
+
+    assert unknown_guardrail.seen == []
+    assert isinstance(unknown_probe.refusal, ProxyModelNotFoundError)
+    assert known_guardrail.seen == [_SECRET_PROMPT]
+    assert known_probe.refusal is None
+
+
+async def test_pre_call_hook_without_a_probe_runs_the_shipped_guardrail_for_an_unknown_model(monkeypatch):
+    guardrail: Final = _ShippedGuardrail()
+
+    result: Final = await _walk(monkeypatch, [guardrail], "no-such-model", None)
+
+    assert guardrail.seen == [_SECRET_PROMPT]
+    assert result["messages"] == _SECRET_PROMPT
+
+
+@pytest.mark.parametrize("operator_in_parallel", [False, True], ids=["sequential", "parallel"])
+async def test_pre_call_hook_runs_an_operator_guardrail_and_every_guardrail_before_it(
+    monkeypatch, operator_in_parallel
+):
+    before: Final = _ShippedGuardrail(name="before")
+    operator: Final = _OperatorGuardrail(name="operator", run_in_parallel=operator_in_parallel)
+    after: Final = _ShippedGuardrail(name="after")
+
+    await _walk(monkeypatch, [before, operator, after], "no-such-model", _unroutable_model_probe())
+
+    assert (before.seen, len(operator.seen), after.seen) == ([_SECRET_PROMPT], 1, [])
+
+
+async def test_pre_call_hook_runs_every_guardrail_when_one_routes_on_sensitive_data(monkeypatch):
+    guardrail: Final = _ShippedGuardrail()
+    sensitive_router: Final = CustomGuardrail(
+        guardrail_name="sensitive-router",
+        event_hook=GuardrailEventHooks.pre_call,
+        on_sensitive_data="route",
+        sensitive_data_route_to_model="gpt-4o-mini",
+    )
+
+    await _walk(monkeypatch, [guardrail, sensitive_router], "no-such-model", _unroutable_model_probe())
+
+    assert guardrail.seen == [_SECRET_PROMPT]
+
+
+async def test_pre_call_hook_hides_the_prompt_from_hooks_after_a_skipped_guardrail(monkeypatch):
+    from litellm.constants import REDACTED_BY_LITELLM
+
+    hook: Final = _ShippedHook()
+
+    result: Final = await _walk(monkeypatch, [_ShippedGuardrail(), hook], "no-such-model", _unroutable_model_probe())
+
+    redacted: Final = [{"role": "user", "content": REDACTED_BY_LITELLM}]
+    assert hook.seen == [redacted]
+    assert result["messages"] == redacted
+
+
+async def test_pre_call_hook_leaves_the_request_alone_when_no_guardrail_applies(monkeypatch):
+    hook: Final = _ShippedHook()
+    probe: Final = _unroutable_model_probe()
+
+    result: Final = await _walk(monkeypatch, [_ShippedGuardrail(default_on=False), hook], "no-such-model", probe)
+
+    assert hook.seen == [_SECRET_PROMPT]
+    assert result["messages"] == _SECRET_PROMPT
+    assert probe.refusal is None
+
+
+def test_without_unscanned_content_redacts_every_field_a_guardrail_can_rewrite():
+    from litellm.constants import REDACTED_BY_LITELLM
+    from litellm.proxy.utils import without_unscanned_content
+
+    instruction: Final = {"parts": [{"text": "card 4111"}]}
+    redacted_instruction: Final = {"parts": [{"text": REDACTED_BY_LITELLM}]}
+
+    assert without_unscanned_content(
+        {
+            "model": "gpt-4o-mini",
+            "temperature": 0,
+            "messages": _SECRET_PROMPT,
+            "contents": [{"role": "user", "parts": [{"text": "card 4111"}]}],
+            "prompt": "card 4111",
+            "input": ["card 4111"],
+            "query": "card 4111",
+            "instruction": "card 4111",
+            "tools": [{"type": "function", "function": {"name": "card", "description": "4111"}}],
+            "system": "card 4111",
+            "instructions": "card 4111",
+            "systemInstruction": instruction,
+            "system_instruction": instruction,
+            "config": {"system_instruction": instruction, "temperature": 0},
+        }
+    ) == {
+        "messages": [{"role": "user", "content": REDACTED_BY_LITELLM}],
+        "contents": [{"role": "user", "parts": [{"text": REDACTED_BY_LITELLM}]}],
+        "prompt": "",
+        "input": "",
+        "query": "",
+        "instruction": "",
+        "tools": [],
+        "system": REDACTED_BY_LITELLM,
+        "instructions": REDACTED_BY_LITELLM,
+        "systemInstruction": redacted_instruction,
+        "system_instruction": redacted_instruction,
+        "config": {"system_instruction": redacted_instruction, "temperature": 0},
+    }
