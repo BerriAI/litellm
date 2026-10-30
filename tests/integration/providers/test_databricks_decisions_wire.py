@@ -1,3 +1,4 @@
+import json
 import threading
 import time
 import uuid
@@ -67,7 +68,12 @@ _NON_BARE_NAMES: Final[tuple[tuple[str, str], ...]] = (
 )
 _DATABRICKS_ERRORS: Final[tuple[tuple[str, str, int, dict[str, JsonValue]], ...]] = (
     (_MODEL, _ROUTE, 400, {"error_code": "BAD_REQUEST", "message": "Invalid input: questions must not be empty"}),
-    (_MODEL, _ROUTE, 403, {"error_code": "PERMISSION_DENIED", "message": "ai_decide is not enabled for this workspace"}),
+    (
+        _MODEL,
+        _ROUTE,
+        403,
+        {"error_code": "PERMISSION_DENIED", "message": "ai_decide is not enabled for this workspace"},
+    ),
     (
         _ENDPOINT,
         f"/{_ENDPOINT}/invocations",
@@ -87,6 +93,15 @@ _TENTH_MEGABYTE_NAME: Final = "a" * 100_000 + "/"
 def _number(value: JsonValue) -> float:
     assert isinstance(value, (int, float)) and not isinstance(value, bool), value
     return float(value)
+
+
+def _endpoint_spend() -> float:
+    prices: Final = object_value(
+        json.loads(Path("model_prices_and_context_window.json").read_text())[f"databricks/{_ENDPOINT}"]
+    )
+    return _number(_USAGE["input_tokens"]) * _number(prices["input_cost_per_token"]) + _number(
+        _USAGE["output_tokens"]
+    ) * _number(prices["output_cost_per_token"])
 
 
 def _register(scenario: Scenario, body: dict[str, JsonValue], *, status: int = 200) -> ScenarioHandle:
@@ -300,9 +315,14 @@ def test_an_openai_format_request_at_v1_decisions_reaches_the_serving_endpoint_a
             row["model_group"],
             row["api_base"],
             _number(row["spend"]),
-        ) == ("success", "adecisions", "databricks", deployment, f"{handle.api_base()}/{_ENDPOINT}/invocations", 0.0), (
-            row
-        )
+        ) == (
+            "success",
+            "adecisions",
+            "databricks",
+            deployment,
+            f"{handle.api_base()}/{_ENDPOINT}/invocations",
+            pytest.approx(_endpoint_spend(), rel=1e-9),
+        ), row
 
 
 def test_an_openai_format_request_at_v1_decisions_reaches_the_ai_decide_route_without_a_model_field(
@@ -381,6 +401,7 @@ def test_a_noul_probability_reaches_the_caller_as_the_system_one_noul_answer(gat
 
 
 def test_a_wildcard_deployment_sends_each_request_to_the_named_endpoint_and_bills_each_once(gateway: Gateway) -> None:
+    expected_spend: Final = _endpoint_spend()
     with gateway.scenario() as scenario:
         handle: Final = _register(scenario, _ANSWER_BODY)
         prefix: Final = _wildcard_deployment(scenario, api_base=handle.api_base(), api_key=_API_KEY)
@@ -408,9 +429,14 @@ def test_a_wildcard_deployment_sends_each_request_to_the_named_endpoint_and_bill
                 row["model_group"],
                 row["api_base"],
                 _number(row["spend"]),
-            ) == ("success", "asystemone", "databricks", model, f"{handle.api_base()}/{_ENDPOINT}/invocations", 0.0), (
-                row
-            )
+            ) == (
+                "success",
+                "asystemone",
+                "databricks",
+                model,
+                f"{handle.api_base()}/{_ENDPOINT}/invocations",
+                pytest.approx(expected_spend, rel=1e-9),
+            ), row
 
 
 def test_a_wildcard_deployment_sends_each_ai_decide_request_to_the_route_and_logs_each_once(gateway: Gateway) -> None:

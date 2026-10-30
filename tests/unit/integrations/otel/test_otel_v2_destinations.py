@@ -3352,8 +3352,7 @@ class TestArizeTenantOnly:
 
         assert capture.received() == {
             "space_id=space-operator,api_key=key-operator": ("chat gpt-4",),
-            None: ("chat gpt-4",),
-        }, "the operator's space, plus the stdout placeholder every credentialed preset keeps today"
+        }, "the operator's space, with no stdout copy the operator never asked for"
 
     def test_the_standard_otlp_headers_still_reach_the_operators_space(self, monkeypatch):
         credential_less_arize(monkeypatch)
@@ -3366,8 +3365,7 @@ class TestArizeTenantOnly:
 
         assert capture.received() == {
             "space_id=space-operator,api_key=key-operator": ("chat gpt-4",),
-            None: ("chat gpt-4",),
-        }, "the operator's space, plus the stdout placeholder every credentialed preset keeps today"
+        }, "the operator's space, with no stdout copy the operator never asked for"
 
     def test_a_credential_less_arize_still_delivers_a_team_destination(self, monkeypatch):
         from litellm.integrations.otel.plumbing.providers import attach_tenant_fan_out
@@ -3453,7 +3451,7 @@ class TestLangfuseDestinationFields:
         for kind in ("otlp_grpc", "otlp_http", "console"):
             monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)  # pyright: ignore[reportPrivateUsage]  # the factory table is the seam for capturing each exporter
         config: Final = OpenTelemetryV2Config()
-        provider: Final = build_tracer_provider(config, tenant_overrides=True)
+        provider: Final = build_tracer_provider(config, tenant_overrides=True, console_default=True)
         attach_tenant_fan_out(provider, config)
         emitter: Final = SpanEmitter(get_tracer(provider, "litellm"), config)
         call: Final = replace(
@@ -3493,7 +3491,7 @@ class TestLangfuseDestinationFields:
         capture: Final = _ExporterCapture()
         for kind in ("otlp_grpc", "otlp_http", "console"):
             monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)  # pyright: ignore[reportPrivateUsage]  # the factory table is the seam for capturing each exporter
-        provider: Final = build_tracer_provider(config, tenant_overrides=True)
+        provider: Final = build_tracer_provider(config, tenant_overrides=True, console_default=True)
         attach_tenant_fan_out(provider, config)
         emitter: Final = SpanEmitter(get_tracer(provider, "litellm"), config)
         call: Final = replace(
@@ -3644,7 +3642,7 @@ class TestLangfuseDestinationFields:
         for kind in ("otlp_grpc", "otlp_http", "console"):
             monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)  # pyright: ignore[reportPrivateUsage]  # the factory table is the seam for capturing each exporter
         config: Final = OpenTelemetryV2Config()
-        provider: Final = build_tracer_provider(config, tenant_overrides=True)
+        provider: Final = build_tracer_provider(config, tenant_overrides=True, console_default=True)
         attach_tenant_fan_out(provider, config)
         emitter: Final = SpanEmitter(get_tracer(provider, "litellm"), config)
         destination: Final = destination_for(
@@ -4823,6 +4821,115 @@ class TestCredentialGatedExporters:
         kept = credential_gated_exporters((operator_console,), ExporterOwner.LANGFUSE_OTEL)
 
         assert kept[0] is operator_console
+
+
+class TestConsolePlaceholder:
+    """The console spec ``_normalize`` folds in for an empty exporter list prints spans
+    only for the ``otel`` callback; no other logger was asked to print."""
+
+    @pytest.fixture
+    def capture(self, monkeypatch: pytest.MonkeyPatch) -> "_ExporterCapture":
+        return TestArizeTenantOnly._capture_exporters(monkeypatch)
+
+    @staticmethod
+    def _received(capture: "_ExporterCapture", provider: TracerProvider) -> Mapping[str | None, tuple[str, ...]]:
+        emit(provider)
+        provider.force_flush()
+        return capture.received()
+
+    @staticmethod
+    def _no_otel_env(monkeypatch: pytest.MonkeyPatch) -> None:
+        for name in _OTEL_SHORTHAND_ENV:
+            monkeypatch.delenv(name, raising=False)
+
+    @staticmethod
+    def _operator_langfuse(monkeypatch: pytest.MonkeyPatch) -> None:
+        TestConsolePlaceholder._no_otel_env(monkeypatch)
+        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-operator")
+        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-operator")
+
+    @staticmethod
+    def _isolated_proxy_registration(monkeypatch: pytest.MonkeyPatch) -> None:
+        for name in ("service_callback", "input_callback", "_async_success_callback", "_async_failure_callback"):
+            monkeypatch.setattr(litellm, name, [])
+        monkeypatch.setattr("litellm.proxy.proxy_server.open_telemetry_logger", None)
+
+    def test_a_credentialed_langfuse_exports_to_langfuse_alone(
+        self, monkeypatch: pytest.MonkeyPatch, capture: "_ExporterCapture"
+    ) -> None:
+        self._operator_langfuse(monkeypatch)
+        config: Final = langfuse_preset()
+        langfuse_headers: Final = next(
+            spec.headers for spec in config.exporters if spec.owner is ExporterOwner.LANGFUSE_OTEL
+        )
+
+        assert self._received(capture, build_tracer_provider(config)) == {langfuse_headers: ("chat gpt-4",)}
+
+    def test_a_console_exporter_the_operator_named_still_prints(
+        self, monkeypatch: pytest.MonkeyPatch, capture: "_ExporterCapture"
+    ) -> None:
+        self._operator_langfuse(monkeypatch)
+        monkeypatch.setenv("OTEL_EXPORTER", "console")
+
+        assert self._received(capture, build_tracer_provider(langfuse_preset()))[None] == ("chat gpt-4",)
+
+    @pytest.fixture
+    def otel_callback(self, monkeypatch: pytest.MonkeyPatch, capture: "_ExporterCapture") -> OpenTelemetryV2:
+        """The plain ``otel`` callback with nothing else configured, built the way the proxy builds it."""
+        from litellm.litellm_core_utils import litellm_logging as logging_module
+
+        self._no_otel_env(monkeypatch)
+        self._isolated_proxy_registration(monkeypatch)
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        monkeypatch.setattr(logging_module, "_in_memory_loggers", [])
+        is_otel_v2_enabled.cache_clear()
+        built: Final = logging_module.build_custom_logger_compatible_class(
+            "otel", internal_usage_cache=None, llm_router=None
+        )
+        assert isinstance(built, OpenTelemetryV2)
+        return built
+
+    def test_the_otel_callback_prints_when_nothing_else_is_configured(
+        self, otel_callback: OpenTelemetryV2, capture: "_ExporterCapture"
+    ) -> None:
+        assert self._received(capture, otel_callback.tracer_provider) == {None: ("chat gpt-4",)}
+
+    def test_the_otel_callback_prints_a_call_for_a_key_with_its_own_service_name(
+        self, otel_callback: OpenTelemetryV2, capture: "_ExporterCapture"
+    ) -> None:
+        """A key or team ``otel_service_name`` moves the call onto a second provider built for that name."""
+        kwargs: Final = {
+            **_closed_chat_call_kwargs(),
+            "litellm_params": {"metadata": {"user_api_key_auth_metadata": {"otel_service_name": "payments-gateway"}}},
+        }
+
+        otel_callback.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+        asyncio.run(otel_callback.async_log_success_event(kwargs, None, None, None))
+
+        assert capture.received() == {None: ("chat gpt-4o",)}
+
+    @pytest.mark.parametrize(
+        ("env", "expected"),
+        [({}, {}), ({"OTEL_EXPORTER": "console"}, {None: ("chat gpt-4",)})],
+        ids=["nothing-configured", "operator-asked-for-console"],
+    )
+    def test_the_background_global_logger_prints_only_when_asked(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capture: "_ExporterCapture",
+        env: Mapping[str, str],
+        expected: Mapping[str | None, tuple[str, ...]],
+    ) -> None:
+        """The proxy publishes a generic logger even when no callback built one, which is
+        what key-only and team-only destinations run under."""
+        from litellm.integrations.otel.logger import select_global_otel_v2_logger
+
+        self._no_otel_env(monkeypatch)
+        self._isolated_proxy_registration(monkeypatch)
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+
+        assert self._received(capture, select_global_otel_v2_logger([]).tracer_provider) == expected
 
 
 class TestTenantHostSsrfGuard:

@@ -7975,6 +7975,8 @@ async def atext_completion(*args, **kwargs) -> TextCompletionResponse | TextComp
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 stream_options=kwargs.get("stream_options"),
+                usage_injected_by_proxy="_litellm_strip_stream_usage" in kwargs
+                and kwargs["_litellm_strip_stream_usage"] is True,
             )
         else:
             ## OpenAI / Azure Text Completion Returns here
@@ -8824,8 +8826,9 @@ def speech(
     extra_headers: Final = kwargs.get("extra_headers", None)
     model_info: Final = kwargs.get("model_info", None)
     shared_session: Final = kwargs.get("shared_session", None)
+    caller_api_base: Final = api_base or base_url
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
-        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base or base_url
+        model=model, custom_llm_provider=custom_llm_provider, api_base=caller_api_base
     )
     kwargs.pop("tags", [])
 
@@ -8880,13 +8883,13 @@ def speech(
         custom_llm_provider=custom_llm_provider,
     )
     response: HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent] | None = None
-    if custom_llm_provider == "edenai":
-        litellm_params_dict["api_base"] = api_base
+    if custom_llm_provider in ("edenai", "dashscope") and text_to_speech_provider_config is not None:
+        litellm_params_dict["api_base"] = caller_api_base if custom_llm_provider == "dashscope" else api_base
         response = base_llm_http_handler.text_to_speech_handler(
             model=model,
             input=input,
             voice=voice if isinstance(voice, str) else None,
-            text_to_speech_provider_config=text_to_speech_provider_config or litellm.EdenAITextToSpeechConfig(),
+            text_to_speech_provider_config=text_to_speech_provider_config,
             text_to_speech_optional_params=optional_params,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params_dict,
