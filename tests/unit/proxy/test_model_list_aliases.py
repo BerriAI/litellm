@@ -1,7 +1,8 @@
 """
 Tests for key and team `model_aliases` on the model listing endpoints: GET /v1/models
-(`model_list`, OpenAI and Anthropic shapes) and GET /v1/models/{id} (`model_info`).
-An alias the caller can complete on is listed next to its target and resolves by name.
+(`model_list`, OpenAI and Anthropic shapes), GET /v1/models/{id} (`model_info`) and
+GET /model_group/info (`model_group_info`). An alias the caller can complete on is listed
+next to its target and resolves by name.
 """
 
 import json
@@ -350,3 +351,89 @@ async def test_hidden_router_settings_alias_the_key_does_not_list_is_not_retriev
     with pytest.raises(HTTPException) as retrieval:
         await proxy_server.model_info(model_id="quiet", user_api_key_dict=caller)
     assert retrieval.value.status_code == 404
+
+
+async def _model_group_rows(
+    user_api_key_dict: UserAPIKeyAuth, model_group: str | None = None
+) -> dict[str, dict[str, object]]:
+    response = await proxy_server.model_group_info(user_api_key_dict=user_api_key_dict, model_group=model_group)
+    return {row.model_group: row.model_dump() for row in response["data"]}
+
+
+def _team_listing(*extra: str, **aliases: dict[str, str]) -> UserAPIKeyAuth:
+    return _team_member(models=["gpt-4.1-mini", "team-chat", *extra], **aliases)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "alias", "target"),
+    [
+        (_team_listing(aliases={"mini": "gpt-4.1-mini"}), "mini", "gpt-4.1-mini"),
+        (_team_listing(team_model_aliases={"claude-sonnet-4-5": "gpt-4.1-mini"}), "claude-sonnet-4-5", "gpt-4.1-mini"),
+        (_team_listing("fast", team_model_aliases={"fast": "gpt-4.1-mini"}), "fast", "gpt-4.1-mini"),
+        (_team_listing(team_model_aliases={"chat": "team-chat"}), "chat", "team-chat"),
+        (_alias_holder(aliases={"fast": "gpt-4.1"}), "fast", "gpt-4.1"),
+        (_alias_holder(router_settings={"model_group_alias": {"fast": "gpt-4.1"}}), "fast", "gpt-4.1"),
+    ],
+)
+async def test_model_group_info_describes_every_alias_v1_models_lists_as_its_target(
+    router: Router, caller: UserAPIKeyAuth, alias: str, target: str
+) -> None:
+    rows = await _model_group_rows(caller)
+
+    assert list(rows) == await _v1_models(caller)
+    assert rows[alias] == {**rows[target], "model_group": alias}
+    assert await _model_group_rows(caller, model_group=alias) == {alias: rows[alias]}
+
+
+@pytest.mark.asyncio
+async def test_model_group_info_describes_a_team_alias_to_a_model_the_team_does_not_list(router: Router) -> None:
+    caller = _team_listing("fast", team_model_aliases={"fast": "gpt-4.1"})
+
+    rows = await _model_group_rows(caller)
+    assert list(rows) == await _v1_models(caller)
+    assert rows["fast"] == {**(await _model_group_rows(_keyholder("gpt-4.1")))["gpt-4.1"], "model_group": "fast"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target", "team_id"), [("paused", "team1"), ("hidden", "team1"), ("model_name_team1_abc", "team2")]
+)
+async def test_model_group_info_does_not_describe_an_alias_to_a_model_the_listing_hides(
+    router: Router, target: str, team_id: str
+) -> None:
+    models = ["gpt-4.1-mini", "fast"]
+    caller = _team_member(team_id=team_id, models=models, team_model_aliases={"fast": target})
+
+    assert await _model_group_rows(caller) == await _model_group_rows(_team_member(team_id=team_id, models=models))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target", "gated", "models"),
+    [
+        ("gpt-4.1", "gpt-4.1", ["gpt-4.1-mini", "fast"]),
+        ("gpt-4.1", "gpt-4.1", ["gpt-4.1-mini", "fast", "gpt-4.1"]),
+        ("model_name_team1_abc", "team-chat", ["gpt-4.1-mini", "fast", "model_name_team1_abc"]),
+    ],
+)
+async def test_model_group_info_hides_an_alias_whose_target_a_listing_callback_hides(
+    router: Router, monkeypatch: pytest.MonkeyPatch, target: str, gated: str, models: list[str]
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_ListingGate(frozenset({gated}))])
+    ProxyLogging._callback_capabilities_cache.clear()
+    caller = _team_member(models=models, team_model_aliases={"fast": target})
+
+    assert await _model_group_rows(caller) == await _model_group_rows(_team_member(models=models))
+
+
+@pytest.mark.asyncio
+async def test_model_group_info_keeps_every_group_an_allow_list_callback_allows_when_an_alias_points_past_them(
+    router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    caller = _team_member(models=["gpt-4.1-mini", "legacy", "fast"], team_model_aliases={"fast": "gpt-4.1"})
+    listed = await _v1_models(caller)
+
+    monkeypatch.setattr(litellm, "callbacks", [_ListingAllowList(frozenset(listed))])
+    ProxyLogging._callback_capabilities_cache.clear()
+    assert list(await _model_group_rows(caller)) == listed

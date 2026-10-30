@@ -514,6 +514,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401, RUF10
 from litellm.proxy.common_utils.load_config_utils import get_config_from_bucket
 from litellm.proxy.common_utils.model_deprecation import collect_model_deprecations
 from litellm.proxy.common_utils.model_listing_utils import (
+    CallerAliases,
     ClaudeCodeRoutingNames,
     DeployedModelGroups,
     TeamModelNameTranslator,
@@ -12254,6 +12255,19 @@ class ProxyStartupEvent:
 
 
 #### API ENDPOINTS ####
+async def _caller_aliases(user_api_key_dict: UserAPIKeyAuth, listed_team_id: str | None) -> CallerAliases:
+    router_settings: Final = await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict, prisma_client, proxy_logging_obj
+    )
+    return caller_alias_maps(
+        user_api_key_dict.aliases,
+        user_api_key_dict.team_model_aliases,
+        user_api_key_dict.team_id,
+        listed_team_id,
+        router_settings.get("model_group_alias") if isinstance(router_settings, Mapping) else None,
+    )
+
+
 async def _names_hidden_by_listing_callbacks(
     user_api_key_dict: UserAPIKeyAuth, model_names: Sequence[str]
 ) -> frozenset[str]:
@@ -12384,16 +12398,7 @@ async def model_list(
         http_request is not None and http_request.headers.get("anthropic-version") is not None
     )
     client_headers: Final[Mapping[str, str]] = http_request.headers if http_request is not None else _EMPTY_HEADERS
-    caller_router_settings: Final = await proxy_config.get_hierarchical_router_settings(
-        user_api_key_dict, prisma_client, proxy_logging_obj
-    )
-    caller_aliases: Final = caller_alias_maps(
-        user_api_key_dict.aliases,
-        user_api_key_dict.team_model_aliases,
-        user_api_key_dict.team_id,
-        team_id,
-        caller_router_settings.get("model_group_alias") if isinstance(caller_router_settings, Mapping) else None,
-    )
+    caller_aliases: Final = await _caller_aliases(user_api_key_dict, team_id)
     routing_names: Final = ClaudeCodeRoutingNames(
         llm_router,
         team_id or user_api_key_dict.team_id,
@@ -12672,16 +12677,7 @@ async def model_info(
     )
     hidden_names: Final = blocked_names | unhealthy_names
     internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, settings)
-    caller_router_settings: Final = await proxy_config.get_hierarchical_router_settings(
-        user_api_key_dict, prisma_client, proxy_logging_obj
-    )
-    caller_aliases: Final = caller_alias_maps(
-        user_api_key_dict.aliases,
-        user_api_key_dict.team_model_aliases,
-        user_api_key_dict.team_id,
-        team_id,
-        caller_router_settings.get("model_group_alias") if isinstance(caller_router_settings, Mapping) else None,
-    )
+    caller_aliases: Final = await _caller_aliases(user_api_key_dict, team_id)
     callback_hidden_names: Final = await _names_hidden_by_listing_callbacks(
         user_api_key_dict,
         tuple(
@@ -18274,37 +18270,77 @@ async def model_group_info(
     undiscoverable_group_names: Final = undiscoverable_model_names(
         all_models_str, llm_router, user_api_key_dict, user_api_key_dict.team_id
     )
-    listed_group_names: Final = tuple(name for name in all_models_str if name not in undiscoverable_group_names)
+    listed_group_names: Final = tuple(
+        dict.fromkeys(name for name in all_models_str if name not in undiscoverable_group_names)
+    )
+    internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
 
-    # Append A2A agents to model groups
     from litellm.proxy.agent_endpoints.model_list_helpers import (
         append_agents_to_model_group,
     )
 
-    model_groups: Final = await append_agents_to_model_group(
-        model_groups=get_model_group_info(
-            llm_router=llm_router,
-            all_models_str=listed_group_names,
-            model_group=model_group,
-            team_id=user_api_key_dict.team_id,
-        ),
-        user_api_key_dict=user_api_key_dict,
-    )
-    internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
-    public_group_names: Final = tuple(
-        internal_to_public.get(group.model_group, group.model_group) for group in model_groups
-    )
+    agent_groups: Final = await append_agents_to_model_group(model_groups=[], user_api_key_dict=user_api_key_dict)
     callback_hidden_names: Final = await _names_hidden_by_listing_callbacks(
-        user_api_key_dict, tuple(dict.fromkeys(public_group_names))
+        user_api_key_dict,
+        tuple(
+            dict.fromkeys(
+                (
+                    *(internal_to_public.get(name, name) for name in listed_group_names),
+                    *(group.model_group for group in agent_groups),
+                )
+            )
+        ),
+    )
+    kept_entries: Final = tuple(
+        (name, name) for name in listed_group_names if internal_to_public.get(name, name) not in callback_hidden_names
+    )
+    requested_entries: Final = tuple(
+        entry
+        for entry in alias_listing_entries(
+            kept_entries,
+            await _caller_aliases(user_api_key_dict, None),
+            _describable_model_groups(
+                kept_entries, llm_router.health().fully_blocked_model_names(), user_api_key_dict, None
+            ),
+        )
+        if model_group is None or entry[0] == model_group
+    )
+    lookup_ids: Final = tuple(dict.fromkeys(lookup_id for _, lookup_id in requested_entries))
+    groups_by_lookup_id: Final = MappingProxyType(
+        dict(
+            zip(
+                lookup_ids,
+                get_model_group_info(
+                    llm_router=llm_router,
+                    all_models_str=lookup_ids,
+                    model_group=None,
+                    team_id=user_api_key_dict.team_id,
+                ),
+                strict=True,
+            )
+        )
     )
 
     return {
         "data": [
-            group
-            for group, public_name in zip(model_groups, public_group_names, strict=True)
-            if public_name not in callback_hidden_names
+            *(
+                _model_group_row_listed_as(groups_by_lookup_id[lookup_id], listed_name, lookup_id)
+                for listed_name, lookup_id in requested_entries
+            ),
+            *(group for group in agent_groups if group.model_group not in callback_hidden_names),
         ]
     }
+
+
+def _model_group_row_listed_as(row: ModelGroupInfoProxy, listed_name: str, lookup_id: str) -> ModelGroupInfoProxy:
+    if listed_name == lookup_id:
+        return row
+    return row.model_copy(
+        update={
+            "model_group": listed_name,
+            "is_public_model_group": listed_name in (litellm.public_model_groups or ()),
+        }
+    )
 
 
 @router.get(
