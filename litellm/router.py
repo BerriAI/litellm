@@ -897,6 +897,23 @@ def _stream_pre_content_error(
     )
 
 
+def _context_window_stream_fallback_error(
+    error: "MidStreamFallbackError | litellm.ContextWindowExceededError",
+    model: object,
+    llm_provider: str,
+    has_output: bool,
+) -> "MidStreamFallbackError":
+    if isinstance(error, litellm.ContextWindowExceededError):
+        if has_output:
+            raise error
+        return _stream_pre_content_error(error, model if isinstance(model, str) else "", llm_provider)
+    if isinstance(error.original_exception, litellm.ContextWindowExceededError) and (
+        has_output or error.generated_content or error.emitted_disqualifying_content
+    ):
+        raise error.original_exception
+    return error
+
+
 def _deployment_num_retries(deployment: "Deployment | None") -> int | None:
     """The deployment's own num_retries litellm_param, an int or a digit string the way the config loader leaves it."""
     configured: Final = getattr(deployment.litellm_params, "num_retries", None) if deployment is not None else None
@@ -3845,7 +3862,19 @@ class Router(DeprecatedRouterMembers):
             try:
                 async for item in _achunks_with_first(model_response, first_chunk):
                     yield item
-            except MidStreamFallbackError as e:
+            except (MidStreamFallbackError, litellm.ContextWindowExceededError) as stream_error:
+                e: Final = (
+                    _context_window_stream_fallback_error(
+                        stream_error,
+                        getattr(model_response, "model", ""),
+                        model_response.custom_llm_provider or "",
+                        bool(getattr(model_response, "response_uptil_now", ""))
+                        or _stream_chunks_have_generated_content(model_response.chunks),
+                    )
+                    if isinstance(stream_error, litellm.ContextWindowExceededError)
+                    or isinstance(stream_error.original_exception, litellm.ContextWindowExceededError)
+                    else stream_error
+                )
                 with anyio.CancelScope(shield=True):
                     await close_model_response()
                     await held_slot.aclose()
@@ -3917,7 +3946,9 @@ class Router(DeprecatedRouterMembers):
                         initial_kwargs["messages"] = messages
                     self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
                     fallback_response = await self.async_function_with_fallbacks_common_utils(
-                        e=e,
+                        e=e.original_exception
+                        if isinstance(e.original_exception, litellm.ContextWindowExceededError)
+                        else e,
                         disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
                         fallbacks=fallbacks,
                         context_window_fallbacks=context_window_fallbacks,
@@ -3985,10 +4016,10 @@ class Router(DeprecatedRouterMembers):
                     if fallback_response is not None and hasattr(fallback_response, "aclose"):
                         try:
                             await fallback_response.aclose()
-                        except BaseException as e:
+                        except BaseException as close_error:
                             verbose_router_logger.debug(
                                 "stream_with_fallbacks: error closing fallback_response: %s",
-                                e,
+                                close_error,
                             )
 
         wrapped_response: Final = FallbackStreamWrapper(stream_with_fallbacks())
@@ -4348,6 +4379,10 @@ class Router(DeprecatedRouterMembers):
             def __aiter__(self):
                 return self
 
+            @property
+            def yielded_first_chunk(self) -> bool:
+                return self._yielded_first_chunk
+
             async def __anext__(self):
                 try:
                     chunk: Final = await self._async_generator.__anext__()
@@ -4375,6 +4410,7 @@ class Router(DeprecatedRouterMembers):
                 # the very key that created the container (#30210).
                 if self.completed_response is None and getattr(chunk, "type", None) in _RESPONSES_TERMINAL_EVENT_TYPES:
                     self.completed_response = chunk
+                self._yielded_first_chunk = True
                 return chunk
 
             async def aclose(self):
@@ -4401,7 +4437,18 @@ class Router(DeprecatedRouterMembers):
                     yield item
                 for held_event in held_lifecycle_events:
                     yield held_event
-            except MidStreamFallbackError as e:
+            except (MidStreamFallbackError, litellm.ContextWindowExceededError) as stream_error:
+                e: Final = (
+                    _context_window_stream_fallback_error(
+                        stream_error,
+                        source_iterator.model or "",
+                        source_iterator.custom_llm_provider or "",
+                        wrapper.yielded_first_chunk,
+                    )
+                    if isinstance(stream_error, litellm.ContextWindowExceededError)
+                    or isinstance(stream_error.original_exception, litellm.ContextWindowExceededError)
+                    else stream_error
+                )
                 if response_id_exposed:
                     self._raise_released_stream_error(e, initial_kwargs)
                 async with contextlib.aclosing(
@@ -4572,7 +4619,11 @@ class Router(DeprecatedRouterMembers):
             # The content-policy dispatch branch matches on the trigger's own type, so a refusal's
             # MidStreamFallbackError envelope is unwrapped here or the wrong fallback list is consulted.
             fallback_trigger: Final[Exception] = (
-                e.original_exception if isinstance(e.original_exception, litellm.ContentPolicyViolationError) else e
+                e.original_exception
+                if isinstance(
+                    e.original_exception, (litellm.ContentPolicyViolationError, litellm.ContextWindowExceededError)
+                )
+                else e
             )
             fallback_response = await self.async_function_with_fallbacks_common_utils(  # rebind-ok: set on success
                 e=fallback_trigger,
@@ -4658,7 +4709,19 @@ class Router(DeprecatedRouterMembers):
             try:
                 for item in _chunks_with_first(model_response, first_chunk):
                     yield item
-            except MidStreamFallbackError as e:
+            except (MidStreamFallbackError, litellm.ContextWindowExceededError) as stream_error:
+                e: Final = (
+                    _context_window_stream_fallback_error(
+                        stream_error,
+                        getattr(model_response, "model", ""),
+                        model_response.custom_llm_provider or "",
+                        bool(getattr(model_response, "response_uptil_now", ""))
+                        or _stream_chunks_have_generated_content(model_response.chunks),
+                    )
+                    if isinstance(stream_error, litellm.ContextWindowExceededError)
+                    or isinstance(stream_error.original_exception, litellm.ContextWindowExceededError)
+                    else stream_error
+                )
                 if fallbacks_disabled_for_request(initial_kwargs) or (
                     not e.is_pre_first_chunk
                     and (e.generated_content or _stream_chunks_have_generated_content(model_response.chunks))
@@ -4683,7 +4746,9 @@ class Router(DeprecatedRouterMembers):
                     router_self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
                     fallback_response = run_async_function(
                         router_self.async_function_with_fallbacks_common_utils,
-                        e=e,
+                        e=e.original_exception
+                        if isinstance(e.original_exception, litellm.ContextWindowExceededError)
+                        else e,
                         disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
                         fallbacks=fallbacks,
                         context_window_fallbacks=context_window_fallbacks,
