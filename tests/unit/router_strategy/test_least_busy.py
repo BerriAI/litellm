@@ -791,7 +791,7 @@ async def test_a_fallback_hop_rejected_before_its_provider_frees_its_pick_when_e
     logging_obj, request = litellm.utils.function_setup(
         original_function="acompletion",
         rules_obj=litellm.utils.Rules(),
-        start_time=datetime.datetime.now(),
+        start_time=datetime.datetime(2026, 1, 1),
         model="unreachable-group",
         messages=[{"role": "user", "content": "hi"}],
         logit_bias={"1": 1},

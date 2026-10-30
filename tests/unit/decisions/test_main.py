@@ -320,7 +320,7 @@ async def test_least_busy_frees_a_decisions_deployment_once_a_proxy_logged_call_
         logging_obj, _ = litellm.utils.function_setup(
             original_function="adecisions",
             rules_obj=litellm.utils.Rules(),
-            start_time=datetime.now(),
+            start_time=datetime(2026, 1, 1),
             model="jev",
             litellm_call_id=str(uuid.uuid4()),
         )
