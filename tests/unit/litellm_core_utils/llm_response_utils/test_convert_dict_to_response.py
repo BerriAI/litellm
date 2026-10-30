@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import json
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Final
 
@@ -1110,6 +1111,44 @@ def test_convert_to_model_response_object_with_logprobs():
 
     assert result.system_fingerprint is None
     assert result._hidden_params is not None
+
+
+@pytest.mark.parametrize(
+    "upstream_logprobs",
+    [
+        pytest.param({"content": [{"token": "Hi", "logprob": None}]}, id="null-content-logprob"),
+        pytest.param(
+            {
+                "content": [{"token": "Hi", "logprob": -0.1, "top_logprobs": []}],
+                "refusal": [{"token": "I", "logprob": None}],
+            },
+            id="null-refusal-logprob",
+        ),
+    ],
+)
+def test_convert_to_model_response_object_passes_nonconforming_logprobs_through(
+    upstream_logprobs: Mapping[str, object],
+) -> None:
+    result: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1702685778,
+            "model": "test-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hi"},
+                    "logprobs": upstream_logprobs,
+                    "finish_reason": "stop",
+                }
+            ],
+        },
+        model_response_object=ModelResponse(),
+    )
+
+    assert json.loads(result.model_dump_json())["choices"][0]["logprobs"] == upstream_logprobs
+
 
 def test_convert_to_model_response_object_error():
     """Test error handling for None response object."""

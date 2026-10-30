@@ -29161,7 +29161,7 @@ export interface components {
             /** Token */
             token: string;
             /** Top Logprobs */
-            top_logprobs: components["schemas"]["TopLogprob"][];
+            top_logprobs?: components["schemas"]["TopLogprob"][];
         } & {
             [key: string]: unknown;
         };
@@ -29292,6 +29292,8 @@ export interface components {
         ChoiceLogprobs: {
             /** Content */
             content?: components["schemas"]["ChatCompletionTokenLogprob"][] | null;
+            /** Refusal */
+            refusal?: components["schemas"]["ChatCompletionTokenLogprob"][] | null;
         } & {
             [key: string]: unknown;
         };
