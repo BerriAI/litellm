@@ -5468,3 +5468,56 @@ async def test_chat_bridge_tool_result_text_block_without_text_reaches_the_model
             ],
         }
     ]
+
+
+_GEMINI_URL: Final = (
+    r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash:generateContent.*"
+)
+_GEMINI_REPLY: Final = {
+    "candidates": [
+        {"content": {"role": "model", "parts": [{"text": "How can I help?"}]}, "finishReason": "STOP", "index": 0}
+    ],
+    "usageMetadata": {"promptTokenCount": 4, "candidatesTokenCount": 4, "totalTokenCount": 8},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize(
+    "empty_user_message",
+    [
+        pytest.param({"role": "user", "content": ""}, id="empty_string"),
+        pytest.param({"role": "user", "content": []}, id="empty_list"),
+        pytest.param({"role": "user", "content": None}, id="null"),
+        pytest.param({"role": "user"}, id="missing"),
+    ],
+)
+async def test_an_empty_trailing_user_message_reaches_gemini_as_a_user_turn(
+    respx_mock: respx.MockRouter, empty_user_message: dict[str, object]
+) -> None:
+    route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
+
+    await litellm.anthropic.messages.acreate(
+        model="gemini/gemini-2.5-flash",
+        api_key="test-key",
+        max_tokens=64,
+        messages=[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, empty_user_message],
+    )
+
+    assert json.loads(route.calls.last.request.read())["contents"] == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
+        {"role": "user", "parts": [{"text": " "}]},
+    ]
+
+
+def test_a_tool_result_only_user_message_adds_no_empty_user_message() -> None:
+    translated: Final = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=[
+            {"role": "user", "content": "run the build"},
+            _anthropic_tool_use_turn("toolu_log"),
+            _anthropic_tool_result_turn({"toolu_log": "build ok"}),
+        ]
+    )
+
+    assert [message["role"] for message in translated] == ["user", "assistant", "tool"]

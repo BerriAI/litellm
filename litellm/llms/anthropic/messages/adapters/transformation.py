@@ -565,6 +565,9 @@ class LiteLLMAnthropicMessagesAdapter:
             if len(new_user_content_list) > 0:
                 new_messages.append({"role": "user", "content": new_user_content_list})
 
+            if m["role"] == "user" and user_message is None and not new_user_content_list and not tool_message_list:
+                new_messages.append(ChatCompletionUserMessage(role="user", content=""))
+
             ## ASSISTANT MESSAGE ##
             assistant_message_str: str | None = None
             assistant_content_list: list[dict[str, Any]] = []  # For content blocks with cache_control
