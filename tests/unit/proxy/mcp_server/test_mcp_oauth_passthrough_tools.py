@@ -341,7 +341,6 @@ async def test_aggregate_list_tools_absorbs_one_unauthenticated_server():
     from mcp.types import Tool as MCPTool
 
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.mcp_server import server as mcp_server
 
     delegate = _http_server(
         "s1", "delegate_docs", auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True
@@ -384,7 +383,6 @@ async def test_single_server_route_also_absorbs_upstream_auth_error():
     from unittest.mock import patch
 
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.mcp_server import server as mcp_server
     from litellm.proxy.mcp_server.mcp_context import mcp_gateway_server_name
 
     delegate = _http_server(
@@ -425,7 +423,6 @@ async def test_aggregate_with_single_accessible_server_still_absorbs():
     from unittest.mock import patch
 
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.mcp_server import server as mcp_server
 
     delegate = _http_server(
         "s1", "delegate_docs", auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True
@@ -836,3 +833,102 @@ def test_managed_step_up_metadata_matches_the_sdk_configured_resource(path):
         requested_resource=f"https://gateway.test{path}",
         configured_resource=f"https://gateway.test{resource_path}",
     ), "the SDK must accept the advertised resource before it can reauthorize"
+
+
+@pytest.mark.asyncio
+async def test_scope_challenge_replaces_pending_stream_headers_on_401():
+    from litellm.proxy.mcp_server.scope_challenge import OAuthScopeResponse
+
+    send = AsyncMock()
+    response = OAuthScopeResponse(send, "https://gateway.example", "/mcp/docs")
+    headers: Final = asyncio.create_task(response({"type": "http.response.start", "status": 200, "headers": []}))
+    body = asyncio.create_task(response({"type": "http.response.body", "body": b"event: message\n"}))
+    await asyncio.sleep(0)
+    send.assert_not_awaited()
+    response.deny(MCPUpstreamAuthError(401, None, "docs"))
+    await asyncio.wait_for(asyncio.gather(headers, body), 1)
+    await response({"type": "http.response.body", "body": b"tools result"})
+    assert send.await_count == 2
+    start, result = [call.args[0] for call in send.await_args_list]
+    assert start["status"] == 401
+    challenge = dict(start["headers"])[b"www-authenticate"].decode()
+    assert challenge == 'Bearer resource_metadata="https://gateway.example/.well-known/oauth-protected-resource/mcp/docs"'
+    assert result["body"] == b'{"detail":"Unauthorized"}'
+
+
+@pytest.mark.asyncio
+async def test_get_filtered_server_tools_denies_scope_response_on_single_server_401():
+    from unittest.mock import MagicMock, patch
+
+    from mcp.server.context import ServerRequestContext
+    from starlette.requests import Request
+
+    from litellm.proxy.mcp_server.catalog import get_filtered_server_tools
+    from litellm.proxy.mcp_server.contracts import OperationContext
+    from litellm.proxy.mcp_server.mcp_context import active_mcp_request_ctx_var
+    from litellm.proxy.mcp_server.scope_challenge import SCOPE_RESPONSE_KEY, OAuthScopeResponse
+
+    mock_send = AsyncMock()
+    scope_response = OAuthScopeResponse(mock_send, "https://gateway.example", "/mcp/docs")
+    request = Request({"type": "http", SCOPE_RESPONSE_KEY: scope_response})
+    context = ServerRequestContext(session=MagicMock(), lifespan_context={}, protocol_version="2025-11-25", method="tools/list", request=request)
+    token = active_mcp_request_ctx_var.set(context)
+
+    server = _http_server("s1", "docs", auth_type=MCPAuth.none, extra_headers=["Authorization"], oauth_passthrough=True)
+    op_ctx = OperationContext(_caller=None, mcp_servers=("docs",))
+
+    try:
+        with patch("litellm.proxy.mcp_server.operations.global_mcp_server_manager.get_tools_from_server",
+                   AsyncMock(side_effect=MCPUpstreamAuthError(401, None, "docs"))):
+            tools_result, outcome = await get_filtered_server_tools(
+                server,
+                context=op_ctx,
+                allowed_mcp_servers=[server],
+                prefetched_oauth_creds={},
+            )
+            assert tools_result.tools == []
+            assert outcome.tag == "auth_required"
+            assert not scope_response.pending
+            assert scope_response._challenge is not None
+            assert scope_response._challenge.status_code == 401
+    finally:
+        active_mcp_request_ctx_var.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_get_filtered_server_tools_does_not_deny_scope_response_on_multi_server_401():
+    from unittest.mock import MagicMock, patch
+
+    from mcp.server.context import ServerRequestContext
+    from starlette.requests import Request
+
+    from litellm.proxy.mcp_server.catalog import get_filtered_server_tools
+    from litellm.proxy.mcp_server.contracts import OperationContext
+    from litellm.proxy.mcp_server.mcp_context import active_mcp_request_ctx_var
+    from litellm.proxy.mcp_server.scope_challenge import SCOPE_RESPONSE_KEY, OAuthScopeResponse
+
+    mock_send = AsyncMock()
+    scope_response = OAuthScopeResponse(mock_send, "https://gateway.example", "/mcp")
+    request = Request({"type": "http", SCOPE_RESPONSE_KEY: scope_response})
+    context = ServerRequestContext(session=MagicMock(), lifespan_context={}, protocol_version="2025-11-25", method="tools/list", request=request)
+    token = active_mcp_request_ctx_var.set(context)
+
+    server1 = _http_server("s1", "docs", auth_type=MCPAuth.none, extra_headers=["Authorization"], oauth_passthrough=True)
+    server2 = _http_server("s2", "other", auth_type=MCPAuth.none)
+    op_ctx = OperationContext(_caller=None, mcp_servers=("docs", "other"))
+
+    try:
+        with patch("litellm.proxy.mcp_server.operations.global_mcp_server_manager.get_tools_from_server",
+                   AsyncMock(side_effect=MCPUpstreamAuthError(401, None, "docs"))):
+            tools_result, outcome = await get_filtered_server_tools(
+                server1,
+                context=op_ctx,
+                allowed_mcp_servers=[server1, server2],
+                prefetched_oauth_creds={},
+            )
+            assert tools_result.tools == []
+            assert outcome.tag == "auth_required"
+            assert scope_response.pending
+            assert scope_response._challenge is None
+    finally:
+        active_mcp_request_ctx_var.reset(token)
