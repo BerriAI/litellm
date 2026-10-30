@@ -28,6 +28,7 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
     - text: str
 """
 
+import asyncio
 import copy
 import json
 import time
@@ -161,11 +162,12 @@ class _ProviderThinkingBlockPosition:
     block_index: int
 
 
+_AnswerPosition: TypeAlias = _MessageContentPosition | _CompactionSummaryPosition
 _ReasoningPosition: TypeAlias = _ReasoningSummaryPosition | _ReasoningContentPosition | _ThinkingBlockPosition
-_OutputItemPosition: TypeAlias = _MessageContentPosition | _CompactionSummaryPosition | _ReasoningPosition
+_OutputItemPosition: TypeAlias = _AnswerPosition | _ReasoningPosition
+_ReasoningTextPosition: TypeAlias = _ReasoningPosition | _ProviderThinkingBlockPosition
 _OutputPosition: TypeAlias = _OutputItemPosition | _ProviderThinkingBlockPosition
 _REASONING_POSITION_TYPES: Final = (_ReasoningSummaryPosition, _ReasoningContentPosition, _ThinkingBlockPosition)
-_ANSWER_POSITION_TYPES: Final = (_MessageContentPosition, _CompactionSummaryPosition)
 
 
 def _output_compaction_summary(item: object) -> str | None:
@@ -208,15 +210,24 @@ def _provider_thinking_texts(response: object) -> tuple[tuple[_ProviderThinkingB
     )
 
 
-def _answers_before_reasoning(outputs: Sequence[object]) -> tuple[tuple[int, object], ...]:
-    return tuple(sorted(enumerate(outputs), key=lambda indexed: stream_item_field(indexed[1], "type") == "reasoning"))
+def _answer_output_items(outputs: Sequence[object]) -> tuple[tuple[int, object], ...]:
+    return tuple((index, item) for index, item in enumerate(outputs) if stream_item_field(item, "type") != "reasoning")
 
 
-def _rewrite_of_each_text(
-    texts: Sequence[str], scanned_texts: Sequence[str], rewritten_texts: Sequence[str]
-) -> tuple[str, ...]:
-    rewrites: Final = dict(zip(scanned_texts, rewritten_texts))
-    return tuple(rewrites.get(text, text) for text in texts)
+def _reasoning_text_inputs(text: str, model: object) -> GenericGuardrailAPIInputs:
+    return (
+        GenericGuardrailAPIInputs(texts=[text], model=model)
+        if isinstance(model, str) and model
+        else GenericGuardrailAPIInputs(texts=[text])
+    )
+
+
+def _response_reasoning_texts(response: object) -> tuple[tuple[_ReasoningTextPosition, str], ...]:
+    item_texts: Final = chain.from_iterable(
+        _reasoning_output_texts(output_item, output_index)
+        for output_index, output_item in enumerate(stream_item_items(response, "output"))
+    )
+    return (*item_texts, *_provider_thinking_texts(response))
 
 
 class _ToolCallShape(NamedTuple):
@@ -1420,7 +1431,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             return response
 
         # Step 1: Extract all text content and tool calls from response output
-        for output_idx, output_item in _answers_before_reasoning(stream_item_items(response, "output")):
+        for output_idx, output_item in _answer_output_items(response_output):
             self._extract_output_text_and_images(
                 output_item=output_item,
                 output_idx=output_idx,
@@ -1429,28 +1440,16 @@ class OpenAIResponsesHandler(BaseTranslation):
                 task_mappings=task_mappings,
                 tool_calls_to_check=tool_calls_to_check,
             )
-        provider_thinking: Final = _provider_thinking_texts(response)
-        texts_to_check.extend(text for _, text in provider_thinking)
-        task_mappings.extend(position for position, _ in provider_thinking)
+
+        reasoning_texts: Final = _response_reasoning_texts(response)
+        reasoning_in_answer_call: Final = guardrail_to_apply.scans_all_response_texts_in_one_call()
+        if reasoning_in_answer_call:
+            texts_to_check.extend(text for _, text in reasoning_texts)
+            task_mappings.extend(position for position, _ in reasoning_texts)
 
         # Step 2: Apply guardrail to all texts in batch
         if texts_to_check or tool_calls_to_check:
-            # Use the real request_data if provided (proxy path), otherwise
-            # create a standalone dict (SDK / direct-call path).
-            if request_data is None:
-                request_data = {"response": response}
-            else:
-                if "response" not in request_data:
-                    request_data["response"] = response
-
-            # Add user API key metadata with prefixed keys
-            if "litellm_metadata" not in request_data:
-                user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-                if user_metadata:
-                    request_data["litellm_metadata"] = user_metadata
-
-            scanned_texts: Final = tuple(dict.fromkeys(texts_to_check))
-            inputs: Final = GenericGuardrailAPIInputs(texts=list(scanned_texts))
+            inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
             if tool_calls_to_check:
@@ -1467,14 +1466,12 @@ class OpenAIResponsesHandler(BaseTranslation):
             pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
-                request_data=request_data,
+                request_data=self._request_data_with_response(request_data, response, user_api_key_dict),
                 input_type="response",
                 logging_obj=litellm_logging_obj,
             )
 
-            guardrailed_texts: Final = _rewrite_of_each_text(
-                texts_to_check, scanned_texts, guardrailed_inputs.get("texts", [])
-            )
+            guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
             post_guardrail_tool_calls: Final = _post_guardrail_tool_call_shapes(
                 returned_tool_calls=guardrailed_inputs.get("tool_calls"),
                 pre_guardrail_tool_calls=pre_guardrail_tool_calls,
@@ -1491,6 +1488,15 @@ class OpenAIResponsesHandler(BaseTranslation):
                 outputs=response_output,
                 pre_guardrail_tool_calls=pre_guardrail_tool_calls,
                 post_guardrail_tool_calls=post_guardrail_tool_calls,
+            )
+
+        if reasoning_texts and not reasoning_in_answer_call:
+            await self._apply_guardrail_to_reasoning_texts(
+                response=response,
+                reasoning_texts=reasoning_texts,
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=litellm_logging_obj,
+                request_data=self._request_data_with_response(request_data, response, user_api_key_dict),
             )
 
         verbose_proxy_logger.debug("OpenAI Responses API: Processed output response: %s", response)
@@ -1556,7 +1562,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             tool_calls_to_check: Final[list[ChatCompletionToolCallChunk]] = []
             task_mappings: Final[list[_OutputPosition]] = []
 
-            for output_idx, output_item in _answers_before_reasoning(outputs):
+            for output_idx, output_item in _answer_output_items(outputs):
                 self._extract_output_text_and_images(
                     output_item=output_item,
                     output_idx=output_idx,
@@ -1565,22 +1571,18 @@ class OpenAIResponsesHandler(BaseTranslation):
                     task_mappings=task_mappings,
                     tool_calls_to_check=tool_calls_to_check,
                 )
-            provider_thinking: Final = _provider_thinking_texts(response_obj)
-            texts_to_check.extend(text for _, text in provider_thinking)
-            task_mappings.extend(position for position, _ in provider_thinking)
+
+            reasoning_texts: Final = _response_reasoning_texts(response_obj)
+            reasoning_in_answer_call: Final = guardrail_to_apply.scans_all_response_texts_in_one_call()
+            answer_outside_envelope: Final = (
+                not texts_to_check and not tool_calls_to_check and _has_answer_stream_text(responses_so_far)
+            )
+            if reasoning_in_answer_call and not answer_outside_envelope:
+                texts_to_check.extend(text for _, text in reasoning_texts)
+                task_mappings.extend(position for position, _ in reasoning_texts)
 
             if texts_to_check or tool_calls_to_check:
-                if request_data is None:
-                    request_data = {}
-                if "response" not in request_data:
-                    request_data["response"] = response_obj
-                if "litellm_metadata" not in request_data:
-                    user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-                    if user_metadata:
-                        request_data["litellm_metadata"] = user_metadata
-
-                scanned_texts: Final = tuple(dict.fromkeys(texts_to_check))
-                inputs = GenericGuardrailAPIInputs(texts=list(scanned_texts))
+                inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
                 if tool_calls_to_check:
                     inputs["tool_calls"] = cast(list[ChatCompletionToolCallChunk], tool_calls_to_check)
                 response_model = response_obj.get("model")
@@ -1590,14 +1592,12 @@ class OpenAIResponsesHandler(BaseTranslation):
                 pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
                 guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                     inputs=inputs,
-                    request_data=request_data,
+                    request_data=self._request_data_with_response(request_data, response_obj, user_api_key_dict),
                     input_type="response",
                     logging_obj=litellm_logging_obj,
                 )
 
-                guardrailed_texts: Final = _rewrite_of_each_text(
-                    texts_to_check, scanned_texts, guardrailed_inputs.get("texts", [])
-                )
+                guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
                 post_guardrail_tool_calls: Final = _post_guardrail_tool_call_shapes(
                     returned_tool_calls=guardrailed_inputs.get("tool_calls"),
                     pre_guardrail_tool_calls=pre_guardrail_tool_calls,
@@ -1613,22 +1613,14 @@ class OpenAIResponsesHandler(BaseTranslation):
                     task_mappings=task_mappings,
                 )
                 if deliver_ended_stream_rewrites:
-                    rewrites_by_position: Final = MappingProxyType(
+                    rewrites_by_position: Final[Mapping[_OutputPosition, str]] = MappingProxyType(
                         {
-                            position: rewritten
+                            task_mappings[task_idx]: rewritten
                             for task_idx, rewritten in enumerate(guardrailed_texts)
-                            if task_idx < len(texts_to_check)
-                            and rewritten != texts_to_check[task_idx]
-                            and not isinstance(position := task_mappings[task_idx], _ProviderThinkingBlockPosition)
+                            if task_idx < len(texts_to_check) and rewritten != texts_to_check[task_idx]
                         }
                     )
-                    if rewrites_by_position:
-                        self._sync_stream_events_with_rewrites(
-                            stream_events=responses_so_far[:-1],
-                            rewrites_by_position=rewrites_by_position,
-                        )
-                    if provider_thinking:
-                        self._sync_provider_fields_to_stream_events(responses_so_far, response_obj)
+                    self._sync_stream_events_with_output_rewrites(responses_so_far, response_obj, rewrites_by_position)
                     self._deliver_ended_stream_tool_call_rewrites(
                         responses_so_far=responses_so_far,
                         outputs=outputs,
@@ -1636,12 +1628,20 @@ class OpenAIResponsesHandler(BaseTranslation):
                         post_guardrail_tool_calls=post_guardrail_tool_calls,
                         guardrail_name=guardrail_to_apply.guardrail_name or "unknown",
                     )
-                if (
-                    tool_calls_to_check
-                    or any(isinstance(position, _ANSWER_POSITION_TYPES) for position in task_mappings)
-                    or not _has_answer_stream_text(responses_so_far)
-                ):
-                    return responses_so_far
+
+            if reasoning_texts and not reasoning_in_answer_call:
+                reasoning_rewrites: Final = await self._apply_guardrail_to_reasoning_texts(
+                    response=response_obj,
+                    reasoning_texts=reasoning_texts,
+                    guardrail_to_apply=guardrail_to_apply,
+                    litellm_logging_obj=litellm_logging_obj,
+                    request_data=self._request_data_with_response(request_data, response_obj, user_api_key_dict),
+                )
+                if deliver_ended_stream_rewrites:
+                    self._sync_stream_events_with_output_rewrites(responses_so_far, response_obj, reasoning_rewrites)
+
+            if (texts_to_check or tool_calls_to_check or reasoning_texts) and not answer_outside_envelope:
+                return responses_so_far
 
         # ------------------------------------------------------------------ #
         # Case 2: response.output_item.done — extract tool calls only, then  #
@@ -1715,6 +1715,77 @@ class OpenAIResponsesHandler(BaseTranslation):
                     guardrail_name=guardrail_to_apply.guardrail_name or "unknown",
                 )
         return responses_so_far
+
+    def _request_data_with_response(
+        self,
+        request_data: dict[str, object] | None,
+        response: Union["ResponsesAPIResponse", ResponseOutputEnvelope],
+        user_api_key_dict: "UserAPIKeyAuth | None",
+    ) -> dict[str, object]:
+        scanned_request_data: Final = {} if request_data is None else request_data
+        if "response" not in scanned_request_data:
+            scanned_request_data["response"] = response
+        if "litellm_metadata" not in scanned_request_data:
+            user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+            if user_metadata:
+                scanned_request_data["litellm_metadata"] = user_metadata
+        return scanned_request_data
+
+    async def _apply_guardrail_to_reasoning_texts(
+        self,
+        response: Union["ResponsesAPIResponse", ResponseOutputEnvelope],
+        reasoning_texts: Sequence[tuple[_ReasoningTextPosition, str]],
+        guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
+        request_data: dict[str, object],
+    ) -> Mapping[_OutputPosition, str]:
+        distinct_texts: Final = tuple(dict.fromkeys(text for _, text in reasoning_texts))
+        guardrailed_texts: Final = await asyncio.gather(
+            *(
+                guardrail_to_apply.apply_guardrail(
+                    inputs=_reasoning_text_inputs(text, stream_item_field(response, "model")),
+                    request_data=request_data,
+                    input_type="response",
+                    logging_obj=litellm_logging_obj,
+                )
+                for text in distinct_texts
+            )
+        )
+        rewrites: Final = MappingProxyType(
+            {
+                text: next(iter(guardrailed.get("texts") or ()), text)
+                for text, guardrailed in zip(distinct_texts, guardrailed_texts)
+            }
+        )
+        await self._apply_guardrail_responses_to_output(
+            response=response,
+            responses=tuple(rewrites[text] for _, text in reasoning_texts),
+            task_mappings=tuple(position for position, _ in reasoning_texts),
+        )
+        return MappingProxyType(
+            {position: rewrites[text] for position, text in reasoning_texts if rewrites[text] != text}
+        )
+
+    def _sync_stream_events_with_output_rewrites(
+        self,
+        responses_so_far: Sequence[object],
+        response: Union["ResponsesAPIResponse", ResponseOutputEnvelope],
+        rewrites_by_position: Mapping[_OutputPosition, str],
+    ) -> None:
+        item_rewrites: Final[Mapping[_OutputItemPosition, str]] = MappingProxyType(
+            {
+                position: rewritten
+                for position, rewritten in rewrites_by_position.items()
+                if not isinstance(position, _ProviderThinkingBlockPosition)
+            }
+        )
+        if item_rewrites:
+            self._sync_stream_events_with_rewrites(
+                stream_events=responses_so_far[:-1],
+                rewrites_by_position=item_rewrites,
+            )
+        if len(item_rewrites) != len(rewrites_by_position):
+            self._sync_provider_fields_to_stream_events(responses_so_far, response)
 
     def _spread_text_rewrite_over_stream_events(
         self,
@@ -1822,7 +1893,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 write_field(event, "delta", next(rewrites.content_deltas[content_position]))
             case "response.reasoning_text.done" if content_position in rewrites.contents:
                 write_field(event, "text", rewrites.contents[content_position])
-            case "response.content_part.done" if content_position in rewrites.contents:
+            case "response.content_part.done" if content_position in rewrites.contents and part is not None:
                 part_field: Final = "reasoning" if isinstance(stream_item_field(part, "reasoning"), str) else "text"
                 write_field(part, part_field, rewrites.contents[content_position])
             case _:
@@ -2237,14 +2308,8 @@ class OpenAIResponsesHandler(BaseTranslation):
             task_mappings.append(_CompactionSummaryPosition(output_idx))
             return
 
-        reasoning_texts: Final = _reasoning_output_texts(output_item, output_idx)
-        if reasoning_texts:
-            texts_to_check.extend(text for _, text in reasoning_texts)
-            task_mappings.extend(position for position, _ in reasoning_texts)
-            return
-
         # Handle both GenericResponseOutputItem and dict
-        content: list[OutputText] | list[dict] | None = None
+        content: Sequence[object] | None = None
         if isinstance(output_item, BaseModel):
             try:
                 output_item_dump: Final = output_item.model_dump()

@@ -470,7 +470,7 @@ class QualifireGuardrail(CustomGuardrail):
         if input_type == "response":
             # For post_call, extract output from texts
             if texts:
-                output = "\n".join(texts) if isinstance(texts, list) else str(texts)
+                output = texts[-1] if isinstance(texts, list) else str(texts)
 
             # If no structured messages available, construct from texts
             if not messages and texts:

@@ -20,6 +20,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
     CustomCodeGuardrail,
@@ -1763,6 +1764,92 @@ async def test_streaming_step_passes_a_tool_only_stream_the_legacy_hook_left_alo
 
 class _NoHooksGuardrail(CustomGuardrail):
     pass
+
+
+class _PersimmonMaskingLegacyHook(_LegacyHookGuardrail):
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+        self.calls.append(response)
+        return json.loads(json.dumps(response).replace("persimmon", "[MASKED]"))
+
+
+def _reasoning_stream_event(thought):
+    return {
+        "type": "response.reasoning_summary_text.delta",
+        "item_id": "rs_1",
+        "output_index": 0,
+        "summary_index": 0,
+        "delta": thought,
+    }
+
+
+def _reasoning_output_item(*thoughts):
+    return {
+        "id": "rs_1",
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": thought} for thought in thoughts],
+    }
+
+
+def _answer_stream_event(answer):
+    return {
+        "type": "response.output_text.delta",
+        "item_id": "msg_1",
+        "output_index": 1,
+        "content_index": 0,
+        "delta": answer,
+    }
+
+
+def _answer_output_item(answer):
+    return {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": answer}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_runs_a_legacy_hook_once_over_a_response_with_reasoning(monkeypatch):
+    guardrail = _PersimmonMaskingLegacyHook()
+    chunks = [
+        _reasoning_stream_event("I think of a persimmon"),
+        _answer_stream_event("the fruit is a persimmon"),
+        {
+            "type": "response.completed",
+            "response": {
+                "output": [
+                    _reasoning_output_item("I think of a persimmon", "a persimmon is orange"),
+                    _answer_output_item("the fruit is a persimmon"),
+                ]
+            },
+        },
+    ]
+
+    result = await _run_legacy_streaming_step(monkeypatch, guardrail, chunks, translation=OpenAIResponsesHandler())
+
+    output = chunks[-1]["response"]["output"]
+    assert result.terminal_action == "allow"
+    assert len(guardrail.calls) == 1
+    assert chunks[0]["delta"] == "I think of a [MASKED]"
+    assert chunks[1]["delta"] == "the fruit is a [MASKED]"
+    assert [part["text"] for part in output[0]["summary"]] == ["I think of a [MASKED]", "a [MASKED] is orange"]
+    assert output[1]["content"][0]["text"] == "the fruit is a [MASKED]"
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_keeps_a_legacy_hook_reasoning_out_of_an_answer_the_envelope_lacks(monkeypatch):
+    guardrail = _PersimmonMaskingLegacyHook()
+    chunks = [
+        _answer_stream_event("the fruit is a persimmon"),
+        {"type": "response.completed", "response": {"output": [_reasoning_output_item("I think of a persimmon")]}},
+    ]
+
+    result = await _run_legacy_streaming_step(monkeypatch, guardrail, chunks, translation=OpenAIResponsesHandler())
+
+    assert result.terminal_action == "allow"
+    assert chunks[0]["delta"] == "the fruit is a persimmon"
 
 
 class _IteratorAndLegacyHookGuardrail(_LegacyHookGuardrail):

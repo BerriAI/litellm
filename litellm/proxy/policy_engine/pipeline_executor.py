@@ -132,6 +132,9 @@ class _StreamRewriteObserver(CustomGuardrail):
         self.rewrote_tool_calls = False
         self.tool_call_count_change: tuple[int, int] | None = None
 
+    def scans_all_response_texts_in_one_call(self) -> bool:
+        return self.inner.scans_all_response_texts_in_one_call()
+
     def structured_messages_cover_full_request(self) -> bool:
         return self.inner.structured_messages_cover_full_request()
 
@@ -181,6 +184,9 @@ class _ScannedTextRecorder(CustomGuardrail):
         super().__init__(guardrail_name=guardrail_name)
         self.inputs: GenericGuardrailAPIInputs | None = None
 
+    def scans_all_response_texts_in_one_call(self) -> bool:
+        return True
+
     @_logged_by_inner_guardrail
     async def apply_guardrail(
         self,
@@ -216,6 +222,9 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
         self.inner: Final = inner
         self.endpoint_translation: Final = endpoint_translation
         self.user_api_key_dict: Final = user_api_key_dict
+
+    def scans_all_response_texts_in_one_call(self) -> bool:
+        return True
 
     def structured_messages_cover_full_request(self) -> bool:
         return self.inner.structured_messages_cover_full_request()

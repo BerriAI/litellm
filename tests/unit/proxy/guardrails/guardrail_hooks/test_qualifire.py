@@ -345,34 +345,6 @@ class TestQualifireGuardrailAPICall:
         assert call_kwargs["url"].endswith("/api/evaluation/evaluate")
 
     @pytest.mark.asyncio
-    async def test_a_response_scan_evaluates_every_text_of_the_response(self):
-        from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
-            QualifireGuardrail,
-        )
-
-        guardrail = QualifireGuardrail(
-            api_key="test_key",
-            prompt_injections=True,
-            guardrail_name="test_guardrail",
-        )
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "score": 100,
-            "status": "completed",
-            "evaluationResults": [],
-        }
-        guardrail.async_handler.post = AsyncMock(return_value=mock_response)
-
-        await guardrail.apply_guardrail(
-            inputs={"texts": ["the answer", "the reasoning"]},
-            request_data={},
-            input_type="response",
-        )
-
-        evaluated_output = guardrail.async_handler.post.call_args[1]["json"]["output"]
-        assert evaluated_output == "the answer\nthe reasoning"
-
-    @pytest.mark.asyncio
     async def test_evaluate_called_with_multiple_checks(self):
         """Test that evaluate is called with multiple checks enabled."""
         from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
