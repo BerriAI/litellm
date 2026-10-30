@@ -87,7 +87,9 @@ async def test_ahealth_check_wildcard_models_respects_max_tokens():
     with (
         patch(
             "litellm.litellm_core_utils.llm_request_utils.rank_chat_models_from_llm_provider",
-            return_value=(RankedChatModel(model="gpt-4o-mini", is_past_deprecation_date=False),),
+            return_value=(
+                RankedChatModel(model="gpt-4o-mini", route_rank=0, cost=0.0, is_past_deprecation_date=False),
+            ),
         ),
         patch("litellm.acompletion", new_callable=AsyncMock),
     ):

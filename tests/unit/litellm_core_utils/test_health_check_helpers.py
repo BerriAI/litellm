@@ -1672,6 +1672,72 @@ async def test_partial_wildcard_health_check_that_fails_on_every_probe_tries_its
     assert "error" in response
 
 
+_DATABRICKS_EQUAL_PRICE_MODELS: Final = (
+    "databricks/databricks-free-d",
+    "databricks/databricks-free-c",
+    "databricks/databricks-free-b",
+    "databricks/databricks-free-a",
+)
+
+
+def _register_equal_price_databricks_models(monkeypatch: pytest.MonkeyPatch, listed_order: tuple[str, ...]) -> None:
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "databricks",
+                "mode": "chat",
+                "max_tokens": 1024,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+            for model in listed_order
+        }
+    )
+    monkeypatch.setitem(litellm.models_by_provider, "databricks", list(listed_order))
+
+
+@pytest.mark.parametrize("listed_order", [_DATABRICKS_EQUAL_PRICE_MODELS, _DATABRICKS_EQUAL_PRICE_MODELS[::-1]])
+def test_partial_wildcard_health_check_orders_its_own_equal_price_models_by_id_whatever_the_listing_order(
+    monkeypatch: pytest.MonkeyPatch, listed_order: tuple[str, ...]
+) -> None:
+    _register_equal_price_databricks_models(monkeypatch, listed_order)
+
+    assert wildcard_health_check_models(wildcard="databricks/databricks-free-*", custom_llm_provider="databricks")[
+        :2
+    ] == ("databricks/databricks-free-a", "databricks/databricks-free-b")
+
+
+def _answer_only_the_first_listed_databricks_free_model(request: httpx.Request) -> httpx.Response:
+    model: Final = json.loads(request.content)["model"]
+    if model != "databricks-free-d":
+        return httpx.Response(404, json={"error_code": "ENDPOINT_NOT_FOUND", "message": f"{model} does not exist"})
+    return _fail_first_databricks_claude_probe(request)
+
+
+@pytest.mark.asyncio
+async def test_wildcard_health_check_falls_back_to_equal_price_provider_models_in_the_provider_listing_order(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    _register_equal_price_databricks_models(monkeypatch, _DATABRICKS_EQUAL_PRICE_MODELS)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(f"{_DATABRICKS_FIXTURE_API_BASE}/chat/completions").mock(
+        side_effect=_answer_only_the_first_listed_databricks_free_model
+    )
+
+    response: Final = await ahealth_check(
+        {
+            "model": "databricks/databricks-claude-*",
+            "api_key": "fake-key",
+            "api_base": _DATABRICKS_FIXTURE_API_BASE,
+            "messages": [{"role": "user", "content": "What is 1 + 1?"}],
+        }
+    )
+
+    assert [json.loads(call.request.content)["model"] for call in upstream.calls] == ["databricks-free-d"]
+    assert response == {}
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("wildcard_catalog")
 async def test_partial_wildcard_health_check_without_a_served_cost_map_model_probes_the_provider_cheapest_chat_model(

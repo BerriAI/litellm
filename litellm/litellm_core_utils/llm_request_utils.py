@@ -162,19 +162,21 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
 @dataclass(frozen=True, slots=True)
 class RankedChatModel:
     model: str
+    route_rank: int
+    cost: float
     is_past_deprecation_date: bool
 
 
 def rank_chat_models_from_llm_provider(custom_llm_provider: str) -> tuple[RankedChatModel, ...]:
     known_models: Final[Iterable[str]] = litellm.models_by_provider.get(custom_llm_provider, ())
-    ranked_rows: Final = (
-        (route_rank, cost, ranked_model)
-        for ranked_model, cost in _chat_row_costs(known_models, custom_llm_provider)
-        if (route_rank := _route_rank(ranked_model.model, custom_llm_provider)) is not None
+    ranked_models: Final = (
+        RankedChatModel(
+            model=model, route_rank=route_rank, cost=cost, is_past_deprecation_date=is_past_deprecation_date
+        )
+        for model, cost, is_past_deprecation_date in _chat_row_costs(known_models, custom_llm_provider)
+        if (route_rank := _route_rank(model, custom_llm_provider)) is not None
     )
-    return tuple(
-        ranked_model for _, _, ranked_model in sorted(ranked_rows, key=lambda row: (row[0], row[1], row[2].model))
-    )
+    return tuple(sorted(ranked_models, key=lambda ranked_model: (ranked_model.route_rank, ranked_model.cost)))
 
 
 class _CostMapDeprecation(TypedDict):
@@ -199,7 +201,7 @@ def _is_past_deprecation_date(cost_map_key: str) -> bool:
         return False
 
 
-def _chat_row_costs(models: Iterable[str], custom_llm_provider: str) -> Iterator[tuple[RankedChatModel, float]]:
+def _chat_row_costs(models: Iterable[str], custom_llm_provider: str) -> Iterator[tuple[str, float, bool]]:
     for model in models:
         try:
             model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
@@ -208,8 +210,9 @@ def _chat_row_costs(models: Iterable[str], custom_llm_provider: str) -> Iterator
         if model_info.get("mode") != "chat":
             continue
         yield (
-            RankedChatModel(model=model, is_past_deprecation_date=_is_past_deprecation_date(model_info["key"])),
+            model,
             (model_info.get("input_cost_per_token") or 0.0) + (model_info.get("output_cost_per_token") or 0.0),
+            _is_past_deprecation_date(model_info["key"]),
         )
 
 

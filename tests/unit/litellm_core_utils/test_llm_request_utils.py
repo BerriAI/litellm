@@ -7,7 +7,6 @@ import litellm
 from litellm.litellm_core_utils.llm_request_utils import (
     ensure_extra_body_is_safe,
     flatten_form_field_values,
-    RankedChatModel,
     pick_cheapest_chat_models_from_llm_provider,
     rank_chat_models_from_llm_provider,
     serialize_multipart_form_fields,
@@ -210,7 +209,7 @@ def test_rank_chat_models_flags_only_the_rows_whose_cost_map_deprecation_date_ha
     "listed_order",
     [("deepseek/fake-tie-b", "deepseek/fake-tie-a"), ("deepseek/fake-tie-a", "deepseek/fake-tie-b")],
 )
-def test_pick_cheapest_chat_models_breaks_price_ties_by_model_id_whatever_the_provider_listing_order(
+def test_pick_cheapest_chat_models_keeps_the_provider_listing_order_for_equal_price_models(
     monkeypatch: pytest.MonkeyPatch, listed_order: tuple[str, str]
 ) -> None:
     for name in listed_order:
@@ -226,10 +225,7 @@ def test_pick_cheapest_chat_models_breaks_price_ties_by_model_id_whatever_the_pr
         )
     monkeypatch.setitem(litellm.models_by_provider, PICKER_PROVIDER, listed_order)
 
-    assert pick_cheapest_chat_models_from_llm_provider(PICKER_PROVIDER, n=2) == [
-        "deepseek/fake-tie-a",
-        "deepseek/fake-tie-b",
-    ]
+    assert pick_cheapest_chat_models_from_llm_provider(PICKER_PROVIDER, n=2) == list(listed_order)
 
 
 def test_rank_chat_models_flags_a_retired_model_the_provider_lists_without_its_cost_map_prefix(
@@ -245,7 +241,7 @@ def test_rank_chat_models_flags_a_retired_model_the_provider_lists_without_its_c
         litellm.models_by_provider, "vertex_ai", tuple(name.removeprefix("vertex_ai/") for name in rows)
     )
 
-    assert rank_chat_models_from_llm_provider("vertex_ai") == (
-        RankedChatModel(model="fake-retired-vertex-chat", is_past_deprecation_date=True),
-        RankedChatModel(model="fake-live-vertex-chat", is_past_deprecation_date=False),
-    )
+    assert [
+        (ranked_model.model, ranked_model.is_past_deprecation_date)
+        for ranked_model in rank_chat_models_from_llm_provider("vertex_ai")
+    ] == [("fake-retired-vertex-chat", True), ("fake-live-vertex-chat", False)]

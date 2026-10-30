@@ -128,12 +128,12 @@ def wildcard_health_check_models(wildcard: str, custom_llm_provider: str) -> tup
     route_prefix: Final = "".join(f"{segments[segment_index]}/" for segment_index in route_segments)
     model_regex: Final = re.compile(PatternMatchRouter().pattern_to_regex("/".join(segments[len(route_segments) :])))
     ranked_model_ids: Final = tuple(
-        (ranked_model.model.removeprefix(provider_prefix), ranked_model.is_past_deprecation_date)
+        (ranked_model.model.removeprefix(provider_prefix), ranked_model)
         for ranked_model in rank_chat_models_from_llm_provider(custom_llm_provider)
     )
     served_model_ids: Final = sorted(
         (ranked for ranked in ranked_model_ids if model_regex.fullmatch(ranked[0])),
-        key=lambda ranked: ranked[1],
+        key=lambda ranked: (ranked[1].is_past_deprecation_date, ranked[1].route_rank, ranked[1].cost, ranked[0]),
     )
     served_probes: Final = itertools.islice(
         dict.fromkeys(f"{provider_prefix}{route_prefix}{model_id}" for model_id, _ in served_model_ids),
