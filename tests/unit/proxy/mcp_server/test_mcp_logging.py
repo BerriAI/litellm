@@ -6,6 +6,7 @@ import sys
 from collections.abc import Generator
 from datetime import datetime
 from pathlib import Path
+from queue import SimpleQueue
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -174,6 +175,30 @@ async def test_sdk_caller_errors_do_not_trigger_llm_alerts(
         alerts.assert_awaited_once()
         assert alerts.await_args.kwargs["level"] == "High"
         assert alerts.await_args.kwargs["alert_type"] == AlertType.llm_exceptions
+
+
+@pytest.mark.asyncio
+async def test_sdk_rejection_sync_logging_allows_concurrent_ping(
+    sdk_rejection_logger: SDKRejectionLogger,
+) -> None:
+    loop: Final = asyncio.get_running_loop()
+    ping_responses: Final = SimpleQueue[EmptyResult]()
+    async with Client(server, mode="legacy") as client:
+        def sync_failure(
+            kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            ping_responses.put(asyncio.run_coroutine_threadsafe(client.session.send_ping(), loop).result(timeout=10))
+
+        with patch("litellm.failure_callback", [sync_failure]):
+            with pytest.raises(MCPError) as rejected:
+                await client.session.send_request(Request(method="unknown/method", params=RequestParams()), EmptyResult)
+            assert rejected.value.code == -32601
+
+    assert ping_responses.qsize() == 1
+    assert isinstance(ping_responses.get_nowait(), EmptyResult)
+    assert len(sdk_rejection_logger.failures) == 1
+    assert sdk_rejection_logger.post_failures == 1
+    assert sdk_rejection_logger.pre_calls == 0
 
 
 @pytest.mark.asyncio

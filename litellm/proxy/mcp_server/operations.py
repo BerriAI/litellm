@@ -2847,7 +2847,7 @@ async def log_mcp_sdk_rejection(
     )
     safe_error: Final = HTTPException(status_code=400, detail=message)
     end_time: Final = datetime.now()  # noqa: DTZ005  # matches the failure logging start time
-    logging_obj.failure_handler(safe_error, "", start_time, end_time)
+    await asyncio.to_thread(logging_obj.failure_handler, safe_error, "", start_time, end_time)
     await logging_obj.async_failure_handler(safe_error, "", start_time, end_time)
     await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # legacy signature
         request_data={**request_data, "litellm_logging_obj": logging_obj},
