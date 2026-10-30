@@ -125,7 +125,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         thinking_effort: Final = (
             None
             if "reasoning_effort" in params
-            else reasoning_effort_from_thinking(params.get("thinking"), drop_params=drop_params)
+            else reasoning_effort_from_thinking(params.get("thinking"), model=model, drop_params=drop_params)
         )
         tools: Final = non_default_params.pop("tools", None)
         if tools is not None:
