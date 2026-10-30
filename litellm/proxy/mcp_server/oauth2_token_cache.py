@@ -17,13 +17,13 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
+    AUTH_OBJECTS_TARGET,
     MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL,
     MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE,
     MCP_OAUTH2_TOKEN_CACHE_MIN_TTL,
     MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS,
     MCP_PER_USER_TOKEN_DEFAULT_TTL,
     MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS,
-    MCP_PER_USER_TOKEN_REDIS_KEY_PREFIX,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -34,9 +34,11 @@ from litellm.proxy.mcp_server.oauth_utils import (
     build_upstream_oauth2_token_request,
     resolve_upstream_resource,
 )
+from litellm.proxy.mcp_server.outbound_credentials.dual_cache_token_backend import DualCacheTokenCacheBackend
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
 from litellm.proxy.mcp_server.outbound_credentials.token_cache_codec import OAuthTokenCacheCodec
 from litellm.proxy.mcp_server.utils import MCP_OAUTH_TOKENS_TARGET
+from litellm.redis.stores.mcp_per_user_tokens import per_user_token_key
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 if TYPE_CHECKING:
@@ -241,7 +243,7 @@ class MCPPerUserTokenCache:
     """
 
     def _cache_key(self, user_id: str, server_id: str) -> str:
-        return f"{MCP_PER_USER_TOKEN_REDIS_KEY_PREFIX}:{user_id}:{server_id}"
+        return per_user_token_key(user_id, server_id)
 
     def _codec(self) -> OAuthTokenCacheCodec:
         return OAuthTokenCacheCodec(
@@ -258,11 +260,7 @@ class MCPPerUserTokenCache:
         try:
             from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
 
-            key: Final = self._cache_key(user_id, server_id)
-            encrypted: Final = await user_api_key_cache.async_get_cache(key)
-            if encrypted is None:
-                return None
-            return self._codec().decode(encrypted)
+            return await DualCacheTokenCacheBackend(user_api_key_cache, self._codec()).get(user_id, server_id)
         except Exception as exc:
             verbose_logger.debug(
                 "MCPPerUserTokenCache.get failed for user=%s server=%s: %s",
@@ -285,11 +283,12 @@ class MCPPerUserTokenCache:
         try:
             from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
 
-            key: Final = self._cache_key(user_id, server_id)
-            encrypted: Final = self._codec().encode(
-                OAuthToken(access_token=access_token, identity_binding_proof=identity_binding_proof)
+            await DualCacheTokenCacheBackend(user_api_key_cache, self._codec()).cache_token(
+                user_id,
+                server_id,
+                OAuthToken(access_token=access_token, identity_binding_proof=identity_binding_proof),
+                ttl,
             )
-            await user_api_key_cache.async_set_cache(key, encrypted, ttl=ttl)
             verbose_logger.debug(
                 "MCPPerUserTokenCache.set: cached token for user=%s server=%s ttl=%ds",
                 user_id,
@@ -304,16 +303,18 @@ class MCPPerUserTokenCache:
                 exc,
             )
 
+    @with_service_target(AUTH_OBJECTS_TARGET)
     async def delete(self, user_id: str, server_id: str) -> None:
         """Invalidate the cached token in Redis, here, and in every peer worker's in-memory layer."""
         try:
             from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (  # noqa: PLC0415  # proxy import cycle
-                evict_and_broadcast,
+                publish_auth_cache_invalidation,
             )
             from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
 
             key: Final = self._cache_key(user_id, server_id)
-            await evict_and_broadcast((key,), user_api_key_cache)
+            await DualCacheTokenCacheBackend(user_api_key_cache, self._codec()).evict_token(user_id, server_id)
+            await publish_auth_cache_invalidation(cache_key=key)
         except Exception as exc:
             verbose_logger.debug(
                 "MCPPerUserTokenCache.delete failed for user=%s server=%s: %s",
