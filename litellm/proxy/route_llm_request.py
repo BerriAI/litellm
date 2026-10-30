@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import inspect
 import json
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
@@ -785,6 +786,62 @@ async def route_request(
             router_only_settings_from_override=router_only_settings_from_override,
             user_api_key_dict=user_api_key_dict,
         )
+
+
+class UnroutableModelProbe:
+    """Asks ``route_request``, on a copy of the request, whether its model can be routed. A model the router
+    recognizes and an ``a2a/`` agent name count as routable without asking.
+
+    ``refusal`` is the routing error a caller skipped a pre-call guardrail for, and the request must end with it.
+    """
+
+    __slots__ = ("_checked", "_llm_router", "_route_type", "_user_api_key_dict", "_user_model", "refusal")
+
+    def __init__(
+        self,
+        llm_router: LitellmRouter | None,
+        user_model: str | None,
+        route_type: RouteType,
+        user_api_key_dict: UserAPIKeyAuth | None,
+    ) -> None:
+        self._llm_router: Final = llm_router
+        self._user_model: Final = user_model
+        self._route_type: Final = route_type
+        self._user_api_key_dict: Final = user_api_key_dict
+        self._checked: tuple[object, ProxyModelNotFoundError | None] | None = None
+        self.refusal: ProxyModelNotFoundError | None = None
+
+    async def refuses(self, data: Mapping[str, object]) -> bool:
+        model: Final = data.get("model")
+        if self._checked is None or self._checked[0] != model:
+            self._checked = (model, await self._refusal(data, model))
+        refusal: Final = self._checked[1]
+        if refusal is not None:
+            self.refusal = refusal
+        return refusal is not None
+
+    async def _refusal(self, data: Mapping[str, object], model: object) -> ProxyModelNotFoundError | None:
+        if _is_a2a_agent_model(model) or (
+            isinstance(model, str)
+            and self._llm_router is not None
+            and self._llm_router.registry().resolve(model, kind="recognized")
+        ):
+            return None
+        try:
+            call: Final[object] = await route_request(  # pyright: ignore[reportUnknownVariableType]  # unawaited provider call of any endpoint
+                data=dict(data),
+                llm_router=self._llm_router,
+                user_model=self._user_model,
+                route_type=self._route_type,
+                user_api_key_dict=self._user_api_key_dict,
+            )
+        except ProxyModelNotFoundError as refusal:
+            return refusal
+        except Exception:  # noqa: BLE001  # any other routing failure is left for the real dispatch to raise
+            return None
+        if inspect.iscoroutine(call):  # pyright: ignore[reportUnknownArgumentType]  # unawaited provider call of any endpoint
+            call.close()
+        return None
 
 
 async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited provider coroutines; the inferred union keeps route_request's callers typed
