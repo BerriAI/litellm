@@ -606,6 +606,7 @@ _PRE_CALL_CHECK_FILTERED_PARAMS: Final = frozenset({"response_format"})
 _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS: Final = frozenset({"anthropic_messages", "aresponses", "responses"})
 _video_call_deployment_id: Final[ContextVar[str | None]] = ContextVar("video_call_deployment_id", default=None)
 _routed_call_type: Final[ContextVar[str | None]] = ContextVar("routed_call_type", default=None)
+_DECISIONS_MEDIA_CALL_TYPES: Final = frozenset({"adecisions", "decisions", "asystemone", "systemone"})
 _ROUTE_CAPABILITY_RESOLVERS: Final[Mapping[str, Callable[[str, LlmProviders], object | None]]] = MappingProxyType(
     {
         "adecisions": ProviderConfigManager.get_provider_decisions_config,
@@ -14532,6 +14533,45 @@ class Router:
         return cast(_RouteDeploymentsT, filtered_deployments)  # cast-ok: same list shape as the input candidates
 
     @staticmethod
+    def _decisions_deployment_takes_media(
+        deployment: DeploymentTypedDict, group: str, *, audio: bool, videos: bool
+    ) -> bool:
+        from litellm.decisions.call import deployment_takes_media
+
+        plain_deployment: Final = cast(Mapping[str, object], deployment)  # cast-ok: router deployments are plain dicts
+        model_info: Final = cast(Mapping[str, object], plain_deployment.get("model_info") or {})  # cast-ok: plain dict
+        model, custom_llm_provider = Router._capability_model_and_provider(deployment["litellm_params"], group)
+        return deployment_takes_media(model, custom_llm_provider, model_info, audio=audio, videos=videos)
+
+    @staticmethod
+    def _without_decisions_deployments_refusing_media(
+        healthy_deployments: _RouteDeploymentsT, group: str, request_kwargs: Mapping[str, object] | None
+    ) -> _RouteDeploymentsT:
+        call_kwargs: Final = request_kwargs or {}
+        audio: Final = bool(call_kwargs.get("audio"))
+        videos: Final = bool(call_kwargs.get("videos"))
+        if (
+            _routed_call_type.get() not in _DECISIONS_MEDIA_CALL_TYPES
+            or not (audio or videos)
+            or isinstance(healthy_deployments, Mapping)
+        ):
+            return healthy_deployments
+
+        media_capable_deployments: Final = [
+            deployment
+            for deployment in healthy_deployments
+            if Router._decisions_deployment_takes_media(
+                cast(DeploymentTypedDict, deployment),  # cast-ok: router candidates use the deployment shape
+                group,
+                audio=audio,
+                videos=videos,
+            )
+        ]
+        if not media_capable_deployments:
+            return healthy_deployments
+        return cast(_RouteDeploymentsT, media_capable_deployments)  # cast-ok: same list shape as the input candidates
+
+    @staticmethod
     def _without_declared_text_only_deployments(
         healthy_deployments: _RouteDeploymentsT,
         group: str,
@@ -15142,9 +15182,13 @@ class Router:
             verbose_router_logger.debug("healthy_deployments after web search filter: %s", healthy_deployments)
 
         healthy_deployments = (  # pyright: ignore[reportUnknownVariableType]  # rebind-ok: route filter narrows
-            self._without_deployments_that_cannot_serve_route(
-                healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
+            self._without_decisions_deployments_refusing_media(
+                self._without_deployments_that_cannot_serve_route(
+                    healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
+                    model,
+                ),
                 model,
+                cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: request kwargs are a plain dict
             )
         )
 
@@ -16412,9 +16456,13 @@ class Router:
             request_kwargs=request_kwargs,
         )
         healthy_deployments = (  # pyright: ignore[reportUnknownVariableType]  # rebind-ok: route filter narrows
-            self._without_deployments_that_cannot_serve_route(
-                healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
+            self._without_decisions_deployments_refusing_media(
+                self._without_deployments_that_cannot_serve_route(
+                    healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
+                    model,
+                ),
                 model,
+                cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: request kwargs are a plain dict
             )
         )
         strategy, strategy_selector = self._get_routing_context(model, request_kwargs)

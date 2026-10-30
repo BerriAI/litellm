@@ -3860,6 +3860,72 @@ async def test_another_deployments_mode_never_switches_off_a_deployments_own_med
     assert (sent["audio"], sent["videos"]) == (list(_AUDIO_CLIPS), list(_VIDEO_CLIPS))
 
 
+_MEDIA_SURFACES: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+    {
+        "adecisions": {"input": "review", "questions": _PREDICATE_QUESTIONS},
+        "asystemone": {"state": "review", "questions": _QUESTIONS},
+        "systemone": {"state": "review", "questions": _QUESTIONS},
+    }
+)
+
+
+def _group_member(group: str, model: str, key: str, weight: int, model_info: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "model_name": group,
+        "litellm_params": {"model": model, "api_key": key, "weight": weight},
+        "model_info": {"id": f"{group}-{key}", **model_info},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", tuple(_MEDIA_SURFACES))
+async def test_a_group_sends_clips_to_a_deployment_that_takes_them_and_refuses_only_when_none_does(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, surface: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
+    monkeypatch.delenv("CLOUDFLARE_API_BASE", raising=False)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "cloudflare/@cf/cloudflare/clef-omni",
+        {"litellm_provider": "cloudflare", "mode": "evaluation", "supports_audio_input": True},
+    )
+    respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
+    respx_mock.post("https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/cloudflare/clef-omni").respond(
+        json=_RESPONSE
+    )
+    unlisted: Final = "openrouter/example/omni-preview"
+    listed: Final = "cloudflare/clef-omni"
+    router: Final = litellm.Router(
+        model_list=[
+            _group_member("unlisted", unlisted, "refuses", 1, {}),
+            _group_member("unlisted", unlisted, "takes", 0, {"supports_audio_input": True}),
+            _group_member("listed", listed, "refuses", 1, {"supports_audio_input": False}),
+            _group_member("listed", listed, "takes", 0, {}),
+            _group_member("none", unlisted, "refuses", 1, {}),
+            _group_member("none", listed, "refuses", 1, {"supports_audio_input": False}),
+        ]
+    )
+    call: Final = getattr(router, surface)
+
+    async def send(group: str, **media: object) -> object:
+        response: Final = call(model=group, **_MEDIA_SURFACES[surface], **media)
+        return await response if asyncio.iscoroutine(response) else response
+
+    for group in ("unlisted", "listed"):
+        await send(group, audio=_AUDIO_CLIPS)
+        assert respx_mock.calls.last.request.headers["authorization"] == "Bearer takes"
+        assert json.loads(respx_mock.calls.last.request.content)["audio"] == list(_AUDIO_CLIPS)
+
+    await send("unlisted")
+    assert respx_mock.calls.last.request.headers["authorization"] == "Bearer refuses"
+
+    sent_before_refusal: Final = len(respx_mock.calls)
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("['audio']")):
+        await send("none", audio=_AUDIO_CLIPS)
+    assert len(respx_mock.calls) == sent_before_refusal
+
+
 @pytest.mark.asyncio
 async def test_a_deployment_that_turns_audio_off_is_refused_or_dropped_even_when_the_cost_map_allows_it(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None

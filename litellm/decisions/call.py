@@ -291,6 +291,37 @@ class _ResolvedSupport:
     videos: bool
 
 
+def _takes_audio(
+    provider_config: BaseDecisionsConfig, model: str, custom_llm_provider: str, deployment: _DeploymentCapabilities
+) -> bool:
+    return provider_config.supports_audio_input(
+        model,
+        custom_llm_provider,
+        deployment.decisions_media_flag(deployment.supports_audio_input, model, custom_llm_provider),
+    )
+
+
+def _takes_videos(
+    provider_config: BaseDecisionsConfig, model: str, custom_llm_provider: str, deployment: _DeploymentCapabilities
+) -> bool:
+    return provider_config.supports_video_input(
+        model,
+        custom_llm_provider,
+        deployment.decisions_media_flag(deployment.supports_video_input, model, custom_llm_provider),
+    )
+
+
+def deployment_takes_media(
+    model: str, custom_llm_provider: str, model_info: Mapping[str, object], *, audio: bool, videos: bool
+) -> bool:
+    provider_config: Final = _provider_config(model, custom_llm_provider)
+    canonical_model: Final = provider_config.canonical_model(model)
+    deployment: Final = _DeploymentCapabilities.model_validate(model_info)
+    return (not audio or _takes_audio(provider_config, canonical_model, custom_llm_provider, deployment)) and (
+        not videos or _takes_videos(provider_config, canonical_model, custom_llm_provider, deployment)
+    )
+
+
 def _resolved_support(
     provider_config: BaseDecisionsConfig,
     model: str,
@@ -304,18 +335,8 @@ def _resolved_support(
         box_questions=provider_config.supports_box_questions(
             model, custom_llm_provider, headers, deployment.supports_box_questions
         ),
-        audio=bool(fields.audio)
-        and provider_config.supports_audio_input(
-            model,
-            custom_llm_provider,
-            deployment.decisions_media_flag(deployment.supports_audio_input, model, custom_llm_provider),
-        ),
-        videos=bool(fields.videos)
-        and provider_config.supports_video_input(
-            model,
-            custom_llm_provider,
-            deployment.decisions_media_flag(deployment.supports_video_input, model, custom_llm_provider),
-        ),
+        audio=bool(fields.audio) and _takes_audio(provider_config, model, custom_llm_provider, deployment),
+        videos=bool(fields.videos) and _takes_videos(provider_config, model, custom_llm_provider, deployment),
     )
 
 
