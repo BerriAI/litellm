@@ -25,7 +25,7 @@ use crate::{
             streaming::StreamShape,
             transformation::{
                 BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-                ValidatedEnvironment, map_openai_param_names, unsupported_message,
+                ValidatedEnvironment, map_openai_param_names, map_openai_stop, unsupported_message,
                 unsupported_param,
             },
         },
@@ -105,14 +105,10 @@ impl BaseConfig for AnthropicConfig {
         _model: &str,
         params: Map<String, Value>,
     ) -> Result<Map<String, Value>, Decline> {
-        Ok(
-            map_openai_param_names(SUPPORTED_PARAMS, self.config_params(), params)?
-                .into_iter()
-                .filter_map(|(name, value)| match name.as_str() {
-                    STOP_SEQUENCES => stop_sequences(value).map(|value| (name, value)),
-                    _ => Some((name, value)),
-                })
-                .collect(),
+        map_openai_param_names(
+            SUPPORTED_PARAMS,
+            self.config_params(),
+            map_openai_stop(params, stop_sequences),
         )
     }
 
@@ -240,8 +236,7 @@ fn stop_sequences(stop: Value) -> Option<Value> {
     match stop {
         Value::String(stop) => Some(json!([stop])),
         Value::Array(stops) if stops.is_empty() => None,
-        Value::Array(stops) => Some(Value::Array(stops)),
-        _ => None,
+        stop => Some(stop),
     }
 }
 
@@ -333,13 +328,17 @@ mod tests {
     #[case::empty_stop_list(json!({"stop": []}), json!({}))]
     #[case::stop_list(json!({"stop": ["a", "b"]}), json!({"stop_sequences": ["a", "b"]}))]
     #[case::max_completion_tokens(json!({"max_completion_tokens": 32}), json!({"max_tokens": 32}))]
+    #[case::anthropic_name_unchanged(
+        json!({"stop_sequences": ["5"]}),
+        json!({"stop_sequences": ["5"]})
+    )]
+    #[case::malformed_stop_reaches_anthropic(json!({"stop": 5}), json!({"stop_sequences": 5}))]
     fn maps_openai_params_to_anthropic_names(#[case] openai: Value, #[case] anthropic: Value) {
         assert_eq!(map(openai), Ok(params(anthropic)));
     }
 
     #[rstest]
     #[case::unknown(json!({"top_k": 40}))]
-    #[case::anthropic_name(json!({"stop_sequences": ["5"]}))]
     fn declines_an_openai_param_it_has_no_anthropic_name_for(#[case] openai: Value) {
         assert_eq!(
             map(openai),

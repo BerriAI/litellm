@@ -29,7 +29,7 @@ use crate::{
             streaming::StreamShape,
             transformation::{
                 BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-                ValidatedEnvironment, map_openai_param_names, unsupported_message,
+                ValidatedEnvironment, map_openai_param_names, map_openai_stop, unsupported_message,
                 unsupported_param,
             },
         },
@@ -53,6 +53,8 @@ const SUPPORTED_PARAMS: &[(&str, &str)] = &[
 
 const MAX_TOKENS: &str = "maxTokens";
 const STOP_SEQUENCES: &str = "stopSequences";
+
+const MODEL_SPECIFIC_OPENAI_PARAMS: &[&str] = &["max_tokens", "max_completion_tokens", "stop"];
 
 const AWS_BEDROCK_RUNTIME_ENDPOINT: &str = "aws_bedrock_runtime_endpoint";
 
@@ -118,21 +120,18 @@ impl BaseConfig for AmazonConverseConfig {
         model: &str,
         params: Map<String, Value>,
     ) -> Result<Map<String, Value>, Decline> {
-        let mapped = map_openai_param_names(SUPPORTED_PARAMS, CONFIG_PARAMS, params)?;
         if has_model_specific_token_and_stop_rules(model)
-            && [MAX_TOKENS, STOP_SEQUENCES]
+            && MODEL_SPECIFIC_OPENAI_PARAMS
                 .iter()
-                .any(|name| mapped.contains_key(*name))
+                .any(|name| params.get(*name).is_some_and(|value| !value.is_null()))
         {
             return Err(Decline::new("model-specific max_tokens or stop rules"));
         }
-        Ok(mapped
-            .into_iter()
-            .filter_map(|(name, value)| match name.as_str() {
-                STOP_SEQUENCES => stop_sequences(value).map(|value| (name, value)),
-                _ => Some((name, value)),
-            })
-            .collect())
+        map_openai_param_names(
+            SUPPORTED_PARAMS,
+            CONFIG_PARAMS,
+            map_openai_stop(params, stop_sequences),
+        )
     }
 
     fn get_complete_url(
@@ -488,6 +487,17 @@ mod tests {
         json!({"temperature": 0.2}),
         json!({"temperature": 0.2})
     )]
+    #[case::converse_names_unchanged(
+        CLAUDE,
+        json!({"maxTokens": 16, "topP": 0.5, "stopSequences": ["5"]}),
+        json!({"maxTokens": 16, "topP": 0.5, "stopSequences": ["5"]})
+    )]
+    #[case::rule_family_with_converse_names(
+        "xai.grok-4-6",
+        json!({"maxTokens": 16, "stopSequences": ["5"]}),
+        json!({"maxTokens": 16, "stopSequences": ["5"]})
+    )]
+    #[case::rule_family_with_null_params("xai.grok-4-6", json!({"max_tokens": null}), json!({}))]
     fn maps_openai_params_to_converse_names(
         #[case] model: &str,
         #[case] openai: Value,
@@ -513,7 +523,6 @@ mod tests {
 
     #[rstest]
     #[case::unknown(json!({"top_k": 40}))]
-    #[case::converse_name(json!({"maxTokens": 16}))]
     fn declines_an_openai_param_it_has_no_converse_name_for(#[case] openai: Value) {
         assert_eq!(
             map(CLAUDE, openai),

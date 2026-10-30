@@ -441,15 +441,15 @@ async fn a_bedrock_api_key_is_sent_as_a_bearer_token_instead_of_being_signed() {
 }
 
 #[rstest]
+#[case::openai_names(json!({"max_tokens": 16, "top_p": 0.5, "stop": "5"}))]
+#[case::converse_names(json!({"maxTokens": 16, "topP": 0.5, "stopSequences": ["5"]}))]
 #[tokio::test]
-async fn an_openai_shaped_bedrock_call_sends_converse_inference_config() {
+async fn an_openai_shaped_bedrock_call_sends_converse_inference_config(#[case] params: Value) {
     let upstream = upstream([bedrock_response()]).await;
     let base = upstream.uri();
     complete(ChatCompletionsRequest {
         api_base: Some(&base),
-        optional_params: OptionalParams::OpenAi(object(
-            json!({"max_tokens": 16, "top_p": 0.5, "stop": "5"}),
-        )),
+        optional_params: OptionalParams::OpenAi(object(params)),
         ..request(
             "bedrock/us-east-1/anthropic.claude-v2",
             None,
@@ -468,7 +468,6 @@ async fn an_openai_shaped_bedrock_call_sends_converse_inference_config() {
 
 #[rstest]
 #[case::unknown_openai_param(OptionalParams::OpenAi(object(json!({"top_k": 40}))))]
-#[case::provider_name_in_the_openai_shape(OptionalParams::OpenAi(object(json!({"maxTokens": 16}))))]
 #[case::openai_name_in_the_provider_shape(OptionalParams::ProviderMapped(object(
     json!({"max_tokens": 16})
 )))]

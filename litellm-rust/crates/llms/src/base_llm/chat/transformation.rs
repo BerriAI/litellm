@@ -24,6 +24,8 @@ pub struct ProviderChatResponseData {
 
 pub const STREAM_PARAM: &str = "stream";
 
+const STOP_PARAM: &str = "stop";
+
 const UNRECOGNIZED_PARAM: &str = "unrecognized request parameter";
 
 /// Message fields that carry no meaning for the upstream body, so their
@@ -140,6 +142,25 @@ fn provider_param_name(
         .iter()
         .find(|(openai_name, _)| *openai_name == name)
         .map(|(_, provider_name)| (*provider_name).to_string())
+        .or_else(|| {
+            supported
+                .iter()
+                .any(|(_, provider_name)| *provider_name == name)
+                .then_some(name)
+        })
+}
+
+pub fn map_openai_stop(
+    params: Map<String, Value>,
+    to_provider_stop: fn(Value) -> Option<Value>,
+) -> Map<String, Value> {
+    params
+        .into_iter()
+        .filter_map(|(name, value)| match name.as_str() {
+            STOP_PARAM => to_provider_stop(value).map(|value| (name, value)),
+            _ => Some((name, value)),
+        })
+        .collect()
 }
 
 pub fn unsupported_param(
