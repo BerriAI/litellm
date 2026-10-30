@@ -30,6 +30,7 @@ pub struct ModelInfoFields {
     pub cache_read_input_audio_token_cost_batches: Option<f64>,
     pub explicit_cache_read_input_token_cost: Option<f64>,
     pub prompt_cache_min_tokens: Option<i64>,
+    pub min_billed_input_tokens: Option<i64>,
     pub cache_read_input_token_cost_above_200k_tokens: Option<f64>,
     pub cache_read_input_token_cost_above_200k_tokens_priority: Option<f64>,
     pub cache_read_input_token_cost_above_272k_tokens: Option<f64>,

@@ -25,6 +25,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
     _get_team_member_budget_counter,
+    estimate_request_input_cost,
     estimate_request_max_cost,
     get_budget_window_start,
     release_unbound_budget_reservation,
@@ -219,6 +220,73 @@ def test_deployment_pricing_update_invalidates_cached_estimate() -> None:
     after: Final = estimate_request_max_cost(request_body=TIERED_BODY, route="/chat/completions", llm_router=router)
     assert after is not None
     assert math.isclose(after, before * 1000)
+
+
+@pytest.mark.parametrize("deployment_minimum", [None, 0])
+def test_short_prompt_reserves_the_deployments_billed_input_minimum(deployment_minimum: int | None) -> None:
+    backend_model: Final = "vispark/vision-small"
+    backend_info: Final = litellm.get_model_info(model=backend_model)
+    built_in_minimum: Final = backend_info.get("min_billed_input_tokens")
+    input_cost_per_token: Final = backend_info.get("input_cost_per_token")
+    assert built_in_minimum is not None and built_in_minimum > 0
+    assert input_cost_per_token is not None
+    router: Final = Router(
+        model_list=[
+            Deployment(
+                model_name="minimum-group",
+                litellm_params=LiteLLM_Params(model=backend_model, api_key="sk-fake"),
+                model_info=ModelInfo(id="minimum-deployment", min_billed_input_tokens=deployment_minimum),
+            ).model_dump()
+        ]
+    )
+    prompt_tokens: Final = 12
+
+    reserved: Final = estimate_request_input_cost(
+        request_body={"model": "minimum-group", "messages": [{"role": "user", "content": "hi"}]},
+        route="/chat/completions",
+        llm_router=router,
+        input_token_counts={"minimum-group": prompt_tokens},
+    )
+
+    billed_tokens: Final = built_in_minimum if deployment_minimum is None else max(prompt_tokens, deployment_minimum)
+    assert reserved is not None
+    assert math.isclose(reserved, billed_tokens * input_cost_per_token)
+
+
+@pytest.mark.parametrize("sibling_minimum", [0, None])
+def test_disconnect_charge_is_only_the_minimum_every_deployment_in_the_group_bills(sibling_minimum: int | None) -> None:
+    backend_model: Final = "vispark/vision-small"
+    backend_info: Final = litellm.get_model_info(model=backend_model)
+    built_in_minimum: Final = backend_info.get("min_billed_input_tokens")
+    input_cost_per_token: Final = backend_info.get("input_cost_per_token")
+    assert built_in_minimum is not None and built_in_minimum > 0
+    assert input_cost_per_token is not None
+    largest_minimum: Final = built_in_minimum * 100
+    router: Final = Router(
+        model_list=[
+            Deployment(
+                model_name="mixed-minimum-group",
+                litellm_params=LiteLLM_Params(model=backend_model, api_key="sk-fake"),
+                model_info=ModelInfo(id=deployment_id, min_billed_input_tokens=minimum),
+            ).model_dump()
+            for deployment_id, minimum in (("largest-minimum", largest_minimum), ("sibling", sibling_minimum))
+        ]
+    )
+    prompt_tokens: Final = 12
+    request_body: Final = {"model": "mixed-minimum-group", "messages": [{"role": "user", "content": "hi"}]}
+    token_counts: Final = {"mixed-minimum-group": prompt_tokens}
+
+    disconnect_charge: Final = estimate_request_input_cost(
+        request_body=request_body, route="/chat/completions", llm_router=router, input_token_counts=token_counts
+    )
+    admission_estimate: Final = estimate_request_max_cost(
+        request_body=request_body, route="/chat/completions", llm_router=router, input_token_counts=token_counts
+    )
+
+    shared_minimum: Final = built_in_minimum if sibling_minimum is None else sibling_minimum
+    assert disconnect_charge is not None and admission_estimate is not None
+    assert math.isclose(disconnect_charge, max(prompt_tokens, shared_minimum) * input_cost_per_token)
+    assert admission_estimate >= largest_minimum * input_cost_per_token
 
 
 @pytest.mark.asyncio

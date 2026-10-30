@@ -4,7 +4,7 @@ import asyncio
 import json
 import math
 import time
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import chain
@@ -1361,7 +1361,7 @@ def _estimate_request_input_cost_for_model(
             model_info=model_info,
             input_tokens=input_tokens,
         )
-        for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
+        for model_info in _get_model_cost_infos(model=model, llm_router=llm_router, group_billing_minimum=min)
     ]
     valid_estimates: Final = [estimate for estimate in estimates if estimate is not None]
     return max(valid_estimates) if valid_estimates else None
@@ -1530,6 +1530,7 @@ def _get_model_cost_info(
 def _get_model_cost_infos(
     model: str,
     llm_router: Router | None,
+    group_billing_minimum: Callable[[Sequence[int]], int] = max,
 ) -> Sequence[Mapping[str, object]]:
     """Cost-info candidates to estimate a request against for one model group.
 
@@ -1537,52 +1538,64 @@ def _get_model_cost_infos(
     is unknown. Rather than guess, we estimate the cost against every eligible
     pricing shape in the group (the group's flat rates plus each deployment's
     tiered table) and let the caller reserve the maximum, so a cheaper sibling
-    deployment can never leave the request under-reserved.
+    deployment can never leave the request under-reserved. The deployments'
+    billed input minimums fold into one through ``group_billing_minimum``, the
+    largest for admission and the smallest for the input cost a disconnect is charged.
     """
     try:
-        base: Final = _get_model_cost_info(model=model, llm_router=llm_router)
-        if base is None:
+        group_info: Final = _get_model_cost_info(model=model, llm_router=llm_router)
+        if group_info is None:
             return []
-        tiered_tables: Final = _get_deployment_tiered_pricing_tables(model=model, llm_router=llm_router)
+        deployment_infos: Final = _get_deployment_model_infos(model=model, llm_router=llm_router)
     except Exception:
         verbose_proxy_logger.debug(
             "Unable to load model cost info for budget reservation",
             exc_info=True,
         )
         return []
-    if not tiered_tables:
-        return [base]
+    billing_minimums: Final = tuple(
+        _to_int(deployment_info.get("min_billed_input_tokens")) or 0 for deployment_info in deployment_infos
+    )
+    base: Final = (
+        {**group_info, "min_billed_input_tokens": group_billing_minimum(billing_minimums)}
+        if any(billing_minimums)
+        else group_info
+    )
+    tiered_tables: Final = [
+        table for deployment_info in deployment_infos if (table := _tiered_pricing_table(deployment_info)) is not None
+    ]
     return [base, *({**base, "tiered_pricing": table} for table in tiered_tables)]
 
 
-def _deployment_tiered_pricing_table(
-    deployment: DeploymentTypedDict,
-    llm_router: Router,
-) -> Sequence[Mapping[str, object]] | None:
-    model_id: Final = _get_value(_get_value(deployment, "model_info"), "id")
-    backend_model: Final = _get_value(_get_value(deployment, "litellm_params"), "model")
-    if not isinstance(model_id, str) or not isinstance(backend_model, str):
-        return None
-    deployment_model_info: Final = llm_router.registry().deployment_model_info(model_id, backend_model, cached=True)
-    if deployment_model_info is None:
-        return None
-    tiered_pricing: Final = deployment_model_info.get("tiered_pricing")
+def _tiered_pricing_table(deployment_info: Mapping[str, object]) -> Sequence[Mapping[str, object]] | None:
+    tiered_pricing: Final = deployment_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
         return tiered_pricing
     return None
 
 
-def _get_deployment_tiered_pricing_tables(
+def _deployment_model_info(
+    deployment: DeploymentTypedDict,
+    llm_router: Router,
+) -> Mapping[str, object] | None:
+    model_id: Final = _get_value(_get_value(deployment, "model_info"), "id")
+    backend_model: Final = _get_value(_get_value(deployment, "litellm_params"), "model")
+    if not isinstance(model_id, str) or not isinstance(backend_model, str):
+        return None
+    return llm_router.registry().deployment_model_info(model_id, backend_model, cached=True)
+
+
+def _get_deployment_model_infos(
     model: str,
     llm_router: Router | None,
-) -> Sequence[Sequence[Mapping[str, object]]]:
+) -> Sequence[Mapping[str, object]]:
     if llm_router is None:
         return []
     deployments: Final = llm_router.registry().deployments(model) or []
     return [
-        table
+        deployment_info
         for deployment in deployments
-        if (table := _deployment_tiered_pricing_table(deployment, llm_router)) is not None
+        if (deployment_info := _deployment_model_info(deployment, llm_router)) is not None
     ]
 
 
@@ -1651,14 +1664,10 @@ def _estimate_input_tokens(
         if input_tokens is not None
         else count_input_tokens_for_model(request_body=request_body, model=model)
     )
-    if counted is not None:
-        return counted
-
-    max_input_tokens: Final = _to_int(model_info.get("max_input_tokens"))
-    if max_input_tokens is not None:
-        return max_input_tokens
-
-    return None
+    estimated: Final = counted if counted is not None else _to_int(model_info.get("max_input_tokens"))
+    if estimated is None:
+        return None
+    return max(estimated, _to_int(model_info.get("min_billed_input_tokens")) or 0)
 
 
 DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK: Final = 16384

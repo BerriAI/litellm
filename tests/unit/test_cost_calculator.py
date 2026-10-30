@@ -10896,3 +10896,50 @@ def test_bedrock_registered_cache_prices_preserve_dynamic_threshold_rates(
     assert entry is not None
     assert entry[1]["input_cost_per_token_above_300k_tokens"] == 0.03
     assert entry[1][tier_field] == (tier_override if tier_override is not None else 0.007)
+
+
+@pytest.mark.parametrize(
+    ("model", "chat_url", "usage_cost", "stated_cost"),
+    [
+        (
+            "perplexity/sonar",
+            "https://api.perplexity.ai/chat/completions",
+            {"request_cost": 0.0025, "total_cost": 0.00266},
+            0.00266,
+        ),
+        ("kyma/sonar", "https://kymaapi.com/v1/chat/completions", 0.00721, 0.00721),
+        ("openrouter/openai/gpt-5.4-nano", "https://openrouter.ai/api/v1/chat/completions", 0.00721, 0.00721),
+    ],
+    ids=["perplexity", "kyma", "openrouter"],
+)
+def test_a_deployment_that_only_sets_a_billing_minimum_bills_the_provider_stated_cost(
+    _local_model_cost_map, model: str, chat_url: str, usage_cost: object, stated_cost: float
+):
+    from litellm import Router
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "deployment-with-minimum",
+                "litellm_params": {"model": model, "api_key": "provider-test-key"},
+                "model_info": {"min_billed_input_tokens": 1000},
+            }
+        ]
+    )
+    with respx.mock() as upstream:
+        upstream.post(chat_url).respond(
+            200,
+            json={
+                "id": "chatcmpl_minimum",
+                "object": "chat.completion",
+                "created": 1_790_000_000,
+                "model": "sonar",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Paris"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8, "cost": usage_cost},
+            },
+        )
+        response: Final = router.completion(
+            model="deployment-with-minimum", messages=[{"role": "user", "content": "Capital of France?"}]
+        )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(stated_cost)

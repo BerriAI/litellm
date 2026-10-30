@@ -690,6 +690,7 @@ kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared mo
 streamlake_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
 v0_models: Set = set()
+vispark_models: Set[str] = set()
 morph_models: Set = set()
 opencode_go_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 lambda_ai_models: Set = set()
@@ -998,6 +999,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             zerogpu_models.add(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
+        elif value.get("litellm_provider") == "vispark":
+            vispark_models.add(key)
         elif value.get("litellm_provider") == "morph":
             morph_models.add(key)
         elif value.get("litellm_provider") == "opencode_go":
@@ -1175,6 +1178,7 @@ model_list = list(
     | streamlake_models
     | zerogpu_models
     | v0_models
+    | vispark_models
     | morph_models
     | opencode_go_models
     | lambda_ai_models
@@ -1308,6 +1312,7 @@ def _build_models_by_provider() -> dict:
         "streamlake": streamlake_models,
         "zerogpu": zerogpu_models,
         "v0": v0_models,
+        "vispark": vispark_models,
         "morph": morph_models,
         "opencode_go": opencode_go_models,
         "lambda_ai": lambda_ai_models,

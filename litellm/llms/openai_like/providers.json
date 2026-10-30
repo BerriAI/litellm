@@ -292,5 +292,18 @@
       "preserve_cache_control": true
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "vispark": {
+    "base_url": "https://api.lab.vispark.in/v1",
+    "api_key_env": "VISPARK_LAB_API_KEY",
+    "api_base_env": "VISPARK_LAB_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "special_handling": {
+      "convert_file_parts_to_image_url": true,
+      "remove_additional_properties_from_response_format": true
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/completions"]
   }
 }

@@ -73,6 +73,8 @@ attributes! {
     max_tokens: u64 as Count,
     /// Free-form notes about the entry (e.g. pricing derivation).
     metadata: BTreeMap<String, Value>,
+    /// Input tokens billed per request even when the prompt is shorter.
+    min_billed_input_tokens: u64 as Count,
     /// Primary API surface / task type of the model.
     mode: Mode,
     /// Databricks units, not USD.
