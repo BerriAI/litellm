@@ -571,7 +571,7 @@ async def acompletion(
     custom_llm_provider = kwargs.get("custom_llm_provider", None)
     _ = _resolve_control_options(kwargs, model)
     caller_request: Final = cast(  # cast-ok: acompletion types messages and tools as bare Lists
-        "Mapping[str, object]", {"model": model, "messages": messages, "tools": tools}
+        "Mapping[str, object]", {"model": model, "messages": messages, "tools": None if tools is None else [*tools]}
     )
     caller_kwargs: Final = cast("Mapping[str, object]", {**kwargs})  # cast-ok: acompletion takes untyped kwargs
 

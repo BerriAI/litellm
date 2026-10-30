@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.fallback_utils import (
 )
 from litellm.main import acompletion as python_acompletion
 from litellm.main import completion as python_completion
+from litellm.vector_stores.vector_store_registry import LiteLLM_ManagedVectorStore, VectorStoreRegistry
 
 
 @pytest.mark.asyncio
@@ -532,3 +533,58 @@ async def test_cache_dialect_follows_base_url_over_an_api_base_the_call_does_not
 
     base_url_only, with_unused_api_base = (json.loads(call.request.content) for call in route.calls)
     assert with_unused_api_base == base_url_only
+
+
+@pytest.mark.asyncio
+async def test_acompletion_fallback_sends_the_context_a_vector_store_tool_retrieves(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            vector_stores=[
+                LiteLLM_ManagedVectorStore(
+                    vector_store_id="vs_docs", custom_llm_provider="openai", litellm_params={"api_key": "openai-key"}
+                )
+            ]
+        ),
+    )
+    respx_mock.post("https://api.openai.com/v1/vector_stores/vs_docs/search").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "vector_store.search_results.page",
+                "search_query": "what is litellm?",
+                "data": [{"score": 1.0, "content": [{"type": "text", "text": "litellm is an LLM gateway"}]}],
+            },
+        )
+    )
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            401,
+            json={"error": {"message": "invalid key", "type": "authentication_error", "param": None, "code": None}},
+        )
+    )
+    anthropic_route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, json=ANTHROPIC_ANSWER)
+    )
+
+    async def send(**kwargs: object) -> None:
+        await python_acompletion(
+            messages=[{"role": "user", "content": "what is litellm?"}],
+            tools=[{"type": "file_search", "vector_store_ids": ["vs_docs"]}],
+            **kwargs,
+        )
+
+    await send(model="anthropic/claude-haiku-4-5", api_key="anthropic-key")
+    await send(
+        model="openai/gpt-6.1-sol",
+        api_key="openai-key",
+        fallbacks=[{"model": "anthropic/claude-haiku-4-5", "api_key": "anthropic-key"}],
+    )
+
+    direct_body, fallback_body = (json.loads(call.request.content) for call in anthropic_route.calls)
+    assert "litellm is an LLM gateway" in json.dumps(direct_body)
+    assert fallback_body == direct_body
