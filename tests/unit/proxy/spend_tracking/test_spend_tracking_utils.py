@@ -69,6 +69,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
+    LiteLLMBatch,
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
     StandardLoggingModelInformation,
@@ -220,6 +221,64 @@ def test_get_logging_payload_maps_openai_cached_tokens_to_cache_read_input_token
 
     assert additional_usage_values["cache_read_input_tokens"] == 123
     assert additional_usage_values["prompt_tokens_details"]["cached_tokens"] == 123
+
+
+_PROVIDER_READ_BATCH: Final = LiteLLMBatch.model_validate(
+    {
+        "id": "batch_spend_row",
+        "completion_window": "24h",
+        "created_at": 1,
+        "endpoint": "/v1/chat/completions",
+        "input_file_id": "file-in",
+        "object": "batch",
+        "status": "completed",
+        "output_file_id": "file-out",
+        "usage": {
+            "input_tokens": 29,
+            "input_tokens_details": {"cached_tokens": 8},
+            "output_tokens": 46,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 75,
+        },
+    }
+)
+
+
+@pytest.mark.parametrize(
+    "batch",
+    [
+        _PROVIDER_READ_BATCH,
+        _PROVIDER_READ_BATCH.model_copy(
+            update={
+                "usage": litellm.Usage(
+                    prompt_tokens=29,
+                    completion_tokens=46,
+                    total_tokens=75,
+                    prompt_tokens_details={"cached_tokens": 8},
+                )
+            }
+        ),
+    ],
+    ids=["provider_read", "poller_billed"],
+)
+def test_batch_spend_row_stores_the_same_usage_extras_as_a_chat_call_with_its_counts(batch: LiteLLMBatch) -> None:
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "call_type": "aretrieve_batch",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj=batch,
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (29, 46, 75)
+    assert json.loads(payload["metadata"])["additional_usage_values"] == _get_additional_usage_values_for_usage(
+        litellm.Usage(
+            prompt_tokens=29, completion_tokens=46, total_tokens=75, prompt_tokens_details={"cached_tokens": 8}
+        )
+    )
 
 
 class _HashingCache(litellm.Cache):

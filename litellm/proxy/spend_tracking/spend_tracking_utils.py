@@ -87,6 +87,7 @@ from litellm.types.utils import (
     AzureSpillover,
     CallTypes,
     CostBreakdown,
+    LiteLLMBatch,
     LlmProviders,
     StandardLoggingGuardrailInformation,
     StandardLoggingKubernetesPodRouting,
@@ -96,6 +97,7 @@ from litellm.types.utils import (
     StandardLoggingPayloadErrorInformation,
     StandardLoggingVectorStoreRequest,
     VectorStoreSearchResponse,
+    batch_chat_usage,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
 
@@ -626,7 +628,12 @@ def get_logging_payload(
         usage = _extract_usage_for_ocr_call(response_obj, response_obj_dict)
     elif not is_unbilled_non_inference_call(call_type, metadata, response_obj_dict):
         # Use response_obj_dict instead of response_obj to avoid calling .get() on Pydantic models
-        _usage: Final = response_obj_dict.get("usage", None) or {}
+        chat_usage_of_batch: Final = batch_chat_usage(response_obj) if isinstance(response_obj, LiteLLMBatch) else None
+        _usage: Final = (
+            chat_usage_of_batch.model_dump()
+            if chat_usage_of_batch is not None
+            else response_obj_dict.get("usage", None) or {}
+        )
         if isinstance(_usage, litellm.Usage):
             usage = dict(_usage)
         elif isinstance(_usage, dict):

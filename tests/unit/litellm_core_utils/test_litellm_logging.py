@@ -1629,22 +1629,33 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
             litellm_call_id="batch-call-2",
             function_id="f",
         )
-        obj.custom_llm_provider = "openai"
+        obj.update_environment_variables(
+            model="gpt-5.6-luna", user=None, optional_params={}, litellm_params={}, custom_llm_provider="openai"
+        )
         return obj
 
     @staticmethod
     def _batch(status: str, output_file_id: str | None):
         from litellm.types.utils import LiteLLMBatch
 
-        return LiteLLMBatch(
-            id="batch_6a9c99e185588190877d391f8b9d7f8a",
-            completion_window="24h",
-            created_at=1,
-            endpoint="/v1/chat/completions",
-            input_file_id="file-in",
-            object="batch",
-            status="validating",
-            output_file_id=output_file_id,
+        return LiteLLMBatch.model_validate(
+            {
+                "id": "batch_6a9c99e185588190877d391f8b9d7f8a",
+                "completion_window": "24h",
+                "created_at": 1,
+                "endpoint": "/v1/chat/completions",
+                "input_file_id": "file-in",
+                "object": "batch",
+                "status": "validating",
+                "output_file_id": output_file_id,
+                "usage": {
+                    "input_tokens": 29,
+                    "input_tokens_details": {"cached_tokens": 0},
+                    "output_tokens": 48,
+                    "output_tokens_details": {"reasoning_tokens": 0},
+                    "total_tokens": 77,
+                },
+            }
         ).model_copy(update={"status": status})
 
     @pytest.mark.asyncio
@@ -1658,11 +1669,12 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
         handle_completed_batch = AsyncMock()
         monkeypatch.setattr(logging_module, "handle_completed_batch", handle_completed_batch)
         batch = self._batch(status, output_file_id)
+        logging_obj = self._logging_obj()
 
-        await self._logging_obj()._async_success_handler_body(result=batch, start_time=None, end_time=None)
+        await logging_obj._async_success_handler_body(result=batch, start_time=None, end_time=None)
 
         handle_completed_batch.assert_not_awaited()
-        assert "response_cost" not in batch._hidden_params
+        assert logging_obj.model_call_details["response_cost"] == 0.0
 
     @pytest.mark.asyncio
     async def test_completed_batch_with_output_is_priced(self, monkeypatch) -> None:
@@ -1688,6 +1700,80 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
         assert batch._hidden_params["response_cost"] == 8e-06
         assert batch.usage is not None
         assert batch.usage.total_tokens == 35
+
+    @pytest.mark.parametrize("batch_ignore_default_logging", [True, False])
+    def test_sync_logger_gets_a_free_event_for_the_cost_poller_retrieve(self, batch_ignore_default_logging: bool) -> None:
+        sync_events: list[object] = []
+
+        class SyncOnlyLogger(CustomLogger):
+            def log_success_event(
+                self,
+                kwargs: dict[str, object],
+                response_obj: object,
+                start_time: dt_object,
+                end_time: dt_object,
+            ) -> None:
+                sync_events.append(kwargs["response_cost"])
+
+        logging_obj = LitellmLogging(
+            model="gpt-5.6-luna",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=False,
+            call_type="aretrieve_batch",
+            start_time=time.time(),
+            litellm_call_id="batch-call-3",
+            function_id="f",
+            dynamic_success_callbacks=[SyncOnlyLogger()],
+        )
+        logging_obj.update_environment_variables(
+            model="gpt-5.6-luna",
+            user=None,
+            optional_params={},
+            litellm_params={"litellm_metadata": {"batch_ignore_default_logging": batch_ignore_default_logging}},
+            custom_llm_provider="openai",
+        )
+
+        logging_obj.success_handler(
+            result=self._batch("completed", "file-out"),
+            start_time=dt_object.now(),
+            end_time=dt_object.now(),
+            for_async_request=True,
+        )
+
+        assert len(sync_events) == 1
+        assert isinstance(sync_events[0], float)
+        assert (sync_events[0] == 0.0) is batch_ignore_default_logging
+
+    def test_logged_usage_object_keeps_the_batch_chat_usage(self) -> None:
+        from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+        from litellm.types.utils import Usage
+
+        aggregate: Final = Usage(
+            prompt_tokens=29, completion_tokens=48, total_tokens=77, reasoning_tokens=3, cache_creation_input_tokens=300
+        )
+        billed: Final = self._batch("completed", "file-out").model_copy(update={"usage": aggregate})
+        provider_read: Final = self._batch("completed", "file-out")
+        now: Final = dt_object(2026, 1, 1, 12, 0, 0)
+
+        usage_objects: Final = tuple(
+            payload["metadata"]["usage_object"]
+            for payload in (
+                get_standard_logging_object_payload(
+                    kwargs={"litellm_params": {}},
+                    init_response_obj=batch,
+                    start_time=now,
+                    end_time=now,
+                    logging_obj=self._logging_obj(),
+                    status="success",
+                )
+                for batch in (billed, provider_read)
+            )
+            if payload is not None
+        )
+
+        assert usage_objects[0] == aggregate.model_dump()
+        assert usage_objects[1]["prompt_tokens"] == 29
+        assert "input_tokens" not in usage_objects[1]
 
 
 class TestAnthropicPassthroughCustomPricing:
