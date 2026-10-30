@@ -76,6 +76,11 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
     canonical_provider_batch_id,
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.proxy.spend_tracking.input_tokens import (
+    inline_pdf_file_count,
+    models_counted_for,
+    openai_chat_pdf_file_tokens,
+)
 from litellm.responses.litellm_completion_transformation.compaction_items import billable_input_since_newest_compaction
 from litellm.router_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
@@ -142,7 +147,7 @@ class RateLimitedModel:
 def _resolve_media_models(router: "Router | None", model: str, team_id: str | None) -> tuple[str, ...]:
     if router is None:
         return (model,)
-    return tuple(dict.fromkeys(router.resolved_litellm_models(model, team_id, use_base_model=True))) or (model,)
+    return tuple(dict.fromkeys(router.registry().names(model, kind="litellm_base_models", team_id=team_id))) or (model,)
 
 
 def _resolve_media_models_via_proxy_router(model: str, team_id: str | None) -> tuple[str, ...]:
@@ -156,7 +161,13 @@ def _resolve_model_group_alias_via_proxy_router(model: str) -> str | None:
 
     if llm_router is None:
         return None
-    return resolve_model_group_alias(llm_router.model_group_alias, model)
+    return resolve_model_group_alias(llm_router.registry().aliases(), model)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # registry().aliases() is the untyped model_group_alias dict
+
+
+def _resolve_counted_models_via_proxy_router(model: str, team_id: str | None) -> Sequence[str]:
+    from litellm.proxy.proxy_server import llm_router
+
+    return models_counted_for(model, llm_router, team_id)
 
 
 def _resolve_ptu_team_ceiling_via_proxy_router(team_id: str, model_group: str) -> PTUTeamCeiling | None:
@@ -164,7 +175,7 @@ def _resolve_ptu_team_ceiling_via_proxy_router(team_id: str, model_group: str) -
 
     if llm_router is None:
         return None
-    ceiling: Final = llm_router.team_ptu_ceiling(team_id, model_group)
+    ceiling: Final = llm_router.health().team_ptu_ceiling(team_id, model_group)
     return ceiling if ceiling is not None and is_ptu_cost_attribution_enabled() else None
 
 
@@ -507,6 +518,7 @@ _TPM_FLOOR_FRACTION: Final = 4
 # check on data["input"] must exclude these call types, or a Responses call
 # gets misclassified as an embedding and skips output-token reservation/caps.
 RESPONSES_API_CALL_TYPES: Final = ("aresponses", "responses")
+CHAT_COMPLETION_API_CALL_TYPES: Final = (CallTypes.completion.value, CallTypes.acompletion.value)
 EMBEDDING_API_CALL_TYPES: Final = ("aembedding", "embedding")
 TEXT_COMPLETION_API_CALL_TYPES: Final = ("atext_completion", "text_completion")
 RERANK_API_CALL_TYPES: Final = (CallTypes.rerank.value, CallTypes.arerank.value)
@@ -878,6 +890,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         time_provider: Callable[[], datetime] | None = None,
         tag_rate_limit_resolver: TagRateLimitResolver = resolve_tag_rate_limits_from_db,
         model_group_resolver: Callable[[str], str | None] = _resolve_model_group_alias_via_proxy_router,
+        counted_models_resolver: Callable[[str, str | None], Sequence[str]] = _resolve_counted_models_via_proxy_router,
         media_model_resolver: Callable[[str, str | None], tuple[str, ...]] = _resolve_media_models_via_proxy_router,
         ptu_team_ceiling_resolver: Callable[
             [str, str], PTUTeamCeiling | None
@@ -889,6 +902,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self._time_provider = time_provider or datetime.now
         self._tag_rate_limit_resolver = tag_rate_limit_resolver
         self._model_group_resolver = model_group_resolver
+        self._counted_models_resolver = counted_models_resolver
         self._media_model_resolver = media_model_resolver
         self._ptu_team_ceiling_resolver = ptu_team_ceiling_resolver
         self._fail_closed_resolver = fail_closed_resolver
@@ -3556,7 +3570,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         try:
             # Get all deployments for this model
-            model_list: Final = llm_router.get_model_list(model_name=model)
+            model_list: Final = llm_router.registry().deployments(model)
             if not model_list:
                 return False
 
@@ -3939,7 +3953,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         state: Final = data.get("state")
         return f"{state if isinstance(state, str) else ''}\n{json.dumps(data.get('fields'), default=str)}"
 
-    def _estimate_precise_input_tokens(self, data: object, model: str | None, call_type: str | None = None) -> int:
+    def _estimate_precise_input_tokens(
+        self, data: object, model: str | None, call_type: str | None = None, team_id: str | None = None
+    ) -> int:
         """
         Model-aware input token estimate for the project ITPM reservation,
         using ``litellm.token_counter`` -- the same approach the
@@ -4005,19 +4021,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         audio_token_estimate: Final = self._estimate_audio_content_tokens(messages)
         countable_messages: Final = self._strip_audio_content_blocks(messages) if audio_token_estimate > 0 else messages
+        chat_pdf_files: Final = (
+            inline_pdf_file_count(countable_messages) if call_type in CHAT_COMPLETION_API_CALL_TYPES else 0
+        )
 
         try:
             estimate: Final = max(
                 0,
-                int(
-                    token_counter(
-                        model=model or "",
-                        messages=countable_messages,
-                        text=selected_text,
-                        tools=countable_tools,
-                        tool_choice=countable_tool_choice,
-                        use_default_image_token_count=True,
+                *(
+                    int(
+                        token_counter(
+                            model=tokenizer_model,
+                            messages=countable_messages,
+                            text=selected_text,
+                            tools=countable_tools,
+                            tool_choice=countable_tool_choice,
+                            use_default_image_token_count=True,
+                        )
                     )
+                    + openai_chat_pdf_file_tokens(tokenizer_model, chat_pdf_files)
+                    for tokenizer_model in (self._counted_models_resolver(model, team_id) if model else ("",))
                 ),
             )
             return estimate + audio_token_estimate
@@ -4074,7 +4097,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             include_media=False,
         )
         raw_estimated_input_tokens: Final = await offload_token_count(self._estimate_precise_input_tokens)(
-            data=data, model=requested_model, call_type=call_type
+            data=data, model=requested_model, call_type=call_type, team_id=user_api_key_dict.team_id
         )
         estimated_input_tokens: Final = max(raw_estimated_input_tokens, 1)
         estimated_output_tokens: Final = (

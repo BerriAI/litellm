@@ -34,13 +34,16 @@ from litellm.repositories.prisma_protocols import DatabaseClient
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import TeamMembershipRepository
 from litellm.router import Router
+from litellm.router_strategy.auto_router.auto_router_model_naming import (
+    classify_strategy_router_model,
+    strategy_router_dependencies,
+)
 from litellm.router_strategy.complexity_router.config import (
     ComplexityRouterConfigWrite,
     normalize_classifier_config_aliases,
     resolve_complexity_router_config_write,
 )
 from litellm.router_strategy.complexity_router.request_models import RequestComplexityRouterConfig
-from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model, strategy_router_dependencies
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import Deployment, updateDeployment
 
@@ -226,7 +229,7 @@ async def authorize_member_auto_router_dependencies(
         (
             dependency,
             dependency.model_name,
-            llm_router.get_model_list(model_name=dependency.model_name, team_id=team.team_id),
+            llm_router.registry().deployments(dependency.model_name, team_id=team.team_id),
         )
         for dependency in dependencies
     ):

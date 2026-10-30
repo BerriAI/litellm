@@ -2408,9 +2408,14 @@ export interface paths {
          *     - claude plugin marketplace add <url>
          *     - claude plugin install <name>@<marketplace>
          *
-         *     Without `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`
+         *     Without a key the catalog holds the enabled (public) plugins. With `?key=sk-...`
          *     the key is authenticated and the catalog also holds the disabled plugins granted
          *     to it through `object_permission.skills` or an access group on the key or its team.
+         *
+         *     With `general_settings.claude_code_marketplace_auth_required: true` the key must come
+         *     in the `Authorization` or `x-litellm-api-key` header (Claude Code sends them from the
+         *     marketplace source's `headers`), `?key=` is ignored, and a caller with no valid key
+         *     gets a 401 with `WWW-Authenticate: Bearer`.
          *
          *     Returns:
          *         Marketplace catalog with list of available plugins and their git sources.
@@ -5355,6 +5360,32 @@ export interface paths {
         head?: never;
         /** Assemblyai Proxy Route */
         patch: operations["assemblyai_proxy_route_eu_assemblyai__endpoint__patch"];
+        trace?: never;
+    };
+    "/eu_jev/v1/systemone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Eu Jev Proxy Route
+         * @description Forward a request to eu/jev, an EU-hosted decision API, with `EU_JEV_API_KEY`.
+         *
+         *     `POST /eu_jev/v1/systemone` sends a `state` and one to eight named `questions` (`choice`, `noul` or `score`)
+         *     and returns one answer per question name, with spend booked from the reported `usage`. `custom_body` and
+         *     `stream` are rejected with a 400. A pass-through endpoint configured at this path keeps serving it.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)
+         */
+        post: operations["eu_jev_proxy_route_eu_jev_v1_systemone_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/extraction": {
@@ -10516,8 +10547,10 @@ export interface paths {
          *     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
          *                     provider's model catalog. When present, the response is Codex's own
          *                     catalog shape (`{"models": [...]}`) built from the same listing, with
-         *                     each model's `model_info.service_tiers` as its service tiers; absent,
-         *                     the OpenAI shape below is returned
+         *                     each model's `model_info.service_tiers` as its service tiers and, for a
+         *                     model that Codex release does not know, the reasoning efforts
+         *                     `/model_group/info` reports that it can parse; absent, the OpenAI shape
+         *                     below is returned
          *     - include_metadata: Include additional metadata in the response with fallback information
          *     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
          *                     Defaults to "general" when include_metadata=true
@@ -11211,6 +11244,9 @@ export interface paths {
          *
          *     # Get provider response
          *     curl -X GET http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
+         *
+         *     # Resume a background response's event stream after sequence number 7
+         *     curl -N "http://localhost:4000/v1/responses/resp_abc123?stream=true&starting_after=7"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["get_response_openai_v1_responses__response_id__get"];
@@ -13783,7 +13819,7 @@ export interface paths {
         };
         /**
          * Public Skill Hub
-         * @description Return enabled (public) Claude Code skills — no auth required.
+         * @description Return enabled (public) Claude Code skills, or none when the marketplace requires a key.
          */
         get: operations["public_skill_hub_public_skill_hub_get"];
         put?: never;
@@ -14269,6 +14305,9 @@ export interface paths {
          *
          *     # Get provider response
          *     curl -X GET http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
+         *
+         *     # Resume a background response's event stream after sequence number 7
+         *     curl -N "http://localhost:4000/v1/responses/resp_abc123?stream=true&starting_after=7"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["get_response_responses__response_id__get"];
@@ -21428,8 +21467,10 @@ export interface paths {
          *     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
          *                     provider's model catalog. When present, the response is Codex's own
          *                     catalog shape (`{"models": [...]}`) built from the same listing, with
-         *                     each model's `model_info.service_tiers` as its service tiers; absent,
-         *                     the OpenAI shape below is returned
+         *                     each model's `model_info.service_tiers` as its service tiers and, for a
+         *                     model that Codex release does not know, the reasoning efforts
+         *                     `/model_group/info` reports that it can parse; absent, the OpenAI shape
+         *                     below is returned
          *     - include_metadata: Include additional metadata in the response with fallback information
          *     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
          *                     Defaults to "general" when include_metadata=true
@@ -21891,6 +21932,9 @@ export interface paths {
          *
          *     # Get provider response
          *     curl -X GET http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
+         *
+         *     # Resume a background response's event stream after sequence number 7
+         *     curl -N "http://localhost:4000/v1/responses/resp_abc123?stream=true&starting_after=7"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["get_response_v1_responses__response_id__get"];
@@ -29882,6 +29926,12 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /**
+             * Claude Code Marketplace Auth Required
+             * @description If True, GET /claude-code/marketplace.json requires a LiteLLM key in the Authorization or x-litellm-api-key header (?key= is not accepted) and answers 401 with WWW-Authenticate: Bearer without one, and GET /public/skill_hub returns an empty list. Default is False, which serves the enabled plugins to anyone.
+             * @default false
+             */
+            claude_code_marketplace_auth_required: boolean;
+            /**
              * Completion Model
              * @description proxy level default model for all chat completion calls
              */
@@ -32266,6 +32316,50 @@ export interface components {
             detail: {
                 [key: string]: unknown;
             };
+        };
+        /** EuJevDecisionResponse */
+        EuJevDecisionResponse: {
+            /**
+             * Answers
+             * @description One answer per question, under the same names
+             */
+            answers: {
+                [key: string]: components["schemas"]["ChoiceAnswer"] | components["schemas"]["NoulAnswer"] | components["schemas"]["ScoreAnswer"];
+            };
+            meta: components["schemas"]["EuJevMeta"];
+            /**
+             * Model
+             * @description The release that answered, such as eu-jeff-1.0.0
+             */
+            model: string;
+            usage: components["schemas"]["EuJevUsage"];
+        };
+        /** EuJevMeta */
+        EuJevMeta: {
+            /**
+             * Cost Eur
+             * @description The exact charge in euros, on authenticated requests
+             */
+            cost_eur?: string | null;
+            /**
+             * Latency Ms
+             * @description Server-side time for token quoting, credit reservation and inference
+             */
+            latency_ms: number;
+            /**
+             * Mode
+             * @constant
+             */
+            mode: "live";
+            /** Request Id */
+            request_id: string;
+        };
+        /** EuJevUsage */
+        EuJevUsage: {
+            /** Input Tokens */
+            input_tokens: number;
+            /** Output Tokens */
+            output_tokens: number;
         };
         /**
          * Eval
@@ -35397,6 +35491,8 @@ export interface components {
             cost_per_second?: number | null;
             /** Custom Llm Provider */
             custom_llm_provider?: string | null;
+            /** Daily Reset Time */
+            daily_reset_time?: string | null;
             /** Default Api Key Rpm Limit */
             default_api_key_rpm_limit?: number | null;
             /** Default Api Key Tpm Limit */
@@ -35647,6 +35743,8 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Responses Api Version */
             responses_api_version?: string | null;
+            /** Rpd */
+            rpd?: number | null;
             /** Rpm */
             rpm?: number | null;
             /** S3 Access Key Id */
@@ -35699,6 +35797,8 @@ export interface components {
             token_exchange_profile?: string | null;
             /** Token Exchange Scope */
             token_exchange_scope?: string | null;
+            /** Tpd */
+            tpd?: number | null;
             /** Tpm */
             tpm?: number | null;
             /** Use Chat Completions Api */
@@ -36980,10 +37080,10 @@ export interface components {
             on_disallowed_action: "block" | "rewrite";
             /**
              * On Flagged
-             * @description Action to take when content is flagged: 'block' (raise exception), 'monitor' (log only), or 'inject_system_message' (append an advisory system message and let the LLM decide)
+             * @description Action to take when content is flagged: 'block' (raise exception), 'mask' (mask PII-only detections and allow, block anything else), 'monitor' (log only), or 'inject_system_message' (append an advisory system message and let the LLM decide)
              * @default block
              */
-            on_flagged: ("block" | "monitor" | "inject_system_message") | null;
+            on_flagged: ("block" | "mask" | "monitor" | "inject_system_message") | null;
             /**
              * On Flagged Action
              * @description Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)
@@ -48168,6 +48268,11 @@ export interface components {
             admin_ui_disabled: boolean;
             /** Auto Redirect To Sso */
             auto_redirect_to_sso: boolean;
+            /**
+             * Claude Code Marketplace Auth Required
+             * @default false
+             */
+            claude_code_marketplace_auth_required: boolean;
             /** Gateway Base Url */
             gateway_base_url?: string | null;
             /**
@@ -50402,6 +50507,8 @@ export interface components {
             discoverable?: boolean | null;
             /** Enable Tag Filtering */
             enable_tag_filtering?: boolean | null;
+            /** Enforce Supported Endpoints */
+            enforce_supported_endpoints?: boolean | null;
             /** Explicit Cache Read Input Token Cost */
             explicit_cache_read_input_token_cost?: number | null;
             /** Id */
@@ -50789,6 +50896,8 @@ export interface components {
             cost_per_second?: number | null;
             /** Custom Llm Provider */
             custom_llm_provider?: string | null;
+            /** Daily Reset Time */
+            daily_reset_time?: string | null;
             /** Default Api Key Rpm Limit */
             default_api_key_rpm_limit?: number | null;
             /** Default Api Key Tpm Limit */
@@ -51039,6 +51148,8 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Responses Api Version */
             responses_api_version?: string | null;
+            /** Rpd */
+            rpd?: number | null;
             /** Rpm */
             rpm?: number | null;
             /** S3 Access Key Id */
@@ -51091,6 +51202,8 @@ export interface components {
             token_exchange_profile?: string | null;
             /** Token Exchange Scope */
             token_exchange_scope?: string | null;
+            /** Tpd */
+            tpd?: number | null;
             /** Tpm */
             tpm?: number | null;
             /** Use Chat Completions Api */
@@ -59437,6 +59550,144 @@ export interface operations {
             };
         };
     };
+    eu_jev_proxy_route_eu_jev_v1_systemone_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "model": "eu-jeff-latest",
+                 *       "questions": {
+                 *         "frustration": {
+                 *           "criteria": [
+                 *             "calm",
+                 *             "mildly annoyed",
+                 *             "angry"
+                 *           ],
+                 *           "instructions": "How frustrated is the customer?",
+                 *           "type": "score"
+                 *         },
+                 *         "is_refund_request": {
+                 *           "instructions": "Is the customer asking for a refund?",
+                 *           "type": "noul"
+                 *         },
+                 *         "team": {
+                 *           "criteria": {
+                 *             "billing": "Payments, invoices, and refunds",
+                 *             "support": "Technical issues and bugs"
+                 *           },
+                 *           "instructions": "Which team should handle this?",
+                 *           "type": "choice"
+                 *         }
+                 *       },
+                 *       "state": "I was charged twice. Can I get a refund?"
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Model
+                     * @description eu-jeff-latest follows the current release, eu-jeff-1.0.0 pins it
+                     * @default eu-jeff-latest
+                     */
+                    model?: string;
+                    /**
+                     * Questions
+                     * @description One to eight questions, keyed by names of up to 80 characters
+                     */
+                    questions: {
+                        [key: string]: {
+                            /**
+                             * Criteria
+                             * @description Two to 64 options, option name to description. A null description uses the option name
+                             */
+                            criteria: {
+                                [key: string]: string | {
+                                    [key: string]: unknown;
+                                } | unknown[] | null;
+                            };
+                            /**
+                             * Instructions
+                             * @description Free text, or a JSON object, array or null that eu/jev serializes to text before inference
+                             */
+                            instructions: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "choice";
+                        } | {
+                            /**
+                             * Criteria
+                             * @description Optional descriptions of what true and false mean
+                             */
+                            criteria?: {
+                                [key: string]: string | {
+                                    [key: string]: unknown;
+                                } | unknown[] | null;
+                            } | null;
+                            /**
+                             * Instructions
+                             * @description Free text, or a JSON object, array or null that eu/jev serializes to text before inference
+                             */
+                            instructions: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "noul";
+                        } | {
+                            /**
+                             * Criteria
+                             * @description Two to 10 level descriptions, ordered from low to high
+                             */
+                            criteria: (string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null)[];
+                            /**
+                             * Instructions
+                             * @description Free text, or a JSON object, array or null that eu/jev serializes to text before inference
+                             */
+                            instructions: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "score";
+                        };
+                    };
+                    /**
+                     * State
+                     * @description The content to evaluate, a string of up to 100,000 characters or a JSON object or array
+                     */
+                    state: string | {
+                        [key: string]: unknown;
+                    } | unknown[];
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EuJevDecisionResponse"];
+                };
+            };
+        };
+    };
     extraction_extraction_post: {
         parameters: {
             query?: never;
@@ -67117,7 +67368,16 @@ export interface operations {
     };
     get_response_openai_v1_responses__response_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Replay the response's events as server-sent events (OpenAI, Azure, and Azure AI Foundry) */
+                stream?: boolean;
+                /** @description With stream=true, replay only the events after this sequence number */
+                starting_after?: number;
+                /** @description Additional output data to include, forwarded to the provider */
+                include?: string[];
+                /** @description With stream=true, whether delta events carry obfuscation padding */
+                include_obfuscation?: boolean;
+            };
             header?: never;
             path: {
                 response_id: string;
@@ -67133,6 +67393,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResponsesAPIResponse"];
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -70582,7 +70843,16 @@ export interface operations {
     };
     get_response_responses__response_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Replay the response's events as server-sent events (OpenAI, Azure, and Azure AI Foundry) */
+                stream?: boolean;
+                /** @description With stream=true, replay only the events after this sequence number */
+                starting_after?: number;
+                /** @description Additional output data to include, forwarded to the provider */
+                include?: string[];
+                /** @description With stream=true, whether delta events carry obfuscation padding */
+                include_obfuscation?: boolean;
+            };
             header?: never;
             path: {
                 response_id: string;
@@ -70598,6 +70868,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResponsesAPIResponse"];
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -81385,7 +81656,16 @@ export interface operations {
     };
     get_response_v1_responses__response_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Replay the response's events as server-sent events (OpenAI, Azure, and Azure AI Foundry) */
+                stream?: boolean;
+                /** @description With stream=true, replay only the events after this sequence number */
+                starting_after?: number;
+                /** @description Additional output data to include, forwarded to the provider */
+                include?: string[];
+                /** @description With stream=true, whether delta events carry obfuscation padding */
+                include_obfuscation?: boolean;
+            };
             header?: never;
             path: {
                 response_id: string;
@@ -81401,6 +81681,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResponsesAPIResponse"];
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
