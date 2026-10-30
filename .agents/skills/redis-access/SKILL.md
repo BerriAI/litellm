@@ -81,7 +81,22 @@ A store owns one keyspace. Python and Rust pods share one Redis, so each keyspac
 - The store owns, and nothing outside it knows, the key builders (logical keys, no namespace), the value codec, expiry taken from the caller, the Lua, and reply decoding into typed results
 - Every operation returns its result or a `RedisFailure`. A value that does not decode is a `decode` failure, never a miss or a default
 - No logging, no retries, no fallback in a store. Those are policy and stay in the caller
-- A caller never builds a key, touches a client or runs a command for a keyspace that has a store. Exposing a key builder as a delegate for an existing public helper is fine
+- A caller never builds a key, touches a client or runs a command for a keyspace that has a store. Exposing a key builder as a delegate for an existing public helper, or for the caller's in-memory fallback, is fine
+- Store operations take domain inputs, the ids and typed values the caller already has, and never a Redis key, a bundle of keys or encoded bytes. A native store implements the same `Protocol`, so anything the caller hands over ready-made stays in Python after a Rust port
+  - The store encodes what it writes and decodes what it reads, both ways. A caller never serializes a value before handing it over, and never parses a value a store returned
+  - A caller never calls a store's key builder to pass the result back into the store
+
+```python
+# a caller building the key or the value
+await store.claim(f"mcp_gateway_dcr_code_used:{jti}", ttl=ttl)
+await store.acquire(refresh_lock_key(user_id, server_id), token, ttl=ttl)
+await store.save_record(batch_id, adapter.dump_json(reservation).decode(), ttl=ttl)
+
+# the store owning both
+await store.claim(UsedCode(jti), ttl=ttl)
+await store.acquire(user_id, server_id, token, ttl=ttl)
+await store.save_record(batch_id, reservation, ttl=ttl)
+```
 - Keys and values already in Redis are a wire format. Old and new pods read each other's writes during a rolling deploy, so a move keeps them byte for byte, including `json.dumps` spacing and ASCII escaping, float formatting, and seconds versus milliseconds. Changing a key, codec or TTL unit is never part of a move. It is its own change that writes a new versioned key and reads both for one release
 - Response cache identity (normalization, hashing into a logical key) is backend independent and is not store logic. Reuse or move the Rust `cache_response::cache_key`, never write a third key builder
 
@@ -89,6 +104,9 @@ A store owns one keyspace. Python and Rust pods share one Redis, so each keyspac
 
 - Move the key builders, codec, TTLs, Lua and decoding verbatim. Keep policy in the caller
 - Keep the caller's outcome per failure. If it failed closed on any exception, it fails closed on any `RedisFailure`
+  - Read how the replaced call failed before mapping it. `async_get_cache` and `async_set_cache` swallow Redis errors and return `None`, `async_delete_cache`, `async_increment` and registered scripts raise, and every method behind `_redis_circuit_breaker_guard` raises `RedisCircuitBreakerOpenError` when the breaker is open. So one `RedisFailure` can map to different outcomes by `kind`, and the caller matches on `kind` to keep each one
+  - The one accepted difference is the breaker. A path that called the raw redis-py client skipped it and now goes through it. Say so in the PR
+- The move leaves no caller holding a key or a codec for that keyspace. Change the operations to take domain inputs in the same change, never as a follow-up
 - Delete the caller's own timing, service hooks and Redis health logging. The transport emits for it now
 - Move one keyspace per change. An extraction is not a Rust port
 - `RedisCache` is a connection object wearing a cache name. Its own cache verbs move onto the transport one method at a time, each conversion deleting that method's inline logging, until what is left is the connection, the breaker and a thin facade
