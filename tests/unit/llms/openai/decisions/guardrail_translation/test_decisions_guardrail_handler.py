@@ -2,6 +2,7 @@ from functools import reduce
 from typing import Final, Literal
 
 import pytest
+from pydantic import JsonValue
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
@@ -232,15 +233,37 @@ async def test_systemone_masks_a_card_number_that_json_escaping_splits() -> None
 
 
 @pytest.mark.asyncio
-async def test_systemone_rejects_an_escaped_entry_whose_two_scanned_forms_disagree() -> None:
-    data: Final = {
-        "model": "judge",
-        "state": {"note": "first\nsecond"},
-        "questions": {"q": {"type": "noul", "criteria": {}}},
-    }
+@pytest.mark.parametrize(
+    ("pattern_name", "state", "masked"),
+    (
+        pytest.param(
+            "visa",
+            {"4111111111111111": "4111\t1111\t1111\t1111"},
+            {"[VISA_REDACTED]": "[VISA_REDACTED]"},
+            id="key-and-escaped-value",
+        ),
+        pytest.param(
+            "email",
+            {"note": "Please call me back.\ndana.quill@example.com"},
+            {"note": "Please call me back.\n[EMAIL_REDACTED]"},
+            id="match-after-an-escape",
+        ),
+    ),
+)
+async def test_systemone_masks_findings_on_both_sides_of_a_json_escape(
+    pattern_name: str, state: dict[str, JsonValue], masked: dict[str, JsonValue]
+) -> None:
+    guardrail: Final = ContentFilterGuardrail(
+        guardrail_name="mask",
+        patterns=[
+            ContentFilterPattern(pattern_type="prebuilt", pattern_name=pattern_name, action=ContentFilterAction.MASK)
+        ],
+    )
+    data: Final = {"model": "judge", "state": state, "questions": {"q": {"type": "noul", "criteria": {}}}}
 
-    with pytest.raises(UnappliableRequestRewrite):
-        await SystemOneHandler().process_input_messages(data, _TaggingGuardrail())
+    result: Final = await SystemOneHandler().process_input_messages(data, guardrail)
+
+    assert result["state"] == masked
 
 
 @pytest.mark.asyncio

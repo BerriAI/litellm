@@ -3,7 +3,7 @@ import re
 from collections.abc import Iterator, Mapping
 from itertools import chain, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, Final
+from typing import TYPE_CHECKING, ClassVar, Final, TypeVar
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
@@ -22,6 +22,7 @@ _JSON_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _KEY_ADAPTER: Final[TypeAdapter[str]] = TypeAdapter(str)
 _JSON_KEY_PREFIX: Final = re.compile(r'("(?:[^"\\\x00-\x1f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"): ')
 _DESCRIBED_ITEM_KEYS: Final = ("choices", "levels")
+_Field: Final = TypeVar("_Field", bound=JsonValue)
 _QUESTION_LIST_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, JsonValue], ...]]] = TypeAdapter(
     tuple[Mapping[str, JsonValue], ...]
 )
@@ -173,6 +174,10 @@ def _decoded_text(text: str, form: str, guardrailed: Mapping[str, str]) -> str:
     return form if form in text else guardrailed.get(form, form)
 
 
+def _merged_field(original: _Field, rewritten: _Field, decoded: _Field) -> _Field:
+    return rewritten if decoded == original else decoded
+
+
 def _guardrailed_entry(
     key: str, item: JsonValue, guardrailed: Mapping[str, str], guardrail_name: str | None
 ) -> tuple[str, JsonValue]:
@@ -180,16 +185,12 @@ def _guardrailed_entry(
         return guardrailed.get(key, key), _guardrailed_json(item, guardrailed, guardrail_name)
     text: Final = _entry_text(key, item)
     rewritten: Final = guardrailed.get(text, text)
-    decoded: Final = (
-        _decoded_text(text, key, guardrailed),
-        _decoded_text(text, item, guardrailed) if isinstance(item, str) else item,
+    entry: Final = (key, item) if rewritten == text else _rewritten_entry(rewritten, guardrail_name)
+    decoded_item: Final = _decoded_text(text, item, guardrailed) if isinstance(item, str) else item
+    return (
+        _merged_field(key, entry[0], _decoded_text(text, key, guardrailed)),
+        _merged_field(item, entry[1], decoded_item),
     )
-    if rewritten == text:
-        return decoded
-    entry: Final = _rewritten_entry(rewritten, guardrail_name)
-    if decoded not in ((key, item), entry):
-        raise unappliable_request_rewrite(guardrail_name)
-    return entry
 
 
 def _instruction_texts(question: Mapping[str, JsonValue]) -> tuple[str, ...]:

@@ -6,6 +6,7 @@ Additional tests live in tests/guardrails_tests/test_lakera_v2.py.
 """
 
 import importlib, logging, os
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -315,6 +316,25 @@ class TestAsyncPostCallSuccessHookSkipFlags:
         result_dict = result.model_dump()
         assert "[MASKED" in result_dict["choices"][0]["message"]["content"]
         assert "a@b.com" not in result_dict["choices"][0]["message"]["content"]
+
+
+@pytest.mark.asyncio
+async def test_post_call_skips_a_response_with_no_assistant_text() -> None:
+    guardrail: Final = LakeraAIGuardrail(api_key="test_key")
+    data: Final = {"model": "clairic", "metadata": {}}
+    llm_response: Final = MagicMock()
+    llm_response.model_dump.return_value = {"answer": "Berlin"}
+
+    with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+        result: Final = await guardrail.async_post_call_success_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+            response=llm_response,
+        )
+
+    mock_call.assert_not_called()
+    assert result is llm_response
+    assert "applied_guardrails" not in data["metadata"]
 
 
 PII_ONLY_LAKERA_RESPONSE = {
