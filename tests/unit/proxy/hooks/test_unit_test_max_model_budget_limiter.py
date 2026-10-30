@@ -1,15 +1,14 @@
 import asyncio
 import time
 from datetime import datetime, timedelta, timezone
-from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
+import fakeredis
 import pytest
 
 import litellm
 from litellm.caching.caching import DualCache
-from litellm.caching.redis_cache import RedisCache
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.hooks.model_max_budget_limiter import (
@@ -20,6 +19,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     model_budget_start_time_cache_key,
     resolve_model_budget,
 )
+from tests._support.fake_redis import fake_redis_cache
 
 
 async def _reset_at_of_open_window(
@@ -168,21 +168,14 @@ async def test_get_spend_for_model_budget_reads_the_configured_model_key(
     # hit the same key async_log_success_event writes.
     resolved = resolve_model_budget(model="openai/gpt-4", model_max_budget=model_max_budget)
 
-    async def _spend(key):
-        return 50.0 if key == f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:test-key:gpt-4:1d" else None
-
-    with patch.object(budget_limiter.dual_cache, "async_get_cache", side_effect=_spend) as mock_get:
-        spend = await budget_limiter._get_spend_for_model_budget(
-            entity_type=Litellm_EntityType.KEY,
-            entity_id="test-key",
-            model="openai/gpt-4",
-            resolved=resolved,
-        )
-        assert spend == 50.0
-        assert [call.kwargs["key"] for call in mock_get.call_args_list] == [
-            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:test-key:gpt-4:1d",
-            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:test-key:openai/gpt-4:1d",
-        ]
+    await budget_limiter.dual_cache.async_set_cache(f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:test-key:gpt-4:1d", 50.0)
+    spend = await budget_limiter._get_spend_for_model_budget(
+        entity_type=Litellm_EntityType.KEY,
+        entity_id="test-key",
+        model="openai/gpt-4",
+        resolved=resolved,
+    )
+    assert spend == 50.0
 
 
 @pytest.mark.asyncio
@@ -268,21 +261,14 @@ async def test_get_spend_for_end_user_model_budget(budget_limiter):
     model_max_budget = {"gpt-4": {"budget_limit": 100.0, "time_period": "1d"}}
     resolved = resolve_model_budget(model="openai/gpt-4", model_max_budget=model_max_budget)
 
-    async def _spend(key):
-        return 50.0 if key == f"{END_USER_SPEND_CACHE_KEY_PREFIX}:test-user:gpt-4:1d" else None
-
-    with patch.object(budget_limiter.dual_cache, "async_get_cache", side_effect=_spend) as mock_get:
-        spend = await budget_limiter._get_spend_for_model_budget(
-            entity_type=Litellm_EntityType.END_USER,
-            entity_id="test-user",
-            model="openai/gpt-4",
-            resolved=resolved,
-        )
-        assert spend == 50.0
-        assert [call.kwargs["key"] for call in mock_get.call_args_list] == [
-            f"{END_USER_SPEND_CACHE_KEY_PREFIX}:test-user:gpt-4:1d",
-            f"{END_USER_SPEND_CACHE_KEY_PREFIX}:test-user:openai/gpt-4:1d",
-        ]
+    await budget_limiter.dual_cache.async_set_cache(f"{END_USER_SPEND_CACHE_KEY_PREFIX}:test-user:gpt-4:1d", 50.0)
+    spend = await budget_limiter._get_spend_for_model_budget(
+        entity_type=Litellm_EntityType.END_USER,
+        entity_id="test-user",
+        model="openai/gpt-4",
+        resolved=resolved,
+    )
+    assert spend == 50.0
 
 
 @pytest.mark.asyncio
@@ -470,8 +456,8 @@ async def test_async_log_success_event_pushes_redis_increments_when_redis_config
     so the periodic Redis flush task never starts. After logging spend we must call
     _push_in_memory_increments_to_redis when Redis is wired so other workers see spend.
     """
-    dual_cache = DualCache()
-    dual_cache.redis_cache = object()  # truthy placeholder; push only checks is not None
+    redis: Final = fake_redis_cache(fakeredis.FakeServer())
+    dual_cache = DualCache(redis_cache=redis)
     limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     model = "gpt-4"
     kwargs = {
@@ -488,14 +474,8 @@ async def test_async_log_success_event_pushes_redis_increments_when_redis_config
             },
         },
     }
-    with patch.object(limiter, "_increment_spend_for_key", new_callable=AsyncMock):
-        with patch.object(
-            limiter,
-            "_push_in_memory_increments_to_redis",
-            new_callable=AsyncMock,
-        ) as mock_push:
-            await limiter.async_log_success_event(kwargs, response_obj=None, start_time=None, end_time=None)
-            mock_push.assert_awaited_once()
+    await limiter.async_log_success_event(kwargs, response_obj=None, start_time=None, end_time=None)
+    assert await redis.async_get_cache("virtual_key_spend:vk-hash:gpt-4:1d") == 0.01
 
 
 @pytest.mark.asyncio
@@ -1554,34 +1534,6 @@ async def test_the_user_scope_has_no_pre_upgrade_counter_to_carry():
         )
 
 
-class _SharedFakeRedis(RedisCache):
-    """Stand-in for the one Redis every replica's DualCache is attached to.
-
-    Only the methods the limiter and DualCache call are implemented, and
-    ``super().__init__`` is skipped so no connection is opened.
-    """
-
-    def __init__(self):
-        self._store = MappingProxyType({})
-        self.expiry_seconds = MappingProxyType({})
-
-    async def async_set_cache(self, key, value, **kwargs):
-        self._store = MappingProxyType({**self._store, key: value})
-
-    async def async_get_cache(self, key, **kwargs):
-        return self._store.get(key)
-
-    async def async_batch_get_cache(self, key_list, **kwargs):
-        return {key: self._store.get(key) for key in key_list}
-
-    async def async_increment_pipeline(self, increment_list, **kwargs):
-        for op in increment_list:
-            total = self._store.get(op["key"], 0.0) + op["increment_value"]
-            self._store = MappingProxyType({**self._store, op["key"]: total})
-            self.expiry_seconds = MappingProxyType({**self.expiry_seconds, op["key"]: op["ttl"]})
-        return [self._store[op["key"]] for op in increment_list]
-
-
 async def _log_spend(limiter, *, key_hash, model_max_budget, response_cost):
     await limiter.async_log_success_event(
         _success_kwargs(
@@ -1610,7 +1562,7 @@ async def test_spend_logged_on_one_replica_is_enforced_and_reported_on_another()
     copy sat under the cap kept admitting requests and /key/info on it reported
     that local share, while the shared counter was already over the cap.
     """
-    shared_redis = _SharedFakeRedis()
+    shared_redis = fake_redis_cache(fakeredis.FakeServer())
     replica_a = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache(redis_cache=shared_redis))
     replica_b = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache(redis_cache=shared_redis))
     key_hash = "vk-shared"
@@ -1645,7 +1597,7 @@ async def test_a_replica_reports_the_reset_of_a_window_another_replica_opened():
     replica that has never seen this key must read it from the shared Redis, or it
     would report no reset for a model it is actively refusing.
     """
-    shared_redis = _SharedFakeRedis()
+    shared_redis = fake_redis_cache(fakeredis.FakeServer())
     opening_replica = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache(redis_cache=shared_redis))
     other_replica = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache(redis_cache=shared_redis))
     model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1h"}}
@@ -1658,11 +1610,11 @@ async def test_a_replica_reports_the_reset_of_a_window_another_replica_opened():
         model_max_budget=model_max_budget,
         cache=other_replica.dual_cache,
     )
-    started_at: Final = shared_redis._store[
+    started_at: Final = await shared_redis.async_get_cache(
         model_budget_start_time_cache_key(
             entity_type=Litellm_EntityType.KEY, entity_id="vk-shared", budget_model="gpt-4", budget_duration="1h"
         )
-    ]
+    )
     assert usage_on_other == {
         "gpt-4": {
             "current_spend": 0.5,
@@ -1691,7 +1643,7 @@ async def test_a_monthly_window_is_enforced_until_the_reset_it_reports(opened_at
     start, so a window opened in a month of another length stayed blocked past its
     reported reset, or reported no reset while still blocked.
     """
-    shared_redis = _SharedFakeRedis()
+    shared_redis = fake_redis_cache(fakeredis.FakeServer())
     limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(
         dual_cache=DualCache(redis_cache=shared_redis), clock=charged_at.timestamp
     )
@@ -1715,9 +1667,8 @@ async def test_a_monthly_window_is_enforced_until_the_reset_it_reports(opened_at
     )
     reported_reset: Final = datetime.fromisoformat(usage["gpt-4"]["budget_reset_at"])
     assert usage["gpt-4"]["current_spend"] == 0.5
-    assert shared_redis.expiry_seconds[model_budget_spend_cache_key(**window)] == int(
-        (reported_reset - charged_at).total_seconds()
-    )
+    remaining: Final = await shared_redis.transport().ttl(model_budget_spend_cache_key(**window))
+    assert remaining == int((reported_reset - charged_at).total_seconds())
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,7 @@ from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Final,
+    Protocol,
     TypeAlias,
     cast,  # noqa: TID251  # untyped callback payload requires explicit narrowing
 )
@@ -18,8 +19,9 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 from litellm.integrations.custom_logger import Span
-from litellm.litellm_core_utils.batch_utils import batch_charged_once_marker_key, batch_id_to_charge_once
+from litellm.litellm_core_utils.batch_utils import batch_id_to_charge_once
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model, get_bedrock_cross_region_inference_regions
@@ -30,6 +32,14 @@ from litellm.proxy.hooks.model_budget_shared_windows import (
     SharedWindow,
     SharedWindows,
 )
+from litellm.redis.stores import model_budget_windows
+from litellm.redis.stores.model_budget_windows import (
+    ModelBudgetDelta,
+    ModelBudgetWindow,
+    ModelBudgetWindowStore,
+    TransportModelBudgetWindowStore,
+)
+from litellm.redis.transport.contract import RedisFailure
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting, budget_window_seconds
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import BudgetConfig, LlmProviders, StandardLoggingPayload
@@ -37,21 +47,11 @@ from litellm.types.utils import BudgetConfig, LlmProviders, StandardLoggingPaylo
 if TYPE_CHECKING:
     from litellm.router import Router
 
-VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX: Final = "virtual_key_spend"
-END_USER_SPEND_CACHE_KEY_PREFIX: Final = "end_user_model_spend"
-USER_SPEND_CACHE_KEY_PREFIX: Final = "user_model_spend"
-TEAM_SPEND_CACHE_KEY_PREFIX: Final = "team_model_spend"
-TEAM_MEMBER_SPEND_CACHE_KEY_PREFIX: Final = "team_member_model_spend"
-
-_SPEND_CACHE_KEY_PREFIXES: Final = MappingProxyType(
-    {
-        Litellm_EntityType.KEY: VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
-        Litellm_EntityType.USER: USER_SPEND_CACHE_KEY_PREFIX,
-        Litellm_EntityType.END_USER: END_USER_SPEND_CACHE_KEY_PREFIX,
-        Litellm_EntityType.TEAM: TEAM_SPEND_CACHE_KEY_PREFIX,
-        Litellm_EntityType.TEAM_MEMBER: TEAM_MEMBER_SPEND_CACHE_KEY_PREFIX,
-    }
-)
+VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX: Final = model_budget_windows.VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX
+END_USER_SPEND_CACHE_KEY_PREFIX: Final = model_budget_windows.END_USER_SPEND_CACHE_KEY_PREFIX
+USER_SPEND_CACHE_KEY_PREFIX: Final = model_budget_windows.USER_SPEND_CACHE_KEY_PREFIX
+TEAM_SPEND_CACHE_KEY_PREFIX: Final = model_budget_windows.TEAM_SPEND_CACHE_KEY_PREFIX
+TEAM_MEMBER_SPEND_CACHE_KEY_PREFIX: Final = model_budget_windows.TEAM_MEMBER_SPEND_CACHE_KEY_PREFIX
 
 _LEGACY_REQUEST_MODEL_SCOPES: Final = frozenset({Litellm_EntityType.KEY, Litellm_EntityType.END_USER})
 
@@ -66,16 +66,6 @@ _GLOB_WILDCARD: Final = "*"
 ModelAccessGroups: TypeAlias = Callable[[str, str | None], Collection[str]]
 
 _PROVIDER_PREFIXES: Final = tuple(f"{provider.value}/" for provider in LlmProviders)
-
-_BUDGET_START_TIME_KEY_PREFIXES: Final = MappingProxyType(
-    {
-        Litellm_EntityType.KEY: "virtual_key_budget_start_time",
-        Litellm_EntityType.USER: "user_model_budget_start_time",
-        Litellm_EntityType.END_USER: "end_user_budget_start_time",
-        Litellm_EntityType.TEAM: "team_model_budget_start_time",
-        Litellm_EntityType.TEAM_MEMBER: "team_member_model_budget_start_time",
-    }
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +92,7 @@ class RoutedModels:
 
 
 def team_member_budget_entity_id(user_id: str, team_id: str) -> str:
-    return f"{len(user_id)}:{user_id}:{team_id}"
+    return model_budget_windows.team_member_entity_id(user_id, team_id)
 
 
 def model_budget_spend_cache_key(
@@ -112,7 +102,7 @@ def model_budget_spend_cache_key(
     budget_duration: str | None,
 ) -> str:
     """Sole owner of the per-model spend counter key, shared by its writer and all of its readers."""
-    return f"{_SPEND_CACHE_KEY_PREFIXES[entity_type]}:{entity_id}:{budget_model}:{budget_duration}"
+    return model_budget_windows.spend_key(ModelBudgetWindow(entity_type, entity_id, budget_model, budget_duration))
 
 
 def _legacy_request_model_spend_cache_key(
@@ -161,7 +151,7 @@ def model_budget_start_time_cache_key(
     different periods, and a shared start time lets the shorter period restart
     the longer one's window.
     """
-    return f"{_BUDGET_START_TIME_KEY_PREFIXES[entity_type]}:{entity_id}:{budget_model}:{budget_duration}"
+    return model_budget_windows.start_key(ModelBudgetWindow(entity_type, entity_id, budget_model, budget_duration))
 
 
 def model_access_groups_of(router: "Router", model: str, team_id: str | None = None) -> frozenset[str]:
@@ -631,8 +621,8 @@ async def build_model_max_budget_usage(
     )
     if not budgets:
         return {}
-    spend_keys: Final = tuple(
-        model_budget_spend_cache_key(
+    identities: Final = tuple(
+        ModelBudgetWindow(
             entity_type=entity_type,
             entity_id=entity_id,
             budget_model=budget_model,
@@ -640,18 +630,10 @@ async def build_model_max_budget_usage(
         )
         for budget_model, budget_config in budgets
     )
+    spend_keys: Final = tuple(model_budget_windows.spend_key(window) for window in identities)
     windows: Final = await _read_windows(
         cache=cache,
-        spend_keys=spend_keys,
-        start_time_keys=tuple(
-            model_budget_start_time_cache_key(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                budget_model=budget_model,
-                budget_duration=budget_config.budget_duration,
-            )
-            for budget_model, budget_config in budgets
-        ),
+        windows=identities,
     )
     current_time: Final = (now or datetime.now(timezone.utc)).timestamp()
     shared: Final = tuple(
@@ -706,25 +688,50 @@ def _fuller_reading(local: _WindowReading, shared: SharedWindow | None) -> _Wind
 
 
 @with_service_target("model_budgets")
-async def _read_windows(
-    cache: DualCache, spend_keys: Sequence[str], start_time_keys: Sequence[str]
-) -> tuple[_WindowReading, ...]:
+async def _read_windows(cache: DualCache, windows: Sequence[ModelBudgetWindow]) -> tuple[_WindowReading, ...]:
     """Every window's spend and start time in one batched read, however many models are budgeted.
 
     Redis holds the window total across replicas; the in-memory copy is one replica's share.
     """
-    keys: Final = [*spend_keys, *start_time_keys]
     redis_cache: Final = cache.redis_cache
     if redis_cache is not None:
-        shared: Final = await redis_cache.async_batch_get_cache(key_list=keys)
-        return _readings(tuple(_as_float(shared.get(key)) for key in keys), window_count=len(spend_keys))
+        store: Final[ModelBudgetWindowStore] = TransportModelBudgetWindowStore(redis_cache.transport())
+        shared: Final = await store.readings(windows)
+        if isinstance(shared, RedisFailure):
+            _model_read_value(shared)
+            return tuple(_WindowReading(current_spend=0.0, started_at=None) for _ in windows)
+        return _readings(tuple(_model_read_value(value) for value in shared), window_count=len(windows))
+    keys: Final = [
+        *tuple(model_budget_windows.spend_key(window) for window in windows),
+        *tuple(model_budget_windows.start_key(window) for window in windows),
+    ]
     # async_batch_get_cache returns None if it fails internally, and its result is
     # index-aligned with `keys` otherwise. An unusable result reads as a miss,
     # which is what a never-written counter already reads as.
     batched: Final = await cache.async_batch_get_cache(keys=keys)
     if not isinstance(batched, list) or len(batched) != len(keys):
-        return tuple(_WindowReading(current_spend=0.0, started_at=None) for _ in spend_keys)
-    return _readings(tuple(_as_float(value) for value in batched), window_count=len(spend_keys))
+        return tuple(_WindowReading(current_spend=0.0, started_at=None) for _ in windows)
+    return _readings(tuple(_as_float(value) for value in batched), window_count=len(windows))
+
+
+def _model_read_value(value: float | None | RedisFailure) -> float | None:
+    if isinstance(value, RedisFailure):
+        if value.kind == "breaker_open":
+            raise RedisCircuitBreakerOpenError(value.message)
+        return None
+    return value
+
+
+class _LocalWindows(Protocol):
+    async def async_get_cache(self, key: str) -> object | None: ...
+
+    async def async_set_cache(self, key: str, value: float, *, ttl: float | None) -> None: ...
+
+    async def async_increment(self, key: str, value: float, *, ttl: int) -> float: ...
+
+
+def _model_local_cache(cache: DualCache) -> _LocalWindows:
+    return cache.in_memory_cache
 
 
 def _readings(values: Sequence[float | None], window_count: int) -> tuple[_WindowReading, ...]:
@@ -849,6 +856,8 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         self._redis_increment_queue_lock = asyncio.Lock()
         self._redis_increment_flush_lock = asyncio.Lock()
         self._detached_increment_operations = None
+        self._model_deltas: tuple[ModelBudgetDelta, ...] = ()
+        self._detached_model_deltas: tuple[ModelBudgetDelta, ...] | None = None
         self._retired = False
         self._flush_after_retire = None
         self.deployment_budget_config = None
@@ -1048,7 +1057,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         distinction only shows up at a zero-dollar cap, where skipping the
         comparison would let the strictest possible limit admit every request.
         """
-        spend_key: Final = model_budget_spend_cache_key(
+        window: Final = ModelBudgetWindow(
             entity_type=entity_type,
             entity_id=entity_id,
             budget_model=resolved.budget_model,
@@ -1060,10 +1069,11 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             model=model,
             resolved=resolved,
         )
-        current_spend: Final = _as_spend(await self._cached_spend(spend_key))
-        if legacy_spend_key is None or legacy_spend_key == spend_key:
+        current_spend: Final = _as_spend(await self._cached_model_spend(window))
+        if legacy_spend_key is None or legacy_spend_key == model_budget_windows.spend_key(window):
             return current_spend
-        return current_spend + _as_spend(await self._cached_spend(legacy_spend_key))
+        legacy_window: Final = ModelBudgetWindow(entity_type, entity_id, model, resolved.budget_config.budget_duration)
+        return current_spend + _as_spend(await self._cached_model_spend(legacy_window))
 
     async def _with_shared_spend(
         self,
@@ -1089,11 +1099,13 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         )
         return local_spend if shared is None else max(local_spend, shared.spend)
 
-    async def _cached_spend(self, spend_key: str) -> float | None:
+    async def _cached_model_spend(self, window: ModelBudgetWindow) -> float | None:
         redis_cache: Final = self.dual_cache.redis_cache
         if redis_cache is None:
-            return await self.dual_cache.async_get_cache(key=spend_key)
-        return await redis_cache.async_get_cache(key=spend_key)
+            local: Final = _model_local_cache(self.dual_cache)
+            return _as_float(await local.async_get_cache(key=model_budget_windows.spend_key(window)))
+        store: Final[ModelBudgetWindowStore] = TransportModelBudgetWindowStore(redis_cache.transport())
+        return _model_read_value(await store.spend(window))
 
     @with_service_target("model_budgets")
     async def async_filter_deployments(
@@ -1241,35 +1253,26 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         budget_duration: Final = resolved.budget_config.budget_duration
         if budget_duration is None:
             return
-        spend_key: Final = model_budget_spend_cache_key(
+        window: Final = ModelBudgetWindow(
             entity_type=entity_type,
             entity_id=entity_id,
             budget_model=resolved.budget_model,
             budget_duration=budget_duration,
         )
-        if batch_id is not None and not await self._claim_batch_charge(
-            spend_key=spend_key,
+        spend_key: Final = model_budget_windows.spend_key(window)
+        if batch_id is not None and not await self._claim_model_batch(
+            window=window,
             batch_id=batch_id,
             ttl_seconds=duration_in_seconds(budget_duration),
         ):
             return
-        start_time_key: Final = model_budget_start_time_cache_key(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            budget_model=resolved.budget_model,
-            budget_duration=budget_duration,
-        )
+        start_time_key: Final = model_budget_windows.start_key(window)
         shares_window: Final = self._shares_windows_in_database(entity_type)
         if shares_window:
             await self._join_shared_window(
                 spend_key=spend_key, start_time_key=start_time_key, budget_duration=budget_duration
             )
-        await self._increment_spend_for_key(
-            budget_config=resolved.budget_config,
-            spend_key=spend_key,
-            start_time_key=start_time_key,
-            response_cost=response_cost,
-        )
+        await self._increment_model_window(window, resolved.budget_config, response_cost)
         if shares_window:
             await self._share_spend(
                 spend_key=spend_key,
@@ -1362,12 +1365,93 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             spend=response_cost,
         )
 
-    async def _claim_batch_charge(self, spend_key: str, batch_id: str, ttl_seconds: int) -> bool:
-        marker_key: Final = batch_charged_once_marker_key(spend_key=spend_key, batch_id=batch_id)
-        polls: Final = await self.dual_cache.async_increment_cache(
-            key=marker_key, value=1, ttl=ttl_seconds, refresh_ttl=True
-        )
-        return polls == 1
+    async def _claim_model_batch(self, window: ModelBudgetWindow, batch_id: str, ttl_seconds: int) -> bool:
+        marker_key: Final = model_budget_windows.batch_marker_key(model_budget_windows.spend_key(window), batch_id)
+        local: Final = _model_local_cache(self.dual_cache)
+        local_polls: Final = await local.async_increment(key=marker_key, value=1, ttl=ttl_seconds)
+        redis_cache: Final = self.dual_cache.redis_cache
+        if redis_cache is None:
+            return local_polls == 1
+        store: Final[ModelBudgetWindowStore] = TransportModelBudgetWindowStore(redis_cache.transport())
+        polls: Final = await store.claim_batch(window, batch_id, ttl=ttl_seconds)
+        return (local_polls if isinstance(polls, RedisFailure) else polls) == 1
+
+    async def _increment_model_window(
+        self, window: ModelBudgetWindow, budget_config: BudgetConfig, response_cost: float
+    ) -> None:
+        duration: Final = window.budget_duration
+        if duration is None:
+            return
+        spend_key: Final = model_budget_windows.spend_key(window)
+        start_key: Final = model_budget_windows.start_key(window)
+        redis_cache: Final = self.dual_cache.redis_cache
+        if redis_cache is None:
+            await self._increment_spend_for_key(
+                budget_config=budget_config, spend_key=spend_key, start_time_key=start_key, response_cost=response_cost
+            )
+            return
+        store: Final[ModelBudgetWindowStore] = TransportModelBudgetWindowStore(redis_cache.transport())
+        now: Final = self._clock()
+        new_ttl: Final = budget_window_seconds(now, duration)
+        local: Final = _model_local_cache(self.dual_cache)
+        local_value: Final = await local.async_get_cache(start_key)
+        local_start: Final = _as_float(local_value)
+        if local_value is not None and local_start is None:
+            raise ValueError("model budget start is not numeric")
+        shared_start: Final = await store.started_at(window) if local_start is None else local_start
+        if isinstance(shared_start, RedisFailure) and shared_start.kind == "decode":
+            raise ValueError(shared_start.message)
+        started_at: Final = None if isinstance(shared_start, RedisFailure) else shared_start
+        if started_at is None:
+            await local.async_set_cache(start_key, now, ttl=new_ttl)
+            await store.set_start(window, now, ttl=new_ttl)
+        elif local_start is None:
+            await local.async_set_cache(start_key, started_at, ttl=self.dual_cache.default_in_memory_ttl)
+        budget_start: Final = now if started_at is None else started_at
+        elapsed: Final = now - budget_start
+        open_seconds: Final = budget_window_seconds(budget_start, duration)
+        if elapsed > open_seconds:
+            await local.async_set_cache(spend_key, response_cost, ttl=new_ttl)
+            await store.set_spend(window, response_cost, ttl=new_ttl)
+            await local.async_set_cache(start_key, now, ttl=new_ttl)
+            await store.set_start(window, now, ttl=new_ttl)
+            return
+        ttl: Final = int(open_seconds - elapsed)
+        async with self._get_redis_increment_queue_lock():
+            await local.async_increment(spend_key, response_cost, ttl=ttl)
+            self._model_deltas = (*self._model_deltas, ModelBudgetDelta(window, response_cost, ttl))
+            if self._retired:
+                self._schedule_flush_after_retire()
+
+    def _has_unwritten_increments(self) -> bool:
+        return bool(self._model_deltas) or self._detached_model_deltas is not None
+
+    @with_service_target("router_budgets")
+    async def _write_queued_increment_operations(self, redis_cache: RedisCache) -> bool:
+        async with self._get_redis_increment_queue_lock():
+            deltas: Final = self._detached_model_deltas or self._model_deltas
+            if self._detached_model_deltas is None:
+                self._model_deltas = ()
+            self._detached_model_deltas = deltas
+        if not deltas:
+            self._detached_model_deltas = None
+            return True
+        store: Final[ModelBudgetWindowStore] = TransportModelBudgetWindowStore(redis_cache.transport())
+        result: Final = await store.add_spend(deltas)
+        async with self._get_redis_increment_queue_lock():
+            if isinstance(result, RedisFailure):
+                operations: Final = (*deltas, *self._model_deltas)
+                groups: Final = itertools.groupby(
+                    sorted(operations, key=lambda delta: model_budget_windows.spend_key(delta.window)),
+                    key=lambda delta: model_budget_windows.spend_key(delta.window),
+                )
+                grouped: Final = tuple(tuple(group) for _, group in groups)
+                self._model_deltas = tuple(
+                    ModelBudgetDelta(group[0].window, sum(delta.amount for delta in group), group[-1].ttl)
+                    for group in grouped
+                )
+            self._detached_model_deltas = None
+        return not isinstance(result, RedisFailure)
 
 
 def _local_windows(dual_cache: DualCache) -> LocalTTLCache:

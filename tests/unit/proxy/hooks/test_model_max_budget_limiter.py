@@ -8,10 +8,12 @@ from datetime import datetime, timezone
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
 
+import fakeredis
 import pytest
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendTransaction
 from litellm.proxy.hooks.model_budget_shared_windows import DatabaseSharedWindows, SharedWindows
@@ -25,8 +27,8 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     team_member_budget_entity_id,
 )
 from litellm.router import Router
-from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import LiteLLMBatch, Usage
+from tests._support.fake_redis import fake_redis_cache
 
 KEY_HASH: Final = "key-hash-batch"
 USER_ID: Final = "user-batch"
@@ -213,58 +215,8 @@ class _Clock:
         self.seconds = self.seconds + seconds
 
 
-class _SharedRedisDouble:
-    def __init__(self, now: Callable[[], float] = time.time) -> None:
-        self.now = now
-        self.entries: Mapping[str, tuple[float, float | None]] = MappingProxyType({})
-
-    def _live(self, key: str) -> tuple[float, float | None] | None:
-        entry: Final = self.entries.get(key)
-        if entry is None:
-            return None
-        expires_at: Final = entry[1]
-        if expires_at is not None and expires_at <= self.now():
-            return None
-        return entry
-
-    def _store(self, key: str, value: float, expires_at: float | None) -> None:
-        self.entries = MappingProxyType({**self.entries, key: (value, expires_at)})
-
-    async def async_get_cache(self, key: str, **kwargs: object) -> float | None:
-        await asyncio.sleep(0)
-        entry: Final = self._live(key)
-        return None if entry is None else entry[0]
-
-    async def async_set_cache(self, key: str, value: float, ttl: int | None = None, **kwargs: object) -> None:
-        await asyncio.sleep(0)
-        self._store(key, value, None if ttl is None else self.now() + ttl)
-
-    async def async_increment(
-        self,
-        key: str,
-        value: float,
-        ttl: int | None = None,
-        parent_otel_span: object = None,
-        refresh_ttl: bool = False,
-    ) -> float:
-        await asyncio.sleep(0)
-        live: Final = self._live(key)
-        total: Final = value if live is None else live[0] + value
-        kept_expiry: Final = None if live is None else live[1]
-        expires_at: Final = (
-            kept_expiry if ttl is None or (kept_expiry is not None and not refresh_ttl) else self.now() + ttl
-        )
-        self._store(key, total, expires_at)
-        return total
-
-    async def async_increment_pipeline(self, increment_list: list[RedisPipelineIncrementOperation]) -> list[float]:
-        return [await self.async_increment(op["key"], op["increment_value"], ttl=op["ttl"]) for op in increment_list]
-
-
-def _worker(redis: _SharedRedisDouble) -> PROXY_VirtualKeyModelMaxBudgetLimiter:
-    return PROXY_VirtualKeyModelMaxBudgetLimiter(
-        dual_cache=DualCache(redis_cache=redis)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
-    )
+def _worker(redis: RedisCache) -> PROXY_VirtualKeyModelMaxBudgetLimiter:
+    return PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache(redis_cache=redis))
 
 
 async def _drain_redis_pushes() -> None:
@@ -299,7 +251,7 @@ async def test_a_second_batch_and_chat_requests_still_charge_the_budget():
 
 @pytest.mark.asyncio
 async def test_two_workers_polling_the_same_finished_batch_at_once_charge_it_once():
-    redis: Final = _SharedRedisDouble()
+    redis: Final = fake_redis_cache(fakeredis.FakeServer())
     worker_a: Final = _worker(redis)
     worker_b: Final = _worker(redis)
     finished: Final = _batch("batch_first", "completed")
@@ -312,9 +264,10 @@ async def test_two_workers_polling_the_same_finished_batch_at_once_charge_it_onc
 
 
 @pytest.mark.asyncio
-async def test_a_batch_polled_within_every_budget_window_is_never_charged_again():
+async def test_a_batch_polled_within_every_budget_window_is_never_charged_again(monkeypatch):
     clock: Final = _Clock()
-    limiter: Final = _worker(_SharedRedisDouble(now=clock.now))
+    monkeypatch.setattr("fakeredis._basefakesocket.time", SimpleNamespace(time=clock.now))
+    limiter: Final = _worker(fake_redis_cache(fakeredis.FakeServer()))
     finished: Final = _batch("batch_first", "completed")
 
     await _poll(limiter, finished, BATCH_COST)
@@ -660,9 +613,10 @@ async def test_spend_charged_while_the_database_is_unreachable_reaches_the_share
         shared_windows=database.replica(),
     )
     assert usage["claude-opus*"]["current_spend"] == round(CHAT_COST * 3, 4)
-    assert usage["claude-opus*"]["budget_reset_at"] == datetime.fromtimestamp(
-        WINDOW_EPOCH + 24 * 3600, tz=timezone.utc
-    ).isoformat()
+    assert (
+        usage["claude-opus*"]["budget_reset_at"]
+        == datetime.fromtimestamp(WINDOW_EPOCH + 24 * 3600, tz=timezone.utc).isoformat()
+    )
 
 
 @pytest.mark.asyncio
@@ -715,7 +669,9 @@ def test_an_access_group_named_after_a_served_model_never_widens_that_models_ent
         resolved: Final = resolve_model_budget(
             model="gpt-4o-mini",
             model_max_budget=model_max_budget,
-            model_access_groups=lambda model, team_id: model_access_groups_of(router=router, model=model, team_id=team_id),
+            model_access_groups=lambda model, team_id: model_access_groups_of(
+                router=router, model=model, team_id=team_id
+            ),
         )
         return None if resolved is None else resolved.budget_model
 
@@ -780,14 +736,14 @@ async def test_replicas_without_redis_enforce_one_family_cap_together():
 @pytest.mark.asyncio
 async def test_replicas_sharing_redis_enforce_the_family_cap_without_the_database():
     budget: Final = {"claude-opus*": FAMILY_CAP}
-    redis: Final = _SharedRedisDouble()
+    redis: Final = fake_redis_cache(fakeredis.FakeServer())
     table: Final = _WindowSpendDatabase()
     replica_a: Final = _family_limiter(
-        dual_cache=DualCache(redis_cache=redis),  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+        dual_cache=DualCache(redis_cache=redis),
         shared_windows=table.replica(),
     )
     replica_b: Final = _family_limiter(
-        dual_cache=DualCache(redis_cache=redis),  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+        dual_cache=DualCache(redis_cache=redis),
         shared_windows=table.replica(),
     )
 
