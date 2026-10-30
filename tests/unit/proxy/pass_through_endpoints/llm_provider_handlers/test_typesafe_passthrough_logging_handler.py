@@ -366,3 +366,94 @@ def test_success_handler_skips_typesafe_pricing_for_non_decisions_openrouter_rou
     assert normalized["standard_logging_response_object"] is None
     assert "combined_usage_object" not in normalized["kwargs"]
     assert normalized["kwargs"].get("model") != "openrouter/typesafe/jev-1.13-20260917"
+
+
+def test_eu_jev_decision_is_priced_from_its_registry_row():
+    model_cost: Final = litellm.model_cost["eu_jev/eu-jeff-1.0.0"]
+    response: Final = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
+        httpx_response=_response(),
+        response_body={"model": "eu-jeff-1.0.0", "usage": {"input_tokens": 64, "output_tokens": 0}},
+        logging_obj=_logging_obj(),
+        url_route="https://eu-jev.com/v1/systemone",
+        result='{"answers": {}}',
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        cache_hit=False,
+        request_body={"model": "eu-jeff-latest"},
+        custom_llm_provider="eu_jev",
+    )
+
+    assert response["kwargs"]["model"] == "eu_jev/eu-jeff-1.0.0"
+    assert response["kwargs"]["custom_llm_provider"] == "eu_jev"
+    assert response["kwargs"]["response_cost"] == pytest.approx(64 * model_cost["input_cost_per_token"])
+    assert response["kwargs"]["response_cost"] > 0
+    assert response["kwargs"]["combined_usage_object"].prompt_tokens == 64
+    assert response["kwargs"]["combined_usage_object"].completion_tokens == 0
+
+
+# eu-jev.com/docs (read 2026-10-21): an omitted model and the legacy names answer with the current release,
+# which a future eu/jev release reports under a version the registry does not list yet, and a caller may pin it.
+@pytest.mark.parametrize(
+    "request_body", [{}, {"model": "jeff-latest"}, {"model": "jeff-1.0.0"}, {"model": "eu-jeff-99.0.0"}]
+)
+def test_eu_jev_release_without_its_own_row_is_priced_as_the_latest_alias(request_body: dict[str, object]) -> None:
+    unlisted_release: Final = "eu-jeff-99.0.0"
+    assert f"eu_jev/{unlisted_release}" not in litellm.model_cost
+    response: Final = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
+        httpx_response=_response(),
+        response_body={"model": unlisted_release, "usage": {"input_tokens": 64, "output_tokens": 0}},
+        logging_obj=_logging_obj(),
+        url_route="https://eu-jev.com/v1/systemone",
+        result='{"answers": {}}',
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        cache_hit=False,
+        request_body=request_body,
+        custom_llm_provider="eu_jev",
+    )
+
+    latest_cost: Final = litellm.model_cost["eu_jev/eu-jeff-latest"]["input_cost_per_token"]
+    assert response["kwargs"]["model"] == f"eu_jev/{unlisted_release}"
+    assert latest_cost > 0
+    assert response["kwargs"]["response_cost"] == pytest.approx(64 * latest_cost)
+
+
+def test_eu_jev_pinned_release_is_not_priced_as_the_latest_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "eu_jev/eu-jeff-latest",
+        {**litellm.model_cost["eu_jev/eu-jeff-latest"], "input_cost_per_token": 1.0},
+    )
+    response: Final = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
+        httpx_response=_response(),
+        response_body={"model": "eu-jeff-1.0.0", "usage": {"input_tokens": 64, "output_tokens": 0}},
+        logging_obj=_logging_obj(),
+        url_route="https://eu-jev.com/v1/systemone",
+        result='{"answers": {}}',
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        cache_hit=False,
+        request_body={"model": "eu-jeff-1.0.0"},
+        custom_llm_provider="eu_jev",
+    )
+
+    pinned_cost: Final = litellm.model_cost["eu_jev/eu-jeff-1.0.0"]["input_cost_per_token"]
+    assert response["kwargs"]["response_cost"] == pytest.approx(64 * pinned_cost)
+
+
+def test_success_handler_dispatches_eu_jev_to_the_shared_handler():
+    normalized: Final = PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
+        httpx_response=_response(),
+        response_body={"model": "eu-jeff-1.0.0", "usage": {"input_tokens": 64, "output_tokens": 0}},
+        request_body={"model": "eu-jeff-latest"},
+        logging_obj=_logging_obj(),
+        url_route="https://eu-jev.com/v1/systemone",
+        result="{}",
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        cache_hit=False,
+        custom_llm_provider="eu_jev",
+    )
+
+    assert normalized["kwargs"]["custom_llm_provider"] == "eu_jev"
+    assert normalized["kwargs"]["model"] == "eu_jev/eu-jeff-1.0.0"

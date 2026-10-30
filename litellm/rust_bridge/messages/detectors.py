@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Final
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.opencode.common_utils import is_opencode_api_base
 from litellm.rust_bridge.detectors import api_base, overridden, present, streaming
 from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
@@ -41,6 +42,18 @@ def _replays_thinking(message: object) -> bool:
 def thinking_signature_retry(request: NativeCall) -> bool:
     """Python may strip replayed thinking blocks and retry after a rejected signature."""
     return any(_replays_thinking(message) for message in optional_sequence(request.resolved.get("messages")) or ())
+
+
+def tool_custom_field(request: NativeCall) -> bool:
+    tools: Final = optional_sequence(request.resolved.get("tools")) or ()
+    return any("custom" in (optional_mapping(tool) or {}) for tool in tools)
+
+
+def strict_tools_retry(request: NativeCall) -> bool:
+    tools: Final = optional_sequence(request.resolved.get("tools")) or ()
+    return drops_unsupported_params(request.resolved.get("drop_params")) and any(
+        (optional_mapping(tool) or {}).get("strict") is True for tool in tools
+    )
 
 
 def stream_cost_injection(request: NativeCall) -> bool:

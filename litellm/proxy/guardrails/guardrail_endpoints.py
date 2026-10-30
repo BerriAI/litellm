@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX
+from litellm.proxy.common_utils.openai_error_payload import status_typed_proxy_exception
 from litellm.proxy.common_utils.path_utils import is_within, safe_join
 from litellm.proxy.guardrails.content_filter_data import CATEGORIES_DIR, DATA_ROOTS, category_dirs, find_category_file
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.bounded_execution import (
@@ -2533,7 +2534,7 @@ async def apply_guardrail(
                 e = transformed_exception
         except Exception:
             verbose_proxy_logger.exception("apply_guardrail: post_call_failure_hook failed")
-        raise handle_exception_on_proxy(e)
+        raise handle_exception_on_proxy(status_typed_proxy_exception(e) if isinstance(e, HTTPException) else e)
 
     # Success logging outside except so a hook error never triggers failure handlers.
     response = await _emit_guardrail_success_logs(

@@ -1304,10 +1304,116 @@ def test_stream_chunk_builder_keeps_each_choices_tool_call_arguments_apart():
         ]
     )
 
-    assert [(tool_call.id, tool_call.function.arguments) for tool_call in response.choices[0].message.tool_calls] == [
-        ("call_a", '{"fruit": "persimmon"}'),
-        ("call_b", '{"fruit": "durian"}'),
+    assert [
+        (choice.index, [(tool_call.id, tool_call.function.arguments) for tool_call in choice.message.tool_calls])
+        for choice in response.choices
+    ] == [
+        (0, [("call_a", '{"fruit": "persimmon"}')]),
+        (1, [("call_b", '{"fruit": "durian"}')]),
     ]
+
+
+def test_stream_chunk_builder_rebuilds_each_choice_of_a_multi_choice_text_stream_on_its_own():
+    def chunk(choice_index: int, content: str, finish_reason: str | None = None) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-123",
+            object="chat.completion.chunk",
+            created=1234567890,
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(index=choice_index, delta=Delta(content=content), finish_reason=finish_reason)],
+        )
+
+    response = stream_chunk_builder(
+        chunks=[
+            chunk(0, "The persim"),
+            chunk(1, "The"),
+            chunk(1, " persimmon is"),
+            chunk(0, "mon is ripe.", finish_reason="stop"),
+            chunk(1, " ripe and", finish_reason="length"),
+        ]
+    )
+
+    assert [(choice.index, choice.message.content, choice.finish_reason) for choice in response.choices] == [
+        (0, "The persimmon is ripe.", "stop"),
+        (1, "The persimmon is ripe and", "length"),
+    ]
+
+
+def test_stream_chunk_builder_gives_a_choice_without_a_finish_chunk_the_finish_reason_its_content_implies():
+    def chunk(choice_index: int, delta: Delta, finish_reason: str | None = None) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-123",
+            object="chat.completion.chunk",
+            created=1234567890,
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(index=choice_index, delta=delta, finish_reason=finish_reason)],
+        )
+
+    def tool_call(call_id: str) -> list[ChatCompletionDeltaToolCall]:
+        return [
+            ChatCompletionDeltaToolCall(
+                id=call_id, index=0, type="function", function=Function(name="lookup_fruit", arguments="{}")
+            )
+        ]
+
+    response = stream_chunk_builder(
+        chunks=[
+            chunk(0, Delta(tool_calls=tool_call("call_a"))),
+            chunk(1, Delta(tool_calls=tool_call("call_b"))),
+            chunk(2, Delta(content="Kiwis are fuzzy.")),
+            chunk(0, Delta(), finish_reason="tool_calls"),
+        ]
+    )
+
+    assert [(choice.index, choice.finish_reason) for choice in response.choices] == [
+        (0, "tool_calls"),
+        (1, "tool_calls"),
+        (2, "stop"),
+    ]
+
+
+def test_stream_chunk_builder_keeps_each_choices_function_call_annotations_and_images_on_that_choice():
+    def chunk(choice_index: int, delta: Delta) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-123",
+            object="chat.completion.chunk",
+            created=1234567890,
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(index=choice_index, delta=delta, finish_reason=None)],
+        )
+
+    citation: Final = {
+        "type": "url_citation",
+        "url_citation": {"start_index": 0, "end_index": 5, "url": "https://example.com/kiwi", "title": "Kiwi"},
+    }
+    image: Final = {"type": "image_url", "index": 0, "image_url": {"url": "data:image/png;base64,a2l3aQ=="}}
+
+    response = stream_chunk_builder(
+        chunks=[
+            chunk(0, Delta(function_call={"name": "lookup_fruit", "arguments": '{"fruit": '})),
+            chunk(1, Delta(content="Kiwis are")),
+            chunk(0, Delta(function_call={"arguments": '"kiwi"}'})),
+            chunk(1, Delta(content=" fuzzy.", annotations=[citation])),
+            chunk(1, Delta(images=[image])),
+        ]
+    )
+
+    function_choice, cited_choice = response.choices
+    assert (
+        function_choice.index,
+        function_choice.message.content,
+        function_choice.message.function_call.name,
+        function_choice.message.function_call.arguments,
+        getattr(function_choice.message, "annotations", None),
+        getattr(function_choice.message, "images", None),
+    ) == (0, None, "lookup_fruit", '{"fruit": "kiwi"}', None, None)
+    assert (
+        cited_choice.index,
+        cited_choice.message.content,
+        cited_choice.message.function_call,
+        cited_choice.message.annotations,
+        cited_choice.message.images,
+    ) == (1, "Kiwis are fuzzy.", None, [citation], [image])
 
 
 def test_get_combined_tool_content_joins_many_dict_shaped_argument_fragments_in_order():
@@ -2519,3 +2625,39 @@ def test_stream_chunk_builder_carries_the_bedrock_guardrail_trace_and_records_it
     (entry,) = logging_obj.model_call_details["litellm_params"]["metadata"]["standard_logging_guardrail_information"]
     assert entry["guardrail_usage"] == {"topicPolicyUnits": 2}
     assert entry["guardrail_cost"] == pytest.approx(2 * 0.00015)
+
+
+@pytest.mark.parametrize(
+    ("base_model", "counted_as"), [("azure/gpt-6.1-sol", "azure/gpt-6.1-sol"), ("claude-sonnet-4-5", "my-gpt-6")]
+)
+def test_stream_chunk_builder_counts_a_custom_named_deployments_missing_usage_with_its_base_model_only_when_openai(
+    base_model: str, counted_as: str
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    messages: Final = [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
+    chunks: Final = [
+        ModelResponseStream(id="s", model="my-gpt-6", choices=[StreamingChoices(index=0, delta=Delta(content="hi"))]),
+        ModelResponseStream(
+            id="s", model="my-gpt-6", choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")]
+        ),
+    ]
+    logging_obj: Final = Logging(
+        model="my-gpt-6",
+        messages=messages,
+        stream=True,
+        call_type="acompletion",
+        start_time=None,
+        litellm_call_id="call",
+        function_id="fn",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"metadata": {"model_info": {"base_model": base_model}}}
+
+    built: Final = stream_chunk_builder(chunks=chunks, messages=messages, logging_obj=logging_obj)
+
+    assert built is not None
+    assert litellm.token_counter(model=base_model, messages=messages) != litellm.token_counter(
+        model="my-gpt-6", messages=messages
+    )
+    assert built.usage.prompt_tokens == litellm.token_counter(model=counted_as, messages=messages)

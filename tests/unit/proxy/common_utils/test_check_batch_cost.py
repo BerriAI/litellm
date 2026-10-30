@@ -80,10 +80,11 @@ def _batch_cost_result(
     """Build the BatchCostUsageResult calculate_batch_cost_and_usage now returns,
     for mocking it in tests that only care about cost/usage/models."""
     from litellm.batches.batch_utils import BatchCostUsageResult
+    from litellm.types.utils import Usage
 
     return BatchCostUsageResult(
         cost=cost,
-        usage=usage,
+        usage=Usage(**usage),
         models=models,
         successful_requests=successful_requests,
         failed_requests=failed_requests,
@@ -297,13 +298,13 @@ class TestCheckBatchCost:
         mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        mock_llm_router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
 
         mock_deployment = MagicMock()
         mock_deployment.litellm_params.custom_llm_provider = "openai"
         mock_deployment.litellm_params.model = "gpt-4"
         mock_deployment.model_info.model_dump.return_value = {}
-        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+        mock_llm_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
         mock_file_content = MagicMock()
         mock_file_content.content = b'{"id":"req-1"}'
@@ -390,7 +391,7 @@ class TestCheckBatchCost:
         mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(
+        mock_llm_router.registry.return_value.credentials = MagicMock(
             return_value={
                 "custom_llm_provider": "bedrock",
                 "s3_bucket_name": "configured-batch-bucket",
@@ -402,7 +403,7 @@ class TestCheckBatchCost:
         mock_deployment.litellm_params.custom_llm_provider = "bedrock"
         mock_deployment.litellm_params.model = "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
         mock_deployment.model_info.model_dump.return_value = {}
-        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+        mock_llm_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
         mock_file_content = MagicMock()
         mock_file_content.content = b'{"recordId":"req-1"}'
@@ -498,7 +499,7 @@ class TestCheckBatchCost:
         mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(
+        mock_llm_router.registry.return_value.credentials = MagicMock(
             return_value={"custom_llm_provider": "bedrock", "aws_region_name": "us-east-1"}
         )
 
@@ -506,7 +507,7 @@ class TestCheckBatchCost:
         mock_deployment.litellm_params.custom_llm_provider = "bedrock"
         mock_deployment.litellm_params.model = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
         mock_deployment.model_info.model_dump.return_value = {}
-        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+        mock_llm_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
         mock_file_content = MagicMock()
         mock_file_content.content = b'{"recordId":"req-1"}'
@@ -598,14 +599,14 @@ class TestCheckBatchCost:
         mock_response.error_file_id = None
         mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        mock_llm_router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
 
         mock_deployment = MagicMock()
         mock_deployment.litellm_params.custom_llm_provider = "openai"
         mock_deployment.litellm_params.model = "gpt-5.4-mini"
         mock_deployment.litellm_params.api_base = "https://gateway.example.com/v1?key=AIzaSyVERYSECRET7890"
         mock_deployment.model_info.model_dump.return_value = {}
-        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+        mock_llm_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
         output_line = json.dumps(
             {
@@ -682,13 +683,13 @@ class TestCheckBatchCost:
         )
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        mock_llm_router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
 
         mock_deployment = MagicMock()
         mock_deployment.litellm_params.custom_llm_provider = "openai"
         mock_deployment.litellm_params.model = "gpt-4"
         mock_deployment.model_info.model_dump.return_value = {}
-        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+        mock_llm_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
         mock_file_content = MagicMock()
         mock_file_content.content = b'{"id":"req-1"}'
@@ -796,13 +797,13 @@ class TestCheckBatchCost:
         )
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        mock_llm_router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
 
         mock_deployment = MagicMock()
         mock_deployment.litellm_params.custom_llm_provider = "openai"
         mock_deployment.litellm_params.model = "gpt-4"
         mock_deployment.model_info.model_dump.return_value = {}
-        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+        mock_llm_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
         mock_file_content = MagicMock()
         mock_file_content.content = b'{"id":"req-1"}'
@@ -904,7 +905,7 @@ class TestCheckBatchCost:
         mock_response.output_file_id = "msgbatch_01WA5hdsa2Xx8w4zyPjV1frs"
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(
+        mock_llm_router.registry.return_value.credentials = MagicMock(
             return_value={"api_key": "sk-test", "custom_llm_provider": "anthropic"}
         )
 
@@ -1138,7 +1139,7 @@ class TestCheckBatchCost:
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
         # Billing reads credentials off the router; if it is touched we billed a batch
         # that has no output, which is the behaviour this test guards against.
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        mock_llm_router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
 
         with patch(
             "litellm.files.main.afile_content",
@@ -1155,7 +1156,7 @@ class TestCheckBatchCost:
             "completed-without-output update() must set batch_processed=True so polling stops"
         )
         assert mock_afile_content.await_count == 0, "a batch with no output file must not be billed"
-        assert mock_llm_router.get_deployment_credentials_with_provider.call_count == 0, (
+        assert mock_llm_router.registry.return_value.credentials.call_count == 0, (
             "a batch with no output file must not enter the cost-tracking path"
         )
 
@@ -1207,7 +1208,7 @@ class TestCheckBatchCost:
         mock_response.request_counts = request_counts
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        mock_llm_router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
 
         with patch(
             "litellm.files.main.afile_content",
@@ -1307,13 +1308,13 @@ class TestCheckBatchCost:
         )
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        mock_llm_router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
 
         mock_deployment = MagicMock()
         mock_deployment.litellm_params.custom_llm_provider = "openai"
         mock_deployment.litellm_params.model = "gpt-4"
         mock_deployment.model_info.model_dump.return_value = {}
-        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+        mock_llm_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
         mock_file_content = MagicMock()
         mock_file_content.content = b'{"id":"req-1"}'
@@ -1409,13 +1410,13 @@ class TestCheckBatchCost:
         mock_response.error_file_id = "file-error-456"
         mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        mock_llm_router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
 
         mock_deployment = MagicMock()
         mock_deployment.litellm_params.custom_llm_provider = "openai"
         mock_deployment.litellm_params.model = "gpt-4"
         mock_deployment.model_info.model_dump.return_value = {}
-        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+        mock_llm_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
         succeeded_line = json.dumps(
             {
@@ -1519,7 +1520,7 @@ class TestCheckBatchCost:
         mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"failed"}'
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        mock_llm_router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
 
         with (
             patch(
@@ -1583,14 +1584,14 @@ class TestCheckBatchCost:
         mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        mock_llm_router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
 
         mock_deployment = MagicMock()
         mock_deployment.litellm_params.custom_llm_provider = "azure"
         mock_deployment.litellm_params.model = "azure/gpt-5-mini"
         mock_deployment.model_name = "gpt-5-batch"
         mock_deployment.model_info.model_dump.return_value = {}
-        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+        mock_llm_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
         mock_hook = MagicMock(spec=ManagedBatchOutputFileWriter)
         mock_hook.get_unified_output_file_id.side_effect = [
@@ -1715,8 +1716,8 @@ class TestUnmanagedVertexRouting:
 
         assert result is None
         prom.record_check_batch_cost_error.assert_called_once_with("invalid_unified_id")
-        router.resolve_model_name_from_model_id.assert_not_called()
-        router.get_model_ids.assert_not_called()
+        router.registry.return_value.resolve.assert_not_called()
+        router.registry.return_value.names.assert_not_called()
 
     def _vertex_deployment(self):
         deployment = MagicMock()
@@ -1728,9 +1729,9 @@ class TestUnmanagedVertexRouting:
         """Flag on: derive the bare model from the gs:// path, resolve it to a deployment id,
         and use the raw unified_object_id as the provider batch id."""
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = "gemini-2.5-flash"
-        router.get_model_ids.return_value = ["deploy-1"]
-        router.get_deployment = MagicMock(return_value=self._vertex_deployment())
+        router.registry.return_value.resolve.return_value = "gemini-2.5-flash"
+        router.registry.return_value.names.return_value = ["deploy-1"]
+        router.registry.return_value.deployment = MagicMock(return_value=self._vertex_deployment())
         instance = self._instance(track_unmanaged=True, router=router)
 
         with patch(_IS_B64, return_value=False):
@@ -1738,8 +1739,8 @@ class TestUnmanagedVertexRouting:
 
         assert result == ("deploy-1", "8823717160934178816")
         # bare model name (trailing GCS segment), not the full publishers/.. path
-        router.resolve_model_name_from_model_id.assert_called_once_with("gemini-2.5-flash")
-        router.get_model_ids.assert_called_once_with(model_name="gemini-2.5-flash")
+        router.registry.return_value.resolve.assert_called_once_with("gemini-2.5-flash", kind="from_id")
+        router.registry.return_value.names.assert_called_once_with("gemini-2.5-flash", kind="ids")
 
     def test_flag_on_routes_fine_tuned_endpoint_to_vertex_deployment(self):
         """A fine-tuned Gemini batch stores `endpoints/<id>` in the gs:// path; the bare model
@@ -1747,8 +1748,8 @@ class TestUnmanagedVertexRouting:
         `vertex_ai/gemini/<id>` (LIT-6899)."""
         endpoint_id = "7768560373388541952"
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = None
-        router.get_model_list.return_value = [
+        router.registry.return_value.resolve.return_value = None
+        router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "gemini-2.5-flash-dts-usc1",
                 "litellm_params": {
@@ -1774,12 +1775,12 @@ class TestUnmanagedVertexRouting:
         """Flag on, but the only deployment for the model group is a non-vertex_ai
         provider: must not be selected, even though the model group name matches."""
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = "gemini-2.5-flash"
-        router.get_model_ids.return_value = ["deploy-openai"]
+        router.registry.return_value.resolve.return_value = "gemini-2.5-flash"
+        router.registry.return_value.names.return_value = ["deploy-openai"]
         non_vertex_deployment = MagicMock()
         non_vertex_deployment.litellm_params.custom_llm_provider = "openai"
         non_vertex_deployment.litellm_params.model = "gpt-4o"
-        router.get_deployment = MagicMock(return_value=non_vertex_deployment)
+        router.registry.return_value.deployment = MagicMock(return_value=non_vertex_deployment)
         instance = self._instance(track_unmanaged=True, router=router)
         prom = MagicMock()
 
@@ -1791,13 +1792,13 @@ class TestUnmanagedVertexRouting:
 
     def test_flag_on_uses_later_vertex_deployment_with_matching_suffix(self):
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = "azure-gemini"
-        router.get_model_ids.return_value = ["deploy-azure"]
+        router.registry.return_value.resolve.return_value = "azure-gemini"
+        router.registry.return_value.names.return_value = ["deploy-azure"]
         non_vertex_deployment = MagicMock()
         non_vertex_deployment.litellm_params.custom_llm_provider = "azure"
         non_vertex_deployment.litellm_params.model = "azure/gemini-2.5-flash"
-        router.get_deployment = MagicMock(return_value=non_vertex_deployment)
-        router.get_model_list.return_value = [
+        router.registry.return_value.deployment = MagicMock(return_value=non_vertex_deployment)
+        router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "azure-gemini",
                 "litellm_params": {
@@ -1821,13 +1822,13 @@ class TestUnmanagedVertexRouting:
             result = instance._resolve_job_routing(self._job(), MagicMock())
 
         assert result == ("deploy-vertex", "8823717160934178816")
-        router.get_model_ids.assert_called_once_with(model_name="azure-gemini")
+        router.registry.return_value.names.assert_called_once_with("azure-gemini", kind="ids")
 
     def test_flag_on_no_matching_deployment_records_metric(self):
         """Flag on but no vertex_ai deployment for the model: skip with a distinct metric."""
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = None
-        router.get_model_ids.return_value = []
+        router.registry.return_value.resolve.return_value = None
+        router.registry.return_value.names.return_value = []
         instance = self._instance(track_unmanaged=True, router=router)
         prom = MagicMock()
 
@@ -1850,7 +1851,7 @@ class TestUnmanagedVertexRouting:
 
         assert result is None
         prom.record_check_batch_cost_error.assert_called_once_with("invalid_unified_id")
-        router.resolve_model_name_from_model_id.assert_not_called()
+        router.registry.return_value.resolve.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_end_to_end_costs_unmanaged_batch(self):
@@ -1858,8 +1859,8 @@ class TestUnmanagedVertexRouting:
         computes cost, and marks batch_processed=True. Fails before this change (the row is
         skipped at the unified-id gate)."""
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = "gemini-2.5-flash"
-        router.get_model_ids.return_value = ["deploy-1"]
+        router.registry.return_value.resolve.return_value = "gemini-2.5-flash"
+        router.registry.return_value.names.return_value = ["deploy-1"]
 
         mock_response: Final = LiteLLMBatch(
             id="8823717160934178816",
@@ -1872,7 +1873,7 @@ class TestUnmanagedVertexRouting:
             object="batch",
         )
         router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        router.get_deployment_credentials_with_provider = MagicMock(
+        router.registry.return_value.credentials = MagicMock(
             return_value={"vertex_project": "p", "vertex_location": "us-central1"}
         )
 
@@ -1881,7 +1882,7 @@ class TestUnmanagedVertexRouting:
         deployment.litellm_params.model = "vertex_ai/gemini-2.5-flash"
         deployment.model_name = "gemini-2.5-flash"
         deployment.model_info.model_dump.return_value = {}
-        router.get_deployment = MagicMock(return_value=deployment)
+        router.registry.return_value.deployment = MagicMock(return_value=deployment)
 
         instance = self._instance(track_unmanaged=True, router=router)
         instance.proxy_logging_obj.get_proxy_hook.return_value = None
@@ -1985,16 +1986,16 @@ class TestUnmanagedBedrockRouting:
 
         assert result is None
         prom.record_check_batch_cost_error.assert_called_once_with("invalid_unified_id")
-        router.resolve_model_name_from_model_id.assert_not_called()
-        router.get_model_ids.assert_not_called()
+        router.registry.return_value.resolve.assert_not_called()
+        router.registry.return_value.names.assert_not_called()
 
     def test_flag_on_routes_to_bedrock_deployment(self):
         """Flag on: derive the bare model from the s3:// object key (":" restored to "-" is
         matched fuzzily), resolve it to a deployment id, and use the raw ARN as the batch id."""
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = "claude-sonnet-4"
-        router.get_model_ids.return_value = ["deploy-1"]
-        router.get_deployment = MagicMock(return_value=self._bedrock_deployment())
+        router.registry.return_value.resolve.return_value = "claude-sonnet-4"
+        router.registry.return_value.names.return_value = ["deploy-1"]
+        router.registry.return_value.deployment = MagicMock(return_value=self._bedrock_deployment())
         instance = self._instance(track_unmanaged=True, router=router)
 
         with patch(_IS_B64, return_value=False):
@@ -2006,12 +2007,12 @@ class TestUnmanagedBedrockRouting:
         """Flag on, but the only deployment for the model group is a non-bedrock provider:
         must not be selected, even though the model group name matches."""
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = "claude-sonnet-4"
-        router.get_model_ids.return_value = ["deploy-anthropic"]
+        router.registry.return_value.resolve.return_value = "claude-sonnet-4"
+        router.registry.return_value.names.return_value = ["deploy-anthropic"]
         non_bedrock_deployment = MagicMock()
         non_bedrock_deployment.litellm_params.custom_llm_provider = "anthropic"
         non_bedrock_deployment.litellm_params.model = "claude-sonnet-4-20250514"
-        router.get_deployment = MagicMock(return_value=non_bedrock_deployment)
+        router.registry.return_value.deployment = MagicMock(return_value=non_bedrock_deployment)
         instance = self._instance(track_unmanaged=True, router=router)
         prom = MagicMock()
 
@@ -2025,9 +2026,9 @@ class TestUnmanagedBedrockRouting:
         """The S3 object key has ':' replaced with '-' (e.g. 'v1-0'), but the configured
         deployment's actual bedrock model id uses ':' (e.g. 'v1:0'). Routing must still match."""
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = None
-        router.get_model_ids.return_value = []
-        router.get_model_list.return_value = [
+        router.registry.return_value.resolve.return_value = None
+        router.registry.return_value.names.return_value = []
+        router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "claude-sonnet-4",
                 "litellm_params": {
@@ -2047,9 +2048,9 @@ class TestUnmanagedBedrockRouting:
     def test_flag_on_no_matching_deployment_records_metric(self):
         """Flag on but no bedrock deployment for the model: skip with a distinct metric."""
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = None
-        router.get_model_ids.return_value = []
-        router.get_model_list.return_value = []
+        router.registry.return_value.resolve.return_value = None
+        router.registry.return_value.names.return_value = []
+        router.registry.return_value.deployments.return_value = []
         instance = self._instance(track_unmanaged=True, router=router)
         prom = MagicMock()
 
@@ -2072,15 +2073,15 @@ class TestUnmanagedBedrockRouting:
 
         assert result is None
         prom.record_check_batch_cost_error.assert_called_once_with("invalid_unified_id")
-        router.resolve_model_name_from_model_id.assert_not_called()
+        router.registry.return_value.resolve.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_end_to_end_costs_unmanaged_batch(self):
         """Flag on, completed unmanaged batch: the poller polls Bedrock with the raw ARN,
         computes cost, and marks batch_processed=True."""
         router = MagicMock()
-        router.resolve_model_name_from_model_id.return_value = "claude-sonnet-4"
-        router.get_model_ids.return_value = ["deploy-1"]
+        router.registry.return_value.resolve.return_value = "claude-sonnet-4"
+        router.registry.return_value.names.return_value = ["deploy-1"]
 
         mock_response: Final = LiteLLMBatch(
             id=self._ARN,
@@ -2093,12 +2094,12 @@ class TestUnmanagedBedrockRouting:
             object="batch",
         )
         router.aretrieve_batch = AsyncMock(return_value=mock_response)
-        router.get_deployment_credentials_with_provider = MagicMock(return_value={"aws_region_name": "us-east-1"})
+        router.registry.return_value.credentials = MagicMock(return_value={"aws_region_name": "us-east-1"})
 
         deployment = self._bedrock_deployment()
         deployment.model_name = "claude-sonnet-4"
         deployment.model_info.model_dump.return_value = {}
-        router.get_deployment = MagicMock(return_value=deployment)
+        router.registry.return_value.deployment = MagicMock(return_value=deployment)
 
         instance = self._instance(track_unmanaged=True, router=router)
         instance.proxy_logging_obj.get_proxy_hook.return_value = None
@@ -2171,11 +2172,11 @@ class TestUnmanagedBatchCostFlagIsGeneralized:
         )
 
         router = MagicMock()
-        router.resolve_model_name_from_model_id.side_effect = [
+        router.registry.return_value.resolve.side_effect = [
             "gemini-2.5-flash",
             "claude-sonnet-4",
         ]
-        router.get_model_ids.side_effect = [["deploy-vertex"], ["deploy-bedrock"]]
+        router.registry.return_value.names.side_effect = [["deploy-vertex"], ["deploy-bedrock"]]
 
         def _get_deployment(model_id):
             if model_id == "deploy-vertex":
@@ -2188,7 +2189,7 @@ class TestUnmanagedBatchCostFlagIsGeneralized:
             deployment.litellm_params.model = "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"
             return deployment
 
-        router.get_deployment = MagicMock(side_effect=_get_deployment)
+        router.registry.return_value.deployment = MagicMock(side_effect=_get_deployment)
 
         instance = CheckBatchCost(
             proxy_logging_obj=MagicMock(),
@@ -2264,13 +2265,13 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
         from litellm.types.utils import LiteLLMBatch
 
         router = MagicMock()
-        router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+        router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
         deployment = MagicMock()
         deployment.litellm_params.custom_llm_provider = "azure"
         deployment.litellm_params.model = "azure/gpt-5.5"
         deployment.model_name = self._PUBLIC_MODEL_GROUP
         deployment.model_info.model_dump.return_value = {}
-        router.get_deployment = MagicMock(return_value=deployment)
+        router.registry.return_value.deployment = MagicMock(return_value=deployment)
 
         hook = MagicMock(spec=ManagedBatchOutputFileWriter)
         hook.get_unified_output_file_id = lambda output_file_id, model_id, model_name: (
@@ -2788,7 +2789,7 @@ class TestPollPageStarvation:
             ]
         )
         llm_router = MagicMock()
-        llm_router.get_deployment = MagicMock(return_value=None)
+        llm_router.registry.return_value.deployment = MagicMock(return_value=None)
         llm_router.aretrieve_batch = AsyncMock(
             side_effect=litellm.NotFoundError(
                 message="No batch found with id 'batch_alive'.",
@@ -3211,8 +3212,8 @@ class TestMultiPodBatchCostClaim:
 
         router = MagicMock()
         router.aretrieve_batch = AsyncMock(return_value=response)
-        router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
-        router.get_deployment = MagicMock(return_value=deployment)
+        router.registry.return_value.credentials = MagicMock(return_value={"api_key": "sk-test"})
+        router.registry.return_value.deployment = MagicMock(return_value=deployment)
         return router
 
     @staticmethod
@@ -3261,7 +3262,7 @@ class TestMultiPodBatchCostClaim:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=_batch_cost_result(0.01, {"prompt_tokens": 10, "completion_tokens": 5}, ["gpt-4"]),
+                return_value=_batch_cost_result(0.01, {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}, ["gpt-4"]),
             ),
             patch(
                 "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
@@ -3370,7 +3371,7 @@ class TestMultiPodBatchCostClaim:
         )
         prisma: Final = self._prisma(row, [])
         router: Final = self._router()
-        router.get_deployment.return_value = Deployment(
+        router.registry.return_value.deployment.return_value = Deployment(
             model_name="batch-alias",
             litellm_params=LiteLLM_Params(model="openai/batch-test-model"),
             model_info=ModelInfo(id="model-123"),
@@ -3491,7 +3492,7 @@ class TestMultiPodBatchCostClaim:
         )
         prisma: Final = self._prisma(row, [])
         router: Final = self._router()
-        router.get_deployment.return_value = Deployment(
+        router.registry.return_value.deployment.return_value = Deployment(
             model_name="batch-alias",
             litellm_params=LiteLLM_Params(model=deployment_model, custom_llm_provider="openai"),
             model_info=ModelInfo(id="model-123"),
@@ -3506,7 +3507,7 @@ class TestMultiPodBatchCostClaim:
             object="batch",
             status="completed",
         )
-        router.get_deployment_credentials_with_provider.return_value = {
+        router.registry.return_value.credentials.return_value = {
             "api_key": "synthetic-key",
             "custom_llm_provider": "openai",
         }
@@ -3676,7 +3677,17 @@ class TestMultiPodBatchCostClaim:
 
         assert journal == ["fetch", "claim", "bill"]
         assert row.status == "complete"
-        assert json.loads(row.file_object)["usage"] == {"prompt_tokens": 10, "completion_tokens": 5}
+        assert json.loads(row.file_object)["usage"] == {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "prompt_tokens_details": None,
+            "completion_tokens_details": None,
+            "input_tokens": 10,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 5,
+            "output_tokens_details": {"reasoning_tokens": 0},
+        }
         logging_obj.async_success_handler.assert_awaited_once()
         assert row.batch_processed is True
 
@@ -4349,9 +4360,9 @@ class TestBatchLineItemsFromThePoller:
         row, instance = self._setup(journal)
         logger = self._recording_logger(journal)
         monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
-        deployment = instance.llm_router.get_deployment.return_value
-        instance.llm_router.get_deployment = MagicMock(
-            side_effect=lambda **_: None if instance._poll_idle.is_set() else deployment
+        deployment = instance.llm_router.registry.return_value.deployment.return_value
+        instance.llm_router.registry.return_value.deployment = MagicMock(
+            side_effect=lambda _model_id: None if instance._poll_idle.is_set() else deployment
         )
 
         with self._provider(journal), caplog.at_level(logging.ERROR):
@@ -5027,8 +5038,10 @@ async def test_batch_cost_reaches_configured_success_callbacks(
         proxy_logging_obj=SimpleNamespace(get_proxy_hook=lambda _: None),
         prisma_client=prisma,
         llm_router=SimpleNamespace(
-            get_deployment_credentials_with_provider=lambda _: credentials,
-            get_deployment=lambda **_: deployment,
+            registry=lambda: SimpleNamespace(
+                credentials=lambda _model_id, form: credentials,
+                deployment=lambda _model_id: deployment,
+            ),
         ),
     )
     job: Final = SimpleNamespace(

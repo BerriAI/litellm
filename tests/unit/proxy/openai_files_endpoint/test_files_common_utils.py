@@ -21,12 +21,13 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import InternalUsageCache, handle_exception_on_proxy
 from litellm.types.utils import LiteLLMBatch
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 _RAW_MODEL_WITH_PROMPT: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
 
 
 def test_get_credentials_for_model_rejects_an_unknown_model_without_persisting_the_raw_model():
-    llm_router: Final = MagicMock()
+    llm_router: Final = route_entry_points_to_stubs(MagicMock())
     llm_router.get_deployment_credentials_with_provider.return_value = None
 
     with pytest.raises(ProxyModelNotFoundError) as raised:
@@ -406,7 +407,7 @@ def test_add_internal_model_credentials_attaches_an_immutable_snapshot():
         add_internal_model_credentials,
     )
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment_credentials_with_provider = MagicMock(
         return_value={"s3_bucket_name": "configured-bucket", "aws_region_name": "us-east-1"}
     )
@@ -434,7 +435,7 @@ def test_add_internal_model_credentials_is_a_noop_without_a_resolvable_deploymen
         add_internal_model_credentials,
     )
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment_credentials_with_provider = MagicMock(return_value=credentials)
     data = {"batch_id": "unified-batch-id"}
 
@@ -451,7 +452,7 @@ def test_add_internal_model_credentials_survives_a_failing_deployment_lookup():
         add_internal_model_credentials,
     )
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=KeyError("deployment-gone"))
     data = {"batch_id": "unified-batch-id"}
 

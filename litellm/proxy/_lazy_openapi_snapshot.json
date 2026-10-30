@@ -1648,7 +1648,7 @@
       },
       "/access_group/{access_group}/update": {
         "put": {
-          "description": "Update an access group's model names.\n\nThis will:\n1. Remove the access group from all current deployments\n2. Add the access group to all deployments for the new model_names list\n\nExample:\n```bash\ncurl -X PUT 'http://localhost:4000/access_group/production-models/update' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model_names\": [\"gpt-4\", \"claude-3-sonnet\"]\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n- model_names: List[str] - New list of model groups to include\n\nReturns:\n- NewModelGroupResponse with the updated access group details\n\nRaises:\n- HTTPException 400: If any model names don't exist\n- HTTPException 404: If access group not found",
+          "description": "Update an access group's model names.\n\nThis will:\n1. Add the access group to all deployments for the new model_names list\n2. Remove the access group from every other deployment\n\nExample:\n```bash\ncurl -X PUT 'http://localhost:4000/access_group/production-models/update' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model_names\": [\"gpt-4\", \"claude-3-sonnet\"]\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n- model_names: List[str] - New list of model groups to include\n\nReturns:\n- NewModelGroupResponse with the updated access group details\n\nRaises:\n- HTTPException 400: If any model names don't exist\n- HTTPException 404: If access group not found\n- HTTPException 409: If another edit holds the group or one of its models for 30 s",
           "operationId": "update_access_group_access_group__access_group__update_put",
           "parameters": [
             {
@@ -7816,7 +7816,7 @@
     "paths": {
       "/claude-code/marketplace.json": {
         "get": {
-          "description": "Serve marketplace.json for Claude Code plugin discovery.\n\nThis endpoint is accessed by Claude Code CLI when users run:\n- claude plugin marketplace add <url>\n- claude plugin install <name>@<marketplace>\n\nWithout `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`\nthe key is authenticated and the catalog also holds the disabled plugins granted\nto it through `object_permission.skills` or an access group on the key or its team.\n\nReturns:\n    Marketplace catalog with list of available plugins and their git sources.\n\nExample:\n    ```bash\n    claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json\n    claude plugin marketplace add \"http://localhost:4000/claude-code/marketplace.json?key=sk-...\"\n    claude plugin install my-plugin@litellm\n    ```",
+          "description": "Serve marketplace.json for Claude Code plugin discovery.\n\nThis endpoint is accessed by Claude Code CLI when users run:\n- claude plugin marketplace add <url>\n- claude plugin install <name>@<marketplace>\n\nWithout a key the catalog holds the enabled (public) plugins. With `?key=sk-...`\nthe key is authenticated and the catalog also holds the disabled plugins granted\nto it through `object_permission.skills` or an access group on the key or its team.\n\nWith `general_settings.claude_code_marketplace_auth_required: true` the key must come\nin the `Authorization` or `x-litellm-api-key` header (Claude Code sends them from the\nmarketplace source's `headers`), `?key=` is ignored, and a caller with no valid key\ngets a 401 with `WWW-Authenticate: Bearer`.\n\nReturns:\n    Marketplace catalog with list of available plugins and their git sources.\n\nExample:\n    ```bash\n    claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json\n    claude plugin marketplace add \"http://localhost:4000/claude-code/marketplace.json?key=sk-...\"\n    claude plugin install my-plugin@litellm\n    ```",
           "operationId": "get_marketplace_claude_code_marketplace_json_get",
           "parameters": [
             {
@@ -18332,6 +18332,7 @@
                 {
                   "enum": [
                     "block",
+                    "mask",
                     "monitor",
                     "inject_system_message"
                   ],
@@ -18342,7 +18343,7 @@
                 }
               ],
               "default": "block",
-              "description": "Action to take when content is flagged: 'block' (raise exception), 'monitor' (log only), or 'inject_system_message' (append an advisory system message and let the LLM decide)",
+              "description": "Action to take when content is flagged: 'block' (raise exception), 'mask' (mask PII-only detections and allow, block anything else), 'monitor' (log only), or 'inject_system_message' (append an advisory system message and let the LLM decide)",
               "title": "On Flagged"
             },
             "on_flagged_action": {
@@ -23169,6 +23170,39 @@
           "title": "CachedTokensDetails",
           "type": "object"
         },
+        "ChoiceAnswer": {
+          "additionalProperties": true,
+          "properties": {
+            "choice": {
+              "title": "Choice",
+              "type": "string"
+            },
+            "confidence": {
+              "title": "Confidence",
+              "type": "number"
+            },
+            "probabilities": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "title": "Probabilities",
+              "type": "object"
+            },
+            "type": {
+              "const": "choice",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "choice",
+            "confidence",
+            "probabilities"
+          ],
+          "title": "ChoiceAnswer",
+          "type": "object"
+        },
         "Click": {
           "additionalProperties": true,
           "description": "A click action.",
@@ -23931,6 +23965,112 @@
             "detail"
           ],
           "title": "ErrorResponse",
+          "type": "object"
+        },
+        "EuJevDecisionResponse": {
+          "properties": {
+            "answers": {
+              "additionalProperties": {
+                "discriminator": {
+                  "mapping": {
+                    "choice": "#/components/schemas/ChoiceAnswer",
+                    "noul": "#/components/schemas/NoulAnswer",
+                    "score": "#/components/schemas/ScoreAnswer"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ChoiceAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/NoulAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ScoreAnswer"
+                  }
+                ]
+              },
+              "description": "One answer per question, under the same names",
+              "title": "Answers",
+              "type": "object"
+            },
+            "meta": {
+              "$ref": "#/components/schemas/EuJevMeta"
+            },
+            "model": {
+              "description": "The release that answered, such as eu-jeff-1.0.0",
+              "title": "Model",
+              "type": "string"
+            },
+            "usage": {
+              "$ref": "#/components/schemas/EuJevUsage"
+            }
+          },
+          "required": [
+            "model",
+            "answers",
+            "usage",
+            "meta"
+          ],
+          "title": "EuJevDecisionResponse",
+          "type": "object"
+        },
+        "EuJevMeta": {
+          "properties": {
+            "cost_eur": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The exact charge in euros, on authenticated requests",
+              "title": "Cost Eur"
+            },
+            "latency_ms": {
+              "description": "Server-side time for token quoting, credit reservation and inference",
+              "title": "Latency Ms",
+              "type": "integer"
+            },
+            "mode": {
+              "const": "live",
+              "title": "Mode",
+              "type": "string"
+            },
+            "request_id": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "request_id",
+            "mode",
+            "latency_ms"
+          ],
+          "title": "EuJevMeta",
+          "type": "object"
+        },
+        "EuJevUsage": {
+          "properties": {
+            "input_tokens": {
+              "minimum": 0.0,
+              "title": "Input Tokens",
+              "type": "integer"
+            },
+            "output_tokens": {
+              "minimum": 0.0,
+              "title": "Output Tokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "input_tokens",
+            "output_tokens"
+          ],
+          "title": "EuJevUsage",
           "type": "object"
         },
         "FileSearchTool": {
@@ -25591,6 +25731,26 @@
             "type"
           ],
           "title": "NamespaceTool",
+          "type": "object"
+        },
+        "NoulAnswer": {
+          "additionalProperties": true,
+          "properties": {
+            "noul": {
+              "title": "Noul",
+              "type": "number"
+            },
+            "type": {
+              "const": "noul",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "noul"
+          ],
+          "title": "NoulAnswer",
           "type": "object"
         },
         "OperationCreateFile": {
@@ -28865,6 +29025,59 @@
           "title": "Result",
           "type": "object"
         },
+        "ScoreAnswer": {
+          "additionalProperties": true,
+          "properties": {
+            "confidence": {
+              "title": "Confidence",
+              "type": "number"
+            },
+            "legend": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "items": {},
+                    "type": "array"
+                  }
+                ]
+              },
+              "title": "Legend",
+              "type": "object"
+            },
+            "probabilities": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "title": "Probabilities",
+              "type": "object"
+            },
+            "score": {
+              "title": "Score",
+              "type": "number"
+            },
+            "type": {
+              "const": "score",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "score",
+            "confidence",
+            "legend",
+            "probabilities"
+          ],
+          "title": "ScoreAnswer",
+          "type": "object"
+        },
         "Screenshot": {
           "additionalProperties": true,
           "description": "A screenshot action.",
@@ -31757,6 +31970,315 @@
           ]
         }
       },
+      "/eu_jev/v1/systemone": {
+        "post": {
+          "description": "Forward a request to eu/jev, an EU-hosted decision API, with `EU_JEV_API_KEY`.\n\n`POST /eu_jev/v1/systemone` sends a `state` and one to eight named `questions` (`choice`, `noul` or `score`)\nand returns one answer per question name, with spend booked from the reported `usage`. `custom_body` and\n`stream` are rejected with a 400. A pass-through endpoint configured at this path keeps serving it.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)",
+          "operationId": "eu_jev_proxy_route_eu_jev_v1_systemone_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "model": "eu-jeff-latest",
+                  "questions": {
+                    "frustration": {
+                      "criteria": [
+                        "calm",
+                        "mildly annoyed",
+                        "angry"
+                      ],
+                      "instructions": "How frustrated is the customer?",
+                      "type": "score"
+                    },
+                    "is_refund_request": {
+                      "instructions": "Is the customer asking for a refund?",
+                      "type": "noul"
+                    },
+                    "team": {
+                      "criteria": {
+                        "billing": "Payments, invoices, and refunds",
+                        "support": "Technical issues and bugs"
+                      },
+                      "instructions": "Which team should handle this?",
+                      "type": "choice"
+                    }
+                  },
+                  "state": "I was charged twice. Can I get a refund?"
+                },
+                "schema": {
+                  "properties": {
+                    "model": {
+                      "default": "eu-jeff-latest",
+                      "description": "eu-jeff-latest follows the current release, eu-jeff-1.0.0 pins it",
+                      "title": "Model",
+                      "type": "string"
+                    },
+                    "questions": {
+                      "additionalProperties": {
+                        "discriminator": {
+                          "propertyName": "type"
+                        },
+                        "oneOf": [
+                          {
+                            "properties": {
+                              "criteria": {
+                                "additionalProperties": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference"
+                                },
+                                "description": "Two to 64 options, option name to description. A null description uses the option name",
+                                "maxProperties": 64,
+                                "minProperties": 2,
+                                "title": "Criteria",
+                                "type": "object"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "choice",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "criteria"
+                            ],
+                            "title": "EuJevChoiceQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "properties": {
+                              "criteria": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "additionalProperties": true,
+                                          "type": "object"
+                                        },
+                                        {
+                                          "items": {},
+                                          "type": "array"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "propertyNames": {
+                                      "enum": [
+                                        "true",
+                                        "false"
+                                      ]
+                                    },
+                                    "type": "object"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Optional descriptions of what true and false mean",
+                                "title": "Criteria"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "noul",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions"
+                            ],
+                            "title": "EuJevNoulQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "properties": {
+                              "criteria": {
+                                "description": "Two to 10 level descriptions, ordered from low to high",
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference"
+                                },
+                                "maxItems": 10,
+                                "minItems": 2,
+                                "title": "Criteria",
+                                "type": "array"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Free text, or a JSON object, array or null that eu/jev serializes to text before inference",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "score",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "criteria"
+                            ],
+                            "title": "EuJevScoreQuestion",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "description": "One to eight questions, keyed by names of up to 80 characters",
+                      "maxProperties": 8,
+                      "minProperties": 1,
+                      "propertyNames": {
+                        "maxLength": 80,
+                        "minLength": 1
+                      },
+                      "title": "Questions",
+                      "type": "object"
+                    },
+                    "state": {
+                      "anyOf": [
+                        {
+                          "maxLength": 100000,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        {
+                          "items": {},
+                          "type": "array"
+                        }
+                      ],
+                      "description": "The content to evaluate, a string of up to 100,000 characters or a JSON object or array",
+                      "title": "State"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "questions"
+                  ],
+                  "title": "EuJevDecisionRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/EuJevDecisionResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Eu Jev Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
       "/fal_ai/{endpoint}": {
         "delete": {
           "operationId": "fal_ai_proxy_route_fal_ai__endpoint__delete",
@@ -33639,7 +34161,7 @@
           ]
         },
         "get": {
-          "description": "Get a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Returns cumulative cached content from background responses\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/get\n\n```bash\n# Get polling response\ncurl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n\n# Get provider response\ncurl -X GET http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```",
+          "description": "Get a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Returns cumulative cached content from background responses\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/get\n\n```bash\n# Get polling response\ncurl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n\n# Get provider response\ncurl -X GET http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n\n# Resume a background response's event stream after sequence number 7\ncurl -N \"http://localhost:4000/v1/responses/resp_abc123?stream=true&starting_after=7\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```",
           "operationId": "get_response_openai_v1_responses__response_id__get",
           "parameters": [
             {
@@ -33650,6 +34172,46 @@
                 "title": "Response Id",
                 "type": "string"
               }
+            },
+            {
+              "description": "Replay the response's events as server-sent events (OpenAI, Azure, and Azure AI Foundry)",
+              "in": "query",
+              "name": "stream",
+              "required": false,
+              "schema": {
+                "type": "boolean"
+              }
+            },
+            {
+              "description": "With stream=true, replay only the events after this sequence number",
+              "in": "query",
+              "name": "starting_after",
+              "required": false,
+              "schema": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            {
+              "description": "Additional output data to include, forwarded to the provider",
+              "in": "query",
+              "name": "include",
+              "required": false,
+              "schema": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            {
+              "description": "With stream=true, whether delta events carry obfuscation padding",
+              "in": "query",
+              "name": "include_obfuscation",
+              "required": false,
+              "schema": {
+                "type": "boolean"
+              }
             }
           ],
           "responses": {
@@ -33658,6 +34220,12 @@
                 "application/json": {
                   "schema": {
                     "$ref": "#/components/schemas/ResponsesAPIResponse"
+                  }
+                },
+                "text/event-stream": {
+                  "schema": {
+                    "description": "Server sent events when stream=true",
+                    "type": "string"
                   }
                 }
               },

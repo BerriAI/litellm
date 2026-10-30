@@ -155,6 +155,25 @@ def test_vertex_ai_anthropic_web_search_header_in_completion():
     ), "anthropic-beta with web-search should not be present for non-Vertex requests"
 
 
+def test_vertex_ai_anthropic_chat_adds_the_betas_for_bound_thinking_with_display_updates() -> None:
+    thinking: Final = {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+    result: Final = VertexAIAnthropicConfig().transform_request(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"thinking": thinking, "max_tokens": 100, "is_vertex_request": True},
+        litellm_params={},
+        headers={},
+    )
+    assert result["thinking"] == thinking
+    assert {"thinking-binding-controls-2026-08-01", "thinking-display-updates-2026-08-18"} <= set(
+        result["anthropic_beta"]
+    )
+
+
 def test_vertex_ai_anthropic_context_management_compact_beta_header():
     """Test that context_management with compact adds the correct beta header for Vertex AI"""
     config = VertexAIAnthropicConfig()

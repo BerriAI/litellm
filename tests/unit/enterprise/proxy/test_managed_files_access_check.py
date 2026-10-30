@@ -328,7 +328,7 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
     # Mock router
     mock_router = MagicMock()
     mock_router.aretrieve_batch = AsyncMock(return_value=batch_response)
-    mock_router.get_deployment_credentials_with_provider = MagicMock(
+    mock_router.registry.return_value.credentials = MagicMock(
         return_value={
             "api_key": "test-key",
             "api_base": "https://test.azure.com/",
@@ -339,7 +339,7 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
     mock_deployment = MagicMock()
     mock_deployment.litellm_params.custom_llm_provider = "azure"
     mock_deployment.litellm_params.model = "azure/gpt-4"
-    mock_router.get_deployment = MagicMock(return_value=mock_deployment)
+    mock_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
     checker = CheckBatchCost(
         proxy_logging_obj=mock_proxy_logging,

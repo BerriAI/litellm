@@ -16,7 +16,7 @@ def raise_if_teams_hold_ptu_shares(team_ids: Sequence[str], llm_router: Router |
     held: Final = tuple(
         (team_id, deployment_ids)
         for team_id in team_ids
-        if (deployment_ids := deployments_shared_with(llm_router.get_model_list() or (), team_id))
+        if (deployment_ids := deployments_shared_with(llm_router.registry().deployments() or (), team_id))
     )
     if not held:
         return

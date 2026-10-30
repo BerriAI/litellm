@@ -17,6 +17,7 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
     COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY,
@@ -118,6 +119,23 @@ class TestGetMetadataVariableName:
 
     def test_returns_metadata_for_chat_completions(self):
         request = self._make_request("/chat/completions")
+        assert get_metadata_variable_name(request) == "metadata"
+
+    @pytest.mark.parametrize(
+        "body, expected",
+        [
+            ({"messages": [{"role": "user", "content": "hi"}]}, "metadata"),
+            ({"messages": []}, "metadata"),
+            ({"input": [{"role": "user", "content": "hi"}]}, "litellm_metadata"),
+            ({"input": "hi", "messages": []}, "litellm_metadata"),
+        ],
+    )
+    def test_cursor_route_picks_the_metadata_field_by_body_shape(self, body, expected):
+        request = self._make_request("/cursor/chat/completions")
+        assert get_metadata_variable_name(request, body) == expected
+
+    def test_cursor_route_without_a_body_keeps_the_route_answer(self):
+        request = self._make_request("/cursor/chat/completions")
         assert get_metadata_variable_name(request) == "metadata"
 
     def test_returns_metadata_for_completions(self):
@@ -681,6 +699,45 @@ async def test_add_litellm_data_to_request_rejects_non_object_metadata(field, va
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/chat/completions", "/v1/responses", "/cursor/chat/completions"])
+@pytest.mark.parametrize("value, received_type", [("junk", "a string"), (5, "an integer"), ([1], "an array")])
+async def test_invalid_litellm_metadata_answers_400_when_metadata_carries_tags(route, value, received_type):
+    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.proxy.utils import ProxyLogging
+
+    data = {"model": "gpt-4o", "input": "hi", "metadata": {"tags": ["client-tag"]}, "litellm_metadata": value}
+    request = _batches_request_mock()
+    await common_checks(
+        request_body=data,
+        team_object=None,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route=route,
+        llm_router=None,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+        valid_token=UserAPIKeyAuth(api_key="hashed-key"),
+        request=request,
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.message == (
+        f"Invalid type for 'litellm_metadata': expected an object, but got {received_type} instead."
+    )
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_removes_every_invalid_metadata_field_before_raising():
     """When both fields are invalid, the raise for the first must not leave the
     second invalid value in data, or failure-logging hooks that inspect the body
@@ -1202,24 +1259,35 @@ def test_body_snapshot_excludes_team_callback_credentials() -> None:
     }, proxy_request
 
 
-def test_body_snapshot_keeps_the_stream_usage_injection_marker_out_of_the_stored_request() -> None:
+@pytest.mark.parametrize(
+    ("route_type", "request_input"),
+    [
+        ("acompletion", {"messages": [{"role": "user", "content": "hi"}]}),
+        ("atext_completion", {"prompt": "hi"}),
+    ],
+)
+def test_body_snapshot_keeps_the_stream_usage_injection_marker_out_of_the_stored_request(
+    route_type: str, request_input: dict[str, object]
+) -> None:
     from litellm.proxy.common_request_processing import stream_usage_tracking_updates
     from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
     from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 
-    request: Final = {"model": "gpt-5-mini", "messages": [{"role": "user", "content": "hi"}], "stream": True}
+    request: Final = {"model": "gpt-5-mini", **request_input, "stream": True}
     proxy_request: Final = {"body": dict(request)}
     data: Final = {
         **request,
-        **stream_usage_tracking_updates(request, {}, "acompletion", lambda: True),
+        **stream_usage_tracking_updates(request, {}, route_type, lambda: True),
         "proxy_server_request": proxy_request,
     }
 
     refresh_proxy_server_request_body_snapshot(data)
 
     assert data[STREAM_USAGE_INJECTED_FIELD] is True
+    assert data["_litellm_strip_stream_usage"] is True
     assert proxy_request["body"]["stream_options"] == {"include_usage": True}
     assert STREAM_USAGE_INJECTED_FIELD not in proxy_request["body"]
+    assert "_litellm_strip_stream_usage" not in proxy_request["body"]
 
 
 @pytest.mark.asyncio
@@ -6861,7 +6929,7 @@ class TestApplyKeyTagsPreAuth:
 
 def test_resolve_provider_from_deployment_uses_litellm_params_model():
     """When custom_llm_provider is unset, fall back to the prefix of model."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     deployment = MagicMock()
     deployment.litellm_params.model = "bedrock/us.anthropic.claude-sonnet-4-6"
     deployment.litellm_params.custom_llm_provider = None
@@ -6872,7 +6940,7 @@ def test_resolve_provider_from_deployment_uses_litellm_params_model():
 
 def test_resolve_provider_from_deployment_prefers_custom_llm_provider():
     """Explicit custom_llm_provider on the deployment wins over model prefix."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     deployment = MagicMock()
     deployment.litellm_params.model = "us.anthropic.claude-sonnet-4-6"
     deployment.litellm_params.custom_llm_provider = "bedrock"
@@ -6883,21 +6951,21 @@ def test_resolve_provider_from_deployment_prefers_custom_llm_provider():
 
 def test_resolve_provider_from_deployment_no_match():
     """No deployment for the model group -> None."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment_by_model_group_name.return_value = None
     assert _resolve_provider_from_deployment(router, "unknown-model") is None
 
 
 def test_resolve_provider_from_deployment_router_raises():
     """Router exceptions must not propagate — fall back to None."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment_by_model_group_name.side_effect = RuntimeError("boom")
     assert _resolve_provider_from_deployment(router, "claude-sonnet-4.6") is None
 
 
 def test_resolve_provider_from_deployment_falls_back_to_pre_alias():
     """If post-alias lookup fails, the pre-alias name is also tried."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     deployment = MagicMock()
     deployment.litellm_params.model = "bedrock/anthropic.claude-sonnet-4-6"
     deployment.litellm_params.custom_llm_provider = None
@@ -6950,7 +7018,7 @@ def test_apply_overrides_multi_provider_default_picks_correct_provider(
         },
     )
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     deployment = MagicMock()
     deployment.litellm_params.model = "us.anthropic.claude-sonnet-4-6"
     deployment.litellm_params.custom_llm_provider = "bedrock"
@@ -7001,7 +7069,7 @@ def test_apply_overrides_provider_prefix_in_model_skips_router_lookup(
         },
     )
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     _apply_credential_overrides_from_model_config(data=data, user_api_key_dict=user_api_key_dict, llm_router=router)
     assert data["api_base"] == "https://hotel-eastus.openai.azure.com/"
     assert data["api_key"] == "key-hotel-eastus"
@@ -7023,24 +7091,30 @@ def _make_request_mock(path: str, headers: dict) -> MagicMock:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "user_agent, request_drop_params, operator_drop_params, expected_drop_params",
+    "user_agent, request_drop_params, operator_settings, expected_drop_params",
     [
-        ("claude-cli/2.0.69 (external, cli)", None, None, True),
-        ("claude-cli/1.0.44 (external, sdk-py)", None, None, True),
-        ("claude-cli/2.0.69 (external, cli)", False, None, False),
-        ("claude-cli/2.0.69 (external, cli)", None, False, None),
-        ("claude-cli/2.0.69 (external, cli)", None, True, None),
-        ("codex_cli_rs/0.144.5 (Mac OS 26.4.0; arm64) WezTerm", None, None, True),
-        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64) WarpTerminal (codex_exec; 0.144.5)", None, None, True),
-        ("codex_vscode/0.144.5 (Mac OS 26.4.0; arm64) vscode/1.104.1", None, None, True),
-        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", False, None, False),
-        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, True, None),
-        ("PostmanRuntime/7.53.0", None, None, None),
-        (None, None, None, None),
+        ("claude-cli/2.0.69 (external, cli)", None, {}, True),
+        ("claude-cli/1.0.44 (external, sdk-py)", None, {}, True),
+        ("claude-cli/2.0.69 (external, cli)", False, {}, False),
+        ("claude-cli/2.0.69 (external, cli)", None, {"drop_params": False}, None),
+        ("claude-cli/2.0.69 (external, cli)", None, {"drop_params": True}, True),
+        ("claude-cli/2.0.69 (external, cli)", None, {"drop_params": None}, True),
+        ("claude-cli/2.0.69 (external, cli)", None, {"drop_params": "false"}, None),
+        ("claude-cli/2.0.69 (external, cli)", None, {"drop_params": "maybe"}, True),
+        ("codex_cli_rs/0.144.5 (Mac OS 26.4.0; arm64) WezTerm", None, {}, True),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64) WarpTerminal (codex_exec; 0.144.5)", None, {}, True),
+        ("codex_vscode/0.144.5 (Mac OS 26.4.0; arm64) vscode/1.104.1", None, {}, True),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", False, {}, False),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, {"drop_params": False}, None),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, {"drop_params": True}, True),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, {"drop_params": " False "}, None),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, {"drop_params": "true"}, True),
+        ("PostmanRuntime/7.53.0", None, {}, None),
+        (None, None, {}, None),
     ],
 )
 async def test_add_litellm_data_to_request_agentic_cli_drop_params(
-    user_agent, request_drop_params, operator_drop_params, expected_drop_params
+    user_agent, request_drop_params, operator_settings, expected_drop_params
 ):
     """Claude Code sends Anthropic-specific params and Codex sends
     service_tier, both of which fail on providers that reject them, so those
@@ -7057,12 +7131,10 @@ async def test_add_litellm_data_to_request_agentic_cli_drop_params(
     if request_drop_params is not None:
         data["drop_params"] = request_drop_params
 
-    proxy_config = MagicMock()
-    proxy_config.config = (
-        {"litellm_settings": {"drop_params": operator_drop_params}}
-        if operator_drop_params is not None
-        else {"litellm_settings": {}}
-    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config.update_config_state(config={"litellm_settings": operator_settings})
 
     updated = await add_litellm_data_to_request(
         data=data,
@@ -7409,9 +7481,9 @@ def test_team_alias_targeting_deleted_team_deployment_keeps_requested_model(monk
     monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
-    class _MockRouter:
-        model_name_to_deployment_indices = {"gpt-4": [0]}
-        team_model_to_deployment_indices = {}
+    mock_router = route_entry_points_to_stubs(MagicMock())
+    mock_router.model_name_to_deployment_indices = {"gpt-4": [0]}
+    mock_router.team_model_to_deployment_indices = {}
 
     test_data = {"model": "gpt-4"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -7420,7 +7492,7 @@ def test_team_alias_targeting_deleted_team_deployment_keeps_requested_model(monk
         team_model_aliases={"gpt-4": "model_name_team-1_dead-uuid"},
     )
 
-    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router):
         _update_model_if_team_alias_exists(data=test_data, user_api_key_dict=user_api_key_dict)
 
     assert test_data.get("model") == "gpt-4"
@@ -7433,9 +7505,9 @@ def test_team_alias_targeting_live_team_deployment_still_rewrites(monkeypatch):
     monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
-    class _MockRouter:
-        model_name_to_deployment_indices = {"model_name_team-1_live-uuid": [0]}
-        team_model_to_deployment_indices = {}
+    mock_router = route_entry_points_to_stubs(MagicMock())
+    mock_router.model_name_to_deployment_indices = {"model_name_team-1_live-uuid": [0]}
+    mock_router.team_model_to_deployment_indices = {}
 
     test_data = {"model": "gpt-4"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -7444,7 +7516,7 @@ def test_team_alias_targeting_live_team_deployment_still_rewrites(monkeypatch):
         team_model_aliases={"gpt-4": "model_name_team-1_live-uuid"},
     )
 
-    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router):
         _update_model_if_team_alias_exists(data=test_data, user_api_key_dict=user_api_key_dict)
 
     assert test_data.get("model") == "model_name_team-1_live-uuid"
@@ -9932,7 +10004,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         self._env(monkeypatch)
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -9964,7 +10036,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         self._env(monkeypatch)
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -9995,7 +10067,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table = self._env(monkeypatch)
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10036,7 +10108,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table = self._env(monkeypatch)
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10071,13 +10143,16 @@ class TestResolveUserProviderCredentials:
         assert data["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
 
     @pytest.mark.asyncio
-    async def test_key_router_settings_fallback_loads_per_user_tokens(self, monkeypatch):
-        """The proxy prefers key/team router_settings.fallbacks over router-level
-        fallbacks (_configured_fallbacks), so discovery must read them too."""
+    @pytest.mark.parametrize("fallback_key", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
+    async def test_key_router_settings_fallback_loads_per_user_tokens(
+        self, monkeypatch: pytest.MonkeyPatch, fallback_key: str
+    ):
+        """The proxy forwards key/team router_settings fallback lists into the
+        request after discovery, so discovery must read every one of them."""
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table = self._env(monkeypatch)
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10103,7 +10178,7 @@ class TestResolveUserProviderCredentials:
             authenticated_user_id="user-a",
             team_id=None,
             llm_router=router,
-            router_settings={"fallbacks": [{"gpt-4o": [{"model": "copilot-chat"}]}]},
+            router_settings={fallback_key: [{"gpt-4o": [{"model": "copilot-chat"}]}]},
         )
         table.find_many.assert_awaited()
         assert data["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
@@ -10125,7 +10200,7 @@ class TestResolveUserProviderCredentials:
             return real_matcher(fallbacks=fallbacks, model_group=model_group)
 
         monkeypatch.setattr(feh, "get_fallback_model_group", _spy)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = [{"unmatched-%d" % i: ["x"]} for i in range(30_000)] + [{"*": ["generic-x"]}]
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10151,7 +10226,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table: Final = self._env(monkeypatch)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = [{"gpt-4o": ["copilot-chat"]}, {"gpt-4o": ["other-chat"]}]
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10189,7 +10264,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table: Final = self._env(monkeypatch)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         entries: Final = [{"azure/unmatched-%d" % i: ["x"]} for i in range(300)]
         entries.insert(290, {"*": ["copilot-chat"]})
         router.fallbacks = entries
@@ -10241,7 +10316,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         self._env(monkeypatch)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10270,7 +10345,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         self._env(monkeypatch)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10307,7 +10382,7 @@ class TestResolveUserProviderCredentials:
             return real_matcher(fallbacks=fallbacks, model_group=model_group)
 
         monkeypatch.setattr(feh, "get_fallback_model_group", _spy)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = [{"gpt-4o": ["copilot-chat"]}]
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10353,7 +10428,7 @@ class TestResolveUserProviderCredentials:
         table.find_many = AsyncMock(
             return_value=[SimpleNamespace(user_id="user-a", credential_name="copilot-cred", credential_b64=ciphertext)]
         )
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10384,7 +10459,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table: Final = self._env(monkeypatch)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10425,7 +10500,7 @@ class TestResolveUserProviderCredentials:
             return result
 
         monkeypatch.setattr(lpc, "_fallback_edges", _counting_edges)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = [{"*": ["target-%d" % i for i in range(4999)] + ["copilot-chat"]}]
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10464,7 +10539,7 @@ class TestResolveUserProviderCredentials:
 
         table = self._env(monkeypatch)
         monkeypatch.setattr(litellm, "model_alias_map", {"chat-alias": "copilot-chat"})
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10509,7 +10584,7 @@ class TestResolveUserProviderCredentials:
             "get_team_object",
             AsyncMock(return_value=SimpleNamespace(router_settings={"fallbacks": [{"gpt-4o": ["copilot-chat"]}]})),
         )
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10688,7 +10763,7 @@ class TestResolveUserProviderCredentials:
         from litellm.types.router import LiteLLM_Params
 
         self._env(monkeypatch)
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.get_model_list = MagicMock(
             return_value=[
                 {
@@ -11082,3 +11157,15 @@ def test_mapped_baggage_tags_keep_non_string_client_tags_as_sent():
     data: Final[dict[str, object]] = {"metadata": {"tags": [1, {"team": "x"}, "client-tag", "client-tag"]}}
     LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, data)
     assert data["metadata"]["tags"] == [1, {"team": "x"}, "client-tag", "client-tag", "tenant:a"]
+
+
+@pytest.mark.parametrize("caller_metadata", ({"tags": ["client-tag"]}, json.dumps({"tags": ["client-tag"]})))
+def test_caller_tags_reach_litellm_metadata_whether_metadata_is_a_dict_or_a_json_string(caller_metadata):
+    data: Final[dict[str, object]] = {
+        "input": "hi",
+        "metadata": caller_metadata,
+        "litellm_metadata": {"tags": ["key-tag"]},
+    }
+    LiteLLMProxyRequestSetup.merge_caller_body_tags(request_data=data)
+    assert set(data["litellm_metadata"]["tags"]) == {"key-tag", "client-tag"}
+    assert data["metadata"] == caller_metadata

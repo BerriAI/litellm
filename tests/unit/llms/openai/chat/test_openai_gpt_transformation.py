@@ -2,7 +2,9 @@
 Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation.py)
 """
 import base64
+import copy
 import json
+from collections.abc import Callable
 from typing import Final
 
 import pytest
@@ -1820,3 +1822,97 @@ class TestToolSchemaCombinatorFlatteningForOpenAI:
         )
 
         assert request["tools"][0] is tool
+
+
+def _developer_message_after_a_user_turn() -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "Hi there"},
+        {"role": "assistant", "content": "Hello!"},
+        {"role": "developer", "content": "Answer with exactly one word."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("config", "custom_llm_provider", "api_base", "declared", "expected_roles"),
+    [
+        (OpenAIGPTConfig(), "openai", "https://api.openai.com/v1", False, ["system", "user", "assistant", "system", "user"]),
+        (OpenAIGPT5Config(), "openai", "https://api.openai.com/v1", False, ["system", "user", "assistant", "system", "user"]),
+        (OpenAIGPTConfig(), "openai", "http://vllm.internal:8000/v1", None, ["system", "user", "assistant", "system", "user"]),
+        (OpenAIGPTConfig(), "openai", "http://vllm.internal:8000/v1", False, ["system", "user", "assistant", "user"]),
+        (OpenAIGPTConfig(), "groq", None, None, ["system", "user", "assistant", "system", "user"]),
+        (OpenAIGPTConfig(), "groq", None, False, ["system", "user", "assistant", "user"]),
+    ],
+)
+def test_translate_developer_role_hoists_a_later_developer_message_only_for_a_model_off_openai_that_rejects_it(
+    declare_mid_conversation_system: Callable[[str, bool], None],
+    config: OpenAIGPTConfig,
+    custom_llm_provider: str,
+    api_base: str | None,
+    declared: bool | None,
+    expected_roles: list[str],
+) -> None:
+    if declared is not None:
+        declare_mid_conversation_system(f"{custom_llm_provider}/system-first-model", declared)
+    messages: Final = config.translate_developer_role_to_system_role(
+        messages=_developer_message_after_a_user_turn(),
+        model="system-first-model",
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        model_info=None,
+    )
+    assert [message["role"] for message in messages] == expected_roles
+    assert "Answer with exactly one word." in [message["content"] for message in messages if message["role"] == "system"][-1]
+
+
+@pytest.mark.parametrize("role", [["user"], {"name": "user"}])
+@pytest.mark.parametrize(
+    ("declared", "expected_order"),
+    [(None, ("caller", "instruction")), (False, ("instruction", "caller"))],
+)
+def test_translate_developer_role_places_a_message_with_a_non_string_role_like_any_conversation_turn(
+    declare_mid_conversation_system: Callable[[str, bool], None],
+    role: object,
+    declared: bool | None,
+    expected_order: tuple[str, str],
+) -> None:
+    if declared is not None:
+        declare_mid_conversation_system("groq/system-first-model", declared)
+    caller_turn: Final = {"role": role, "content": "Hi there"}
+    by_name: Final = {"caller": caller_turn, "instruction": {"role": "system", "content": "Answer in one word."}}
+    messages: Final = OpenAIGPTConfig().translate_developer_role_to_system_role(
+        messages=[caller_turn, {"role": "developer", "content": "Answer in one word."}],
+        model="system-first-model",
+        custom_llm_provider="groq",
+        api_base=None,
+        model_info=None,
+    )
+    assert list(messages) == [by_name[name] for name in expected_order]
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_completion_leaves_the_callers_closing_developer_message_unchanged_on_a_system_first_deployment(
+    respx_mock: respx.MockRouter,
+) -> None:
+    chat: Final = respx_mock.post("http://vllm.internal:8000/v1/chat/completions").mock(
+        return_value=Response(200, json=_OPENAI_CHAT_REPLY)
+    )
+    messages: Final = [
+        {"role": "user", "content": "Describe the image."},
+        {"role": "assistant", "content": "Send it."},
+        {
+            "role": "developer",
+            "content": [{"type": "text", "text": "Look at this."}, {"type": "image_url", "image_url": "data:image/png;base64,aW1hZ2U="}],
+        },
+    ]
+    sent: Final = copy.deepcopy(messages)
+    litellm.completion(
+        model="openai/system-first-model",
+        api_base="http://vllm.internal:8000/v1",
+        api_key="sk-test",
+        messages=messages,
+        model_info={"id": "deployment-1", "supports_mid_conversation_system": False},
+    )
+    assert json.loads(chat.calls.last.request.content)["messages"][-1]["role"] == "user"
+    assert messages == sent

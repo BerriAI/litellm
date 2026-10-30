@@ -1085,7 +1085,8 @@ def test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls(gateway:
         mcp_peer() as peer,
         candidate.scenario() as scenario,
     ):
-        identity = register_mcp(scenario, peer, "guardrail" + uuid.uuid4().hex)
+        server = "guardrail" + uuid.uuid4().hex
+        identity = register_mcp(scenario, peer, server)
         permission = {"mcp_servers": [identity], "mcp_tool_search_enabled": True}
         key = scenario.key(object_permission=permission)
         key_selected = scenario.key(object_permission=permission, guardrails=[guardrail])
@@ -1116,8 +1117,10 @@ def test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls(gateway:
                 )
                 calls = tuple(item for item in peer.drain() if item["body"].get("method") == "tools/call")
                 if expected is None:
-                    assert response.status_code == 400, response.text
-                    assert "integration resolved add denied" in response.text, response.text
+                    assert response.status_code == 403, response.text
+                    assert response.json() == {
+                        "detail": {"error": f"Tool add is unavailable after MCP guardrail checks for server {server}."}
+                    }, response.text
                     assert calls == (), "pre-call denial must prevent upstream execution"
                 else:
                     assert response.status_code == 200, response.text
@@ -1902,11 +1905,20 @@ def test_messages_pre_call_denial_streams_message(gateway: Gateway, tmp_path: Pa
         )
         assert response.status_code == 200, response.text
         assert response.headers["content-type"].startswith("text/event-stream"), response.text
-        lines: Final = tuple(line for line in response.text.split("\n") if line.startswith("data: "))
-        assert len(lines) == 1, response.text
-        body: Final = json.loads(lines[0].removeprefix("data: "))
-        assert body["type"] == "message" and body["role"] == "assistant", body
-        assert body["content"] == [{"type": "text", "text": _RESPONSES_DENIAL}], body
+        events: Final = tuple(
+            json.loads(line.removeprefix("data: ")) for line in response.text.split("\n") if line.startswith("data: ")
+        )
+        assert [event["type"] for event in events] == [
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "content_block_stop",
+            "message_delta",
+            "message_stop",
+        ], response.text
+        assert events[0]["message"]["role"] == "assistant", events[0]
+        assert events[2]["delta"] == {"type": "text_delta", "text": _RESPONSES_DENIAL}, events[2]
+        assert events[4]["delta"]["stop_reason"] == "end_turn", events[4]
 
 
 @pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_writes_zero_spend_row")

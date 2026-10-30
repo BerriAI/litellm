@@ -17,6 +17,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm.anthropic_beta_gated_fields import strip_beta_gated_request_body
 from litellm.anthropic_beta_headers_manager import (
     update_request_with_filtered_beta,
 )
@@ -506,10 +507,19 @@ class AnthropicChatCompletion(BaseLLM):
             The pair stays mutable because the streaming path rewrites it in
             place (`data["stream"] = True`) before sending.
             """
-            request_headers, data = update_request_with_filtered_beta(
+            request_headers, filtered_data = update_request_with_filtered_beta(
                 headers=headers,
                 request_data=request_data,
                 provider=custom_llm_provider,
+            )
+            data: Final = dict(
+                strip_beta_gated_request_body(
+                    filtered_data,
+                    request_headers,
+                    drop_params=litellm_params.get("drop_params"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # litellm_params is the handler's bare dict
+                    model=model,
+                    provider=custom_llm_provider,
+                )
             )
             logging_obj.pre_call(
                 input=messages,

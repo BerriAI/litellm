@@ -1,3 +1,4 @@
+import asyncio
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -152,6 +153,28 @@ def test_get_openai_client_initialization_param_fields(client_type):
     assert isinstance(result, tuple)
     assert len(result) > 0
     assert "self" not in result
+
+
+def _loop_test_client_params(is_async: bool) -> dict[str, object]:
+    return {"api_key": "sk-loop-scope-test", "is_async": is_async}
+
+
+async def _cache_openai_client(client: openai.OpenAI | openai.AsyncOpenAI, is_async: bool) -> None:
+    BaseOpenAILLM.set_cached_openai_client(client, "openai", _loop_test_client_params(is_async))
+
+
+async def _cached_openai_client(is_async: bool) -> object:
+    return BaseOpenAILLM.get_cached_openai_client(_loop_test_client_params(is_async), "openai")
+
+
+def test_sync_openai_client_cached_in_one_loop_is_reused_by_the_next_while_async_is_not():
+    sync_client: Final = openai.OpenAI(api_key="sk-loop-scope-test")
+    async_client: Final = openai.AsyncOpenAI(api_key="sk-loop-scope-test")
+    asyncio.run(_cache_openai_client(sync_client, is_async=False))
+    asyncio.run(_cache_openai_client(async_client, is_async=True))
+
+    assert asyncio.run(_cached_openai_client(is_async=False)) is sync_client
+    assert asyncio.run(_cached_openai_client(is_async=True)) is None
 
 
 @pytest.mark.parametrize("client_type", ["openai", "azure"])
@@ -320,6 +343,29 @@ def test_mapped_response_still_bills_the_prompt_the_provider_processed(provider)
     assert response.usage.prompt_tokens == expected_prompt_tokens
     assert response.usage.completion_tokens == 0
     assert litellm.completion_cost(completion_response=response) > 0
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure"])
+@pytest.mark.parametrize(
+    ("base_model", "counted_as"), [("azure/gpt-6.1-sol", "azure/gpt-6.1-sol"), ("claude-sonnet-4-5", "my-gpt-6")]
+)
+@pytest.mark.asyncio
+async def test_mapped_response_bills_a_custom_named_deployment_with_its_base_model_only_when_it_is_openai(
+    provider: str, base_model: str, counted_as: str
+) -> None:
+    messages: Final = [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
+    overrides: Final = {"model": f"{provider}/my-gpt-6", "messages": messages, "base_model": base_model}
+
+    sync_response: Final = litellm.completion(
+        **_completion_kwargs(provider, _sync_client_raising(provider, OUTPUT_LIMIT_400_MESSAGE), **overrides)
+    )
+    async_response: Final = await litellm.acompletion(
+        **_completion_kwargs(provider, _async_client_raising(provider, OUTPUT_LIMIT_400_MESSAGE), **overrides)
+    )
+
+    expected: Final = token_counter(model=counted_as, messages=messages)
+    assert token_counter(model=base_model, messages=messages) != token_counter(model="my-gpt-6", messages=messages)
+    assert (sync_response.usage.prompt_tokens, async_response.usage.prompt_tokens) == (expected, expected)
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure"])

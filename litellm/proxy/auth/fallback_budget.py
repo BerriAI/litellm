@@ -193,7 +193,7 @@ class RouterFallbackBudgetCheck:
         valid_token: Final = _user_api_key_auth_from_request(request_kwargs)
         if valid_token is None:
             return True
-        budget_models: Final = tuple(dict.fromkeys((model, llm_router.routable_model_group(model))))
+        budget_models: Final = tuple(dict.fromkeys((model, llm_router.registry().resolve(model))))
         for budget_model in budget_models:
             try:
                 if not await is_token_within_budget_for_model(

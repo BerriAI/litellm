@@ -106,7 +106,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
         """
         try:
             # Get model info first for conversion
-            model_group_info: Final[ModelGroupInfo | None] = self.llm_router.get_model_group_info(model_group=model)
+            model_group_info: Final[ModelGroupInfo | None] = self.llm_router.registry().group(model)
 
             weight: float = 1
             if litellm.priority_reservation is None or priority not in litellm.priority_reservation:
@@ -128,7 +128,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             (
                 current_model_tpm,
                 current_model_rpm,
-            ) = await self.llm_router.get_model_group_usage(model_group=model)
+            ) = await self.llm_router.health().usage(model)
             total_model_tpm: int | None = None
             total_model_rpm: int | None = None
             if model_group_info is not None:
@@ -248,7 +248,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 model_id: Final = response.hidden_params["model_id"]
                 if not isinstance(model_id, str):
                     return response
-                model_info: Final = self.llm_router.get_model_info(id=model_id)
+                model_info: Final = self.llm_router.registry().deployment_dict(model_id)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # deployment_dict returns the untyped model_list row
                 assert model_info is not None, f"Model info for model with id={model_id} is None"
                 key_priority: Final[str | None] = user_api_key_dict.metadata.get("priority", None)
                 (
@@ -257,11 +257,11 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                     model_tpm,
                     model_rpm,
                     active_projects,
-                ) = await self.check_available_usage(model=model_info["model_name"], priority=key_priority)
+                ) = await self.check_available_usage(model=model_info["model_name"], priority=key_priority)  # pyright: ignore[reportUnknownArgumentType]  # model_info is the untyped model_list row
                 set_hidden_param(
                     response,
                     "additional_headers",
-                    {
+                    {  # pyright: ignore[reportUnknownArgumentType]  # model_info is the untyped model_list row
                         "x-litellm-model_group": model_info["model_name"],
                         "x-ratelimit-remaining-litellm-project-tokens": available_tpm,
                         "x-ratelimit-remaining-litellm-project-requests": available_rpm,

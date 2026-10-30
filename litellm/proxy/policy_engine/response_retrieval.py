@@ -44,10 +44,11 @@ def _model_group_for_response_id(response_id: object, llm_router: "Router | None
     )
     if model_id is None:
         return UngovernedRetrieval("response id names no deployment")
-    deployment: Final = llm_router.get_deployment(model_id)
+    registry: Final = llm_router.registry()
+    deployment: Final = registry.deployment(model_id)
     if deployment is None:
         return UngovernedRetrieval("deployment no longer in the router")
-    hidden_by: Final = _submit_model_hidden_by(deployment.model_name, llm_router.model_group_alias)
+    hidden_by: Final = _submit_model_hidden_by(deployment.model_name, registry.aliases())
     if hidden_by is not None:
         verbose_proxy_logger.warning(
             "Policy engine: background response %s re-matches policies on retrieval as model group %s (%s), "

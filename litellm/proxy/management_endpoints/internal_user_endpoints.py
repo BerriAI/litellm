@@ -13,6 +13,7 @@ These are members of a Team on LiteLLM
 """
 
 import asyncio
+import contextlib
 import json
 import traceback
 from collections.abc import Awaitable, Mapping, Sequence
@@ -22,7 +23,7 @@ from typing import Any, Final, Literal, Protocol, cast, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -122,6 +123,20 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 _USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(dict[str, float | BudgetConfig])
 _USER_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _AdminTeamAndKeyRows(TypedDict):
+    keys: ReadOnly[Sequence[object] | None]
+    teams: ReadOnly[Sequence[object] | None]
+
+
+_ADMIN_TEAM_AND_KEY_ROWS_ADAPTER: Final = TypeAdapter(
+    list[_AdminTeamAndKeyRows], config=ConfigDict(hide_input_in_errors=True)
+)
+_ADMIN_KEY_ROW_ADAPTER: Final = TypeAdapter(
+    dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 
 def _user_table(
@@ -429,30 +444,25 @@ async def add_new_user_to_default_team(
     teams: Sequence[str | NewUserRequestTeam],
     prisma_client: "PrismaClient",
 ):
-    tasks: Final[list[Awaitable[object]]] = []
-    for team in teams:
-        user_role: Literal["user", "admin"] = "user"
-        max_budget_in_team: float | None = None
-        if isinstance(team, str):
-            team_id = team
-        elif isinstance(team, NewUserRequestTeam):
-            team_id = team.team_id
-            user_role = team.user_role
-            max_budget_in_team = team.max_budget_in_team
-        else:
-            raise ValueError(f"Invalid team type: {type(team)}")
-
-        tasks.append(
-            _add_user_to_team(
+    memberships: Final = tuple(_default_team_membership(team) for team in teams)
+    for membership in memberships:
+        with contextlib.suppress(Exception):
+            await _add_user_to_team(
                 user_id=user_id,
-                team_id=team_id,
+                team_id=membership.team_id,
                 user_email=user_email,
                 user_api_key_dict=user_api_key_dict,
-                max_budget_in_team=max_budget_in_team,
-                user_role=user_role,
+                max_budget_in_team=membership.max_budget_in_team,
+                user_role=membership.user_role,
             )
-        )
-    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _default_team_membership(team: str | NewUserRequestTeam) -> NewUserRequestTeam:
+    if isinstance(team, str):
+        return NewUserRequestTeam(team_id=team)
+    if isinstance(team, NewUserRequestTeam):
+        return team
+    raise ValueError(f"Invalid team type: {type(team)}")
 
 
 async def _fetch_user_team_ids(user_id: str, prisma_client: "PrismaClient") -> tuple[str, ...]:
@@ -931,6 +941,14 @@ async def user_info(
     request: Request,
     user_id: str | None = fastapi.Query(default=None, description="User ID in the request parameters"),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    admin_mcp: bool = fastapi.Query(
+        default=False, description="Include the caller's current admin MCP route permissions"
+    ),
+    mcp_tool: str | None = fastapi.Query(default=None, description="Admin MCP tool to authorize for this caller"),
+    mcp_path: str | None = fastapi.Query(
+        default=None,
+        description="URL-encoded concrete management path used by the MCP tool, before query-string encoding",
+    ),
 ):
     """
     [10/07/2024]
@@ -951,12 +969,23 @@ async def user_info(
         user_id = _normalize_user_info_user_id(request=request, user_id=user_id)
         _enforce_user_info_access(user_id=user_id, user_api_key_dict=user_api_key_dict)
 
+        from litellm.proxy.admin_mcp import get_admin_mcp_permissions
+
+        mcp_permissions: Final = (
+            get_admin_mcp_permissions(user_api_key_dict, request, mcp_tool, mcp_path) if admin_mcp is True else None
+        )
+
         if prisma_client is None:
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
         if user_id is None and user_api_key_has_admin_view(user_api_key_dict):
-            return await _get_user_info_for_proxy_admin(user_api_key_dict=user_api_key_dict)
+            admin_response: Final = await _get_user_info_for_proxy_admin(user_api_key_dict=user_api_key_dict)
+            return (
+                admin_response.model_copy(update={"admin_mcp_permissions": mcp_permissions})
+                if mcp_permissions is not None
+                else admin_response
+            )
         elif user_id is None:
             user_id = user_api_key_dict.user_id
         ## GET USER ROW ##
@@ -995,7 +1024,11 @@ async def user_info(
             ),
         )
 
-        return response_data
+        return (
+            response_data.model_copy(update={"admin_mcp_permissions": mcp_permissions})
+            if mcp_permissions is not None
+            else response_data
+        )
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.user_info(): Exception occured - %s", e)
         raise handle_exception_on_proxy(e)
@@ -1170,8 +1203,8 @@ async def user_info_v2(
 
 async def _fetch_admin_teams_and_keys_rows(
     prisma_client: "PrismaClient", sql_query: str
-) -> Sequence[Mapping[str, Sequence[Mapping[str, object]] | None]]:
-    return await prisma_client.db.query_raw(sql_query)
+) -> Sequence[_AdminTeamAndKeyRows]:
+    return _ADMIN_TEAM_AND_KEY_ROWS_ADAPTER.validate_python(await prisma_client.db.query_raw(sql_query))
 
 
 async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
@@ -1201,17 +1234,17 @@ async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
 
     verbose_proxy_logger.debug("results_keys: %s", results)
 
-    _keys_in_db: Final[Sequence[Mapping[str, object]]] = results[0]["keys"] or []
+    _keys_in_db: Final[Sequence[object]] = results[0]["keys"] or []
     # cast all keys to LiteLLM_VerificationToken
     keys_in_db: Final = []
     for key in _keys_in_db:
-        key_payload = dict[str, object](key)
+        key_payload = _ADMIN_KEY_ROW_ADAPTER.validate_python(key)
         if key_payload.get("models") is None:
             key_payload["models"] = []
         keys_in_db.append(LiteLLM_VerificationToken.model_validate(key_payload))
 
     # cast all teams to LiteLLM_TeamTable
-    _teams_rows: Final[Sequence[Mapping[str, object]]] = results[0]["teams"] or []
+    _teams_rows: Final[Sequence[object]] = results[0]["teams"] or []
     _teams_in_db: Final = sorted(
         (LiteLLM_TeamTable.model_validate(team) for team in _teams_rows),
         key=lambda x: getattr(x, "team_alias", "") or "",

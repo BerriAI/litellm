@@ -14,6 +14,7 @@ class ForkedAfterNativeRuntimeStarted(RuntimeError): ...
 class ProcessReservedForForking(RuntimeError): ...
 
 def trace_encode_error(message: str) -> bytes: ...
+def bundled_model_cost_map() -> bytes: ...
 
 @final
 class NativeClickHouseSpendConfig:
@@ -220,6 +221,7 @@ __all__ = [
     "aocr",
     "aresponses",
     "atranscription",
+    "bundled_model_cost_map",
     "completion",
     "embedding",
     "gil_stats",

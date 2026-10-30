@@ -4,9 +4,11 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
+import functools
 import re
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -65,6 +67,10 @@ from .utils import (
 )
 
 AllowedModelRegion: TypeAlias = Literal["eu", "us"]
+
+
+class SilentExperimentFlag(TypedDict, total=False):
+    is_silent_experiment: ReadOnly[bool]
 
 
 class FallbackSkipReason(str, enum.Enum):
@@ -186,6 +192,11 @@ OptionalPreCallChecks = list[
 ]
 
 
+FallbackTargets: TypeAlias = Sequence[str | Mapping[str, JsonValue]]
+ContentPolicyFallbackRule: TypeAlias = Annotated[Mapping[str, FallbackTargets], Field(min_length=1, max_length=1)]
+ContentPolicyFallbackRules: TypeAlias = Sequence[ContentPolicyFallbackRule]
+
+
 class UpdateRouterConfig(LiteLLMBaseModel):
     """
     Set of params that you can modify via `router.update_settings()`.
@@ -205,6 +216,7 @@ class UpdateRouterConfig(LiteLLMBaseModel):
     retry_after: float | None = None
     fallbacks: list[dict] | None = None
     context_window_fallbacks: list[dict] | None = None
+    content_policy_fallbacks: ContentPolicyFallbackRules | None = None
     model_group_alias: dict[str, str | dict] | None = Field(default={})
     enable_tag_filtering: bool | None = None
     weights: RouterWeights | None = None
@@ -266,6 +278,7 @@ def _whole_float_as_int(value: object) -> object:
 
 
 class ModelInfo(MirroredPricingParams):
+    enforce_supported_endpoints: bool | None = None
     id: str | None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
     updated_at: datetime.datetime | None = None
@@ -984,9 +997,10 @@ class AlertingConfig(LiteLLMBaseModel):
     alerting_threshold: float | None = 300
 
 
+@functools.cache
 def _resolved_annotations(model_class: type[object]) -> Mapping[str, object]:
     """Resolve a class's annotations, keeping each resolved annotation opaque."""
-    return get_type_hints(model_class)
+    return MappingProxyType(get_type_hints(model_class))
 
 
 class ModelGroupInfo(LiteLLMBaseModel):

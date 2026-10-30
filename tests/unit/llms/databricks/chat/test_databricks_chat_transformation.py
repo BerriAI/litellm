@@ -2465,6 +2465,41 @@ def test_databricks_claude_drops_the_openai_tool_search_tool_under_drop_params(m
     ]
 
 
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_databricks_chat_drops_beta_gated_thinking_fields_only_under_drop_params(
+    drop_params: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    thinking: Final = {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+    mapped: Final = DatabricksConfig().map_openai_params(
+        non_default_params={"thinking": thinking},
+        optional_params={},
+        model="databricks-claude-opus-5-5",
+        drop_params=drop_params,
+    )
+    assert mapped["thinking"] == ({"type": "adaptive"} if drop_params else thinking)
+    assert thinking == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+
+
+def test_databricks_chat_keeps_ungated_thinking_display_under_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = DatabricksConfig().map_openai_params(
+        non_default_params={"thinking": {"type": "adaptive", "display": "summarized"}},
+        optional_params={},
+        model="databricks-claude-opus-5-5",
+        drop_params=True,
+    )
+    assert mapped["thinking"] == {"type": "adaptive", "display": "summarized"}
+
+
 _JSON_TOOL_ARGUMENT_FRAGMENTS: Final = ("", "", '{"name": ', '"Ada"', ', "met', 'a": ', "{}", ', "tags": []}')
 _RECORD_RESPONSE_FORMAT: Final = {
     "type": "json_schema",
