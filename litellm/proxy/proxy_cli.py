@@ -680,6 +680,7 @@ class ProxyInitializationHelpers:
         ssl_keyfile_path: str,
         max_requests_before_restart: int | None = None,
         max_requests_before_restart_jitter: int | None = None,
+        keepalive_timeout: int | None = None,
     ):
         """
         Run litellm with `gunicorn`
@@ -773,6 +774,9 @@ class ProxyInitializationHelpers:
                 )
             else:
                 gunicorn_options["max_requests_jitter"] = max_requests_before_restart_jitter
+
+        if keepalive_timeout is not None:
+            gunicorn_options["keepalive"] = keepalive_timeout
 
         # Clean up prometheus .db files when a worker exits (prevents ghost gauge values)
         if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
@@ -1105,7 +1109,8 @@ class ProxyInitializationHelpers:
     "--keepalive_timeout",
     default=None,
     type=int,
-    help="Set the uvicorn keepalive timeout in seconds (uvicorn timeout_keep_alive parameter)",
+    help="Idle keep-alive timeout in seconds (uvicorn timeout_keep_alive; gunicorn keepalive with --run_gunicorn, "
+    "default 2s). Behind a reverse proxy, set it above the proxy's idle-connection timeout.",
     envvar="KEEPALIVE_TIMEOUT",
 )
 @click.option(
@@ -1802,6 +1807,7 @@ def run_server(
                 ssl_keyfile_path=ssl_keyfile_path,
                 max_requests_before_restart=max_requests_before_restart,
                 max_requests_before_restart_jitter=max_requests_before_restart_jitter,
+                keepalive_timeout=keepalive_timeout,
             )
         elif run_hypercorn is True:
             ProxyInitializationHelpers.init_hypercorn_server(
