@@ -1,4 +1,3 @@
-import hashlib
 import logging
 import math
 from base64 import b64encode
@@ -204,11 +203,12 @@ async def test_a_valid_id_jag_names_the_user_its_single_use_key_and_its_scope():
     assert resolver.calls == ((_claims(), "team-b"),)
     assert (identity.user_id, identity.team_id, identity.scope) == ("u1", "team-b", "litellm:mcp")
     assert identity.allowed_routes == ("mcp_inference_routes",)
-    assert identity.replay_key == "mcp_gateway_dcr:id_jag:" + hashlib.sha256(f"{ISSUER}\njti-1".encode()).hexdigest()
+    assert identity.replay_marker.issuer == ISSUER
+    assert identity.replay_marker.jti == "jti-1"
     assert identity.replay_ttl_seconds == math.ceil(300)
     other_jti = await _identity(_redemption(_assertion(jti="jti-2")), _Verifier(), _Resolver())
     assert isinstance(other_jti, AssertionIdentity)
-    assert other_jti.replay_key != identity.replay_key
+    assert other_jti.replay_marker != identity.replay_marker
     teamless = await _identity(_redemption(_assertion(scope=""), team_id=None))
     assert isinstance(teamless, AssertionIdentity)
     assert (teamless.team_id, teamless.scope, teamless.allowed_routes) == (None, None, None)
