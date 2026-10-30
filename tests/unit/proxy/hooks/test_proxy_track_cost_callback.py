@@ -1815,7 +1815,7 @@ async def test_track_cost_callback_releases_reservation_for_unpollable_interacti
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", ["completed", "requires_action"])
+@pytest.mark.parametrize("status", ["completed", "requires_action", "requires_continuation"])
 async def test_track_cost_callback_alerts_when_an_interaction_that_produced_output_has_no_usage(status):
     """
     ``completed`` and ``requires_action`` both mean the model produced output,
@@ -1939,6 +1939,7 @@ async def test_callback_handles_every_status_the_interactions_api_can_return():
     assert released == {
         "completed",
         "requires_action",
+        "requires_continuation",
         "failed",
         "cancelled",
         "incomplete",

@@ -276,7 +276,7 @@ def map_interactions_status_to_finish_reason(
     if has_tool_calls:
         return "tool_calls"
     match status:
-        case "incomplete" | "budget_exceeded":
+        case "incomplete" | "budget_exceeded" | "requires_continuation":
             return "length"
         case _:
             return "stop"
