@@ -18346,25 +18346,31 @@
     "dashscope/qwen-image-2.0": {
         "litellm_provider": "dashscope",
         "mode": "image_generation",
-        "source": "https://www.alibabacloud.com/help/en/model-studio/models",
+        "output_cost_per_image": 0.035,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/model-pricing",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ]
     },
     "dashscope/qwen-image-2.0-pro": {
         "litellm_provider": "dashscope",
         "mode": "image_generation",
-        "source": "https://www.alibabacloud.com/help/en/model-studio/models",
+        "output_cost_per_image": 0.075,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/model-pricing",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ]
     },
     "dashscope/qwen-image-3.0": {
         "litellm_provider": "dashscope",
         "mode": "image_generation",
-        "source": "https://www.alibabacloud.com/help/en/model-studio/models",
+        "output_cost_per_image": 0.03,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/model-pricing",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ]
     },
     "dashscope/qwen-image-3.0-pro": {
@@ -18372,7 +18378,54 @@
         "mode": "image_generation",
         "source": "https://www.alibabacloud.com/help/en/model-studio/models",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ]
+    },
+    "dashscope/qwen3-tts-flash": {
+        "input_cost_per_character": 1e-05,
+        "litellm_provider": "dashscope",
+        "mode": "audio_speech",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/model-pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "dashscope/qwen-audio-3.1-tts-flash": {
+        "input_cost_per_token": 2.3e-07,
+        "output_cost_per_token": 1.87e-06,
+        "litellm_provider": "dashscope",
+        "mode": "audio_speech",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/model-pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "dashscope/qwen-audio-3.1-tts-plus": {
+        "input_cost_per_character": 3e-05,
+        "litellm_provider": "dashscope",
+        "mode": "audio_speech",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/model-pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "dashscope/qwen-audio-3.0-tts-plus": {
+        "input_cost_per_character": 2e-05,
+        "litellm_provider": "dashscope",
+        "mode": "audio_speech",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/model-pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "dashscope/qwen-audio-3.0-tts-flash": {
+        "input_cost_per_character": 1.5e-05,
+        "litellm_provider": "dashscope",
+        "mode": "audio_speech",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/model-pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
         ]
     },
     "dashscope/wan3.0-video": {

@@ -75,6 +75,14 @@ _IMAGE_TOKEN_RATE_KEYS: Final[tuple[str, ...]] = (
     "output_cost_per_image_token",
 )
 
+
+def _deployment_prices_images_without_an_output_price(pricing: ModelInfo | None) -> bool:
+    return pricing is not None and (
+        "input_cost_per_pixel" in pricing
+        or ("input_cost_per_image" in pricing and "output_cost_per_image" not in pricing)
+    )
+
+
 # Pre-resolved service-tier cost-key suffixes (e.g. "_priority"). Used per
 # request in the cost-calc path, so the f-strings are built once here instead
 # of being rebuilt for every model_info key on every call. Longest-first so a
@@ -127,7 +135,7 @@ def _get_token_detail_value(details: object, key: str) -> int | None:
     return value if isinstance(value, int) else None
 
 
-_IMAGE_SIZE_PATTERN: Final = re.compile(r"\d+(?:x|-x-)\d+")
+_IMAGE_SIZE_PATTERN: Final = re.compile(r"\d+(?:x|-x-|\*)\d+")
 
 
 def _requested_image_param(optional_params: Mapping[str, object] | None, key: str) -> str | None:
@@ -137,7 +145,7 @@ def _requested_image_param(optional_params: Mapping[str, object] | None, key: st
 
 def _requested_image_size(optional_params: Mapping[str, object] | None) -> str | None:
     value: Final = _requested_image_param(optional_params, "size")
-    return value if value is not None and _IMAGE_SIZE_PATTERN.fullmatch(value) else None
+    return value.replace("*", "x") if value is not None and _IMAGE_SIZE_PATTERN.fullmatch(value) else None
 
 
 def get_web_search_requests(server_tool_use: object) -> int | None:
@@ -2090,7 +2098,7 @@ class _ModelPricedImageCostCalculator(Protocol):
 
 
 def _model_priced_image_cost_calculator(
-    custom_llm_provider: str | None, model: str
+    custom_llm_provider: str | None, model: str, pricing: ModelInfo | None
 ) -> _ModelPricedImageCostCalculator | None:
     match custom_llm_provider:
         case litellm.LlmProviders.RECRAFT.value:
@@ -2116,6 +2124,14 @@ def _model_priced_image_cost_calculator(
             from litellm.llms.tencent.image_generation.transformation import is_tokenhub_image_model
 
             return tencent_image_cost_calculator if is_tokenhub_image_model(model) else None
+        case litellm.LlmProviders.DASHSCOPE.value:
+            if _deployment_prices_images_without_an_output_price(pricing):
+                return None
+            from litellm.llms.dashscope.image_generation.cost_calculator import (
+                cost_calculator as dashscope_image_cost_calculator,
+            )
+
+            return dashscope_image_cost_calculator
         case _:
             return None
 
@@ -2178,7 +2194,7 @@ class CostCalculatorUtils:
         )
         resolved_n: Final = n if n is not None else (len(completion_response.data) if completion_response.data else 0)
         pricing: Final = deployment_pricing(model_info)
-        model_priced_calculator: Final = _model_priced_image_cost_calculator(custom_llm_provider, model)
+        model_priced_calculator: Final = _model_priced_image_cost_calculator(custom_llm_provider, model, pricing)
 
         if model_priced_calculator is not None:
             return model_priced_calculator(model=model, image_response=completion_response, model_info=pricing)
