@@ -244,6 +244,31 @@ async def test_failed_anthropic_stream_records_partial_usage_off_the_event_loop(
 
 
 @pytest.mark.asyncio
+async def test_failed_stream_still_records_partial_usage_when_its_failure_logging_cannot_be_scheduled(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    model: Final = "claude-fable-5"
+    logging_obj: Final = _logging_obj()
+    logging_obj.model_call_details = {"model": model, "stream": True}
+    logging_obj.litellm_params = {}
+    logging_obj.get_router_model_id.return_value = None
+    logging_obj.attempt_scoped_copy.return_value = logging_obj
+    logging_obj.dispatch_attempt_failure_handlers = MagicMock(side_effect=RuntimeError("failure handlers unavailable"))
+    caplog.set_level(logging.ERROR, logger="LiteLLM Proxy")
+
+    await PassThroughStreamingHandler.schedule_stream_failure_logging(
+        litellm_logging_obj=logging_obj,
+        endpoint_type=EndpointType.ANTHROPIC,
+        request_body={"model": model, "stream": True},
+        raw_bytes=_interrupted_anthropic_stream(model, "partial answer"),
+        exception=RuntimeError("upstream closed the stream"),
+    )
+
+    assert logging_obj.record_partial_usage_for_failure.call_args.kwargs["usage"].completion_tokens > 0
+    assert "failure handlers unavailable" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_interrupted_vertex_stream_bills_the_deployment_custom_price(monkeypatch: pytest.MonkeyPatch) -> None:
     deployment_id: Final = "vertex-custom-priced-deployment"
     custom_rates: Final = {"input_cost_per_token": 2e-09, "output_cost_per_token": 3e-09}
