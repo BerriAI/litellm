@@ -1902,20 +1902,19 @@ async def pass_through_request(
         passthrough_logging_payload["response_body"] = response_body
         end_time: Final = datetime.now()
         if response.status_code < 400:
-            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
-                    httpx_response=response,
-                    response_body=response_body,
-                    url_route=str(url),
-                    result="",
-                    start_time=start_time,
-                    end_time=end_time,
-                    logging_obj=logging_obj,
-                    cache_hit=False,
-                    request_body=_parsed_body or {},
-                    custom_llm_provider=custom_llm_provider,
-                    **kwargs,
-                )
+            await pass_through_endpoint_logging.pass_through_async_success_handler(
+                finalize_before_dispatch=True,
+                httpx_response=response,
+                response_body=response_body,
+                url_route=str(url),
+                result="",
+                start_time=start_time,
+                end_time=end_time,
+                logging_obj=logging_obj,
+                cache_hit=False,
+                request_body=_parsed_body or {},
+                custom_llm_provider=custom_llm_provider,
+                **kwargs,
             )
             bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
@@ -1926,6 +1925,8 @@ async def pass_through_request(
             model_id=None,
             cache_key=None,
             api_base=str(url._uri_reference),
+            response_cost=logging_obj.finalized_cost.amount if logging_obj.finalized_cost is not None else None,
+            litellm_logging_obj=logging_obj,
         )
 
         # Call response headers hook
@@ -3026,6 +3027,7 @@ async def websocket_passthrough_request(
                 request_body={},
                 passthrough_logging_payload=logged_payload,
                 custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+                finalize_before_dispatch=False,
                 **success_kwargs,
             )
         )
