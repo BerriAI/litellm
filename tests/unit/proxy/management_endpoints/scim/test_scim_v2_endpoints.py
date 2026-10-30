@@ -3774,6 +3774,37 @@ async def test_process_group_patch_operations_remove_uses_members_with_roles(moc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["members", "Members"])
+async def test_process_group_patch_operations_remove_members_without_value_or_filter_removes_every_member(
+    mocker, path
+):
+    """RFC 7644 section 3.5.2.2: a remove on a multi-valued attribute with no
+    filter removes all of its values"""
+    existing_team = LiteLLM_TeamTable(
+        team_id="team-1",
+        team_alias="Team One",
+        members=[],
+        members_with_roles=[
+            Member(user_id="member-1", role="user"),
+            Member(user_id="member-2", role="user"),
+        ],
+    )
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="remove", path=path)],
+    )
+
+    _, final_members, replace_target = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=existing_team,
+        prisma_client=mocker.MagicMock(),
+    )
+
+    assert final_members == set()
+    assert replace_target is None
+
+
+@pytest.mark.asyncio
 async def test_get_groups_reports_members_from_members_with_roles(mocker):
     """GET /Groups must report members from members_with_roles (the source of
     truth), not the legacy ``members`` column that team creation leaves empty.

@@ -2253,7 +2253,13 @@ def _is_group_path(path: str | None) -> bool:
     return isinstance(path, str) and path.lower().startswith("groups")
 
 
+def _removes_every_value(op: SCIMPatchOperation, attribute: str) -> bool:
+    return op.op == "remove" and op.value is None and (op.path or "").lower() == attribute
+
+
 def _apply_group_operation(teams: tuple[str, ...], op: SCIMPatchOperation) -> tuple[str, ...]:
+    if _removes_every_value(op, "groups"):
+        return ()
     listed: Final = _extract_group_values(op.value)
     group_values: Final = listed if listed or op.value is not None else _extract_ids_from_path_filter(op.path, "groups")
     if op.op == "replace":
@@ -3270,8 +3276,11 @@ async def _process_group_patch_operations(
                 )
 
                 if op_type == "remove":
-                    final_members = final_members - await _member_ids_to_drop(
-                        patched_members, frozenset(final_members), prisma_client
+                    final_members = (
+                        set[str]()
+                        if _removes_every_value(op, "members")
+                        else final_members
+                        - await _member_ids_to_drop(patched_members, frozenset(final_members), prisma_client)
                     )
                 else:
                     member_result = await _resolve_group_member_ids(

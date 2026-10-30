@@ -385,6 +385,10 @@ PATCH_SHAPES: Final[Mapping[str, PatchShape]] = {
         ],
         expected=lambda users: (users[0], users[3]),
     ),
+    "remove-every-member": PatchShape(
+        operations=lambda users: [{"op": "remove", "path": "members"}],
+        expected=lambda users: (),
+    ),
 }
 
 
