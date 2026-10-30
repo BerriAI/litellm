@@ -6,7 +6,8 @@ Base class for sending emails to user after creating keys or invite links
 import html
 import json
 import os
-from typing import Final, List, Literal, Optional
+from datetime import timedelta
+from typing import Final, List, Literal, Optional, Protocol
 
 from litellm_enterprise.types.enterprise_callbacks.send_emails import (
     EmailEvent,
@@ -18,6 +19,7 @@ from litellm_enterprise.types.enterprise_callbacks.send_emails import (
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
     EMAIL_BUDGET_ALERT_TTL,
@@ -46,6 +48,17 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     WebhookEvent,
 )
+from litellm.redis.stores.email_alert_claims import (
+    EmailAlertClaimsStore,
+    EmailBudgetAlert,
+    MaxBudgetAlert,
+    SoftBudgetAlert,
+    TeamMemberAlert,
+    ThresholdBudgetAlert,
+    TransportEmailAlertClaimsStore,
+    alert_key,
+)
+from litellm.redis.transport.contract import RedisFailure
 from litellm.repositories.table_repositories import InvitationLinkRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool
@@ -54,9 +67,23 @@ from litellm.types.integrations.slack_alerting import LITELLM_LOGO_URL
 _BUDGET_ALERT_CLAIMS_TARGET: Final = "budget_alert_claims"
 
 
-def _max_budget_alert_id(user_info: CallInfo) -> str:
+class _LocalAlertCache(Protocol):
+    async def async_increment(self, key: str, value: float, *, ttl: int) -> float: ...
+
+    def delete_cache(self, key: str) -> None: ...
+
+
+class _BudgetAlertCache(Protocol):
+    @property
+    def in_memory_cache(self) -> _LocalAlertCache | None: ...
+
+    @property
+    def redis_cache(self) -> RedisCache | None: ...
+
+
+def _max_budget_alert_id(user_info: CallInfo) -> str | TeamMemberAlert:
     if user_info.event_group == Litellm_EntityType.TEAM_MEMBER:
-        return f"team_member:{user_info.user_id}:{user_info.team_id}"
+        return TeamMemberAlert(user_info.user_id, user_info.team_id)
     return user_info.token or user_info.user_id or "default_id"
 
 
@@ -503,13 +530,8 @@ class BaseEmailLogger(CustomLogger):
                 else:
                     # For KEY and other types, use token or user_id
                     _id = user_info.token or user_info.user_id or "default_id"
-                _cache_key = f"email_budget_alerts:soft_budget_crossed:{_id}"
-
-                send_count = await _cache.async_increment_cache(
-                    key=_cache_key,
-                    value=1,
-                    ttl=EMAIL_BUDGET_ALERT_TTL,
-                )
+                soft_alert: Final = SoftBudgetAlert(_id)
+                send_count = await self._claim_budget_alert(_cache, soft_alert)
                 if send_count is None or send_count <= 1:
                     # Create WebhookEvent for soft budget alert
                     event_message = f"Soft Budget Crossed - Total Soft Budget: ${user_info.soft_budget}"
@@ -544,7 +566,7 @@ class BaseEmailLogger(CustomLogger):
                             f"Error sending soft budget alert email: {e}",
                             exc_info=True,
                         )
-                        await self._release_budget_alert_claim(_cache, _cache_key)
+                        await self._release_budget_alert_claim(_cache, soft_alert)
             return
 
         # For max_budget_alert, check if we've already sent an alert
@@ -568,13 +590,8 @@ class BaseEmailLogger(CustomLogger):
                 ):
                     # Generate cache key based on event type and identifier
                     _id = user_info.token or user_info.user_id or "default_id"
-                    _cache_key = f"email_budget_alerts:max_budget_alert:{_id}"
-
-                    send_count = await _cache.async_increment_cache(
-                        key=_cache_key,
-                        value=1,
-                        ttl=EMAIL_BUDGET_ALERT_TTL,
-                    )
+                    max_alert: Final = MaxBudgetAlert(_id)
+                    send_count = await self._claim_budget_alert(_cache, max_alert)
                     if send_count is None or send_count <= 1:
                         # Calculate percentage
                         percentage = int(
@@ -609,7 +626,7 @@ class BaseEmailLogger(CustomLogger):
                                 f"Error sending max budget alert email: {e}",
                                 exc_info=True,
                             )
-                            await self._release_budget_alert_claim(_cache, _cache_key)
+                            await self._release_budget_alert_claim(_cache, max_alert)
             return
 
     @with_service_target(_BUDGET_ALERT_CLAIMS_TARGET)
@@ -636,9 +653,7 @@ class BaseEmailLogger(CustomLogger):
                 continue
 
             _id = _max_budget_alert_id(user_info)
-            _cache_key = (
-                f"email_budget_alerts:max_budget_alert:{threshold_pct}:{_id}"
-            )
+            threshold_alert = ThresholdBudgetAlert(_id, threshold_pct)
 
             # Parse emails + auto-include owner
             emails = _parse_email_list(raw_emails)
@@ -653,11 +668,7 @@ class BaseEmailLogger(CustomLogger):
                 continue
             recipient_emails = list(set(emails))
 
-            send_count = await _cache.async_increment_cache(
-                key=_cache_key,
-                value=1,
-                ttl=EMAIL_BUDGET_ALERT_TTL,
-            )
+            send_count = await self._claim_budget_alert(_cache, threshold_alert)
             if send_count is not None and send_count > 1:
                 continue
 
@@ -696,17 +707,37 @@ class BaseEmailLogger(CustomLogger):
                     f"Error sending multi-threshold max budget alert email for {threshold_pct}%: {e}",
                     exc_info=True,
                 )
-                await self._release_budget_alert_claim(_cache, _cache_key)
+                await self._release_budget_alert_claim(_cache, threshold_alert)
 
     @with_service_target(_BUDGET_ALERT_CLAIMS_TARGET)
-    async def _release_budget_alert_claim(self, cache: DualCache, cache_key: str) -> None:
+    async def _claim_budget_alert(self, cache: _BudgetAlertCache, alert: EmailBudgetAlert) -> float | None:
         try:
-            await cache.async_delete_cache(key=cache_key)
-        except Exception:
-            verbose_proxy_logger.debug(
-                "Failed to release budget alert claim for %s; it expires with the TTL",
-                cache_key,
+            local_count: Final = (
+                await cache.in_memory_cache.async_increment(alert_key(alert), 1, ttl=EMAIL_BUDGET_ALERT_TTL)
+                if cache.in_memory_cache is not None
+                else None
             )
+        except Exception:
+            return None
+        if cache.redis_cache is None:
+            return local_count
+        try:
+            store: Final[EmailAlertClaimsStore] = TransportEmailAlertClaimsStore(cache.redis_cache.transport())
+            count: Final = await store.claim(alert, ttl=timedelta(seconds=EMAIL_BUDGET_ALERT_TTL))
+            return local_count if isinstance(count, RedisFailure) else count
+        except Exception:
+            return local_count
+
+    @with_service_target(_BUDGET_ALERT_CLAIMS_TARGET)
+    async def _release_budget_alert_claim(self, cache: _BudgetAlertCache, alert: EmailBudgetAlert) -> None:
+        try:
+            if cache.in_memory_cache is not None:
+                cache.in_memory_cache.delete_cache(alert_key(alert))
+            if cache.redis_cache is not None:
+                store: Final[EmailAlertClaimsStore] = TransportEmailAlertClaimsStore(cache.redis_cache.transport())
+                await store.release_failed_send(alert)
+        except Exception:
+            return
 
     async def _get_email_params(
         self,

@@ -2,32 +2,53 @@ import asyncio
 import json
 import os
 import unittest.mock as mock
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
+import fakeredis
 import pytest
+import pytest_asyncio
 from fastapi.testclient import TestClient
-
-from litellm.caching.caching import DualCache
 from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
     BaseEmailLogger,
 )
-
 from litellm_enterprise.types.enterprise_callbacks.send_emails import (
     EmailEvent,
     SendKeyCreatedEmailEvent,
     SendKeyRotatedEmailEvent,
 )
 
+from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import RedisCache
+from litellm.constants import EMAIL_BUDGET_ALERT_TTL
 from litellm.integrations.email_templates.email_footer import EMAIL_FOOTER
 from litellm.proxy._types import (
     CallInfo,
-    LiteLLM_UserTable,
     Litellm_EntityType,
+    LiteLLM_UserTable,
     WebhookEvent,
 )
-from litellm.constants import EMAIL_BUDGET_ALERT_TTL
+from tests._support.fake_redis import fake_redis_cache
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def alert_redis() -> AsyncIterator[tuple[RedisCache, fakeredis.FakeAsyncRedis, fakeredis.FakeServer]]:
+    server: Final = fakeredis.FakeServer()
+    cache: Final = fake_redis_cache(server, namespace="alerts")
+    raw: Final = fakeredis.FakeAsyncRedis(server=server)
+    try:
+        yield cache, raw, server
+    finally:
+        await raw.aclose()
+
+
+@pytest.fixture
+def redis_email_logger(
+    alert_redis: tuple[RedisCache, fakeredis.FakeAsyncRedis, fakeredis.FakeServer],
+) -> BaseEmailLogger:
+    return BaseEmailLogger(internal_usage_cache=DualCache(redis_cache=alert_redis[0]))
 
 
 @pytest.fixture(autouse=True)
@@ -716,7 +737,7 @@ async def test_send_soft_budget_alert_email_no_max_budget(
 
 
 @pytest.mark.asyncio
-async def test_budget_alerts_soft_budget_crossed(base_email_logger, mock_send_email):
+async def test_budget_alerts_soft_budget_crossed(redis_email_logger, mock_send_email, alert_redis):
     """Test that budget_alerts sends email when soft budget is crossed"""
     user_info = CallInfo(
         user_id="test_user",
@@ -727,33 +748,24 @@ async def test_budget_alerts_soft_budget_crossed(base_email_logger, mock_send_em
         event_group=Litellm_EntityType.USER,
     )
 
-    # Mock the cache so the claim is won (increment returns 1)
-    mock_cache = mock.AsyncMock()
-    mock_cache.async_increment_cache = mock.AsyncMock(return_value=1)
-    base_email_logger.internal_usage_cache = mock_cache
-
     with mock.patch.dict(
         os.environ,
         {
             "PROXY_BASE_URL": "http://test.com",
         },
     ):
-        await base_email_logger.budget_alerts(type="soft_budget", user_info=user_info)
+        await redis_email_logger.budget_alerts(type="soft_budget", user_info=user_info)
 
         # Verify email was sent
         mock_send_email.assert_called_once()
         call_args = mock_send_email.call_args[1]
         assert call_args["to_email"] == ["test@example.com"]
 
-        # Verify the send slot was claimed to prevent duplicate alerts
-        mock_cache.async_increment_cache.assert_called_once()
-        cache_call_args = mock_cache.async_increment_cache.call_args[1]
+        assert await alert_redis[1].get("alerts:email_budget_alerts:soft_budget_crossed:test_user") == b"1"
         assert (
-            cache_call_args["key"]
-            == "email_budget_alerts:soft_budget_crossed:test_user"
+            0 < await alert_redis[1].pttl("alerts:email_budget_alerts:soft_budget_crossed:test_user")
+            <= EMAIL_BUDGET_ALERT_TTL * 1000
         )
-        assert cache_call_args["value"] == 1
-        assert cache_call_args["ttl"] == EMAIL_BUDGET_ALERT_TTL
 
 
 @pytest.mark.asyncio
@@ -770,9 +782,6 @@ async def test_budget_alerts_soft_budget_not_crossed(
         event_group=Litellm_EntityType.USER,
     )
 
-    mock_cache = mock.AsyncMock()
-    base_email_logger.internal_usage_cache = mock_cache
-
     await base_email_logger.budget_alerts(type="soft_budget", user_info=user_info)
 
     # Verify email was NOT sent
@@ -781,7 +790,7 @@ async def test_budget_alerts_soft_budget_not_crossed(
 
 @pytest.mark.asyncio
 async def test_budget_alerts_soft_budget_duplicate_prevention(
-    base_email_logger, mock_send_email
+    redis_email_logger, mock_send_email, alert_redis
 ):
     """Test that budget_alerts does not send duplicate alerts within TTL period"""
     user_info = CallInfo(
@@ -793,12 +802,10 @@ async def test_budget_alerts_soft_budget_duplicate_prevention(
         event_group=Litellm_EntityType.USER,
     )
 
-    # Mock the cache so the slot is already claimed (increment returns > 1)
-    mock_cache = mock.AsyncMock()
-    mock_cache.async_increment_cache = mock.AsyncMock(return_value=2)
-    base_email_logger.internal_usage_cache = mock_cache
-
-    await base_email_logger.budget_alerts(type="soft_budget", user_info=user_info)
+    await alert_redis[0].async_increment(
+        "email_budget_alerts:soft_budget_crossed:test_user", 1, ttl=EMAIL_BUDGET_ALERT_TTL
+    )
+    await redis_email_logger.budget_alerts(type="soft_budget", user_info=user_info)
 
     # Verify email was NOT sent (duplicate prevention)
     mock_send_email.assert_not_called()
@@ -824,7 +831,7 @@ async def test_budget_alerts_no_budgets(base_email_logger, mock_send_email):
 
 @pytest.mark.asyncio
 async def test_budget_alerts_uses_token_for_cache_key(
-    base_email_logger, mock_send_email
+    redis_email_logger, mock_send_email, alert_redis
 ):
     """Test that budget_alerts uses token for cache key when available"""
     user_info = CallInfo(
@@ -837,26 +844,15 @@ async def test_budget_alerts_uses_token_for_cache_key(
         event_group=Litellm_EntityType.KEY,
     )
 
-    # Mock the cache so the claim is won (increment returns 1)
-    mock_cache = mock.AsyncMock()
-    mock_cache.async_increment_cache = mock.AsyncMock(return_value=1)
-    base_email_logger.internal_usage_cache = mock_cache
-
     with mock.patch.dict(
         os.environ,
         {
             "PROXY_BASE_URL": "http://test.com",
         },
     ):
-        await base_email_logger.budget_alerts(type="soft_budget", user_info=user_info)
+        await redis_email_logger.budget_alerts(type="soft_budget", user_info=user_info)
 
-        # Verify cache key uses token instead of user_id
-        mock_cache.async_increment_cache.assert_called_once()
-        cache_call_args = mock_cache.async_increment_cache.call_args[1]
-        assert (
-            cache_call_args["key"]
-            == "email_budget_alerts:soft_budget_crossed:hashed_token_123"
-        )
+        assert await alert_redis[1].get("alerts:email_budget_alerts:soft_budget_crossed:hashed_token_123") == b"1"
 
 
 @pytest.mark.asyncio
@@ -886,7 +882,7 @@ async def test_get_email_params_soft_budget_crossed(
 
 @pytest.mark.asyncio
 async def test_budget_alerts_max_budget_alert_crossed(
-    base_email_logger, mock_send_email
+    redis_email_logger, mock_send_email, alert_redis
 ):
     """Test that budget_alerts sends email when max budget alert threshold is crossed"""
     user_info = CallInfo(
@@ -897,17 +893,13 @@ async def test_budget_alerts_max_budget_alert_crossed(
         event_group=Litellm_EntityType.USER,
     )
 
-    mock_cache = mock.AsyncMock()
-    mock_cache.async_increment_cache = mock.AsyncMock(return_value=1)
-    base_email_logger.internal_usage_cache = mock_cache
-
     with mock.patch.dict(
         os.environ,
         {
             "PROXY_BASE_URL": "http://test.com",
         },
     ):
-        await base_email_logger.budget_alerts(
+        await redis_email_logger.budget_alerts(
             type="max_budget_alert", user_info=user_info
         )
 
@@ -916,18 +908,16 @@ async def test_budget_alerts_max_budget_alert_crossed(
         assert call_args["to_email"] == ["test@example.com"]
         assert "Max Budget Alert" in call_args["subject"]
 
-        mock_cache.async_increment_cache.assert_called_once()
-        cache_call_args = mock_cache.async_increment_cache.call_args[1]
+        assert await alert_redis[1].get("alerts:email_budget_alerts:max_budget_alert:test_user") == b"1"
         assert (
-            cache_call_args["key"] == "email_budget_alerts:max_budget_alert:test_user"
+            0 < await alert_redis[1].pttl("alerts:email_budget_alerts:max_budget_alert:test_user")
+            <= EMAIL_BUDGET_ALERT_TTL * 1000
         )
-        assert cache_call_args["value"] == 1
-        assert cache_call_args["ttl"] == EMAIL_BUDGET_ALERT_TTL
 
 
 @pytest.mark.asyncio
 async def test_multi_threshold_sends_crossed_thresholds(
-    base_email_logger, mock_send_email
+    redis_email_logger, mock_send_email, alert_redis
 ):
     """Test that multi-threshold path sends emails for all crossed thresholds"""
     user_info = CallInfo(
@@ -944,29 +934,23 @@ async def test_multi_threshold_sends_crossed_thresholds(
         },
     )
 
-    mock_cache = mock.AsyncMock()
-    mock_cache.async_increment_cache = mock.AsyncMock(return_value=1)
-    base_email_logger.internal_usage_cache = mock_cache
-
     with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
-        await base_email_logger.budget_alerts(
+        await redis_email_logger.budget_alerts(
             type="max_budget_alert", user_info=user_info
         )
 
         # spend=80 crosses 50% ($50) and 75% ($75), but not 100% ($100)
         assert mock_send_email.call_count == 2
 
-        # Check cache keys include threshold percentage
-        cache_keys = [
-            c[1]["key"] for c in mock_cache.async_increment_cache.call_args_list
+        assert sorted(await alert_redis[1].keys("*")) == [
+            b"alerts:email_budget_alerts:max_budget_alert:50:hashed_key_1",
+            b"alerts:email_budget_alerts:max_budget_alert:75:hashed_key_1",
         ]
-        assert "email_budget_alerts:max_budget_alert:50:hashed_key_1" in cache_keys
-        assert "email_budget_alerts:max_budget_alert:75:hashed_key_1" in cache_keys
 
 
 @pytest.mark.asyncio
 async def test_multi_threshold_dedup_cache_prevents_resend(
-    base_email_logger, mock_send_email
+    redis_email_logger, mock_send_email, alert_redis
 ):
     """Test that cached thresholds are not re-sent"""
     user_info = CallInfo(
@@ -982,30 +966,23 @@ async def test_multi_threshold_dedup_cache_prevents_resend(
         },
     )
 
-    # Simulate 50% already claimed (increment returns >1), 75% first send (returns 1)
-    async def cache_increment(key, value, ttl=None):
-        if "50:" in key:
-            return 2
-        return 1
-
-    mock_cache = mock.AsyncMock()
-    mock_cache.async_increment_cache = mock.AsyncMock(side_effect=cache_increment)
-    base_email_logger.internal_usage_cache = mock_cache
+    await alert_redis[0].async_increment("email_budget_alerts:max_budget_alert:50:hashed_key_1", 1, ttl=EMAIL_BUDGET_ALERT_TTL)
 
     with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
-        await base_email_logger.budget_alerts(
+        await redis_email_logger.budget_alerts(
             type="max_budget_alert", user_info=user_info
         )
 
         # Only 75% should fire
         assert mock_send_email.call_count == 1
-        cache_key = mock_cache.async_increment_cache.call_args[1]["key"]
-        assert "75:" in cache_key
+        assert "75%" in mock_send_email.call_args.kwargs["subject"]
+        assert await alert_redis[1].get("alerts:email_budget_alerts:max_budget_alert:50:hashed_key_1") == b"2"
+        assert await alert_redis[1].get("alerts:email_budget_alerts:max_budget_alert:75:hashed_key_1") == b"1"
 
 
 @pytest.mark.asyncio
 async def test_multi_threshold_owner_email_auto_included(
-    base_email_logger, mock_send_email
+    redis_email_logger, mock_send_email
 ):
     """Test that the owner email is auto-appended and deduplicated"""
     user_info = CallInfo(
@@ -1020,12 +997,8 @@ async def test_multi_threshold_owner_email_auto_included(
         },
     )
 
-    mock_cache = mock.AsyncMock()
-    mock_cache.async_increment_cache = mock.AsyncMock(return_value=1)
-    base_email_logger.internal_usage_cache = mock_cache
-
     with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
-        await base_email_logger.budget_alerts(
+        await redis_email_logger.budget_alerts(
             type="max_budget_alert", user_info=user_info
         )
 
@@ -1037,7 +1010,7 @@ async def test_multi_threshold_owner_email_auto_included(
 
 @pytest.mark.asyncio
 async def test_multi_threshold_malformed_keys_skipped(
-    base_email_logger, mock_send_email
+    redis_email_logger, mock_send_email
 ):
     """Test that non-numeric threshold keys are skipped"""
     user_info = CallInfo(
@@ -1053,12 +1026,8 @@ async def test_multi_threshold_malformed_keys_skipped(
         },
     )
 
-    mock_cache = mock.AsyncMock()
-    mock_cache.async_increment_cache = mock.AsyncMock(return_value=1)
-    base_email_logger.internal_usage_cache = mock_cache
-
     with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
-        await base_email_logger.budget_alerts(
+        await redis_email_logger.budget_alerts(
             type="max_budget_alert", user_info=user_info
         )
 
@@ -1068,7 +1037,7 @@ async def test_multi_threshold_malformed_keys_skipped(
 
 @pytest.mark.asyncio
 async def test_multi_threshold_empty_emails_only_owner(
-    base_email_logger, mock_send_email
+    redis_email_logger, mock_send_email
 ):
     """Test that empty email list for a threshold sends only to owner"""
     user_info = CallInfo(
@@ -1083,12 +1052,8 @@ async def test_multi_threshold_empty_emails_only_owner(
         },
     )
 
-    mock_cache = mock.AsyncMock()
-    mock_cache.async_increment_cache = mock.AsyncMock(return_value=1)
-    base_email_logger.internal_usage_cache = mock_cache
-
     with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
-        await base_email_logger.budget_alerts(
+        await redis_email_logger.budget_alerts(
             type="max_budget_alert", user_info=user_info
         )
 
@@ -1099,7 +1064,7 @@ async def test_multi_threshold_empty_emails_only_owner(
 
 @pytest.mark.asyncio
 async def test_multi_threshold_team_member_alert_renders_member_template_per_team(
-    base_email_logger, mock_send_email
+    redis_email_logger, mock_send_email, alert_redis
 ):
     """A team member budget alert is keyed per member and team, names the member and team,
     and goes to the member plus the threshold's configured recipients"""
@@ -1114,17 +1079,12 @@ async def test_multi_threshold_team_member_alert_renders_member_template_per_tea
         max_budget_alert_emails={"50": [], "100": ["finance@co.com"]},
     )
 
-    mock_cache = mock.AsyncMock()
-    mock_cache.async_increment_cache = mock.AsyncMock(return_value=1)
-    base_email_logger.internal_usage_cache = mock_cache
-
     with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
-        await base_email_logger.budget_alerts(type="max_budget_alert", user_info=user_info)
+        await redis_email_logger.budget_alerts(type="max_budget_alert", user_info=user_info)
 
-    cache_keys = sorted(c[1]["key"] for c in mock_cache.async_increment_cache.call_args_list)
-    assert cache_keys == [
-        "email_budget_alerts:max_budget_alert:100:team_member:member_1:team_a",
-        "email_budget_alerts:max_budget_alert:50:team_member:member_1:team_a",
+    assert sorted(await alert_redis[1].keys("*")) == [
+        b"alerts:email_budget_alerts:max_budget_alert:100:team_member:member_1:team_a",
+        b"alerts:email_budget_alerts:max_budget_alert:50:team_member:member_1:team_a",
     ]
     assert mock_send_email.call_count == 2
     hundred = next(
@@ -1140,7 +1100,7 @@ async def test_multi_threshold_team_member_alert_renders_member_template_per_tea
 
 @pytest.mark.asyncio
 async def test_no_map_preserves_old_single_threshold(
-    base_email_logger, mock_send_email
+    redis_email_logger, mock_send_email, alert_redis
 ):
     """Test that without max_budget_alert_emails, the old 80% single-threshold path works"""
     user_info = CallInfo(
@@ -1151,21 +1111,15 @@ async def test_no_map_preserves_old_single_threshold(
         event_group=Litellm_EntityType.USER,
     )
 
-    mock_cache = mock.AsyncMock()
-    mock_cache.async_increment_cache = mock.AsyncMock(return_value=1)
-    base_email_logger.internal_usage_cache = mock_cache
-
     with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
-        await base_email_logger.budget_alerts(
+        await redis_email_logger.budget_alerts(
             type="max_budget_alert", user_info=user_info
         )
 
         mock_send_email.assert_called_once()
         call_args = mock_send_email.call_args[1]
         assert call_args["to_email"] == ["test@example.com"]
-        # Old path cache key has no threshold percentage
-        cache_key = mock_cache.async_increment_cache.call_args[1]["key"]
-        assert cache_key == "email_budget_alerts:max_budget_alert:test_user"
+        assert await alert_redis[1].get("alerts:email_budget_alerts:max_budget_alert:test_user") == b"1"
 
 
 CUSTOM_SIGNATURE = "<div>Best,<br/>The Acme Platform Team</div>"
@@ -1399,31 +1353,31 @@ async def test_budget_alert_failed_send_releases_claim_for_retry(
 
 
 @pytest.mark.asyncio
-async def test_budget_alert_release_failure_does_not_propagate(base_email_logger):
+async def test_budget_alert_release_failure_does_not_propagate(redis_email_logger, alert_redis):
     """If the send fails and releasing the claim also fails (transient cache
     error), budget_alerts must swallow it and still log the send failure rather
     than letting the exception escape the fire-and-forget task."""
-    mock_cache = mock.AsyncMock()
-    mock_cache.async_increment_cache = mock.AsyncMock(return_value=1)
-    mock_cache.async_delete_cache = mock.AsyncMock(
-        side_effect=RuntimeError("cache backend unavailable")
-    )
-    base_email_logger.internal_usage_cache = mock_cache
-
     async def failing_send(*args, **kwargs):
+        alert_redis[2].connected = False
         raise ValueError("smtp backend down")
 
     with mock.patch.object(
-        base_email_logger, "send_max_budget_alert_email", side_effect=failing_send
+        redis_email_logger, "send_email", side_effect=failing_send
     ):
         with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
             # Must not raise even though both the send and the release fail.
-            await base_email_logger.budget_alerts(
+            await redis_email_logger.budget_alerts(
                 type="max_budget_alert",
                 user_info=_budget_alert_user_info(dict(max_budget=100.0, spend=85.0)),
             )
 
-    mock_cache.async_delete_cache.assert_awaited_once()
+    alert_redis[2].connected = True
+    assert await alert_redis[1].get("alerts:email_budget_alerts:max_budget_alert:hashed_key_1") == b"1"
+    assert (
+        redis_email_logger.internal_usage_cache.in_memory_cache.get_cache(
+            "email_budget_alerts:max_budget_alert:hashed_key_1"
+        ) is None
+    )
 
 
 class _RecordingEmailLogger(BaseEmailLogger):
