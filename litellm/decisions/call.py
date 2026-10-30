@@ -33,6 +33,7 @@ from litellm.llms.base_llm.decisions.transformation import (
     with_inlined_images,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.openai.common_utils import openai_organization_header
 from litellm.llms.openai.decisions.transformation import ir_to_openai_response, openai_request_to_ir
 from litellm.types.decisions import (
     DecisionQuestion,
@@ -408,6 +409,14 @@ def _provider_ir_request(
     return supported
 
 
+def _organization_header(
+    headers: Mapping[str, str], custom_llm_provider: str, organization: object
+) -> Mapping[str, str]:
+    if custom_llm_provider != LlmProviders.OPENAI.value or not isinstance(organization, str):
+        return {}
+    return openai_organization_header(headers, organization)
+
+
 def _outbound_headers(
     extra_headers: Mapping[str, str] | None, custom_llm_provider: str, kwargs: Mapping[str, object]
 ) -> Mapping[str, str]:
@@ -417,7 +426,10 @@ def _outbound_headers(
         ),
         custom_llm_provider=custom_llm_provider,
     )
-    return MappingProxyType({**(extra_headers or {}), **forwarded})
+    caller_headers: Final = {**(extra_headers or {}), **forwarded}
+    return MappingProxyType(
+        {**caller_headers, **_organization_header(caller_headers, custom_llm_provider, kwargs.get("organization"))}
+    )
 
 
 _LOGGED_FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])

@@ -297,6 +297,47 @@ async def test_router_dispatches_typesafe_decisions_without_api_base(
     assert response.answers["sentiment"].choice == "positive"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("extra_headers", "expected"),
+    [
+        pytest.param(None, "org-deployment", id="deployment-organization"),
+        pytest.param({"openai-organization": "org-caller"}, "org-caller", id="caller-header-wins"),
+    ],
+)
+async def test_openai_decisions_sends_the_organization_header(
+    extra_headers: Mapping[str, str] | None, expected: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+
+    await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_key="caller-key",
+        api_base="https://api.openai.com/v1",
+        organization="org-deployment",
+        extra_headers=extra_headers,
+    )
+
+    assert route.calls[0].request.headers.get_list("openai-organization") == [expected]
+
+
+@pytest.mark.asyncio
+async def test_decisions_keeps_the_organization_off_other_providers(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    await litellm.asystemone(
+        model="perplexity/pplx-decider-v1-27b",
+        state="review",
+        questions=_QUESTIONS,
+        api_key="caller-key",
+        organization="org-deployment",
+    )
+
+    assert "openai-organization" not in route.calls[0].request.headers
+
+
 def test_decisions_uses_the_same_wire_contract_for_sync_calls(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
 
