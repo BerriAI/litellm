@@ -5906,8 +5906,8 @@ def default_response_schema_prompt(response_schema: Mapping[str, object]) -> str
     This is the default prompt. Allow user to override this with a custom_prompt.
     """
     prompt_str: Final = f"""Use this JSON schema: 
-    ```json 
-    {response_schema}
+    ```json
+    {json.dumps(response_schema, default=str)}
     ```"""
     return prompt_str
 

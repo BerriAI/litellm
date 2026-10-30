@@ -223,7 +223,9 @@ def test_zai_puts_json_schema_in_prompt_for_models_that_ignore_it(
     assert body["response_format"] == {"type": "json_object"}
     assert body["messages"][0] == {"role": "user", "content": "Ann likes 7"}
     assert body["messages"][-1]["role"] == "user"
-    assert "favorite_number" in body["messages"][-1]["content"]
+    prompt = body["messages"][-1]["content"]
+    rendered_schema = prompt[prompt.index("{") : prompt.rindex("}") + 1]
+    assert json.loads(rendered_schema) == JSON_SCHEMA_RESPONSE_FORMAT["json_schema"]["schema"]
 
 
 def test_zai_glm_5v_turbo_bills_cached_input_at_cache_read_price(local_model_cost_map: None) -> None:
