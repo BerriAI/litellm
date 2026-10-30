@@ -338,6 +338,26 @@ class TestProxyHeaderExtraction:
         assert headers.get("llm_provider-x-request-id") == "req-abc123"
         assert headers.get("llm_provider-x-ms-region") == "eastus"
 
+    def test_get_response_headers_preserves_anthropic_rate_limit_headers(self):
+        """Anthropic-compatible and rate-limited clients need these headers on downstream 429."""
+        from litellm.litellm_core_utils.llm_response_utils.get_headers import (
+            get_response_headers,
+        )
+
+        result = get_response_headers(
+            {
+                "Anthropic-RateLimit-Unified-Status": "rejected",
+                "Retry-After": "287441",
+                "x-request-id": "req-123",
+            }
+        )
+
+        assert result["Anthropic-RateLimit-Unified-Status"] == "rejected"
+        assert result["Retry-After"] == "287441"
+        assert result["llm_provider-Anthropic-RateLimit-Unified-Status"] == "rejected"
+        assert result["llm_provider-Retry-After"] == "287441"
+        assert result["llm_provider-x-request-id"] == "req-123"
+
 
 class TestBedrockErrorHeaders:
     """A BedrockError built with headers but no response still exposes them (LIT-5428)."""
