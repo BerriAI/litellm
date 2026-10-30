@@ -27,7 +27,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -84,7 +84,7 @@ jobs:
 
       - name: Sync commits into the release
         if: steps.plan.outputs.sync_base != ''
-        uses: linear/linear-release-action@d4af10092984f9bc6d5efa075b242bdf01333463 # v0.18.0
+        uses: linear/linear-release-action@30f9ae77461ec29f07fffe0c52edd1909bfbb6f5 # v0.18.1
         with:
           access_key: ${{ secrets.LINEAR_API_KEY }}
           command: sync
@@ -113,7 +113,7 @@ jobs:
 
       - name: Move the release to its stage
         if: steps.plan.outputs.stage != '' || steps.main_stage.outputs.stage != ''
-        uses: linear/linear-release-action@d4af10092984f9bc6d5efa075b242bdf01333463 # v0.18.0
+        uses: linear/linear-release-action@30f9ae77461ec29f07fffe0c52edd1909bfbb6f5 # v0.18.1
         with:
           access_key: ${{ secrets.LINEAR_API_KEY }}
           command: update
@@ -123,7 +123,7 @@ jobs:
 
       - name: Complete the release
         if: steps.plan.outputs.complete == 'true'
-        uses: linear/linear-release-action@d4af10092984f9bc6d5efa075b242bdf01333463 # v0.18.0
+        uses: linear/linear-release-action@30f9ae77461ec29f07fffe0c52edd1909bfbb6f5 # v0.18.1
         with:
           access_key: ${{ secrets.LINEAR_API_KEY }}
           command: complete
