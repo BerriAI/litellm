@@ -70,9 +70,45 @@ pub fn app_with_cache_for_principal(
     )
 }
 
+pub fn app_with_litellm_params(model: &str, api_base: &str, litellm_params: Value) -> Router {
+    deployment_app(
+        Deployment {
+            litellm_params: serde_json::from_value(litellm_params).unwrap(),
+            ..test_deployment(model, api_base)
+        },
+        litellm_gateway_auth::Permissions::All,
+        None,
+        None,
+    )
+}
+
+fn test_deployment(model: &str, api_base: &str) -> Deployment {
+    Deployment {
+        model: model.into(),
+        api_base: Some(api_base.into()),
+        api_key: Some("test-key".into()),
+        timeout: Some(Duration::from_secs(5)),
+        ..Default::default()
+    }
+}
+
 fn configured_app(
     model: &str,
     api_base: &str,
+    permissions: litellm_gateway_auth::Permissions,
+    cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
+    principal: Option<litellm_gateway_auth::Principal>,
+) -> Router {
+    deployment_app(
+        test_deployment(model, api_base),
+        permissions,
+        cache,
+        principal,
+    )
+}
+
+fn deployment_app(
+    deployment: Deployment,
     permissions: litellm_gateway_auth::Permissions,
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
     principal: Option<litellm_gateway_auth::Principal>,
@@ -85,18 +121,7 @@ fn configured_app(
         resources,
         http,
         secrets,
-        [(
-            "public/model".into(),
-            Deployment {
-                model: model.into(),
-                api_base: Some(api_base.into()),
-                api_key: Some("test-key".into()),
-                timeout: Some(Duration::from_secs(5)),
-                ..Default::default()
-            },
-        )]
-        .into_iter()
-        .collect(),
+        [("public/model".into(), deployment)].into_iter().collect(),
     )
     .unwrap();
     let gateway = match cache {

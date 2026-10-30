@@ -25,6 +25,13 @@ const OPENROUTER_API_HEADERS: [&str; 2] = [
 ];
 const ANTHROPIC_API_HEADER_PROVIDERS: &str =
     "anthropic,bedrock,bedrock_mantle,vertex_ai,openrouter,deepseek";
+const DEPLOYMENT_SAMPLING_PARAMS: [&str; 5] = [
+    "temperature",
+    "top_p",
+    "top_k",
+    "max_tokens",
+    "stop_sequences",
+];
 
 pub async fn create(
     State(gateway): State<Arc<Gateway>>,
@@ -72,12 +79,12 @@ fn project(
     body: Map<String, Value>,
     headers: &HeaderMap,
 ) -> Result<MessagesCall, Error> {
-    let body = body
-        .into_iter()
-        .map(|(name, value)| match name.as_str() {
-            "model" => (name, Value::from(deployment.model.as_str())),
-            _ => (name, value),
-        })
+    let client_params = body.into_iter().map(|(name, value)| match name.as_str() {
+        "model" => (name, Value::from(deployment.model.as_str())),
+        _ => (name, value),
+    });
+    let body = deployment_sampling_params(deployment)
+        .chain(client_params)
         .collect();
     Ok(MessagesCall {
         body: messages_body(body)?,
@@ -89,6 +96,15 @@ fn project(
         provider_specific_header: anthropic_api_headers(headers),
         timeout: deployment.timeout,
         shaping: deployment.shaping.clone(),
+    })
+}
+
+fn deployment_sampling_params(
+    deployment: &Deployment,
+) -> impl Iterator<Item = (String, Value)> + '_ {
+    DEPLOYMENT_SAMPLING_PARAMS.iter().filter_map(|name| {
+        let value = deployment.litellm_params.extra.get(*name)?;
+        Some(((*name).to_owned(), value.clone()))
     })
 }
 

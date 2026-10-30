@@ -5,7 +5,7 @@ use axum::{
     http::Request,
 };
 use rstest::rstest;
-use serde_json::json;
+use serde_json::{Value, json};
 use tower::ServiceExt;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -73,6 +73,67 @@ async fn messages_reaches_the_provider_and_preserves_json_or_sse(
     assert_eq!(requests.len(), 1);
     assert!(!requests[0].headers.contains_key("authorization"));
     assert!(!requests[0].headers.contains_key("x-request-id"));
+}
+
+#[rstest]
+#[case::the_defaults_fill_what_the_client_omits(
+    json!({}),
+    json!({"temperature": 0.2, "top_p": 0.9, "top_k": 5, "max_tokens": 7, "stop_sequences": ["default"]}),
+)]
+#[case::client_values_win(
+    json!({"temperature": 0.7, "top_p": 0.8, "top_k": 6, "max_tokens": 16, "stop_sequences": ["client"]}),
+    json!({"temperature": 0.7, "top_p": 0.8, "top_k": 6, "max_tokens": 16, "stop_sequences": ["client"]}),
+)]
+#[case::a_client_null_clears_each_default(
+    json!({"temperature": null, "top_p": null, "top_k": null, "stop_sequences": null, "max_tokens": 16}),
+    json!({"max_tokens": 16}),
+)]
+#[tokio::test]
+async fn deployment_sampling_params_sit_under_the_client_body(
+    #[case] client_params: Value,
+    #[case] expected_params: Value,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(body_json(messages_request("test-model", expected_params)))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "msg_test", "type": "message", "role": "assistant", "model": "test-model",
+            "content": [{"type": "text", "text": "hello"}], "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        })))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let app = support::app_with_litellm_params(
+        "anthropic/test-model",
+        &upstream.uri(),
+        json!({
+            "model": "anthropic/test-model",
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "top_k": 5,
+            "max_tokens": 7,
+            "stop_sequences": ["default"],
+            "a_litellm_only_setting": "stays-out-of-the-provider-body",
+        }),
+    );
+
+    let response = support::post(
+        app,
+        "/v1/messages",
+        messages_request("public/model", client_params),
+    )
+    .await;
+
+    assert_eq!(response.status(), 200);
+}
+
+fn messages_request(model: &str, params: Value) -> Value {
+    let mut request = params;
+    request["model"] = json!(model);
+    request["messages"] = json!([{"role": "user", "content": "hi"}]);
+    request
 }
 
 #[tokio::test]
