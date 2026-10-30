@@ -68,10 +68,10 @@ class _ErrorPayload(LiteLLMBaseModel):
         return {"message": self.error} if isinstance(self.error, str) else self.error
 
 
-def _is_mapping(
+def _is_dict_like(
     value: object,
-) -> TypeIs[Mapping[object, object]]:  # guard-ok: isinstance decides it, keys and values stay object
-    return isinstance(value, Mapping)
+) -> TypeIs[dict[object, object] | MappingProxyType[object, object]]:  # guard-ok: isinstance decides it
+    return isinstance(value, dict | MappingProxyType)
 
 
 def _is_mapping_proxy(
@@ -96,13 +96,15 @@ def _jsonable_stream_value(value: object) -> object:
     return str(value)
 
 
-def responses_chunk_json(chunk: object) -> str | None:
-    if not _is_mapping(chunk):
-        return None
+def _stream_json(value: Mapping[object, object]) -> str | None:
     try:
-        return json.dumps(_with_json_keys(chunk), default=_jsonable_stream_value)
-    except (TypeError, ValueError):
+        return json.dumps(_with_json_keys(value), default=_jsonable_stream_value)
+    except Exception:  # noqa: BLE001  # hook values run their own __str__ and serializers, so any failure must fall back
         return None
+
+
+def responses_chunk_json(chunk: object) -> str | None:
+    return _stream_json(chunk) if _is_dict_like(chunk) else None
 
 
 def sse_error_object(data: str | bytes) -> Mapping[str, object] | None:
@@ -221,15 +223,24 @@ class ResponsesStreamErrorState:
         return prefix.encode("utf-8") + frame if isinstance(frame, bytes) else prefix + frame
 
     def format_error(self, error: Mapping[str, object]) -> str:
-        payload: Final = json.dumps(
+        fields: Final = responses_error_fields(error)
+        sequence_number: Final = self.sequence_number + 1
+        payload: Final = _stream_json(
             {
                 "type": ResponsesAPIStreamEvents.ERROR.value,
-                **responses_error_fields(error),
+                **fields,
                 "param": error.get("param"),
-                "sequence_number": self.sequence_number + 1,
+                "sequence_number": sequence_number,
                 "error": error,
-            },
-            default=_jsonable_stream_value,
+            }
+        ) or json.dumps(
+            {
+                "type": ResponsesAPIStreamEvents.ERROR.value,
+                **fields,
+                "param": None,
+                "sequence_number": sequence_number,
+                "error": fields,
+            }
         )
         return f"event: error\ndata: {payload}\n\n"
 

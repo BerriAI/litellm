@@ -258,13 +258,41 @@ def _self_referencing_chunk() -> Mapping[str, object]:
     return chunk
 
 
+class _UnprintableValue:
+    def __str__(self) -> str:
+        raise RuntimeError("no string form")
+
+
 @pytest.mark.parametrize(
     "chunk",
-    [{"type": "response.output_text.delta", "meta": {("a", "b"): 1}}, _self_referencing_chunk()],
-    ids=["nested_dict_tuple_key", "self_reference"],
+    [
+        {"type": "response.output_text.delta", "meta": {("a", "b"): 1}},
+        _self_referencing_chunk(),
+        {"type": "response.output_text.delta", "meta": _UnprintableValue()},
+        _UPSTREAM_HEADERS,
+    ],
+    ids=["nested_dict_tuple_key", "self_reference", "unprintable_value", "header_mapping_chunk"],
 )
 def test_responses_sse_chunk_json_cannot_encode_streams_as_a_plain_data_frame(chunk: Mapping[str, object]) -> None:
     assert _format_responses_sse_chunk(chunk=chunk) == _format_streaming_sse_chunk(chunk=chunk)
+
+
+@pytest.mark.parametrize(
+    "nested",
+    [
+        MappingProxyType({"bad": {("a", "b"): 1}}),
+        _self_referencing_chunk(),
+        _UnprintableValue(),
+    ],
+    ids=["proxy_over_tuple_key", "self_reference", "unprintable_value"],
+)
+def test_responses_error_event_json_cannot_encode_still_ends_the_stream_with_its_message(nested: object) -> None:
+    frame: Final = ResponsesStreamErrorState().format_error({"message": "blocked", "code": 400, "nested": nested})
+
+    assert frame.startswith("event: error\ndata: ")
+    payload: Final = json.loads(frame.split("data: ", 1)[1])
+    assert (payload["type"], payload["message"], payload["error"]["message"]) == ("error", "blocked", "blocked")
+    assert payload["error"]["code"] == payload["code"]
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
