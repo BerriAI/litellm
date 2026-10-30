@@ -4495,6 +4495,7 @@ GenericBudgetConfigType = dict[str, BudgetConfig]
 
 class LlmProviders(str, Enum):
     REFUSELESS = "refuseless"
+    LLAMAY = "llamay"
     OPENAI = "openai"
     CHATGPT = "chatgpt"
     OPENAI_LIKE = "openai_like"  # embedding only
