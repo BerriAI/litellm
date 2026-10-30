@@ -287,6 +287,42 @@ def test_extract_tool_results_skips_non_dict_messages_and_tool_calls():
     assert extract_tool_results(msgs) == (("f", "ok", "c1"),)
 
 
+def test_tool_result_takes_its_name_from_the_nearest_earlier_declaration():
+    msgs = [
+        {"role": "assistant", "tool_calls": [{"id": "c1", "function": {"name": "first"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "r1"},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "c1", "function": {"name": "second"}}, {"id": "c1", "function": {"name": "third"}}],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "r2"},
+        {"role": "tool", "tool_call_id": "c2", "content": "r3"},
+        {"role": "assistant", "tool_calls": [{"id": "c2", "function": {"name": "too-late"}}]},
+    ]
+    assert extract_tool_results(msgs) == (("first", "r1", "c1"), ("third", "r2", "c1"), ("tool_result", "r3", "c2"))
+
+
+class _ReadCountingMessage(dict):
+    def __init__(self, **fields):
+        super().__init__(**fields)
+        self.reads = 0
+
+    def get(self, key, default=None):
+        self.reads += 1
+        return super().get(key, default)
+
+
+def _reads_of_a_declaration_followed_by(tool_results):
+    declaration = _ReadCountingMessage(role="assistant", tool_calls=[{"id": "c0", "function": {"name": "f"}}])
+    tool_messages = [{"role": "tool", "tool_call_id": f"c{index}", "content": "x"} for index in range(tool_results)]
+    extract_tool_results([declaration, *tool_messages])
+    return declaration.reads
+
+
+def test_tool_result_names_resolve_without_rescanning_earlier_messages():
+    assert _reads_of_a_declaration_followed_by(1000) == _reads_of_a_declaration_followed_by(1)
+
+
 def test_malformed_data_url_is_undecodable():
     block = {"type": "file", "file": {"filename": "x.bin", "file_data": "data:garbage-no-comma"}}
     parts = extract_file_parts_from_messages(_msgs(block), size_limit=1000)

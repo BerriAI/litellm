@@ -2,8 +2,10 @@ import base64
 import json
 import posixpath
 import re
+from bisect import bisect_left
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from itertools import chain
+from itertools import chain, groupby
+from operator import attrgetter
 from types import MappingProxyType
 from typing import Final, NamedTuple
 from urllib.parse import unquote, urlparse
@@ -303,32 +305,51 @@ def _extract_tool_content(content: object) -> str | None:
     return text if text.strip() else None
 
 
-def _declared_names_for_call(message: object, call_id: str) -> Iterator[str]:
+class _Declaration(NamedTuple):
+    call_id: str
+    message_index: int
+    name: str
+
+
+def _declarations_in(message_index: int, message: object) -> Iterator[_Declaration]:
     fields: Final = as_str_mapping(message)
     if fields is None or fields.get("role") != "assistant":
         return
     for tool_call in map(as_str_mapping, _list_items(fields.get("tool_calls"))):
-        if tool_call is None or tool_call.get("id") != call_id:
+        if tool_call is None:
             continue
+        call_id = tool_call.get("id")
         function = as_str_mapping(tool_call.get("function"))
         name = str_or_none(function.get("name")) if function is not None else None
-        if name and name.strip():
-            yield name
+        if isinstance(call_id, str) and call_id and name and name.strip():
+            yield _Declaration(call_id, message_index, name)
 
 
-def _resolve_tool_name(messages: Sequence[object], tool_index: int, tool_call_id: object) -> str:
+def _declarations_by_call_id(messages: Sequence[object]) -> Mapping[str, tuple[_Declaration, ...]]:
+    """Every named declaration of each tool call id, in message order, built in one pass."""
+    declarations: Final = chain.from_iterable(
+        _declarations_in(index, message) for index, message in enumerate(messages)
+    )
+    ordered: Final = sorted(declarations, key=attrgetter("call_id", "message_index"))
+    return MappingProxyType({call_id: tuple(group) for call_id, group in groupby(ordered, key=attrgetter("call_id"))})
+
+
+def _resolve_tool_name(
+    declarations: Mapping[str, tuple[_Declaration, ...]], tool_index: int, tool_call_id: object
+) -> str:
+    """Name from the nearest declaration of ``tool_call_id`` before ``tool_index``."""
     if not isinstance(tool_call_id, str) or not tool_call_id:
         return _DEFAULT_TOOL_RESULT_NAME
-    declared: Final = tuple(
-        chain.from_iterable(_declared_names_for_call(message, tool_call_id) for message in messages[:tool_index])
-    )
-    return declared[-1] if declared else _DEFAULT_TOOL_RESULT_NAME
+    declared: Final = declarations.get(tool_call_id, ())
+    earlier: Final = bisect_left(declared, tool_index, key=attrgetter("message_index"))
+    return declared[earlier - 1].name if earlier else _DEFAULT_TOOL_RESULT_NAME
 
 
 def extract_tool_results(
     structured_messages: Sequence[object] | None,
 ) -> tuple[tuple[str, str, object], ...]:
     messages: Final = tuple(structured_messages or ())
+    declarations: Final = _declarations_by_call_id(messages)
 
     def _results() -> Iterator[tuple[str, str, object]]:
         for index, message in enumerate(map(as_str_mapping, messages)):
@@ -338,7 +359,7 @@ def extract_tool_results(
             if content is None:
                 continue
             tool_call_id = message.get("tool_call_id")
-            yield _resolve_tool_name(messages, index, tool_call_id), content, tool_call_id
+            yield _resolve_tool_name(declarations, index, tool_call_id), content, tool_call_id
 
     return tuple(_results())
 
