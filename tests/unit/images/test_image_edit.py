@@ -12,7 +12,8 @@ from typing_extensions import ReadOnly, TypedDict, override
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.utils import ImageResponse
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.types.utils import FileTypes, ImageResponse
 
 _PNG_SIGNATURE: Final = b"\x89PNG\r\n\x1a\n"
 _FIRST_IMAGE: Final = _PNG_SIGNATURE + b"first-reference-image"
@@ -32,6 +33,26 @@ _EDIT_RESPONSE: Final = {
         "input_tokens_details": {"image_tokens": _IMAGE_TOKENS, "text_tokens": _TEXT_TOKENS},
         "output_tokens": _OUTPUT_TOKENS,
     },
+}
+
+_DASHSCOPE_IMAGE_URL: Final = (
+    "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+)
+_DASHSCOPE_EDIT_RESPONSE: Final = {
+    "output": {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": [{"image": "https://example.com/edited.png"}]},
+            }
+        ]
+    },
+    "usage": {"image_count": 1},
+}
+
+_FAL_EDIT_URL: Final = "https://fal.run/fal-ai/flux-2/edit"
+_FAL_EDIT_RESPONSE: Final = {
+    "images": [{"url": "https://example.com/edited.png", "width": 1024, "height": 768, "content_type": "image/png"}]
 }
 
 
@@ -73,6 +94,20 @@ def _multipart_image_parts(request: httpx.Request) -> tuple[bytes, ...]:
     return tuple(part.split(b"\r\n\r\n", 1)[1].removesuffix(b"\r\n") for part in parts if b'name="image[]"' in part)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("image", (None, []), ids=("none", "empty-list"))
+async def test_bfl_image_edit_missing_image_returns_bad_request(image: list[FileTypes] | None) -> None:
+    with pytest.raises(litellm.BadRequestError, match="No image provided") as exc_info:
+        await litellm.aimage_edit(
+            model="black_forest_labs/flux-kontext-pro",
+            prompt="make it blue",
+            image=image,
+            api_key="fake-key",
+        )
+
+    assert exc_info.value.status_code == 400
+
+
 def test_openai_image_edit_sync_accepts_bytesio_images(respx_mock: respx.MockRouter, httpx_transport: None) -> None:
     route: Final = respx_mock.post("https://api.openai.com/v1/images/edits").mock(
         return_value=httpx.Response(200, json=_EDIT_RESPONSE)
@@ -89,6 +124,24 @@ def test_openai_image_edit_sync_accepts_bytesio_images(respx_mock: respx.MockRou
     assert result.data is not None and result.data[0].b64_json == _EDITED_IMAGE_B64
     assert route.call_count == 1
     assert _multipart_image_parts(route.calls[0].request) == (_FIRST_IMAGE,)
+
+
+def test_openai_image_edit_without_a_model_leaves_model_out_of_the_request(
+    respx_mock: respx.MockRouter, httpx_transport: None
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/images/edits").mock(
+        return_value=httpx.Response(200, json=_EDIT_RESPONSE)
+    )
+
+    litellm.image_edit(
+        prompt="combine the reference images",
+        image=io.BytesIO(_FIRST_IMAGE),
+        custom_llm_provider="openai",
+        api_key="fake-key",
+    )
+
+    assert route.call_count == 1
+    assert b'name="model"' not in route.calls[0].request.read()
 
 
 @pytest.mark.asyncio
@@ -197,3 +250,101 @@ async def test_router_image_edit_returns_the_provider_image(
     assert isinstance(result, ImageResponse)
     assert result.data is not None and result.data[0].b64_json == _EDITED_IMAGE_B64
     assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_price", "size", "expected_cost"),
+    (
+        ({"input_cost_per_image": 0.0123}, None, 0.0123),
+        ({"input_cost_per_pixel": 1e-08}, "2048x2048", 2048 * 2048 * 1e-08),
+    ),
+)
+async def test_an_edit_bills_the_deployment_price_at_its_size_on_a_logging_object_made_before_routing(
+    respx_mock: respx.MockRouter,
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_price: dict[str, float],
+    size: str | None,
+    expected_cost: float,
+) -> None:
+    monkeypatch.delenv("DASHSCOPE_API_BASE", raising=False)
+    monkeypatch.delenv("DASHSCOPE_API_BASE_IMAGE", raising=False)
+    respx_mock.post(_DASHSCOPE_IMAGE_URL).mock(return_value=httpx.Response(200, json=_DASHSCOPE_EDIT_RESPONSE))
+    logging_made_before_routing: Final = Logging(
+        model="qwen-image-edit",
+        messages=[],
+        stream=False,
+        call_type="aimage_edit",
+        start_time=datetime.now(),
+        litellm_call_id="edit-call",
+        function_id="edit-call",
+    )
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "qwen-image-edit",
+                "litellm_params": {
+                    "model": "dashscope/qwen-image-2.0",
+                    "api_key": "fake-key",
+                    **deployment_price,
+                },
+            }
+        ]
+    )
+
+    result: Final = await router.aimage_edit(
+        model="qwen-image-edit",
+        image=_FIRST_IMAGE,
+        prompt="Turn the circle into a square",
+        size=size,
+        litellm_logging_obj=logging_made_before_routing,
+        litellm_call_id="edit-call",
+    )
+
+    assert isinstance(result, ImageResponse)
+    assert result._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+
+@pytest.mark.asyncio
+async def test_a_fal_edit_bills_the_deployment_price_per_image_on_a_logging_object_made_before_routing(
+    respx_mock: respx.MockRouter,
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FAL_AI_API_BASE", raising=False)
+    respx_mock.post(_FAL_EDIT_URL).mock(return_value=httpx.Response(200, json=_FAL_EDIT_RESPONSE))
+    logging_made_before_routing: Final = Logging(
+        model="flux-edit",
+        messages=[],
+        stream=False,
+        call_type="aimage_edit",
+        start_time=datetime.now(),
+        litellm_call_id="fal-edit-call",
+        function_id="fal-edit-call",
+    )
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "flux-edit",
+                "litellm_params": {
+                    "model": "fal_ai/fal-ai/flux-2/edit",
+                    "api_key": "fake-key",
+                    "output_cost_per_image": 0.0456,
+                },
+            }
+        ]
+    )
+
+    result: Final = await router.aimage_edit(
+        model="flux-edit",
+        image=_FIRST_IMAGE,
+        prompt="Turn the circle into a square",
+        litellm_logging_obj=logging_made_before_routing,
+        litellm_call_id="fal-edit-call",
+    )
+
+    assert isinstance(result, ImageResponse)
+    assert result._hidden_params["response_cost"] == pytest.approx(0.0456)

@@ -1,9 +1,10 @@
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -138,6 +139,15 @@ class BaseAnthropicMessagesConfig(ABC):
         """
         return True
 
+    def supports_safeguards(self) -> bool:
+        return True
+
+    def serves_api_base(self, model: str, api_base: str | None) -> bool:
+        return True
+
+    def is_native_messages_route(self) -> bool:
+        return True
+
     def handles_web_search_natively(self) -> bool:
         """
         Whether the upstream this config routes to executes ``web_search`` tools
@@ -180,7 +190,7 @@ class BaseAnthropicMessagesConfig(ABC):
         return 2
 
     def should_retry_anthropic_messages_on_http_error(
-        self, e: httpx.HTTPStatusError, litellm_params: dict, request_body: object = None
+        self, e: httpx.HTTPStatusError, litellm_params: Mapping[str, object], request_body: object = None
     ) -> bool:
         """
         When True, async_anthropic_messages_handler will transform the request body
@@ -192,25 +202,63 @@ class BaseAnthropicMessagesConfig(ABC):
             anthropic_request_errors_on_thinking_binding_mismatch,
             is_anthropic_invalid_thinking_block_error,
             is_anthropic_thinking_binding_mismatch_error,
+            is_claude_strict_tools_rejection,
+            tools_without_strict,
+            validated_object_mapping,
         )
 
         if e.response.status_code != 400:
             return False
         error_text: Final[str] = e.response.text
+        body: Final = validated_object_mapping(request_body)
+        drops_rejected_strict_tools: Final = (
+            drops_unsupported_params(litellm_params.get("drop_params"))
+            and is_claude_strict_tools_rejection(e.response.status_code, error_text)
+            and body is not None
+            and tools_without_strict(body.get("tools")) is not None
+        )
+        if drops_rejected_strict_tools:
+            return True
         caller_asked_for_this_error: Final = anthropic_request_errors_on_thinking_binding_mismatch(
             request_body
         ) and is_anthropic_thinking_binding_mismatch_error(error_text)
         return not caller_asked_for_this_error and is_anthropic_invalid_thinking_block_error(error_text)
 
-    def transform_anthropic_messages_request_on_http_error(self, e: httpx.HTTPStatusError, request_data: dict) -> dict:
+    def transform_anthropic_messages_request_on_http_error(
+        self, e: httpx.HTTPStatusError, request_data: dict[str, object]
+    ) -> dict[str, object]:
         """
         Mutates request_data in place when retrying after a recoverable HTTP error.
         """
         from litellm.llms.anthropic.common_utils import (
             is_anthropic_invalid_thinking_block_error,
+            is_claude_strict_tools_rejection,
             strip_thinking_blocks_from_anthropic_messages_request_dict,
+            tools_without_strict,
+            warn_claude_strict_tools_dropped,
         )
 
         if e.response.status_code == 400 and is_anthropic_invalid_thinking_block_error(e.response.text):
             strip_thinking_blocks_from_anthropic_messages_request_dict(request_data)
+        without_strict: Final = (
+            tools_without_strict(request_data.get("tools"))
+            if is_claude_strict_tools_rejection(e.response.status_code, e.response.text)
+            else None
+        )
+        if without_strict is not None:
+            warn_claude_strict_tools_dropped(without_strict.dropped_count)
+            request_data["tools"] = list(without_strict.tools)  # rebind-ok: the retry loop re-signs this same dict
         return request_data
+
+    def native_output_fallback_litellm_params(
+        self,
+        model: str,
+        anthropic_messages_optional_request_params: Mapping[str, object],
+        litellm_params: GenericLiteLLMParams,
+    ) -> GenericLiteLLMParams | None:
+        return None
+
+    def should_retry_anthropic_messages_without_native_output(
+        self, e: httpx.HTTPStatusError, request_body: Mapping[str, object], model: str
+    ) -> bool:
+        return False

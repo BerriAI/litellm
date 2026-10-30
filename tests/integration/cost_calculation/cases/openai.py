@@ -2,6 +2,7 @@
 
 PARITY pairs the streamed case with its plain twin where both bill the same row."""
 
+from collections.abc import Mapping
 from typing import Final, cast
 
 from integration.cost_calculation.cost_tracking_case import (
@@ -32,6 +33,256 @@ def _response_for_model(response: JsonResponse, model: str) -> JsonResponse:
 
 def _stream_for_model(response: SseResponse, model: str) -> SseResponse:
     return response.model_copy(update={"frames": tuple(frame.replace("gpt-6-luna", model) for frame in response.frames)})
+
+
+def _responses_json_body(
+    model: str,
+    *,
+    include_content_filters: bool = False,
+    content_filters: JsonValue = None,
+    include_reasoning: bool = True,
+) -> dict[str, JsonValue]:
+    reasoning_item: Final[dict[str, JsonValue]] = {
+        "content": [],
+        "encrypted_content": "$ENCRYPTED_CONTENT",
+        "id": "rs_$REQUEST_ID",
+        "summary": [],
+        "type": "reasoning",
+    }
+    message_item: Final[dict[str, JsonValue]] = {
+        "content": [
+            {
+                "annotations": [],
+                "logprobs": [],
+                "text": "scripted response",
+                "type": "output_text",
+            }
+        ],
+        "id": "msg_$REQUEST_ID",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message",
+    }
+    output: Final = [reasoning_item, message_item] if include_reasoning else [message_item]
+    body: Final[dict[str, JsonValue]] = {
+        "access_programs": [],
+        "background": False,
+        "completed_at": 1791855453,
+        "created_at": 1791855452,
+        "error": None,
+        "frequency_penalty": None,
+        "id": "resp_$REQUEST_ID",
+        "incomplete_details": None,
+        "instructions": None,
+        "max_output_tokens": None,
+        "max_tool_calls": None,
+        "metadata": {},
+        "moderation": None,
+        "model": model,
+        "object": "response",
+        "output": output,
+        "parallel_tool_calls": True,
+        "presence_penalty": None,
+        "previous_response_id": None,
+        "prompt_cache_key": None,
+        "prompt_cache_retention": None,
+        "reasoning": {"effort": "medium"},
+        "safety_identifier": None,
+        "service_tier": "default",
+        "status": "completed",
+        "store": True,
+        "temperature": 1.0,
+        "text": None,
+        "tool_choice": "auto",
+        "tool_usage": None,
+        "tools": [],
+        "top_logprobs": None,
+        "top_p": 1.0,
+        "truncation": "disabled",
+        "usage": {
+            "input_tokens": 1840,
+            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "output_tokens": 412,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 2252,
+        },
+        "user": None,
+    }
+    return {**body, "content_filters": content_filters} if include_content_filters else body
+
+
+def _responses_stream_response(
+    model: str,
+    delta_count: int,
+    *,
+    include_content_filters: bool = False,
+    content_filters: JsonValue = None,
+    include_reasoning: bool = True,
+) -> SseResponse:
+    response_body: Final = _responses_json_body(
+        model,
+        include_content_filters=include_content_filters,
+        content_filters=content_filters,
+        include_reasoning=include_reasoning,
+    )
+    in_progress_body: Final = {
+        **response_body,
+        "output": [],
+        "status": "in_progress",
+        "usage": None,
+    }
+    reasoning_item: Final = {
+        "content": [],
+        "encrypted_content": "$ENCRYPTED_CONTENT",
+        "id": "rs_$REQUEST_ID",
+        "summary": [],
+        "type": "reasoning",
+    }
+    message_item: Final = {
+        "content": [],
+        "id": "msg_$REQUEST_ID",
+        "role": "assistant",
+        "status": "in_progress",
+        "type": "message",
+    }
+    delta_events: Final = tuple(
+        {
+            "content_index": 0,
+            "delta": "scripted response" if index == 0 else "",
+            "item_id": "msg_$REQUEST_ID",
+            "logprobs": [],
+            "obfuscation": None,
+            "output_index": 1 if include_reasoning else 0,
+            "sequence_number": (6 if include_reasoning else 4) + index,
+            "type": "response.output_text.delta",
+        }
+        for index in range(delta_count)
+    )
+    delta_start: Final = 6 if include_reasoning else 4
+    message_output_index: Final = 1 if include_reasoning else 0
+    reasoning_events: Final = (
+        (
+            {
+                "item": reasoning_item,
+                "output_index": 0,
+                "sequence_number": 2,
+                "type": "response.output_item.added",
+            },
+            {
+                "item": reasoning_item,
+                "output_index": 0,
+                "sequence_number": 3,
+                "type": "response.output_item.done",
+            },
+        )
+        if include_reasoning
+        else ()
+    )
+    completed_message_item: Final = {
+        "content": [
+            {
+                "annotations": [],
+                "logprobs": [],
+                "text": "scripted response",
+                "type": "output_text",
+            }
+        ],
+        "id": "msg_$REQUEST_ID",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message",
+    }
+    return SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "response": in_progress_body,
+                "sequence_number": 0,
+                "type": "response.created",
+            },
+            {
+                "response": in_progress_body,
+                "sequence_number": 1,
+                "type": "response.in_progress",
+            },
+            *reasoning_events,
+            {
+                "item": message_item,
+                "output_index": message_output_index,
+                "sequence_number": 4 if include_reasoning else 2,
+                "type": "response.output_item.added",
+            },
+            {
+                "content_index": 0,
+                "item_id": "msg_$REQUEST_ID",
+                "output_index": message_output_index,
+                "part": {"annotations": [], "logprobs": [], "text": "", "type": "output_text"},
+                "sequence_number": 5 if include_reasoning else 3,
+                "type": "response.content_part.added",
+            },
+            *delta_events,
+            {
+                "content_index": 0,
+                "item_id": "msg_$REQUEST_ID",
+                "logprobs": [],
+                "output_index": message_output_index,
+                "sequence_number": delta_start + delta_count,
+                "text": "scripted response",
+                "type": "response.output_text.done",
+            },
+            {
+                "content_index": 0,
+                "item_id": "msg_$REQUEST_ID",
+                "output_index": message_output_index,
+                "part": {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "scripted response",
+                    "type": "output_text",
+                },
+                "sequence_number": delta_start + delta_count + 1,
+                "type": "response.content_part.done",
+            },
+            {
+                "item": completed_message_item,
+                "output_index": message_output_index,
+                "sequence_number": delta_start + delta_count + 2,
+                "type": "response.output_item.done",
+            },
+            {
+                "response": response_body,
+                "sequence_number": delta_start + delta_count + 3,
+                "type": "response.completed",
+            },
+        ),
+    )
+
+
+def _responses_stream_case(
+    base: CostTrackingTestCase,
+    name: str,
+    response_model: str,
+    delta_count: int,
+    *,
+    include_content_filters: bool = False,
+    content_filters: JsonValue = None,
+    include_reasoning: bool = True,
+) -> CostTrackingTestCase:
+    return base.model_copy(
+        update={
+            "name": name,
+            "request": {**base.request, "stream": True},
+            "response": _responses_stream_response(
+                response_model,
+                delta_count,
+                include_content_filters=include_content_filters,
+                content_filters=content_filters,
+                include_reasoning=include_reasoning,
+            ),
+        }
+    )
 
 
 # gpt-5.3-codex
@@ -6735,6 +6986,106 @@ GPT_5_6_RESPONSES_CACHE_READ: Final = CostTrackingTestCase(
     ),
 )
 
+GPT_5_6_RESPONSES_CACHE_WRITE_12H: Final = CostTrackingTestCase(
+    name="gpt-5.6-responses_cache_write_12h",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-5.6",
+    endpoint="/v1/responses",
+    request={
+        "model": "$MODEL",
+        "input": "summarize this text",
+        "prompt_cache_options": {"mode": "implicit", "ttl": "12h"},
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "resp_$REQUEST_ID",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_$REQUEST_ID",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "scripted response", "annotations": []}],
+                }
+            ],
+            "usage": {
+                "input_tokens": 12928,
+                "output_tokens": 380,
+                "total_tokens": 13308,
+                "input_tokens_details": {
+                    "cached_tokens": 0,
+                    "cache_write_tokens": 5000,
+                    "cache_write_tokens_details": {"ttl_30m_tokens": 3000, "ttl_12h_tokens": 2000},
+                },
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0344865,
+        input_cost=0.0291865,
+        output_cost=0.00532,
+        prompt_tokens=12928,
+        completion_tokens=380,
+        cache_creation_cost=0.0153125,
+    ),
+)
+
+GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE: Final = CostTrackingTestCase(
+    name="gpt-6-luna-responses_cache_write_12h_no_12h_rate",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6-luna",
+    endpoint="/v1/responses",
+    request={
+        "model": "$MODEL",
+        "input": "summarize this text",
+        "prompt_cache_options": {"mode": "implicit", "ttl": "12h"},
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "resp_$REQUEST_ID",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "gpt-6-luna",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_$REQUEST_ID",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "scripted response", "annotations": []}],
+                }
+            ],
+            "usage": {
+                "input_tokens": 12928,
+                "output_tokens": 380,
+                "total_tokens": 13308,
+                "input_tokens_details": {
+                    "cached_tokens": 0,
+                    "cache_write_tokens": 5000,
+                    "cache_write_tokens_details": {"ttl_30m_tokens": 3000, "ttl_12h_tokens": 2000},
+                },
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0016078,
+        input_cost=0.0014178,
+        output_cost=0.00019,
+        prompt_tokens=12928,
+        completion_tokens=380,
+        cache_creation_cost=0.000625,
+    ),
+)
+
 GPT_5_6_RESPONSES_REASONING: Final = CostTrackingTestCase(
     name="gpt-5.6-responses_reasoning",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -11356,6 +11707,31 @@ GPT_5_6_TERRA_TOOL_CALL: Final = GPT_6_LUNA_TOOL_CALL.model_copy(
     }
 )
 
+GPT_5_6_TERRA_TIERED_INPUT_ABOVE_272K: Final = with_usage(
+    GPT_5_6_TERRA_INPUT_TEXT,
+    "gpt-5.6-terra-tiered_input_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(
+        spend=1.5696408, input_cost=1.56, output_cost=0.0096408, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+GPT_5_6_TERRA_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
+    GPT_5_6_TERRA_INPUT_TEXT,
+    "gpt-5.6-terra-tiered_cache_read_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 200000},
+    },
+    ExactExpected(
+        spend=0.6336408, input_cost=0.624, output_cost=0.0096408, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+
 
 GPT_5_6_SLASH_ALIAS: Final = GPT_5_6_INPUT_TEXT.model_copy(
     update={"name": "gpt-5.6-slash_alias", "alias": "openai/custom/gpt-5.6-$MARKER"}
@@ -11446,7 +11822,272 @@ GPT_5_6_RESPONSES_IMAGE_GENERATION_TOOL_TOKENS: Final = CostTrackingTestCase(
     ),
 )
 
+GPT_6_1_SOL_RESPONSES_NATIVE_STREAM: Final = _responses_stream_case(
+    GPT_6_1_SOL_RESPONSES_NATIVE_JSON,
+    "gpt-6.1-sol-responses_native_stream",
+    "gpt-6.1-sol",
+    1,
+    include_reasoning=False,
+)
+GPT_6_LUNA_RESPONSES_NATIVE_STREAM: Final = _responses_stream_case(
+    GPT_6_LUNA_RESPONSES_NATIVE_JSON,
+    "gpt-6-luna-responses_native_stream",
+    "gpt-6-luna",
+    45,
+)
+GPT_6_ASTRA_RESPONSES_NATIVE_STREAM: Final = _responses_stream_case(
+    GPT_6_ASTRA_RESPONSES_NATIVE_JSON,
+    "gpt-6-astra-responses_native_stream",
+    "gpt-6-astra",
+    36,
+)
+GPT_5_6_TERRA_RESPONSES_NATIVE_STREAM: Final = _responses_stream_case(
+    GPT_5_6_TERRA_RESPONSES_NATIVE_JSON,
+    "gpt-5.6-terra-responses_native_stream",
+    "gpt-5.6-terra",
+    95,
+)
+GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON: Final = bridge_pairs(
+    (GPT_5_6_TERRA_RESPONSES_NATIVE_JSON,), ("/v1/messages",)
+)[0].bridged.model_copy(update={"name": "gpt-5.6-terra-messages_bridged_json"})
+GPT_6_1_SOL_MESSAGES_BRIDGED_STREAM: Final = GPT_6_1_SOL_MESSAGES_BRIDGED_JSON.model_copy(
+    update={
+        "name": "gpt-6.1-sol-messages_bridged_stream",
+        "request": {**GPT_6_1_SOL_MESSAGES_BRIDGED_JSON.request, "stream": True},
+        "response": GPT_6_1_SOL_RESPONSES_NATIVE_STREAM.response,
+    }
+)
+GPT_6_LUNA_MESSAGES_BRIDGED_STREAM: Final = GPT_6_LUNA_MESSAGES_BRIDGED_JSON.model_copy(
+    update={
+        "name": "gpt-6-luna-messages_bridged_stream",
+        "request": {**GPT_6_LUNA_MESSAGES_BRIDGED_JSON.request, "stream": True},
+        "response": GPT_6_LUNA_RESPONSES_NATIVE_STREAM.response,
+    }
+)
+GPT_6_ASTRA_MESSAGES_BRIDGED_STREAM: Final = GPT_6_ASTRA_MESSAGES_BRIDGED_JSON.model_copy(
+    update={
+        "name": "gpt-6-astra-messages_bridged_stream",
+        "request": {**GPT_6_ASTRA_MESSAGES_BRIDGED_JSON.request, "stream": True},
+        "response": GPT_6_ASTRA_RESPONSES_NATIVE_STREAM.response,
+    }
+)
+GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM: Final = GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON.model_copy(
+    update={
+        "name": "gpt-5.6-terra-messages_bridged_stream",
+        "request": {**GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON.request, "stream": True},
+        "response": GPT_5_6_TERRA_RESPONSES_NATIVE_STREAM.response,
+    }
+)
+
+
+# An OpenAI-compatible gateway that reports what it charged under usage.cost (#47533). The reported total is the bill,
+# split across input and output by the ratio of the cost map rates (100 * 1e-6 : 20 * 3e-6), on plain and streamed
+# replies alike. A deployment the operator priced keeps the operator's rates on both.
+_GATEWAY_REPORTED_USAGE: Final = {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120, "cost": 0.037}
+_GATEWAY_REPORTED_EXPECTED: Final = ExactExpected(
+    spend=0.037, input_cost=0.0, output_cost=0.037, prompt_tokens=100, completion_tokens=20
+)
+_GATEWAY_OPERATOR_PRICED: Final = Deployment(input_cost_per_token=2e-06, output_cost_per_token=6e-06)
+_GATEWAY_OPERATOR_PRICED_EXPECTED: Final = ExactExpected(
+    spend=0.00032, input_cost=0.0002, output_cost=0.00012, prompt_tokens=100, completion_tokens=20
+)
+_GATEWAY_CHUNK: Final = {
+    "id": "chatcmpl-$REQUEST_ID",
+    "object": "chat.completion.chunk",
+    "created": 1,
+    "model": "gateway-reported-cost-fixture",
+}
+
+GATEWAY_REPORTED_COST: Final = CostTrackingTestCase(
+    name="gateway-reported-cost",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gateway-reported-cost-fixture",
+    endpoint="/v1/chat/completions",
+    request={"model": "$MODEL", "messages": [{"role": "user", "content": "reported cost"}], "stream": False},
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gateway-reported-cost-fixture",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": _GATEWAY_REPORTED_USAGE,
+        },
+    ),
+    expected=_GATEWAY_REPORTED_EXPECTED,
+)
+
+GATEWAY_REPORTED_COST_STREAM: Final = CostTrackingTestCase(
+    name="gateway-reported-cost-stream",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gateway-reported-cost-fixture",
+    endpoint="/v1/chat/completions",
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "reported cost"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {**_GATEWAY_CHUNK, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}}]},
+            {**_GATEWAY_CHUNK, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            {**_GATEWAY_CHUNK, "choices": [], "usage": _GATEWAY_REPORTED_USAGE},
+            done=True,
+        ),
+    ),
+    expected=_GATEWAY_REPORTED_EXPECTED,
+)
+
+GATEWAY_REPORTED_COST_OPERATOR_PRICED: Final = GATEWAY_REPORTED_COST.model_copy(
+    update={
+        "name": "gateway-reported-cost-operator_priced",
+        "deployment": _GATEWAY_OPERATOR_PRICED,
+        "expected": _GATEWAY_OPERATOR_PRICED_EXPECTED,
+    }
+)
+
+GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM: Final = GATEWAY_REPORTED_COST_STREAM.model_copy(
+    update={
+        "name": "gateway-reported-cost-operator_priced-stream",
+        "deployment": _GATEWAY_OPERATOR_PRICED,
+        "expected": _GATEWAY_OPERATOR_PRICED_EXPECTED,
+    }
+)
+
+_GATEWAY_RESPONSES_USAGE: Final[Mapping[str, JsonValue]] = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "cost": 0.037}
+_GATEWAY_RESPONSES_ITEM: Final[Mapping[str, JsonValue]] = {
+    "id": "msg_gateway",
+    "type": "message",
+    "role": "assistant",
+    "status": "completed",
+    "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+}
+_GATEWAY_RESPONSES_BODY: Final[Mapping[str, JsonValue]] = {
+    "id": "resp_$REQUEST_ID",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "gateway-reported-cost-fixture",
+    "output": [_GATEWAY_RESPONSES_ITEM],
+    "usage": _GATEWAY_RESPONSES_USAGE,
+}
+
+GATEWAY_REPORTED_COST_RESPONSES: Final = CostTrackingTestCase(
+    name="gateway-reported-cost-responses",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gateway-reported-cost-fixture",
+    endpoint="/v1/responses",
+    request={"model": "$MODEL", "input": "reported cost", "cache": {"no-cache": True}},
+    response=JsonResponse(content_type="application/json", body=_GATEWAY_RESPONSES_BODY),
+    expected=_GATEWAY_REPORTED_EXPECTED,
+)
+
+GATEWAY_REPORTED_COST_RESPONSES_STREAM: Final = GATEWAY_REPORTED_COST_RESPONSES.model_copy(
+    update={
+        "name": "gateway-reported-cost-responses-stream",
+        "request": {**GATEWAY_REPORTED_COST_RESPONSES.request, "stream": True},
+        "response": SseResponse(
+            content_type="text/event-stream",
+            frames=sse_frames(
+                {
+                    "type": "response.created",
+                    "sequence_number": 0,
+                    "response": {**_GATEWAY_RESPONSES_BODY, "status": "in_progress", "output": [], "usage": None},
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "sequence_number": 1,
+                    "item_id": "msg_gateway",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "ok",
+                },
+                {"type": "response.completed", "sequence_number": 2, "response": _GATEWAY_RESPONSES_BODY},
+            ),
+        ),
+    }
+)
+
+GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED: Final = GATEWAY_REPORTED_COST_RESPONSES.model_copy(
+    update={
+        "name": "gateway-reported-cost-responses-operator_priced",
+        "deployment": _GATEWAY_OPERATOR_PRICED,
+        "expected": _GATEWAY_OPERATOR_PRICED_EXPECTED,
+    }
+)
+
+GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED_STREAM: Final = GATEWAY_REPORTED_COST_RESPONSES_STREAM.model_copy(
+    update={
+        "name": "gateway-reported-cost-responses-operator_priced-stream",
+        "deployment": _GATEWAY_OPERATOR_PRICED,
+        "expected": _GATEWAY_OPERATOR_PRICED_EXPECTED,
+    }
+)
+
+
+_GATEWAY_ZERO_USAGE: Final = {**_GATEWAY_REPORTED_USAGE, "cost": 0}
+
+GATEWAY_REPORTED_ZERO_OPERATOR_PRICED: Final = GATEWAY_REPORTED_COST_OPERATOR_PRICED.model_copy(
+    update={
+        "name": "gateway-reported-zero-operator_priced",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={**GATEWAY_REPORTED_COST.response.body, "usage": _GATEWAY_ZERO_USAGE},
+        ),
+    }
+)
+
+GATEWAY_REPORTED_ZERO_OPERATOR_PRICED_STREAM: Final = GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM.model_copy(
+    update={
+        "name": "gateway-reported-zero-operator_priced-stream",
+        "response": SseResponse(
+            content_type="text/event-stream",
+            frames=sse_frames(
+                {**_GATEWAY_CHUNK, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}}]},
+                {**_GATEWAY_CHUNK, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+                {**_GATEWAY_CHUNK, "choices": [], "usage": _GATEWAY_ZERO_USAGE},
+                done=True,
+            ),
+        ),
+    }
+)
+
+_GATEWAY_OPENROUTER_OPERATOR_PRICED: Final = _GATEWAY_OPERATOR_PRICED.model_copy(
+    update={"model": "openrouter/vendor/gateway-reported-cost-fixture"}
+)
+
+GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED: Final = GATEWAY_REPORTED_COST_OPERATOR_PRICED.model_copy(
+    update={
+        "name": "gateway-reported-cost-openrouter-operator_priced",
+        "deployment": _GATEWAY_OPENROUTER_OPERATOR_PRICED,
+    }
+)
+
+GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED_STREAM: Final = (
+    GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM.model_copy(
+        update={
+            "name": "gateway-reported-cost-openrouter-operator_priced-stream",
+            "deployment": _GATEWAY_OPENROUTER_OPERATOR_PRICED,
+        }
+    )
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    GATEWAY_REPORTED_COST,
+    GATEWAY_REPORTED_COST_STREAM,
+    GATEWAY_REPORTED_COST_OPERATOR_PRICED,
+    GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM,
+    GATEWAY_REPORTED_COST_RESPONSES,
+    GATEWAY_REPORTED_COST_RESPONSES_STREAM,
+    GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED,
+    GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED_STREAM,
+    GATEWAY_REPORTED_ZERO_OPERATOR_PRICED,
+    GATEWAY_REPORTED_ZERO_OPERATOR_PRICED_STREAM,
+    GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED,
+    GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED_STREAM,
     GPT_5_6_SLASH_ALIAS,
     GPT_5_6_SLASH_ALIAS_STREAM,
     GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON,
@@ -11581,6 +12222,8 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     OMNI_MODERATIONS_NEXT_SINGLE,
     OMNI_MODERATIONS_NEXT_LIST,
     GPT_5_6_RESPONSES_CACHE_READ,
+    GPT_5_6_RESPONSES_CACHE_WRITE_12H,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
     GPT_5_6_RESPONSES_REASONING,
     GPT_5_6_RESPONSES_STREAM,
     GPT_5_6_RESPONSES_STREAM_CACHE_READ,
@@ -11659,6 +12302,8 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_6_LUNA_CACHE_WRITE_5M,
     GPT_6_ASTRA_CACHE_WRITE_5M,
     GPT_5_6_TERRA_INPUT_TEXT,
+    GPT_5_6_TERRA_TIERED_INPUT_ABOVE_272K,
+    GPT_5_6_TERRA_TIERED_CACHE_READ_ABOVE_272K,
     GPT_5_6_TERRA_STREAM,
     GPT_5_6_TERRA_RESPONSES_NATIVE_JSON,
     GPT_5_6_TERRA_RESPONSES_DEPLOYMENT_JSON,
@@ -11669,9 +12314,37 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_5_6_TERRA_SERVICE_TIER_FLEX,
     GPT_5_6_TERRA_SERVICE_TIER_PRIORITY,
     GPT_5_6_TERRA_TOOL_CALL,
+    GPT_6_1_SOL_RESPONSES_NATIVE_STREAM,
+    GPT_6_LUNA_RESPONSES_NATIVE_STREAM,
+    GPT_6_ASTRA_RESPONSES_NATIVE_STREAM,
+    GPT_5_6_TERRA_RESPONSES_NATIVE_STREAM,
+    GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON,
+    GPT_6_1_SOL_MESSAGES_BRIDGED_JSON,
+    GPT_6_LUNA_MESSAGES_BRIDGED_JSON,
+    GPT_6_ASTRA_MESSAGES_BRIDGED_JSON,
+    GPT_6_1_SOL_MESSAGES_BRIDGED_STREAM,
+    GPT_6_LUNA_MESSAGES_BRIDGED_STREAM,
+    GPT_6_ASTRA_MESSAGES_BRIDGED_STREAM,
+    GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
+    StreamParityTestCase(plain=GATEWAY_REPORTED_COST, streamed=GATEWAY_REPORTED_COST_STREAM),
+    StreamParityTestCase(
+        plain=GATEWAY_REPORTED_COST_OPERATOR_PRICED, streamed=GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM
+    ),
+    StreamParityTestCase(
+        plain=GATEWAY_REPORTED_ZERO_OPERATOR_PRICED, streamed=GATEWAY_REPORTED_ZERO_OPERATOR_PRICED_STREAM
+    ),
+    StreamParityTestCase(
+        plain=GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED,
+        streamed=GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED_STREAM,
+    ),
+    StreamParityTestCase(plain=GATEWAY_REPORTED_COST_RESPONSES, streamed=GATEWAY_REPORTED_COST_RESPONSES_STREAM),
+    StreamParityTestCase(
+        plain=GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED,
+        streamed=GATEWAY_REPORTED_COST_RESPONSES_OPERATOR_PRICED_STREAM,
+    ),
     StreamParityTestCase(plain=GPT_5_3_CODEX_INPUT_TEXT, streamed=GPT_5_3_CODEX_STREAM),
     StreamParityTestCase(plain=GPT_5_3_CODEX_INPUT_TEXT, streamed=GPT_5_3_CODEX_STREAM_INCOMPLETE),
     StreamParityTestCase(plain=GPT_5_3_CODEX_INPUT_TEXT, streamed=GPT_5_3_CODEX_STREAM_UNVALIDATED),
@@ -11698,6 +12371,16 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=GPT_6_ASTRA_INPUT_TEXT, streamed=GPT_6_ASTRA_STREAM),
     StreamParityTestCase(plain=GPT_6_1_SOL_INPUT_TEXT, streamed=GPT_6_1_SOL_STREAM),
     StreamParityTestCase(plain=GPT_5_6_TERRA_INPUT_TEXT, streamed=GPT_5_6_TERRA_STREAM),
+    StreamParityTestCase(plain=GPT_6_1_SOL_RESPONSES_NATIVE_JSON, streamed=GPT_6_1_SOL_RESPONSES_NATIVE_STREAM),
+    StreamParityTestCase(plain=GPT_6_LUNA_RESPONSES_NATIVE_JSON, streamed=GPT_6_LUNA_RESPONSES_NATIVE_STREAM),
+    StreamParityTestCase(plain=GPT_6_ASTRA_RESPONSES_NATIVE_JSON, streamed=GPT_6_ASTRA_RESPONSES_NATIVE_STREAM),
+    StreamParityTestCase(plain=GPT_5_6_TERRA_RESPONSES_NATIVE_JSON, streamed=GPT_5_6_TERRA_RESPONSES_NATIVE_STREAM),
+    StreamParityTestCase(plain=GPT_6_1_SOL_MESSAGES_BRIDGED_JSON, streamed=GPT_6_1_SOL_MESSAGES_BRIDGED_STREAM),
+    StreamParityTestCase(plain=GPT_6_LUNA_MESSAGES_BRIDGED_JSON, streamed=GPT_6_LUNA_MESSAGES_BRIDGED_STREAM),
+    StreamParityTestCase(plain=GPT_6_ASTRA_MESSAGES_BRIDGED_JSON, streamed=GPT_6_ASTRA_MESSAGES_BRIDGED_STREAM),
+    StreamParityTestCase(
+        plain=GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON, streamed=GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM
+    ),
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
@@ -11726,6 +12409,13 @@ BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     BridgeCostParityTestCase(native=GPT_6_LUNA_RESPONSES_NATIVE_JSON, bridged=GPT_6_LUNA_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_ASTRA_RESPONSES_NATIVE_JSON, bridged=GPT_6_ASTRA_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_1_SOL_RESPONSES_NATIVE_JSON, bridged=GPT_6_1_SOL_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_5_6_TERRA_RESPONSES_NATIVE_JSON, bridged=GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_6_1_SOL_RESPONSES_NATIVE_STREAM, bridged=GPT_6_1_SOL_MESSAGES_BRIDGED_STREAM),
+    BridgeCostParityTestCase(native=GPT_6_LUNA_RESPONSES_NATIVE_STREAM, bridged=GPT_6_LUNA_MESSAGES_BRIDGED_STREAM),
+    BridgeCostParityTestCase(native=GPT_6_ASTRA_RESPONSES_NATIVE_STREAM, bridged=GPT_6_ASTRA_MESSAGES_BRIDGED_STREAM),
+    BridgeCostParityTestCase(
+        native=GPT_5_6_TERRA_RESPONSES_NATIVE_STREAM, bridged=GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM
+    ),
     BridgeCostParityTestCase(native=GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_SOL_CHAT_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_LUNA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_LUNA_CHAT_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_ASTRA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_ASTRA_CHAT_BRIDGED_JSON),

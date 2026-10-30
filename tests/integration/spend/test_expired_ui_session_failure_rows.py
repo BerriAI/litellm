@@ -11,7 +11,7 @@ from integration._support.process import OwnedProxy, graceful_stop_seconds, owne
 
 from litellm.proxy._types import hash_token
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 240)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 240), pytest.mark.shares_worker_state]
 
 SESSION_SECONDS: Final = 3
 DASHBOARD_INFO_ROUTES: Final = (

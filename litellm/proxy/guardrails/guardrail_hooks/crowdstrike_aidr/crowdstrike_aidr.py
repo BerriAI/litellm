@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple, Optional, cast
 
 from fastapi import HTTPException
-from pydantic import ConfigDict, Field, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import override
 
 from litellm._logging import verbose_proxy_logger
@@ -36,6 +36,8 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class CrowdStrikeAIDRGuardrailMissingSecrets(Exception):
@@ -362,7 +364,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         assert response is not None
         response.raise_for_status()
 
-        response_body: Final[object] = response.json()
+        response_body: Final = _DECODED_JSON.validate_python(response.json())
         raw_result: Final[object] = response_body.get("result") if isinstance(response_body, dict) else None
         blocked_signal: Final[object] = raw_result.get("blocked") if isinstance(raw_result, dict) else None
 
@@ -468,6 +470,10 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
     @override
     def structured_messages_cover_full_request(self) -> bool:
         return effective_skip_system_message_for_guardrail(self) or effective_skip_tool_message_for_guardrail(self)
+
+    @override
+    def supports_structured_messages(self) -> bool:
+        return False
 
     def _writeback_messages(
         self,

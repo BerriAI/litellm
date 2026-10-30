@@ -14,6 +14,7 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.utils import CustomStreamWrapper, ModelResponse
 
 from ..common_utils import PredibaseError
@@ -34,7 +35,7 @@ async def make_call(
     if response.status_code != 200:
         raise PredibaseError(status_code=response.status_code, message=response.text)
 
-    completion_stream: Final = response.aiter_lines()
+    completion_stream: Final = aiter_sse_lines(response.aiter_text())
     # LOGGING
     logging_obj.post_call(
         input=messages,
@@ -163,7 +164,7 @@ class PredibaseChatCompletion:
                 timeout=timeout,
             )
             _response: Final = CustomStreamWrapper(
-                response.iter_lines(),
+                iter_sse_lines(response.iter_text()),
                 model,
                 custom_llm_provider="predibase",
                 logging_obj=logging_obj,

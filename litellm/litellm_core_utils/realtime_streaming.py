@@ -1,11 +1,11 @@
 import asyncio
 import json
 import traceback
-from collections.abc import Callable, Coroutine, Mapping, Sequence
+from collections.abc import Callable, Coroutine, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from enum import Enum, auto
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypeAlias, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypeAlias, TypedDict, cast, runtime_checkable
 
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
@@ -14,11 +14,13 @@ import litellm
 from litellm._logging import redact_internal_details_from_client_message, verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import (
+    BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY,
     REALTIME_METERED_USAGE_KEY,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTranscriptionProtocolError
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
 from litellm.types.llms.openai import (
     OpenAIRealtimeEvents,
@@ -98,6 +100,16 @@ class _ResponseDoneBody(TypedDict, total=False):
 class ScopedWebSocket(Protocol):
     @property
     def scope(self) -> _ASGIScope: ...
+
+
+@runtime_checkable
+class _ReplayScopeWebSocket(Protocol):
+    @property
+    def scope(self) -> MutableMapping[str, object]: ...
+
+
+def client_websocket_scope(websocket: object) -> MutableMapping[str, object] | None:
+    return websocket.scope if isinstance(websocket, _ReplayScopeWebSocket) else None
 
 
 class _ClientWebSocket(ScopedWebSocket, Protocol):
@@ -233,6 +245,7 @@ class RealTimeStreaming:
         logging_worker: _LoggingWorker = GLOBAL_LOGGING_WORKER,
     ):
         self.websocket: _ClientWebSocket = websocket
+        self._replay_scope: Final = client_websocket_scope(websocket)
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
         self._logging_worker = logging_worker
@@ -1269,23 +1282,28 @@ class RealTimeStreaming:
             verbose_logger.exception("Connection closed in backend to client send messages - %s", e)
             close: Final = backend_close_from(e)
             self._flush_unbilled_transcription_usage()
-            if self._backend_refused_session(close):
-                await self.log_backend_refusal(e)
-            else:
-                await self.log_messages()
+            await self._log_session_end(e if self._backend_refused_session(close) else None)
             return close
         except asyncio.CancelledError:
             self._flush_unbilled_transcription_usage()
-            await self.log_messages()
+            await self._log_session_end(None)
             raise
         except Exception as e:
             verbose_logger.exception("Error in backend to client send messages: %s", e)
             self._flush_unbilled_transcription_usage()
-            await self.log_messages()
+            await self._log_session_end(None)
             return BackendClose(code=1011, reason="proxy failed while relaying the upstream websocket")
 
     def _backend_refused_session(self, close: BackendClose) -> bool:
         return close.code != 1000 and not self._backend_sent_frames
+
+    async def _log_session_end(self, transport_refusal: Exception | None) -> None:
+        provider_refusal: Final = None if self.provider_config is None else self.provider_config.session_refusal()
+        refusal: Final = provider_refusal or transport_refusal
+        if refusal is None:
+            await self.log_messages()
+            return
+        await self.log_backend_refusal(refusal)
 
     async def log_backend_refusal(self, error: Exception) -> None:
         if not self.logging_obj:
@@ -1451,6 +1469,13 @@ class RealTimeStreaming:
         return item
 
     async def _receive_client_message(self) -> str | None:
+        refused_opening_message: Final = (
+            None
+            if self._replay_scope is None
+            else self._replay_scope.pop(BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY, None)
+        )
+        if isinstance(refused_opening_message, str):
+            return refused_opening_message
         try:
             return await self.websocket.receive_text()
         except Exception as e:  # noqa: BLE001  # whatever the client socket raises, the client is gone
@@ -1672,7 +1697,13 @@ class RealTimeStreaming:
                 # ``_maybe_send_guardrail_turn_detection_update`` would retry.
                 if msg_type == "session.update" and self.provider_config is None:
                     await self._send_session_gate_once()
-                sent = await self._send_to_backend(message)
+                try:
+                    sent = await self._send_to_backend(message)
+                except RealtimeTranscriptionProtocolError as e:
+                    await self.websocket.send_text(realtime_error_event(str(e), error_type="invalid_request_error"))
+                    if self._uses_deferred_backend_setup():
+                        raise
+                    continue
                 if guardrail_turn_detection_injected and sent:
                     self._guardrail_turn_detection_update_sent = True
 

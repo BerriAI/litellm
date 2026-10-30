@@ -23,6 +23,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import PromptManagementClient
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     cache_control_as_prompt_cache_breakpoint,
     with_prompt_cache_breakpoint,
@@ -72,6 +73,8 @@ MAX_CACHE_CONTROL_BLOCKS: Final = 4
 CACHE_BREAKPOINT_KEYS: Final = ("cache_control", "prompt_cache_breakpoint")
 OPENAI_PROMPT_CACHE_BREAKPOINT_MIN_GPT_VERSION: Final = (5, 6)
 _GPT_VERSION_PATTERN: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+))?")
+_FINE_TUNED_BASE_PATTERN: Final = re.compile(r"^ft:([^:]+)")
+_O_SERIES_PATTERN: Final = re.compile(r"^o\d+(?:-|$)")
 OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES: Final = frozenset(
     {"text", "image", "image_url", "file", "input_audio", "input_text", "input_image", "input_file"}
 )
@@ -125,6 +128,10 @@ def _served_provider_for_model(model: str) -> str | None:
 
 
 def supports_openai_prompt_cache_breakpoint(model: str, custom_llm_provider: str | None = None) -> bool:
+    return openai_prompt_cache_breakpoint_support(model, custom_llm_provider) is True
+
+
+def openai_prompt_cache_breakpoint_support(model: str, custom_llm_provider: str | None = None) -> bool | None:
     hosted_flag: Final = (
         None
         if custom_llm_provider is None
@@ -135,9 +142,19 @@ def supports_openai_prompt_cache_breakpoint(model: str, custom_llm_provider: str
     model_map_flag: Final = _model_map_prompt_cache_breakpoint_flag(model)
     if model_map_flag is not None:
         return model_map_flag
-    version_match: Final = _GPT_VERSION_PATTERN.match(model.rsplit("/", 1)[-1].lower())
-    if version_match is None:
+    fine_tuned_base: Final = _FINE_TUNED_BASE_PATTERN.match(model.rsplit("/", 1)[-1])
+    if fine_tuned_base is not None:
+        return False if _named_model_breakpoint_support(fine_tuned_base.group(1)) is False else None
+    return _named_model_breakpoint_support(model)
+
+
+def _named_model_breakpoint_support(model: str) -> bool | None:
+    bare_model: Final = model.rsplit("/", 1)[-1].lower()
+    if _O_SERIES_PATTERN.match(bare_model) is not None:
         return False
+    version_match: Final = _GPT_VERSION_PATTERN.match(bare_model)
+    if version_match is None:
+        return None
     version: Final = (int(version_match.group(1)), int(version_match.group(2) or 0))
     return version >= OPENAI_PROMPT_CACHE_BREAKPOINT_MIN_GPT_VERSION
 
@@ -159,7 +176,10 @@ def _hosted_entry_flag(entry: Mapping[str, object], resolve_provider: Callable[[
 
 
 def _hosted_openai_dialect_flag(
-    model: str, custom_llm_provider: str | None, resolve_provider: Callable[[str], str | None]
+    model: str,
+    custom_llm_provider: str | None,
+    resolve_provider: Callable[[str], str | None],
+    model_cost: Mapping[str, Mapping[str, object]] | None = None,
 ) -> bool | None:
     """
     Explicit opt-in for an OpenAI-shaped deployment served by another provider.
@@ -178,14 +198,19 @@ def _hosted_openai_dialect_flag(
     """
     import litellm
 
-    exact_entry: Final = litellm.model_cost.get(model)
-    exact_provider: Final = exact_entry.get("litellm_provider") if isinstance(exact_entry, dict) else None
+    cost_map: Final = (
+        cast(Mapping[str, Mapping[str, object]], litellm.model_cost)  # cast-ok: the live map holds catalog entries
+        if model_cost is None
+        else model_cost
+    )
+    exact_entry: Final = cost_map.get(model)
+    exact_provider: Final = exact_entry.get("litellm_provider") if isinstance(exact_entry, Mapping) else None
     if custom_llm_provider is None and (exact_provider == "openai" or ("/" not in model and exact_provider is None)):
         return None
     provider: Final = custom_llm_provider or resolve_provider(model)
     if provider is None or provider == "openai":
         return None
-    if isinstance(exact_entry, dict) and exact_provider == provider:
+    if isinstance(exact_entry, Mapping) and exact_provider == provider:
         return _hosted_entry_flag(exact_entry, lambda: provider)
     from litellm.utils import get_potential_model_names
 
@@ -198,8 +223,8 @@ def _hosted_openai_dialect_flag(
         names["stripped_model_name"],
         names["provider_prefixed_model_name"],
     )
-    entries: Final = (litellm.model_cost.get(candidate) for candidate in candidates)
-    flags: Final = (_hosted_entry_flag(entry, lambda: provider) for entry in entries if isinstance(entry, dict))
+    entries: Final = (cost_map.get(candidate) for candidate in candidates)
+    flags: Final = (_hosted_entry_flag(entry, lambda: provider) for entry in entries if isinstance(entry, Mapping))
     return next((flag for flag in flags if flag is not None), None)
 
 
@@ -340,6 +365,20 @@ CARRY_UNMATCHED_MESSAGE_POINTS: Final = "_litellm_carry_unmatched_cache_control_
 
 EXTERNAL_BREAKPOINTS_STAMP: Final = "_litellm_external_breakpoints"
 CUSTOM_LLM_PROVIDER_STAMP: Final = "_litellm_custom_llm_provider"
+
+
+def _accepts_cache_control(part: object) -> bool:
+    match part:
+        case {"type": "thinking" | "redacted_thinking"}:
+            return False
+        case dict():
+            return True
+        case _:
+            return False
+
+
+def _last_index_accepting_cache_control(parts: Sequence[object]) -> int | None:
+    return next((index for index in reversed(range(len(parts))) if _accepts_cache_control(parts[index])), None)
 
 
 class AnthropicCacheControlHook(CustomPromptManagement):
@@ -506,6 +545,18 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if (custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model)) != "openai":
             return False
         return prompt_cache_options is not None or targets_openai_api(api_base)
+
+    @staticmethod
+    def catalog_targets_openai_prompt_cache_breakpoint(model: str, custom_llm_provider: str) -> bool:
+        return (
+            _hosted_openai_dialect_flag(
+                model,
+                custom_llm_provider,
+                AnthropicCacheControlHook._resolve_provider,
+                GetModelCostMap.loaded_model_cost_map(),
+            )
+            is True
+        )
 
     @staticmethod
     def _resolve_provider(model: str) -> str | None:
@@ -740,10 +791,11 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # 1. if string, insert cache control in the message
         if isinstance(message_content, str):
             message["cache_control"] = control
-        # 2. list of objects - only apply to last item per Anthropic spec
+        # 2. list of objects - only apply to the last item Claude accepts a breakpoint on
         elif isinstance(message_content, list):
-            if len(message_content) > 0 and isinstance(message_content[-1], dict):
-                message_content[-1]["cache_control"] = control  # pyright: ignore[reportGeneralTypeIssues]  # loose runtime dict
+            markable_index: Final = _last_index_accepting_cache_control(message_content)
+            if markable_index is not None:
+                message_content[markable_index]["cache_control"] = control  # pyright: ignore[reportGeneralTypeIssues]  # loose runtime dict
         return message
 
     @staticmethod
