@@ -1,6 +1,6 @@
 use litellm_cache_response::CachePolicy;
 use litellm_host::{
-    interceptors::{ExecutionFacts, Interceptors, RawResponse},
+    interceptors::{ExecutionFacts, Interceptors, RawResponse, ResultSource},
     lifecycle::{CallEvent, ExecutionEvent},
     observation::ObservationSender,
 };
@@ -28,7 +28,17 @@ impl<'a, I: Interceptors<Error>> CallContext<'a, I> {
                 facts: facts.clone(),
             }));
         }
-        self.interceptors.result_ready(facts).await
+        let from_provider = facts.source == ResultSource::Provider;
+        self.interceptors
+            .result_ready(facts)
+            .await
+            .map_err(|error| {
+                if from_provider {
+                    Error::post_call(error)
+                } else {
+                    error
+                }
+            })
     }
 
     pub async fn response_received(&self, body: &str) -> Result<(), Error> {

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Plus,
@@ -34,6 +35,7 @@ import ThemeToggle from "@/components/ThemeToggle/ThemeToggle";
 import { useLogout } from "@/app/(dashboard)/hooks/useLogout";
 import { uiHref } from "@/utils/uiHref";
 import { useChatShell } from "@/contexts/ChatShellContext";
+import { useTheme } from "@/contexts/ThemeContext";
 import ViewSwitcher from "@/components/Navbar/ViewSwitcher";
 import ConversationList from "./ConversationList";
 
@@ -94,6 +96,9 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [searchOpen, setSearchOpen] = useState(false);
   if (isDesktop && sidebarOpen) setSidebarOpen(false);
   const collapsed = isDesktop && sidebarCollapsed;
+  const { logoUrl, logoUrlDark } = useTheme();
+  const lightLogo = logoUrl || logoUrlDark;
+  const darkLogo = logoUrlDark || logoUrl;
   const routes = getChatRoutes();
   const isChatsRoute = pathname === routes.chats;
   const accountName = userEmail?.split("@")[0] || userId || "Account";
@@ -216,6 +221,26 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           hideSearchButton
         />
       </div>
+      {lightLogo && darkLogo && (
+        <div className="flex h-12 shrink-0 items-center px-1 pb-2" role="img" aria-label="Organization logo">
+          <Image
+            src={lightLogo}
+            alt=""
+            width={160}
+            height={32}
+            unoptimized
+            className="h-8 max-w-full object-contain object-left dark:hidden"
+          />
+          <Image
+            src={darkLogo}
+            alt=""
+            width={160}
+            height={32}
+            unoptimized
+            className="hidden h-8 max-w-full object-contain object-left dark:block"
+          />
+        </div>
+      )}
       <footer className="moyai-chat-account">
         <span className="min-w-0 flex-1 truncate text-[13px]" title={userEmail || userId}>
           {accountName}
