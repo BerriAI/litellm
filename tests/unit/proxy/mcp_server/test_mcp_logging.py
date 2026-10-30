@@ -7,16 +7,18 @@ from collections.abc import Generator
 from datetime import datetime
 from pathlib import Path
 from typing import Final
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 from mcp import Client
 from mcp.server.auth.middleware.auth_context import auth_context_var
+from mcp.server.context import ServerRequestContext
+from mcp.server.session import ServerSession
 from mcp.shared.exceptions import MCPError
-from mcp.types import CallToolResult, EmptyResult, Request, RequestParams, TextContent
+from mcp.types import CallToolResult, EmptyResult, InitializeRequestParams, Request, RequestParams, TextContent
 from mcp.types import Tool as MCPTool
-from pydantic import ConfigDict
+from pydantic import ConfigDict, ValidationError
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -26,6 +28,7 @@ from litellm.proxy.mcp_server.mcp_server_manager import (
     MCPServerManager,
 )
 from litellm.proxy.mcp_server.server import (
+    _log_sdk_rejection,
     mcp_server_tool_call,
     server,
     set_auth_context,
@@ -177,11 +180,19 @@ async def test_sdk_caller_errors_do_not_trigger_llm_alerts(
 async def test_sdk_initialization_errors_are_not_logged_as_tool_rejections(
     sdk_rejection_logger: SDKRejectionLogger,
 ) -> None:
-    async with Client(server, mode="legacy") as client:
-        with pytest.raises(MCPError) as rejected:
-            await client.session.send_request(Request(method="initialize", params=SDKRejectionParams()), EmptyResult)
-        assert rejected.value.code == -32602
-        await client.session.send_ping()
+    context: Final = ServerRequestContext(
+        session=MagicMock(spec=ServerSession),
+        lifespan_context=None,
+        protocol_version="2025-11-25",
+        method="initialize",
+        params={},
+        request_id="bad-init",
+    )
+    with pytest.raises(ValidationError) as sdk_error:
+        InitializeRequestParams.model_validate({})
+    with pytest.raises(ValidationError) as rejected:
+        await _log_sdk_rejection(context, AsyncMock(side_effect=sdk_error.value))
+    assert rejected.value is sdk_error.value
     assert sdk_rejection_logger.pre_calls == 0
     assert sdk_rejection_logger.failures == []
     assert sdk_rejection_logger.post_failures == 0
