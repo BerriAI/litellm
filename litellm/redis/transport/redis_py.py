@@ -115,8 +115,15 @@ class RedisPyTransport:
             await self._run("eval", lambda: _evalsha_or_eval(self.client(), script, sha, namespaced, args))
         )
 
-    def batch(self, *, transaction: bool = False) -> "RedisPyCommandBatch":
-        return RedisPyCommandBatch(self, PipelineBatch(self._backend(runs_alone=False), transaction=transaction))
+    def batch(
+        self, *, transaction: bool = False, raise_on_error: bool = False, name: str = "redis_batch"
+    ) -> "RedisPyCommandBatch":
+        return RedisPyCommandBatch(
+            self,
+            PipelineBatch(
+                self._backend(runs_alone=False), name=name, transaction=transaction, raise_on_error=raise_on_error
+            ),
+        )
 
     def request_batch(self) -> "RedisPyCommandBatch | None":
         engine: Final = self.request_engine()

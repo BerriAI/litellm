@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import fakeredis
 import pytest
+from prometheus_client import REGISTRY
 from redis.asyncio.client import Pipeline, Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import ResponseError
@@ -18,7 +19,7 @@ from litellm._service_logger import ServiceLogging
 from litellm.caching.redis_batch import active_request_redis_batch, request_redis_batch_scope
 from litellm.caching.redis_cluster_cache import ClusterConnectionGate, RedisClusterCache
 from litellm.redis.transport.batch import PipelineBatch
-from litellm.redis.transport.contract import PubSubMessage, RedisFailure
+from litellm.redis.transport.contract import PubSubMessage, RedisFailure, raise_redis_failure
 from litellm.redis.transport.redis_py import RedisPyCommandBatch, RedisPyTransport
 from litellm.types.services import ServiceTypes
 from tests._support.fake_redis import fake_redis_cache, fake_redis_transport
@@ -258,6 +259,7 @@ class _RecordingEvents(ServiceLogging):
     def __init__(self) -> None:
         super().__init__()
         self.seen: tuple[_Event, ...] = ()
+        self.failures: tuple[str | Exception, ...] = ()
 
     def has_sinks(self) -> bool:
         return True
@@ -290,6 +292,7 @@ class _RecordingEvents(ServiceLogging):
     ) -> None:
         assert service == ServiceTypes.REDIS and 0 <= duration
         self.seen = (*self.seen, _Event("failure", call_type, current_service_target(), str(error)))
+        self.failures = (*self.failures, error)
 
 
 @pytest.mark.asyncio
@@ -311,6 +314,51 @@ async def test_every_command_reports_one_service_event_under_the_callers_target(
         _Event("success", "get", "response_polling"),
         _Event("failure", "delete", "response_polling", failed.message),
     )
+
+
+@pytest.mark.asyncio
+async def test_failure_events_keep_original_exception_objects(
+    server: fakeredis.FakeServer, raw: fakeredis.FakeAsyncRedis
+) -> None:
+    events: Final = _RecordingEvents()
+    transport: Final = fake_redis_transport(raw, failure_threshold=1, events=events)
+    await raw.set("wrong", "text")
+
+    failed_command: Final = await transport.rpush("wrong", "item")
+    server.connected = False
+    failed_connection: Final = await transport.get("wrong")
+    refused: Final = await transport.get("wrong")
+
+    assert isinstance(failed_command, RedisFailure)
+    assert isinstance(failed_connection, RedisFailure)
+    assert isinstance(refused, RedisFailure) and refused.kind == "breaker_open"
+    assert events.failures == (failed_command.exception, failed_connection.exception)
+    assert isinstance(events.failures[0], ResponseError)
+    assert isinstance(events.failures[1], RedisConnectionError)
+
+
+@pytest.mark.asyncio
+async def test_failed_request_metrics_preserve_redis_exception_classes(
+    server: fakeredis.FakeServer, raw: fakeredis.FakeAsyncRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "service_callback", ["prometheus_system"])
+    labels: Final = {"redis": "redis", "error_class": "ResponseError", "function_name": "rpush"}
+    connection_labels: Final = {"redis": "redis", "error_class": "ConnectionError", "function_name": "get"}
+    transport: Final = fake_redis_transport(raw, failure_threshold=1, events=ServiceLogging())
+    before: Final = REGISTRY.get_sample_value("litellm_redis_failed_requests_total", labels) or 0
+    before_connection: Final = REGISTRY.get_sample_value("litellm_redis_failed_requests_total", connection_labels) or 0
+    await raw.set("wrong", "text")
+
+    failed_command: Final = await transport.rpush("wrong", "item")
+    server.connected = False
+    failed_connection: Final = await transport.get("wrong")
+    refused: Final = await transport.get("wrong")
+
+    assert isinstance(failed_command, RedisFailure) and failed_command.kind == "server"
+    assert isinstance(failed_connection, RedisFailure) and failed_connection.kind == "transport"
+    assert isinstance(refused, RedisFailure) and refused.kind == "breaker_open"
+    assert REGISTRY.get_sample_value("litellm_redis_failed_requests_total", labels) == before + 1
+    assert REGISTRY.get_sample_value("litellm_redis_failed_requests_total", connection_labels) == before_connection + 1
 
 
 @pytest.mark.asyncio
@@ -690,6 +738,51 @@ async def test_a_batch_sends_every_declared_command_in_one_round_trip(
     await _settle()
     assert [event.call_type for event in events.seen[before:]] == ["redis_batch"]
     assert 0 < await raw.pttl("ns:b") <= 30_000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strict", (False, True))
+async def test_explicit_batch_error_policy_preserves_other_writes_and_event_outcome(
+    server: fakeredis.FakeServer, raw: fakeredis.FakeAsyncRedis, strict: bool
+) -> None:
+    events: Final = _RecordingEvents()
+    cache: Final = fake_redis_cache(server, namespace="ns", service_logger=events)
+    await _settle()
+    await raw.set("ns:wrong", "text")
+    before: Final = len(events.seen)
+    batch: Final = cache.transport().batch(raise_on_error=strict, name="legacy_batch")
+    bad: Final = batch.rpush("wrong", "item")
+    good: Final = batch.set("written", "value", ttl=None)
+
+    failure: Final = await bad
+    assert isinstance(failure, RedisFailure) and failure.kind == "server"
+    with pytest.raises(ResponseError, match="WRONGTYPE") as caught:
+        raise_redis_failure(failure)
+    assert caught.value is failure.exception
+    assert await good == (failure if strict else True)
+    assert await raw.get("ns:written") == b"value"
+    assert await raw.get("ns:wrong") == b"text"
+    await _settle()
+    assert tuple((event.outcome, event.call_type) for event in events.seen[before:]) == (
+        ("failure" if strict else "success", "legacy_batch"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_transport_failure_retains_original_exception_for_public_facade(
+    server: fakeredis.FakeServer, raw: fakeredis.FakeAsyncRedis
+) -> None:
+    transport: Final = fake_redis_transport(raw, failure_threshold=1)
+    server.connected = False
+
+    failure: Final = await transport.get("key")
+    assert isinstance(failure, RedisFailure) and failure.kind == "transport"
+    with pytest.raises(RedisConnectionError) as caught:
+        raise_redis_failure(failure)
+    assert caught.value is failure.exception
+    assert str(caught.value) == failure.message
+    assert failure == RedisFailure(kind="transport", message=failure.message)
+    assert "exception=" not in repr(failure)
 
 
 @pytest.mark.asyncio

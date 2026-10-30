@@ -26,11 +26,11 @@ async def run_under_breaker(
         return failure
 
 
-def failure_from(exc: BaseException) -> RedisFailure | None:
+def failure_from(exc: Exception) -> RedisFailure | None:
     if isinstance(exc, RedisCircuitBreakerOpenError):
-        return RedisFailure(kind="breaker_open", message=str(exc))
+        return RedisFailure(kind="breaker_open", message=str(exc), exception=exc)
     if _is_redis_health_failure(exc):
-        return RedisFailure(kind="transport", message=str(exc), timeout=is_redis_timeout_failure(exc))
+        return RedisFailure(kind="transport", message=str(exc), timeout=is_redis_timeout_failure(exc), exception=exc)
     if is_redis_error(exc):
-        return RedisFailure(kind="server", message=str(exc))
+        return RedisFailure(kind="server", message=str(exc), exception=exc)
     return None
