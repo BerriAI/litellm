@@ -227,13 +227,16 @@ async def test_closed_pooled_connection_retains_batch_until_automatic_recovery(w
 
 
 @pytest.mark.asyncio
-async def test_shutdown_during_conflict_isolation_completes_every_receipt() -> None:
+@pytest.mark.parametrize("first_commits", [False, True])
+async def test_shutdown_during_conflict_isolation_completes_every_receipt(first_commits: bool) -> None:
     isolating: Final = asyncio.Event()
     blocked: Final = asyncio.Event()
 
     async def persist(writes: tuple[UsageWrite, ...]) -> None:
         if len(writes) > 1:
             raise AccountingConflictError("one producer conflicts")
+        if first_commits and writes[0].event.event_id == "one":
+            return
         isolating.set()
         await blocked.wait()
 
@@ -243,7 +246,8 @@ async def test_shutdown_during_conflict_isolation_completes_every_receipt() -> N
     await isolating.wait()
     await meter.stop(0)
     results: Final = await asyncio.gather(first, second, return_exceptions=True)
-    assert all(isinstance(result, UsageCaptureError) for result in results)
+    assert results[0] is None if first_commits else isinstance(results[0], UsageCaptureError)
+    assert isinstance(results[1], UsageCaptureError)
     assert (meter.pending_records, meter.pending_bytes) == (0, 0)
 
 
