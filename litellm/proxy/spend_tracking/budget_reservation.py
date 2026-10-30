@@ -1451,41 +1451,67 @@ def _max_cost_for_cost_info(
     )
     if estimated_input_tokens is None or output_tokens is None:
         return None
-    held_output_tokens: Final = _held_output_tokens(
-        route=route, model_info=model_info, output_tokens=output_tokens, output_multiplier=output_multiplier
+    candidates_hold: Final = _priced_hold(
+        model_info=model_info,
+        input_tokens=estimated_input_tokens,
+        held_output_tokens=output_tokens * output_multiplier,
+        output_tokens=output_tokens,
+    )
+    if candidates_hold is None or output_multiplier == 1 or not RouteChecks.is_generate_content_route(route):
+        return candidates_hold
+    one_candidate_hold: Final = _priced_hold(
+        model_info=model_info,
+        input_tokens=estimated_input_tokens,
+        held_output_tokens=output_tokens,
+        output_tokens=output_tokens,
+    )
+    main_hold: Final = _main_generate_content_hold(model_info)
+    if one_candidate_hold is None or main_hold is None:
+        return one_candidate_hold
+    return max(one_candidate_hold, min(candidates_hold, main_hold))
+
+
+def _main_generate_content_hold(model_info: Mapping[str, object]) -> float | None:
+    context_window: Final = _to_int(model_info.get("max_input_tokens"))
+    if context_window is None:
+        return None
+    default_output_tokens: Final = min(DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK, _model_output_ceiling(model_info))
+    return _priced_hold(
+        model_info=model_info,
+        input_tokens=context_window,
+        held_output_tokens=default_output_tokens,
+        output_tokens=default_output_tokens,
     )
 
+
+def _priced_hold(
+    model_info: Mapping[str, object], input_tokens: int, held_output_tokens: int, output_tokens: int
+) -> float | None:
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
-        tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
+        tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=input_tokens)
         if tier is not None:
-            output_rate = max(
+            tier_output_rate: Final = max(
                 tier_rate(tier, "output_cost_per_token"),
                 tier_rate(tier, "output_cost_per_reasoning_token"),
             )
-            return (estimated_input_tokens * tier_rate(tier, "input_cost_per_token")) + _output_cost(
-                held_output_tokens, output_tokens, output_rate
+            return (input_tokens * tier_rate(tier, "input_cost_per_token")) + _output_cost(
+                held_output_tokens, output_tokens, tier_output_rate
             )
 
     input_cost_per_token: Final = _to_float(model_info.get("input_cost_per_token"))
     output_cost_per_token: Final = _to_float(model_info.get("output_cost_per_token"))
     output_cost_per_reasoning_token: Final = _to_float(model_info.get("output_cost_per_reasoning_token"))
-    cost = 0.0
-    if input_cost_per_token is not None:
-        cost += estimated_input_tokens * input_cost_per_token
-    elif estimated_input_tokens > 0:
+    if input_cost_per_token is None and input_tokens > 0:
+        return None
+    if output_cost_per_token is None and output_cost_per_reasoning_token is None and output_tokens > 0:
         return None
 
     # The reasoning-token share is unknown before the request runs, so reserve every
     # output token at the higher of the standard and reasoning rates to avoid
     # under-reserving reasoning-heavy requests.
-    output_rate = max(output_cost_per_token or 0.0, output_cost_per_reasoning_token or 0.0)
-    if output_cost_per_token is not None or output_cost_per_reasoning_token is not None:
-        cost += _output_cost(held_output_tokens, output_tokens, output_rate)
-    elif output_tokens > 0:
-        return None
-
-    return cost
+    output_rate: Final = max(output_cost_per_token or 0.0, output_cost_per_reasoning_token or 0.0)
+    return input_tokens * (input_cost_per_token or 0.0) + _output_cost(held_output_tokens, output_tokens, output_rate)
 
 
 def _estimate_image_generation_cost(
@@ -1770,15 +1796,6 @@ def _serves_generate_content_natively(litellm_params: Mapping[str, object]) -> b
 
 def _get_output_multiplier(requested_counts: tuple[object, ...]) -> int:
     return max((1, *(count for count in map(_to_int, requested_counts) if count is not None)))
-
-
-def _held_output_tokens(
-    route: str, model_info: Mapping[str, object], output_tokens: int, output_multiplier: int
-) -> int:
-    if not RouteChecks.is_generate_content_route(route):
-        return output_tokens * output_multiplier
-    default_output_tokens: Final = min(DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK, _model_output_ceiling(model_info))
-    return max(output_tokens, min(output_tokens * output_multiplier, default_output_tokens))
 
 
 def _output_cost(held_output_tokens: int, output_tokens: int, output_rate: float) -> float:
