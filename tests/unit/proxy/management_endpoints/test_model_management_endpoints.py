@@ -4845,6 +4845,40 @@ class TestModelInfoCostMapEchoFilter:
         assert info["access_groups"] == ["prod"]
         assert set(info).isdisjoint(entry), "one listed model's metadata must not be saved onto the whole wildcard"
 
+    def test_echo_saved_on_a_worker_that_has_not_loaded_the_wildcard_is_not_persisted(self):
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router_without_the_wildcard = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "openai-mini",
+                    "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "x"},
+                    "model_info": {"id": "dep-other"},
+                }
+            ]
+        )
+        entry = litellm.get_model_info("openai/gpt-5.6")
+        db_model = Deployment(
+            model_name="my-openai/*",
+            litellm_params=LiteLLM_Params(model="openai/*"),
+            model_info=ModelInfo(id="dep-echo-wildcard"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                model_name="my-openai/gpt-5.6",
+                model_info=ModelInfo(**{**entry, "id": "dep-echo-wildcard", "access_groups": ["prod"]}),
+            ),
+            llm_router=router_without_the_wildcard,
+        )
+
+        info = json.loads(result["model_info"])
+        assert info["access_groups"] == ["prod"]
+        assert set(info).isdisjoint(entry), "one listed model's metadata must not be saved onto the whole wildcard"
+
     def test_legacy_update_echo_of_an_expanded_wildcard_row_is_not_persisted_on_the_wildcard(self):
         import litellm
         from litellm.proxy.management_endpoints.model_management_endpoints import (
@@ -8681,7 +8715,6 @@ class TestAccessGroupModelSync:
         mock_prisma = self._prisma_with_row("m-rename", "gpt-5.6", deployment_count=0)
         router = MagicMock()
         router.registry.return_value.names.return_value = ["m-rename"]
-        router.registry.return_value.resolve.return_value = None
 
         with self._endpoint_env(mock_prisma, router) as invalidate:
             await patch_model(
@@ -8704,7 +8737,6 @@ class TestAccessGroupModelSync:
         mock_prisma = self._prisma_with_row("m-rename", "gpt-5.6", deployment_count=1)
         router = MagicMock()
         router.registry.return_value.names.return_value = ["m-rename"]
-        router.registry.return_value.resolve.return_value = None
 
         with self._endpoint_env(mock_prisma, router):
             await patch_model(
@@ -8771,7 +8803,6 @@ class TestAccessGroupModelSync:
         mock_prisma = self._prisma_with_row("m-terraform", "gpt-5.6", deployment_count=0)
         router = MagicMock()
         router.registry.return_value.names.return_value = ["m-terraform"]
-        router.registry.return_value.resolve.return_value = None
 
         with self._endpoint_env(mock_prisma, router) as invalidate:
             await update_model(
@@ -8798,7 +8829,6 @@ class TestAccessGroupModelSync:
         mock_prisma = self._prisma_with_row("m-rename", "gpt-5.6", deployment_count=0)
         router = MagicMock()
         router.registry.return_value.names.return_value = ["m-rename"]
-        router.registry.return_value.resolve.return_value = None
         evict = AsyncMock()
 
         with self._endpoint_env(mock_prisma, router, evict=evict):
@@ -8844,7 +8874,6 @@ class TestAccessGroupModelSync:
         mock_prisma = self._prisma_with_row("m-rename", "gpt-5.6", deployment_count=1)
         router = MagicMock()
         router.registry.return_value.names.return_value = ["m-rename"]
-        router.registry.return_value.resolve.return_value = None
 
         with self._endpoint_env(mock_prisma, router):
             await patch_model(

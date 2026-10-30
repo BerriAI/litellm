@@ -685,9 +685,8 @@ class WildcardDeployment:
 def wildcard_deployment_priced_model(
     llm_router: Router, deployment: WildcardDeployment, listed_name: str, caller_aliases: CallerAliases
 ) -> str | RoutedElsewhere:
-    registry: Final = llm_router.registry()
-    served_name: Final = dispatched_model(listed_name, _without_deleted_team_targets(caller_aliases, registry))
-    candidates: Final = registry.names(
+    served_name: Final = _served_name(llm_router, listed_name, caller_aliases)
+    candidates: Final = llm_router.registry().names(
         served_name, kind="route_candidates", team_id=deployment.team_id or caller_aliases.team_id
     )
     if deployment.model_id not in candidates:
@@ -695,6 +694,17 @@ def wildcard_deployment_priced_model(
     return _routed_deployment_model(
         deployment.model_name_pattern, routed_model_name(llm_router, served_name), deployment.litellm_model
     )
+
+
+def wildcard_row_filled_model(
+    llm_router: Router, name_pattern: str, litellm_model: str, listed_name: str, caller_aliases: CallerAliases
+) -> str:
+    served_name: Final = _served_name(llm_router, listed_name, caller_aliases)
+    return _routed_deployment_model(name_pattern, routed_model_name(llm_router, served_name), litellm_model)
+
+
+def _served_name(llm_router: Router, listed_name: str, caller_aliases: CallerAliases) -> str:
+    return dispatched_model(listed_name, _without_deleted_team_targets(caller_aliases, llm_router.registry()))
 
 
 def _without_deleted_team_targets(caller_aliases: CallerAliases, registry: RouterRegistry) -> CallerAliases:

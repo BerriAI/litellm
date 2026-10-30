@@ -63,9 +63,8 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY
 from litellm.proxy.auth.model_checks import (
     GLOBAL_ALIASES_ONLY,
-    WildcardDeployment,
     model_info_cost_map_entry,
-    wildcard_deployment_priced_model,
+    wildcard_row_filled_model,
 )
 from litellm.proxy.auth.team_grants import team_model_aliases
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -1306,16 +1305,11 @@ _NO_LISTED_ROW: Final = _ListedRow()
 
 def _live_cost_map_model(db_model: Deployment, listed_row: _ListedRow) -> str | None:
     stored_model: Final = _decrypted_model(db_model.litellm_params.model)
-    model_id: Final = db_model.model_info.id
-    if stored_model is None or listed_row.name is None or listed_row.llm_router is None or model_id is None:
+    if stored_model is None or "*" not in stored_model or listed_row.name is None or listed_row.llm_router is None:
         return stored_model
-    priced: Final = wildcard_deployment_priced_model(
-        listed_row.llm_router,
-        WildcardDeployment(model_id, db_model.model_name, stored_model, db_model.model_info.team_id),
-        listed_row.name,
-        listed_row.caller_aliases,
+    return wildcard_row_filled_model(
+        listed_row.llm_router, db_model.model_name, stored_model, listed_row.name, listed_row.caller_aliases
     )
-    return priced if isinstance(priced, str) else stored_model
 
 
 def _cost_map_entry(
