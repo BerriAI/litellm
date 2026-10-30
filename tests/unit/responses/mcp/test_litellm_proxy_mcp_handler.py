@@ -1507,6 +1507,7 @@ TOOLSET_ROWS: Final = (
     MCPToolset(
         toolset_id="ts-other", toolset_name="other-toolset", tools=[{"server_id": "srv-2", "tool_name": "lookup"}]
     ),
+    MCPToolset(toolset_id="ts-shouty", toolset_name="CALC", tools=[{"server_id": "srv-2", "tool_name": "lookup"}]),
 )
 GATEWAY_SERVERS: Final = (
     MCPServer(server_id="srv-1", name="calc", alias="calc", transport=MCPTransport.http, access_groups=["wiki"]),
@@ -1543,6 +1544,10 @@ def _team_grants(toolset_id: str) -> GrantedToolsetIds:
         return await granted_toolset_ids(context, team_object_permission=team_permission, require_key_access=False)
 
     return granted_through_team
+
+
+async def _no_toolset_grants(context: UserAPIKeyAuth) -> frozenset[str]:
+    return frozenset()
 
 
 async def _tools_listed_through_the_gateway(
@@ -1673,17 +1678,42 @@ async def test_an_admin_credential_without_a_team_keeps_a_toolset_no_grant_names
 async def test_a_name_that_does_not_resolve_to_a_toolset_is_listed_as_a_server_name(
     monkeypatch: pytest.MonkeyPatch, lookup_error: Exception | None
 ):
-    async def no_toolset_grants(context: UserAPIKeyAuth) -> frozenset[str]:
-        return frozenset()
-
     listed: Final = await _tools_listed_through_the_gateway(
         monkeypatch,
         _key_holding("srv-1", "srv-2"),
         ("litellm_proxy", "litellm_proxy/mcp/wiki"),
-        no_toolset_grants,
+        _no_toolset_grants,
         _toolset_table(lookup_error),
     )
     assert listed == ["calc-add", "calc-subtract"]
+
+
+@pytest.mark.asyncio
+async def test_an_ungranted_toolset_named_like_a_server_the_key_holds_answers_403_once(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with pytest.raises(HTTPException) as denial:
+        await _tools_listed_through_the_gateway(
+            monkeypatch,
+            _key_holding("srv-1", "srv-2"),
+            ("litellm_proxy/mcp/CALC", "litellm_proxy/mcp/CALC"),
+            _no_toolset_grants,
+        )
+    assert denial.value.status_code == 403
+    assert str(denial.value.detail).count("CALC") == 1
+
+
+@pytest.mark.asyncio
+async def test_an_ungranted_toolset_named_like_a_server_adds_no_server_beside_a_named_one(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    listed: Final = await _tools_listed_through_the_gateway(
+        monkeypatch,
+        _key_holding("srv-1", "srv-2"),
+        ("litellm_proxy/mcp/docs", "litellm_proxy/mcp/CALC"),
+        _no_toolset_grants,
+    )
+    assert listed == ["docs-lookup"]
 
 
 @pytest.mark.asyncio

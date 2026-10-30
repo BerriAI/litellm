@@ -300,6 +300,7 @@ class LiteLLM_Proxy_MCP_Handler:
         from litellm.proxy.mcp_server.server import (
             _get_allowed_mcp_servers_from_mcp_server_names,
             _get_tools_from_mcp_servers,
+            raise_denied_scoped_mcp_access,
         )
 
         mcp_servers: Final = [
@@ -335,10 +336,12 @@ class LiteLLM_Proxy_MCP_Handler:
         # filter here would exclude those toolset server IDs (which are UUIDs, not
         # names), so use None and let the auth object's mcp_servers do the filtering.
         asks_whole_gateway: Final = any(map(names_whole_gateway, mcp_tools_with_litellm_proxy or ()))
-        denied_names_in_filter: Final = () if asks_whole_gateway else denied_toolset_names
-        effective_server_filter: Final = (
-            None if resolved_toolset_ids else ([*resolved_mcp_servers, *denied_names_in_filter] or None)
-        )
+        if denied_toolset_names and not (asks_whole_gateway or resolved_mcp_servers or resolved_toolset_ids):
+            await raise_denied_scoped_mcp_access(
+                requested_names=tuple(dict.fromkeys(denied_toolset_names)),
+                user_api_key_auth=user_api_key_auth,
+            )
+        effective_server_filter: Final = None if resolved_toolset_ids else (list(resolved_mcp_servers) or None)
 
         listing: Final = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_api_key_auth,
