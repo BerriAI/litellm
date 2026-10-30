@@ -42,6 +42,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
+from litellm.redis.transport.client import AsyncPubSubClient, AsyncRedisCommands
 from litellm.redis.transport.contract import RedisFailure, RedisTransport
 from litellm.types.caching import (
     RedisPipelineIncrementOperation,
@@ -73,7 +74,7 @@ else:
     Span = Any
 
 
-class _AsyncRedisCommands(Protocol):
+class _AsyncRedisCommands(AsyncRedisCommands, Protocol):
     """Async redis commands this cache issues.
 
     redis-py's type stubs omit these methods on RedisCluster, so the union returned by
@@ -81,12 +82,6 @@ class _AsyncRedisCommands(Protocol):
     """
 
     def ping(self) -> Awaitable[bool]: ...
-
-    def get(self, name: str) -> Awaitable[object]: ...
-
-    def mget(self, keys: Sequence[str]) -> Awaitable[object]: ...
-
-    def set(self, name: str, value: str | bytes | float, *, nx: bool, px: int | None) -> Awaitable[object]: ...
 
     def delete(self, *names: str) -> Awaitable[int]: ...
 
@@ -96,13 +91,7 @@ class _AsyncRedisCommands(Protocol):
 
     def rpush(self, name: str, *values: str | bytes | float) -> Awaitable[int]: ...
 
-    def lpop(self, name: str, count: int | None = None) -> Awaitable[object]: ...
-
     def pipeline(self, transaction: bool = True) -> "Pipeline[bytes]": ...
-
-    def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
-
-    def evalsha(self, sha: str, numkeys: int, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
 
 
 _GENERIC_CALLER_MODULES: Final = frozenset(
@@ -868,7 +857,11 @@ class RedisCache(BaseCache):
     def _async_commands(self) -> _AsyncRedisCommands:
         return self.init_async_client()
 
+    def _pubsub_commands(self) -> AsyncPubSubClient:
+        return self.init_pubsub_client()  # pyright: ignore[reportUnknownVariableType]  # redis generics
+
     def transport(self) -> RedisTransport:
+        from litellm.caching.redis_batch import post_call_batch_engine, request_batch_engine
         from litellm.redis.transport.events import RedisServiceEvents
         from litellm.redis.transport.redis_py import RedisPyTransport
 
@@ -878,6 +871,11 @@ class RedisCache(BaseCache):
             breaker=self._circuit_breaker,
             admit=self._admit_async_call,
             events=RedisServiceEvents(self.service_logger_obj),
+            multi_get=lambda keys: self._async_run_redis_mget_operation(list(keys)),
+            server_version=self._parse_redis_major_version,
+            pubsub_client=self._pubsub_commands,
+            request_engine=lambda: request_batch_engine(self),
+            post_call_engine=lambda: post_call_batch_engine(self),
         )
 
     def check_and_fix_namespace(self, key: str) -> str:

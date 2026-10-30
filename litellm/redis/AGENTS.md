@@ -1,8 +1,9 @@
 For adding Redis access or moving raw Redis access here, follow [.agents/skills/redis-access/SKILL.md](../../.agents/skills/redis-access/SKILL.md)
 
-- `transport/contract.py` is the Python seam to redis-py. `RedisTransport` is plain methods, one per Redis command the Python code uses, command shaped and never redis-py shaped. It is not a seam for the Rust client, native stores sit behind a store `Protocol` instead
+- `transport/contract.py` is the Python seam to redis-py. `RedisTransport` is plain methods covering every Redis use in Python, data commands, batches, pub/sub and admin, command shaped and never redis-py shaped. It is not a seam for the Rust client, native stores sit behind a store `Protocol` instead
+- `transport/client.py` holds the redis-py client shapes the transport drives, as Protocols with no redis import. `transport/batch.py` is the one pipeline engine, shared by transport batches and `RedisBatch`
 - Rules shared with `crates/redis-client`, so Python and Rust pods agree on one Redis
-  - The namespace is applied here, once, including Lua `KEYS`. A key that already starts with `{namespace}:` is left alone
+  - The namespace is applied here, once, including Lua `KEYS` and pub/sub channels. A key that already starts with `{namespace}:` is left alone
   - Every write takes its TTL from the caller, `None` means no expiry, there is no default
   - Replies are undecoded bytes, `mget` and `eval` arrays are tuples
   - Failures are values. `transport` covers timeouts and connection loss, where the command may still have applied. `server` means Redis answered with an error and the connection is fine
