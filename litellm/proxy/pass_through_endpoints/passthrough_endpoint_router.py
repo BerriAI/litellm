@@ -12,6 +12,7 @@ from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook i
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.secret_managers.main import (
+    GOOGLE_OIDC_SECRET_PREFIX,
     UnresolvableSecretReference,
     get_secret_str,
     resolve_local_oidc_reference,
@@ -47,6 +48,14 @@ def _credential_identity(credentials: VERTEX_CREDENTIALS_TYPES | None) -> str | 
 def _resolve_oidc_reference(credential: str | None) -> str | None:
     if credential is None:
         return None
+    if credential.startswith(GOOGLE_OIDC_SECRET_PREFIX):
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "pass-through credential oidc/google secret reference could not be resolved: pass-through routes "
+                "do not fetch Google ID tokens. Use a static key, oidc/file/<absolute path> or oidc/env/<VARIABLE_NAME>."
+            ),
+        )
     match resolve_local_oidc_reference(credential):
         case UnresolvableSecretReference(kind=kind, reason=reason):
             raise HTTPException(
@@ -105,7 +114,7 @@ class PassthroughEndpointRouter:
         llm_router: Final = self.llm_router_getter()
         if llm_router is None:
             return None
-        deployments: Final = llm_router.get_model_list() or ()
+        deployments: Final = llm_router.registry().deployments() or ()
         return next(
             (
                 api_key
@@ -173,7 +182,7 @@ class PassthroughEndpointRouter:
             return None
         resolved: Final = tuple(
             (deployment, credentials)
-            for deployment in (llm_router.get_model_list() or ())
+            for deployment in (llm_router.registry().deployments() or ())
             if (credentials := self._resolve_vertex_deployment_credentials(deployment["litellm_params"])) is not None
         )
         matched: Final = next(

@@ -1430,7 +1430,7 @@ def _deployment_attribution_for_model_group(model_group: object, team_id: str | 
 
     if llm_router is None:
         return _EMPTY_LIFT
-    deployments: Final = llm_router.get_model_list(model_name=model_group, team_id=team_id)
+    deployments: Final = llm_router.registry().deployments(model_name=model_group, team_id=team_id)
     if not deployments:
         return _EMPTY_LIFT
 
@@ -2345,10 +2345,13 @@ class ProxyLogging:
         """
         from litellm.proxy.proxy_server import llm_router
 
-        if llm_router is None or not hasattr(llm_router, "guardrail_list"):
+        if llm_router is None:
+            return False
+        router_settings: Final = llm_router.settings()
+        if not router_settings.is_set("guardrail_list"):
             return False
 
-        matching: Final = [g for g in llm_router.guardrail_list if g.get("guardrail_name") == guardrail_name]
+        matching: Final = [g for g in router_settings.guardrail_list if g.get("guardrail_name") == guardrail_name]
         return len(matching) > 1
 
     async def _execute_guardrail_hook(
@@ -2437,7 +2440,7 @@ class ProxyLogging:
             raise ValueError("Router not initialized")
 
         # Select guardrail using router's load balancing
-        selected_guardrail: Final = llm_router.get_available_guardrail(guardrail_name=guardrail_name)
+        selected_guardrail: Final = llm_router.settings().guardrail(guardrail_name)
 
         callback: Final[CustomGuardrail | None] = selected_guardrail.get("callback")
         if callback is None:
@@ -3834,7 +3837,9 @@ class ProxyLogging:
         request_data.pop("standard_logging_object", None)
 
         ### LOGGING ###
-        if self._is_proxy_only_llm_api_error(
+        if isinstance(logging_obj, Logging) and logging_obj.prepared_cost is not None:
+            await self._dispatch_proxy_only_failure_handlers(logging_obj, original_exception)
+        elif self._is_proxy_only_llm_api_error(
             original_exception=original_exception,
             error_type=error_type,
             route=user_api_key_dict.request_route,
@@ -9018,7 +9023,7 @@ def check_and_merge_model_level_guardrails(
 
     model_level_guardrails: list[object] | None = None
     if model_id is not None:
-        deployment: Final = llm_router.get_deployment(model_id=model_id)
+        deployment: Final = llm_router.registry().deployment(model_id)
         if deployment is None:
             return data
         deployment_guardrails: Final = deployment.litellm_params.get("guardrails")
@@ -9041,7 +9046,7 @@ def check_and_merge_model_level_guardrails(
         # Pass team_id so team-scoped public model names resolve the same way
         # route_request resolves them; otherwise team-scoped deployments are
         # invisible to this lookup and their guardrails are silently dropped.
-        deployments: Final = llm_router.get_model_list(model_name=alias, team_id=team_id) or []
+        deployments: Final = llm_router.registry().deployments(model_name=alias, team_id=team_id) or []
         seen: Final[set] = set()
         union: Final[list] = []
         for dep in deployments:
@@ -9248,7 +9253,7 @@ def is_known_model(model: str | None, llm_router: Router | None) -> bool:
     """
     if model is None or llm_router is None:
         return False
-    model_names: Final = llm_router.get_model_names()
+    model_names: Final = llm_router.registry().names()
 
     model_names_set: Final = set(model_names)
 
@@ -9511,8 +9516,9 @@ async def _agent_access_group_visible_models(
         return None
     if llm_router is None:
         return ceiling.models
-    proxy_model_list: Final = llm_router.get_model_names()
-    model_access_groups: Final = llm_router.get_model_access_groups()
+    registry: Final = llm_router.registry()
+    proxy_model_list: Final = registry.names()
+    model_access_groups: Final = registry.access_groups()
     granted: Final = get_team_models(
         team_models=sorted(ceiling.models),
         proxy_model_list=proxy_model_list,
@@ -9584,8 +9590,8 @@ async def get_available_models_for_user(
         proxy_model_list = []
         model_access_groups = {}
     else:
-        proxy_model_list = llm_router.get_model_names()
-        model_access_groups = llm_router.get_model_access_groups()
+        proxy_model_list = llm_router.registry().names()
+        model_access_groups = llm_router.registry().access_groups()
 
     requested_team_object: Final = (
         await _get_validated_team_object(
@@ -9806,11 +9812,13 @@ def create_model_info_response(
     }
 
     alias_target: Final = (
-        resolve_model_group_alias(llm_router.model_group_alias, model_id) if llm_router is not None else None
+        resolve_model_group_alias(llm_router.registry().aliases(), model_id) if llm_router is not None else None
     )
     lookup_model: Final = alias_target if alias_target is not None else model_id
 
-    listing_info: Final = llm_router.get_model_listing_info(lookup_model) if llm_router is not None else None
+    listing_info: Final = (
+        llm_router.registry().group(lookup_model, field="listing_info") if llm_router is not None else None
+    )
 
     # One entry per distinct model behind the listed name; (None,) when the router knows
     # nothing about it, so the listed name is resolved on its own as before.
@@ -9852,7 +9860,7 @@ def create_model_info_response(
             max_output_tokens = listing_info.max_output_tokens
 
     if llm_router is not None:
-        configured_mode: Final = llm_router.get_configured_mode(lookup_model)
+        configured_mode: Final = llm_router.registry().group(lookup_model, field="mode")
         if isinstance(configured_mode, str):
             base["mode"] = configured_mode
 
