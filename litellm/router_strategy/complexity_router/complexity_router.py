@@ -2607,9 +2607,10 @@ class ComplexityRouter(CustomLogger):
         """The classifier-failed outcome for classifier_fallback='default_model'.
 
         The outcome still carries a tier because ClassificationOutcome requires one, so it reports
-        the tier whose pool holds default_model, and MEDIUM when no pool does. Nothing about the
-        request produced that tier, so the pre-routing hook never logs it as the request's tier: it
-        routes this cause straight to default_model rather than picking from the tier's pool, since
+        the tier whose pool holds default_model, or the first custom tier (MEDIUM for built-in
+        tiers) when no pool does. Nothing about the request produced that tier, so the
+        pre-routing hook never logs it as the request's tier: it routes this cause straight to
+        default_model rather than picking from the tier's pool, since
         a pool with several models would otherwise land somewhere else and the point of this
         fallback is a known destination when classification failed.
 
@@ -2622,14 +2623,11 @@ class ComplexityRouter(CustomLogger):
         """
         default_model: Final = self.config.default_model
         pools: Final = self._tier_pools()
-        tier: Final = next(
-            (
-                candidate
-                for candidate in self.config.active_tier_severity_order()
-                if default_model in pools.get(candidate.value, ())
-            ),
-            ComplexityTier.MEDIUM,
+        name: Final = next(
+            (candidate for candidate in self.config.tier_names() if default_model in pools.get(candidate, ())),
+            self.config.tier_names()[0] if self.config.has_custom_tiers else ComplexityTier.MEDIUM.value,
         )
+        tier: Final = name if self.config.has_custom_tiers else ComplexityTier(name)
         return ClassificationOutcome(
             tier=tier, score=None, signals=("classifier-failed:default-model",), cause="default_model_fallback"
         )
@@ -3415,8 +3413,8 @@ class ComplexityRouter(CustomLogger):
 
     def _active_tier_severity(self, tier: ComplexityTier | str) -> int:
         """Position of a tier in the active severity order: TIER_SEVERITY_ORDER for the built-in
-        set, tier_definitions list order (ascending) for a custom set -- the same order
-        keyword_tier_rules resolve severity against."""
+        set, tier_definitions list order or inferred mapping order (ascending) for a custom set --
+        the same order keyword_tier_rules resolve severity against."""
         return self.config.tier_names().index(_tier_name(tier))
 
     def _matched_plan_mode_signal(
@@ -4961,7 +4959,8 @@ class ComplexityRouter(CustomLogger):
         fallback_model: Final = self.config.default_model if not self.config.plugins else None
         # A sentinel-carrying request skips the failure exit below, whether or not the floor
         # moved the tier: default_model carries no tier guarantee (its placeholder tier is the
-        # pool that holds it, or MEDIUM when none does), so a placeholder at or above the floor
+        # pool that holds it, or the first custom tier / MEDIUM when none does), so a placeholder
+        # at or above the floor
         # would otherwise route a plan-mode request to a model the floor cannot vouch for. The
         # clamped tier's pool is the destination the floor can guarantee.
         if outcome.cause == "default_model_fallback" and fallback_model is not None and plan_mode_sentinel is None:

@@ -209,6 +209,10 @@ def inline_remote_image_urls(media: RemoteMedia) -> bool:
     return media.part_type == "image_url"
 
 
+def inline_remote_file_urls(media: RemoteMedia) -> bool:
+    return media.part_type == "file"
+
+
 def _parse_remote_image(fields: Mapping[str, object]) -> _RemoteImage | None:
     if fields.get("type") != "image_url":
         return None

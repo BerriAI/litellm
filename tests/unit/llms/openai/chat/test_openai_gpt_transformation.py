@@ -4,14 +4,14 @@ Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation
 import asyncio
 import base64
 import copy
+import itertools
 import json
-import threading
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable
 from typing import Final
 
 import pytest
 import respx
-from httpx import Response
+from httpx import Request, Response
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -19,12 +19,13 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_MEDIA_BOUNDARY,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import in_memory_cache
+from litellm.llms.deepinfra.chat.transformation import DeepInfraConfig
 from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
-from litellm.types.llms.openai import AllMessageValues
+from litellm.llms.sambanova.chat import SambanovaConfig
 
 
 class TestOpenAIGPTConfig:
@@ -1351,103 +1352,218 @@ async def test_openai_media_download_preserves_supported_chat_fields(
 
 
 
-@pytest.mark.respx(assert_all_called=True)
-@pytest.mark.asyncio
-async def test_codestral_file_request_still_works_after_an_openai_config_is_built(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
-) -> None:
+_PDF_BYTES: Final = b"%PDF-1.7\nmock-pdf"
+_DOWNLOADED_PDF_PART: Final = {
+    "type": "file",
+    "file": {
+        "file_data": f"data:application/pdf;base64,{base64.b64encode(_PDF_BYTES).decode('utf-8')}",
+        "filename": "my_file.pdf",
+    },
+}
+
+
+def _pdf_url_part(url: str) -> dict[str, object]:
+    return {"type": "file", "file": {"file_id": url}}
+
+
+async def _serve_pdf_to_async_clients_only(request: Request) -> Response:
+    return Response(200, headers={"content-type": "application/pdf"}, content=_PDF_BYTES)
+
+
+def _tool_result_messages(*content: object) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "read the report"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "fetch_report", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": list(content)},
+    ]
+
+
+@pytest.fixture
+def pdf_urls_reachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    chat: Final = respx_mock.post("https://codestral.example.test/v1/chat/completions").mock(
-        return_value=Response(200, json=_OPENAI_CHAT_REPLY)
-    )
-    OpenAIGPTConfig()
-
-    await litellm.acompletion(
-        model="codestral/codestral-latest",
-        api_base="https://codestral.example.test/v1",
-        api_key="mistral-test-key",
-        messages=[{"role": "user", "content": [
-            {"type": "text", "text": "What is in the file?"},
-            {"type": "file", "file": {"file_id": "uploaded-file-id"}},
-        ]}],
-    )
-
-    assert json.loads(chat.calls[0].request.content)["messages"][0]["content"][1] == {
-        "type": "file", "file_id": "uploaded-file-id",
-    }
 
 
-_PDF_URL: Final = "https://files.example.test/off-event-loop.pdf"
-_PDF_URL_PART: Final = {"type": "file", "file": {"file_id": _PDF_URL}}
+_SUMMARIZE: Final = {"type": "text", "text": "Summarize the report."}
+_UPLOADED_FILE_PART: Final = {"type": "file", "file": {"file_id": "file-uploaded"}}
+_ONCE_URL: Final = "https://files.example.test/download-once.pdf"
 
 
+@pytest.mark.usefixtures("pdf_urls_reachable")
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "messages",
+    ("messages", "expected_messages"),
     [
-        pytest.param([{"role": "user", "content": [_PDF_URL_PART]}], id="user_message"),
         pytest.param(
+            [{"role": "user", "content": [_SUMMARIZE, _UPLOADED_FILE_PART, _pdf_url_part(_ONCE_URL)]}],
+            [{"role": "user", "content": [_SUMMARIZE, _UPLOADED_FILE_PART, _DOWNLOADED_PDF_PART]}],
+            id="user_message",
+        ),
+        pytest.param(
+            _tool_result_messages(_SUMMARIZE, _pdf_url_part(_ONCE_URL)),
             [
-                {"role": "user", "content": "read the report"},
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {"id": "call_1", "type": "function", "function": {"name": "fetch_report", "arguments": "{}"}}
-                    ],
-                },
-                {"role": "tool", "tool_call_id": "call_1", "content": [_PDF_URL_PART]},
+                *_tool_result_messages(_SUMMARIZE)[:2],
+                {"role": "tool", "tool_call_id": "call_1", "content": [_SUMMARIZE]},
+                {"role": "user", "content": [{"type": "text", "text": TOOL_RESULT_MEDIA_BOUNDARY}, _DOWNLOADED_PDF_PART]},
             ],
             id="tool_result",
         ),
     ],
 )
-async def test_async_transform_request_downloads_pdf_urls_without_blocking_the_event_loop(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, messages: list[AllMessageValues]
+async def test_async_transform_request_downloads_a_pdf_url_once_and_leaves_the_callers_messages_unchanged(
+    respx_mock: respx.MockRouter, messages: list[dict[str, object]], expected_messages: list[dict[str, object]]
 ) -> None:
-    monkeypatch.setattr(litellm, "user_url_validation", False)
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    pdf_content: Final = b"%PDF-1.7\nmock-pdf"
-    in_memory_cache.delete_cache(_PDF_URL)
-    event_loop_thread: Final = threading.current_thread()
-    event_loop_ran: Final = threading.Event()
-    loop_ran_during_download: Final[list[bool]] = []
+    in_memory_cache.delete_cache(_ONCE_URL)
+    download: Final = respx_mock.get(_ONCE_URL).mock(side_effect=_serve_pdf_to_async_clients_only)
+    sent: Final = copy.deepcopy(messages)
 
-    def pdf_response() -> Response:
-        return Response(200, headers={"content-type": "application/pdf"}, content=pdf_content)
+    request: Final = await OpenAIGPTConfig().async_transform_request(
+        model="gpt-4.1",
+        messages=sent,
+        optional_params={},
+        litellm_params={"custom_llm_provider": "openai"},
+        headers={},
+    )
 
-    async def serve_pdf_on_event_loop() -> Response:
-        loop_ran_during_download.append(await asyncio.to_thread(event_loop_ran.wait, 5))
-        return pdf_response()
+    assert download.call_count == 1
+    assert request["messages"] == expected_messages
+    assert sent == messages
 
-    def serve_pdf(request: object) -> Response | Coroutine[object, object, Response]:
-        if threading.current_thread() is event_loop_thread:
-            return serve_pdf_on_event_loop()
-        loop_ran_during_download.append(event_loop_ran.wait(timeout=5))
-        return pdf_response()
 
-    respx_mock.get(_PDF_URL).mock(side_effect=serve_pdf)
+@pytest.mark.usefixtures("pdf_urls_reachable")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.asyncio
+async def test_async_transform_request_downloads_the_pdf_urls_of_one_request_at_the_same_time(
+    respx_mock: respx.MockRouter,
+) -> None:
+    pdf_urls: Final = tuple(f"https://files.example.test/together-{index}.pdf" for index in range(3))
+    for pdf_url in pdf_urls:
+        in_memory_cache.delete_cache(pdf_url)
+    started_downloads: Final = itertools.count(1)
+    every_download_started: Final = asyncio.Event()
 
-    async def mark_event_loop_ran() -> None:
-        event_loop_ran.set()
+    async def serve_pdf_once_every_download_started(request: Request) -> Response:
+        if next(started_downloads) == len(pdf_urls):
+            every_download_started.set()
+        try:
+            await asyncio.wait_for(every_download_started.wait(), timeout=5)
+        except TimeoutError as error:
+            raise litellm.ImageFetchError("the PDF URLs were downloaded one after another") from error
+        return await _serve_pdf_to_async_clients_only(request)
 
-    request, _ = await asyncio.gather(
-        OpenAIGPTConfig().async_transform_request(
+    respx_mock.route(method="GET", host="files.example.test").mock(side_effect=serve_pdf_once_every_download_started)
+
+    request: Final = await OpenAIGPTConfig().async_transform_request(
+        model="gpt-4.1",
+        messages=[{"role": "user", "content": [_SUMMARIZE, *map(_pdf_url_part, pdf_urls)]}],
+        optional_params={},
+        litellm_params={"custom_llm_provider": "openai"},
+        headers={},
+    )
+
+    assert request["messages"] == [{"role": "user", "content": [_SUMMARIZE, *[_DOWNLOADED_PDF_PART] * 3]}]
+
+
+@pytest.mark.usefixtures("pdf_urls_reachable")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.asyncio
+async def test_streamed_completion_downloads_its_pdf_url_with_the_async_client(respx_mock: respx.MockRouter) -> None:
+    pdf_url: Final = "https://files.example.test/streamed.pdf"
+    in_memory_cache.delete_cache(pdf_url)
+    download: Final = respx_mock.get(pdf_url).mock(side_effect=_serve_pdf_to_async_clients_only)
+    chunk: Final = {
+        "id": "chatcmpl-stream",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "gpt-4.1",
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": "seen"}, "finish_reason": "stop"}],
+    }
+    chat: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode(),
+        )
+    )
+
+    stream: Final = await litellm.acompletion(
+        model="gpt-4.1",
+        messages=[{"role": "user", "content": [_SUMMARIZE, _pdf_url_part(pdf_url)]}],
+        api_key="sk-openai-test",
+        stream=True,
+    )
+    text: Final = "".join([part.choices[0].delta.content or "" async for part in stream])
+
+    assert text == "seen"
+    assert download.call_count == 1
+    assert json.loads(chat.calls[0].request.content)["messages"] == [
+        {"role": "user", "content": [_SUMMARIZE, _DOWNLOADED_PDF_PART]}
+    ]
+
+
+@pytest.mark.usefixtures("pdf_urls_reachable")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.asyncio
+async def test_async_transform_request_rejects_a_file_part_without_its_file_and_leaves_the_callers_messages_unchanged(
+    respx_mock: respx.MockRouter,
+) -> None:
+    pdf_url: Final = "https://files.example.test/before-a-broken-part.pdf"
+    in_memory_cache.delete_cache(pdf_url)
+    respx_mock.get(pdf_url).mock(side_effect=_serve_pdf_to_async_clients_only)
+    messages: Final = [{"role": "user", "content": [_SUMMARIZE, _pdf_url_part(pdf_url), {"type": "file", "file": None}]}]
+    sent: Final = copy.deepcopy(messages)
+
+    with pytest.raises(
+        litellm.BadRequestError, match="Content block has type='file' but is missing the required 'file' field"
+    ):
+        await OpenAIGPTConfig().async_transform_request(
             model="gpt-4.1",
-            messages=copy.deepcopy(messages),
+            messages=sent,
             optional_params={},
             litellm_params={"custom_llm_provider": "openai"},
             headers={},
-        ),
-        mark_event_loop_ran(),
+        )
+
+    assert sent == messages
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("config", [OpenAIGPTConfig(), DeepInfraConfig()], ids=["openai", "deepinfra"])
+async def test_async_transform_request_sends_a_plain_string_tool_result_part_like_the_sync_transform(
+    config: OpenAIGPTConfig,
+) -> None:
+    messages: Final = _tool_result_messages("plain string result")
+
+    request: Final = await config.async_transform_request(
+        model="test-model", messages=copy.deepcopy(messages), optional_params={}, litellm_params={}, headers={}
     )
 
-    assert loop_ran_during_download == [True]
-    assert request["messages"][-1]["content"][-1]["file"] == {
-        "file_data": f"data:application/pdf;base64,{base64.b64encode(pdf_content).decode('utf-8')}",
-        "filename": "my_file.pdf",
-    }
+    assert request == config.transform_request(
+        model="test-model", messages=copy.deepcopy(messages), optional_params={}, litellm_params={}, headers={}
+    )
+
+
+@pytest.mark.usefixtures("pdf_urls_reachable")
+@pytest.mark.respx(assert_all_called=False)
+@pytest.mark.asyncio
+async def test_async_transform_request_still_flattens_for_a_provider_without_files_when_the_pdf_url_fails(
+    respx_mock: respx.MockRouter,
+) -> None:
+    pdf_url: Final = "https://files.example.test/missing.pdf"
+    in_memory_cache.delete_cache(pdf_url)
+    respx_mock.get(pdf_url).mock(return_value=Response(404))
+    messages: Final = [{"role": "user", "content": [_SUMMARIZE, _pdf_url_part(pdf_url)]}]
+
+    request: Final = await SambanovaConfig().async_transform_request(
+        model="test-model", messages=copy.deepcopy(messages), optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert request["messages"] == [{"role": "user", "content": "Summarize the report."}]
 
 
 @pytest.mark.respx(assert_all_called=True)

@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import logging
 import os
 import sys
 from typing import Final, cast
@@ -23,6 +24,7 @@ import json
 from unittest.mock import ANY, MagicMock, patch
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.types.utils import Choices, EmbeddingResponse, Message, ModelResponse, ModelResponseStream
 from unittest import mock
 
@@ -1114,3 +1116,36 @@ def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
         )
         == "http://gateway.example.com/ollama/api/chat"
     )
+
+
+def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and f"Dropping {param}=" in r.getMessage()
+    )
+
+
+@pytest.mark.parametrize("effort", ("minimal", "xhigh"))
+def test_reasoning_effort_mapped_to_think_off_warns_once(effort: str, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = OllamaChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": effort}, optional_params={}, model="qwen3", drop_params=False
+        )
+
+    warnings: Final = _warnings_naming(caplog, "reasoning_effort")
+    assert result["think"] is False
+    assert len(warnings) == 1
+    assert f"reasoning_effort={effort!r}" in warnings[0]
+    assert "qwen3" in warnings[0]
+
+
+@pytest.mark.parametrize("effort, think", (("none", False), ("low", True), ("high", True)))
+def test_reasoning_effort_with_a_matching_think_value_does_not_warn(
+    effort: str, think: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = OllamaChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": effort}, optional_params={}, model="qwen3", drop_params=False
+        )
+
+    assert result["think"] is think
+    assert _warnings_naming(caplog, "reasoning_effort") == ()
