@@ -207,18 +207,18 @@ qualification_outage() {
   qualification_read_boundaries before-outage
   qualification_inference before-outage
   deployment_pods "$control" > "$qa_dir/outage-gateway-before.json"
-  replicas=$(kubectl -n "$namespace" get deployment lens-lens-worker -o jsonpath='{.spec.replicas}')
+  replicas=$(kubectl -n "$namespace" get deployment "${lens_deployment:-lens-lens-worker}" -o jsonpath='{.spec.replicas}')
   test "$replicas" = 1
-  selector=$(kubectl -n "$namespace" get deployment lens-lens-worker -o json | jq -r '.spec.selector.matchLabels|to_entries|map("\(.key)=\(.value)")|join(",")')
-  kubectl -n "$namespace" scale deployment/lens-lens-worker --replicas=0
+  selector=$(kubectl -n "$namespace" get deployment "${lens_deployment:-lens-lens-worker}" -o json | jq -r '.spec.selector.matchLabels|to_entries|map("\(.key)=\(.value)")|join(",")')
+  kubectl -n "$namespace" scale "deployment/${lens_deployment:-lens-lens-worker}" --replicas=0
   kubectl -n "$namespace" wait --for=delete pods -l "$selector" --timeout=90s
   qualification_request "$master_key" GET /lens/service 200 outage-service-status
   jq -e '.configured == true and .connected == false' "$qa_dir/release-response.json" > /dev/null
   qualification_request "$master_key" GET /lens/signals 503 outage-lens-unavailable
   qualification_request invalid-release-key GET /lens/signals 401 outage-invalid-key-still-denied
   qualification_inference during-outage
-  kubectl -n "$namespace" scale deployment/lens-lens-worker --replicas="$replicas"
-  kubectl -n "$namespace" rollout status deployment/lens-lens-worker --timeout=180s
+  kubectl -n "$namespace" scale "deployment/${lens_deployment:-lens-lens-worker}" --replicas="$replicas"
+  kubectl -n "$namespace" rollout status "deployment/${lens_deployment:-lens-lens-worker}" --timeout=180s
   forward_bundled
   saved_trace
   qualification_read_boundaries after-outage

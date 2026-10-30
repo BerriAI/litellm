@@ -1,0 +1,133 @@
+suite: Lens connection
+templates:
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+  - backend/deployment.yaml
+  - ingress.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: connects the gateway and backend to the Lens service
+    templates:
+      - gateway/deployment.yaml
+      - backend/deployment.yaml
+    set:
+      lens.enabled: true
+      lens.url: http://lens.lens.svc:4318
+      lens.publicUrl: https://gateway.example/lens-ingest
+      lens.gatewaySecret.name: lens-connection
+      lens.serviceTokenSecret.name: lens-connection
+      lens.serviceTokenSecret.key: token
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_URL
+            value: http://lens.lens.svc:4318
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_PUBLIC_URL
+            value: https://gateway.example/lens-ingest
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LENS_GATEWAY_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: lens-connection
+                key: gateway-secret
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_SERVICE_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: lens-connection
+                key: token
+  - it: sets nothing Lens related by default
+    templates:
+      - gateway/deployment.yaml
+      - backend/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_URL
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LENS_GATEWAY_SECRET
+          any: true
+  - it: renders no Lens workload, storage or secret
+    set:
+      lens.enabled: true
+      lens.url: http://lens.lens.svc:4318
+      lens.publicUrl: https://gateway.example/lens-ingest
+      lens.gatewaySecret.name: lens-connection
+      lens.serviceTokenSecret.name: lens-connection
+    asserts:
+      - notEqual:
+          path: kind
+          value: StatefulSet
+      - notEqual:
+          path: kind
+          value: Secret
+      - notMatchRegex:
+          path: metadata.name
+          pattern: lens
+  - it: routes /lens-ingest to the in-cluster Lens service ahead of the gateway catch-all
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: gateway.example
+      lens.enabled: true
+      lens.url: http://existing-lens:4318
+      lens.publicUrl: https://gateway.example/lens-ingest
+      lens.service.name: existing-lens
+      lens.service.port: 4319
+      lens.gatewaySecret.name: lens-connection
+      lens.serviceTokenSecret.name: lens-connection
+    asserts:
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /lens-ingest
+            pathType: Prefix
+            backend:
+              service:
+                name: existing-lens
+                port:
+                  number: 4319
+      - equal:
+          path: spec.rules[0].http.paths[-1].path
+          value: /
+  - it: keeps /lens-ingest off the ingress without a Lens service name
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: gateway.example
+      lens.enabled: true
+      lens.url: https://lens.example
+      lens.publicUrl: https://lens.example
+      lens.gatewaySecret.name: lens-connection
+      lens.serviceTokenSecret.name: lens-connection
+    asserts:
+      - notContains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /lens-ingest
+          any: true
+  - it: keeps /lens-ingest off the ingress when Lens is disabled
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: gateway.example
+      lens.service.name: existing-lens
+    asserts:
+      - notContains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /lens-ingest
+          any: true
