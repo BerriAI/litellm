@@ -7,16 +7,9 @@ payload encrypted; the request-time cache carries only ciphertext plus a
 negative marker so an unconnected user does not hit the DB per request.
 """
 
-import json
 from collections.abc import Mapping, Sequence
-from typing import (
-    TYPE_CHECKING,
-    Final,
-    Protocol,
-    cast,  # noqa: TID251  # narrows the untyped Redis cache to the str-keyed Protocol
-)
-
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from datetime import timedelta
+from typing import TYPE_CHECKING, Final
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -25,15 +18,19 @@ from litellm.caching.dual_cache import DualCache
 if TYPE_CHECKING:
     from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
-    GITHUB_COPILOT_DEFAULT_HOST,
     GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS,
-    USER_PROVIDER_CREDENTIAL_CACHE_PREFIX,
     USER_PROVIDER_CREDENTIAL_NOT_CONNECTED,
 )
-from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    decrypt_value_helper,
-    encrypt_value_helper,
+from litellm.redis.stores.user_provider_credentials import (
+    GithubCopilotUserConnectionPayload,
+    InvalidCredentialValue,
+    TransportUserProviderCredentialStore,
+    UserProviderCredentialStore,
+    decode_credential,
+    encode_credential,
+    user_provider_credential_key,
 )
+from litellm.redis.transport.contract import RedisFailure
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import PrismaTableRepository
@@ -44,14 +41,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 _NOT_CONNECTED: Final = USER_PROVIDER_CREDENTIAL_NOT_CONNECTED
-
-
-class GithubCopilotUserConnectionPayload(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    access_token: str = Field(repr=False)
-    github_login: str
-    github_host: str = GITHUB_COPILOT_DEFAULT_HOST
+_cache_key: Final = user_provider_credential_key
 
 
 class _UserProviderCredentialsRepository(PrismaTableRepository["prisma_models.LiteLLM_UserProviderCredentials"]):
@@ -64,28 +54,12 @@ def _table(
     return _UserProviderCredentialsRepository(prisma_client, use_writer=True).table
 
 
-def _cache_key(user_id: str, credential_name: str) -> str:
-    pair: Final = json.dumps([user_id, credential_name], separators=(",", ":"))
-    return f"{USER_PROVIDER_CREDENTIAL_CACHE_PREFIX}:{pair}"
-
-
 def _encode(payload: GithubCopilotUserConnectionPayload) -> str:
-    return encrypt_value_helper(payload.model_dump_json())
+    return encode_credential(payload)
 
 
 def decode_user_provider_credential(stored: str) -> GithubCopilotUserConnectionPayload | None:
-    decrypted: Final = decrypt_value_helper(
-        value=stored,
-        key="user_provider_credential",
-        exception_type="debug",
-        return_original_value=False,
-    )
-    if decrypted is None:
-        return None
-    try:
-        return GithubCopilotUserConnectionPayload.model_validate_json(decrypted)
-    except ValidationError:
-        return None
+    return decode_credential(stored)
 
 
 async def upsert_user_provider_credential(
@@ -158,47 +132,15 @@ async def list_user_provider_credentials_for_credential(
     return await _table(prisma_client).find_many(where={"credential_name": credential_name})
 
 
-class _StringKeyCache(Protocol):
-    async def async_get_cache(
-        self,
-        key: str,
-        **kwargs: object,  # kwargs-ok: RedisCache accepts optional cache kwargs
-    ) -> object: ...
-
-    async def async_set_cache(
-        self,
-        key: str,
-        value: str,
-        **kwargs: object,  # kwargs-ok: RedisCache accepts ttl/nx kwargs
-    ) -> None: ...
-
-    async def async_delete_cache(
-        self,
-        key: str,
-        **kwargs: object,  # kwargs-ok: RedisCache accepts optional cache kwargs
-    ) -> None: ...
+def _store(cache: "RedisCache") -> UserProviderCredentialStore:
+    return TransportUserProviderCredentialStore(cache.transport())
 
 
-def _string_cache(cache: "RedisCache") -> _StringKeyCache:
-    return cast(_StringKeyCache, cache)  # cast-ok: RedisCache exposes the str-keyed cache protocol
-
-
-async def _try_cache_get(token_cache: "RedisCache", key: str) -> object:
-    """Redis errors must read as a plain miss: the DB is the source of truth."""
-    try:
-        return await _string_cache(token_cache).async_get_cache(key)
-    except Exception:  # noqa: BLE001  # a Redis outage must fall back to the database, never reject a connected user
-        verbose_proxy_logger.warning("aget_user_provider_credentials: Redis get failed; falling back to the database")
-        return None
-
-
-async def _try_cache_set(token_cache: "RedisCache", key: str, value: str, nx: bool = False) -> None:
-    try:
-        await _string_cache(token_cache).async_set_cache(
-            key, value, nx=nx, ttl=GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS
-        )
-    except Exception:  # noqa: BLE001  # caching is best-effort; a Redis outage is not worth failing the request
-        verbose_proxy_logger.warning("aget_user_provider_credentials: Redis set failed; skipping the cache write")
+async def _try_cache_get(
+    token_cache: "RedisCache", user_id: str, credential_name: str
+) -> str | None | InvalidCredentialValue:
+    result: Final = await _store(token_cache).read(user_id, credential_name)
+    return None if isinstance(result, RedisFailure) else result
 
 
 @with_service_target("user_provider_connections")
@@ -214,23 +156,11 @@ async def invalidate_user_provider_credential_cache(
     token_cache: Final = cache.redis_cache
     if token_cache is None:
         return True
-    try:
-        await _string_cache(token_cache).async_set_cache(
-            _cache_key(user_id, credential_name),
-            _NOT_CONNECTED,
-            ttl=GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS,
-        )
-    except Exception:  # noqa: BLE001  # caller decides whether a Redis outage aborts the disconnect
-        verbose_proxy_logger.warning("invalidate_user_provider_credential_cache: Redis tombstone failed")
-        return False
-    # async_set_cache swallows client errors internally, so a write that never
-    # landed looks identical to a success. The tombstone is only trusted when the
-    # key reads back as _NOT_CONNECTED; anything else means revoke failed.
-    readback: Final = await _try_cache_get(token_cache, _cache_key(user_id, credential_name))
-    if readback != _NOT_CONNECTED:
-        verbose_proxy_logger.warning("invalidate_user_provider_credential_cache: tombstone not visible after write")
-        return False
-    return True
+    await _store(token_cache).disconnect(
+        user_id, credential_name, ttl=timedelta(seconds=GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS)
+    )
+    readback: Final = await _try_cache_get(token_cache, user_id, credential_name)
+    return readback == _NOT_CONNECTED
 
 
 @with_service_target("user_provider_connections")
@@ -244,10 +174,7 @@ async def drop_user_provider_credential_cache(
     token_cache: Final = cache.redis_cache
     if token_cache is None:
         return
-    try:
-        await _string_cache(token_cache).async_delete_cache(_cache_key(user_id, credential_name))
-    except Exception:  # noqa: BLE001  # a Redis outage must not fail a connect
-        verbose_proxy_logger.warning("drop_user_provider_credential_cache: Redis delete failed")
+    await _store(token_cache).delete(user_id, credential_name)
 
 
 @with_service_target("user_provider_connections")
@@ -265,32 +192,21 @@ async def set_user_provider_credential_cache(
     token_cache: Final = cache.redis_cache
     if token_cache is None:
         return True
-    key: Final = _cache_key(user_id, credential_name)
-    try:
-        await _string_cache(token_cache).async_set_cache(
-            key,
-            _encode(payload),
-            ttl=GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS,
-        )
-        readback: Final = await _try_cache_get(token_cache, key)
+    write: Final = await _store(token_cache).connect(
+        user_id,
+        credential_name,
+        payload,
+        ttl=timedelta(seconds=GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS),
+    )
+    if not (isinstance(write, RedisFailure) and write.kind == "decode"):
+        readback: Final = await _try_cache_get(token_cache, user_id, credential_name)
         if isinstance(readback, str) and decode_user_provider_credential(readback) == payload:
             return True
-        verbose_proxy_logger.warning(
-            "set_user_provider_credential_cache: Redis overwrite not visible; falling back to delete"
-        )
-    except Exception:  # noqa: BLE001  # a Redis outage must not fail a connect
-        verbose_proxy_logger.warning("set_user_provider_credential_cache: Redis set failed; falling back to delete")
-    try:
-        await _string_cache(token_cache).async_delete_cache(key)
-    except Exception:  # noqa: BLE001  # a Redis outage must not fail a connect
-        verbose_proxy_logger.warning("set_user_provider_credential_cache: Redis delete failed")
-    after_delete: Final = await _try_cache_get(token_cache, key)
+    await _store(token_cache).delete(user_id, credential_name)
+    after_delete: Final = await _try_cache_get(token_cache, user_id, credential_name)
     if after_delete is None:
         return True
-    if isinstance(after_delete, str) and decode_user_provider_credential(after_delete) == payload:
-        return True
-    verbose_proxy_logger.warning("set_user_provider_credential_cache: stale entry survived delete")
-    return False
+    return isinstance(after_delete, str) and decode_user_provider_credential(after_delete) == payload
 
 
 @with_service_target("user_provider_connections")
@@ -313,8 +229,9 @@ async def aget_user_provider_credentials(
     cached: Final[dict[str, str]] = {}  # mutable-ok: accumulates hits and DB reads
     misses: Final[list[str]] = []  # mutable-ok: accumulates cache misses
     for name in names:
-        value = await _try_cache_get(token_cache, _cache_key(user_id, name)) if token_cache is not None else None
-        if value == _NOT_CONNECTED:
+        if (
+            value := await _try_cache_get(token_cache, user_id, name) if token_cache is not None else None
+        ) == _NOT_CONNECTED:
             continue
         if isinstance(value, str) and value:
             cached[name] = value
@@ -340,13 +257,15 @@ async def aget_user_provider_credentials(
     found: Final = {row.credential_name: row.credential_b64 for row in rows}
     for name in misses:
         if token_cache is not None:
-            await _try_cache_set(token_cache, _cache_key(user_id, name), found.get(name, _NOT_CONNECTED), nx=True)
+            await _store(token_cache).fill(
+                user_id, name, found.get(name), ttl=timedelta(seconds=GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS)
+            )
         if name in found:
             cached[name] = found[name]
     return {
-        name: connection
+        name: found_connection
         for name, ciphertext in cached.items()
-        if (connection := _connection_from_ciphertext(ciphertext)) is not None
+        if (found_connection := _connection_from_ciphertext(ciphertext)) is not None
     }
 
 

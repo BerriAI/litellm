@@ -83,3 +83,25 @@ def trip_breaker(cache: RedisCache, failures: int | None = None) -> None:
     breaker: Final = cache._circuit_breaker  # pyright: ignore[reportPrivateUsage]  # tests open the breaker the way RedisCache does after hard failures
     for _ in range(breaker.failure_threshold if failures is None else failures):
         breaker.record_failure()
+
+
+def async_client(cache: RedisCache) -> fakeredis.FakeAsyncRedis:
+    client: Final = cache.init_async_client()  # pyright: ignore[reportUnknownMemberType]  # legacy RedisCache API is untyped
+    assert isinstance(client, fakeredis.FakeAsyncRedis)
+    return client
+
+
+def pin_async_client(cache: RedisCache) -> Callable[[], None]:
+    client: Final = async_client(cache)
+
+    def pin() -> None:
+        litellm.in_memory_llm_clients_cache.set_cache(
+            key=cache._get_async_client_cache_key(),  # pyright: ignore[reportPrivateUsage]  # re-seeds the per-loop client slot RedisCache reads
+            value=client,
+        )
+
+    return pin
+
+
+async def legacy_set(cache: RedisCache, key: str, value: object, *, ttl: int | None = None) -> None:
+    await cache.async_set_cache(key, value, ttl=ttl)  # pyright: ignore[reportUnknownMemberType]  # legacy RedisCache API is untyped
