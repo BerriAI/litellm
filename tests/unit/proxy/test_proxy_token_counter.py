@@ -2048,21 +2048,10 @@ async def test_framing_keeps_the_400_for_blocks_the_provider_counter_cannot_conv
             {
                 "messages": [
                     {"role": "user", "content": "What is new?"},
-                    {
-                        "role": "assistant",
-                        "content": [
-                            {
-                                "type": "server_tool_use",
-                                "id": "srvtoolu_01",
-                                "name": "web_search",
-                                "input": {"query": "new"},
-                            },
-                            {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01", "content": []},
-                        ],
-                    },
+                    {"role": "assistant", "content": [{"type": "future_block", "data": "opaque"}]},
                 ]
             },
-            id="web_search_blocks",
+            id="unknown_content_block",
         ),
         pytest.param(
             {"messages": [], "contents": [{"role": "user", "parts": [{"text": "What is new?"}]}]},

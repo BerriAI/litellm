@@ -2114,6 +2114,337 @@ def test_count_content_list_rejects_unknown_type():
     assert "tool_reference" in message
 
 
+def _count_with_assistant_blocks(
+    blocks: list[dict[str, object]], custom_tokenizer: dict[str, object] | None = None
+) -> int:
+    return token_counter(
+        model="claude-haiku-5-5",
+        messages=[
+            {"role": "user", "content": "What is the latest stable Python release?"},
+            {"role": "assistant", "content": [*blocks, {"type": "text", "text": "Python 3.15.0 is the latest."}]},
+            {"role": "user", "content": "Thanks. When did it come out?"},
+        ],
+        custom_tokenizer=custom_tokenizer,
+    )
+
+
+def _count_as_text_blocks(texts: tuple[str, ...]) -> int:
+    return _count_with_assistant_blocks([{"type": "text", "text": text} for text in texts])
+
+
+def _server_tool_use(query: str = "latest stable Python release") -> dict[str, object]:
+    return {"type": "server_tool_use", "id": "srvtoolu_01FC4b9yWf8JZ14cgNFzM6Xq", "name": "web_search", "input": {"query": query}}
+
+
+def _web_search_tool_result(
+    title: str = "Python Release Python 3.15.0", encrypted_content: str = "EtQHCioIFRgCIiRk"
+) -> dict[str, object]:
+    return {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu_01FC4b9yWf8JZ14cgNFzM6Xq",
+        "content": [
+            {
+                "type": "web_search_result",
+                "title": title,
+                "url": "https://www.python.org/downloads/release/python-3150/",
+                "encrypted_content": encrypted_content,
+                "page_age": "7 days ago",
+            },
+            {
+                "type": "web_search_result",
+                "title": "Python 3.15.0 (final) is here!",
+                "url": "https://blog.python.org/2026/10/python-3150-final-is-here/",
+                "encrypted_content": "EvoHCioIFRgCIiRk",
+                "page_age": "21 days ago",
+            },
+        ],
+        "caller": {"type": "direct"},
+    }
+
+
+def _web_fetch_tool_result(page_text: str = "This domain is for use in documentation examples.") -> dict[str, object]:
+    return {
+        "type": "web_fetch_tool_result",
+        "tool_use_id": "srvtoolu_01LLidSpmfYJZdG9eMuC7NCr",
+        "content": {
+            "type": "web_fetch_result",
+            "url": "https://example.com",
+            "retrieved_at": "2026-10-30T00:17:50+00:00",
+            "content": {
+                "type": "document",
+                "source": {"type": "text", "media_type": "text/plain", "data": page_text},
+                "title": "Example Domain",
+            },
+        },
+        "caller": {"type": "direct"},
+    }
+
+
+def _code_execution_tool_result(result: dict[str, object]) -> dict[str, object]:
+    return {"type": "code_execution_tool_result", "tool_use_id": "srvtoolu_01SSkyUm5fJfVgAt7G8ETmCr", "content": result}
+
+
+def _encrypted_code_execution_result(encrypted_stdout: str = "Eo0FCioIFRgC") -> dict[str, object]:
+    return {
+        "type": "encrypted_code_execution_result",
+        "encrypted_stdout": encrypted_stdout,
+        "stderr": "ZeroDivisionError: division by zero",
+        "return_code": 1,
+        "content": [],
+    }
+
+
+def _bash_code_execution_tool_result(
+    stdout: str = "print(6*7)\n42\n", stderr: str = "", return_code: int = 0, file_id: str = "file_011CTbzkXVLiDsGSTB"
+) -> dict[str, object]:
+    return {
+        "type": "bash_code_execution_tool_result",
+        "tool_use_id": "srvtoolu_01MPTob4Wf1Ev1h9dMXieEce",
+        "content": {
+            "type": "bash_code_execution_result",
+            "stdout": stdout,
+            "stderr": stderr,
+            "return_code": return_code,
+            "content": [{"type": "bash_code_execution_output", "file_id": file_id}],
+        },
+    }
+
+
+def _text_editor_code_execution_tool_result(result: dict[str, object]) -> dict[str, object]:
+    return {
+        "type": "text_editor_code_execution_tool_result",
+        "tool_use_id": "srvtoolu_01PzGCHv7iMv3u3SqyueAtPi",
+        "content": result,
+    }
+
+
+def _tool_search_tool_result(tool_name: str = "get_weather") -> dict[str, object]:
+    return {
+        "type": "tool_search_tool_result",
+        "tool_use_id": "srvtoolu_01HtRX8eCM4vE6JZqLhcCA2i",
+        "content": {
+            "type": "tool_search_tool_search_result",
+            "tool_references": [{"type": "tool_reference", "tool_name": tool_name}],
+        },
+    }
+
+
+_MCP_TOOL_USE: Final = {
+    "type": "mcp_tool_use",
+    "id": "mcptoolu_014Q35RayjACSWkSj4X2yov1",
+    "name": "search_issues",
+    "server_name": "tracker",
+    "input": {"query": "token counter"},
+}
+_MCP_TOOL_RESULT: Final = {
+    "type": "mcp_tool_result",
+    "tool_use_id": "mcptoolu_014Q35RayjACSWkSj4X2yov1",
+    "is_error": False,
+    "content": [{"type": "text", "text": "Issue 42 is still open."}],
+}
+_ADVISOR_TOOL_RESULT: Final = {
+    "type": "advisor_tool_result",
+    "tool_use_id": "srvtoolu_01Wq8GYYv1dHrKzZx4k8Aa2m",
+    "content": {"type": "advisor_result", "text": "Check the encrypted fields first."},
+}
+_CONTAINER_UPLOAD: Final = {"type": "container_upload", "file_id": "file_019aJSLMRKBtjSjRmfY1WRVr"}
+_CONNECTOR_TEXT: Final = {
+    "type": "connector_text",
+    "text": "Ticket 42 was closed on Monday.",
+    "signature": "EqQBCkYIBRgCKkBj",
+}
+
+
+@pytest.mark.parametrize(
+    ("block", "counted_text"),
+    [
+        pytest.param(_server_tool_use(), ("web_search", "latest stable Python release"), id="server_tool_use"),
+        pytest.param(_MCP_TOOL_USE, ("search_issues", "tracker", "token counter"), id="mcp_tool_use"),
+        pytest.param(
+            _web_search_tool_result(),
+            (
+                "Python Release Python 3.15.0",
+                "https://www.python.org/downloads/release/python-3150/",
+                "7 days ago",
+                "Python 3.15.0 (final) is here!",
+                "https://blog.python.org/2026/10/python-3150-final-is-here/",
+                "21 days ago",
+            ),
+            id="web_search_tool_result",
+        ),
+        pytest.param(
+            _web_fetch_tool_result(),
+            (
+                "https://example.com",
+                "2026-10-30T00:17:50+00:00",
+                "Example Domain",
+                "This domain is for use in documentation examples.",
+            ),
+            id="web_fetch_tool_result",
+        ),
+        pytest.param(
+            _code_execution_tool_result(
+                {
+                    "type": "code_execution_result",
+                    "stdout": "42",
+                    "stderr": "",
+                    "return_code": 0,
+                    "content": [],
+                    "abort_reason": None,
+                }
+            ),
+            ("42",),
+            id="code_execution_tool_result",
+        ),
+        pytest.param(
+            _code_execution_tool_result(_encrypted_code_execution_result()),
+            ("ZeroDivisionError: division by zero",),
+            id="encrypted_code_execution_tool_result",
+        ),
+        pytest.param(_bash_code_execution_tool_result(), ("print(6*7)\n42\n",), id="bash_code_execution_tool_result"),
+        pytest.param(
+            _text_editor_code_execution_tool_result(
+                {"type": "text_editor_code_execution_create_result", "is_file_update": False}
+            ),
+            (),
+            id="text_editor_code_execution_create_result",
+        ),
+        pytest.param(
+            _text_editor_code_execution_tool_result(
+                {
+                    "type": "text_editor_code_execution_str_replace_result",
+                    "lines": ["print(6 * 7)"],
+                    "new_lines": 1,
+                    "new_start": 1,
+                    "old_lines": 1,
+                    "old_start": 1,
+                }
+            ),
+            ("print(6 * 7)",),
+            id="text_editor_code_execution_str_replace_result",
+        ),
+        pytest.param(_tool_search_tool_result(), ("get_weather",), id="tool_search_tool_result"),
+        pytest.param(_MCP_TOOL_RESULT, ("Issue 42 is still open.",), id="mcp_tool_result"),
+        pytest.param(_ADVISOR_TOOL_RESULT, ("Check the encrypted fields first.",), id="advisor_tool_result"),
+        pytest.param(_CONTAINER_UPLOAD, (), id="container_upload"),
+        pytest.param(_CONNECTOR_TEXT, ("Ticket 42 was closed on Monday.",), id="connector_text"),
+    ],
+)
+def test_token_counter_counts_anthropic_server_tool_blocks_by_their_text(
+    block: dict[str, object], counted_text: tuple[str, ...]
+) -> None:
+    with_block: Final = _count_with_assistant_blocks([block])
+
+    assert with_block == _count_as_text_blocks(counted_text)
+    assert (with_block > _count_with_assistant_blocks([])) == bool(counted_text)
+
+
+_LONG_ID: Final = "srvtoolu_" + "7Hq2" * 30
+
+
+@pytest.mark.parametrize(
+    ("block", "same_text_block"),
+    [
+        pytest.param(
+            _web_search_tool_result(),
+            _web_search_tool_result(encrypted_content="EtQHCioIFRgCIiRk" * 200),
+            id="encrypted_content",
+        ),
+        pytest.param(
+            _code_execution_tool_result(_encrypted_code_execution_result()),
+            _code_execution_tool_result(_encrypted_code_execution_result(encrypted_stdout="Eo0FCioIFRgC" * 200)),
+            id="encrypted_stdout",
+        ),
+        pytest.param(_CONNECTOR_TEXT, {**_CONNECTOR_TEXT, "signature": "EqQBCkYIBRgCKkBj" * 200}, id="signature"),
+        pytest.param(_server_tool_use(), {**_server_tool_use(), "id": _LONG_ID}, id="id"),
+        pytest.param(_MCP_TOOL_RESULT, {**_MCP_TOOL_RESULT, "tool_use_id": _LONG_ID}, id="tool_use_id"),
+        pytest.param(_CONTAINER_UPLOAD, {**_CONTAINER_UPLOAD, "file_id": "file_" + "7Hq2" * 30}, id="file_id"),
+        pytest.param(
+            _bash_code_execution_tool_result(),
+            _bash_code_execution_tool_result(file_id="file_" + "7Hq2" * 30),
+            id="output_file_id",
+        ),
+        pytest.param(
+            {**_server_tool_use(), "caller": {"type": "code_execution_20250825", "tool_id": "srvtoolu_01A"}},
+            {**_server_tool_use(), "caller": {"type": "code_execution_20250825", "tool_id": _LONG_ID}},
+            id="caller",
+        ),
+        pytest.param(
+            _MCP_TOOL_RESULT,
+            {**_MCP_TOOL_RESULT, "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+            id="cache_control",
+        ),
+        pytest.param(
+            _bash_code_execution_tool_result(), _bash_code_execution_tool_result(return_code=137), id="return_code"
+        ),
+    ],
+)
+def test_token_counter_ignores_ids_and_opaque_payloads_in_server_tool_blocks(
+    block: dict[str, object], same_text_block: dict[str, object]
+) -> None:
+    assert _count_with_assistant_blocks([same_text_block]) == _count_with_assistant_blocks([block])
+
+
+@pytest.mark.parametrize(
+    ("block", "longer_block"),
+    [
+        pytest.param(
+            _bash_code_execution_tool_result(stdout="42\n"),
+            _bash_code_execution_tool_result(stdout="42\n" * 30),
+            id="stdout",
+        ),
+        pytest.param(
+            _bash_code_execution_tool_result(stderr=""),
+            _bash_code_execution_tool_result(stderr="Traceback (most recent call last):\n  File \"/tmp/a.py\"\n"),
+            id="stderr",
+        ),
+        pytest.param(
+            _web_search_tool_result(title="Python 3.15"),
+            _web_search_tool_result(title="Python 3.15.0 release notes, changelog and download links"),
+            id="search_result_title",
+        ),
+        pytest.param(
+            _server_tool_use(query="python"),
+            _server_tool_use(query="latest stable python release date and changelog"),
+            id="server_tool_use_input",
+        ),
+        pytest.param(
+            _web_fetch_tool_result(page_text="Example."),
+            _web_fetch_tool_result(page_text="Example. " + text[:2000]),
+            id="fetched_document_text",
+        ),
+        pytest.param(
+            _tool_search_tool_result(tool_name="get_weather"),
+            _tool_search_tool_result(tool_name="get_weather_forecast_for_a_city_by_name"),
+            id="tool_reference_name",
+        ),
+    ],
+)
+def test_token_counter_counts_more_for_longer_server_tool_block_text(
+    block: dict[str, object], longer_block: dict[str, object]
+) -> None:
+    assert _count_with_assistant_blocks([longer_block]) > _count_with_assistant_blocks([block])
+
+
+def test_token_counter_counts_tool_input_values_without_reading_them_as_content_blocks() -> None:
+    search: Final = {
+        "type": "mcp_tool_use",
+        "id": "mcptoolu_01Lq9bVd7RkZxN2s4WmEh6Ta",
+        "name": "search_drive",
+        "server_name": "drive",
+        "input": {"type": "document", "query": "Q3 board packet"},
+    }
+
+    assert _count_with_assistant_blocks([search]) == _count_as_text_blocks(("search_drive", "drive", "Q3 board packet"))
+
+
+def test_token_counter_charges_nothing_for_server_tool_output_with_no_text() -> None:
+    tokenizer: Final = {"type": "huggingface_tokenizer", "tokenizer": _BosEncoder()}
+    silent_command: Final = _bash_code_execution_tool_result(stdout="", stderr="")
+
+    assert _count_with_assistant_blocks([silent_command], tokenizer) == _count_with_assistant_blocks([], tokenizer)
+
+
 @pytest.mark.parametrize(
     "source",
     [

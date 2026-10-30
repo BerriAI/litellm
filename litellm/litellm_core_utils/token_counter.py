@@ -8,7 +8,7 @@ import struct
 from bisect import bisect_right
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import cached_property
+from functools import cached_property, partial
 from itertools import accumulate, chain, islice
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast
@@ -1675,20 +1675,114 @@ _TEXT_FIELD_BY_BLOCK_TYPE: Final = MappingProxyType(
     {"text": "text", "thinking": "thinking", "redacted_thinking": "thinking", "compaction": "content"}
 )
 
+_SERVER_TOOL_BLOCK_TYPES: Final = frozenset(
+    {
+        "server_tool_use",
+        "mcp_tool_use",
+        "web_search_tool_result",
+        "web_fetch_tool_result",
+        "code_execution_tool_result",
+        "bash_code_execution_tool_result",
+        "text_editor_code_execution_tool_result",
+        "tool_search_tool_result",
+        "mcp_tool_result",
+        "advisor_tool_result",
+        "container_upload",
+        "connector_text",
+    }
+)
+
+_UNCOUNTED_SERVER_TOOL_FIELDS: Final = frozenset(
+    {
+        "type",
+        "id",
+        "tool_use_id",
+        "cache_control",
+        "caller",
+        "encrypted_content",
+        "encrypted_index",
+        "encrypted_stdout",
+        "file_id",
+        "signature",
+    }
+)
+
+_NESTED_CONTENT_BLOCK_TYPES: Final = frozenset(
+    {
+        *_TEXT_FIELD_BY_BLOCK_TYPE,
+        "image_url",
+        "image",
+        "document",
+        "file",
+        "tool_use",
+        "tool_result",
+        "search_result",
+        "tool_reference",
+    }
+)
+
+_ContentBlock: TypeAlias = (
+    OpenAIMessageContentListBlock
+    | ChatCompletionThinkingBlock
+    | ChatCompletionRedactedThinkingBlock
+    | AnthropicMessagesTextParam
+    | AnthropicMessagesImageParam
+    | AnthropicMessagesDocumentParam
+    | AnthropicSearchResultParam
+    | CompactionBlock
+)
+
+_CountContentBlock: TypeAlias = Callable[[Mapping[str, object]], int]
+
+
+def _count_block_fields(
+    block: Mapping[str, object],
+    count_function: TokenCounterFunction,
+    count_content_block: _CountContentBlock | None,
+) -> int:
+    return sum(
+        _count_field_value(value, count_function, None if key == "input" else count_content_block)
+        for key, value in block.items()
+        if key not in _UNCOUNTED_SERVER_TOOL_FIELDS
+    )
+
+
+def _count_field_value(
+    value: object,
+    count_function: TokenCounterFunction,
+    count_content_block: _CountContentBlock | None,
+) -> int:
+    if isinstance(value, str):
+        return count_function(value) if value else 0
+    if isinstance(value, list):
+        return sum(
+            _count_field_value(item, count_function, count_content_block)
+            for item in _OBJECT_LIST.validate_python(value)
+        )
+    nested: Final = as_str_mapping(value)
+    if nested is None:
+        return 0
+    if count_content_block is not None and nested.get("type") in _NESTED_CONTENT_BLOCK_TYPES:
+        return count_content_block(nested)
+    return _count_block_fields(nested, count_function, count_content_block)
+
+
+def _count_nested_content_block(
+    count_function: TokenCounterFunction,
+    use_default_image_token_count: bool,
+    default_token_count: int | None,
+    pdf_pricing: PdfPagePricing,
+    block: Mapping[str, object],
+) -> int:
+    content_block: Final = cast(_ContentBlock, block)  # cast-ok: _count_content_list dispatches on the type
+    return _count_content_list(
+        count_function, (content_block,), use_default_image_token_count, default_token_count, pdf_pricing
+    )
+
 
 def _count_content_list(
     count_function: TokenCounterFunction,
-    content_list: str
-    | Iterable[
-        OpenAIMessageContentListBlock
-        | ChatCompletionThinkingBlock
-        | ChatCompletionRedactedThinkingBlock
-        | AnthropicMessagesTextParam
-        | AnthropicMessagesImageParam
-        | AnthropicMessagesDocumentParam
-        | AnthropicSearchResultParam
-        | CompactionBlock
-    ],
+    content_list: str | Iterable[_ContentBlock],
     use_default_image_token_count: bool,
     default_token_count: int | None,
     pdf_pricing: PdfPagePricing = "claude",
@@ -1746,13 +1840,25 @@ def _count_content_list(
                 tool_name = str(c.get("tool_name") or "")
                 if tool_name:
                     num_tokens += count_function(tool_name)
+            elif c["type"] in _SERVER_TOOL_BLOCK_TYPES:
+                num_tokens += _count_block_fields(
+                    c,
+                    count_function,
+                    partial(
+                        _count_nested_content_block,
+                        count_function,
+                        use_default_image_token_count,
+                        default_token_count,
+                        pdf_pricing,
+                    ),
+                )
             else:
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise UnsupportedContentTypeError(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
                     f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"compaction, tool_reference, search_result)."
+                    f"compaction, tool_reference, search_result, {', '.join(sorted(_SERVER_TOOL_BLOCK_TYPES))})."
                 )
         return num_tokens
     except Exception as e:
