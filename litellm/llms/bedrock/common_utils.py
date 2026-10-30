@@ -136,7 +136,7 @@ _UNKNOWN_OPERATION_HINT: Final = ", which usually means the model id in the mode
 def bedrock_service_error(error_type: str, headers: httpx.Headers) -> BedrockError:
     hint: Final = _UNKNOWN_OPERATION_HINT if error_type.endswith("#UnknownOperationException") else ""
     return BedrockError(
-        status_code=404,
+        status_code=502,
         message=f"Bedrock answered HTTP 200 with the error {error_type}{hint}.",
         headers=headers,
     )

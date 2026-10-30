@@ -2166,8 +2166,8 @@ def _unknown_operation_upstream() -> httpx.MockTransport:
     )
 
 
-def _assert_unknown_operation_is_not_found(error: litellm.NotFoundError) -> None:
-    assert error.status_code == 404
+def _assert_unknown_operation_is_a_bad_gateway(error: litellm.BadGatewayError) -> None:
+    assert error.status_code == 502
     assert "com.amazon.coral.service#UnknownOperationException" in error.message
 
 
@@ -2182,10 +2182,10 @@ def _assert_unknown_operation_is_not_found(error: litellm.NotFoundError) -> None
         "bedrock/converse/us.anthropic.claude-haiku-5-5",
     ],
 )
-def test_a_200_unknown_operation_body_is_a_not_found_error(
+def test_a_200_unknown_operation_body_is_a_bad_gateway_error(
     _aws_test_credentials: None, model: str, stream: bool
 ) -> None:
-    with pytest.raises(litellm.NotFoundError) as exc_info:
+    with pytest.raises(litellm.BadGatewayError) as exc_info:
         _answer_text(
             litellm.completion(
                 model=model,
@@ -2196,7 +2196,7 @@ def test_a_200_unknown_operation_body_is_a_not_found_error(
             )
         )
 
-    _assert_unknown_operation_is_not_found(exc_info.value)
+    _assert_unknown_operation_is_a_bad_gateway(exc_info.value)
 
 
 async def _drain_async_unknown_operation_stream() -> None:
@@ -2211,13 +2211,38 @@ async def _drain_async_unknown_operation_stream() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_200_unknown_operation_body_is_a_not_found_error_on_an_async_stream(
+async def test_a_200_unknown_operation_body_is_a_bad_gateway_error_on_an_async_stream(
     _aws_test_credentials: None,
 ) -> None:
-    with pytest.raises(litellm.NotFoundError) as exc_info:
+    with pytest.raises(litellm.BadGatewayError) as exc_info:
         await _drain_async_unknown_operation_stream()
 
-    _assert_unknown_operation_is_not_found(exc_info.value)
+    _assert_unknown_operation_is_a_bad_gateway(exc_info.value)
+
+
+def test_the_router_retries_a_200_unknown_operation_body(_aws_test_credentials: None) -> None:
+    calls: Final = itertools.count()
+    replies: Final = (_UNKNOWN_OPERATION_BODY, _CLAUDE_INVOKE_ANSWER)
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=replies[min(next(calls), 1)], headers={"content-type": "application/json"}, request=request
+        )
+
+    router: Final = litellm.Router(
+        model_list=[{"model_name": "claude", "litellm_params": {"model": "bedrock/invoke/anthropic.claude-haiku-5-5"}}],
+        num_retries=1,
+        retry_after=0,
+    )
+    response: Final = router.completion(
+        model="claude",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10,
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(answer))),
+    )
+
+    assert _answer_text(response) == "hi"
+    assert next(calls) == 2
 
 
 def test_a_tool_call_whose_arguments_carry_a_type_key_is_not_read_as_a_bedrock_error(

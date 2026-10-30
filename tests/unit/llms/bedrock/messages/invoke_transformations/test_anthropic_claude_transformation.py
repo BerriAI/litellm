@@ -4565,12 +4565,12 @@ _UNKNOWN_OPERATION_BODY: Final = {
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize(
     ("stream", "raised"),
-    [(False, litellm.NotFoundError), (True, BedrockError)],
+    [(False, litellm.BadGatewayError), (True, BedrockError)],
     ids=["non-stream", "stream"],
 )
-async def test_bedrock_messages_raise_a_404_when_bedrock_answers_200_with_an_unknown_operation_body(
+async def test_bedrock_messages_raise_a_502_when_bedrock_answers_200_with_an_unknown_operation_body(
     stream: bool,
-    raised: type[litellm.NotFoundError] | type[BedrockError],
+    raised: type[litellm.BadGatewayError] | type[BedrockError],
 ) -> None:
     bedrock: Final = ScriptedBedrockInvoke(replies=((200, _UNKNOWN_OPERATION_BODY),))
 
@@ -4591,5 +4591,5 @@ async def test_bedrock_messages_raise_a_404_when_bedrock_answers_200_with_an_unk
     with pytest.raises(raised) as error:
         await _call_and_drain()
 
-    assert error.value.status_code == 404
+    assert error.value.status_code == 502
     assert "UnknownOperationException" in str(error.value)
