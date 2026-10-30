@@ -39,6 +39,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 from litellm.llms.bedrock.common_utils import (
     BedrockError,
     apply_bedrock_invoke_structured_output,
+    bedrock_invoke_guardrail_intervened,
     bedrock_supports_tool_search,
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
@@ -62,6 +63,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
 )
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.llms.bedrock import BedrockInvokeAnthropicMessagesRequest
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
@@ -77,6 +79,7 @@ else:
 
 
 _MODEL_INFO: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_BEDROCK_EVENT: Final = TypeAdapter(Mapping[str, object])
 
 
 class AmazonAnthropicClaudeMessagesConfig(
@@ -868,6 +871,21 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         return anthropic_messages_request
 
+    def transform_anthropic_messages_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> AnthropicMessagesResponse:
+        response: Final = super().transform_anthropic_messages_response(
+            model=model,
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
+        if not bedrock_invoke_guardrail_intervened(response):
+            return response
+        return {**response, "stop_reason": "refusal"}
+
     def get_async_streaming_response_iterator(
         self,
         model: str,
@@ -1004,6 +1022,9 @@ class AmazonAnthropicClaudeMessagesConfig(
 
                 if delta_usage:
                     pending_delta["usage"] = delta_usage
+
+                if bedrock_invoke_guardrail_intervened(_BEDROCK_EVENT.validate_python(chunk)):
+                    pending_delta["delta"] = {**(pending_delta.get("delta") or {}), "stop_reason": "refusal"}
 
                 yield pending_delta
                 pending_delta = None

@@ -50,6 +50,11 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
 
 BEDROCK_INVOKE_TRACE_FIELD: Final = "amazon-bedrock-trace"
+_BEDROCK_INVOKE_GUARDRAIL_ACTION_FIELD: Final = "amazon-bedrock-guardrailAction"
+
+
+def bedrock_invoke_guardrail_intervened(payload: Mapping[str, object]) -> bool:
+    return payload.get(_BEDROCK_INVOKE_GUARDRAIL_ACTION_FIELD) == "INTERVENED"
 
 
 _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"

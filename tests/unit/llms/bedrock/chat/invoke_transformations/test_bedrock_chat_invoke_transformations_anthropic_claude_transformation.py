@@ -17,7 +17,7 @@ import litellm
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
@@ -2030,3 +2030,49 @@ def test_bedrock_chat_invoke_adds_the_binding_beta_so_block_binding_is_kept(
 
     assert result["thinking"] == {"type": "enabled", "budget_tokens": 1024, "block_binding": block_binding}
     assert "thinking-binding-controls-2026-08-01" in result["anthropic_beta"]
+
+
+_GUARDRAIL_BLOCKED_TEXT: Final = "Sorry, the model cannot answer this question."
+
+
+def _guardrailed_invoke_body(guardrail_fields: Mapping[str, str]) -> Mapping[str, object]:
+    return {
+        "id": "bedrock-guardrails-19a36670",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": _GUARDRAIL_BLOCKED_TEXT}],
+        "model": "claude-haiku-5-5",
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 0, "output_tokens": 0},
+        **guardrail_fields,
+    }
+
+
+@pytest.mark.parametrize(
+    ("guardrail_fields", "expected_finish_reason"),
+    [
+        pytest.param({"amazon-bedrock-guardrailAction": "INTERVENED"}, "content_filter", id="guardrail_intervened"),
+        pytest.param({"amazon-bedrock-guardrailAction": "NONE"}, "stop", id="guardrail_passed"),
+        pytest.param({}, "stop", id="no_guardrail"),
+    ],
+)
+def test_bedrock_chat_invoke_reports_a_guardrail_block_as_content_filter(
+    guardrail_fields: Mapping[str, str], expected_finish_reason: str
+) -> None:
+    body: Final = _guardrailed_invoke_body(guardrail_fields)
+    client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)))
+    )
+
+    response: Final = litellm.completion(
+        model="bedrock/invoke/us.anthropic.claude-haiku-5-5",
+        messages=[{"role": "user", "content": "My code word is hexblade. What is 2+2?"}],
+        aws_access_key_id="AKIAEXAMPLE",
+        aws_secret_access_key="fake-secret",
+        aws_region_name="us-east-1",
+        client=client,
+    )
+
+    assert response.choices[0].message.content == _GUARDRAIL_BLOCKED_TEXT
+    assert response.choices[0].finish_reason == expected_finish_reason

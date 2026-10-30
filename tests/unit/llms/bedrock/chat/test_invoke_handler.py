@@ -1982,3 +1982,94 @@ def test_invoke_stream_decoder_carries_the_guardrail_trace_of_the_message_stop_c
     assert (plain.provider_specific_fields or {}).get("amazon-bedrock-trace") is None
     assert traced.provider_specific_fields is not None
     assert traced.provider_specific_fields["amazon-bedrock-trace"] == trace
+
+
+_GUARDRAIL_BLOCKED_TEXT: Final = "Sorry, the model cannot answer this question."
+_EVENT_STREAM_HEADERS: Final = {"content-type": "application/vnd.amazon.eventstream"}
+
+
+def _guardrailed_claude_invoke_stream(message_stop: Mapping[str, str] | None) -> bytes:
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "bedrock-guardrails-c43066a6",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": "claude-haiku-5-5",
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 11, "output_tokens": 0},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": _GUARDRAIL_BLOCKED_TEXT}},
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 7},
+        },
+    )
+    stop: Final = () if message_stop is None else ({"type": "message_stop", **message_stop},)
+    return b"".join(_bedrock_event_stream_frame(event) for event in (*events, *stop))
+
+
+_GUARDRAIL_STREAM_CASES: Final = [
+    pytest.param({"amazon-bedrock-guardrailAction": "INTERVENED"}, "content_filter", id="guardrail_intervened"),
+    pytest.param({"amazon-bedrock-guardrailAction": "NONE"}, "stop", id="guardrail_passed"),
+    pytest.param({}, "stop", id="no_guardrail"),
+    pytest.param(None, "stop", id="stream_ends_before_message_stop"),
+]
+_GUARDRAIL_STREAM_REQUEST: Final = {
+    "model": "bedrock/invoke/us.anthropic.claude-haiku-5-5",
+    "messages": [{"role": "user", "content": "My code word is hexblade. What is 2+2?"}],
+    "stream": True,
+    "stream_options": {"include_usage": True},
+    "aws_access_key_id": "AKIAEXAMPLE",
+    "aws_secret_access_key": "fake-secret",
+    "aws_region_name": "us-east-1",
+}
+
+
+def _assert_guardrailed_stream(chunks: Sequence[ModelResponseStream], expected_finish_reason: str) -> None:
+    assert _streamed_content(chunks) == _GUARDRAIL_BLOCKED_TEXT
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices and chunk.choices[0].finish_reason] == [
+        expected_finish_reason
+    ]
+    usage: Final = next(chunk.usage for chunk in reversed(chunks) if getattr(chunk, "usage", None) is not None)
+    assert (usage.prompt_tokens, usage.completion_tokens) == (11, 7)
+
+
+@pytest.mark.parametrize(("message_stop", "expected_finish_reason"), _GUARDRAIL_STREAM_CASES)
+def test_claude_invoke_stream_reports_a_guardrail_block_as_content_filter(
+    message_stop: Mapping[str, str] | None, expected_finish_reason: str
+) -> None:
+    raw: Final = _guardrailed_claude_invoke_stream(message_stop)
+    client: Final = HTTPHandler(
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, content=raw, headers=_EVENT_STREAM_HEADERS)
+            )
+        )
+    )
+
+    stream: Final = litellm.completion(**_GUARDRAIL_STREAM_REQUEST, client=client)
+
+    _assert_guardrailed_stream(list(stream), expected_finish_reason)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("message_stop", "expected_finish_reason"), _GUARDRAIL_STREAM_CASES)
+async def test_async_claude_invoke_stream_reports_a_guardrail_block_as_content_filter(
+    message_stop: Mapping[str, str] | None, expected_finish_reason: str
+) -> None:
+    raw: Final = _guardrailed_claude_invoke_stream(message_stop)
+    client: Final = AsyncHTTPHandler(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=raw, headers=_EVENT_STREAM_HEADERS))
+    )
+
+    stream: Final = await litellm.acompletion(**_GUARDRAIL_STREAM_REQUEST, client=client)
+
+    _assert_guardrailed_stream([chunk async for chunk in stream], expected_finish_reason)
