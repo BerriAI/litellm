@@ -255,6 +255,7 @@ from litellm.router_utils.clientside_credential_handler import (
 from litellm.router_utils.common_utils import (
     MID_STREAM_CONTINUATION_KWARG,
     as_retry_skipped_deployment_ids,
+    deployment_model_id_pin,
     deployments_the_caller_may_use,
     filter_team_based_models,
     filter_web_search_deployments,
@@ -5316,6 +5317,9 @@ class Router(DeprecatedRouterMembers):
         ):
             kwargs[STREAM_USAGE_INJECTED_FIELD] = True
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
+        pinned_model_id: Final = deployment_model_id_pin(deployment_context)
+        if pinned_model_id is not None:
+            kwargs["model_id"] = pinned_model_id  # rebind-ok: this method's contract is filling the caller's kwargs
         hop_kwargs: Final = _FALLBACK_HOP_ADAPTER.validate_python(kwargs)
         if _is_fallback_hop(hop_kwargs):
             EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
@@ -6242,6 +6246,9 @@ class Router(DeprecatedRouterMembers):
                     kwargs[k] = v
                 elif k == "metadata":
                     kwargs[k].update(v)
+            pinned_model_id: Final = deployment_model_id_pin(_LITELLM_PARAMS_ADAPTER.validate_python(data))
+            if pinned_model_id is not None:
+                kwargs["model_id"] = pinned_model_id  # rebind-ok: this call's own kwargs, filled like the defaults
 
             # call via litellm.completion()
             return litellm.text_completion(
