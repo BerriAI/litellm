@@ -841,6 +841,7 @@ from litellm.proxy.telemetry.middleware import TelemetryMiddleware
 from litellm.proxy.telemetry.runtime import TelemetryRuntime
 from litellm.proxy.telemetry.settings import describe_errors as describe_telemetry_errors
 from litellm.proxy.telemetry.settings import load_settings as load_telemetry_settings
+from litellm.redis.stores.config_sync import TransportConfigSyncStore
 
 try:
     from litellm.proxy.enterprise_billing.billing_metrics import (
@@ -8779,7 +8780,7 @@ class ProxyConfig:
             await self.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
 
         subscriber: Final = ConfigSyncSubscriber(
-            redis_cache=redis_cache,
+            store=TransportConfigSyncStore(redis_cache.transport()),
             resync_callbacks=(_resync_config_from_db,),
             apply_model_ids=resync_model_deployments_by_ids,
         )

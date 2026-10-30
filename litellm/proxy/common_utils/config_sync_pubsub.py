@@ -1,15 +1,20 @@
 import asyncio
-import json
 import random
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import asdict, dataclass
 from itertools import chain
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, cast  # noqa: TID251  # untyped prisma/redis boundary
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.redis.stores.config_sync import (
+    ConfigChange,
+    ConfigSyncStore,
+    TransportConfigSyncStore,
+    decode_config_change,
+)
+from litellm.redis.transport.contract import RedisFailure, RedisSubscription, raise_redis_failure
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
 
 if TYPE_CHECKING:
@@ -41,7 +46,6 @@ class _ConfigSyncPubSubClient(Protocol):
     def pipeline(self, transaction: bool = True) -> _PublishPipeline: ...
 
 
-CONFIG_SYNC_CHANNEL: Final = "litellm_proxy.config_change"
 CONFIG_SYNC_DEBOUNCE_SECONDS: Final = 1.0
 CONFIG_SYNC_JITTER_MAX_SECONDS: Final = 5.0
 CONFIG_SYNC_MIN_RESYNC_INTERVAL_SECONDS: Final = 10.0
@@ -90,12 +94,6 @@ def coordination_redis_cache() -> "RedisCache | None":
     return redis_usage_cache
 
 
-def config_sync_channel(redis_cache: "RedisCache") -> str:
-    if redis_cache.namespace is None:
-        return CONFIG_SYNC_CHANNEL
-    return f"{redis_cache.namespace}:{CONFIG_SYNC_CHANNEL}"
-
-
 def pubsub_capable_client(redis_cache: "RedisCache") -> _ConfigSyncPubSubClient:
     return cast(  # cast-ok: protocol view of the pub/sub-capable async redis client
         _ConfigSyncPubSubClient,
@@ -106,43 +104,16 @@ def pubsub_capable_client(redis_cache: "RedisCache") -> _ConfigSyncPubSubClient:
 _pubsub_capable_client: Final = pubsub_capable_client
 
 
-@dataclass(frozen=True, slots=True)
-class _ConfigChangeMessage:
-    object_type: str
-    model_ids: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class _PubSubEnvelope:
-    data: str | bytes
-
-
 class _WrittenModelRow(BaseModel):
     model_config = ConfigDict(from_attributes=True, frozen=True)
 
     model_id: str
 
 
-_CONFIG_CHANGE_MESSAGE: Final = TypeAdapter(_ConfigChangeMessage)
-_PUBSUB_ENVELOPE: Final = TypeAdapter(_PubSubEnvelope)
 _MODEL_TABLE_NAME: Final = "litellm_proxymodeltable"
 _TARGETED_WRITE_ACTION_NAMES: Final[frozenset[str]] = frozenset({"create", "update", "upsert"})
 
 PublishConfigChange: TypeAlias = Callable[[str, tuple[str, ...]], Awaitable[None]]
-
-
-def _config_change_message_json(object_type: str, model_ids: tuple[str, ...]) -> str:
-    return json.dumps(asdict(_ConfigChangeMessage(object_type=object_type, model_ids=model_ids)))
-
-
-def parse_config_change(message: object) -> _ConfigChangeMessage | None:
-    try:
-        payload: Final = (
-            message if isinstance(message, (str, bytes)) else _PUBSUB_ENVELOPE.validate_python(message).data
-        )
-        return _CONFIG_CHANGE_MESSAGE.validate_json(payload)
-    except ValidationError:
-        return None
 
 
 def written_model_ids(object_type: str, action_name: str, result: object) -> tuple[str, ...]:
@@ -160,10 +131,14 @@ async def publish_config_change(
     if redis_cache is None:
         return
     try:
-        client: Final = pubsub_capable_client(redis_cache)
-        await client.publish(config_sync_channel(redis_cache), _config_change_message_json(object_type, model_ids))
+        published: Final = await TransportConfigSyncStore(redis_cache.transport()).publish_change(
+            ConfigChange(object_type=object_type, model_ids=model_ids)
+        )
     except Exception as e:  # noqa: BLE001  # best-effort publish; writes must never fail on redis errors
         verbose_proxy_logger.warning("config sync publish for %s failed: %s", object_type, e)
+        return
+    if isinstance(published, RedisFailure):
+        verbose_proxy_logger.warning("config sync publish for %s failed: %s", object_type, published.message)
 
 
 async def publish_config_change_for_object_type(object_type: str, model_ids: tuple[str, ...] = ()) -> None:
@@ -222,8 +197,17 @@ def wrap_table_actions_for_config_sync(
     return cast("TableActions[RowT_co]", wrapped)  # cast-ok: dynamic write-through proxy keeps the wrapped row type
 
 
-def _published_model_ids(messages: tuple[object, ...]) -> tuple[str, ...]:
-    changes: Final = (parse_config_change(message) for message in messages)
+async def _next_payload(subscription: RedisSubscription, timeout: float) -> bytes | None:
+    message: Final = await subscription.get_message(timeout=timeout)
+    if not isinstance(message, RedisFailure):
+        return None if message is None else message.data
+    if message.kind == "decode":
+        return b""
+    raise_redis_failure(message)
+
+
+def _published_model_ids(payloads: tuple[bytes, ...]) -> tuple[str, ...]:
+    changes: Final = (decode_config_change(payload) for payload in payloads)
     return tuple(dict.fromkeys(chain.from_iterable(change.model_ids for change in changes if change is not None)))
 
 
@@ -237,17 +221,17 @@ class ConfigSyncSubscriber:
         "_last_resync_at",
         "_min_resync_interval_seconds",
         "_monotonic",
-        "_redis_cache",
         "_resync_callbacks",
         "_resync_required",
         "_rng",
         "_sleep",
+        "_store",
         "_task",
     )
 
     def __init__(
         self,
-        redis_cache: "RedisCache",
+        store: ConfigSyncStore,
         resync_callbacks: tuple[Callable[[], Awaitable[None]], ...],
         apply_model_ids: Callable[[tuple[str, ...]], Awaitable[None]] | None = None,
         debounce_seconds: float = CONFIG_SYNC_DEBOUNCE_SECONDS,
@@ -259,7 +243,7 @@ class ConfigSyncSubscriber:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
-        self._redis_cache = redis_cache
+        self._store = store
         self._resync_callbacks = resync_callbacks
         self._apply_model_ids = apply_model_ids
         self._debounce_seconds = debounce_seconds
@@ -294,17 +278,15 @@ class ConfigSyncSubscriber:
         backoff_seconds = self._backoff_initial_seconds
         while True:
             try:
-                client = pubsub_capable_client(self._redis_cache)
-                pubsub = client.pubsub()
+                subscription = await self._subscribe()
                 try:
-                    await pubsub.subscribe(config_sync_channel(self._redis_cache))
                     if self._resync_required:
-                        await self._debounce_and_resync(pubsub)
+                        await self._debounce_and_resync(subscription)
                         self._resync_required = False
                     backoff_seconds = self._backoff_initial_seconds
-                    await self._consume(pubsub)
+                    await self._consume(subscription)
                 finally:
-                    await self._close_pubsub(pubsub)
+                    await self._close_subscription(subscription)
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001  # any redis failure falls through to backoff and reconnect
@@ -317,20 +299,27 @@ class ConfigSyncSubscriber:
                 await self._sleep(backoff_seconds)
                 backoff_seconds = min(backoff_seconds * 2, self._backoff_max_seconds)
 
-    async def _consume(self, pubsub: ConfigSyncPubSub) -> None:
-        while True:
-            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=_POLL_TIMEOUT_SECONDS)
-            if message is None:
-                continue
-            await self._apply(pubsub, message)
-            await self._debounce_and_resync(pubsub)
+    async def _subscribe(self) -> RedisSubscription:
+        subscription: Final = await self._store.subscribe()
+        if isinstance(subscription, RedisFailure):
+            raise_redis_failure(subscription)
+        return subscription
 
-    async def _debounce_and_resync(self, pubsub: ConfigSyncPubSub) -> None:
+    async def _consume(self, subscription: RedisSubscription) -> None:
+        while True:
+            payload = await _next_payload(subscription, _POLL_TIMEOUT_SECONDS)
+            if payload is None:
+                continue
+            await self._apply(subscription, payload)
+            await self._debounce_and_resync(subscription)
+
+    async def _debounce_and_resync(self, subscription: RedisSubscription) -> None:
         await self._apply_until(
-            pubsub, self._monotonic() + self._debounce_seconds + self._rng.uniform(0.0, self._jitter_max_seconds)
+            subscription,
+            self._monotonic() + self._debounce_seconds + self._rng.uniform(0.0, self._jitter_max_seconds),
         )
-        await self._apply_until(pubsub, self._next_resync_at())
-        await self._drain_pending(pubsub)
+        await self._apply_until(subscription, self._next_resync_at())
+        await self._drain_pending(subscription)
         await self._run_resync_callbacks()
         self._last_resync_at = self._monotonic()
 
@@ -346,32 +335,30 @@ class ConfigSyncSubscriber:
             )
         return next_resync_at
 
-    async def _apply_until(self, pubsub: ConfigSyncPubSub, deadline: float) -> None:
+    async def _apply_until(self, subscription: RedisSubscription, deadline: float) -> None:
         while True:
             remaining = deadline - self._monotonic()
             if remaining <= 0:
                 return
-            message = await pubsub.get_message(
-                ignore_subscribe_messages=True, timeout=min(remaining, _POLL_TIMEOUT_SECONDS)
-            )
-            if message is not None:
-                await self._apply(pubsub, message)
+            payload = await _next_payload(subscription, min(remaining, _POLL_TIMEOUT_SECONDS))
+            if payload is not None:
+                await self._apply(subscription, payload)
 
     @staticmethod
-    async def _drain_pending(pubsub: ConfigSyncPubSub) -> None:
-        while await pubsub.get_message(ignore_subscribe_messages=True, timeout=0) is not None:
+    async def _drain_pending(subscription: RedisSubscription) -> None:
+        while await _next_payload(subscription, 0) is not None:
             pass
 
     @staticmethod
-    async def _ready_messages(pubsub: ConfigSyncPubSub) -> AsyncIterator[object]:
-        while (message := await pubsub.get_message(ignore_subscribe_messages=True, timeout=0)) is not None:
-            yield message
+    async def _ready_payloads(subscription: RedisSubscription) -> AsyncIterator[bytes]:
+        while (payload := await _next_payload(subscription, 0)) is not None:
+            yield payload
 
-    async def _apply(self, pubsub: ConfigSyncPubSub, message: object) -> None:
+    async def _apply(self, subscription: RedisSubscription, payload: bytes) -> None:
         apply: Final = self._apply_model_ids
         if apply is None:
             return
-        ready: Final = (message, *[ready_message async for ready_message in self._ready_messages(pubsub)])
+        ready: Final = (payload, *[ready_payload async for ready_payload in self._ready_payloads(subscription)])
         model_ids: Final = _published_model_ids(ready)
         if not model_ids:
             return
@@ -388,8 +375,11 @@ class ConfigSyncSubscriber:
                 verbose_proxy_logger.warning("config sync resync callback failed: %s", e)
 
     @staticmethod
-    async def _close_pubsub(pubsub: ConfigSyncPubSub) -> None:
+    async def _close_subscription(subscription: RedisSubscription) -> None:
         try:
-            await pubsub.aclose()
+            closed: Final = await subscription.close()
         except Exception as e:  # noqa: BLE001  # best-effort close of a possibly-broken connection
             verbose_proxy_logger.debug("config sync pubsub close failed: %s", e)
+            return
+        if isinstance(closed, RedisFailure):
+            verbose_proxy_logger.debug("config sync pubsub close failed: %s", closed.message)
