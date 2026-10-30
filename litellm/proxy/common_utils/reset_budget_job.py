@@ -49,7 +49,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.db.budget_window_spend_writer import roll_window_spend_row
 from litellm.proxy.db.db_span import db_span, db_spanned
-from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARGET, PodLockManager
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET
 from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -500,23 +500,6 @@ class ResetBudgetJob:
         new_batch: Final[Callable[[], PrismaBatch]] = self.prisma_client.db.batch_
         return new_batch
 
-    @with_service_target(POD_LOCK_TARGET)
-    async def _lease_is_held(self, lock_manager: PodLockManager) -> bool:
-        """True only when the lease is readable and someone holds it.
-
-        An unreadable lock reports as unheld so the caller sweeps rather than
-        skipping; being wrong here costs a duplicate sweep, and the alternative
-        strands every expired budget at its cap.
-        """
-        if lock_manager.redis_cache is None:
-            return False
-        try:
-            lock_key: Final = lock_manager.get_redis_lock_key(RESET_BUDGET_JOB_NAME)
-            return bool(await lock_manager.redis_cache.async_get_cache(lock_key))
-        except Exception as exc:  # noqa: BLE001  # an unreadable lease must not strand the sweep
-            verbose_proxy_logger.warning("Reset budget job: could not read the reset lease: %s", exc)
-            return False
-
     async def _acquire_lease(self) -> _Lease:
         """Elect one sweeper per tick.
 
@@ -536,7 +519,7 @@ class ResetBudgetJob:
         ):
             return _Lease.LEADER
 
-        if await self._lease_is_held(lock_manager):
+        if await lock_manager.is_held(RESET_BUDGET_JOB_NAME):
             verbose_proxy_logger.debug("Reset budget job: another pod holds the reset lease, skipping this tick")
             return _Lease.FOLLOWER
 

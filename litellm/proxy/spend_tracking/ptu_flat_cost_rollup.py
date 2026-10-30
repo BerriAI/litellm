@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
 
-from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     PTU_LAPSED_ALERT_LIMIT,
@@ -34,7 +33,6 @@ from litellm.constants import (
     PTU_SENTINEL_API_KEY,
 )
 from litellm.litellm_core_utils.ptu_pricing import ptu_terms
-from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARGET
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -705,7 +703,7 @@ async def run_scheduled_ptu_rollup(
         )
 
     if not await pod_lock_manager.acquire_lock(cronjob_id=PTU_ROLLUP_JOB_ID, ttl=PTU_ROLLUP_LOCK_TTL_SECONDS):
-        if await _lock_is_held(pod_lock_manager):
+        if await pod_lock_manager.is_held(PTU_ROLLUP_JOB_ID):
             verbose_proxy_logger.info("PTU rollup: another pod holds the rollup lock, skipping this run")
             return None
         # acquire_lock reports contention and a Redis outage the same way, so an
@@ -726,21 +724,6 @@ async def run_scheduled_ptu_rollup(
         )
     finally:
         await pod_lock_manager.release_lock(cronjob_id=PTU_ROLLUP_JOB_ID)
-
-
-@with_service_target(POD_LOCK_TARGET)
-async def _lock_is_held(pod_lock_manager: "PodLockManager") -> bool:
-    """True only when the rollup lock is readable and someone is holding it.
-
-    A Redis that cannot be read is reported as "not held" so the caller runs the day
-    rather than skipping it; the cost of being wrong here is a duplicate reconcile.
-    """
-    try:
-        lock_key: Final = pod_lock_manager.get_redis_lock_key(PTU_ROLLUP_JOB_ID)
-        return bool(await pod_lock_manager.redis_cache.async_get_cache(lock_key))
-    except Exception as exc:  # noqa: BLE001  # an unreadable lock must not skip the day
-        verbose_proxy_logger.warning("PTU rollup: could not read the rollup lock: %s", exc)
-        return False
 
 
 async def _run_and_alert(
