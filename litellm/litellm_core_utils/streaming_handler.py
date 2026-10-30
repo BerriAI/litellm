@@ -102,8 +102,6 @@ def _choice_progress(chunk: object) -> tuple[tuple[int, bool], ...]:
             return tuple((choice.index, bool(choice.finish_reason)) for choice in choices or ())
         case Completion(choices=choices):
             return tuple((choice.index, bool(choice.finish_reason)) for choice in choices or ())
-        case {"is_finished": bool() as is_finished, "index": int() as index}:
-            return ((index, is_finished),)
         case {"is_finished": bool() as is_finished}:
             return ((0, is_finished),)
         case _:

@@ -38,6 +38,7 @@ from litellm.responses.mcp.chat_completions_handler import _add_mcp_metadata_to_
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     Delta,
+    GenericStreamingChunk,
     ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
@@ -5449,6 +5450,31 @@ async def test_ollama_generate_stream_dropped_after_its_done_line_ends_cleanly(l
 
     assert "".join(chunk.choices[0].delta.content or "" for chunk in collected if chunk.choices) == "Hi"
     assert [chunk.choices[0].finish_reason for chunk in collected if chunk.choices[0].finish_reason] == ["stop"]
+
+
+def _generic_chunks_with_a_second_content_block_then(failure: Exception) -> Iterator[GenericStreamingChunk]:
+    yield GenericStreamingChunk(text="Hi", is_finished=False, finish_reason="", usage=None, index=0)
+    yield GenericStreamingChunk(text="!", is_finished=False, finish_reason="", usage=None, index=1)
+    yield GenericStreamingChunk(text="", is_finished=True, finish_reason="stop", usage=None, index=0)
+    raise failure
+
+
+@pytest.mark.asyncio
+@_SYNC_AND_ASYNC
+async def test_generic_chunk_index_is_not_a_choice_when_the_stream_drops_after_its_finish(
+    logging_obj: Logging, sync_mode: bool
+):
+    chunks: Final = _generic_chunks_with_a_second_content_block_then(_httpx2_read_error())
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=chunks if sync_mode else _as_async(chunks),
+        model="command-a-03-2025",
+        custom_llm_provider="cohere_chat",
+        logging_obj=logging_obj,
+    )
+
+    collected: Final = await _collect(wrapper, sync_mode)
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in collected if chunk.choices) == "Hi!"
 
 
 @pytest.mark.asyncio
