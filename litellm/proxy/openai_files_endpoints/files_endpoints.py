@@ -38,7 +38,6 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     is_managed_cloud_storage_uri,
 )
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.files.litellm_db_storage_backend import LITELLM_DB_STORAGE_BACKEND_NAME
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints, FileListModelScope
 from litellm.llms.base_llm.managed_resources.isolation import build_list_page
@@ -83,6 +82,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     add_internal_model_credentials,
     apply_team_provider_credentials,
     authorize_model_for_key,
+    batch_row_model_for_deployment,
     deployment_drop_params,
     encode_file_id_with_model,
     extract_file_creation_params,
@@ -383,12 +383,14 @@ def get_model_from_json_obj(json_object: dict) -> str | None:
     return body.get("model") if isinstance(body, dict) else None
 
 
-def _rewrite_batch_rows_to_deployment_model(file: FileTypes, deployment_model: str, provider: str) -> FileTypes:
-    stripped_model: Final = get_llm_provider(model=deployment_model, custom_llm_provider=provider)[0]
+def _rewrite_alias_rows_to_deployment_model(
+    file: FileTypes, alias: str, deployment_model: str, provider: str
+) -> FileTypes:
     rewritten: Final = replace_model_in_jsonl(
         file_content=file,
-        new_model_name=stripped_model,
+        new_model_name=batch_row_model_for_deployment(deployment_model, provider),
         keep_line_numbers=provider == LlmProviders.VERTEX_AI.value,
+        only_rows_naming=alias,
     )
     source: Final = file[1] if isinstance(file, tuple) else file
     if rewritten is file:
@@ -493,8 +495,9 @@ async def route_create_file(
             {
                 **_create_file_request,
                 "file": await asyncio.to_thread(
-                    _rewrite_batch_rows_to_deployment_model,
+                    _rewrite_alias_rows_to_deployment_model,
                     _create_file_request["file"],
+                    model,
                     credentials["model"],
                     credentials["custom_llm_provider"],
                 ),

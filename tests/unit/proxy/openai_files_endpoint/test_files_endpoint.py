@@ -1036,15 +1036,26 @@ def _models_named_by_rows(received: ExtractedFileData) -> list[str]:
     [({"x-litellm-model": "gpt-5.4-nano-batch"}, {}), ({}, {"model": "gpt-5.4-nano-batch"})],
     ids=["x-litellm-model header", "model form field"],
 )
-def test_model_routed_batch_upload_names_the_deployment_model_on_every_row(
+def test_model_routed_batch_upload_names_the_deployment_model_on_rows_naming_the_alias(
     files_the_provider_received: list[ExtractedFileData], headers: dict[str, str], form: dict[str, str]
 ):
-    content = _batch_row("alias", "gpt-5.4-nano-batch") + b"\n" + _batch_row("other", "a-model-the-key-cannot-reach")
+    content = _batch_row("first", "gpt-5.4-nano-batch") + b"\n" + _batch_row("second", "gpt-5.4-nano-batch")
 
     response = _upload_batch_file(headers, form, content)
 
     assert response.status_code == 200, response.text
     assert _models_named_by_rows(files_the_provider_received[0]) == ["gpt-5.4-nano", "gpt-5.4-nano"]
+
+
+def test_model_routed_batch_upload_leaves_a_row_naming_another_model_for_the_limiter_to_check(
+    files_the_provider_received: list[ExtractedFileData],
+):
+    content = _batch_row("alias", "gpt-5.4-nano-batch") + b"\n" + _batch_row("other", "another-model")
+
+    response = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {}, content)
+
+    assert response.status_code == 200, response.text
+    assert _models_named_by_rows(files_the_provider_received[0]) == ["gpt-5.4-nano", "another-model"]
 
 
 def test_model_routed_batch_upload_strips_the_provider_prefix_from_the_deployment_model(
@@ -1080,7 +1091,7 @@ def test_wildcard_routed_batch_upload_names_the_requested_model(
         ),
     )
 
-    response = _upload_batch_file({"x-litellm-model": requested_model}, {}, _batch_row("r", "a-row-naming-another-model"))
+    response = _upload_batch_file({"x-litellm-model": requested_model}, {}, _batch_row("r", requested_model))
 
     assert response.status_code == 200, response.text
     assert _models_named_by_rows(files_the_provider_received[0]) == ["gpt-x"]

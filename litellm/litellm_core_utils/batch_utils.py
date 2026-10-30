@@ -155,7 +155,12 @@ def should_replace_model_in_jsonl(
     return purpose == "batch" and not passthrough
 
 
-def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str, keep_line_numbers: bool = False) -> FileTypes:
+def replace_model_in_jsonl(
+    file_content: FileTypes,
+    new_model_name: str,
+    keep_line_numbers: bool = False,
+    only_rows_naming: str | None = None,
+) -> FileTypes:
     try:
         ## if pathlike, return the original file content
         if isinstance(file_content, PathLike):
@@ -209,7 +214,11 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str, keep_li
                 json_object = _DECODED_JSONL_ROW.validate_python(json.loads(stripped))
             except json.JSONDecodeError:
                 continue  # object not complete yet; keep accumulating
-            if isinstance(json_object, dict) and isinstance(json_object.get("body"), dict):
+            if (
+                isinstance(json_object, dict)
+                and isinstance(json_object.get("body"), dict)
+                and (only_rows_naming is None or json_object["body"].get("model") == only_rows_naming)
+            ):
                 json_object["body"]["model"] = new_model_name
             output.write(
                 (

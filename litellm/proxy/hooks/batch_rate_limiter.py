@@ -223,6 +223,33 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         return None
 
+    def _routing_alias_by_row_model(self, routing_alias: str | None) -> Mapping[str, str]:
+        """Map the model a model-routed upload writes into its rows back to the alias it routed by.
+
+        A key's allowlist and project quotas name the proxy alias, while the uploaded
+        rows name the deployment's model. A row that maps here runs on the alias's own
+        deployment, so the alias is what the key has to be granted and charged for.
+        """
+        from litellm.proxy.openai_files_endpoints.common_utils import (
+            batch_row_model_for_deployment,
+            get_credentials_for_model,
+        )
+        from litellm.proxy.proxy_server import llm_router
+
+        if routing_alias is None or llm_router is None:
+            return MappingProxyType({})
+        try:
+            credentials: Final = get_credentials_for_model(
+                llm_router=llm_router,
+                model_id=routing_alias,
+                operation_context="batch input file read (rate limiting)",
+            )
+        except HTTPException:
+            return MappingProxyType({})
+        return MappingProxyType(
+            {batch_row_model_for_deployment(credentials["model"], credentials["custom_llm_provider"]): routing_alias}
+        )
+
     def _resolve_batch_provider(self, batch_model: str | None) -> str | None:
         """Resolve the provider from the deployment that serves ``batch_model``.
 
@@ -942,6 +969,13 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             # For managed files the unified file id encodes the proxy model
             # alias(es) the file was uploaded for; auth validates against those.
             target_model_names: Final = get_models_from_unified_file_id(is_managed_file) if is_managed_file else []
+            routing_alias_by_row_model: Final = (
+                MappingProxyType({})
+                if is_managed_file
+                else self._routing_alias_by_row_model(
+                    (self._get_file_bound_batch_model(data) or _batch_create_routing_model(data)) if data else None
+                )
+            )
             if is_managed_file and user_api_key_dict is not None:
                 file_content = await self._fetch_managed_file_content(
                     file_id=file_id,
@@ -1001,7 +1035,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     output_tokens += entry_output_tokens
                     continue
 
-                model: str | None = (entry.get("body") or {}).get("model") if isinstance(entry, dict) else None
+                row_model: str | None = (entry.get("body") or {}).get("model") if isinstance(entry, dict) else None
+                model: str | None = routing_alias_by_row_model.get(row_model, row_model) if row_model else None
                 if model:
                     models.add(model)
 
