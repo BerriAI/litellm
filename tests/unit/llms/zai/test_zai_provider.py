@@ -4,8 +4,11 @@ Tests for Z.AI (Zhipu AI) provider - GLM models
 
 import json
 import math
+from collections.abc import Mapping
+from typing import Final
 
 import pytest
+import respx
 
 import litellm
 from litellm import completion
@@ -13,7 +16,7 @@ from litellm.cost_calculator import cost_per_token
 from litellm.llms.zai.chat.transformation import ZAIChatConfig
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
-JSON_SCHEMA_RESPONSE_FORMAT = {
+JSON_SCHEMA_RESPONSE_FORMAT: Final = {
     "type": "json_schema",
     "json_schema": {
         "name": "profile",
@@ -112,7 +115,9 @@ def test_zai_sync_completion(respx_mock, zai_response, monkeypatch):
     assert response.usage.total_tokens == 25
 
 
-def test_zai_sends_response_format_and_maps_max_completion_tokens(respx_mock, zai_response, monkeypatch):
+def test_zai_sends_response_format_and_maps_max_completion_tokens(
+    respx_mock: respx.MockRouter, zai_response: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
@@ -124,7 +129,7 @@ def test_zai_sends_response_format_and_maps_max_completion_tokens(respx_mock, za
         max_completion_tokens=64,
     )
 
-    body = json.loads(respx_mock.calls[0].request.content)
+    body: Final = json.loads(respx_mock.calls[0].request.content)
     assert body["response_format"] == {"type": "json_object"}
     assert body["max_tokens"] == 64
     assert "max_completion_tokens" not in body
@@ -134,8 +139,8 @@ def test_zai_sends_response_format_and_maps_max_completion_tokens(respx_mock, za
     "token_limits",
     [{"max_tokens": 300, "max_completion_tokens": 15}, {"max_completion_tokens": 15, "max_tokens": 300}],
 )
-def test_zai_max_completion_tokens_wins_over_max_tokens(token_limits):
-    mapped = ZAIChatConfig().map_openai_params(token_limits, {}, "glm-5.3", drop_params=False)
+def test_zai_max_completion_tokens_wins_over_max_tokens(token_limits: dict[str, int]) -> None:
+    mapped: Final = ZAIChatConfig().map_openai_params(token_limits, {}, "glm-5.3", drop_params=False)
 
     assert mapped["max_tokens"] == 15
     assert "max_completion_tokens" not in mapped
@@ -146,12 +151,18 @@ def test_zai_max_completion_tokens_wins_over_max_tokens(token_limits):
     [(1, True, False), (1, False, True), (0, True, True)],
 )
 def test_zai_drop_params_drops_max_completion_tokens_above_model_limit(
-    local_model_cost_map, respx_mock, zai_response, monkeypatch, over_limit_by, drop_params, forwarded
-):
+    local_model_cost_map: None,
+    respx_mock: respx.MockRouter,
+    zai_response: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    over_limit_by: int,
+    drop_params: bool,
+    forwarded: bool,
+) -> None:
     monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
-    requested = litellm.model_cost["zai/glm-4.5-flash"]["max_output_tokens"] + over_limit_by
+    requested: Final = litellm.model_cost["zai/glm-4.5-flash"]["max_output_tokens"] + over_limit_by
 
     completion(
         model="zai/glm-4.5-flash",
@@ -160,19 +171,23 @@ def test_zai_drop_params_drops_max_completion_tokens_above_model_limit(
         drop_params=drop_params,
     )
 
-    body = json.loads(respx_mock.calls[0].request.content)
+    body: Final = json.loads(respx_mock.calls[0].request.content)
     assert body.get("max_tokens") == (requested if forwarded else None)
 
 
 @pytest.mark.parametrize("with_over_limit_max_completion_tokens", [False, True])
 def test_zai_drop_params_keeps_max_tokens_above_model_limit(
-    local_model_cost_map, respx_mock, zai_response, monkeypatch, with_over_limit_max_completion_tokens
-):
+    local_model_cost_map: None,
+    respx_mock: respx.MockRouter,
+    zai_response: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    with_over_limit_max_completion_tokens: bool,
+) -> None:
     monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
-    over_limit = litellm.model_cost["zai/glm-4.5-flash"]["max_output_tokens"] + 1
-    over_limit_max_completion_tokens = (
+    over_limit: Final = litellm.model_cost["zai/glm-4.5-flash"]["max_output_tokens"] + 1
+    over_limit_max_completion_tokens: Final = (
         {"max_completion_tokens": over_limit + 1} if with_over_limit_max_completion_tokens else {}
     )
 
@@ -184,30 +199,38 @@ def test_zai_drop_params_keeps_max_tokens_above_model_limit(
         **over_limit_max_completion_tokens,
     )
 
-    body = json.loads(respx_mock.calls[0].request.content)
+    body: Final = json.loads(respx_mock.calls[0].request.content)
     assert body["max_tokens"] == over_limit
 
 
 @pytest.mark.parametrize("pass_through", [{}, {"allowed_openai_params": ["response_format"]}])
 def test_zai_forwards_json_schema_to_models_that_enforce_it(
-    local_model_cost_map, respx_mock, zai_response, monkeypatch, pass_through
-):
+    local_model_cost_map: None,
+    respx_mock: respx.MockRouter,
+    zai_response: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    pass_through: dict[str, list[str]],
+) -> None:
     monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
-    messages = [{"role": "user", "content": "Ann likes 7"}]
+    messages: Final = [{"role": "user", "content": "Ann likes 7"}]
 
     completion(model="zai/glm-5.3", messages=messages, response_format=JSON_SCHEMA_RESPONSE_FORMAT, **pass_through)
 
-    body = json.loads(respx_mock.calls[0].request.content)
+    body: Final = json.loads(respx_mock.calls[0].request.content)
     assert body["response_format"] == JSON_SCHEMA_RESPONSE_FORMAT
     assert body["messages"] == messages
 
 
 @pytest.mark.parametrize("pass_through", [{}, {"allowed_openai_params": ["response_format"]}])
 def test_zai_puts_json_schema_in_prompt_for_models_that_ignore_it(
-    local_model_cost_map, respx_mock, zai_response, monkeypatch, pass_through
-):
+    local_model_cost_map: None,
+    respx_mock: respx.MockRouter,
+    zai_response: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    pass_through: dict[str, list[str]],
+) -> None:
     monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
@@ -219,17 +242,17 @@ def test_zai_puts_json_schema_in_prompt_for_models_that_ignore_it(
         **pass_through,
     )
 
-    body = json.loads(respx_mock.calls[0].request.content)
+    body: Final = json.loads(respx_mock.calls[0].request.content)
     assert body["response_format"] == {"type": "json_object"}
     assert body["messages"][0] == {"role": "user", "content": "Ann likes 7"}
     assert body["messages"][-1]["role"] == "user"
-    prompt = body["messages"][-1]["content"]
-    rendered_schema = prompt[prompt.index("{") : prompt.rindex("}") + 1]
+    prompt: Final = body["messages"][-1]["content"]
+    rendered_schema: Final = prompt[prompt.index("{") : prompt.rindex("}") + 1]
     assert json.loads(rendered_schema) == JSON_SCHEMA_RESPONSE_FORMAT["json_schema"]["schema"]
 
 
 def test_zai_glm_5v_turbo_bills_cached_input_at_cache_read_price(local_model_cost_map: None) -> None:
-    usage = Usage(
+    usage: Final = Usage(
         prompt_tokens=1000,
         completion_tokens=0,
         total_tokens=1000,
@@ -238,7 +261,7 @@ def test_zai_glm_5v_turbo_bills_cached_input_at_cache_read_price(local_model_cos
 
     prompt_cost, _ = cost_per_token(model="glm-5v-turbo", custom_llm_provider="zai", usage_object=usage)
 
-    entry = litellm.model_cost["zai/glm-5v-turbo"]
+    entry: Final = litellm.model_cost["zai/glm-5v-turbo"]
     assert math.isclose(
         prompt_cost, 200 * entry["input_cost_per_token"] + 800 * entry["cache_read_input_token_cost"]
     )
@@ -250,12 +273,17 @@ def test_zai_cost_resolves_case_insensitively(local_model_cost_map: None, model:
         model=model, custom_llm_provider="zai", prompt_tokens=1000, completion_tokens=1000
     )
 
-    entry = litellm.model_cost[f"zai/{model.lower()}"]
+    entry: Final = litellm.model_cost[f"zai/{model.lower()}"]
     assert math.isclose(prompt_cost, 1000 * entry["input_cost_per_token"])
     assert math.isclose(completion_cost, 1000 * entry["output_cost_per_token"])
 
 
-def test_zai_glm_5v_turbo_accepts_thinking(local_model_cost_map: None, respx_mock, zai_response, monkeypatch):
+def test_zai_glm_5v_turbo_accepts_thinking(
+    local_model_cost_map: None,
+    respx_mock: respx.MockRouter,
+    zai_response: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
@@ -266,5 +294,5 @@ def test_zai_glm_5v_turbo_accepts_thinking(local_model_cost_map: None, respx_moc
         thinking={"type": "disabled"},
     )
 
-    body = json.loads(respx_mock.calls[0].request.content)
+    body: Final = json.loads(respx_mock.calls[0].request.content)
     assert body["thinking"] == {"type": "disabled"}
