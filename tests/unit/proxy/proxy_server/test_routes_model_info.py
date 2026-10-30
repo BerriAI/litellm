@@ -25,7 +25,7 @@ import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy import proxy_server
-from litellm.proxy._types import LiteLLM_ProxyModelTable
+from litellm.proxy._types import LiteLLM_ProxyModelTable, UserAPIKeyAuth
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 from .conftest import normalize, route_entry_points_to_stubs  # type: ignore[import-not-found]
@@ -1073,6 +1073,150 @@ def test_model_info_prices_a_wildcard_row_the_proxy_renames_as_the_model_its_cal
         "my-fw/acme-pro": (5e-08, 6e-08, "fireworks_ai"),
         "openai/gpt-5.6-acme": (None, None, None),
     }
+    _invalidate_model_cost_lowercase_map()
+
+
+def test_model_info_prices_a_wildcard_row_whose_team_alias_targets_a_deleted_team_deployment(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """Calls skip a team alias whose target team deployment was deleted, so the row that alias names keeps the
+    price its calls through the wildcard are billed at."""
+    from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
+
+    _catch_all_and_shadowed_wildcard_router(monkeypatch)
+    caller: Final = {"team_id": "team-a", "team_model_aliases": {"my-fw/acme-mini": "model_name_team-a_deleted"}}
+
+    with auth_as(**caller):
+        rows: Final = _expanded_wildcard_rows(client)
+
+    request: Final = {"model": "my-fw/acme-mini"}
+    _update_model_if_team_alias_exists(data=request, user_api_key_dict=UserAPIKeyAuth(**caller))
+    shown: Final = rows["my-fw/acme-mini"]["model_info"]
+    assert request["model"] == "my-fw/acme-mini"
+    assert (
+        shown.get("input_cost_per_token"),
+        shown.get("output_cost_per_token"),
+        shown.get("litellm_provider"),
+    ) == (5e-08, 6e-08, "fireworks_ai")
+    _invalidate_model_cost_lowercase_map()
+
+
+def _fireworks_wildcard_rows(client: TestClient) -> dict[str, dict[str, object]]:
+    response: Final = client.get("/model/info")
+    assert response.status_code == 200, response.text
+    return {
+        row["model_name"]: row["model_info"]
+        for row in response.json()["data"]
+        if row["model_info"]["id"] == "fireworks-wildcard" and "*" not in row["model_name"]
+    }
+
+
+_FIREWORKS_WILDCARD: Final = {
+    "model_name": "my-fw/*",
+    "litellm_params": {"model": "fireworks_ai/accounts/fireworks/models/*", "api_key": "x"},
+    "model_info": {"id": "fireworks-wildcard"},
+}
+
+
+def test_model_info_keeps_the_price_of_a_wildcard_row_another_deployment_of_the_same_model_serves(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """A deployment pinned to one model a wildcard lists takes that name's calls but runs the model the wildcard
+    would run, so the wildcard's row keeps the price those calls bill, and saving that row back stores none of it.
+    A name pinned to another model shows no price."""
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment
+
+    _catch_all_and_shadowed_wildcard_router(monkeypatch)
+    router: Final = litellm.Router(
+        model_list=[
+            _FIREWORKS_WILDCARD,
+            {
+                "model_name": "my-fw/acme-mini",
+                "litellm_params": {
+                    "model": "fireworks_ai/accounts/fireworks/models/acme-mini",
+                    "api_key": "x",
+                    "rpm": 10,
+                },
+                "model_info": {"id": "pinned-acme-mini"},
+            },
+            {
+                "model_name": "my-fw/acme-pro",
+                "litellm_params": {"model": "deepseek/acme-lite", "api_key": "x"},
+                "model_info": {"id": "pinned-acme-pro"},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+
+    with auth_as():
+        rows: Final = _fireworks_wildcard_rows(client)
+
+    shown: Final = rows["my-fw/acme-mini"]
+    call: Final = router.completion(
+        model="my-fw/acme-mini", messages=[{"role": "user", "content": "hi"}], mock_response="hello there"
+    )
+    stored: Final = json.loads(
+        update_db_model(
+            db_model=Deployment(
+                model_name="my-fw/*",
+                litellm_params=LiteLLM_Params(model="fireworks_ai/accounts/fireworks/models/*"),
+                model_info=ModelInfo(id="fireworks-wildcard"),
+            ),
+            updated_patch=updateDeployment(
+                model_name="my-fw/acme-mini", model_info=ModelInfo(**{**shown, "access_groups": ["prod"]})
+            ),
+            llm_router=router,
+        )["model_info"]
+    )
+    assert call._hidden_params["model_id"] == "pinned-acme-mini"
+    assert call._hidden_params["response_cost"] == pytest.approx(
+        shown["input_cost_per_token"] * call.usage.prompt_tokens
+        + shown["output_cost_per_token"] * call.usage.completion_tokens
+    )
+    assert stored["access_groups"] == ["prod"]
+    assert set(stored).isdisjoint(set(shown) - set(router.registry().deployment_dict("fireworks-wildcard")["model_info"]))
+    assert rows["my-fw/acme-pro"].get("input_cost_per_token") is None
+    _invalidate_model_cost_lowercase_map()
+
+
+def test_model_info_shows_no_wildcard_price_for_a_name_the_callers_team_publishes(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """Team ``team-a`` publishes ``my-fw/acme-mini`` on its own DeepSeek deployment, so a team-a key's calls to that
+    name skip the global wildcard and the wildcard's row shows that key no price, while a key outside the team
+    still sees the Fireworks price its calls bill."""
+    _catch_all_and_shadowed_wildcard_router(monkeypatch)
+    router: Final = litellm.Router(
+        model_list=[
+            _FIREWORKS_WILDCARD,
+            {
+                "model_name": "model_name_team-a_acme-mini",
+                "litellm_params": {"model": "deepseek/acme-lite", "api_key": "x"},
+                "model_info": {"id": "team-deepseek", "team_id": "team-a", "team_public_model_name": "my-fw/acme-mini"},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+
+    with auth_as(team_id="team-a"):
+        team_rows: Final = _fireworks_wildcard_rows(client)
+    with auth_as():
+        other_rows: Final = _fireworks_wildcard_rows(client)
+
+    assert team_rows["my-fw/acme-mini"].get("input_cost_per_token") is None
+    assert other_rows["my-fw/acme-mini"].get("input_cost_per_token") == 5e-08
     _invalidate_model_cost_lowercase_map()
 
 

@@ -63,9 +63,9 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY
 from litellm.proxy.auth.model_checks import (
     GLOBAL_ALIASES_ONLY,
+    WildcardDeployment,
     model_info_cost_map_entry,
-    routed_model_name,
-    routes_through_deployment,
+    wildcard_deployment_priced_model,
     wildcard_listed_priced_model,
 )
 from litellm.proxy.auth.team_grants import team_model_aliases
@@ -1280,14 +1280,15 @@ def _live_cost_map_model(
     if stored_model is None or listed_name is None:
         return stored_model
     model_id: Final = db_model.model_info.id
-    served_name: Final = served_model(listed_name, caller_aliases)
-    priced: Final = wildcard_listed_priced_model(
-        db_model.model_name,
-        stored_model,
-        served_name if llm_router is None else routed_model_name(llm_router, served_name),
-        routes_through_wildcard=llm_router is None
-        or model_id is None
-        or routes_through_deployment(llm_router, model_id, served_name, db_model.model_info.team_id),
+    if llm_router is None or model_id is None:
+        return wildcard_listed_priced_model(
+            db_model.model_name, stored_model, served_model(listed_name, caller_aliases)
+        )
+    priced: Final = wildcard_deployment_priced_model(
+        llm_router,
+        WildcardDeployment(model_id, db_model.model_name, stored_model, db_model.model_info.team_id),
+        listed_name,
+        caller_aliases,
     )
     return priced if isinstance(priced, str) else stored_model
 

@@ -5,7 +5,7 @@ import functools
 import itertools
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Final
 
@@ -14,7 +14,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
-from litellm.proxy.common_utils.model_listing_utils import CallerAliases, served_model
+from litellm.proxy.common_utils.model_listing_utils import CallerAliases, alias_map, served_model
 from litellm.proxy.common_utils.token_count_settings import cost_map_entry
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.router import Router
@@ -594,20 +594,69 @@ def wildcard_row_priced_model(
     source_model: Final = _litellm_model(source)
     if not isinstance(source_pattern, str) or not isinstance(source_model, str) or _litellm_model(row) == source_model:
         return None
-    served_name: Final = served_model(listed_name, caller_aliases)
-    return wildcard_listed_priced_model(
-        source_pattern,
-        source_model,
-        routed_model_name(llm_router, served_name),
-        routes_through_wildcard=routes_through_deployment(llm_router, model_id, served_name, _deployment_team_id(row)),
+    return wildcard_deployment_priced_model(
+        llm_router,
+        WildcardDeployment(model_id, source_pattern, source_model, _deployment_team_id(row)),
+        listed_name,
+        caller_aliases,
     )
 
 
-def wildcard_listed_priced_model(
-    model_name_pattern: str, wildcard_model: str, routed_name: str, routes_through_wildcard: bool
+@dataclass(frozen=True, slots=True)
+class WildcardDeployment:
+    model_id: str
+    model_name_pattern: str
+    litellm_model: str
+    team_id: str | None
+
+
+def wildcard_deployment_priced_model(
+    llm_router: Router, deployment: WildcardDeployment, listed_name: str, caller_aliases: CallerAliases
 ) -> str | RoutedElsewhere:
-    if not routes_through_wildcard:
-        return ROUTED_ELSEWHERE
+    registry: Final = llm_router.registry()
+    served_name: Final = served_model(listed_name, _without_deleted_team_targets(caller_aliases, registry))
+    routed_name: Final = routed_model_name(llm_router, served_name)
+    priced: Final = wildcard_listed_priced_model(deployment.model_name_pattern, deployment.litellm_model, routed_name)
+    candidates: Final = registry.names(
+        served_name, kind="route_candidates", team_id=deployment.team_id or caller_aliases.team_id
+    )
+    if deployment.model_id in candidates or _every_candidate_runs(registry, candidates, routed_name, priced):
+        return priced
+    return ROUTED_ELSEWHERE
+
+
+def _every_candidate_runs(registry: RouterRegistry, candidates: frozenset[str], routed_name: str, model: str) -> bool:
+    return bool(candidates) and all(
+        _model_run_by(_router_deployment(registry, candidate), routed_name) == model for candidate in candidates
+    )
+
+
+def _model_run_by(deployment: Mapping[str, object] | None, routed_name: str) -> object:
+    if deployment is None:
+        return None
+    model_name: Final = deployment.get("model_name")
+    litellm_model: Final = _litellm_model(deployment)
+    if not isinstance(model_name, str) or not isinstance(litellm_model, str):
+        return litellm_model
+    return wildcard_listed_priced_model(model_name, litellm_model, routed_name)
+
+
+def _without_deleted_team_targets(caller_aliases: CallerAliases, registry: RouterRegistry) -> CallerAliases:
+    deleted_prefix: Final = f"model_name_{caller_aliases.team_id}_"
+    live_names: Final = registry.index("model_name")
+    return replace(
+        caller_aliases,
+        team=MappingProxyType(
+            {
+                alias: target
+                for alias, target in alias_map(caller_aliases.team).items()
+                if not target.startswith(deleted_prefix) or target in live_names
+            }
+        ),
+    )
+
+
+def wildcard_listed_priced_model(model_name_pattern: str, wildcard_model: str, routed_name: str) -> str:
     filled: Final = wildcard_filled_model(model_name_pattern, wildcard_model, routed_name)
     if filled is None:
         return wildcard_model
@@ -621,10 +670,6 @@ def _repeats_provider_prefix(filled_model: str, routed_name: str) -> bool:
 
 def routed_model_name(llm_router: Router, listed_name: str) -> str:
     return llm_router.registry().resolve(listed_name, kind="alias") or listed_name
-
-
-def routes_through_deployment(llm_router: Router, model_id: str, listed_name: str, team_id: str | None) -> bool:
-    return model_id in llm_router.registry().names(listed_name, kind="route_candidates", team_id=team_id)
 
 
 def model_info_cost_map_entry(model: str) -> Mapping[str, object]:
