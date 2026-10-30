@@ -56,8 +56,11 @@ from litellm.proxy.db.health_check_latest import (
 from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
 from litellm.proxy.health_check import (  # noqa: F401  # legacy module exports
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
+    DEPLOYMENTS_ADAPTER,
+    MODEL_IDS_ADAPTER,
     _clean_endpoint_data,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _update_litellm_params_for_health_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    all_skipped_as_billed_media,
     clean_endpoint_data,
     deployments_targeted_by_name,
     health_check_filter_kwargs_from_general_settings,
@@ -1240,8 +1243,9 @@ async def health_endpoint(
 
     The background loop skips deployments that set ``model_info.disable_background_health_check: true``,
     and image_generation, image_edit, and video_generation deployments unless they set it to ``false``,
-    since those probes generate billed media. To skip the same deployments on ``GET /health``, set
-    ``general_settings.health_check_skip_disabled_background_models: true``.
+    since those probes generate billed media. A ``model`` or ``model_id`` that targets only such media
+    deployments runs the live check, since the background results never hold them. To skip the same
+    deployments on ``GET /health``, set ``general_settings.health_check_skip_disabled_background_models: true``.
     """
     import time
 
@@ -1323,7 +1327,10 @@ async def health_endpoint(
                     else f"key not allowed to health-check model {model}"
                 },
             )
-        if use_background_health_checks:
+        targets_only_skipped_media: Final = targeted_ids is not None and all_skipped_as_billed_media(
+            DEPLOYMENTS_ADAPTER.validate_python(_llm_model_list), MODEL_IDS_ADAPTER.validate_python(targeted_ids)
+        )
+        if use_background_health_checks and not targets_only_skipped_media:
             # The cached background result covers every model. When the
             # caller targets a specific model/model_id we have to narrow the
             # cache to that deployment before _post_process evaluates

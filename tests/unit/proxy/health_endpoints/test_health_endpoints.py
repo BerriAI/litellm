@@ -2636,6 +2636,72 @@ async def test_health_endpoint_omits_model_id_warning_when_no_deployment_matches
 
 
 @pytest.mark.asyncio
+async def test_targeted_health_runs_live_for_media_the_background_loop_skips_by_default():
+    from fastapi import Response
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    model_list = [
+        {
+            "model_name": "image",
+            "litellm_params": {"model": "gemini/gemini-3-pro-image"},
+            "model_info": {"id": "image-1", "mode": "image_generation"},
+        },
+        {
+            "model_name": "image-opted-out",
+            "litellm_params": {"model": "gemini/gemini-3-pro-image"},
+            "model_info": {"id": "image-off", "mode": "image_generation", "disable_background_health_check": True},
+        },
+        {"model_name": "chat", "litellm_params": {"model": "openai/gpt-4o-mini"}, "model_info": {"id": "chat-1"}},
+    ]
+    cached = {
+        "healthy_endpoints": [{"model": "openai/gpt-4o-mini", "model_id": "chat-1"}],
+        "unhealthy_endpoints": [],
+        "healthy_count": 1,
+        "unhealthy_count": 0,
+    }
+    live_model_ids: list[str | None] = []
+
+    async def fake_perform(**kwargs):
+        live_model_ids.append(kwargs["model_id"])
+        return {
+            "healthy_endpoints": [{"model": "gemini/gemini-3-pro-image", "model_id": kwargs["model_id"]}],
+            "unhealthy_endpoints": [],
+            "healthy_count": 1,
+            "unhealthy_count": 0,
+        }
+
+    admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, token="admin-token")
+    responses = {model_id: Response() for model_id in ("image-1", "image-off", "chat-1")}
+    with (
+        _proxy_health_globals(
+            model_list,
+            litellm.Router(model_list=copy.deepcopy(model_list)),
+            use_background_health_checks=True,
+            health_check_results=cached,
+        ),
+        patch(  # test-quality-ok: whether the live probe ran is the assertion; no injection seam
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            side_effect=fake_perform,
+        ),
+    ):
+        results = {
+            model_id: await health_endpoint(
+                response=response, user_api_key_dict=admin, model=None, model_id=model_id
+            )
+            for model_id, response in responses.items()
+        }
+
+    assert live_model_ids == ["image-1"]
+    assert results["image-1"]["healthy_count"] == 1
+    assert responses["image-1"].status_code == 200
+    assert results["chat-1"]["healthy_count"] == 1
+    assert results["image-off"]["healthy_count"] == 0
+    assert responses["image-off"].status_code == 503
+
+
+@pytest.mark.asyncio
 async def test_health_endpoint_filters_background_cache_by_user_access():
     """
     When background_health_checks is enabled, health_endpoint() should also

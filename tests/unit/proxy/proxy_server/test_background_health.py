@@ -810,6 +810,17 @@ async def test_run_background_health_check_skips_billed_media_generation_unless_
                 "model_info": {"id": "speech", "mode": "audio_speech"},
             },
             {
+                "model_name": "embedding",
+                "litellm_params": {"model": "openai/text-embedding-3-small"},
+                "model_info": {"id": "embedding", "mode": "embedding"},
+            },
+            {"model_name": "fine-tune", "litellm_params": {"model": "openai/my-fine-tune"}, "model_info": {"id": "fine-tune"}},
+            {
+                "model_name": "azure-ai-image",
+                "litellm_params": {"model": "azure_ai/gpt-image-1", "api_base": "https://example.services.ai.azure.com"},
+                "model_info": {"id": "azure-ai-image"},
+            },
+            {
                 "model_name": "image-opted-in",
                 "litellm_params": {"model": "gemini/gemini-3-pro-image"},
                 "model_info": {
@@ -853,4 +864,4 @@ async def test_run_background_health_check_skips_billed_media_generation_unless_
     with pytest.raises(asyncio.CancelledError):
         await _run_background_health_check()
 
-    assert probed["ids"] == ["chat", "speech", "image-opted-in"]
+    assert probed["ids"] == ["chat", "speech", "embedding", "fine-tune", "image-opted-in"]

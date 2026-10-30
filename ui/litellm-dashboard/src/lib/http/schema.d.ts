@@ -7557,8 +7557,9 @@ export interface paths {
          *
          *     The background loop skips deployments that set ``model_info.disable_background_health_check: true``,
          *     and image_generation, image_edit, and video_generation deployments unless they set it to ``false``,
-         *     since those probes generate billed media. To skip the same deployments on ``GET /health``, set
-         *     ``general_settings.health_check_skip_disabled_background_models: true``.
+         *     since those probes generate billed media. A ``model`` or ``model_id`` that targets only such media
+         *     deployments runs the live check, since the background results never hold them. To skip the same
+         *     deployments on ``GET /health``, set ``general_settings.health_check_skip_disabled_background_models: true``.
          */
         get: operations["health_endpoint_health_get"];
         put?: never;
@@ -29908,7 +29909,7 @@ export interface components {
             apply_user_budget_to_team_keys?: boolean | null;
             /**
              * Background Health Check Model Groups
-             * @description Opt-in allowlist of model group names for background health checks and health-check routing. When set, the background loop probes only deployments whose model_name is listed, and enable_health_check_routing filters unhealthy deployments only within the listed groups; every other group, including newly added deployments, is skipped and keeps its configured routing strategy. When unset, all deployments participate (opt out per deployment via model_info.disable_background_health_check).
+             * @description Opt-in allowlist of model group names for background health checks and health-check routing. When set, the background loop probes only deployments whose model_name is listed, and enable_health_check_routing filters unhealthy deployments only within the listed groups; every other group, including newly added deployments, is skipped and keeps its configured routing strategy. When unset, every deployment participates except those that set model_info.disable_background_health_check, which defaults to true for image_generation, image_edit, and video_generation deployments.
              */
             background_health_check_model_groups?: string[] | null;
             /**

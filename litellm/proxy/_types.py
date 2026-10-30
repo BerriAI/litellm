@@ -2707,8 +2707,9 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "whose model_name is listed, and enable_health_check_routing filters unhealthy "
             "deployments only within the listed groups; every other group, including newly "
             "added deployments, is skipped and keeps its configured routing strategy. "
-            "When unset, all deployments participate (opt out per deployment via "
-            "model_info.disable_background_health_check)."
+            "When unset, every deployment participates except those that set "
+            "model_info.disable_background_health_check, which defaults to true for "
+            "image_generation, image_edit, and video_generation deployments."
         ),
     )
     model_list_healthy_only: bool | None = Field(

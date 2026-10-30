@@ -1219,28 +1219,41 @@ def test_a_dependency_that_opted_out_of_health_checks_is_never_probed():
     )
     marker = [d for d in router.model_list if d["model_info"]["id"] == "router-1"]
 
-    eligible = hc_module._health_check_eligible(router.model_list, skip_disabled=True)
-    probes = hc_module._dependency_deployments_to_probe(marker, eligible, router)
+    probes = hc_module._dependency_deployments_to_probe(marker, router.model_list, router, skip_disabled=True)
 
     assert probes == ()
-    assert [d["model_info"]["id"] for d in eligible] == ["router-1"]
+    assert [d["model_info"]["id"] for d in hc_module._dependency_deployments_to_probe(marker, router.model_list, router)] == [
+        "dead-1"
+    ]
 
 
-def test_health_skip_flag_also_skips_media_deployments_whose_mode_comes_from_the_cost_map():
-    """gemini/gemini-3-pro-image is mode image_generation in model_prices_and_context_window.json."""
-    image = {
-        "model_name": "image",
-        "litellm_params": {"model": "gemini/gemini-3-pro-image", "api_key": "sk-x"},
-        "model_info": {"id": "image-1"},
-    }
-    chat = {
-        "model_name": "chat",
-        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"},
-        "model_info": {"id": "chat-1"},
-    }
+def test_health_skip_flag_skips_media_by_the_mode_the_probe_would_run():
+    """Modes as model_prices_and_context_window.json listed them on 2026-10-29: gemini/gemini-3-pro-image and
+    gpt-image-1 are image_generation, openai/text-embedding-3-small is embedding."""
 
-    assert hc_module._health_check_eligible([image, chat], skip_disabled=True) == (chat,)
-    assert hc_module._health_check_eligible([image, chat], skip_disabled=False) == (image, chat)
+    def deployment(model_id: str, model: str, **model_info: object) -> dict[str, object]:
+        return {
+            "model_name": model_id,
+            "litellm_params": {"model": model, "api_key": "sk-x", "api_base": "https://example.services.ai.azure.com"},
+            "model_info": {"id": model_id, **model_info},
+        }
+
+    skipped = (
+        deployment("cost-map-image", "gemini/gemini-3-pro-image"),
+        deployment("azure-ai-image", "azure_ai/gpt-image-1"),
+        deployment("wildcard-probing-an-image", "openai/*", health_check_model="openai/gpt-image-1"),
+    )
+    probed = (
+        deployment("chat", "openai/gpt-4o-mini"),
+        deployment("embedding", "openai/text-embedding-3-small"),
+        deployment("wildcard", "openai/*"),
+        deployment("unknown", "openai/my-fine-tune"),
+        deployment("no-provider-prefix", "my-fine-tune"),
+        deployment("image-opted-in", "gemini/gemini-3-pro-image", disable_background_health_check=False),
+    )
+
+    assert hc_module._health_check_eligible([*skipped, *probed], skip_disabled=True) == probed
+    assert hc_module._health_check_eligible([*skipped, *probed], skip_disabled=False) == (*skipped, *probed)
 
 
 def test_narrowing_by_an_id_that_matches_nothing_keeps_the_whole_list():
