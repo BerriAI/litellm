@@ -2218,7 +2218,7 @@ def client(original_function):
             # RETURN RESULT
             return result
         except Exception as e:
-            if call_type == CallTypes.completion.value:
+            if call_type in (CallTypes.completion.value, CallTypes.decisions.value, CallTypes.systemone.value):
                 num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
                 if kwargs.get("retry_policy", None):
                     get_num_retries_from_retry_policy: Callable[..., int | None] = (
@@ -2243,9 +2243,16 @@ def client(original_function):
                         or isinstance(e, openai.APIConnectionError)
                     ):
                         kwargs["num_retries"] = num_retries
-                        return litellm.completion_with_retries(*args, **kwargs)
+                        return litellm.completion_with_retries(
+                            *args,
+                            original_function=original_function
+                            if call_type != CallTypes.completion.value
+                            else litellm.completion,
+                            **kwargs,
+                        )
                 elif (
-                    isinstance(e, litellm.exceptions.ContextWindowExceededError)
+                    call_type == CallTypes.completion.value
+                    and isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict
                     and model in context_window_fallback_dict
                     and not is_completion_litellm_router_call
@@ -2548,7 +2555,11 @@ def client(original_function):
 
             retry_call_type: Final = _get_call_type_from_public_name(original_function.__name__)
             num_retries, kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)
-            if retry_call_type == CallTypes.acompletion.value:
+            if retry_call_type in (
+                CallTypes.acompletion.value,
+                CallTypes.adecisions.value,
+                CallTypes.asystemone.value,
+            ):
                 context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
 
                 is_acompletion_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
@@ -2570,7 +2581,8 @@ def client(original_function):
                     else:
                         return result
                 elif (
-                    isinstance(e, litellm.exceptions.ContextWindowExceededError)
+                    retry_call_type == CallTypes.acompletion.value
+                    and isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict
                     and model in context_window_fallback_dict
                     and not is_acompletion_litellm_router_call
