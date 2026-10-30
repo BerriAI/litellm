@@ -377,6 +377,7 @@ from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check impor
     EncryptedContentAffinityCheck,
 )
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
+    async_io_token_refund_failure,
     build_io_token_rate_limit_headers,
     deployment_has_io_token_limits,
     refund_stale_reservation_before_retry,
@@ -1617,7 +1618,7 @@ class Router(DeprecatedRouterMembers):
         self._core_deployment_names: list[str] = []  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self._core_deployment_latency_map = {}
         ### CACHING ###
-        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = "local"  # default to an in-memory cache
+        cache_type: Literal["local", "redis", "redis-semantic", "s3"] = "local"  # default to an in-memory cache
         redis_cache = None
         cache_config: Final[dict[str, Any]] = {}
 
@@ -9500,7 +9501,7 @@ class Router(DeprecatedRouterMembers):
 
             raise original_exception
 
-    async def make_call(self, original_function: Any, *args, **kwargs):
+    async def make_call(self, original_function: Any, *args: object, **kwargs: object):
         """
         Handler for making a call to the .completion()/.embeddings()/etc. functions.
         """
@@ -9509,17 +9510,26 @@ class Router(DeprecatedRouterMembers):
         endpoint_function: Final = (
             generic_function if callable(generic_function) else _OPAQUE_VALUE_ADAPTER.validate_python(original_function)
         )
-        with endpoint_selection(
-            getattr(endpoint_function, "__name__", None),
-            getattr(endpoint_function, "__module__", None),
-            model=_OPAQUE_VALUE_ADAPTER.validate_python(model_group),
-        ):
-            response = original_function(*args, **kwargs)
-            if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
-                response = await response
+        try:
+            with endpoint_selection(
+                getattr(endpoint_function, "__name__", None),
+                getattr(endpoint_function, "__module__", None),
+                model=_OPAQUE_VALUE_ADAPTER.validate_python(model_group),
+            ):
+                response = original_function(*args, **kwargs)
+                if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
+                    response = await response
+        except Exception:
+            with contextlib.suppress(Exception):
+                await async_io_token_refund_failure(
+                    self.cache, kwargs, parent_otel_span=get_parent_otel_span_from_kwargs(kwargs)
+                )
+            raise
         await self.increment_deployment_usage_for_response(response=response, request_kwargs=kwargs)
         ## PROCESS RESPONSE HEADERS
-        response = await self.set_response_headers(response=response, model_group=model_group, request_kwargs=kwargs)
+        response = await self.set_response_headers(
+            response=response, model_group=model_group if isinstance(model_group, str) else None, request_kwargs=kwargs
+        )
 
         return response
 
@@ -12856,7 +12866,10 @@ class Router(DeprecatedRouterMembers):
         configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
         reasoning_efforts_initialized = False
         reasoning_efforts_unknown = False
-        model_list: Final = self._core_get_model_list_of_routed_group(model_group)
+        serves_team_deployments: Final = team_id is not None and bool(
+            self._team_deployments_named(team_id, model_group)
+        )
+        model_list: Final = self._core_get_model_list_of_routed_group(model_group, team_id)
         model_group_description: Final[str | None] = next(
             (d for d in (_configured_model_info(m).get("description") for m in model_list) if isinstance(d, str)),
             None,
@@ -12864,7 +12877,8 @@ class Router(DeprecatedRouterMembers):
         for model in model_list:
             is_match = False
             if (
-                "model_name" in model
+                serves_team_deployments
+                or "model_name" in model
                 and model["model_name"] == model_group
                 or "model_name" in model
                 and self._core_pattern_router.route(model_group) is not None
@@ -14213,17 +14227,22 @@ class Router(DeprecatedRouterMembers):
             lambda name: self._core_wildcard_route_deployments(name, team_id),
         )
 
-    def _core_get_model_list_of_routed_group(self, model_group: str) -> list[DeploymentTypedDict]:
+    def _core_get_model_list_of_routed_group(
+        self, model_group: str, team_id: str | None = None
+    ) -> list[DeploymentTypedDict]:
         """
         The deployments a request the router has already resolved to model_group is
-        served from: the ones named model_group, the routing group of that name, or
-        the wildcard route matching it when neither exists.
+        served from: team_id's own deployments under that public name when the team has
+        any, else the ones named model_group, the routing group of that name, or the
+        wildcard route matching it when neither exists.
 
         Unlike get_model_list, model_group's own model_group_alias entry is not
         followed. The router resolves an alias exactly once, so a group reached as
         an alias target is served by its own deployments, never by a second hop:
         in the chain X -> T -> U a request to X is served from T's deployments.
         """
+        if team_id is not None and self._team_deployments_named(team_id, model_group):
+            return self._core_get_all_deployments(model_name=model_group, team_id=team_id)
         own: Final = cast(  # cast-ok: the private alias returns what get_all_deployments returns
             list[DeploymentTypedDict], self._get_all_deployments(model_name=model_group)
         )
