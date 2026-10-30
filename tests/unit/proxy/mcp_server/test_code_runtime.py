@@ -22,7 +22,7 @@ def test_code_mode_reports_missing_runtime_dependency(monkeypatch: pytest.Monkey
         raise code_runtime.metadata.PackageNotFoundError(name)
 
     monkeypatch.setattr(code_runtime.metadata, "distribution", missing)
-    with pytest.raises(ValueError, match="requires quickjs-ng"):
+    with pytest.raises(ValueError, match=r"requires quickjs-ng\. Install 'litellm\[proxy,mcp-code-mode\]'"):
         code_runtime.check_runtime()
 
 

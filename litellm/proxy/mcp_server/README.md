@@ -1,6 +1,12 @@
 # MCP code mode
 
-Code mode lets an MCP client run JavaScript that combines tool calls and returns only the output it needs. Enable it in the gateway configuration and restart the proxy. The QuickJS-NG runtime is included in the proxy installation on platforms with supported wheels; no separate sandbox service or client integration is required.
+Code mode lets an MCP client run JavaScript that combines tool calls and returns only the output it needs. It is off by default. Install the optional runtime only in deployments that will enable it; regular proxy installations do not include it.
+
+```sh
+pip install "litellm[proxy,mcp-code-mode]"
+```
+
+Keep your existing LiteLLM version pin when adding the extra to a deployed proxy. For containers, include the extra in the image build. Then enable it in the gateway configuration and restart. No separate sandbox service or client integration is required, and the gateway never installs packages at runtime.
 
 ```yaml
 litellm_settings:
@@ -9,7 +15,7 @@ litellm_settings:
 
 Reconnect the MCP client or refresh its tool list. It should discover `litellm_execute_code` alongside its existing tools. The setting is off by default. Turning it off also rejects calls from clients that cached the code tool.
 
-Intel macOS and Windows ARM installations need a manual source installation of `quickjs-ng` before enabling code mode. A missing runtime produces a startup error. The original `quickjs` package conflicts with `quickjs-ng`; use an environment without that package. These requirements do not affect the gateway when code mode is disabled.
+The extra installs QuickJS-NG. Platforms without a compatible wheel need a source build and its compiler toolchain; these builds are not part of the verified platform matrix. A missing runtime produces an actionable startup error. The original `quickjs` package shares files with `quickjs-ng`; use a separate environment without that package before installing the extra. Regular proxy installations and disabled gateways do not require either runtime.
 
 The code tool accepts a `code` string. Discover a tool and its argument schema normally, then copy the code-mode `tool_id` from its description or `search_tools` into `tools.call_tool`. Copy that reference unchanged: clients can rename the displayed tool. Exact gateway catalog names also work. Calls return the full MCP result, including `content`, `structuredContent` when provided, and `isError`. Use `text(value)` to return a JSON value to the model. For example, after discovering a tool named `example-add` that accepts `a` and `b`:
 

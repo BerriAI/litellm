@@ -54,6 +54,7 @@ Documentation = "https://docs.litellm.ai"
 # sub-packages and the opentelemetry trio move in lockstep, and grpcio is
 # supply-chain-pinned to a vetted, aged release.
 [project.optional-dependencies]
+mcp-code-mode = ["quickjs-ng>=0.17.0.2,<0.18"]
 proxy = [
     "gunicorn>=23.0.0,<24.0",
     "uvicorn>=0.33.0,<1.0",
@@ -82,7 +83,6 @@ proxy = [
     "azure-identity>=1.25.2,<2.0",
     "azure-storage-blob>=12.28.0,<13.0",
     "mcp>=2.3.0,<3",
-    "quickjs-ng>=0.17.0.2,<0.18; (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64' or platform_machine == 'i686')) or (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'win32' and (platform_machine == 'AMD64' or platform_machine == 'x86'))",
     "httpx2>=2.10.0,<3",
     "pydantic>=2.12.0,<3",
     "litellm-proxy-extras==0.4.112",

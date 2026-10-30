@@ -51,7 +51,9 @@ def check_runtime() -> None:
     try:
         metadata.distribution("quickjs-ng")
     except metadata.PackageNotFoundError as exc:
-        raise ValueError("MCP code mode requires quickjs-ng; install it on a supported platform") from exc
+        raise ValueError(
+            "MCP code mode requires quickjs-ng. Install 'litellm[proxy,mcp-code-mode]' on a supported platform."
+        ) from exc
     try:
         metadata.distribution("quickjs")
     except metadata.PackageNotFoundError:
@@ -59,7 +61,9 @@ def check_runtime() -> None:
     else:
         raise ValueError("MCP code mode requires removing the conflicting quickjs package and reinstalling quickjs-ng")
     if importlib.util.find_spec("_quickjs") is None:
-        raise ValueError("MCP code mode requires quickjs-ng; install it on a supported platform")
+        raise ValueError(
+            "MCP code mode requires quickjs-ng. Install 'litellm[proxy,mcp-code-mode]' on a supported platform."
+        )
 
 
 async def _build_reply(call: Call, callback: ToolCallback, maximum: int) -> bytes:

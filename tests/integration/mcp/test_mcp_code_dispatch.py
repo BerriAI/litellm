@@ -68,8 +68,9 @@ def test_code_calls_chain_with_caller_permissions(code_gateway: Gateway) -> None
 
 
 def test_code_timeout_returns_error_and_releases_caller_slot(code_gateway: Gateway) -> None:
-    with code_gateway.scenario() as scenario:
-        key: Final = scenario.key(max_parallel_requests=1)
+    with mcp_peer() as peer, code_gateway.scenario() as scenario:
+        identity: Final = register_mcp(scenario, peer, "timeout" + uuid.uuid4().hex[:8])
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]}, max_parallel_requests=1)
         _, result = official_client_outcomes(
             code_gateway, key, "/mcp", "litellm_execute_code", {"code": "while (true) {}"}
         )

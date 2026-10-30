@@ -5018,6 +5018,9 @@ mcp = [
     { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.15'" },
     { name = "pydantic", version = "2.14.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.15'" },
 ]
+mcp-code-mode = [
+    { name = "quickjs-ng" },
+]
 mlflow = [
     { name = "mlflow" },
 ]
@@ -5050,7 +5053,6 @@ proxy = [
     { name = "pyroscope-io", marker = "sys_platform != 'win32'" },
     { name = "python-multipart" },
     { name = "pyyaml" },
-    { name = "quickjs-ng", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'i686' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86' and sys_platform == 'win32')" },
     { name = "restrictedpython" },
     { name = "rich" },
     { name = "rq" },
@@ -5310,7 +5312,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.3,<7.0" },
     { name = "pyyaml", marker = "extra == 'cli'", specifier = ">=6.0.3,<7.0" },
     { name = "pyyaml", marker = "extra == 'proxy'", specifier = ">=6.0.3,<7.0" },
-    { name = "quickjs-ng", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'proxy') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'proxy') or (platform_machine == 'i686' and sys_platform == 'linux' and extra == 'proxy') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'proxy') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'proxy') or (platform_machine == 'x86' and sys_platform == 'win32' and extra == 'proxy')", specifier = ">=0.17.0.2,<0.18" },
+    { name = "quickjs-ng", marker = "extra == 'mcp-code-mode'", specifier = ">=0.17.0.2,<0.18" },
     { name = "redisvl", marker = "extra == 'extra-proxy'", specifier = ">=0.4.1,<1.0" },
     { name = "requests", marker = "extra == 'cli'", specifier = ">=2.32.0,<3.0" },
     { name = "resend", marker = "extra == 'extra-proxy'", specifier = ">=2.23.0,<3.0" },
@@ -5334,7 +5336,7 @@ requires-dist = [
     { name = "uvloop", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.22.1,<1.0" },
     { name = "websockets", marker = "extra == 'proxy'", specifier = ">=15.0.1,<16.0" },
 ]
-provides-extras = ["proxy", "cli", "extra-proxy", "utils", "mcp", "saml", "semantic-router", "mlflow", "grpc", "stt-vertex-chirp", "stt-nvidia-riva", "google", "bedrock-realtime", "proxy-runtime"]
+provides-extras = ["mcp-code-mode", "proxy", "cli", "extra-proxy", "utils", "mcp", "saml", "semantic-router", "mlflow", "grpc", "stt-vertex-chirp", "stt-nvidia-riva", "google", "bedrock-realtime", "proxy-runtime"]
 
 [package.metadata.requires-dev]
 admin-mcp = [{ name = "litellm-admin-mcp", marker = "python_full_version >= '3.12'", url = "https://github.com/BerriAI/liteadmin-mcp/archive/31fb096904ae05684c0779110a93b135b5601182.tar.gz" }]
