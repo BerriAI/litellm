@@ -5940,11 +5940,8 @@ async def test_delete_verification_tokens_evicts_a_requested_key_whose_row_is_al
     finally:
         await peer_subscriber.stop()
 
-    assert [
-        cache.get_cache(key=token)
-        for cache in (deleting_worker_cache, peer_worker_cache)
-        for token in (live_token, gone_token)
-    ] == [None, None, None, None]
+    assert [deleting_worker_cache.get_cache(key=token) for token in (live_token, gone_token)] == [None, None]
+    assert [peer_worker_cache.get_cache(key=token) for token in (live_token, gone_token)] == [None, None]
 
 
 @pytest.mark.asyncio
