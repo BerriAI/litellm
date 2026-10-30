@@ -143,6 +143,7 @@ API_BASE_IS_THE_FULL_URL: Final[Mapping[str, str]] = MappingProxyType(
             "duckduckgo.search.transformation.DuckDuckGoSearchConfig",
             "google_pse.search.transformation.GooglePSESearchConfig",
             "searchapi.search.transformation.SearchAPIConfig",
+            "soniox.realtime.transformation.SonioxRealtimeConfig",
             "tinyfish.search.transformation.TinyfishSearchConfig",
             "vertex_ai.text_to_speech.transformation.VertexAITextToSpeechConfig",
             "vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation."

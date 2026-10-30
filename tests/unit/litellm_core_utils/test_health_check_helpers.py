@@ -9,6 +9,7 @@ from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import responses
 import respx
 
 import litellm
@@ -794,9 +795,12 @@ async def test_ahealth_check_keeps_the_noul_probe_for_other_decisions_providers(
         ("us.anthropic.claude-haiku-4-5-20251001-v1:0", "bedrock", None),
         ("claude-haiku-4-5", "anthropic", None),
         ("anthropic.claude-haiku-4-5", None, None),
+        ("stt-rt-v5", "soniox", "realtime"),
+        ("stt-rt-preview", "soniox", "realtime"),
+        ("stt-async-v5", "soniox", None),
     ),
 )
-def test_native_health_check_mode_is_messages_only_for_mantle_claude(
+def test_native_health_check_mode_routes_mantle_claude_to_messages_and_soniox_realtime_models_to_realtime(
     model: str, custom_llm_provider: str | None, expected: str | None
 ) -> None:
     assert native_health_check_mode(model=model, custom_llm_provider=custom_llm_provider) == expected
@@ -1544,3 +1548,103 @@ async def test_ahealth_check_probes_extraction_models_through_the_extraction_api
     sent: Final = json.loads(upstream.calls[0].request.content)
     assert sent["state"] == "health check"
     assert sent["fields"]["reachable"]["type"] == "text"
+
+
+VERTEX_AUTHORIZED_USER: Final = json.dumps(
+    {
+        "type": "authorized_user",
+        "client_id": "health-client",
+        "client_secret": "health-secret",
+        "refresh_token": "health-refresh",
+    }
+)
+CHAT_COMPLETION_BODY: Final = MappingProxyType(
+    {
+        "id": "chatcmpl-health",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "health",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+)
+GEMINI_GENERATE_CONTENT_BODY: Final = MappingProxyType(
+    {
+        "candidates": [{"content": {"role": "model", "parts": [{"text": "ok"}]}, "finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+    }
+)
+
+
+async def test_vertex_wildcard_health_check_only_calls_vertex_hosts(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-not-vertex")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    vertex_route: Final = respx_mock.route(host__regex=r".*aiplatform\.googleapis\.com$").respond(
+        json=dict(GEMINI_GENERATE_CONTENT_BODY)
+    )
+    other_hosts: Final = respx_mock.route().respond(json=dict(CHAT_COMPLETION_BODY))
+
+    with responses.RequestsMock() as google_token_endpoint:
+        google_token_endpoint.post(
+            "https://oauth2.googleapis.com/token",
+            json={"access_token": "health-access-token", "expires_in": 3600, "token_type": "Bearer"},
+        )
+        result: Final = await ahealth_check(
+            model_params={
+                "model": "vertex_ai/*",
+                "vertex_project": "health-project",
+                "vertex_location": "us-central1",
+                "vertex_credentials": VERTEX_AUTHORIZED_USER,
+            },
+            mode="chat",
+        )
+
+    assert "error" not in result, result
+    assert vertex_route.called
+    assert not other_hosts.called
+
+
+async def test_ai21_wildcard_health_check_calls_ai21(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    ai21_route: Final = respx_mock.route(host="api.ai21.com").respond(json=dict(CHAT_COMPLETION_BODY))
+    other_hosts: Final = respx_mock.route().respond(json=dict(CHAT_COMPLETION_BODY))
+
+    result: Final = await ahealth_check(model_params={"model": "ai21/*", "api_key": "health-ai21-key"}, mode="chat")
+
+    assert "error" not in result, result
+    assert ai21_route.called
+    assert not other_hosts.called
+
+
+async def test_wildcard_health_check_with_pinned_provider_calls_a_model_without_a_routing_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fake-together-chat",
+        {"input_cost_per_token": 1e-9, "output_cost_per_token": 1e-9, "mode": "chat", "litellm_provider": "together_ai"},
+    )
+    monkeypatch.setitem(litellm.models_by_provider, "together_ai", ("fake-together-chat",))
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    together_route: Final = respx_mock.route(host="api.together.ai").respond(json=dict(CHAT_COMPLETION_BODY))
+    other_hosts: Final = respx_mock.route().respond(json=dict(CHAT_COMPLETION_BODY))
+
+    result: Final = await ahealth_check(
+        model_params={"model": "together_ai/*", "custom_llm_provider": "together_ai", "api_key": "health-together-key"},
+        mode="chat",
+    )
+
+    assert "error" not in result, result
+    assert json.loads(together_route.calls.last.request.content)["model"] == "fake-together-chat"
+    assert not other_hosts.called
+

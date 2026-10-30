@@ -1,6 +1,7 @@
 "use client";
 
 import ScopedSavingsTab from "@/components/shared/ScopedSavingsTab";
+import { reportingKeyId } from "@/components/UsagePage/keyActivityData";
 import { hasProxyWideSpendView, spendScopeUserId } from "@/utils/roles";
 import type { ActivityDateRange } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
 
@@ -15,7 +16,7 @@ interface KeySavingsTabProps {
 const KeySavingsTab = ({ accessToken, keyToken, userId, userRole, activity }: KeySavingsTabProps) => (
   <ScopedSavingsTab
     accessToken={accessToken}
-    scope={{ userId: spendScopeUserId(userRole, userId), apiKey: keyToken }}
+    scope={{ userId: spendScopeUserId(userRole, userId), apiKey: reportingKeyId(keyToken) }}
     activity={activity}
     entityType="key"
     scopeNote={
