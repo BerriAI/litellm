@@ -4,7 +4,7 @@ import datetime
 import json
 import logging
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 
@@ -25,22 +25,21 @@ from litellm.router_strategy.least_busy import (
     IN_FLIGHT_COUNT_TTL_SECONDS,
     SELECTION_RESERVATION_TTL_SECONDS,
     LeastBusyLoggingHandler,
+    picks_reserve,
 )
 from litellm.types.utils import ModelResponse
 
 GROUP: Final = "least-busy-group"
-CALL_STARTED_AT: Final = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
 DEPLOYMENT_A: Final[dict[str, object]] = {"model_info": {"id": "dep-a"}}
 DEPLOYMENT_B: Final[dict[str, object]] = {"model_info": {"id": "dep-b"}}
 HEALTHY: Final = [DEPLOYMENT_A, DEPLOYMENT_B]
 
 
-def _routed_call_kwargs(deployment_id: str) -> dict[str, object]:
-    return {"litellm_params": {"metadata": {"model_group": GROUP}, "model_info": {"id": deployment_id}}}
-
-
-def _call_kwargs(deployment_id: str) -> dict[str, object]:
-    return {**_routed_call_kwargs(deployment_id), "api_call_start_time": CALL_STARTED_AT}
+def _call_kwargs(deployment_id: str, call_id: str = "call-1") -> dict[str, object]:
+    return {
+        "litellm_params": {"metadata": {"model_group": GROUP}, "model_info": {"id": deployment_id}},
+        "litellm_call_id": call_id,
+    }
 
 
 class SharedRedisCounters:
@@ -145,7 +144,7 @@ def _routed_through_litellm_metadata(deployment_id: str) -> dict[str, object]:
             "litellm_metadata": {"model_group": GROUP},
             "model_info": {"id": deployment_id},
         },
-        "api_call_start_time": CALL_STARTED_AT,
+        "litellm_call_id": "call-1",
     }
 
 
@@ -561,7 +560,7 @@ class _StoreWhereThreadsReadBeforeWriting:
         self._meeting: Final = threading.Event()
 
     @contextlib.contextmanager
-    def first_reads_meet(self) -> Iterator[None]:
+    def first_reads_meet(self) -> Generator[None, None, None]:
         self._meeting.set()
         yield
         self._meeting.clear()
@@ -616,11 +615,25 @@ def _router_pick(router: Router) -> str:
 def test_a_pick_stays_reserved_while_other_router_keys_fill_its_cache() -> None:
     router: Final = _least_busy_router()
 
-    first: Final = _router_pick(router)
-    for index in range(DEFAULT_MAX_SIZE_IN_MEMORY):
-        router.health().store.set_cache(f"deployment-usage-{index}", 1, local_only=True, ttl=60)
+    with picks_reserve(True):
+        first: Final = _router_pick(router)
+        for index in range(DEFAULT_MAX_SIZE_IN_MEMORY):
+            router.health().store.set_cache(f"deployment-usage-{index}", 1, local_only=True, ttl=60)
 
-    assert _router_pick(router) != first
+        assert _router_pick(router) != first
+
+
+@pytest.mark.asyncio
+async def test_looking_up_a_deployment_does_not_hold_it_for_later_picks() -> None:
+    router: Final = _least_busy_router()
+
+    sync_picks: Final = [_router_pick(router) for _ in range(3)]
+    async_picks: Final = [
+        (await router.async_get_available_deployment(ROUTER_GROUP, request_kwargs={"metadata": {}}))["model_info"]["id"]
+        for _ in range(3)
+    ]
+
+    assert sync_picks + async_picks == [ROUTER_DEPLOYMENT_IDS[0]] * 6
 
 
 @pytest.mark.asyncio
@@ -638,7 +651,7 @@ def test_a_cache_hit_leaves_requests_in_flight_on_its_deployment_counted() -> No
     worker: Final = _worker(None)
     worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
 
-    worker.log_success_event({**_call_kwargs("dep-a"), "cache_hit": True}, None, None, None)
+    worker.log_success_event({**_call_kwargs("dep-a", "cached-call"), "cache_hit": True}, None, None, None)
 
     assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
 
@@ -650,19 +663,57 @@ def test_a_call_that_ends_before_reaching_the_provider_frees_its_pick(
     worker: Final = _worker(None)
     assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
 
-    outcome(worker, _routed_call_kwargs("dep-a"), None, None, None)
+    outcome(worker, _call_kwargs("dep-a"), None, None, None)
 
     assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
 
 
 def test_a_call_the_proxy_rejected_after_logging_its_start_leaves_no_count_behind() -> None:
     worker: Final = _worker(None)
-    rejected: Final = {**_routed_call_kwargs("dep-a"), LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL: True}
+    rejected: Final = {**_call_kwargs("dep-a"), LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL: True}
 
     worker.log_pre_api_call(model="m", messages=[], kwargs=rejected)
     worker.log_failure_event(rejected, None, None, None)
 
     assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
+def test_a_call_logged_under_its_callers_group_name_frees_the_pick_made_for_another_group() -> None:
+    worker: Final = _worker(None)
+    assert worker.get_available_deployments("tier-group", HEALTHY, reserve=True) is DEPLOYMENT_A
+
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
+    worker.log_success_event(_call_kwargs("dep-a"), None, None, None)
+
+    assert worker.get_available_deployments("tier-group", HEALTHY) is DEPLOYMENT_A
+
+
+def test_a_fallback_attempt_that_fails_before_reaching_its_provider_frees_its_pick() -> None:
+    worker: Final = _worker(None)
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "busy-call"))
+    first_attempt_started_at: Final = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+    first_attempt: Final = {**_call_kwargs("dep-a", "fallback-call"), "api_call_start_time": first_attempt_started_at}
+    worker.log_pre_api_call(model="m", messages=[], kwargs=first_attempt)
+    worker.log_failure_event(first_attempt, None, None, None)
+
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_B
+    second_attempt: Final = {**_call_kwargs("dep-b", "fallback-call"), "api_call_start_time": first_attempt_started_at}
+    worker.log_failure_event(second_attempt, None, None, None)
+
+    assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+
+
+def test_a_retry_that_starts_before_the_failed_attempt_is_logged_counts_each_attempt_once() -> None:
+    worker: Final = _worker(None)
+    attempt: Final = _call_kwargs("dep-a", "retried-call")
+
+    worker.log_pre_api_call(model="m", messages=[], kwargs=attempt)
+    worker.log_pre_api_call(model="m", messages=[], kwargs=attempt)
+    worker.log_failure_event(attempt, None, None, None)
+    worker.log_success_event(attempt, None, None, None)
+
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_B
 
 
 async def _drain_logging() -> None:

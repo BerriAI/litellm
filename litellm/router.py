@@ -219,7 +219,12 @@ from litellm.router_strategy.complexity_router.context_compaction import (
     reject_recursive_compactor,
     surface_for_call,
 )
-from litellm.router_strategy.least_busy import SELECTION_RESERVATION_MAX_KEYS, LeastBusyLoggingHandler
+from litellm.router_strategy.least_busy import (
+    SELECTION_RESERVATION_MAX_KEYS,
+    LeastBusyLoggingHandler,
+    pick_reserves,
+    picks_reserve,
+)
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
@@ -1381,14 +1386,14 @@ class Router(DeprecatedRouterMembers):
         (``pass_through``).
         """
         if kind == "pick":
-            return await self._core_async_get_available_deployment(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selection cores return untyped deployment dicts
-                model=model,
-                request_kwargs=request_kwargs if request_kwargs is not None else {},
-                messages=messages,
-                input=input,
-                specific_deployment=specific_deployment,
-                reserve=False,
-            )
+            with picks_reserve(False):
+                return await self._core_async_get_available_deployment(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selection cores return untyped deployment dicts
+                    model=model,
+                    request_kwargs=request_kwargs if request_kwargs is not None else {},
+                    messages=messages,
+                    input=input,
+                    specific_deployment=specific_deployment,
+                )
         if kind == "healthy":
             return await self._core_async_get_healthy_deployments(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selection cores return untyped deployment dicts
                 model=model,
@@ -3404,12 +3409,13 @@ class Router(DeprecatedRouterMembers):
             )
 
             # pick the one that is available (lowest TPM/RPM)
-            deployment = self.get_available_deployment(
-                model=model,
-                messages=messages,
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
+            with picks_reserve(True):
+                deployment = self.get_available_deployment(
+                    model=model,
+                    messages=messages,
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                )
             self._drop_unsupported_classifier_reasoning_effort(
                 deployment=cast(DeploymentTypedDict, deployment),  # cast-ok: selection returns a router deployment
                 model=model,
@@ -5884,12 +5890,13 @@ class Router(DeprecatedRouterMembers):
         model_name: Final = ""
         try:
             verbose_router_logger.debug("Inside _image_generation()- model: %s", model)
-            deployment: Final = self.get_available_deployment(
-                model=model,
-                messages=[{"role": "user", "content": "prompt"}],
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
+            with picks_reserve(True):
+                deployment: Final = self.get_available_deployment(
+                    model=model,
+                    messages=[{"role": "user", "content": "prompt"}],
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             data: Final = deployment["litellm_params"].copy()
 
@@ -6237,7 +6244,7 @@ class Router(DeprecatedRouterMembers):
             kwargs.setdefault("metadata", {}).update({"model_group": model})
 
             # pick the one that is available (lowest TPM/RPM)
-            with endpoint_selection("text_completion", model=model):
+            with endpoint_selection("text_completion", model=model), picks_reserve(True):
                 deployment: Final = self.get_available_deployment(
                     model=model,
                     messages=messages,
@@ -7378,7 +7385,11 @@ class Router(DeprecatedRouterMembers):
                 kwargs=kwargs,
                 metadata_variable_name=metadata_variable_name,
             )
-            with self._video_call_pin(handler_name, kwargs), self._route_capability_pin(handler_name):
+            with (
+                self._video_call_pin(handler_name, kwargs),
+                self._route_capability_pin(handler_name),
+                picks_reserve(True),
+            ):
                 deployment: Final = self.get_available_deployment(
                     model=model,
                     messages=kwargs.get("messages", None),
@@ -7448,7 +7459,7 @@ class Router(DeprecatedRouterMembers):
         model_name = None
         try:
             verbose_router_logger.debug("Inside embedding()- model: %s", model)
-            with embedding_deployment_selection():
+            with embedding_deployment_selection(), picks_reserve(True):
                 deployment: Final = self.get_available_deployment(
                     model=model,
                     input=input,
@@ -8059,13 +8070,13 @@ class Router(DeprecatedRouterMembers):
         try:
             verbose_router_logger.debug("Inside _acancel_batch()- model: %s", model)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            deployment: Final = await self._core_async_get_available_deployment(
-                model=model,
-                messages=[{"role": "user", "content": "batch-api-fake-text"}],
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-                reserve=False,
-            )
+            with picks_reserve(False):
+                deployment: Final = await self._core_async_get_available_deployment(
+                    model=model,
+                    messages=[{"role": "user", "content": "batch-api-fake-text"}],
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                )
 
             selected_deployment_id: Final = (deployment.get("model_info") or {}).get("id")
             data: Final = deployment["litellm_params"].copy()
@@ -15697,7 +15708,6 @@ class Router(DeprecatedRouterMembers):
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
-        reserve: bool = True,
     ):
         """
         Async implementation of 'get_available_deployments'.
@@ -15711,7 +15721,7 @@ class Router(DeprecatedRouterMembers):
                 messages=messages,
                 input=input,
                 specific_deployment=specific_deployment,
-                reserve=reserve,
+                reserve=pick_reserves(default=True),
             )
 
     async def _async_get_available_deployment(
@@ -16864,7 +16874,7 @@ class Router(DeprecatedRouterMembers):
             messages=messages,
             input=input,
             request_kwargs=request_kwargs,
-            reserve=request_kwargs not in (None, {}),
+            reserve=pick_reserves(default=False) and request_kwargs not in (None, {}),
         )
 
         if deployment is None:

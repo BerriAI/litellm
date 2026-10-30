@@ -616,7 +616,7 @@ async def test_responses_websocket_turns_do_not_make_their_deployment_look_busy_
         await admit_turn()
 
     picks: Final = [
-        (await router.async_get_available_deployment(model="ws-least-busy", request_kwargs={"input": "hi"}))[
+        (await router._core_async_get_available_deployment(model="ws-least-busy", request_kwargs={"input": "hi"}))[
             "model_info"
         ]["id"]
         for _ in range(2)

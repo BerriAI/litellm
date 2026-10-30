@@ -29096,9 +29096,19 @@ def test_reset_custom_routing_strategy():
 
     assert "get_available_deployment" not in router.__dict__
     assert "async_get_available_deployment" not in router.__dict__
-    assert router.async_get_available_deployment.__func__ is Router.async_get_available_deployment
+    assert router.async_get_available_deployment.__wrapped__.__func__ is Router.async_get_available_deployment
 
     router._reset_custom_routing_strategy()
+
+
+@pytest.mark.asyncio
+async def test_select_picks_through_a_custom_routing_strategy() -> None:
+    router: Final = _create_custom_routing_router()
+    router.set_custom_routing_strategy(SpecialEndpointRoutingStrategy(router))
+
+    picked: Final = await router.select("azure-model", {"metadata": {}})
+
+    assert picked["model_info"]["id"] == "very-special-endpoint"
 
 
 @pytest.mark.asyncio

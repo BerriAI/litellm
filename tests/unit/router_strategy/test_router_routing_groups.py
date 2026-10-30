@@ -20,6 +20,7 @@ import litellm
 from litellm import Router
 from litellm.caching.redis_cache import RedisPipelineIncrementOperation
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_strategy.least_busy import picks_reserve
 from litellm.types.router import DeploymentTypedDict, FallbackAccessCheck, RoutingGroup, RoutingStrategy
 from litellm.utils import Rules, function_setup
 
@@ -54,9 +55,6 @@ def _model_list():
             "model_info": {"id": "deploy-3"},
         },
     ]
-
-
-CALL_STARTED_AT: Final = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
 
 
 def _build_router(routing_strategy="simple-shuffle", routing_groups=None):
@@ -471,8 +469,7 @@ def test_two_least_busy_groups_count_a_request_once(monkeypatch):
         "litellm_params": {
             "metadata": {"model_group": "filtered-model"},
             "model_info": {"id": "deploy-1"},
-        },
-        "api_call_start_time": CALL_STARTED_AT,
+        }
     }
 
     for callback in litellm.input_callback:
@@ -483,7 +480,6 @@ def test_two_least_busy_groups_count_a_request_once(monkeypatch):
             callback.log_success_event(kwargs, None, None, None)
 
     assert router.cache.get_cache("filtered-model_request_count:deploy-1") == 0
-
 
 
 def _filtered_model_pick(router: Router) -> str:
@@ -501,10 +497,11 @@ def test_a_least_busy_group_pick_stops_counting_once_its_request_finishes(monkey
         routing_groups=[{"group_name": "fast", "models": ["filtered-model"], "routing_strategy": "least-busy"}],
     )
 
-    first: Final = _filtered_model_pick(router)
+    with picks_reserve(True):
+        first: Final = _filtered_model_pick(router)
     kwargs: Final = {
         "litellm_params": {"metadata": {"model_group": "filtered-model"}, "model_info": {"id": first}},
-        "api_call_start_time": CALL_STARTED_AT,
+        "litellm_call_id": "call-1",
     }
     for callback in litellm.input_callback:
         if isinstance(callback, CustomLogger):
@@ -514,6 +511,7 @@ def test_a_least_busy_group_pick_stops_counting_once_its_request_finishes(monkey
             callback.log_success_event(kwargs, None, None, None)
 
     assert _filtered_model_pick(router) == first
+
 
 def test_two_routers_in_one_process_each_count_their_own_requests(monkeypatch):
     """
@@ -532,8 +530,7 @@ def test_two_routers_in_one_process_each_count_their_own_requests(monkeypatch):
         "litellm_params": {
             "metadata": {"model_group": "filtered-model"},
             "model_info": {"id": "deploy-1"},
-        },
-        "api_call_start_time": CALL_STARTED_AT,
+        }
     }
 
     for callback in litellm.input_callback:
@@ -1241,12 +1238,12 @@ async def test_least_busy_override_sees_the_overriding_request_in_flight():
     stream = await router.acompletion(**_proxy_shaped_request(model="grp", routing_strategy="least-busy", stream=True))
     busy = stream._hidden_params["model_id"]
     idle = "d2" if busy == "d1" else "d1"
-    assert await _async_override_pick(router, "least-busy") == idle
+    assert [await _async_override_pick(router, "least-busy") for _ in range(3)] == [idle, idle, idle]
 
     async for _ in stream:
         pass
     await _async_wait_until(lambda: _in_flight(router, busy) == 0)
-    assert await _async_override_pick(router, "least-busy") == busy
+    assert await _async_override_pick(router, "least-busy") == "d1"
     assert _selector_is_not_global(router._override_selectors["least-busy"])
 
 
@@ -1256,12 +1253,12 @@ def test_sync_least_busy_override_sees_the_overriding_request_in_flight():
     stream = router.completion(**_proxy_shaped_request(model="grp", routing_strategy="least-busy", stream=True))
     busy = stream._hidden_params["model_id"]
     idle = "d2" if busy == "d1" else "d1"
-    assert _sync_override_pick(router, "least-busy") == idle
+    assert [_sync_override_pick(router, "least-busy") for _ in range(3)] == [idle, idle, idle]
 
     for _ in stream:
         pass
     _sync_wait_until(lambda: _in_flight(router, busy) == 0)
-    assert _sync_override_pick(router, "least-busy") == busy
+    assert _sync_override_pick(router, "least-busy") == "d1"
     assert _selector_is_not_global(router._override_selectors["least-busy"])
 
 
