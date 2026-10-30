@@ -25,7 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_litellm_internal_message_fields,
     strip_none_values_from_message,
 )
-from litellm.litellm_core_utils.reasoning_effort_utils import reasoning_effort_from_thinking
+from litellm.litellm_core_utils.reasoning_effort_utils import reasoning_effort_from_thinking, warn_dropped_reasoning
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
@@ -70,12 +70,12 @@ def _accepted_reasoning_effort(model: str, requested: str, custom_llm_provider: 
     return accepted
 
 
-def _thinking_as_reasoning_effort(thinking: object, *, drop_params: bool) -> str | None:
+def _thinking_as_reasoning_effort(thinking: object, *, model: str, drop_params: bool) -> str | None:
     match thinking:
         case {"type": "disabled"}:
             return "none"
         case _:
-            return reasoning_effort_from_thinking(thinking, drop_params=drop_params)
+            return reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
 
 
 _NO_TOOL_CALL_TURN: Final[tuple[int, frozenset[str]]] = (-1, frozenset())
@@ -83,6 +83,9 @@ _MISTRAL_REQUEST_ROUTING: Final = TypeAdapter(MistralRequestRouting)
 _MISTRAL_CACHE_KEY_PARAMS: Final = TypeAdapter(MistralCacheKeyParams)
 _MISTRAL_REASONING_EFFORT_PARAMS: Final = TypeAdapter(MistralReasoningEffortParams)
 _MISTRAL_FILE_PART: Final = TypeAdapter(MistralFilePart)
+_NON_LEVEL_EFFORT_REASON: Final = (
+    "the Mistral API takes it only as a level such as 'high', so Mistral applies its default effort."
+)
 
 
 def _reasoning_level_and_summary(reasoning_effort: object) -> tuple[object, object]:
@@ -234,7 +237,8 @@ class MistralConfig(OpenAIGPTConfig):
             if (
                 param == "thinking"
                 and "reasoning_effort" not in non_default_params
-                and (thinking_effort := _thinking_as_reasoning_effort(value, drop_params=drop_params)) is not None
+                and (thinking_effort := _thinking_as_reasoning_effort(value, model=model, drop_params=drop_params))
+                is not None
             ):
                 optional_params["reasoning_effort"] = _accepted_reasoning_effort(
                     model, thinking_effort, self.custom_llm_provider
@@ -246,13 +250,18 @@ class MistralConfig(OpenAIGPTConfig):
     def _reasoning_level_to_send(
         self, model: str, requested: MistralReasoningEffortParams, drop_params: bool
     ) -> str | None:
-        level, summary = _reasoning_level_and_summary(requested.get("reasoning_effort"))
+        requested_effort: Final = requested.get("reasoning_effort")
+        level, summary = _reasoning_level_and_summary(requested_effort)
         sendable: Final = (
             _accepted_reasoning_effort(model, level, self.custom_llm_provider) if isinstance(level, str) else None
         )
         if sendable is not None and summary is None:
             return sendable
         if drop_params or litellm.drop_params is True:
+            if sendable is None and level is not None:
+                warn_dropped_reasoning(
+                    "reasoning_effort", requested_effort, model, _NON_LEVEL_EFFORT_REASON, drop_params_gated=True
+                )
             return sendable
         raise UnsupportedParamsError(
             message=(

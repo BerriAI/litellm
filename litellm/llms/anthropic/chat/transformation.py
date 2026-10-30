@@ -48,6 +48,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     place_mid_conversation_system,
     split_leading_system_run,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_non_string_reasoning_effort
 from litellm.llms.base_llm.base_utils import (
     ResponseFormatSchema,
     as_json_object,
@@ -1951,6 +1952,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if isinstance(effort_value, dict):
                     effort_value = effort_value.get("effort")
                 if not isinstance(effort_value, str):
+                    warn_non_string_reasoning_effort(OPAQUE_VALUE.validate_python(value), model)
                     continue
                 mapped_thinking = AnthropicConfig._map_reasoning_effort(
                     reasoning_effort=effort_value,

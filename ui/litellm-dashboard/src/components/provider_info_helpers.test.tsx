@@ -32,6 +32,18 @@ describe("provider_info_helpers", () => {
     expect(getPlaceholder(Providers.BIGMODEL)).toMatch(/^bigmodel\//);
   });
 
+  it("resolves ai& metadata, name, logo and model placeholder", () => {
+    const metadata = PROVIDER_CREATE_FIELDS.find((provider) => provider.provider === "AIAND");
+    expect(provider_map.AIAND).toBe(metadata?.litellm_provider);
+    expect(getProviderLogoAndName("aiand")).toEqual({
+      displayName: "ai&",
+      logo: providerLogoMap[Providers.AIAND],
+    });
+    expect(getProviderLogoAndName("AIAND")).toEqual(getProviderLogoAndName("aiand"));
+    expect(providerLogoMap[Providers.AIAND]).toContain("aiand");
+    expect(getPlaceholder(Providers.AIAND)).toBe("aiand/openai/gpt-oss-120b");
+  });
+
   it("maps Microsoft 365 Copilot to its chat model provider and placeholder", () => {
     expect(provider_map.MICROSOFT_365_COPILOT).toBe("microsoft_365_copilot");
     expect(getPlaceholder(Providers.MICROSOFT_365_COPILOT)).toBe("microsoft_365_copilot/chat");

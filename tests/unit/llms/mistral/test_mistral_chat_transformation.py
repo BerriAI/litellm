@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import Mapping
 from typing import Final, List, cast
 from unittest.mock import MagicMock, patch
@@ -9,6 +10,7 @@ import pytest
 import respx
 from openai import AsyncOpenAI
 
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.llms.mistral.chat.transformation import (
     MistralChatResponseIterator,
@@ -1013,7 +1015,10 @@ def test_mistral_sends_only_the_text_items_of_a_native_thinking_chunk_beside_an_
                 "content": [
                     {
                         "type": "thinking",
-                        "thinking": [{"type": "text", "text": "It has whiskers."}, {"type": "reference", "reference_ids": [1]}],
+                        "thinking": [
+                            {"type": "text", "text": "It has whiskers."},
+                            {"type": "reference", "reference_ids": [1]},
+                        ],
                     },
                     {"type": "text", "text": "A cat."},
                 ],
@@ -1471,6 +1476,102 @@ def test_mistral_transform_request_drops_an_empty_tool_message_whose_call_id_is_
     )
 
     assert [m.get("role") for m in request["messages"]] == ["user", "assistant"]
+
+
+def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and f"Dropping {param}=" in r.getMessage()
+    )
+
+
+@pytest.mark.parametrize(
+    "param, value, sent",
+    (
+        ("reasoning_effort", "none", "none"),
+        ("reasoning_effort", "xhigh", "high"),
+        ("thinking", {"type": "disabled"}, "none"),
+        ("thinking", {"type": "enabled", "budget_tokens": 1024}, "high"),
+    ),
+)
+def test_magistral_reasoning_request_is_sent_as_a_level_without_a_drop_warning(
+    local_model_cost_map: None, param: str, value: object, sent: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = MistralConfig().map_openai_params(
+            non_default_params={param: value},
+            optional_params={},
+            model="magistral-medium-latest",
+            drop_params=False,
+        )
+
+    assert result["reasoning_effort"] == sent
+    assert _warnings_naming(caplog, param) == ()
+
+
+def test_magistral_thinking_budget_dropped_under_drop_params_warns_once_naming_the_model(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = MistralConfig().map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": "lots"}},
+            optional_params={},
+            model="magistral-small-latest",
+            drop_params=True,
+        )
+
+    warnings: Final = _warnings_naming(caplog, "thinking.budget_tokens")
+    assert "reasoning_effort" not in result
+    assert len(warnings) == 1
+    assert "model='magistral-small-latest'" in warnings[0]
+
+
+def test_non_magistral_reasoning_effort_is_sent_without_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = MistralConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model="mistral-medium-latest",
+            drop_params=False,
+        )
+
+    assert result["reasoning_effort"] == "high"
+    assert _warnings_naming(caplog, "reasoning_effort") == ()
+
+
+@pytest.mark.parametrize("reasoning_effort", [5, {"effort": 5}, {"effort": 5, "summary": "auto"}])
+def test_mistral_warns_once_when_drop_params_drops_a_level_it_cannot_send(
+    caplog: pytest.LogCaptureFixture, reasoning_effort: object
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result: Final = MistralConfig().map_openai_params(
+            non_default_params={"reasoning_effort": reasoning_effort},
+            optional_params={},
+            model="mistral-medium-latest",
+            drop_params=True,
+        )
+
+    assert "reasoning_effort" not in result
+    warnings: Final = _warnings_naming(caplog, "reasoning_effort")
+    assert len(warnings) == 1
+    assert "model='mistral-medium-latest'" in warnings[0]
+    assert "(drop_params=True)" in warnings[0]
+
+
+@pytest.mark.parametrize("reasoning_effort", [{"summary": "auto"}, {"effort": "high", "summary": "auto"}])
+def test_mistral_stays_quiet_under_drop_params_when_no_level_is_lost(
+    caplog: pytest.LogCaptureFixture, reasoning_effort: object
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        MistralConfig().map_openai_params(
+            non_default_params={"reasoning_effort": reasoning_effort},
+            optional_params={},
+            model="mistral-medium-latest",
+            drop_params=True,
+        )
+
+    assert _warnings_naming(caplog, "reasoning_effort") == ()
 
 
 @pytest.mark.parametrize(
