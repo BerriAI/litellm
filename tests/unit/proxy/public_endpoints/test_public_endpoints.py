@@ -590,7 +590,6 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "libertai",
         "litellm_agent",
         "manus",
-        "meta",
         "modelscope",
         "mongodb",
         "nano-gpt",
