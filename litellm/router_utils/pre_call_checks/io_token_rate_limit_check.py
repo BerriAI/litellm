@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 from collections.abc import Mapping, MutableMapping
+from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
@@ -24,7 +25,7 @@ from litellm import token_counter
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 from litellm.litellm_core_utils.internal_call_metadata import (
     IO_TOKEN_RESERVATION_KEYS,
     ITPM_CACHE_KEY,
@@ -47,13 +48,22 @@ else:
 
 RoutingArgsTTL: Final = 60
 
-_io_token_rate_limit_request_kwargs: Final[contextvars.ContextVar[dict[str, object] | None]] = contextvars.ContextVar(
-    "io_token_rate_limit_request_kwargs",
+
+@dataclass(frozen=True, slots=True)
+class _IoTokenRateLimitRequest:
+    kwargs: dict[str, object] | None
+    opens_responses_socket: bool
+
+
+_io_token_rate_limit_request: Final[contextvars.ContextVar[_IoTokenRateLimitRequest | None]] = contextvars.ContextVar(
+    "io_token_rate_limit_request",
     default=None,
 )
 
 
-def set_io_token_rate_limit_request_kwargs(kwargs: dict[str, object] | None, store_in_context: bool = True) -> None:
+def set_io_token_rate_limit_request_kwargs(
+    kwargs: dict[str, object] | None, store_in_context: bool = True, *, opens_responses_socket: bool = False
+) -> None:
     # The reservation sentinels are server-only, but `metadata` is caller
     # controlled on proxy requests. Strip any client-supplied copies here (this
     # runs before the router stashes its own reservation) so a forged
@@ -67,11 +77,14 @@ def set_io_token_rate_limit_request_kwargs(kwargs: dict[str, object] | None, sto
     # every other deployment overwrite the slot with None instead of the
     # kwargs; overwriting (rather than skipping) also releases a previous
     # request's kwargs when a context is reused.
-    _io_token_rate_limit_request_kwargs.set(kwargs if store_in_context else None)
+    _io_token_rate_limit_request.set(
+        _IoTokenRateLimitRequest(kwargs, opens_responses_socket) if store_in_context else None
+    )
 
 
 def get_io_token_rate_limit_request_kwargs() -> dict[str, object] | None:
-    return _io_token_rate_limit_request_kwargs.get()
+    request: Final = _io_token_rate_limit_request.get()
+    return None if request is None else request.kwargs
 
 
 def seconds_until_minute_reset() -> int:
@@ -506,8 +519,9 @@ async def async_io_token_pre_call_check(
     if itpm_limit is None and otpm_limit is None:
         return deployment
 
-    request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
-    if request_kwargs is not None and request_kwargs.get("websocket") is not None:
+    request: Final = _io_token_rate_limit_request.get()
+    request_kwargs: Final = None if request is None else request.kwargs
+    if request is not None and request.opens_responses_socket:
         _stash_reservation_in_metadata(
             request_kwargs,
             await async_admit_io_token_turn(dual_cache, deployment, get_utc_datetime(), parent_otel_span),
@@ -574,12 +588,19 @@ async def async_io_token_pre_call_check(
     return deployment
 
 
+async def _async_redis_usage(redis_cache: RedisCache | None, key: str, parent_otel_span: Span | None) -> int | None:
+    if redis_cache is None:
+        return None
+    with contextlib.suppress(RedisCircuitBreakerOpenError):
+        return await redis_cache.async_get_cache(key=key, parent_otel_span=parent_otel_span)
+    return None
+
+
 @with_service_target(ROUTER_USAGE_TARGET)
 async def _async_shared_usage(dual_cache: DualCache, key: str, parent_otel_span: Span | None) -> int | None:
-    redis_cache: Final = dual_cache.redis_cache
-    if redis_cache is not None:
-        with contextlib.suppress(RedisCircuitBreakerOpenError):
-            return await redis_cache.async_get_cache(key=key, parent_otel_span=parent_otel_span)
+    shared: Final = await _async_redis_usage(dual_cache.redis_cache, key, parent_otel_span)
+    if shared is not None:
+        return shared
     return await dual_cache.async_get_cache(key=key, local_only=True)
 
 
@@ -615,6 +636,12 @@ async def async_admit_io_token_turn(
     )
 
 
+def _settle_key(reserved_on: str | None, reserved: int, settled_at: datetime) -> str | None:
+    if reserved_on is None or reserved > 0:
+        return reserved_on
+    return f"{reserved_on.rpartition(':')[0]}:{settled_at.strftime('%H-%M')}"
+
+
 @with_service_target(ROUTER_USAGE_TARGET)
 def io_token_reconcile_success(
     dual_cache: DualCache,
@@ -623,9 +650,12 @@ def io_token_reconcile_success(
 ) -> None:
     request_kwargs: Final[Mapping[str, object] | None] = kwargs
     response: Final[object] = response_obj
-    itpm_reserved, otpm_reserved, itpm_key, otpm_key = _read_reservation_from_kwargs(request_kwargs)
-    if itpm_key is None and otpm_key is None:
+    itpm_reserved, otpm_reserved, itpm_reserved_on, otpm_reserved_on = _read_reservation_from_kwargs(request_kwargs)
+    if itpm_reserved_on is None and otpm_reserved_on is None:
         return
+    settled_at: Final = get_utc_datetime()
+    itpm_key: Final = _settle_key(itpm_reserved_on, itpm_reserved, settled_at)
+    otpm_key: Final = _settle_key(otpm_reserved_on, otpm_reserved, settled_at)
 
     billable_input, completion_tokens, usage_resolved = _resolve_reconcile_usage_tokens(request_kwargs, response)
 
@@ -677,18 +707,20 @@ async def async_io_token_reconcile_success(
 ) -> None:
     request_kwargs: Final[Mapping[str, object] | None] = kwargs
     response: Final[object] = response_obj
-    itpm_reserved, otpm_reserved, itpm_key, otpm_key = _read_reservation_from_kwargs(request_kwargs)
-    if itpm_key is None and otpm_key is None:
+    itpm_reserved, otpm_reserved, itpm_reserved_on, otpm_reserved_on = _read_reservation_from_kwargs(request_kwargs)
+    if itpm_reserved_on is None and otpm_reserved_on is None:
         return
+    # A held reservation settles on the exact key that holds it (which encodes
+    # the reservation's minute), so its refund lands on the counter it raised.
+    # A zero reservation holds nothing, so its actual tokens count on the minute
+    # the call finishes. Always clear the stash afterwards (even if an increment
+    # throws) so a retry or a duplicate success event can't re-process it.
+    settled_at: Final = get_utc_datetime()
+    itpm_key: Final = _settle_key(itpm_reserved_on, itpm_reserved, settled_at)
+    otpm_key: Final = _settle_key(otpm_reserved_on, otpm_reserved, settled_at)
 
     billable_input, completion_tokens, usage_resolved = _resolve_reconcile_usage_tokens(request_kwargs, response)
 
-    # Reconcile against the exact key that held the reservation (which encodes
-    # the reservation's minute), not a key recomputed at response time. This
-    # tracks actual usage even when the pre-call estimate was 0, and avoids a
-    # minute-boundary mismatch for calls that span into the next minute. Always
-    # clear the stash afterwards (even if an increment throws) so a retry or a
-    # duplicate success event can't re-process it.
     try:
         if usage_resolved:
             if itpm_key is not None:

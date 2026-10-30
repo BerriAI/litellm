@@ -5111,6 +5111,7 @@ class Router(DeprecatedRouterMembers):
         kwargs: dict,
         function_name: str | None = None,
         splits_stream_timeout: bool = False,
+        opens_responses_socket: bool = False,
     ) -> None:
         """
         5 jobs:
@@ -5200,7 +5201,11 @@ class Router(DeprecatedRouterMembers):
         # here before it's wiped below, instead of relying on that attempt's
         # (possibly still-pending) failure event to do it.
         refund_stale_reservation_before_retry(self._core_cache, kwargs)
-        set_io_token_rate_limit_request_kwargs(kwargs, store_in_context=deployment_has_io_token_limits(deployment))
+        set_io_token_rate_limit_request_kwargs(
+            kwargs,
+            store_in_context=deployment_has_io_token_limits(deployment),
+            opens_responses_socket=opens_responses_socket,
+        )
 
         kwargs[metadata_variable_name].setdefault(
             ROUTING_REQUEST_TAGS_METADATA_KEY,
@@ -6607,6 +6612,7 @@ class Router(DeprecatedRouterMembers):
                 kwargs=kwargs,
                 function_name=function_name,
                 splits_stream_timeout=handler_name in _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
+                opens_responses_socket=handler_name == "_aresponses_websocket",
             )
 
             data: Final = deployment["litellm_params"].copy()

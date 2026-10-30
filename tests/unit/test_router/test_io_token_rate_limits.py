@@ -1149,6 +1149,13 @@ def _turn_key(kind: str, minute: str = "12-34") -> str:
     return f"global_router:ws-turn-{kind}:openai/gpt-5-mini:{kind}:{minute}"
 
 
+@pytest.fixture
+def settled_on_the_turn_s_minute(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "litellm.router_utils.pre_call_checks.io_token_rate_limit_check.get_utc_datetime", lambda: _TURN_AT
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["itpm", "otpm"])
 @pytest.mark.parametrize("used", [100, 101, 250])
@@ -1161,6 +1168,7 @@ async def test_turn_admission_refuses_once_the_minutes_tokens_reach_the_limit(ki
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("settled_on_the_turn_s_minute")
 @pytest.mark.parametrize("kind", ["itpm", "otpm"])
 @pytest.mark.parametrize("used", [0, 1, 99])
 async def test_an_admitted_turn_reserves_nothing_and_counts_its_actual_tokens(kind: str, used: int) -> None:
@@ -1194,18 +1202,16 @@ async def test_a_turn_without_io_token_counters_is_admitted_with_nothing_to_sett
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("settled_on_the_turn_s_minute")
 @pytest.mark.parametrize("kind", ["itpm", "otpm"])
 @pytest.mark.parametrize("used_by_others", [0, 1, 99])
 async def test_a_socket_open_reserves_nothing_and_its_first_turn_counts_its_actual_tokens_on_its_own_minute(
-    kind: str, used_by_others: int, monkeypatch: pytest.MonkeyPatch
+    kind: str, used_by_others: int
 ) -> None:
-    monkeypatch.setattr(
-        "litellm.router_utils.pre_call_checks.io_token_rate_limit_check.get_utc_datetime", lambda: _TURN_AT
-    )
     dual_cache: Final = DualCache()
     await dual_cache.async_increment_cache(key=_turn_key(kind), value=used_by_others, ttl=60)
-    socket_open: Final[dict[str, object]] = {"websocket": object(), "metadata": {}}
-    set_io_token_rate_limit_request_kwargs(socket_open)
+    socket_open: Final[dict[str, object]] = {"metadata": {}}
+    set_io_token_rate_limit_request_kwargs(socket_open, opens_responses_socket=True)
 
     assert await async_io_token_pre_call_check(dual_cache, _turn_deployment(kind)) == _turn_deployment(kind)
     assert await dual_cache.async_get_cache(key=_turn_key(kind)) == used_by_others
@@ -1228,6 +1234,51 @@ def shared_redis() -> Iterator[RedisCache]:
     finally:
         server.shutdown()
         server.server_close()
+
+
+@pytest.fixture
+def unreachable_redis() -> RedisCache:
+    server: Final = TcpFakeServer(("127.0.0.1", 0), server_type="redis")
+    server.server_close()
+    return RedisCache(host="127.0.0.1", port=server.server_address[1])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["itpm", "otpm"])
+async def test_a_turn_is_refused_on_this_instance_s_count_when_reading_the_shared_counter_fails(
+    kind: str, unreachable_redis: RedisCache
+) -> None:
+    dual_cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=unreachable_redis)
+    await dual_cache.in_memory_cache.async_increment(key=_turn_key(kind), value=100)
+
+    with pytest.raises(litellm.RateLimitError, match=f"{kind.upper()} limit=100, current usage=100"):
+        await async_admit_io_token_turn(dual_cache, _turn_deployment(kind), _TURN_AT)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["itpm", "otpm"])
+@pytest.mark.parametrize("delivery", ["async", "sync"])
+async def test_a_turn_finishing_in_the_next_minute_counts_its_actual_tokens_on_that_minute(
+    kind: str, delivery: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "litellm.router_utils.pre_call_checks.io_token_rate_limit_check.get_utc_datetime",
+        lambda: datetime(2026, 1, 1, 12, 35, 10, tzinfo=timezone.utc),
+    )
+    dual_cache: Final = DualCache()
+    reservation: Final = await async_admit_io_token_turn(dual_cache, _turn_deployment(kind), _TURN_AT)
+
+    await _deliver_success(
+        ModelRateLimitingCheck(dual_cache=dual_cache),
+        delivery,
+        _proxy_success_kwargs(reservation),
+        _reply_using(_ACTUAL_TOKENS["itpm"], _ACTUAL_TOKENS["otpm"]),
+    )
+
+    assert [await dual_cache.async_get_cache(key=_turn_key(kind, minute)) for minute in ("12-34", "12-35")] == [
+        None,
+        _ACTUAL_TOKENS[kind],
+    ]
 
 
 @pytest.mark.asyncio
@@ -1275,6 +1326,7 @@ async def test_a_turn_is_admitted_once_the_shared_counter_drops_below_the_limit_
         ),
     ],
 )
+@pytest.mark.usefixtures("settled_on_the_turn_s_minute")
 async def test_a_turn_counts_only_its_uncached_responses_input_toward_itpm(responses_reply: object) -> None:
     dual_cache: Final = DualCache()
     await dual_cache.async_increment_cache(key=_turn_key("itpm"), value=10, ttl=60)

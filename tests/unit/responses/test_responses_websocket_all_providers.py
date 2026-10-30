@@ -1701,6 +1701,12 @@ async def _socket_opened_on(dual_cache: "DualCache") -> Mapping[str, object]:
     return await async_admit_io_token_turn(dual_cache, _WS_DEPLOYMENT, _OPENED_AT)
 
 
+def _turns_finish_at(monkeypatch: pytest.MonkeyPatch, finished_at: datetime) -> None:
+    monkeypatch.setattr(
+        "litellm.router_utils.pre_call_checks.io_token_rate_limit_check.get_utc_datetime", lambda: finished_at
+    )
+
+
 def _later_turns_admitted_through(dual_cache: "DualCache") -> "ResponsesWsTurnAdmission":
     from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_admit_io_token_turn
 
@@ -1929,8 +1935,8 @@ class TestWebSocketTurnAdmission:
             pytest.param(_UPSTREAM_ERROR, 0, id="first_turn_failed"),
         ],
     )
-    async def test_native_relay_counts_the_first_turn_on_the_minute_it_opened_and_each_later_turn_on_its_own(
-        self, first_turn_end: str, first_turn_tokens: int
+    async def test_native_relay_counts_every_turn_on_the_minute_it_finishes(
+        self, first_turn_end: str, first_turn_tokens: int, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
 
@@ -1938,6 +1944,7 @@ class TestWebSocketTurnAdmission:
         from litellm.responses.streaming_iterator import drain_logging_tasks
         from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 
+        _turns_finish_at(monkeypatch, _TURNED_AT)
         dual_cache: Final = DualCache()
         opened_with: Final = await _socket_opened_on(dual_cache)
         first, second, third = _turn_frames()
@@ -1959,8 +1966,11 @@ class TestWebSocketTurnAdmission:
         await handler.backend_to_client()
         await drain_logging_tasks()
 
-        assert await dual_cache.async_get_cache(key=_OPENED_ON) == _OTHER_USAGE + first_turn_tokens
-        assert await dual_cache.async_get_cache(key=_TURNED_ON) == _OTHER_USAGE + 2 * _OUTPUT_TOKENS_PER_TURN
+        assert await dual_cache.async_get_cache(key=_OPENED_ON) == _OTHER_USAGE
+        assert (
+            await dual_cache.async_get_cache(key=_TURNED_ON)
+            == _OTHER_USAGE + first_turn_tokens + 2 * _OUTPUT_TOKENS_PER_TURN
+        )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1971,7 +1981,7 @@ class TestWebSocketTurnAdmission:
         ],
     )
     async def test_native_relay_leaves_a_turn_s_cached_input_out_of_the_deployment_s_itpm(
-        self, cached_tokens: int, counted_input_tokens: int
+        self, cached_tokens: int, counted_input_tokens: int, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
 
@@ -1980,6 +1990,7 @@ class TestWebSocketTurnAdmission:
         from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_admit_io_token_turn
         from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 
+        _turns_finish_at(monkeypatch, _OPENED_AT)
         dual_cache: Final = DualCache()
         opened_with: Final = await async_admit_io_token_turn(dual_cache, _ITPM_DEPLOYMENT, _OPENED_AT)
         first, _, _ = _turn_frames()
@@ -2008,12 +2019,13 @@ class TestWebSocketTurnAdmission:
             pytest.param(frozenset({1}), 0, id="first_turn_failed"),
         ],
     )
-    async def test_managed_relay_counts_the_first_turn_on_the_minute_it_opened_and_each_later_turn_on_its_own(
+    async def test_managed_relay_counts_every_turn_on_the_minute_it_finishes(
         self, monkeypatch: pytest.MonkeyPatch, failing_turns: frozenset[int], first_turn_tokens: int
     ) -> None:
         from litellm.caching.dual_cache import DualCache
         from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 
+        _turns_finish_at(monkeypatch, _TURNED_AT)
         dual_cache: Final = DualCache()
         opened_with: Final = await _socket_opened_on(dual_cache)
 
@@ -2026,8 +2038,11 @@ class TestWebSocketTurnAdmission:
             opened_with,
         )
 
-        assert await dual_cache.async_get_cache(key=_OPENED_ON) == _OTHER_USAGE + first_turn_tokens
-        assert await dual_cache.async_get_cache(key=_TURNED_ON) == _OTHER_USAGE + 2 * _OUTPUT_TOKENS_PER_TURN
+        assert await dual_cache.async_get_cache(key=_OPENED_ON) == _OTHER_USAGE
+        assert (
+            await dual_cache.async_get_cache(key=_TURNED_ON)
+            == _OTHER_USAGE + first_turn_tokens + 2 * _OUTPUT_TOKENS_PER_TURN
+        )
 
     @pytest.mark.asyncio
     async def test_managed_relay_skips_a_later_turn_the_deployment_refuses(self, monkeypatch: pytest.MonkeyPatch):
