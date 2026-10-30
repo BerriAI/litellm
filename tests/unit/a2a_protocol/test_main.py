@@ -1,9 +1,10 @@
 """Tests for litellm/a2a_protocol/main.py non-streaming send behavior."""
 
 import asyncio
+import contextlib
 import datetime
 import json
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import AsyncGenerator, Callable, Coroutine, Iterator, Mapping
 from typing import Final, TypeAlias
 
 import httpx
@@ -1026,28 +1027,149 @@ async def test_agentcore_stream_bills_every_appended_reply_chunk(
     _assert_billed_at_agent_prices(spend, a2a_spend_recorder, _per_token_cost, _LONG_AGENT_REPLY)
 
 
+_PYDANTIC_COMPLETED_TASK: Final[Mapping[str, object]] = {
+    "jsonrpc": "2.0",
+    "id": "bridge-stream",
+    "result": {
+        "kind": "task",
+        "id": "t1",
+        "contextId": "c1",
+        "status": {"state": "completed"},
+        "artifacts": [{"artifactId": "a1", "parts": [{"kind": "text", "text": _LONG_AGENT_REPLY}]}],
+    },
+}
+
+
 @pytest.mark.asyncio
 async def test_pydantic_ai_stream_bills_the_whole_chunked_reply(
     a2a_spend_recorder: _A2ASpendRecorder, respx_reachable_httpx: None
 ) -> None:
-    completed_task: Final = {
-        "jsonrpc": "2.0",
-        "id": "bridge-stream",
-        "result": {
-            "kind": "task",
-            "id": "t1",
-            "contextId": "c1",
-            "status": {"state": "completed"},
-            "artifacts": [{"artifactId": "a1", "parts": [{"kind": "text", "text": _LONG_AGENT_REPLY}]}],
-        },
-    }
     with respx.mock(assert_all_called=True) as router:
-        router.post("http://127.0.0.1:9/").mock(return_value=httpx.Response(200, json=completed_task))
+        router.post("http://127.0.0.1:9/").mock(return_value=httpx.Response(200, json=_PYDANTIC_COMPLETED_TASK))
         await _drain_bridge_stream({"custom_llm_provider": "pydantic_ai_agents", **_PER_TOKEN_PRICES})
 
     spend: Final = await a2a_spend_recorder.logged_spend()
     assert len(_LONG_AGENT_REPLY) > 50
     _assert_billed_at_agent_prices(spend, a2a_spend_recorder, _per_token_cost, _LONG_AGENT_REPLY)
+
+
+async def _close_after_first_event(stream: AsyncGenerator[object, None]) -> None:
+    _ = await stream.__anext__()
+    await stream.aclose()
+
+
+async def _cancel_reader_after_first_event(stream: AsyncGenerator[object, None]) -> None:
+    first_event: Final = asyncio.Event()
+
+    async def _read() -> None:
+        async for _ in stream:
+            first_event.set()
+
+    reader: Final = asyncio.create_task(_read())
+    await first_event.wait()
+    reader.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await reader
+
+
+def _pydantic_bridge_agent_stream() -> AsyncGenerator[object, None]:
+    from litellm.a2a_protocol.main import asend_message_streaming
+
+    return asend_message_streaming(
+        request=SendStreamingMessageRequest(id="bridge-stream", params=_bridge_message_params()),
+        api_base="http://127.0.0.1:9",
+        litellm_params={"custom_llm_provider": "pydantic_ai_agents", "cost_per_query": 0.25},
+        agent_id="agent-1",
+        agent_name="trip-planner",
+    )
+
+
+def _url_agent_stream() -> AsyncGenerator[object, None]:
+    from litellm.a2a_protocol.main import asend_message_streaming
+
+    return asend_message_streaming(
+        request=SendStreamingMessageRequest(id="reply", params=_bridge_message_params()),
+        api_base="http://127.0.0.1:9",
+        litellm_params={"cost_per_query": 0.25},
+        agent_id="agent-1",
+    )
+
+
+@pytest.mark.parametrize(
+    ("open_stream", "billed_model"),
+    (
+        pytest.param(_pydantic_bridge_agent_stream, "a2a_agent/trip-planner", id="bridge_agent"),
+        pytest.param(_url_agent_stream, f"a2a_agent/{_AGENT_CARD['name']}", id="url_agent"),
+    ),
+)
+@pytest.mark.parametrize(
+    "drop_stream",
+    (
+        pytest.param(_close_after_first_event, id="proxy_closes_the_stream"),
+        pytest.param(_cancel_reader_after_first_event, id="reader_cancelled_mid_stream"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_stream_the_client_drops_still_bills_the_agents_price(
+    open_stream: Callable[[], AsyncGenerator[object, None]],
+    billed_model: str,
+    drop_stream: Callable[[AsyncGenerator[object, None]], Coroutine[object, object, None]],
+    a2a_spend_recorder: _A2ASpendRecorder,
+    isolated_client_cache: LLMClientCache,
+    respx_reachable_httpx: None,
+) -> None:
+    _ = await _seed_shared_a2a_client(rpc_stream_events=_LANGGRAPH_STREAM_EVENTS)
+    with respx.mock(assert_all_called=False) as router:
+        router.post("http://127.0.0.1:9/").mock(return_value=httpx.Response(200, json=_PYDANTIC_COMPLETED_TASK))
+        await drop_stream(open_stream())
+
+    spend: Final = await a2a_spend_recorder.logged_spend()
+    assert spend.response_cost == pytest.approx(0.25)
+    assert spend.model == billed_model
+
+
+class _AgentThatNeverAnswers(_RequestRecorder):
+    def __init__(self) -> None:
+        super().__init__()
+        self.message_sent: Final = asyncio.Event()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response | Coroutine[object, object, httpx.Response]:
+        if request.method == "GET":
+            return super().__call__(request)
+        return self._never_answer()
+
+    async def _never_answer(self) -> httpx.Response:
+        self.message_sent.set()
+        reply: Final[asyncio.Future[httpx.Response]] = asyncio.get_running_loop().create_future()
+        return await reply
+
+
+@pytest.mark.asyncio
+async def test_stream_dropped_before_the_agent_answers_bills_nothing(
+    a2a_spend_recorder: _A2ASpendRecorder, isolated_client_cache: LLMClientCache
+) -> None:
+    agent: Final = _AgentThatNeverAnswers()
+    _ = await _seed_shared_a2a_client(recorder=agent)
+    stream: Final = _url_agent_stream()
+    reader: Final = asyncio.create_task(anext(stream))
+    await asyncio.wait_for(agent.message_sent.wait(), timeout=10)
+    reader.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await reader
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(a2a_spend_recorder.logged.wait(), timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_completion_bridge_stream_with_an_empty_reply_bills_no_reply_tokens(
+    a2a_spend_recorder: _A2ASpendRecorder,
+) -> None:
+    await _drain_bridge_stream({**_bridge_agent_params(_PER_TOKEN_PRICES), "mock_response": ""})
+
+    spend: Final = await a2a_spend_recorder.logged_spend()
+    assert spend.completion_tokens == 0
+    assert spend.response_cost == pytest.approx(_per_token_cost(spend.prompt_tokens, 0))
 
 
 @pytest.mark.parametrize(

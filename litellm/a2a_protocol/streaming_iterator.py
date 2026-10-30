@@ -7,12 +7,14 @@ from collections.abc import AsyncIterator, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
+import anyio
 from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
 from litellm.a2a_protocol.utils import A2ARequestUtils
+from litellm.constants import A2A_COMPLETION_BRIDGE_WORKING_MESSAGE
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -91,11 +93,14 @@ class A2AStreamingIterator:
             return chunk
 
         except StopAsyncIteration:
-            # Stream ended - handle logging
-            if self.final_chunk is None and self.chunks:
-                self.final_chunk = self.chunks[-1]
             await self._handle_stream_complete()
             raise
+
+    async def abill_on_disconnect(self) -> None:
+        if not self.chunks:
+            return
+        with anyio.CancelScope(shield=True):
+            await self._handle_stream_complete()
 
     def _collect_text_from_chunk(self, payload: Mapping[str, object]) -> None:
         """Record the reply text a streaming chunk carries."""
@@ -104,6 +109,8 @@ class A2AStreamingIterator:
             if not text:
                 return
             artifact_update: Final = _artifact_update(payload)
+            if artifact_update is None and text == A2A_COMPLETION_BRIDGE_WORKING_MESSAGE:
+                return
             if artifact_update is None:
                 self.latest_message_text = text
                 return
@@ -131,6 +138,8 @@ class A2AStreamingIterator:
 
     async def _handle_stream_complete(self) -> None:
         """Handle logging and token counting when stream completes."""
+        if self.final_chunk is None and self.chunks:
+            self.final_chunk = self.chunks[-1]
         try:
             end_time: Final = datetime.now()
 

@@ -741,13 +741,18 @@ async def asend_message_streaming(
         _set_litellm_params_on_logging_obj(kwargs=kwargs, litellm_params=litellm_params)
         _set_agent_id_on_logging_obj(kwargs=kwargs, agent_id=agent_id)
 
-        async for chunk in A2AStreamingIterator(
+        bridge_iterator: Final = A2AStreamingIterator(
             stream=bridge_stream,
             request=request,
             logging_obj=bridge_logging_obj,
             agent_name=agent_name or "unknown",
-        ):
-            yield chunk
+        )
+        try:
+            async for chunk in bridge_iterator:
+                yield chunk
+        except (GeneratorExit, asyncio.CancelledError):
+            await bridge_iterator.abill_on_disconnect()
+            raise
         return
 
     if request is None:
@@ -805,13 +810,18 @@ async def asend_message_streaming(
 
     _set_agent_id_on_logging_obj(kwargs=kwargs, agent_id=agent_id)
 
-    async for chunk in A2AStreamingIterator(
+    url_agent_iterator: Final = A2AStreamingIterator(
         stream=stream,
         request=request,
         logging_obj=logging_obj,
         agent_name=card_agent_name,
-    ):
-        yield chunk
+    )
+    try:
+        async for chunk in url_agent_iterator:
+            yield chunk
+    except (GeneratorExit, asyncio.CancelledError):
+        await url_agent_iterator.abill_on_disconnect()
+        raise
 
 
 async def create_a2a_client(
