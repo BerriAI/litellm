@@ -916,7 +916,9 @@ def _openai_reply_asking_for_another_search_until_enough_results(request: httpx.
             "object": "chat.completion",
             "created": 0,
             "model": "gpt-5.6",
-            "choices": [{"index": 0, "message": message, "finish_reason": "tool_calls" if "tool_calls" in message else "stop"}],
+            "choices": [
+                {"index": 0, "message": message, "finish_reason": "tool_calls" if "tool_calls" in message else "stop"}
+            ],
             "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
         },
     )
@@ -1023,3 +1025,30 @@ async def test_openai_chat_completion_bridged_to_the_responses_api_stops_searchi
     assert responses_route.call_count == loops_allowed + 1
     assert perplexity_search.call_count == loops_allowed
     assert all("_agentic_loop_api_surface" not in json.loads(call.request.content) for call in responses_route.calls)
+
+
+@pytest.mark.asyncio
+async def test_responses_pinned_openai_chat_completion_keeps_its_search_follow_ups_on_the_responses_api(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    responses_route: Final = respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(
+        side_effect=_responses_reply_asking_for_another_search_until_enough_results
+    )
+    chat_route: Final = respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/chat/completions").respond(404)
+
+    response = await litellm.acompletion(
+        model="openai/responses/responses-only-model",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        tools=[{"type": "web_search"}],
+        api_key="sk-test",
+        api_base=OPENAI_COMPATIBLE_API_BASE,
+        max_agentic_loops=SEARCHES_THE_MODEL_ASKS_FOR,
+    )
+
+    assert chat_route.call_count == 0
+    assert responses_route.call_count == SEARCHES_THE_MODEL_ASKS_FOR + 1
+    assert response.choices[0].message.content == "Argentina won the 2022 World Cup."

@@ -65,6 +65,7 @@ from litellm.router_utils.reasoning_effort_capability import (
     model_group_from_metadata,
     resolve_deployment_reasoning_effort,
 )
+from litellm.types.integrations.custom_logger import CHAT_COMPLETION_AGENTIC_SURFACE
 from litellm.types.llms.openai import (
     PromptObject,
     Reasoning,
@@ -1132,6 +1133,14 @@ def _resolve_prompt_swapped_provider(
     )
 
 
+def _record_model_for_the_responses_agentic_loop(
+    logging_obj: LiteLLMLoggingObj, model: str, request_kwargs: Mapping[str, object]
+) -> None:
+    if request_kwargs.get("_agentic_loop_api_surface") == CHAT_COMPLETION_AGENTIC_SURFACE:
+        return
+    logging_obj.record_agentic_loop_params(AgenticLoopParams(model=model))
+
+
 def _apply_prompt_management_to_responses_call(
     input: str | ResponseInputParam,
     tools: Iterable[ToolParam] | None,
@@ -1574,7 +1583,8 @@ def responses(
             local_vars=local_vars,
             use_chat_completions_api=use_chat_completions_api,
         )
-        litellm_logging_obj.record_agentic_loop_params(AgenticLoopParams(model=model))
+        request_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
+        _record_model_for_the_responses_agentic_loop(litellm_logging_obj, model, request_kwargs)
 
         from litellm.litellm_core_utils.core_helpers import attribute_or_none
 
@@ -1699,7 +1709,6 @@ def responses(
             if current_reasoning is None and reasoning_effort is not None
             else current_reasoning
         )
-        routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
         deployment_reasoning: Final = cast(  # cast-ok: the resolver hands a Reasoning back in the shape it was given
             Reasoning | None,
             resolve_deployment_reasoning_effort(
@@ -1707,9 +1716,9 @@ def responses(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 deployment_model_info=deployment_model_info,
-                model_group=model_group_from_metadata(routing_kwargs.get("litellm_metadata")),
+                model_group=model_group_from_metadata(request_kwargs.get("litellm_metadata")),
                 drop_params=litellm.drop_params is True
-                or normalize_drop_params(routing_kwargs.get("drop_params")) is True,
+                or normalize_drop_params(request_kwargs.get("drop_params")) is True,
             ).value,
         )
         response_api_optional_params: Final[ResponsesAPIOptionalRequestParams] = (
