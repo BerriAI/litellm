@@ -6,6 +6,7 @@ from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from openai.types.file_deleted import FileDeleted
 
 from litellm._logging import verbose_logger
+from litellm.llms.openai.common_utils import client_for_non_idempotent_request
 from litellm.types.llms.openai import *
 
 from ..common_utils import BaseAzureLLM
@@ -46,7 +47,9 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         openai_client: AsyncAzureOpenAI | AsyncOpenAI,
     ) -> OpenAIFileObject:
         verbose_logger.debug("create_file_data=%s", create_file_data)
-        response = await openai_client.files.create(**self._prepare_create_file_data(create_file_data))
+        response: Final = await client_for_non_idempotent_request(openai_client).files.create(
+            **self._prepare_create_file_data(create_file_data)
+        )
         verbose_logger.debug("create_file_response=%s", response)
         return OpenAIFileObject.model_validate(response.model_dump())
 
@@ -81,7 +84,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
                     "AzureOpenAI client is not an instance of AsyncAzureOpenAI. Make sure you passed an AsyncAzureOpenAI client."
                 )
             return self.acreate_file(create_file_data=create_file_data, openai_client=openai_client)
-        response: Final = cast(AzureOpenAI | OpenAI, openai_client).files.create(
+        response: Final = client_for_non_idempotent_request(cast(AzureOpenAI | OpenAI, openai_client)).files.create(
             **self._prepare_create_file_data(create_file_data)
         )
         return OpenAIFileObject.model_validate(response.model_dump())

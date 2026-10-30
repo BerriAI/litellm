@@ -1,8 +1,10 @@
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+import openai
 import pytest
 import respx
 from pydantic import ValidationError
@@ -187,3 +189,36 @@ async def test_openai_file_operations_roundtrip(respx_mock: respx.MockRouter, mo
     assert delete_route.call_count == 1
     assert deleted.id == "file-abc123"
     assert deleted.deleted is True
+
+
+async def _create_file(sync_mode: bool, upload: Mapping[str, object]) -> OpenAIFileObject:
+    if sync_mode:
+        return litellm.create_file(**upload)
+    return await litellm.acreate_file(**upload)
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+async def test_a_file_upload_that_times_out_is_sent_to_the_provider_once(
+    custom_llm_provider: str, sync_mode: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    api_base: Final = f"https://{custom_llm_provider}-{'sync' if sync_mode else 'async'}-upload.test"
+    upload_route: Final = respx_mock.post(url__startswith=api_base).mock(
+        side_effect=httpx.ReadTimeout("the provider answered after the caller's timeout")
+    )
+    upload: Final = MappingProxyType(
+        {
+            "file": ("batch.jsonl", b'{"custom_id": "1"}\n', "application/jsonl"),
+            "purpose": "batch",
+            "custom_llm_provider": custom_llm_provider,
+            "api_key": "sk-test",
+            "api_base": api_base,
+            "api_version": "2025-04-01-preview",
+        }
+    )
+
+    with pytest.raises(openai.APITimeoutError):
+        await _create_file(sync_mode, upload)
+
+    assert upload_route.call_count == 1

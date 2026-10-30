@@ -630,6 +630,7 @@ CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET: Final = "claude_code_session_router_b
 
 _PRE_CALL_CHECK_FILTERED_PARAMS: Final = frozenset({"response_format"})
 _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS: Final = frozenset({"anthropic_messages", "aresponses", "responses"})
+_NON_IDEMPOTENT_CREATE_FUNCTIONS: Final = frozenset({"_acreate_file", "_acreate_batch"})
 _video_call_deployment_id: Final[ContextVar[str | None]] = ContextVar("video_call_deployment_id", default=None)
 _routed_call_type: Final[ContextVar[str | None]] = ContextVar("routed_call_type", default=None)
 _ROUTE_CAPABILITY_RESOLVERS: Final[Mapping[str, Callable[[str, LlmProviders], object | None]]] = MappingProxyType(
@@ -692,6 +693,13 @@ def _extend_trailing_text_block(blocks: Sequence[Mapping[str, object]], text: st
     if last is not None and last.get("type") == "text" and isinstance(last_text := last.get("text"), str):
         return [*blocks[:-1], {**last, "text": f"{last_text}{text}"}]
     return [*blocks, {"type": "text", "text": text}]
+
+
+def _is_timed_out_create(original_function: object, error: Exception) -> bool:
+    return (
+        isinstance(error, openai.APITimeoutError)
+        and getattr(original_function, "__name__", None) in _NON_IDEMPOTENT_CREATE_FUNCTIONS
+    )
 
 
 def _is_fallback_hop(request_kwargs: Mapping[str, object]) -> bool:
@@ -8900,6 +8908,7 @@ class Router(DeprecatedRouterMembers):
             or original_model_group is None
             or is_guardrail_intervention(e)
             or unsupported_params_without_fallback
+            or _is_timed_out_create(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("original_function"), e)
         ):
             raise e
 
@@ -9324,7 +9333,9 @@ class Router(DeprecatedRouterMembers):
             response = add_retry_headers_to_response(response=response, attempted_retries=0, max_retries=None)
             return response
         except Exception as e:
-            if is_guardrail_intervention(e):
+            if is_guardrail_intervention(e) or _is_timed_out_create(
+                _OPAQUE_VALUE_ADAPTER.validate_python(original_function), e
+            ):
                 raise
             current_attempt = None
             original_exception = e

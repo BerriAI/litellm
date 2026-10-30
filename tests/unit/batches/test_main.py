@@ -40,10 +40,12 @@ import json
 from collections.abc import Mapping
 from typing import Final
 import httpx
+import openai
 import respx
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import LiteLLMBatch
 
 
 # --------------------------------------------------------------------------- #
@@ -1204,3 +1206,37 @@ async def test_delete_batch_output_file(respx_mock: respx.MockRouter, monkeypatc
     assert delete_route.call_count == 1
     assert delete_response.id == "file-output123"
     assert delete_response.deleted is True
+
+
+async def _create_batch(sync_mode: bool, batch: Mapping[str, object]) -> LiteLLMBatch:
+    if sync_mode:
+        return litellm.create_batch(**batch)
+    return await litellm.acreate_batch(**batch)
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+async def test_a_batch_create_that_times_out_is_sent_to_the_provider_once(
+    custom_llm_provider: str, sync_mode: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    api_base: Final = f"https://{custom_llm_provider}-{'sync' if sync_mode else 'async'}-batch.test"
+    create_route: Final = respx_mock.post(url__startswith=api_base).mock(
+        side_effect=httpx.ReadTimeout("the provider answered after the caller's timeout")
+    )
+    batch: Final = MappingProxyType(
+        {
+            "completion_window": "24h",
+            "endpoint": "/v1/chat/completions",
+            "input_file_id": "file-abc123",
+            "custom_llm_provider": custom_llm_provider,
+            "api_key": "sk-test",
+            "api_base": api_base,
+            "api_version": "2025-04-01-preview",
+        }
+    )
+
+    with pytest.raises(openai.APITimeoutError):
+        await _create_batch(sync_mode, batch)
+
+    assert create_route.call_count == 1

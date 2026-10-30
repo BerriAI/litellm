@@ -12,7 +12,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import suppress
-from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Optional, Protocol
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Optional, Protocol, TypeVar
 from urllib.parse import urlsplit
 
 import httpx
@@ -52,6 +52,12 @@ _AZURE_OPENAI_INIT_PARAMS: Final[tuple[str, ...]] = _get_client_init_params(Azur
 
 
 _OPENAI_API_HOST: Final[str] = "api.openai.com"
+
+_SDKClientT = TypeVar("_SDKClientT", bound=OpenAI | AsyncOpenAI)
+
+
+def client_for_non_idempotent_request(client: _SDKClientT) -> _SDKClientT:
+    return client.with_options(max_retries=0)
 
 
 class _ModelDumpable(Protocol):

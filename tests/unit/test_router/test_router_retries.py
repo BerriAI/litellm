@@ -988,3 +988,59 @@ timeout_error = litellm.Timeout(
     model="gpt-12",
     llm_provider="azure",
 )
+
+
+@pytest.mark.parametrize(
+    "num_retries, orders",
+    [(2, (1,)), (0, (1, 2))],
+    ids=["retries", "order-fallback"],
+)
+@pytest.mark.parametrize("create", ["batch", "file"])
+async def test_a_create_that_times_out_is_neither_retried_nor_sent_to_a_fallback(
+    create: str,
+    num_retries: int,
+    orders: tuple[int, ...],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    api_base: Final = f"https://router-{create}-{len(orders)}-create.test"
+    create_route: Final = respx_mock.post(url__startswith=api_base).mock(
+        side_effect=httpx.ReadTimeout("the provider answered after the caller's timeout")
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "batch-primary",
+                "litellm_params": {
+                    "model": f"azure/gpt-batch-{order}",
+                    "api_base": api_base,
+                    "api_key": "sk-test",
+                    "api_version": "2025-04-01-preview",
+                    "order": order,
+                },
+            }
+            for order in orders
+        ],
+        num_retries=num_retries,
+    )
+
+    pending_create: Final = (
+        router.acreate_batch(
+            model="batch-primary",
+            completion_window="24h",
+            endpoint="/v1/chat/completions",
+            input_file_id="file-abc123",
+        )
+        if create == "batch"
+        else router.acreate_file(
+            model="batch-primary",
+            file=("batch.jsonl", b'{"custom_id": "1", "body": {"model": "gpt-batch"}}\n', "application/jsonl"),
+            purpose="batch",
+        )
+    )
+
+    with pytest.raises(openai.APITimeoutError):
+        await pending_create
+
+    assert create_route.call_count == 1

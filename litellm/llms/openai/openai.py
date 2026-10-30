@@ -60,6 +60,7 @@ from .common_utils import (
     BaseOpenAILLM,
     OpenAIError,
     build_output_token_limit_response,
+    client_for_non_idempotent_request,
     drop_params_from_unprocessable_entity_error,
     is_openai_backed_api_base,
     is_output_token_limit_error,
@@ -1856,7 +1857,7 @@ class OpenAIFilesAPI(BaseLLM):
         create_file_data: CreateFileRequest,
         openai_client: AsyncOpenAI,
     ) -> OpenAIFileObject:
-        response: Final = await openai_client.files.create(**create_file_data)
+        response: Final = await client_for_non_idempotent_request(openai_client).files.create(**create_file_data)
         return OpenAIFileObject.model_validate(response.model_dump())
 
     def create_file(
@@ -1892,7 +1893,9 @@ class OpenAIFilesAPI(BaseLLM):
                     "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
                 )
             return self.acreate_file(create_file_data=create_file_data, openai_client=openai_client)
-        response: Final = cast(OpenAI, openai_client).files.create(**create_file_data)
+        response: Final = client_for_non_idempotent_request(cast(OpenAI, openai_client)).files.create(
+            **create_file_data
+        )
         return OpenAIFileObject.model_validate(response.model_dump())
 
     async def afile_content(
@@ -2227,7 +2230,7 @@ class OpenAIBatchesAPI(BaseLLM):
         create_batch_data: CreateBatchRequest,
         openai_client: AsyncOpenAI,
     ) -> LiteLLMBatch:
-        response: Final = await openai_client.batches.create(**create_batch_data)
+        response: Final = await client_for_non_idempotent_request(openai_client).batches.create(**create_batch_data)
         return LiteLLMBatch.model_validate(response.model_dump())
 
     def create_batch(
@@ -2263,7 +2266,9 @@ class OpenAIBatchesAPI(BaseLLM):
                     "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
                 )
             return self.acreate_batch(create_batch_data=create_batch_data, openai_client=openai_client)
-        response: Final = cast(OpenAI, openai_client).batches.create(**create_batch_data)
+        response: Final = client_for_non_idempotent_request(cast(OpenAI, openai_client)).batches.create(
+            **create_batch_data
+        )
 
         return LiteLLMBatch.model_validate(response.model_dump())
 

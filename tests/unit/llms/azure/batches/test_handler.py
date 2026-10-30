@@ -74,7 +74,9 @@ def _sdk_response(batch_dict: dict) -> MagicMock:
 
 def _sync_client() -> MagicMock:
     """A sync Azure client (passes ``isinstance(.., AzureOpenAI)``)."""
-    return MagicMock(spec=AzureOpenAI)
+    client = MagicMock(spec=AzureOpenAI)
+    client.with_options.return_value = client
+    return client
 
 
 def _async_client() -> MagicMock:
@@ -88,6 +90,7 @@ def _async_client() -> MagicMock:
     client.batches.retrieve = AsyncMock()
     client.batches.cancel = AsyncMock()
     client.batches.list = AsyncMock()
+    client.with_options.return_value = client
     return client
 
 
@@ -465,6 +468,7 @@ async def test_alist_batches_returns_raw_response(handler):
 
 def test_create_sync_accepts_plain_openai_client(handler):
     client = MagicMock(spec=OpenAI)
+    client.with_options.return_value = client
     client.batches.create.return_value = _sdk_response(_batch_dict())
 
     with patch(GET_CLIENT, return_value=client):
@@ -478,6 +482,7 @@ def test_create_sync_accepts_plain_openai_client(handler):
 @pytest.mark.asyncio
 async def test_create_async_accepts_plain_async_openai_client(handler):
     client = MagicMock(spec=AsyncOpenAI)
+    client.with_options.return_value = client
     client.batches.create = AsyncMock(return_value=_sdk_response(_batch_dict()))
 
     with patch(GET_CLIENT, return_value=client):
