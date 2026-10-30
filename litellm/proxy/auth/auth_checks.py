@@ -937,52 +937,57 @@ _GUARDRAIL_MODIFICATION_KEYS: Final[tuple] = (
 )
 
 
-def _guardrail_modification_check(request_body: Mapping[str, object], team_object: LiteLLM_TeamTable | None) -> None:
+def requests_guardrail_modification(request_body: Mapping[str, object]) -> bool:
+    """Whether a request body sets the plural ``guardrails`` list or a per-request toggle that influences whether
+    default-on guardrails run (``disable_global_guardrails``, ``disable_global_guardrail`` singular, and
+    ``opted_out_global_guardrails``), at the top level or in either metadata key"""
+    return (
+        _requests_guardrail_modification_in(request_body.get("metadata"))
+        or _requests_guardrail_modification_in(request_body.get("litellm_metadata"))
+        or _requests_guardrail_modification_in(request_body)
+    )
+
+
+def _requests_guardrail_modification_in(container: object) -> bool:
+    coerced: Final = _guardrail_container_as_dict(container)
+    if coerced is None:
+        return False
+    return any(key in coerced for key in _GUARDRAIL_MODIFICATION_KEYS)
+
+
+def _guardrail_container_as_dict(container: object) -> Mapping[str, object] | None:
+    """Accept dict or JSON-string (from multipart/form-data or extra_body).
+
+    Without this, an attacker can smuggle guardrail keys past the check by
+    sending ``{"metadata": "{\\"disable_global_guardrails\\": true}"}`` —
+    ``isinstance(dict)`` on the string returns False, the check returns
+    no-modification, and ``add_litellm_data_to_request`` parses the string
+    to a dict downstream.
+    """
+    if isinstance(container, Mapping):
+        return container
+    if isinstance(container, str):
+        parsed: Final = _safe_json_loads_obj(container)
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def guardrail_modification_check(request_body: Mapping[str, object], team_object: LiteLLM_TeamTable | None) -> None:
     """
     Reject user-supplied metadata flags that would modify guardrail behavior
-    unless the team has explicit permission. Checked keys include the plural
-    ``guardrails`` list plus the per-request toggles that influence whether
-    default-on guardrails run (``disable_global_guardrails``,
-    ``disable_global_guardrail`` singular, and ``opted_out_global_guardrails``).
+    unless the team has explicit permission.
 
     User-supplied values for the bypass toggles are also silently ignored by
     ``_get_admin_metadata`` at read time; this check adds defense in depth by
     failing loudly at the auth layer so operators see an explicit 403 instead
     of a confusing silent-ignore.
     """
+    if requests_guardrail_modification(request_body):
+        require_guardrail_modification_permission(team_object)
+
+
+def require_guardrail_modification_permission(team_object: LiteLLM_TeamTable | None) -> None:
     from litellm.proxy.guardrails.guardrail_helpers import can_modify_guardrails
-
-    def _coerce_to_dict(container: object) -> dict | None:
-        """Accept dict or JSON-string (from multipart/form-data or extra_body).
-
-        Without this, an attacker can smuggle guardrail keys past the check by
-        sending ``{"metadata": "{\\"disable_global_guardrails\\": true}"}`` —
-        ``isinstance(dict)`` on the string returns False, the check returns
-        no-modification, and ``add_litellm_data_to_request`` parses the string
-        to a dict downstream.
-        """
-        if isinstance(container, dict):
-            return container
-        if isinstance(container, str):
-            parsed: Final = _safe_json_loads_obj(container)
-            return parsed if isinstance(parsed, dict) else None
-        return None
-
-    def _user_requested_modification(container: object) -> bool:
-        coerced: Final = _coerce_to_dict(container)
-        if coerced is None:
-            return False
-        return any(key in coerced for key in _GUARDRAIL_MODIFICATION_KEYS)
-
-    # Check both metadata keys — callers can populate either depending on the
-    # endpoint. Cover the top-level too so root-level injection is rejected.
-    modifies: Final = (
-        _user_requested_modification(request_body.get("metadata"))
-        or _user_requested_modification(request_body.get("litellm_metadata"))
-        or _user_requested_modification(request_body)
-    )
-    if not modifies:
-        return
 
     if not can_modify_guardrails(team_object):
         raise HTTPException(
@@ -1485,7 +1490,7 @@ async def common_checks(
 
     _enforce_user_param_check(general_settings, request, request_body, route)
     _global_proxy_budget_check(global_proxy_spend, skip_all_budget_checks, route)
-    _guardrail_modification_check(_typed_request_body(request_body), team_object)
+    guardrail_modification_check(_typed_request_body(request_body), team_object)
 
     # 10 [OPTIONAL] Organization RBAC checks
     organization_role_based_access_check(user_object=user_object, route=route, request_body=request_body)
