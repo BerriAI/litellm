@@ -6,8 +6,10 @@ from collections.abc import Iterable
 from unittest.mock import patch
 
 import pytest
+import fakeredis
 from redis.asyncio import Redis
 
+import litellm
 import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
 from litellm._internal_context import current_service_target
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -20,6 +22,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     publish_auth_cache_invalidation,
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
+from tests._support.fake_redis import fake_redis_cache
 
 
 class _RecordingRedisClient(Redis):
@@ -29,6 +32,9 @@ class _RecordingRedisClient(Redis):
     async def publish(self, channel: str, message: str) -> int:
         self.published.append((channel, message))
         return 1
+
+    async def ping(self) -> bool:
+        return True
 
 
 class _WedgedPublishRedisClient(Redis):
@@ -46,6 +52,9 @@ class _WedgedPublishRedisClient(Redis):
         self.in_flight -= 1
         return 1
 
+    async def ping(self) -> bool:
+        return True
+
 
 class _SlowPublishRedisClient(Redis):
     def __init__(self) -> None:
@@ -55,6 +64,9 @@ class _SlowPublishRedisClient(Redis):
         await asyncio.sleep(0.001)
         self.published.append(message)
         return 1
+
+    async def ping(self) -> bool:
+        return True
 
 
 class _Pipeline:
@@ -66,14 +78,22 @@ class _Pipeline:
         self._messages.append(message)
         return self
 
-    async def execute(self) -> None:
+    async def execute(self) -> tuple[int, ...]:
         await self._client.send(tuple(self._messages))
+        return tuple(1 for _ in self._messages)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
 
 
 class _PipelinedRedisClient:
     def __init__(self, wedged: bool = False) -> None:
         self.published: list[str] = []
         self.round_trips = 0
+        self.transactions = []
         self.release = asyncio.Event()
         if not wedged:
             self.release.set()
@@ -84,7 +104,11 @@ class _PipelinedRedisClient:
         self.published.extend(messages)
 
     def pipeline(self, transaction: bool = True) -> _Pipeline:
+        self.transactions.append(transaction)
         return _Pipeline(self)
+
+    async def ping(self) -> bool:
+        return True
 
 
 class _FailingPublishRedisClient(Redis):
@@ -94,6 +118,9 @@ class _FailingPublishRedisClient(Redis):
     async def publish(self, channel: str, message: str) -> int:
         raise ConnectionError("redis down")
 
+    async def ping(self) -> bool:
+        return True
+
 
 class _TargetRecordingRedisClient(Redis):
     def __init__(self) -> None:
@@ -102,6 +129,9 @@ class _TargetRecordingRedisClient(Redis):
     async def publish(self, channel: str, message: str) -> int:
         self.targets.append(current_service_target())
         return 1
+
+    async def ping(self) -> bool:
+        return True
 
 
 class _QueuePubSub:
@@ -127,6 +157,9 @@ class _QueuePubSub:
     async def aclose(self) -> None:
         self.closed = True
 
+    async def reset(self) -> None:
+        await self.aclose()
+
 
 class _ScriptedPubSubRedisClient(Redis):
     def __init__(self, pubsubs: Iterable[_QueuePubSub]) -> None:
@@ -135,18 +168,22 @@ class _ScriptedPubSubRedisClient(Redis):
     def pubsub(self) -> _QueuePubSub:
         return next(self._scripted_pubsubs)
 
+    async def ping(self) -> bool:
+        return True
 
-class _FakeRedisCache:
-    def __init__(self, client: object, namespace: str | None = None) -> None:
-        self._client = client
-        self.namespace = namespace
 
-    def init_pubsub_client(self) -> object:
-        return self._client
+def _FakeRedisCache(client: object, namespace: str | None = None):
+    cache = fake_redis_cache(fakeredis.FakeServer(), namespace=namespace)
+    litellm.in_memory_llm_clients_cache.set_cache(key=cache._get_async_client_cache_key(), value=client)
+    return cache
 
 
 def _invalidation_message(cache_key: str) -> dict:
-    return {"type": "message", "data": json.dumps({"cache_key": cache_key}).encode()}
+    return {
+        "type": "message",
+        "channel": AUTH_CACHE_INVALIDATION_CHANNEL.encode(),
+        "data": json.dumps({"cache_key": cache_key}).encode(),
+    }
 
 
 @pytest.mark.asyncio
@@ -351,6 +388,7 @@ async def test_broadcast_evictions_tells_redis_every_key_past_the_pending_publis
 
     assert [json.loads(message)["cache_key"] for message in client.published] == list(cache_keys)
     assert client.round_trips == 1
+    assert client.transactions == [False]
 
 
 @pytest.mark.asyncio
@@ -389,3 +427,62 @@ async def test_evict_and_broadcast_publishes_under_the_auth_objects_service_targ
         await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
 
     assert client.targets == [AUTH_OBJECTS_TARGET, AUTH_OBJECTS_TARGET]
+
+
+@pytest.mark.asyncio
+async def test_pending_publish_bound_drops_excess_without_replaying_after_recovery(monkeypatch):
+    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
+    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
+    monkeypatch.setattr(pubsub_module, "_MAX_PENDING_PUBLISHES", 2)
+    client = _WedgedPublishRedisClient()
+    with patch.object(pubsub_module, "coordination_redis_cache", return_value=_FakeRedisCache(client)):
+        await publish_auth_cache_invalidation("first")
+        await publish_auth_cache_invalidation("second")
+        await publish_auth_cache_invalidation("dropped")
+        assert client.attempted == [json.dumps({"cache_key": key}) for key in ("first", "second")]
+        client.release.set()
+        await asyncio.gather(*pubsub_module._pending_publishes)
+    assert client.attempted == [json.dumps({"cache_key": key}) for key in ("first", "second")]
+
+
+@pytest.mark.asyncio
+async def test_failed_subscription_is_closed_before_reconnect(monkeypatch):
+    class RejectedPubSub(_QueuePubSub):
+        async def subscribe(self, *channels):
+            await super().subscribe(*channels)
+            raise ConnectionError("subscribe failed")
+
+    first = RejectedPubSub()
+    second = _QueuePubSub([_invalidation_message("project_id:one")])
+    cache = UserApiKeyCache()
+    cache.in_memory_cache.set_cache("project_id:one", "cached")
+    monkeypatch.setattr(pubsub_module, "_BACKOFF_INITIAL_SECONDS", 0)
+    subscriber = AuthCacheInvalidationSubscriber(_FakeRedisCache(_ScriptedPubSubRedisClient((first, second))), cache)
+    subscriber.start()
+    try:
+        await asyncio.wait_for(second.drained.wait(), timeout=2)
+        assert first.closed
+        assert cache.in_memory_cache.get_cache("project_id:one") is None
+    finally:
+        await subscriber.stop()
+    assert second.closed
+
+
+@pytest.mark.asyncio
+async def test_cancelling_pending_subscription_closes_it():
+    entered = asyncio.Event()
+
+    class PendingPubSub(_QueuePubSub):
+        async def subscribe(self, *channels):
+            await super().subscribe(*channels)
+            entered.set()
+            await asyncio.Event().wait()
+
+    pubsub = PendingPubSub()
+    subscriber = AuthCacheInvalidationSubscriber(
+        _FakeRedisCache(_ScriptedPubSubRedisClient((pubsub,))), UserApiKeyCache()
+    )
+    subscriber.start()
+    await asyncio.wait_for(entered.wait(), timeout=2)
+    await subscriber.stop()
+    assert pubsub.closed

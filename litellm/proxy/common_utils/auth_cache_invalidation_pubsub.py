@@ -1,23 +1,24 @@
 import asyncio
-import json
-from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
-from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
-
-from pydantic import TypeAdapter
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.proxy.common_utils.config_sync_pubsub import (  # noqa: F401  # legacy module exports
-    ConfigSyncPubSub,
-    _ConfigSyncPubSub,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    _pubsub_capable_client,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    coordination_redis_cache,
-    pubsub_capable_client,
-)
+from litellm.proxy.common_utils import config_sync_pubsub
+from litellm.proxy.common_utils.config_sync_pubsub import coordination_redis_cache
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
+from litellm.redis.stores import auth_invalidation
+from litellm.redis.stores.auth_invalidation import (
+    AuthInvalidation,
+    AuthInvalidationStore,
+    AuthInvalidationSubscription,
+    TransportAuthInvalidationStore,
+    auth_invalidation_channel,
+    decode_auth_message,
+    encode_auth_invalidation,
+    finite_number_or_none,
+)
+from litellm.redis.transport.contract import RedisFailure
 
 if TYPE_CHECKING:
     from litellm.caching.dual_cache import DualCache
@@ -25,7 +26,7 @@ if TYPE_CHECKING:
     from litellm.caching.redis_cache import RedisCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
-AUTH_CACHE_INVALIDATION_CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
+AUTH_CACHE_INVALIDATION_CHANNEL: Final = auth_invalidation.AUTH_CACHE_INVALIDATION_CHANNEL
 _POLL_TIMEOUT_SECONDS: Final = 1.0
 _MAX_PENDING_PUBLISHES: Final = 1024
 _MAX_IN_FLIGHT_PUBLISHES: Final = 16
@@ -34,74 +35,39 @@ _pending_publishes: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: strong
 _in_flight_publishes: Final = asyncio.Semaphore(_MAX_IN_FLIGHT_PUBLISHES)
 _BACKOFF_INITIAL_SECONDS: Final = 5.0
 _BACKOFF_MAX_SECONDS: Final = 60.0
-_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def auth_cache_invalidation_channel(redis_cache: "RedisCache") -> str:
-    if redis_cache.namespace is None:
-        return AUTH_CACHE_INVALIDATION_CHANNEL
-    return f"{redis_cache.namespace}:{AUTH_CACHE_INVALIDATION_CHANNEL}"
+    return auth_invalidation_channel(redis_cache.namespace)
 
 
-@dataclass(frozen=True, slots=True)
-class _CacheInvalidationMessage:
-    cache_key: str
-    new_value: float | None = None
-    ttl: float | None = None
+_CacheInvalidationMessage: TypeAlias = AuthInvalidation
+ConfigSyncPubSub: TypeAlias = config_sync_pubsub.ConfigSyncPubSub
+_ConfigSyncPubSub: TypeAlias = ConfigSyncPubSub
+pubsub_capable_client: Final = config_sync_pubsub.pubsub_capable_client
+_pubsub_capable_client: Final = pubsub_capable_client
+_cache_invalidation_message_json: Final = encode_auth_invalidation
+_finite_number_or_none: Final = finite_number_or_none
 
 
-def _cache_invalidation_message_json(cache_key: str, new_value: float | None = None, ttl: float | None = None) -> str:
-    message: Final[Mapping[str, object]] = MappingProxyType(
-        asdict(_CacheInvalidationMessage(cache_key=cache_key, new_value=new_value, ttl=ttl))
-    )
-    return json.dumps({field: value for field, value in message.items() if value is not None})
+def _invalidation_store(redis_cache: "RedisCache") -> AuthInvalidationStore:
+    return TransportAuthInvalidationStore(redis_cache.transport(), empty_namespace=redis_cache.namespace == "")
 
 
-def _finite_number_or_none(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    return float(value)
-
-
-def _message_from_data(data: object) -> _CacheInvalidationMessage | None:
-    if isinstance(data, bytes):
-        data = data.decode("utf-8", errors="replace")  # rebind-ok: normalizing the wire payload to str
-    if not isinstance(data, str):
-        return None
+async def _publish_to_redis(
+    redis_cache: "RedisCache", cache_key: str, new_value: float | None, ttl: float | None
+) -> None:
     try:
-        parsed: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(data)))
-    except json.JSONDecodeError:
-        return None
-    if parsed is None:
-        return None
-    cache_key: Final = parsed.get("cache_key")
-    if not isinstance(cache_key, str):
-        return None
-    return _CacheInvalidationMessage(
-        cache_key=cache_key,
-        new_value=_finite_number_or_none(parsed.get("new_value")),
-        ttl=_finite_number_or_none(parsed.get("ttl")),
-    )
-
-
-async def _publish_to_redis(redis_cache: "RedisCache", cache_key: str, message: str) -> None:
-    try:
-        client: Final = pubsub_capable_client(redis_cache)
         async with _in_flight_publishes:
-            await client.publish(auth_cache_invalidation_channel(redis_cache), message)
+            _ = await _invalidation_store(redis_cache).publish_change(cache_key, new_value=new_value, ttl=ttl)
     except Exception as e:  # noqa: BLE001  # best-effort publish; mutations must never fail on redis errors
         verbose_proxy_logger.warning("auth cache invalidation publish for %s failed: %s", cache_key, e)
 
 
 async def _publish_batch_to_redis(redis_cache: "RedisCache", cache_keys: tuple[str, ...]) -> None:
     try:
-        client: Final = pubsub_capable_client(redis_cache)
-        channel: Final = auth_cache_invalidation_channel(redis_cache)
-        pipeline: Final = client.pipeline(transaction=False)
-        for cache_key in cache_keys:
-            _ = pipeline.publish(channel, _cache_invalidation_message_json(cache_key))
         async with _in_flight_publishes:
-            _ = await pipeline.execute()
+            _ = await _invalidation_store(redis_cache).publish_evictions(cache_keys)
     except Exception as e:  # noqa: BLE001  # best-effort publish; mutations must never fail on redis errors
         verbose_proxy_logger.warning("auth cache invalidation publish for %d keys failed: %s", len(cache_keys), e)
 
@@ -144,11 +110,7 @@ async def publish_auth_cache_invalidation(
     redis_cache: Final = coordination_redis_cache()
     if redis_cache is None or not _has_room_for_publish(1):
         return
-    task: Final = asyncio.create_task(
-        _publish_to_redis(
-            redis_cache, cache_key, _cache_invalidation_message_json(cache_key, new_value=new_value, ttl=ttl)
-        )
-    )
+    task: Final = asyncio.create_task(_publish_to_redis(redis_cache, cache_key, new_value=new_value, ttl=ttl))
     _pending_publishes.add(task)
     await asyncio.sleep(0)
 
@@ -265,10 +227,10 @@ class AuthCacheInvalidationSubscriber:
         backoff_seconds = _BACKOFF_INITIAL_SECONDS  # rebind-ok: exponential backoff accumulator across reconnects
         while True:
             try:
-                client = pubsub_capable_client(self._redis_cache)
-                pubsub = client.pubsub()
+                pubsub = await _invalidation_store(self._redis_cache).subscribe()
+                if isinstance(pubsub, RedisFailure):
+                    raise ConnectionError(pubsub.message)
                 try:
-                    await pubsub.subscribe(auth_cache_invalidation_channel(self._redis_cache))
                     backoff_seconds = _BACKOFF_INITIAL_SECONDS
                     await self._consume(pubsub)
                 finally:
@@ -284,18 +246,21 @@ class AuthCacheInvalidationSubscriber:
                 await asyncio.sleep(backoff_seconds)
                 backoff_seconds = min(backoff_seconds * 2, _BACKOFF_MAX_SECONDS)
 
-    async def _consume(self, pubsub: ConfigSyncPubSub) -> None:
+    async def _consume(self, pubsub: AuthInvalidationSubscription) -> None:
         while True:
-            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=_POLL_TIMEOUT_SECONDS)
+            message = await pubsub.receive(timeout=_POLL_TIMEOUT_SECONDS)
             if message is None:
                 continue
+            if isinstance(message, RedisFailure):
+                if message.kind == "decode":
+                    continue
+                raise ConnectionError(message.message)
             self._apply_message(message)
 
     @with_service_target(AUTH_OBJECTS_TARGET)
     def _apply_message(self, message: object) -> None:
-        data: Final = message.get("data") if isinstance(message, dict) else None
-        parsed: Final = _message_from_data(data)
-        if parsed is None:
+        parsed: Final = decode_auth_message(message)
+        if isinstance(parsed, RedisFailure):
             return
         if parsed.new_value is not None:
             for additional_cache in self._additional_in_memory_caches:
@@ -306,8 +271,8 @@ class AuthCacheInvalidationSubscriber:
             additional_cache.delete_cache(parsed.cache_key)
 
     @staticmethod
-    async def _close_pubsub(pubsub: ConfigSyncPubSub) -> None:
+    async def _close_pubsub(pubsub: AuthInvalidationSubscription) -> None:
         try:
-            await pubsub.aclose()
+            _ = await pubsub.close()
         except Exception as e:  # noqa: BLE001  # best-effort close of a possibly-broken connection
             verbose_proxy_logger.debug("auth cache invalidation pubsub close failed: %s", e)
