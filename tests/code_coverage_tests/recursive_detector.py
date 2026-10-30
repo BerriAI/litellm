@@ -86,6 +86,7 @@ IGNORE_FUNCTIONS = [
     "scrub_json_strings",  # max depth set (MAX_SCRUB_DEPTH); fails closed by returning "[Filtered]" for anything nested past the cap.
     "_without_requester_ip_address",  # walks only the fresh tree _sanitize_request_body_for_spend_logs_payload returns (mapping cycles already cut), so it never goes deeper than that sanitizer did.
     "_without_additional_properties",  # bounded by the nesting depth of a pydantic-validated JsonValue response_format (a finite JSON tree, no cycles possible).
+    "_merge_session_fields",  # max depth set (_SESSION_MERGE_MAX_DEPTH); deeper mappings are replaced wholesale by the later session.update.
 ]
 
 

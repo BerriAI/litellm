@@ -420,6 +420,8 @@ REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = get_env_float(
     "REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS", 20.0
 )
 BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS: Final = get_env_float("BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS", 5.0)
+REALTIME_LAZY_SETUP_DEADLINE_SECONDS: Final = 240.0
+REALTIME_LAZY_SETUP_CONTENT_GRACE_SECONDS: Final = 1.0
 
 # RFC 6455 caps the close frame payload at 125 bytes, 2 of which carry the status code
 WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
@@ -1277,7 +1279,7 @@ empower_models: Final = set(
     ]
 )
 
-together_ai_models: Final[set] = set(
+together_ai_models: Final[set[str]] = set(
     [
         # llama llms - chat
         "togethercomputer/llama-2-70b-chat",
