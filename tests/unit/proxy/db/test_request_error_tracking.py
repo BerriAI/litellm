@@ -3,11 +3,21 @@ import json
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import fakeredis
 import pytest
+from redis.exceptions import ConnectionError
 
-from litellm.constants import MAX_REDIS_BUFFER_DEQUEUE_COUNT, REQUEST_ERRORS_MAX_ROWS_PER_UPSERT
+from litellm.caching.redis_cache import RedisCache, RedisCircuitBreaker
+from litellm.constants import (
+    MAX_REDIS_BUFFER_DEQUEUE_COUNT,
+    REDIS_REQUEST_ERRORS_BUFFER_KEY,
+    REQUEST_ERRORS_MAX_ROWS_PER_UPSERT,
+)
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.request_error_tracking import (
+    REQUEST_ERRORS_JOB_NAME,
     RequestErrorAccumulator,
+    RequestErrorCommitCancelled,
     RequestErrorRedisBuffer,
     build_request_errors_upsert,
     commit_request_errors_to_db,
@@ -15,7 +25,43 @@ from litellm.proxy.db.request_error_tracking import (
     fold_counts,
     status_code_from_metadata,
 )
+from litellm.redis.transport.redis_py import RedisPyTransport
 from litellm.types.proxy.request_errors import RequestErrorKey
+from tests._support.fake_redis import fake_redis_cache
+
+
+async def _request_error_cache(
+    server: fakeredis.FakeServer, namespace: str | None = None
+) -> tuple[RedisCache, fakeredis.FakeAsyncRedis]:
+    cache: Final = fake_redis_cache(server, namespace=namespace)
+    cache.redis_version = "7.0.0"
+    assert await cache.transport().ping() is True
+    raw: Final = cache.redis_async_client
+    assert isinstance(raw, fakeredis.FakeAsyncRedis)
+    return cache, raw
+
+
+def _buffer(cache: RedisCache) -> RequestErrorRedisBuffer:
+    return RequestErrorRedisBuffer(redis_cache=cache, pod_lock_manager=PodLockManager(cache))
+
+
+def _breaker(cache: RedisCache) -> RedisCircuitBreaker:
+    transport: Final = cache.transport()
+    assert isinstance(transport, RedisPyTransport)
+    return transport.breaker
+
+
+def _encoded_error(count: int = 1) -> bytes:
+    return json.dumps((("2026-10-08", "hash-1", "team-a", "user-a", "gpt-4o", 429, count),)).encode()
+
+
+async def _cancel_when_empty(reply: object) -> object:
+    if not reply:
+        task: Final = asyncio.current_task()
+        assert task is not None
+        task.cancel()
+        await asyncio.sleep(0)
+    return reply
 
 
 def _key(status_code: int = 429, api_key: str = "hash-1", date: str = "2026-10-08") -> RequestErrorKey:
@@ -212,25 +258,10 @@ async def test_cancelled_commit_restores_only_the_unwritten_chunks_and_propagate
 
 @pytest.mark.asyncio
 async def test_cancelled_leader_commit_requeues_the_unwritten_chunks_to_redis() -> None:
-    redis_cache: Final = MagicMock()
-    stored: Final[list[str]] = []  # mutable-ok: stands in for the Redis list
-
-    async def rpush(key: str, values: tuple[str, ...]) -> int:
-        stored.extend(values)
-        return len(stored)
-
-    async def lpop(key: str, count: int) -> list[str]:
-        popped: Final = stored[:count]
-        del stored[:count]
-        return popped
-
-    redis_cache.async_rpush = AsyncMock(side_effect=rpush)
-    redis_cache.async_lpop = AsyncMock(side_effect=lpop)
-    pod_lock_manager: Final = MagicMock()
-    pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    redis_cache, raw = await _request_error_cache(fakeredis.FakeServer())
     prisma_client: Final = MagicMock()
     prisma_client.db.execute_raw = AsyncMock(side_effect=(None, asyncio.CancelledError()))
-    buffer: Final = RequestErrorRedisBuffer(redis_cache=redis_cache, pod_lock_manager=pod_lock_manager)
+    buffer: Final = _buffer(redis_cache)
     accumulator: Final = RequestErrorAccumulator()
     accumulator.restore(
         {_key(api_key=f"hash-{index:05d}"): 1 for index in range(REQUEST_ERRORS_MAX_ROWS_PER_UPSERT + 1)}
@@ -242,29 +273,21 @@ async def test_cancelled_leader_commit_requeues_the_unwritten_chunks_to_redis() 
     assert accumulator.drain() == {}
     assert await buffer.pop() == {_key(api_key=f"hash-{REQUEST_ERRORS_MAX_ROWS_PER_UPSERT:05d}"): 1}
     assert prisma_client.db.execute_raw.await_count == 2
+    assert await raw.llen(REDIS_REQUEST_ERRORS_BUFFER_KEY) == 0
 
 
 @pytest.mark.asyncio
 async def test_cancelled_leader_commit_keeps_rows_in_memory_when_redis_refuses_them() -> None:
-    redis_cache: Final = MagicMock()
-    stored: Final[list[str]] = []  # mutable-ok: stands in for the Redis list
+    server: Final = fakeredis.FakeServer()
+    redis_cache, raw = await _request_error_cache(server)
 
-    async def rpush_once(key: str, values: tuple[str, ...]) -> int:
-        if stored:
-            raise RuntimeError("redis down")
-        stored.extend(values)
-        return len(stored)
+    async def cancelled_commit(*args: object) -> None:
+        server.connected = False
+        raise asyncio.CancelledError()
 
-    async def lpop(key: str, count: int) -> list[str]:
-        return list(stored)
-
-    redis_cache.async_rpush = AsyncMock(side_effect=rpush_once)
-    redis_cache.async_lpop = AsyncMock(side_effect=lpop)
-    pod_lock_manager: Final = MagicMock()
-    pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
     prisma_client: Final = MagicMock()
-    prisma_client.db.execute_raw = AsyncMock(side_effect=asyncio.CancelledError())
-    buffer: Final = RequestErrorRedisBuffer(redis_cache=redis_cache, pod_lock_manager=pod_lock_manager)
+    prisma_client.db.execute_raw = AsyncMock(side_effect=cancelled_commit)
+    buffer: Final = _buffer(redis_cache)
     accumulator: Final = RequestErrorAccumulator()
     accumulator.restore({_key(429): 2})
 
@@ -272,38 +295,35 @@ async def test_cancelled_leader_commit_keeps_rows_in_memory_when_redis_refuses_t
         await flush_request_errors(prisma_client, accumulator, buffer)
 
     assert accumulator.drain() == {_key(429): 2}
+    server.connected = True
+    assert await raw.llen(REDIS_REQUEST_ERRORS_BUFFER_KEY) == 0
 
 
 @pytest.mark.asyncio
 async def test_cancelled_drain_puts_the_popped_entries_back_in_redis() -> None:
-    redis_cache: Final = MagicMock()
-    entry: Final = json.dumps([["2026-10-08", "hash-1", "team-a", "user-a", "gpt-4o", 429, 1]])
-    stored: Final[list[str]] = [entry] * MAX_REDIS_BUFFER_DEQUEUE_COUNT  # mutable-ok: stands in for the Redis list
-
-    async def lpop(key: str, count: int) -> list[str]:
-        if not stored:
-            raise asyncio.CancelledError()
-        popped: Final = stored[:count]
-        del stored[:count]
-        return popped
-
-    async def rpush(key: str, values: tuple[str, ...]) -> int:
-        stored.extend(values)
-        return len(stored)
-
-    redis_cache.async_lpop = AsyncMock(side_effect=lpop)
-    redis_cache.async_rpush = AsyncMock(side_effect=rpush)
-    pod_lock_manager: Final = MagicMock()
-    pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    redis_cache, raw = await _request_error_cache(fakeredis.FakeServer(), "metrics")
+    key: Final = "metrics:" + REDIS_REQUEST_ERRORS_BUFFER_KEY
+    entry: Final = b'[["2026-10-08", "hash-1", "team-a", "user-a", "gpt-4o", 429, 1]]\n'
+    entries: Final = (entry,) * (MAX_REDIS_BUFFER_DEQUEUE_COUNT - 1) + (b"\xffnot json",)
+    await raw.rpush(key, *entries)
+    raw.set_response_callback("LPOP", _cancel_when_empty)
     prisma_client: Final = MagicMock()
     prisma_client.db.execute_raw = AsyncMock()
-    buffer: Final = RequestErrorRedisBuffer(redis_cache=redis_cache, pod_lock_manager=pod_lock_manager)
+    buffer: Final = _buffer(redis_cache)
     accumulator: Final = RequestErrorAccumulator()
 
-    with pytest.raises(asyncio.CancelledError):
-        await flush_request_errors(prisma_client, accumulator, buffer)
+    def restored_in_shield(reply: object) -> object:
+        assert asyncio.current_task() is not drain_task
+        return reply
 
-    assert len(stored) == MAX_REDIS_BUFFER_DEQUEUE_COUNT
+    raw.set_response_callback("RPUSH", restored_in_shield)
+    drain_task: Final = asyncio.create_task(flush_request_errors(prisma_client, accumulator, buffer))
+
+    with pytest.raises(asyncio.CancelledError):
+        await drain_task
+
+    assert tuple(await raw.lrange(key, 0, -1)) == entries
+    assert await raw.pttl(key) == -1
     prisma_client.db.execute_raw.assert_not_awaited()
     assert accumulator.drain() == {}
 
@@ -318,25 +338,10 @@ async def test_flush_skips_the_database_when_nothing_failed() -> None:
 
 @pytest.mark.asyncio
 async def test_redis_buffer_round_trips_and_leader_commits() -> None:
-    redis_cache: Final = MagicMock()
-    stored: Final[list[str]] = []  # mutable-ok: stands in for the Redis list
-
-    async def rpush(key: str, values: tuple[str, ...]) -> int:
-        stored.extend(values)
-        return len(stored)
-
-    async def lpop(key: str, count: int) -> list[str]:
-        popped: Final = stored[:count]
-        del stored[:count]
-        return popped
-
-    redis_cache.async_rpush = AsyncMock(side_effect=rpush)
-    redis_cache.async_lpop = AsyncMock(side_effect=lpop)
-    pod_lock_manager: Final = MagicMock()
-    pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    redis_cache, raw = await _request_error_cache(fakeredis.FakeServer())
     prisma_client: Final = MagicMock()
     prisma_client.db.execute_raw = AsyncMock()
-    buffer: Final = RequestErrorRedisBuffer(redis_cache=redis_cache, pod_lock_manager=pod_lock_manager)
+    buffer: Final = _buffer(redis_cache)
     accumulator: Final = RequestErrorAccumulator()
     accumulator.record(payload=_payload(), request_status="failure", date="2026-10-08", is_internal_call=False)
 
@@ -347,26 +352,197 @@ async def test_redis_buffer_round_trips_and_leader_commits() -> None:
     assert prisma_client.db.execute_raw.await_args.args[1:] == (
         "2026-10-08", "hash-1", "team-a", "user-a", "gpt-4o", 429, 3,
     )  # fmt: skip
-    assert stored == []
+    assert await raw.llen(REDIS_REQUEST_ERRORS_BUFFER_KEY) == 0
     assert accumulator.drain() == {}
 
 
 @pytest.mark.asyncio
 async def test_redis_buffer_follower_leaves_rows_in_redis() -> None:
-    redis_cache: Final = MagicMock()
-    redis_cache.async_rpush = AsyncMock()
-    redis_cache.async_lpop = AsyncMock()
-    pod_lock_manager: Final = MagicMock()
-    pod_lock_manager.acquire_lock = AsyncMock(return_value=False)
+    redis_cache, raw = await _request_error_cache(fakeredis.FakeServer())
+    leader: Final = PodLockManager(redis_cache)
+    assert await leader.acquire_lock(REQUEST_ERRORS_JOB_NAME)
     prisma_client: Final = MagicMock()
     prisma_client.db.execute_raw = AsyncMock()
-    buffer: Final = RequestErrorRedisBuffer(redis_cache=redis_cache, pod_lock_manager=pod_lock_manager)
+    buffer: Final = _buffer(redis_cache)
     accumulator: Final = RequestErrorAccumulator()
     accumulator.record(payload=_payload(), request_status="failure", date="2026-10-08", is_internal_call=False)
 
     await flush_request_errors(prisma_client, accumulator, buffer)
 
-    redis_cache.async_rpush.assert_awaited_once()
-    redis_cache.async_lpop.assert_not_awaited()
+    assert await raw.lrange(REDIS_REQUEST_ERRORS_BUFFER_KEY, 0, -1) == [_encoded_error()]
     prisma_client.db.execute_raw.assert_not_awaited()
     assert accumulator.drain() == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("namespace", [None, "metrics"])
+@pytest.mark.parametrize("version", ["6.2.0", "7.0.0"])
+async def test_old_and_new_buffer_codecs_keep_identical_bytes(namespace: str | None, version: str) -> None:
+    cache, raw = await _request_error_cache(fakeredis.FakeServer(), namespace)
+    cache.redis_version = version
+    buffer: Final = _buffer(cache)
+    key: Final = (f"{namespace}:" if namespace else "") + REDIS_REQUEST_ERRORS_BUFFER_KEY
+    snapshot: Final = {_key(api_key="hash-\u00e9\u96ea"): 2}
+    encoded: Final = json.dumps((("2026-10-08", "hash-\u00e9\u96ea", "team-a", "user-a", "gpt-4o", 429, 2),))
+
+    await buffer.push(snapshot)
+
+    assert await raw.lrange(key, 0, -1) == [encoded.encode()]
+    assert await raw.pttl(key) == -1
+    assert await cache.async_lpop(REDIS_REQUEST_ERRORS_BUFFER_KEY, count=1) == [encoded]
+    await cache.async_rpush(REDIS_REQUEST_ERRORS_BUFFER_KEY, (encoded, encoded))
+    assert await buffer.pop() == {_key(api_key="hash-\u00e9\u96ea"): 4}
+    assert await raw.keys("*") == []
+
+
+@pytest.mark.asyncio
+async def test_missing_dimensions_and_unknown_status_are_buffered_unchanged() -> None:
+    cache, raw = await _request_error_cache(fakeredis.FakeServer())
+    accumulator: Final = RequestErrorAccumulator()
+    accumulator.record(payload={}, request_status="failure", date="2026-10-08", is_internal_call=False)
+    buffer: Final = _buffer(cache)
+    snapshot: Final = accumulator.drain()
+
+    await buffer.push(snapshot)
+
+    assert await raw.lrange(REDIS_REQUEST_ERRORS_BUFFER_KEY, 0, -1) == [b'[["2026-10-08", "", "", "", "", 0, 1]]']
+    assert await buffer.pop() == snapshot
+
+
+@pytest.mark.asyncio
+async def test_cancelled_drain_failed_shield_restores_counts_to_caller() -> None:
+    server: Final = fakeredis.FakeServer()
+    cache, raw = await _request_error_cache(server)
+    await raw.rpush(REDIS_REQUEST_ERRORS_BUFFER_KEY, *((_encoded_error(),) * MAX_REDIS_BUFFER_DEQUEUE_COUNT))
+
+    async def disconnect_and_cancel_when_empty(reply: object) -> object:
+        if not reply:
+            server.connected = False
+        return await _cancel_when_empty(reply)
+
+    raw.set_response_callback("LPOP", disconnect_and_cancel_when_empty)
+    accumulator: Final = RequestErrorAccumulator()
+    client: Final = MagicMock()
+    client.db.execute_raw = AsyncMock()
+
+    with pytest.raises(RequestErrorCommitCancelled) as cancelled:
+        await flush_request_errors(client, accumulator, _buffer(cache))
+
+    assert cancelled.value.uncommitted == {_key(): MAX_REDIS_BUFFER_DEQUEUE_COUNT}
+    assert accumulator.drain() == {_key(): MAX_REDIS_BUFFER_DEQUEUE_COUNT}
+    client.db.execute_raw.assert_not_awaited()
+    server.connected = True
+    assert await raw.llen(REDIS_REQUEST_ERRORS_BUFFER_KEY) == 0
+
+
+@pytest.mark.asyncio
+async def test_partial_pop_failure_keeps_drained_counts_and_leaves_unread_entries() -> None:
+    server: Final = fakeredis.FakeServer()
+    cache, raw = await _request_error_cache(server)
+    entry: Final = _encoded_error()
+    await raw.rpush(REDIS_REQUEST_ERRORS_BUFFER_KEY, *((entry,) * (MAX_REDIS_BUFFER_DEQUEUE_COUNT + 1)))
+
+    def disconnect_after_reply(reply: object) -> object:
+        server.connected = False
+        return reply
+
+    raw.set_response_callback("LPOP", disconnect_after_reply)
+    assert await _buffer(cache).pop() == {_key(): MAX_REDIS_BUFFER_DEQUEUE_COUNT}
+    server.connected = True
+    assert await raw.lrange(REDIS_REQUEST_ERRORS_BUFFER_KEY, 0, -1) == [entry]
+
+
+@pytest.mark.asyncio
+async def test_failed_database_acknowledgement_requeues_for_next_flush() -> None:
+    cache, raw = await _request_error_cache(fakeredis.FakeServer())
+    buffer: Final = _buffer(cache)
+    await buffer.push({_key(): 2})
+    client: Final = MagicMock()
+    client.db.execute_raw = AsyncMock(side_effect=RuntimeError("database acknowledgement lost"))
+
+    assert await buffer.commit_if_leader(client) == {}
+    assert await raw.lrange(REDIS_REQUEST_ERRORS_BUFFER_KEY, 0, -1) == [_encoded_error(2)]
+    assert await raw.pttl(REDIS_REQUEST_ERRORS_BUFFER_KEY) == -1
+    client.db.execute_raw = AsyncMock()
+    assert await buffer.commit_if_leader(client) == {}
+    assert client.db.execute_raw.await_args.args[1:] == (
+        "2026-10-08", "hash-1", "team-a", "user-a", "gpt-4o", 429, 2,
+    )  # fmt: skip
+    assert await raw.llen(REDIS_REQUEST_ERRORS_BUFFER_KEY) == 0
+
+
+@pytest.mark.asyncio
+async def test_failed_database_and_requeue_restore_local_counts() -> None:
+    server: Final = fakeredis.FakeServer()
+    cache, raw = await _request_error_cache(server)
+    buffer: Final = _buffer(cache)
+    await buffer.push({_key(): 2})
+
+    async def failed_commit(*args: object) -> None:
+        server.connected = False
+        raise RuntimeError("database acknowledgement lost")
+
+    client: Final = MagicMock()
+    client.db.execute_raw = AsyncMock(side_effect=failed_commit)
+    accumulator: Final = RequestErrorAccumulator()
+    await flush_request_errors(client, accumulator, buffer)
+
+    assert accumulator.drain() == {_key(): 2}
+    server.connected = True
+    assert await raw.llen(REDIS_REQUEST_ERRORS_BUFFER_KEY) == 0
+
+
+@pytest.mark.asyncio
+async def test_outage_and_open_breaker_preserve_local_counts() -> None:
+    server: Final = fakeredis.FakeServer()
+    cache, _ = await _request_error_cache(server)
+    buffer: Final = _buffer(cache)
+    accumulator: Final = RequestErrorAccumulator()
+    accumulator.restore({_key(): 2})
+    server.connected = False
+    client: Final = MagicMock()
+    client.db.execute_raw = AsyncMock()
+
+    for _ in range(_breaker(cache).failure_threshold + 1):
+        await flush_request_errors(client, accumulator, buffer)
+
+    assert accumulator.drain() == {_key(): 2}
+    client.db.execute_raw.assert_not_awaited()
+    assert _breaker(cache).state == "open"
+
+
+@pytest.mark.asyncio
+async def test_unknown_applied_push_preserves_local_retry_policy() -> None:
+    cache, raw = await _request_error_cache(fakeredis.FakeServer())
+    buffer: Final = _buffer(cache)
+    accumulator: Final = RequestErrorAccumulator()
+    accumulator.restore({_key(): 2})
+
+    def lost_acknowledgement(reply: object) -> object:
+        raise ConnectionError("push acknowledgement lost")
+
+    raw.set_response_callback("RPUSH", lost_acknowledgement)
+    client: Final = MagicMock()
+    client.db.execute_raw = AsyncMock()
+    await flush_request_errors(client, accumulator, buffer)
+
+    assert accumulator.drain() == {_key(): 2}
+    client.db.execute_raw.assert_not_awaited()
+    assert await raw.lrange(REDIS_REQUEST_ERRORS_BUFFER_KEY, 0, -1) == [_encoded_error(2)]
+    assert await buffer.pop() == {_key(): 2}
+
+
+@pytest.mark.asyncio
+async def test_malformed_entry_is_consumed_but_wrong_type_key_is_retained() -> None:
+    cache, raw = await _request_error_cache(fakeredis.FakeServer())
+    buffer: Final = _buffer(cache)
+    await raw.rpush(REDIS_REQUEST_ERRORS_BUFFER_KEY, b"not json", _encoded_error())
+
+    with pytest.raises(ValueError, match="Invalid JSON"):
+        await buffer.pop()
+
+    assert await raw.llen(REDIS_REQUEST_ERRORS_BUFFER_KEY) == 0
+    await raw.set(REDIS_REQUEST_ERRORS_BUFFER_KEY, "wrong type")
+    assert await buffer.pop() == {}
+    assert await raw.get(REDIS_REQUEST_ERRORS_BUFFER_KEY) == b"wrong type"
+    assert _breaker(cache).state == "closed"

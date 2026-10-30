@@ -16,11 +16,10 @@ deployment-wide written by the lease holder.
 """
 
 import asyncio
-import json
 from collections.abc import Iterable, Iterator, Mapping
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal
 
 from pydantic import TypeAdapter
 
@@ -29,12 +28,17 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
 from litellm.constants import (
     MAX_REDIS_BUFFER_DEQUEUE_COUNT,
-    REDIS_REQUEST_ERRORS_BUFFER_KEY,
     REQUEST_ERRORS_MAX_ROWS_PER_UPSERT,
     REQUEST_ERRORS_UNKNOWN_STATUS_CODE,
 )
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+from litellm.redis.stores.request_error_buffer import (
+    RequestErrorBufferStore,
+    RequestErrorEntries,
+    TransportRequestErrorBufferStore,
+)
+from litellm.redis.transport.contract import RedisFailure
 from litellm.types.proxy.request_errors import RequestErrorKey, RequestErrorSnapshot
 
 if TYPE_CHECKING:
@@ -46,9 +50,6 @@ _COLUMNS_PER_ROW: Final = 7
 _UTC_NOW: Final = "(NOW() AT TIME ZONE 'UTC')"
 REQUEST_ERRORS_JOB_NAME: Final = "update_request_errors_job"
 
-_BufferedRow: TypeAlias = tuple[str, str, str, str, str, int, int]
-_BUFFERED_ROWS: Final = TypeAdapter(tuple[_BufferedRow, ...])
-_BUFFERED_ENTRIES: Final = TypeAdapter(tuple[str | bytes, ...])
 _NO_COUNTS: Final[RequestErrorSnapshot] = MappingProxyType({})
 
 
@@ -128,22 +129,6 @@ def fold_counts(items: Iterable[tuple[RequestErrorKey, int]]) -> RequestErrorSna
     for key, count in items:
         folded[key] = folded.get(key, 0) + count
     return folded
-
-
-def _buffered_counts(entries: Iterable[str | bytes]) -> Iterator[tuple[RequestErrorKey, int]]:
-    for entry in entries:
-        for date, api_key, team_id, user_id, model_group, status_code, failed in _BUFFERED_ROWS.validate_json(entry):
-            yield (
-                RequestErrorKey(
-                    date=date,
-                    api_key=api_key,
-                    team_id=team_id,
-                    user_id=user_id,
-                    model_group=model_group,
-                    status_code=status_code,
-                ),
-                failed,
-            )
 
 
 def build_request_errors_upsert(snapshot: RequestErrorSnapshot) -> tuple[str, tuple[str | int, ...]]:
@@ -233,56 +218,61 @@ class RequestErrorRedisBuffer:
     """Folds every worker's snapshot through one Redis list so a single pod per interval writes the table."""
 
     def __init__(self, *, redis_cache: RedisCache, pod_lock_manager: PodLockManager) -> None:
-        self._redis_cache: Final = redis_cache
+        self._store: Final[RequestErrorBufferStore] = TransportRequestErrorBufferStore(redis_cache.transport())
         self._pod_lock_manager: Final = pod_lock_manager
 
     @with_service_target(_REQUEST_ERROR_QUEUE_TARGET)
     async def push(self, snapshot: RequestErrorSnapshot) -> None:
-        if not snapshot:
-            return
-        rows: Final[tuple[_BufferedRow, ...]] = tuple(
-            (key.date, key.api_key, key.team_id, key.user_id, key.model_group, key.status_code, count)
-            for key, count in snapshot.items()
-        )
-        await self._rpush((json.dumps(rows),))
+        match await self._store.append(snapshot):
+            case RedisFailure(message=message):
+                raise RuntimeError(message)
+            case None:
+                return
 
     @with_service_target(_REQUEST_ERROR_QUEUE_TARGET)
-    async def _rpush(self, entries: tuple[str | bytes, ...]) -> None:
-        if not entries:
-            return
-        await self._redis_cache.async_rpush(  # pyright: ignore[reportUnknownMemberType]  # redis cache span parameter is untyped
-            key=REDIS_REQUEST_ERRORS_BUFFER_KEY, values=entries
-        )
+    async def _restore_entries(self, entries: RequestErrorEntries) -> None:
+        match await self._store.restore(entries):
+            case RedisFailure(message=message):
+                raise RuntimeError(message)
+            case None:
+                return
 
     @with_service_target(_REQUEST_ERROR_QUEUE_TARGET)
-    async def _pop_batch(self) -> tuple[str | bytes, ...]:
-        popped: Final[object] = await self._redis_cache.async_lpop(  # pyright: ignore[reportAny, reportUnknownMemberType]  # redis returns Any; span parameter is untyped
-            key=REDIS_REQUEST_ERRORS_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT
-        )
-        if not popped:
-            return ()
-        return _BUFFERED_ENTRIES.validate_python(popped if isinstance(popped, list) else (popped,))
+    async def _pop_batch(self) -> RequestErrorEntries:
+        result: Final = await self._store.take(count=MAX_REDIS_BUFFER_DEQUEUE_COUNT)
+        match result:
+            case RedisFailure(message=message):
+                raise RuntimeError(message)
+            case _:
+                return result
+
+    def _fold_entries(self, entries: RequestErrorEntries) -> RequestErrorSnapshot:
+        result: Final = self._store.decode(entries)
+        match result:
+            case RedisFailure(message=message):
+                raise ValueError(message)
+            case _:
+                return fold_counts(result)
 
     async def pop(self) -> RequestErrorSnapshot:
         """Drains the Redis list; a cancellation mid-drain puts the popped entries back before propagating."""
         entries: Final[list[str | bytes]] = []  # mutable-ok: bounded drain, folded once per call
         try:
-            while True:
-                batch = await self._pop_batch()
+            while batch := await self._pop_batch():
                 entries.extend(batch)
                 if len(batch) < MAX_REDIS_BUFFER_DEQUEUE_COUNT:
                     break
         except asyncio.CancelledError:
             try:
-                await asyncio.shield(self._rpush(tuple(entries)))
+                await asyncio.shield(self._restore_entries(tuple(entries)))
             except Exception:  # noqa: BLE001 -- Redis refused them, so the caller keeps the rows in memory
-                raise RequestErrorCommitCancelled(fold_counts(_buffered_counts(entries))) from None
+                raise RequestErrorCommitCancelled(self._fold_entries(tuple(entries))) from None
             raise
         except Exception:  # noqa: BLE001 -- fold what was already popped; unread entries stay queued in Redis
             verbose_proxy_logger.warning(
                 "Request error tracking - Redis read failed, folding the entries already popped", exc_info=True
             )
-        return fold_counts(_buffered_counts(entries))
+        return self._fold_entries(tuple(entries))
 
     async def commit_if_leader(self, prisma_client: "PrismaClient") -> RequestErrorSnapshot:
         """Drain and write on the lease holder only; returns rows that could be neither committed nor re-queued."""
