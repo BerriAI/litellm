@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a18d65-9cd0-7cf0-8fdd-ea480a832271"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll look up LiteLLM’s documentation domain."}}
+{"type":"item.started","item":{"id":"item_1","type":"web_search","id":"exec-dfea1d72-2e16-4853-a9c5-713fbd2d4a45","query":"","action":{"type":"other"}}}
+{"type":"item.started","item":{"id":"item_2","type":"web_search","id":"exec-f0f475b4-d3a1-440d-988a-cad646913023","query":"","action":{"type":"other"}}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"docs.litellm.ai"}}
+{"type":"turn.completed","usage":{"input_tokens":59995,"cached_input_tokens":43336,"cache_write_input_tokens":16647,"output_tokens":154,"reasoning_output_tokens":14}}

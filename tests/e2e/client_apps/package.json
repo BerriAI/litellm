@@ -1,0 +1,8 @@
+{
+  "name": "litellm-client-apps-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "@openai/codex": "0.164.0"
+  }
+}

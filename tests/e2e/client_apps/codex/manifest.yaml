@@ -1,0 +1,29 @@
+schema_version: "1"
+client: codex
+package: "@openai/codex"
+
+providers:
+  - openai
+  - azure
+  - bedrock_mantle
+  - vertex_ai
+
+features:
+  - id: basic_messaging
+    name: Basic messaging
+  - id: shell_command
+    name: Shell command
+  - id: file_edit
+    name: File edit
+  - id: multi_turn
+    name: Multi-turn (resumed thread)
+  - id: prompt_caching
+    name: Prompt caching
+  - id: reasoning_effort
+    name: Reasoning effort
+  - id: vision
+    name: Vision (image input)
+  - id: structured_output
+    name: Structured output
+  - id: web_search
+    name: Web search

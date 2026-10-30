@@ -1,0 +1,9 @@
+{"type":"thread.started","thread_id":"01a18d84-ca4f-77b1-8367-f3420df1b7a5"}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 1/5 (rate limit exceeded: litellm.RateLimitError: AzureException RateLimitError - Your requests to gpt-6.1-sol for gpt-6.1-sol in eastus2 have exceeded token rate limit.)"}
+{"type":"error","message":"Reconnecting... 2/5 (rate limit exceeded: litellm.RateLimitError: AzureException RateLimitError - Your requests to gpt-6.1-sol for gpt-6.1-sol in eastus2 have exceeded token rate limit.)"}
+{"type":"error","message":"Reconnecting... 3/5 (rate limit exceeded: litellm.RateLimitError: AzureException RateLimitError - Your requests to gpt-6.1-sol for gpt-6.1-sol in eastus2 have exceeded token rate limit.)"}
+{"type":"error","message":"Reconnecting... 4/5 (rate limit exceeded: litellm.RateLimitError: AzureException RateLimitError - Your requests to gpt-6.1-sol for gpt-6.1-sol in eastus2 have exceeded token rate limit.)"}
+{"type":"error","message":"Reconnecting... 5/5 (rate limit exceeded: litellm.RateLimitError: AzureException RateLimitError - Your requests to gpt-6.1-sol for gpt-6.1-sol in eastus2 have exceeded token rate limit.)"}
+{"type":"error","message":"rate limit exceeded: litellm.RateLimitError: AzureException RateLimitError - Your requests to gpt-6.1-sol for gpt-6.1-sol in eastus2 have exceeded token rate limit."}
+{"type":"turn.failed","error":{"message":"rate limit exceeded: litellm.RateLimitError: AzureException RateLimitError - Your requests to gpt-6.1-sol for gpt-6.1-sol in eastus2 have exceeded token rate limit."}}

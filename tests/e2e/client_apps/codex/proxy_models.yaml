@@ -1,0 +1,47 @@
+openai:
+  - model_name: gpt-6.1-sol-codex-compat-openai
+    litellm_params:
+      model: openai/gpt-6.1-sol
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-6-luna-codex-compat-openai
+    litellm_params:
+      model: openai/gpt-6-luna
+      api_key: os.environ/OPENAI_API_KEY
+
+azure:
+  - model_name: gpt-6.1-sol-codex-compat-azure
+    litellm_params:
+      model: azure/gpt-6.1-sol
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: v1
+  - model_name: gpt-6-luna-codex-compat-azure
+    litellm_params:
+      model: azure/gpt-6-luna
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: v1
+
+bedrock_mantle:
+  - model_name: gpt-6.1-sol-codex-compat-bedrock-mantle
+    litellm_params:
+      model: bedrock_mantle/openai.gpt-6.1-sol
+      aws_region_name: us-east-1
+  - model_name: gpt-6-luna-codex-compat-bedrock-mantle
+    litellm_params:
+      model: bedrock_mantle/openai.gpt-6-luna
+      aws_region_name: us-east-1
+
+vertex_ai:
+  - model_name: gemini-4-argon-codex-compat-vertex-ai
+    litellm_params:
+      model: vertex_ai/gemini-4-argon
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: global
+      vertex_credentials: os.environ/VERTEXAI_CREDENTIALS
+  - model_name: gemini-3.8-flash-codex-compat-vertex-ai
+    litellm_params:
+      model: vertex_ai/gemini-3.8-flash
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: global
+      vertex_credentials: os.environ/VERTEXAI_CREDENTIALS

@@ -52,6 +52,7 @@ LlmRoute = Literal[
     "azure_openai",
     "bedrock_converse",
     "bedrock_invoke",
+    "bedrock_mantle",
     "cohere",
     "gemini",
     "hosted_vllm",

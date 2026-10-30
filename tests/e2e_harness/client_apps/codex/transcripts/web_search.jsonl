@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a18d67-686f-7e72-bc9d-f6a24e2320ed"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll look up LiteLLM’s documentation domain."}}
+{"type":"item.started","item":{"id":"item_1","type":"web_search","id":"exec-baaa41bf-4055-42d4-8651-fbd2611cf820","query":"","action":{"type":"other"}}}
+{"type":"item.completed","item":{"id":"item_1","type":"web_search","id":"exec-baaa41bf-4055-42d4-8651-fbd2611cf820","query":"LiteLLM documentation official","action":{"type":"search","query":"LiteLLM documentation official"}}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"[docs.litellm.ai](https://docs.litellm.ai/)"}}
+{"type":"turn.completed","usage":{"input_tokens":30618,"cached_input_tokens":13312,"cache_write_input_tokens":17300,"output_tokens":80,"reasoning_output_tokens":0}}
