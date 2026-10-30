@@ -574,6 +574,17 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         return MaskPython(guardrail_name="test")
 
     @staticmethod
+    def _python_texts_masking_guardrail() -> CustomGuardrail:
+        class MaskPythonTexts(CustomGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                return {
+                    **inputs,
+                    "texts": [re.sub("python", "[MASKED]", text, flags=re.I) for text in inputs.get("texts", [])],
+                }
+
+        return MaskPythonTexts(guardrail_name="test")
+
+    @staticmethod
     def _web_search_result_block() -> dict[str, object]:
         return {
             "type": "web_search_tool_result",
@@ -661,13 +672,18 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         ]
         return [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in events]
 
+    @pytest.mark.parametrize(
+        "guardrail_factory",
+        [_python_masking_guardrail, _python_texts_masking_guardrail],
+        ids=["texts_and_tool_calls", "texts_only"],
+    )
     @pytest.mark.asyncio
-    async def test_deliver_ended_stream_rewrites_mask_the_web_search_query_results_and_text(self):
+    async def test_deliver_ended_stream_rewrites_mask_the_web_search_query_results_and_text(self, guardrail_factory):
         chunks = self._web_search_stream_chunks()
 
         await AnthropicMessagesHandler().process_output_streaming_response(
             responses_so_far=chunks,
-            guardrail_to_apply=self._python_masking_guardrail(),
+            guardrail_to_apply=guardrail_factory(),
             litellm_logging_obj=MagicMock(),
             deliver_ended_stream_rewrites=True,
         )
