@@ -377,6 +377,12 @@ def _customer_spend_after_request(cached_spend: float, committed_spend: float | 
     return max(committed_spend + response_cost, cached_spend)
 
 
+def _budgeted_org_counter(org_id: str | None, org: OrgBudgetSnapshot | None) -> EntitySpendCounterKeys:
+    if org is None or org.max_budget is None:
+        return EntitySpendCounterKeys()
+    return EntitySpendCounterKeys.of(token=None, team_id=None, user_id=None, org_id=org_id, end_user_id=None)
+
+
 async def _committed_spend_now(counter_keys: EntitySpendCounterKeys) -> CommittedBudgetSpend:
     if not counter_keys.tracked():
         return CommittedBudgetSpend()
@@ -2862,16 +2868,16 @@ class PrometheusLogger(CustomLogger):
                 get_litellm_metadata_from_kwargs(kwargs)
             )
             failure_org_alias: Final = failure_metadata.get("user_api_key_org_alias")
-            failure_at_auth: Final = committed_budget_spend_from_metadata(failure_metadata)
+            failure_org: Final = OrgBudgetSnapshot.from_metadata(failure_metadata)
             failure_committed: Final = _committed_spend_before_request(
-                at_auth=failure_at_auth,
-                now=await _committed_spend_now(EntitySpendCounterKeys(org=failure_at_auth.counter_keys.org)),
+                at_auth=committed_budget_spend_from_metadata(failure_metadata),
+                now=await _committed_spend_now(_budgeted_org_counter(user_api_key_org_id, failure_org)),
                 response_cost=0,
             )
             await self._set_org_budget_metrics_after_api_request(
                 org_id=user_api_key_org_id,
                 response_cost=0,
-                carried=OrgBudgetSnapshot.from_metadata(failure_metadata),
+                carried=failure_org,
                 org_alias=failure_org_alias if isinstance(failure_org_alias, str) else None,
                 committed_spend=failure_committed.org,
             )

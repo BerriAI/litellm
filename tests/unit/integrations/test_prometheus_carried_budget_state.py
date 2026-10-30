@@ -435,6 +435,20 @@ async def test_failed_request_sets_the_org_gauge_from_the_carried_org_and_commit
 
 
 @pytest.mark.asyncio
+async def test_failed_request_without_the_auth_object_still_reads_the_committed_org_spend(
+    prometheus_logger, getters, spend_counter_cache
+):
+    _stub_gauges(prometheus_logger)
+    _store_committed(spend_counter_cache, key=3.0, team=30.0, user=8.0, org=65.0)
+    metadata = _request_metadata(_token_committed_at_auth())
+    del metadata["user_api_key_auth"]
+
+    await prometheus_logger.async_log_failure_event(_failed_request(metadata), None, KEY_RESET_AT, KEY_RESET_AT)
+
+    prometheus_logger.litellm_remaining_org_budget_metric.labels().set.assert_called_once_with(pytest.approx(435.0))
+
+
+@pytest.mark.asyncio
 async def test_ordinary_metadata_keys_named_like_snapshot_fields_change_no_gauge(prometheus_logger, getters):
     _stub_gauges(prometheus_logger)
     metadata = {
