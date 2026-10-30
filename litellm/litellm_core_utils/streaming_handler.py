@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.core_helpers import chunk_usage, provider_report
 from litellm.litellm_core_utils.hidden_params import (
     HIDDEN_PARAMS_ATTR,
     get_hidden_params,
+    set_extra_attribute,
     set_hidden_param,
     stored_attribute,
 )
@@ -1100,7 +1101,7 @@ class CustomStreamWrapper:
             _initial_delta: Final = model_response.choices[0].delta.model_dump()
 
             _initial_delta.pop("role", None)
-            model_response.choices[0].delta = Delta(**_initial_delta)
+            set_extra_attribute(model_response.choices[0], "delta", Delta(**_initial_delta))
         return model_response
 
     def _prebuilt_plain_delta(self, chunk: object) -> Delta | None:
@@ -1126,13 +1127,13 @@ class CustomStreamWrapper:
     def _set_role_on_fresh_delta(self, model_response: ModelResponseStream) -> None:
         delta: Final = model_response.choices[0].delta
         if self.sent_first_chunk is False:
-            delta.role = "assistant"
+            set_extra_attribute(delta, "role", "assistant")
             self.sent_first_chunk = True
             return
         if not _holds_only_scalars(delta):
             self.strip_role_from_delta(model_response)
             return
-        delta.role = None
+        set_extra_attribute(delta, "role", None)
         if "provider_specific_fields" not in delta.model_fields_set:
             delta.provider_specific_fields = None
 
@@ -1256,8 +1257,8 @@ class CustomStreamWrapper:
                             and _holds_only_scalars(upstream_delta)
                         )
                         if can_reuse_choice and upstream_choice is not None:
-                            model_response.choices[0].finish_reason = None  # rebind-ok: keep reused choice
-                            model_response.choices[0].index = upstream_choice.index  # rebind-ok: keep reused choice
+                            set_extra_attribute(model_response.choices[0], "finish_reason", None)
+                            set_extra_attribute(model_response.choices[0], "index", upstream_choice.index)
                             _prepend_upstream_choice_extras(
                                 model_response.choices[0],
                                 upstream_choice,
@@ -1282,11 +1283,7 @@ class CustomStreamWrapper:
                     else:
                         return
                     model_response.system_fingerprint = upstream_chunk.system_fingerprint
-                    setattr(
-                        model_response,
-                        "citations",
-                        stored_attribute(upstream_chunk, "citations"),
-                    )
+                    set_extra_attribute(model_response, "citations", stored_attribute(upstream_chunk, "citations"))
                     preserve_upstream_non_openai_attributes(
                         model_response=model_response,
                         original_chunk=original_chunk,
@@ -2662,6 +2659,25 @@ class CustomStreamWrapper:
     def bill_failure_after_earlier_rounds(self, earlier: "BilledRoundsSpend") -> None:
         self._earlier_rounds_spend = earlier
 
+    def partial_response(self) -> "ModelResponse | TextCompletionResponse | None":
+        partial: Final = (
+            litellm.stream_chunk_builder(
+                chunks=self.chunks,
+                messages=self.messages if isinstance(self.messages, list) else None,
+                logging_obj=self.logging_obj,
+                count_prompt_tokens=self.count_prompt_tokens,
+            )
+            if self.chunks
+            else None
+        )
+        usage: Final[object] = getattr(partial, "usage", None)
+        if partial is None or not isinstance(usage, Usage):
+            return None
+        if self.model:
+            partial.model = self.model
+        backfill_missing_cache_usage_fields(usage)
+        return partial
+
     def _record_partial_usage_for_failure(self) -> None:
         """
         A stream that breaks mid-flight still billed the provider for the chunks
@@ -2671,23 +2687,15 @@ class CustomStreamWrapper:
         moves it into terminal failure usage before opening the next attempt,
         so a recovered attempt logs its own usage.
         """
-        if self.logging_obj is None or not self.chunks:
+        if self.logging_obj is None:
             return
         try:
-            partial_response: Final = litellm.stream_chunk_builder(
-                chunks=self.chunks,
-                messages=self.messages if isinstance(self.messages, list) else None,
-                logging_obj=self.logging_obj,
-                count_prompt_tokens=self.count_prompt_tokens,
-            )
+            partial_response: Final = self.partial_response()
             if partial_response is None:
                 return
-            usage: Final = cast(Usage | None, getattr(partial_response, "usage", None))
-            if usage is None:
+            usage: Final[object] = getattr(partial_response, "usage", None)
+            if not isinstance(usage, Usage):
                 return
-            if self.model:
-                partial_response.model = self.model
-            backfill_missing_cache_usage_fields(usage)
             partial_cost: Final = self.logging_obj.response_cost_calculator(result=partial_response) or 0.0
             if self._earlier_rounds_spend is None:
                 self.logging_obj.model_call_details["combined_usage_object"] = usage

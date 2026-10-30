@@ -265,6 +265,7 @@ def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[
                 "reasoningContentBlocks",
                 "citations",
                 "compaction_blocks",
+                "compaction_start",
                 "compaction_delta",
                 "token_ids",
             )

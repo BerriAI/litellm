@@ -84,6 +84,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
+    AgentAccessGroupCeiling,
     CeilingResolver,
     resolve_agent_access_group_ceiling,
 )
@@ -1684,6 +1685,7 @@ def get_actual_routes(allowed_routes: list) -> list:
 
 KEY_END_USER_BUDGET_ID_METADATA_FIELD: Final = "end_user_budget_id"
 _KEY_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_OBJECTS_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
 def get_key_end_user_budget_id(key_metadata: Mapping[str, object] | None) -> str | None:
@@ -3455,28 +3457,35 @@ async def delete_cache_key_objects(
     proxy_logging_obj: ProxyLogging | None,
 ) -> None:
     """
-    Evict a batch of key objects, for callers that delete keys in bulk rather than through
-    `/key/delete`. Auth resolves a cached key object without re-reading its team, so a key left
-    cached after its row is gone keeps buying access until its TTL expires.
-
-    Evicting locally only reaches this worker; `_delete_cache_key_object` itself broadcasts each
-    token, so a deleted key left in a peer worker's in-memory cache still authenticates there until
-    its TTL expires.
+    Evict a batch of deleted key objects here and on every other worker. Auth resolves a cached key
+    object without re-reading its team, so a key left cached after its row is gone keeps buying
+    access until its TTL expires.
 
     Best-effort per key: the rows are already deleted by the time this runs, so an unreachable
     cache backend must not abort the caller partway through its own cascade.
 
-    Every token is dropped from this worker's memory first, then from the auth cache and the
-    internal usage cache in one batch each, so a deleted key stops authenticating here the instant
-    its rows are gone instead of refilling from Redis on the next miss. Every other worker then
-    gets the eviction in one pipelined broadcast: a publish per key would pass the publisher's
-    pending cap on a bulk delete, and the dropped keys would keep authenticating there until their
-    TTL.
+    Every token is dropped from this worker's memory first, then from the auth cache's Redis layer,
+    so a deleted key stops authenticating here the instant its rows are gone instead of refilling
+    from Redis on the next miss. Every other worker then gets the eviction in one pipelined
+    broadcast: a publish per key would pass the publisher's pending cap on a bulk delete, and the
+    dropped keys would keep authenticating there until their TTL. The internal usage cache is not
+    an auth refill source, so its batch delete runs beside that chain and a hung Redis costs one
+    bounded wait there instead of another in line.
     """
     evict_local(cache_keys=hashed_tokens, user_api_key_cache=user_api_key_cache)
+    usage_eviction: Final = (
+        ()
+        if proxy_logging_obj is None
+        else (evict_shared(cache_keys=hashed_tokens, cache=proxy_logging_obj.internal_usage_cache.dual_cache),)
+    )
+    _ = await asyncio.gather(
+        _evict_auth_cache_then_broadcast(hashed_tokens=hashed_tokens, user_api_key_cache=user_api_key_cache),
+        *usage_eviction,
+    )
+
+
+async def _evict_auth_cache_then_broadcast(hashed_tokens: Sequence[str], user_api_key_cache: UserApiKeyCache) -> None:
     await evict_shared(cache_keys=hashed_tokens, cache=user_api_key_cache)
-    if proxy_logging_obj is not None:
-        await evict_shared(cache_keys=hashed_tokens, cache=proxy_logging_obj.internal_usage_cache.dual_cache)
     await broadcast_evictions(cache_keys=hashed_tokens)
 
 
@@ -5085,6 +5094,36 @@ async def can_agent_call_model(
     )
 
 
+async def _agent_access_group_ceilings(
+    valid_token: UserAPIKeyAuth, resolve_ceiling: CeilingResolver
+) -> tuple[AgentAccessGroupCeiling, ...]:
+    if not valid_token.agent_id:
+        return ()
+
+    from litellm.proxy.agent_endpoints.auth.agent_access_groups import resolve_managed_agent_ceilings
+
+    managed: Final = managed_agent_policy(valid_token)
+    if managed is not None:
+        return await resolve_managed_agent_ceilings(managed)
+    unmanaged: Final = await resolve_ceiling(valid_token.agent_id)
+    return (unmanaged,) if unmanaged is not None else ()
+
+
+def _managed_agent_model_grants(valid_token: UserAPIKeyAuth) -> frozenset[str]:
+    managed: Final = managed_agent_policy(valid_token)
+    granted: Final = (managed.object_permission or {}).get("models") if managed is not None else None
+    if not isinstance(granted, (list, tuple)):
+        return frozenset()
+    return frozenset(name for name in _OBJECTS_ADAPTER.validate_python(granted) if isinstance(name, str))
+
+
+async def agent_model_grants(
+    valid_token: UserAPIKeyAuth, resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling
+) -> frozenset[str]:
+    ceilings: Final = await _agent_access_group_ceilings(valid_token, resolve_ceiling)
+    return _managed_agent_model_grants(valid_token).union(*(ceiling.models for ceiling in ceilings))
+
+
 async def _check_agent_access_group_model_access(
     model: str | list[str] | None,  # mutable-ok: _can_object_call_model and the client message helper take list[str]
     valid_token: UserAPIKeyAuth | None,
@@ -5092,20 +5131,9 @@ async def _check_agent_access_group_model_access(
     resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
 ) -> Literal[True]:
     """Attached groups naming no model deny every model; the empty allowlist in ``_can_object_call_model`` allows."""
-    if not model or valid_token is None or not valid_token.agent_id:
+    if not model or valid_token is None:
         return True
-
-    from litellm.proxy.agent_endpoints.auth.agent_access_groups import resolve_managed_agent_ceilings
-
-    managed: Final = managed_agent_policy(valid_token)
-    unmanaged: Final = await resolve_ceiling(valid_token.agent_id) if managed is None else None
-    ceilings: Final = (
-        await resolve_managed_agent_ceilings(managed)
-        if managed is not None
-        else (unmanaged,)
-        if unmanaged is not None
-        else ()
-    )
+    ceilings: Final = await _agent_access_group_ceilings(valid_token, resolve_ceiling)
     dispatched: Final = _resolve_team_alias(
         model, team_model_aliases_for_auth_check(valid_token), valid_token.team_id, llm_router
     )
