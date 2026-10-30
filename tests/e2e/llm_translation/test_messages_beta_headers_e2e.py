@@ -25,8 +25,10 @@ _CODE_EXECUTION: Final[ToolUnionParam] = {"type": "code_execution_20250825", "na
 
 
 def _mapped_beta_headers(provider: str) -> str:
-    mapping: Final = _BETA_MAPPING.validate_python(_BETA_CONFIG_FILE.validate_json(_BETA_CONFIG.read_text())[provider])
-    return ",".join(name for name, value in mapping.items() if value is not None)
+    config: Final = _BETA_CONFIG_FILE.validate_json(_BETA_CONFIG.read_text())
+    mapping: Final = _BETA_MAPPING.validate_python(config[provider])
+    header_only: Final = _BETA_MAPPING.validate_python(config.get(f"{provider}_header_only", {}))
+    return ",".join(name for name, value in {**mapping, **header_only}.items() if value is not None)
 
 
 def _deployment(backend: str) -> LiteLLMParamsBody:
