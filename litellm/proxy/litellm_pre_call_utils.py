@@ -655,6 +655,12 @@ def normalized_metadata_slot(
     return normalized
 
 
+def _holds_metadata_object(value: object) -> bool:
+    if value is None or isinstance(value, dict):
+        return True
+    return isinstance(value, str) and isinstance(_DECODED_JSON.validate_python(safe_json_loads(value)), dict)
+
+
 def _metadata_object_or_error(field: str, value: object) -> Mapping[str, object] | ProxyException:
     if value is None:
         return {}
@@ -2429,7 +2435,7 @@ class LiteLLMProxyRequestSetup:
             if metadata_variable_name is not None
             else get_metadata_variable_name_from_kwargs(request_data)
         )
-        if slot == "metadata":
+        if slot == "metadata" or not _holds_metadata_object(request_data.get(slot)):
             return
         raw_caller_metadata: Final = request_data.get("metadata")
         caller_metadata: Final = (

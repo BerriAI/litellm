@@ -699,6 +699,45 @@ async def test_add_litellm_data_to_request_rejects_non_object_metadata(field, va
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/chat/completions", "/v1/responses", "/cursor/chat/completions"])
+@pytest.mark.parametrize("value, received_type", [("junk", "a string"), (5, "an integer"), ([1], "an array")])
+async def test_invalid_litellm_metadata_answers_400_when_metadata_carries_tags(route, value, received_type):
+    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.proxy.utils import ProxyLogging
+
+    data = {"model": "gpt-4o", "input": "hi", "metadata": {"tags": ["client-tag"]}, "litellm_metadata": value}
+    request = _batches_request_mock()
+    await common_checks(
+        request_body=data,
+        team_object=None,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route=route,
+        llm_router=None,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+        valid_token=UserAPIKeyAuth(api_key="hashed-key"),
+        request=request,
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.message == (
+        f"Invalid type for 'litellm_metadata': expected an object, but got {received_type} instead."
+    )
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_removes_every_invalid_metadata_field_before_raising():
     """When both fields are invalid, the raise for the first must not leave the
     second invalid value in data, or failure-logging hooks that inspect the body
