@@ -43,6 +43,10 @@ from litellm.integrations.prometheus_helpers.bounded_prometheus_series_tracker i
     BoundedPrometheusSeriesTracker,
     PrometheusSeriesLimits,
 )
+from litellm.integrations.prometheus_helpers.deployment_state_series import (
+    DeploymentStateSeries,
+    DeploymentStateSeriesTracker,
+)
 from litellm.integrations.prometheus_helpers.shared_prometheus_series_admissions import (
     SharedPrometheusSeriesAdmissions,
 )
@@ -533,6 +537,7 @@ class PrometheusLogger(CustomLogger):
             _custom_buckets: Final = litellm.prometheus_latency_buckets
             self.latency_buckets = tuple(_custom_buckets) if _custom_buckets is not None else LATENCY_BUCKETS
             self._bounded_prometheus_series_tracker = BoundedPrometheusSeriesTracker()
+            self._deployment_state_tracker = DeploymentStateSeriesTracker(write=self.set_litellm_deployment_state)
             _multiproc_dir: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
             self._series_cap_tracker = (
                 BoundedPrometheusSeriesTracker()
@@ -3953,7 +3958,9 @@ class PrometheusLogger(CustomLogger):
         api_base: str,
         api_provider: str,
     ):
-        self.set_litellm_deployment_state(0, litellm_model_name, model_id, api_base, api_provider)
+        self._deployment_state_tracker.healthy(
+            DeploymentStateSeries(litellm_model_name, model_id, api_base, api_provider)
+        )
 
     def set_deployment_partial_outage(
         self,
@@ -3962,7 +3969,9 @@ class PrometheusLogger(CustomLogger):
         api_base: str | None,
         api_provider: str,
     ):
-        self.set_litellm_deployment_state(1, litellm_model_name, model_id, api_base, api_provider)
+        self._deployment_state_tracker.partial_outage(
+            DeploymentStateSeries(litellm_model_name, model_id, api_base, api_provider)
+        )
 
     def set_deployment_complete_outage(
         self,
@@ -3971,7 +3980,9 @@ class PrometheusLogger(CustomLogger):
         api_base: str | None,
         api_provider: str,
     ):
-        self.set_litellm_deployment_state(2, litellm_model_name, model_id, api_base, api_provider)
+        self._deployment_state_tracker.complete_outage(
+            DeploymentStateSeries(litellm_model_name, model_id, api_base, api_provider)
+        )
 
     def increment_deployment_cooled_down(
         self,

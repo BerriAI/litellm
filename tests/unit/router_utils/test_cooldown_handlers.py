@@ -6,22 +6,25 @@ import itertools
 import random
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 import respx
+from prometheus_client.samples import Sample
 
 import litellm
 from litellm import Router
 from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.router_utils.cooldown_cache import CooldownCache, CooldownCacheValue
-from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
+from litellm.router_utils.cooldown_callbacks import resolved_model_and_provider, router_cooldown_event_callback
 from litellm.router_utils.cooldown_handlers import (
     _get_deployment_cooldown_policy,
     _has_explicit_allowed_fails_policy_for_exception,
@@ -55,6 +58,15 @@ from litellm.types.router import (
 )
 from litellm.types.utils import CooldownDeploymentInfo, CredentialItem
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+
+CHAT_COMPLETION: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "gpt-5.4-mini",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+}
 
 
 @pytest.mark.asyncio
@@ -1827,6 +1839,100 @@ async def test_router_cooldown_event_callback_no_deployment():
 
     # Assert that the router's get_deployment method was called
     mock_router.get_deployment.assert_called_once_with(model_id="test-deployment")
+
+
+async def await_scheduled_success_logging() -> None:
+    await asyncio.sleep(0)
+    await GLOBAL_LOGGING_WORKER.flush()
+
+
+@pytest.mark.parametrize(
+    "endpoint_params",
+    [
+        pytest.param({}, id="provider_default_endpoint"),
+        pytest.param({"api_base": "https://upstream.example/v1/"}, id="api_base_with_trailing_slash"),
+    ],
+)
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown", "isolated_prometheus_registry")
+@pytest.mark.asyncio
+async def test_deployment_state_returns_to_healthy_after_cooldown_when_group_name_differs_from_model(
+    endpoint_params: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    deployment_state_values: Callable[[str], list[float]],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [PrometheusLogger()])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "prod-chat",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake", **endpoint_params},
+                "model_info": {"id": "dep-1"},
+            }
+        ]
+    )
+
+    respx_mock.post(url__regex=r".*/chat/completions$").mock(return_value=httpx.Response(200, json=CHAT_COMPLETION))
+
+    await router.acompletion(model="prod-chat", messages=[{"role": "user", "content": "hi"}])
+    await await_scheduled_success_logging()
+    assert deployment_state_values("dep-1") == [0.0]
+
+    await router_cooldown_event_callback(
+        litellm_router_instance=router, deployment_id="dep-1", exception_status=404, cooldown_time=5.0
+    )
+    assert deployment_state_values("dep-1") == [2.0]
+
+    await router.acompletion(model="prod-chat", messages=[{"role": "user", "content": "hi"}])
+    await await_scheduled_success_logging()
+
+    assert deployment_state_values("dep-1") == [0.0]
+
+
+@pytest.mark.parametrize(
+    ("model_params", "expected_model_and_provider"),
+    [
+        pytest.param({"model": "openai/gpt-5.4-mini"}, ("gpt-5.4-mini", "openai"), id="provider_prefix_is_stripped"),
+        pytest.param(
+            {"model": "private-model", "custom_llm_provider": "openai"},
+            ("private-model", "openai"),
+            id="explicit_provider",
+        ),
+    ],
+)
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown", "isolated_prometheus_registry")
+@pytest.mark.asyncio
+async def test_cooldown_without_request_history_labels_the_state_with_the_resolved_model_and_provider(
+    model_params: dict[str, str],
+    expected_model_and_provider: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_state_samples: Callable[[str], list[Sample]],
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [PrometheusLogger()])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "prod-chat",
+                "litellm_params": {"api_key": "fake", "api_base": "https://upstream.example/v1", **model_params},
+                "model_info": {"id": "dep-1"},
+            }
+        ]
+    )
+
+    await router_cooldown_event_callback(
+        litellm_router_instance=router, deployment_id="dep-1", exception_status=404, cooldown_time=5.0
+    )
+
+    labelled: Final = {
+        (sample.labels["litellm_model_name"], sample.labels["api_provider"])
+        for sample in deployment_state_samples("dep-1")
+    }
+    assert labelled == {expected_model_and_provider}
+
+
+def test_a_model_litellm_cannot_resolve_keeps_its_configured_name_and_has_no_provider() -> None:
+    assert resolved_model_and_provider("private-model", None) == ("private-model", "")
 
 
 @pytest.fixture
