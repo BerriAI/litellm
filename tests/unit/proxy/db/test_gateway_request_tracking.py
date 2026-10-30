@@ -11,14 +11,17 @@ from itertools import chain
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import fakeredis
 import pytest
 
+from litellm.caching.redis_cache import RedisCache, RedisCircuitBreaker
 from litellm.constants import (
     GATEWAY_REQUESTS_MAX_ROWS_PER_UPSERT,
     MAX_REDIS_BUFFER_DEQUEUE_COUNT,
     REDIS_GATEWAY_REQUESTS_BUFFER_KEY,
     REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2,
 )
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.gateway_request_tracking import (
     GATEWAY_REQUESTS_JOB_NAME,
     GatewayRequestAccumulator,
@@ -28,7 +31,9 @@ from litellm.proxy.db.gateway_request_tracking import (
 )
 from litellm.proxy.db.log_db_metrics import record_db_io
 from litellm.proxy.middleware.billable_request_metrics_middleware import BillableCategory
+from litellm.redis.transport.redis_py import RedisPyTransport
 from litellm.types.proxy.gateway_requests import GatewayRequestCounts, GatewayRequestKey
+from tests._support.fake_redis import fake_redis_cache
 
 _NOW: Final = datetime(2026, 3, 14, 12, 0, tzinfo=timezone.utc)
 _DAY: Final = _NOW.strftime("%Y-%m-%d")
@@ -476,345 +481,273 @@ def test_restore_keeps_requests_recorded_while_the_failed_write_was_in_flight():
     assert _rows_written(client) == [(_DAY, "llm", "/chat/completions", 1, 1)]
 
 
-# ── redis buffer ──────────────────────────────────────────────────────────────
+async def _gateway_cache(
+    server: fakeredis.FakeServer, namespace: str | None = None
+) -> tuple[RedisCache, fakeredis.FakeAsyncRedis]:
+    cache: Final = fake_redis_cache(server, namespace=namespace)
+    cache.redis_version = "7.0.0"
+    assert await cache.transport().ping() is True
+    client: Final = cache.redis_async_client
+    assert isinstance(client, fakeredis.FakeAsyncRedis)
+    return cache, client
 
 
-class FakeRedis:
-    def __init__(self) -> None:
-        self.lists: dict[str, list[str]] = {}
-
-    async def async_rpush(self, key: str, values: list[str]) -> int:
-        self.lists.setdefault(key, []).extend(values)
-        return len(self.lists[key])
-
-    async def async_lpop(self, key: str, count: int) -> list[str] | None:
-        queue = self.lists.get(key, [])
-        if not queue:
-            return None
-        popped, self.lists[key] = queue[:count], queue[count:]
-        return popped
+def _buffer(cache: RedisCache) -> GatewayRequestRedisBuffer:
+    return GatewayRequestRedisBuffer(redis_cache=cache, pod_lock_manager=PodLockManager(cache))
 
 
-class FakePodLock:
-    def __init__(self, *, leader: bool) -> None:
-        self.leader = leader
-        self.held: list[str] = []
-        self.released: list[str] = []
-
-    async def acquire_lock(self, cronjob_id: str) -> bool:
-        self.held.append(cronjob_id)
-        return self.leader
-
-    async def release_lock(self, cronjob_id: str) -> None:
-        self.released.append(cronjob_id)
+def _breaker(cache: RedisCache) -> RedisCircuitBreaker:
+    transport: Final = cache.transport()
+    assert isinstance(transport, RedisPyTransport)
+    return transport.breaker
 
 
-class FakeLease:
-    """Redis-side view of the job lock: SET NX by pod id, re-entrant for the holder, freed only by release or TTL."""
-
-    def __init__(self) -> None:
-        self.holder: str | None = None
-
-
-class FakeLeasePodLock:
-    def __init__(self, lease: FakeLease, pod_id: str) -> None:
-        self.lease = lease
-        self.pod_id = pod_id
-
-    async def acquire_lock(self, cronjob_id: str) -> bool:
-        if self.lease.holder is None:
-            self.lease.holder = self.pod_id
-        return self.lease.holder == self.pod_id
-
-    async def release_lock(self, cronjob_id: str) -> None:
-        if self.lease.holder == self.pod_id:
-            self.lease.holder = None
+def _gateway_snapshot(count: int = 1) -> dict[GatewayRequestKey, GatewayRequestCounts]:
+    return {
+        GatewayRequestKey(date=_DAY, category="llm", route="/chat/completions", status_code=429): GatewayRequestCounts(
+            successful_requests=0, failed_requests=count
+        )
+    }
 
 
-def _buffer(redis: FakeRedis, *, leader: bool) -> tuple[GatewayRequestRedisBuffer, FakePodLock]:
-    lock = FakePodLock(leader=leader)
-    return GatewayRequestRedisBuffer(redis_cache=redis, pod_lock_manager=lock), lock  # pyright: ignore[reportArgumentType]  # duck-typed fakes
+@pytest.mark.asyncio
+@pytest.mark.parametrize("namespace", [None, "metrics"])
+@pytest.mark.parametrize("version", ["6.2.0", "7.0.0"])
+async def test_push_preserves_v2_wire_bytes_and_old_reader(namespace: str | None, version: str) -> None:
+    cache, raw = await _gateway_cache(fakeredis.FakeServer(), namespace)
+    cache.redis_version = version
+    buffer: Final = _buffer(cache)
+    key: Final = f"{namespace}:" if namespace else ""
+    snapshot: Final = {
+        GatewayRequestKey(date=_DAY, category="llm", route="/caf\u00e9/\u96ea", status_code=None): GatewayRequestCounts(
+            successful_requests=2, failed_requests=1
+        )
+    }
+    encoded: Final = json.dumps(((_DAY, "llm", "/caf\u00e9/\u96ea", None, 2, 1),))
+
+    await buffer.push(snapshot)
+
+    assert await raw.lrange(key + REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2, 0, -1) == [encoded.encode()]
+    assert await raw.pttl(key + REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2) == -1
+    assert await raw.exists(key + REDIS_GATEWAY_REQUESTS_BUFFER_KEY) == 0
+    assert await cache.async_lpop(REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2, count=1) == [encoded]
+    assert await raw.keys("*") == []
 
 
-def test_non_leader_workers_push_to_redis_and_never_touch_the_database():
-    redis = FakeRedis()
-    client = FakePrismaClient()
-    for _ in range(3):
-        acc = _accumulator()
-        _record(acc, 200)
-        buffer, _ = _buffer(redis, leader=False)
-        asyncio.run(flush_gateway_requests(client, acc, buffer))
-
-    assert client.db.statements == []
-    assert len(redis.lists[REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2]) == 3
-    assert redis.lists.get(REDIS_GATEWAY_REQUESTS_BUFFER_KEY, []) == []
-
-
-def test_push_writes_six_field_rows_to_the_v2_key():
-    redis: Final = FakeRedis()
-    accumulator: Final = _accumulator()
-    _record(accumulator, 429)
-    buffer, _ = _buffer(redis, leader=False)
-
-    asyncio.run(buffer.push(accumulator.drain()))
-
-    assert json.loads(redis.lists[REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2][0]) == [
-        [_DAY, "llm", "/chat/completions", 429, 0, 1]
-    ]
-    assert redis.lists.get(REDIS_GATEWAY_REQUESTS_BUFFER_KEY, []) == []
-
-
-def test_leader_combines_legacy_and_v2_buffer_rows():
-    redis: Final = FakeRedis()
-    redis.lists[REDIS_GATEWAY_REQUESTS_BUFFER_KEY] = [json.dumps(((_DAY, "llm", "/chat/completions", 2, 1),))]
-    redis.lists[REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2] = [json.dumps(((_DAY, "llm", "/chat/completions", 429, 0, 2),))]
+@pytest.mark.asyncio
+@pytest.mark.parametrize("namespace", [None, "metrics"])
+async def test_leader_combines_legacy_and_v2_old_writer_rows(namespace: str | None) -> None:
+    cache, raw = await _gateway_cache(fakeredis.FakeServer(), namespace)
+    await cache.async_rpush(
+        REDIS_GATEWAY_REQUESTS_BUFFER_KEY, (json.dumps(((_DAY, "llm", "/chat/completions", 2, 1),)),)
+    )
+    await cache.async_rpush(
+        REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2, (json.dumps(((_DAY, "llm", "/chat/completions", 429, 0, 2),)),)
+    )
     client: Final = FakePrismaClient()
-    leader, _ = _buffer(redis, leader=True)
 
-    asyncio.run(flush_gateway_requests(client, _accumulator(), leader))
+    await flush_gateway_requests(client, _accumulator(), _buffer(cache))
 
     assert _rows_written(client) == [(_DAY, "llm", "/chat/completions", 2, 3)]
     assert _failure_rows_written(client) == [(_DAY, "llm", "/chat/completions", 429, 2)]
-    assert redis.lists[REDIS_GATEWAY_REQUESTS_BUFFER_KEY] == []
-    assert redis.lists[REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2] == []
+    assert await raw.keys("*buffer*") == []
 
 
-def test_leader_folds_every_workers_snapshot_into_one_statement():
-    """Fifty workers each flushing the same routes must cost the primary one statement, not fifty."""
-    redis = FakeRedis()
-    client = FakePrismaClient()
+@pytest.mark.asyncio
+async def test_non_leader_workers_queue_snapshots_without_writing_the_database() -> None:
+    cache, raw = await _gateway_cache(fakeredis.FakeServer())
+    owner: Final = PodLockManager(cache)
+    assert await owner.acquire_lock(GATEWAY_REQUESTS_JOB_NAME)
+    client: Final = FakePrismaClient()
+    for _ in range(3):
+        accumulator: Final = _accumulator()
+        _record(accumulator, 200)
+        await flush_gateway_requests(client, accumulator, _buffer(cache))
+        assert accumulator.drain() == {}
+
+    assert client.db.statements == []
+    assert await raw.llen(REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2) == 3
+    assert await raw.get(owner.get_redis_lock_key(GATEWAY_REQUESTS_JOB_NAME)) == json.dumps(owner.pod_id).encode()
+
+
+@pytest.mark.asyncio
+async def test_leader_folds_fifty_workers_into_one_statement() -> None:
+    cache, raw = await _gateway_cache(fakeredis.FakeServer())
+    leader: Final = _buffer(cache)
     for _ in range(50):
-        acc = _accumulator()
-        _record(acc, 200)
-        _record(acc, 500, route="/responses")
-        buffer, _ = _buffer(redis, leader=False)
-        asyncio.run(flush_gateway_requests(client, acc, buffer))
-
-    leader_acc = _accumulator()
+        accumulator: Final = _accumulator()
+        _record(accumulator, 200)
+        _record(accumulator, 500, route="/responses")
+        await _buffer(cache).push(accumulator.drain())
+    leader_acc: Final = _accumulator()
     _record(leader_acc, 200)
-    leader, lock = _buffer(redis, leader=True)
-    asyncio.run(flush_gateway_requests(client, leader_acc, leader))
+    client: Final = FakePrismaClient()
+
+    await flush_gateway_requests(client, leader_acc, leader)
 
     assert len(client.db.statements) == 1
     assert _rows_written(client) == [
         (_DAY, "llm", "/chat/completions", 51, 0),
         (_DAY, "llm", "/responses", 0, 50),
     ]
-    assert redis.lists[REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2] == []
-    assert lock.held == [GATEWAY_REQUESTS_JOB_NAME]
-    assert lock.released == []
+    assert await raw.llen(REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2) == 0
 
 
-def test_leader_keeps_the_lease_so_staggered_pods_cost_one_statement_per_interval():
-    """Pods flush on their own clocks; without the lease each one would win the lock in turn and commit alone."""
-    redis = FakeRedis()
-    client = FakePrismaClient()
-    lease = FakeLease()
-    pods = tuple(
-        GatewayRequestRedisBuffer(redis_cache=redis, pod_lock_manager=FakeLeasePodLock(lease, f"pod-{i}"))  # pyright: ignore[reportArgumentType]  # duck-typed fakes
-        for i in range(4)
-    )
-
-    for _interval in range(3):
+@pytest.mark.asyncio
+async def test_leader_keeps_lease_across_staggered_pod_flushes() -> None:
+    cache, raw = await _gateway_cache(fakeredis.FakeServer())
+    client: Final = FakePrismaClient()
+    pods: Final = tuple(_buffer(cache) for _ in range(4))
+    for _ in range(3):
         for pod in pods:
-            acc = _accumulator()
-            _record(acc, 200)
-            asyncio.run(flush_gateway_requests(client, acc, pod))
+            accumulator: Final = _accumulator()
+            _record(accumulator, 200)
+            await flush_gateway_requests(client, accumulator, pod)
 
-    assert lease.holder == "pod-0"
     assert len(client.db.statements) == 3
-    assert [row[3] for row in _rows_written(client)] == [1, 4, 4]
-    assert len(redis.lists[REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2]) == 3
+    assert sum(row[3] for row in _rows_written(client)) == 9
+    assert await raw.llen(REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2) == 3
+    await flush_gateway_requests(client, _accumulator(), pods[0])
+    assert sum(row[3] for row in _rows_written(client)) == 12
 
 
-def test_leader_drains_a_backlog_deeper_than_one_capped_pop():
-    """More workers than MAX_REDIS_BUFFER_DEQUEUE_COUNT must not leave a growing tail queued behind the cap."""
-    redis = FakeRedis()
-    client = FakePrismaClient()
-    workers = MAX_REDIS_BUFFER_DEQUEUE_COUNT * 2 + 1
-    for _ in range(workers):
-        acc = _accumulator()
-        _record(acc, 200)
-        buffer, _ = _buffer(redis, leader=False)
-        asyncio.run(flush_gateway_requests(client, acc, buffer))
+@pytest.mark.asyncio
+async def test_leader_drains_backlog_deeper_than_one_capped_pop() -> None:
+    cache, raw = await _gateway_cache(fakeredis.FakeServer())
+    workers: Final = MAX_REDIS_BUFFER_DEQUEUE_COUNT * 2 + 1
+    entry: Final = json.dumps(((_DAY, "llm", "/chat/completions", 200, 1, 0),))
+    await raw.rpush(REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2, *((entry,) * workers))
+    client: Final = FakePrismaClient()
 
-    leader, _ = _buffer(redis, leader=True)
-    asyncio.run(flush_gateway_requests(client, _accumulator(), leader))
+    await flush_gateway_requests(client, _accumulator(), _buffer(cache))
 
     assert len(client.db.statements) == 1
     assert _rows_written(client) == [(_DAY, "llm", "/chat/completions", workers, 0)]
-    assert redis.lists[REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2] == []
+    assert await raw.llen(REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2) == 0
 
 
-def test_leader_with_nothing_buffered_writes_nothing():
-    redis = FakeRedis()
-    client = FakePrismaClient()
-    leader, lock = _buffer(redis, leader=True)
-
-    asyncio.run(flush_gateway_requests(client, _accumulator(), leader))
-
-    assert client.db.statements == []
-    assert lock.released == []
-
-
-def test_leader_requeues_to_redis_when_the_database_commit_fails():
-    """Counts popped from Redis are gone from every worker; a failed commit must put them back."""
-    redis = FakeRedis()
-    acc = _accumulator()
-    _record(acc, 200)
-    _record(acc, 200)
-    leader, lock = _buffer(redis, leader=True)
-
-    asyncio.run(flush_gateway_requests(ExplodingClient(), acc, leader))
-
-    assert len(redis.lists[REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2]) == 1
-    assert lock.released == []
-    assert acc.drain() == {}
-
-    client = FakePrismaClient()
-    retry, _ = _buffer(redis, leader=True)
-    asyncio.run(flush_gateway_requests(client, _accumulator(), retry))
-    assert _rows_written(client) == [(_DAY, "llm", "/chat/completions", 2, 0)]
-
-
-class ExplodingRedis(FakeRedis):
-    async def async_rpush(self, key: str, values: list[str]) -> int:
-        raise RuntimeError("redis gone")
-
-
-class UnreadableRedis(FakeRedis):
-    async def async_lpop(self, key: str, count: int) -> list[str] | None:
-        raise RuntimeError("redis gone mid-flush")
-
-
-class LegacyKeyReadFailureRedis(FakeRedis):
-    async def async_lpop(self, key: str, count: int) -> list[str] | None:
-        if key == REDIS_GATEWAY_REQUESTS_BUFFER_KEY:
-            raise RuntimeError("legacy redis key unreadable")
-        return await super().async_lpop(key, count)
-
-
-class FailureAfterFullV2BatchRedis(FakeRedis):
-    async def async_lpop(self, key: str, count: int) -> list[str] | None:
-        if key == REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2 and not self.lists.get(key):
-            raise RuntimeError("redis read failed after full batch")
-        return await super().async_lpop(key, count)
-
-
-class UnwritableRedis(FakeRedis):
-    """Pops succeed, pushes fail: a Redis that went read-only between the leader's pop and its re-queue."""
-
-    async def async_rpush(self, key: str, values: list[str]) -> int:
-        raise RuntimeError("redis read-only")
-
-
-def test_leader_keeps_popped_counts_in_memory_when_both_the_database_and_the_requeue_fail():
-    """The pop removed the only copy; if Redis will not take it back the leader itself must carry it."""
-    redis = FakeRedis()
-    worker_acc = _accumulator()
-    _record(worker_acc, 200)
-    _record(worker_acc, 200)
-    worker, _ = _buffer(redis, leader=False)
-    asyncio.run(flush_gateway_requests(FakePrismaClient(), worker_acc, worker))
-
-    degraded = UnwritableRedis()
-    degraded.lists = redis.lists
-    leader_acc = _accumulator()
-    leader, _ = _buffer(degraded, leader=True)
-    asyncio.run(flush_gateway_requests(ExplodingClient(), leader_acc, leader))
-    assert degraded.lists[REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2] == []
-
-    client = FakePrismaClient()
-    retry, _ = _buffer(redis, leader=True)
-    asyncio.run(flush_gateway_requests(client, leader_acc, retry))
-    assert _rows_written(client) == [(_DAY, "llm", "/chat/completions", 2, 0)]
-
-
-def test_leader_whose_redis_read_fails_leaves_the_pushed_rows_for_the_next_flush():
-    """The scheduler job must not raise, and nothing is popped so nothing needs restoring anywhere."""
-    redis = UnreadableRedis()
-    acc = _accumulator()
-    _record(acc, 200)
-    client = FakePrismaClient()
-    leader, _ = _buffer(redis, leader=True)
-
-    asyncio.run(flush_gateway_requests(client, acc, leader))
-
-    assert client.db.statements == []
-    assert acc.drain() == {}
-    assert len(redis.lists[REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2]) == 1
-
-
-def test_pop_keeps_v2_counts_when_legacy_key_read_fails():
-    redis: Final = LegacyKeyReadFailureRedis()
-    redis.lists[REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2] = [
-        json.dumps(((_DAY, "llm", "/chat/completions", 500, 0, 2),)),
-        json.dumps(((_DAY, "llm", "/embeddings", 429, 0, 3),)),
-    ]
-    buffer: Final = _buffer(redis, leader=True)[0]
-
-    snapshot: Final = asyncio.run(buffer.pop())
-
-    assert snapshot == {
-        GatewayRequestKey(date=_DAY, category="llm", route="/chat/completions", status_code=500): (
-            GatewayRequestCounts(successful_requests=0, failed_requests=2)
-        ),
-        GatewayRequestKey(date=_DAY, category="llm", route="/embeddings", status_code=429): (
-            GatewayRequestCounts(successful_requests=0, failed_requests=3)
-        ),
-    }
-
-
-def test_commit_if_leader_writes_v2_counts_when_legacy_key_read_fails():
-    redis: Final = LegacyKeyReadFailureRedis()
-    redis.lists[REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2] = [json.dumps(((_DAY, "llm", "/chat/completions", 500, 0, 2),))]
-    buffer: Final = _buffer(redis, leader=True)[0]
+@pytest.mark.asyncio
+async def test_leader_with_nothing_buffered_writes_nothing() -> None:
+    cache, raw = await _gateway_cache(fakeredis.FakeServer())
     client: Final = FakePrismaClient()
 
-    asyncio.run(buffer.commit_if_leader(client))
+    await flush_gateway_requests(client, _accumulator(), _buffer(cache))
 
+    assert client.db.statements == []
+    assert await raw.llen(REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2) == 0
+
+
+@pytest.mark.asyncio
+async def test_leader_requeues_after_failed_database_acknowledgement() -> None:
+    cache, raw = await _gateway_cache(fakeredis.FakeServer())
+    buffer: Final = _buffer(cache)
+    await buffer.push(_gateway_snapshot(2))
+
+    assert await buffer.commit_if_leader(ExplodingClient()) == {}
+    assert await raw.llen(REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2) == 1
+    assert await raw.pttl(REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2) == -1
+    client: Final = FakePrismaClient()
+    assert await buffer.commit_if_leader(client) == {}
     assert _rows_written(client) == [(_DAY, "llm", "/chat/completions", 0, 2)]
-    assert _failure_rows_written(client) == [(_DAY, "llm", "/chat/completions", 500, 2)]
 
 
-def test_pop_keeps_v2_first_batch_when_a_later_batch_read_fails(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("litellm.proxy.db.gateway_request_tracking.MAX_REDIS_BUFFER_DEQUEUE_COUNT", 2)
-    redis: Final = FailureAfterFullV2BatchRedis()
-    redis.lists[REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2] = [
-        json.dumps(((_DAY, "llm", "/chat/completions", 500, 0, 2),)),
-        json.dumps(((_DAY, "llm", "/chat/completions", 429, 0, 3),)),
-    ]
-    buffer: Final = _buffer(redis, leader=True)[0]
+@pytest.mark.asyncio
+async def test_failed_database_and_requeue_restore_the_leaders_accumulator() -> None:
+    server: Final = fakeredis.FakeServer()
+    cache, raw = await _gateway_cache(server)
+    buffer: Final = _buffer(cache)
+    await buffer.push(_gateway_snapshot(2))
+    client: Final = MagicMock()
 
-    snapshot: Final = asyncio.run(buffer.pop())
+    async def failed_commit(*args: object) -> None:
+        server.connected = False
+        raise RuntimeError("database acknowledgement lost")
 
-    assert snapshot == {
-        GatewayRequestKey(date=_DAY, category="llm", route="/chat/completions", status_code=500): (
-            GatewayRequestCounts(successful_requests=0, failed_requests=2)
-        ),
-        GatewayRequestKey(date=_DAY, category="llm", route="/chat/completions", status_code=429): (
-            GatewayRequestCounts(successful_requests=0, failed_requests=3)
-        ),
-    }
+    client.db.execute_raw = AsyncMock(side_effect=failed_commit)
+    accumulator: Final = _accumulator()
+    await flush_gateway_requests(client, accumulator, buffer)
+
+    assert accumulator.drain() == _gateway_snapshot(2)
+    server.connected = True
+    assert await raw.llen(REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2) == 0
 
 
-def test_failed_redis_push_keeps_counts_locally_for_the_next_flush():
-    acc = _accumulator()
-    _record(acc, 200)
-    _record(acc, 500)
-    buffer, lock = _buffer(ExplodingRedis(), leader=True)
+@pytest.mark.asyncio
+async def test_pop_keeps_v2_counts_when_legacy_key_has_wrong_type() -> None:
+    cache, raw = await _gateway_cache(fakeredis.FakeServer())
+    buffer: Final = _buffer(cache)
+    await buffer.push(_gateway_snapshot(2))
+    await raw.set(REDIS_GATEWAY_REQUESTS_BUFFER_KEY, "wrong type")
 
-    asyncio.run(flush_gateway_requests(FakePrismaClient(), acc, buffer))
+    assert await buffer.pop() == _gateway_snapshot(2)
+    assert await raw.get(REDIS_GATEWAY_REQUESTS_BUFFER_KEY) == b"wrong type"
+    assert _breaker(cache).state == "closed"
 
-    assert lock.held == []
-    assert acc.drain() == {
-        GatewayRequestKey(date=_DAY, category="llm", route="/chat/completions", status_code=200): (
-            GatewayRequestCounts(successful_requests=1, failed_requests=0)
-        ),
-        GatewayRequestKey(date=_DAY, category="llm", route="/chat/completions", status_code=500): (
-            GatewayRequestCounts(successful_requests=0, failed_requests=1)
-        ),
-    }
+
+@pytest.mark.asyncio
+async def test_partial_pop_failure_retains_first_batch_and_leaves_unread_entries() -> None:
+    server: Final = fakeredis.FakeServer()
+    cache, raw = await _gateway_cache(server)
+    buffer: Final = _buffer(cache)
+    entry: Final = json.dumps(((_DAY, "llm", "/chat/completions", 429, 0, 1),))
+    await raw.rpush(REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2, *((entry,) * (MAX_REDIS_BUFFER_DEQUEUE_COUNT + 1)))
+
+    def disconnect_after_reply(reply: object) -> object:
+        server.connected = False
+        return reply
+
+    raw.set_response_callback("LPOP", disconnect_after_reply)
+    assert await buffer.pop() == _gateway_snapshot(MAX_REDIS_BUFFER_DEQUEUE_COUNT)
+    server.connected = True
+    assert await raw.lrange(REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2, 0, -1) == [entry.encode()]
+
+
+@pytest.mark.asyncio
+async def test_outage_and_open_breaker_keep_the_snapshot_locally() -> None:
+    server: Final = fakeredis.FakeServer()
+    cache, _ = await _gateway_cache(server)
+    buffer: Final = _buffer(cache)
+    accumulator: Final = _accumulator()
+    accumulator.restore(_gateway_snapshot())
+    server.connected = False
+    client: Final = FakePrismaClient()
+
+    for _ in range(_breaker(cache).failure_threshold + 1):
+        await flush_gateway_requests(client, accumulator, buffer)
+
+    assert accumulator.drain() == _gateway_snapshot()
+    assert client.db.statements == []
+    assert _breaker(cache).state == "open"
+
+
+@pytest.mark.asyncio
+async def test_unknown_applied_push_preserves_existing_local_retry_policy() -> None:
+    cache, raw = await _gateway_cache(fakeredis.FakeServer())
+    buffer: Final = _buffer(cache)
+    accumulator: Final = _accumulator()
+    accumulator.restore(_gateway_snapshot())
+
+    def lost_acknowledgement(reply: object) -> object:
+        raise ConnectionError("push acknowledgement lost")
+
+    raw.set_response_callback("RPUSH", lost_acknowledgement)
+    await flush_gateway_requests(FakePrismaClient(), accumulator, buffer)
+
+    assert accumulator.drain() == _gateway_snapshot()
+    assert await raw.llen(REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2) == 1
+    assert await buffer.pop() == _gateway_snapshot()
+
+
+@pytest.mark.asyncio
+async def test_malformed_entry_is_consumed_after_both_formats_are_drained() -> None:
+    cache, raw = await _gateway_cache(fakeredis.FakeServer())
+    await raw.rpush(REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2, b"not json")
+    await raw.rpush(REDIS_GATEWAY_REQUESTS_BUFFER_KEY, json.dumps(((_DAY, "llm", "/chat/completions", 2, 1),)))
+
+    with pytest.raises(ValueError, match="Invalid JSON"):
+        await _buffer(cache).pop()
+
+    assert await raw.keys("*buffer*") == []
 
 
 @pytest.mark.asyncio

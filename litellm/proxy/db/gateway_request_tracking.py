@@ -20,14 +20,11 @@ Redis list and one lock-holding pod folds every entry and writes the tables, so
 the deployment as a whole costs the primary one statement per interval.
 """
 
-import json
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator
 from datetime import datetime
 from itertools import chain, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeAlias
-
-from pydantic import TypeAdapter
+from typing import TYPE_CHECKING, Final
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -35,12 +32,17 @@ from litellm.caching import RedisCache
 from litellm.constants import (
     GATEWAY_REQUESTS_MAX_ROWS_PER_UPSERT,
     MAX_REDIS_BUFFER_DEQUEUE_COUNT,
-    REDIS_GATEWAY_REQUESTS_BUFFER_KEY,
-    REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2,
 )
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.middleware.billable_request_metrics_middleware import BillableCategory
+from litellm.redis.stores.gateway_request_buffer import (
+    BufferVersion,
+    GatewayRequestBatch,
+    GatewayRequestBufferStore,
+    TransportGatewayRequestBufferStore,
+)
+from litellm.redis.transport.contract import RedisFailure
 from litellm.types.proxy.gateway_requests import (
     GatewayRequestCounts,
     GatewayRequestKey,
@@ -60,13 +62,6 @@ _COLUMNS_PER_ROW: Final = 5
 _UTC_NOW: Final = "(NOW() AT TIME ZONE 'UTC')"
 GATEWAY_REQUESTS_JOB_NAME: Final = "update_gateway_requests_job"
 
-_BufferedRow: TypeAlias = tuple[str, str, str, int | None, int, int]
-_LegacyBufferedRow: TypeAlias = tuple[str, str, str, int, int]
-_BufferedRows: TypeAlias = tuple[_BufferedRow, ...]
-_LegacyBufferedRows: TypeAlias = tuple[_LegacyBufferedRow, ...]
-_BUFFERED_ROWS: Final = TypeAdapter(_BufferedRows)
-_LEGACY_BUFFERED_ROWS: Final = TypeAdapter(_LegacyBufferedRows)
-_BUFFERED_ENTRIES: Final = TypeAdapter(tuple[str | bytes, ...])
 _NO_COUNTS: Final[GatewayRequestSnapshot] = MappingProxyType({})
 
 
@@ -119,25 +114,6 @@ def fold_counts(items: Iterable[tuple[GatewayRequestKey, GatewayRequestCounts]])
             failed_requests=existing.failed_requests + counts.failed_requests,
         )
     return folded
-
-
-def _decode_v2_entries(entries: Iterable[str | bytes]) -> Iterator[_BufferedRow]:
-    for entry in entries:
-        yield from _BUFFERED_ROWS.validate_json(entry)
-
-
-def _decode_legacy_entries(entries: Iterable[str | bytes]) -> Iterator[_BufferedRow]:
-    for entry in entries:
-        for date, category, route, succeeded, failed in _LEGACY_BUFFERED_ROWS.validate_json(entry):
-            yield date, category, route, None, succeeded, failed
-
-
-def _buffered_counts(rows: Iterable[_BufferedRow]) -> Iterator[tuple[GatewayRequestKey, GatewayRequestCounts]]:
-    for date, category, route, status_code, succeeded, failed in rows:
-        yield (
-            GatewayRequestKey(date=date, category=category, route=route, status_code=status_code),
-            GatewayRequestCounts(successful_requests=succeeded, failed_requests=failed),
-        )
 
 
 def build_gateway_requests_upsert(snapshot: GatewayRequestSnapshot) -> tuple[str, tuple[str | int, ...]]:
@@ -271,62 +247,51 @@ class GatewayRequestRedisBuffer:
     """
 
     def __init__(self, *, redis_cache: RedisCache, pod_lock_manager: PodLockManager) -> None:
-        self._redis_cache: Final = redis_cache
+        self._store: Final[GatewayRequestBufferStore] = TransportGatewayRequestBufferStore(redis_cache.transport())
         self._pod_lock_manager: Final = pod_lock_manager
 
     @with_service_target(_GATEWAY_REQUEST_QUEUE_TARGET)
     async def push(self, snapshot: GatewayRequestSnapshot) -> None:
-        if not snapshot:
-            return
-        rows: Final[_BufferedRows] = tuple(
-            (key.date, key.category, key.route, key.status_code, counts.successful_requests, counts.failed_requests)
-            for key, counts in snapshot.items()
-        )
-        await self._redis_cache.async_rpush(  # pyright: ignore[reportUnknownMemberType]  # redis cache span parameter is untyped
-            key=REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2, values=(json.dumps(rows),)
-        )
-
-    @with_service_target(_GATEWAY_REQUEST_QUEUE_TARGET)
-    async def _pop_batch(self, key: str) -> tuple[str | bytes, ...]:
-        popped: Final[object] = await self._redis_cache.async_lpop(  # pyright: ignore[reportAny]  # redis returns Any
-            key=key, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT
-        )
-        if not popped:
-            return ()
-        return _BUFFERED_ENTRIES.validate_python(popped if isinstance(popped, list) else (popped,))
-
-    async def _pop_all(self, key: str) -> AsyncIterator[str | bytes]:
-        while True:
-            batch = await self._pop_batch(key)
-            for entry in batch:
-                yield entry
-            if len(batch) < MAX_REDIS_BUFFER_DEQUEUE_COUNT:
+        result: Final = await self._store.append(snapshot)
+        match result:
+            case RedisFailure(message=message):
+                raise RuntimeError(message)
+            case None:
                 return
 
-    async def _pop_until_failure(self, key: str) -> AsyncIterator[str | bytes]:
+    @with_service_target(_GATEWAY_REQUEST_QUEUE_TARGET)
+    async def _pop_batch(self, version: BufferVersion) -> GatewayRequestBatch:
+        result: Final = await self._store.take(version, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT)
+        match result:
+            case RedisFailure(message=message):
+                raise RuntimeError(message)
+            case _:
+                return result
+
+    async def _pop_all(self, version: BufferVersion) -> AsyncIterator[GatewayRequestBatch]:
+        while batch := await self._pop_batch(version):
+            yield batch
+            if len(batch.entries) < MAX_REDIS_BUFFER_DEQUEUE_COUNT:
+                return
+
+    async def _pop_until_failure(self, version: BufferVersion) -> AsyncIterator[GatewayRequestBatch]:
         try:
-            async for entry in self._pop_all(key):
-                yield entry
+            async for batch in self._pop_all(version):
+                yield batch
         except Exception:  # noqa: BLE001 -- fold what was already popped; unread entries stay queued in Redis
             verbose_proxy_logger.warning(
-                "Gateway request tracking - Redis read of %s failed, folding the entries already popped",
-                key,
-                exc_info=True,
+                "Gateway request tracking - folding the %s batches already drained", version, exc_info=True
             )
 
     async def pop(self) -> GatewayRequestSnapshot:
-        entries_v2: Final = tuple(
-            [entry async for entry in self._pop_until_failure(REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2)]
-        )
-        legacy_entries: Final = tuple(
-            [entry async for entry in self._pop_until_failure(REDIS_GATEWAY_REQUESTS_BUFFER_KEY)]
-        )
-        return fold_counts(
-            chain(
-                _buffered_counts(_decode_v2_entries(entries_v2)),
-                _buffered_counts(_decode_legacy_entries(legacy_entries)),
-            )
-        )
+        batches_v2: Final = tuple([batch async for batch in self._pop_until_failure("v2")])
+        legacy_batches: Final = tuple([batch async for batch in self._pop_until_failure("legacy")])
+        result: Final = self._store.decode(batches_v2 + legacy_batches)
+        match result:
+            case RedisFailure(message=message):
+                raise ValueError(message)
+            case _:
+                return fold_counts(result)
 
     async def commit_if_leader(self, prisma_client: "PrismaClient") -> GatewayRequestSnapshot:
         """
