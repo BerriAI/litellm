@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from itertools import product
 from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit
@@ -304,13 +305,7 @@ def test_the_actor_is_the_key_users_email_then_their_id(rig: Rig, guardrail: str
 
 
 def _burst(rig: Rig) -> tuple[httpx.Response, ...]:
-    plan: Final = [
-        (endpoint, guardrail, stream)
-        for endpoint in ENDPOINTS
-        for guardrail in (PINNED, DISCOVERY)
-        for stream in (False, True)
-        for _ in range(2)
-    ]
+    plan: Final = tuple(product(ENDPOINTS, (PINNED, DISCOVERY), (False, True), range(2)))
     with ThreadPoolExecutor(max_workers=12) as pool:
         return tuple(
             pool.map(

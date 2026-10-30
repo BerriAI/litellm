@@ -1,4 +1,5 @@
 import base64
+from typing import Final
 
 from litellm.proxy.guardrails.guardrail_hooks.ovalix.ovalix_extraction import (
     extract_file_parts_from_images,
@@ -288,7 +289,7 @@ def test_extract_tool_results_skips_non_dict_messages_and_tool_calls():
 
 
 def test_tool_result_takes_its_name_from_the_nearest_earlier_declaration():
-    msgs = [
+    msgs: Final = [
         {"role": "assistant", "tool_calls": [{"id": "c1", "function": {"name": "first"}}]},
         {"role": "tool", "tool_call_id": "c1", "content": "r1"},
         {
@@ -313,8 +314,10 @@ class _ReadCountingMessage(dict):
 
 
 def _reads_of_a_declaration_followed_by(tool_results):
-    declaration = _ReadCountingMessage(role="assistant", tool_calls=[{"id": "c0", "function": {"name": "f"}}])
-    tool_messages = [{"role": "tool", "tool_call_id": f"c{index}", "content": "x"} for index in range(tool_results)]
+    declaration: Final = _ReadCountingMessage(role="assistant", tool_calls=[{"id": "c0", "function": {"name": "f"}}])
+    tool_messages: Final = [
+        {"role": "tool", "tool_call_id": f"c{index}", "content": "x"} for index in range(tool_results)
+    ]
     extract_tool_results([declaration, *tool_messages])
     return declaration.reads
 
