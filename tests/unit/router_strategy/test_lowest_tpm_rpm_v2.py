@@ -6,6 +6,7 @@ import importlib
 import os
 import time
 import traceback
+from datetime import datetime, timezone
 from typing import Dict, Final, Iterator
 
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -717,3 +718,120 @@ def setup_and_teardown():
         if hasattr(litellm, "in_memory_llm_clients_cache"):
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
+
+
+_OVER_TPM_MESSAGES: Final = [{"role": "user", "content": "word " * 500}]
+
+
+def _deployment_with_tpm(deployment_id: str, tpm: int) -> DeploymentTypedDict:
+    return {
+        "model_name": "limited",
+        "litellm_params": {
+            "model": "openai/gpt-4o",
+            "api_key": "fake-key",
+            "api_base": f"https://{deployment_id}.example.com/v1",
+            "tpm": tpm,
+        },
+        "model_info": {"id": deployment_id},
+    }
+
+
+def _record_usage(router: Router, deployment_id: str, total_tokens: int) -> None:
+    from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
+
+    payload: Final = create_standard_logging_payload()
+    payload["model_group"] = "limited"
+    payload["model_id"] = deployment_id
+    payload["total_tokens"] = total_tokens
+    payload["hidden_params"]["litellm_model_name"] = "openai/gpt-4o"
+    router.lowesttpm_logger_v2.log_success_event(
+        response_obj={"usage": {"total_tokens": total_tokens}},
+        kwargs={
+            "litellm_params": {"metadata": {"model_group": "limited"}, "model_info": {"id": deployment_id}},
+            "standard_logging_object": payload,
+        },
+        start_time=time.time(),
+        end_time=time.time(),
+    )
+
+
+def _assert_names_size_and_largest_limit(refused: litellm.RequestOverDeploymentTpmError) -> None:
+    message: Final = str(refused)
+    assert "No deployments available" in message
+    assert f"estimated at {litellm.token_counter(messages=_OVER_TPM_MESSAGES)} input tokens" in message
+    assert "largest tpm limit of 200" in message
+    assert refused.status_code == 429
+    assert refused.category == "litellm_rate_limit"
+    assert refused.rate_limit_type == "tokens"
+    assert "retry-after" not in refused.response.headers
+
+
+@pytest.mark.asyncio
+async def test_async_request_over_every_tpm_limit_names_its_size_and_is_not_retried():
+    router: Final = Router(
+        model_list=[_deployment_with_tpm("small", 100), _deployment_with_tpm("smaller", 200)],
+        routing_strategy="usage-based-routing-v2",
+        num_retries=1,
+    )
+
+    metadata: Final = {"caller": "test"}
+
+    with pytest.raises(litellm.RequestOverDeploymentTpmError) as refused:
+        await router.acompletion(model="limited", messages=_OVER_TPM_MESSAGES, metadata=metadata)
+
+    _assert_names_size_and_largest_limit(refused.value)
+    assert metadata["attempted_retries"] == 0
+
+
+def test_sync_request_over_every_tpm_limit_names_its_size():
+    router: Final = Router(
+        model_list=[_deployment_with_tpm("small", 100), _deployment_with_tpm("smaller", 200)],
+        routing_strategy="usage-based-routing-v2",
+    )
+
+    with pytest.raises(litellm.RequestOverDeploymentTpmError) as refused:
+        router.get_available_deployment(model="limited", messages=_OVER_TPM_MESSAGES)
+
+    _assert_names_size_and_largest_limit(refused.value)
+
+
+@pytest.mark.asyncio
+async def test_request_over_every_tpm_limit_still_takes_the_group_fallback():
+    router: Final = Router(
+        model_list=[
+            _deployment_with_tpm("small", 100),
+            {
+                "model_name": "unlimited",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key", "mock_response": "fallback answer"},
+            },
+        ],
+        routing_strategy="usage-based-routing-v2",
+        fallbacks=[{"limited": ["unlimited"]}],
+    )
+
+    response: Final = await router.acompletion(model="limited", messages=_OVER_TPM_MESSAGES)
+
+    assert response.choices[0].message.content == "fallback answer"
+
+
+@pytest.mark.parametrize("spare_tokens", [0, 400])
+@pytest.mark.asyncio
+async def test_request_within_the_largest_tpm_limit_refused_on_usage_stays_retryable(spare_tokens: int):
+    estimated_tokens: Final = litellm.token_counter(messages=_OVER_TPM_MESSAGES)
+    router: Final = Router(
+        model_list=[_deployment_with_tpm("small", 100), _deployment_with_tpm("busy", estimated_tokens + spare_tokens)],
+        routing_strategy="usage-based-routing-v2",
+    )
+
+    with patch(
+        "litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime",
+        return_value=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+    ):
+        _record_usage(router, deployment_id="busy", total_tokens=spare_tokens + 1)
+        with pytest.raises(litellm.RateLimitError) as refused:
+            await router.async_get_available_deployment(
+                model="limited", messages=_OVER_TPM_MESSAGES, request_kwargs={"metadata": {}}
+            )
+
+    assert not isinstance(refused.value, litellm.RequestOverDeploymentTpmError)
+    assert refused.value.response.headers["retry-after"] == "60"

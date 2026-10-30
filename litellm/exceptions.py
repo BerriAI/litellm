@@ -604,6 +604,11 @@ class CallerCredentialRateLimitError(RateLimitError):
     credential, so routers must not cool down the shared deployment."""
 
 
+class RequestOverDeploymentTpmError(RateLimitError):
+    """429 raised when one request alone is estimated over the tpm limit of every
+    deployment the router can pick, so a retry can never clear it."""
+
+
 # sub class of rate limit error - meant to give more granularity for error handling context window exceeded errors
 class ContextWindowExceededError(BadRequestError):
     def __init__(

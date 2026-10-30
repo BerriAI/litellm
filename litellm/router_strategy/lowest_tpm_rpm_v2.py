@@ -14,6 +14,7 @@ from litellm import token_counter
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching.caching import DualCache
+from litellm.exceptions import RateLimitErrorCategory, RateLimitType, RequestOverDeploymentTpmError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
@@ -36,6 +37,15 @@ class RoutingArgs(LiteLLMPydanticObjectBase):
 
 
 _active_prefetched_usage: Final[ContextVar["PrefetchedUsage | None"]] = ContextVar("prefetched_usage", default=None)
+
+
+def _deployment_tpm_limit(deployment: Mapping[str, Any]) -> float:
+    configured_limits: Final[tuple[float | None, ...]] = (
+        deployment.get("tpm"),
+        deployment.get("litellm_params", {}).get("tpm"),
+        deployment.get("model_info", {}).get("tpm"),
+    )
+    return next((limit for limit in configured_limits if limit is not None), float("inf"))
 
 
 @dataclass(frozen=True)
@@ -344,7 +354,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
 
     def _return_potential_deployments(
         self,
-        healthy_deployments: list[dict],
+        healthy_deployments: Sequence[dict[str, Any]],
         all_deployments: dict,
         input_tokens: int,
         rpm_dict: dict,
@@ -363,15 +373,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             elif item_tpm is None:
                 continue  # skip if unhealthy deployment
 
-            _deployment_tpm = None
-            if _deployment_tpm is None:
-                _deployment_tpm = _deployment.get("tpm")
-            if _deployment_tpm is None:
-                _deployment_tpm = _deployment.get("litellm_params", {}).get("tpm")
-            if _deployment_tpm is None:
-                _deployment_tpm = _deployment.get("model_info", {}).get("tpm")
-            if _deployment_tpm is None:
-                _deployment_tpm = float("inf")
+            _deployment_tpm = _deployment_tpm_limit(_deployment)
 
             _deployment_rpm = None
             if _deployment_rpm is None:
@@ -398,7 +400,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
     def _common_checks_available_deployment(
         self,
         model_group: str,
-        healthy_deployments: list,
+        healthy_deployments: Sequence[dict[str, Any]],
         tpm_keys: list,
         tpm_values: Sequence | None,
         rpm_keys: list,
@@ -453,8 +455,22 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
 
         if len(potential_deployments) > 0:
             return random.choice(potential_deployments)
-        else:
-            return None
+
+        largest_tpm_limit: Final = max(map(_deployment_tpm_limit, healthy_deployments), default=float("inf"))
+        if input_tokens > largest_tpm_limit:
+            raise RequestOverDeploymentTpmError(
+                message=(
+                    f"{RouterErrors.no_deployments_available.value}. Passed model={model_group}. "
+                    f"This request alone is estimated at {input_tokens} input tokens, over the largest tpm limit "
+                    f"of {largest_tpm_limit} in this model group, so retrying cannot help. "
+                    "Send a smaller request or raise the deployment's tpm"
+                ),
+                llm_provider="",
+                model=model_group,
+                category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+                rate_limit_type=RateLimitType.TOKENS,
+            )
+        return None
 
     def usage_counter_keys(self, healthy_deployments: list) -> tuple[list[str], list[str]]:
         """The `<id>:<model>:tpm:<HH-MM>` and `<id>:<model>:rpm:<HH-MM>` counter keys selection reads."""

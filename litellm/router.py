@@ -9331,7 +9331,7 @@ class Router(DeprecatedRouterMembers):
             response = add_retry_headers_to_response(response=response, attempted_retries=0, max_retries=None)
             return response
         except Exception as e:
-            if is_guardrail_intervention(e):
+            if is_guardrail_intervention(e) or isinstance(e, litellm.RequestOverDeploymentTpmError):
                 raise
             current_attempt = None
             original_exception = e
