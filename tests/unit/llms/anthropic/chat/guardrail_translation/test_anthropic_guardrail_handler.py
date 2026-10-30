@@ -661,16 +661,18 @@ class TestAnthropicMessagesHandlerInputProcessing:
                 {"name": "get_stock", "input_schema": {"type": "object", "properties": {}}, "defer_loading": True},
                 {"name": "get_weather", "input_schema": {"type": "object", "properties": {}}, "defer_loading": False},
                 {"name": "get_time", "input_schema": {"type": "object", "properties": {}}},
+                {"name": "get_quote", "input_schema": {"type": "object", "properties": {}}, "custom": {"defer_loading": True}},
             ],
         }
 
         await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
-        assert [(tool["name"], tool.get("defer_loading")) for tool in data["tools"]] == [
-            ("tool_search_tool_regex", None),
-            ("get_stock", True),
-            ("get_weather", False),
-            ("get_time", None),
+        assert [(tool["name"], tool.get("defer_loading"), tool.get("custom")) for tool in data["tools"]] == [
+            ("tool_search_tool_regex", None, None),
+            ("get_stock", True, None),
+            ("get_weather", False, None),
+            ("get_time", None, None),
+            ("get_quote", None, {"defer_loading": True}),
         ]
 
     @pytest.mark.asyncio
