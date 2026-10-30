@@ -338,7 +338,10 @@ async def test_the_cache_transport_reports_to_the_caches_service_logger(server: 
 
 
 @pytest.mark.asyncio
-async def test_without_a_service_callback_no_event_is_built(server: fakeredis.FakeServer) -> None:
+async def test_without_a_service_callback_no_event_is_built(
+    server: fakeredis.FakeServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "service_callback", [])
     service_logger = ServiceLogging(mock_testing=True)
     transport = fake_redis_cache(server, service_logger=service_logger).transport()
     await _settle()
