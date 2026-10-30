@@ -865,6 +865,16 @@ def test_a_missing_remote_image_is_refused_without_a_call_to_clef(allowlisted: G
 
 
 @pytest.mark.timeout(_OWNED_TIMEOUT)
+def test_remote_images_past_clefs_count_are_never_downloaded_under_drop_params(
+    allowlisted: Gateway, wire: Wire
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    images: Final = [f"{wire.url}/image.png?n={index}&id=marker-{marker}" for index in range(6)]
+    response: Final = _decide(allowlisted, "/v1/systemone", _ALLOWLISTED_MODEL, marker, images, drop_params=True)
+    assert response.status_code == 200, response.text
+    assert sorted(method for method, _ in _routes(wire.drain())) == ["GET"] * 4 + ["POST"]
+
+
 def test_a_remote_page_that_is_not_an_image_is_refused_without_a_call_to_clef(allowlisted: Gateway, wire: Wire) -> None:
     marker: Final = uuid.uuid4().hex
     response: Final = _decide(

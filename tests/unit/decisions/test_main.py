@@ -4568,6 +4568,35 @@ async def test_a_remote_image_that_fails_to_download_is_dropped_under_drop_param
     ]
 
 
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("one_missing_remote_image")
+@pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
+async def test_remote_images_past_the_count_are_never_downloaded_under_drop_params(
+    sync: bool, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+    urls: Final = tuple(f"https://images.example/{index}.png" for index in range(10))
+    downloads: Final = tuple(
+        respx_mock.get(url).respond(content=_FOUND_PNG, headers={"content-type": "image/png"}) for url in urls
+    )
+    request_kwargs: Final = {
+        "model": "perplexity/pplx-decider-v1.2",
+        "state": _SCREEN_TEXT,
+        "questions": _SYSTEMONE_PREDICATE,
+        "images": list(urls),
+        "api_key": "k",
+        "drop_params": True,
+    }
+
+    if sync:
+        litellm.systemone(**request_kwargs)
+    else:
+        await litellm.asystemone(**request_kwargs)
+
+    assert [download.call_count for download in downloads] == [1] * 8 + [0] * 2
+    assert len(json.loads(route.calls.last.request.content)["state"]) == 9
+
+
 _UNDROPPABLE_DOWNLOAD_FAILURES: Final[tuple[tuple[str, Mapping[str, object]], ...]] = (
     ("asystemone", {"state": _SCREEN_TEXT, "questions": _SYSTEMONE_PREDICATE, "images": [_MISSING_IMAGE_URL]}),
     (
@@ -4620,7 +4649,12 @@ async def test_image_bytes_that_are_not_an_image_the_model_takes_are_dropped_und
         "model": model,
         "state": _SCREEN_TEXT,
         "questions": _SYSTEMONE_PREDICATE,
-        "images": [{"content_type": "image/png", "base64": _NOT_AN_IMAGE_BASE64}, gif, _PNG_DATA_URL],
+        "images": [
+            {"content_type": "image/png", "base64": _NOT_AN_IMAGE_BASE64},
+            {"content_type": "image/png", "base64": "\u00e9" * 8},
+            gif,
+            _PNG_DATA_URL,
+        ],
         "api_key": "k",
         "drop_params": True,
     }
@@ -4695,7 +4729,7 @@ def _refused_then_answered(status: int) -> tuple[httpx.Response, httpx.Response]
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
-@pytest.mark.parametrize("status", (400, 413, 422))
+@pytest.mark.parametrize("status", (400, 408, 413, 422))
 @pytest.mark.parametrize(("model", "url"), _PERPLEXITY_IMAGE_TYPE_MODELS, ids=_PERPLEXITY_IMAGE_TYPE_MODEL_IDS)
 async def test_a_request_whose_images_the_model_refuses_is_sent_again_without_them_under_drop_params(
     sync: bool, status: int, model: str, url: str, respx_mock: respx.MockRouter
@@ -4715,6 +4749,100 @@ async def test_a_request_whose_images_the_model_refuses_is_sent_again_without_th
         ],
         _SCREEN_TEXT,
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
+async def test_a_request_whose_images_time_out_is_sent_again_without_them_under_drop_params(
+    sync: bool, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).mock(
+        side_effect=(httpx.ReadTimeout("too slow"), httpx.Response(200, json=_RESPONSE))
+    )
+
+    if sync:
+        litellm.systemone(model="perplexity/pplx-decider-v1.2", **_UNDECODABLE_PNG_REQUEST)
+    else:
+        await litellm.asystemone(model="perplexity/pplx-decider-v1.2", **_UNDECODABLE_PNG_REQUEST)
+
+    assert route.call_count == 2
+    assert json.loads(route.calls.last.request.content)["state"] == _SCREEN_TEXT
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_account")
+@pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
+async def test_a_refusal_from_a_model_that_always_took_images_is_not_sent_again_under_drop_params(
+    sync: bool, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").mock(side_effect=_refused_then_answered(422))
+    request_kwargs: Final = {
+        "model": "cloudflare/clef",
+        "state": _SCREEN_TEXT,
+        "questions": _SYSTEMONE_PREDICATE,
+        "images": [_PNG_DATA_URL],
+        "drop_params": True,
+    }
+
+    if sync:
+        with pytest.raises(litellm.BadRequestError):
+            litellm.systemone(**request_kwargs)
+    else:
+        with pytest.raises(litellm.BadRequestError):
+            await litellm.asystemone(**request_kwargs)
+
+    assert route.call_count == 1
+
+
+_NOT_AN_IMAGE_REQUEST: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "questions": _SYSTEMONE_PREDICATE,
+        "images": [{"content_type": "image/png", "base64": _NOT_AN_IMAGE_BASE64}],
+        "drop_params": True,
+    }
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_account")
+@pytest.mark.parametrize("state", ("", [], {}), ids=("string", "list", "object"))
+async def test_an_empty_state_with_only_a_dropped_image_is_refused_when_the_model_always_took_images(
+    state: object, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError):
+        await litellm.asystemone(model="cloudflare/clef", state=state, **_NOT_AN_IMAGE_REQUEST)
+
+    assert route.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_account")
+async def test_an_empty_state_keeps_the_images_that_survive_a_drop(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+
+    await litellm.asystemone(
+        model="cloudflare/clef",
+        state="",
+        questions=_SYSTEMONE_PREDICATE,
+        images=[{"content_type": "image/png", "base64": _NOT_AN_IMAGE_BASE64}, _PNG_DATA_URL],
+        drop_params=True,
+    )
+
+    assert json.loads(route.calls.last.request.content)["images"] == [_PNG_DATA_URL]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ("", [], {}), ids=("string", "list", "object"))
+async def test_an_empty_state_with_only_a_dropped_image_still_reaches_a_model_that_took_no_images_on_main(
+    state: object, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    await litellm.asystemone(model="perplexity/pplx-decider-v1.2", state=state, api_key="k", **_NOT_AN_IMAGE_REQUEST)
+
+    assert json.loads(route.calls.last.request.content)["state"] == state
 
 
 @pytest.mark.asyncio

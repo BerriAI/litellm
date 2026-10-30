@@ -1,5 +1,4 @@
 import base64
-import binascii
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -601,12 +600,24 @@ def _is_not_one_of(urls: frozenset[str], image: DecisionsImage) -> bool:
     return not isinstance(image, str) or image not in urls
 
 
+def _leaves_nothing_to_decide_on(call: DecisionsCall, kept_input: DecisionsIRState | DecisionsIRMessages) -> bool:
+    if _leaves_no_input(kept_input):
+        return True
+    return (
+        not call.provider_config.images_in_state
+        and isinstance(kept_input, DecisionsIRState)
+        and not kept_input.images
+        and not kept_input.state
+    )
+
+
 def _with_downloads_or_dropped_failures(
     call: DecisionsCall, downloads: Mapping[str, str | litellm.ImageFetchError]
 ) -> DecisionsCall:
     failures: Final = tuple(result for result in downloads.values() if isinstance(result, litellm.ImageFetchError))
     failed_urls: Final = frozenset(url for url, result in downloads.items() if not isinstance(result, str))
-    if failures and _leaves_no_input(with_images_where(call.ir_request.input, partial(_is_not_one_of, failed_urls))):
+    kept_input: Final = with_images_where(call.ir_request.input, partial(_is_not_one_of, failed_urls))
+    if failures and _leaves_nothing_to_decide_on(call, kept_input):
         raise failures[0]
     return _with_images_replaced(
         call, MappingProxyType({url: result for url, result in downloads.items() if isinstance(result, str)})
@@ -685,7 +696,7 @@ def _with_images_kept(
 def _dropped_or_refused(
     call: DecisionsCall, kept_input: DecisionsIRState | DecisionsIRMessages, refusal: str
 ) -> DecisionsCall:
-    if _drops_params(call.litellm_params) and not _leaves_no_input(kept_input):
+    if _drops_params(call.litellm_params) and not _leaves_nothing_to_decide_on(call, kept_input):
         return replace(call, ir_request=replace(call.ir_request, input=kept_input))
     raise _refusal(call, refusal)
 
@@ -701,12 +712,14 @@ def _checked_image_types(call: DecisionsCall) -> DecisionsCall:
 
 
 def _refused_over_count(call: DecisionsCall) -> DecisionsCall:
-    error: Final = _count_error(
-        call.provider_config.image_rules_for(call.model).max_images, len(input_images(call.ir_request.input))
-    )
-    if error is None or _drops_params(call.litellm_params):
+    max_images: Final = call.provider_config.image_rules_for(call.model).max_images
+    error: Final = _count_error(max_images, len(input_images(call.ir_request.input)))
+    if error is None:
         return call
-    raise _refusal(call, error)
+    past_the_count: Final = frozenset(_remote_image_urls(call)[max_images:])
+    return _dropped_or_refused(
+        call, with_images_where(call.ir_request.input, partial(_is_not_one_of, past_the_count)), error
+    )
 
 
 def _decoded_byte_count(payload: str) -> int:
@@ -729,7 +742,7 @@ def _leading_bytes(payload: str) -> bytes:
     head: Final = standard_base64(payload[:64])[:16]
     try:
         return base64.b64decode(head + "=" * (-len(head) % 4))
-    except binascii.Error:
+    except ValueError:
         return b""
 
 
@@ -926,16 +939,26 @@ def _map_upstream_exception(error: Exception, call: DecisionsCall) -> Exception:
             )
 
 
-_CONTENT_REFUSAL_STATUSES: Final = frozenset({400, 413, 422})
+_RESENT_WITHOUT_IMAGES_STATUSES: Final = frozenset({400, 408, 413, 422})
 
 
-def _refuses_request_content(error: BaseLLMException) -> bool:
-    return not error.status_code_is_synthesized and error.status_code in _CONTENT_REFUSAL_STATUSES
+def _may_be_caused_by_images(error: BaseLLMException | litellm.Timeout) -> bool:
+    if isinstance(error, litellm.Timeout):
+        return True
+    return not error.status_code_is_synthesized and error.status_code in _RESENT_WITHOUT_IMAGES_STATUSES
 
 
-def _without_images_after_refusal(call: DecisionsCall, error: BaseLLMException) -> DecisionsCall | None:
+def _goes_again_without_images(call: DecisionsCall, error: BaseLLMException | litellm.Timeout) -> bool:
+    return (
+        call.provider_config.images_in_state and _drops_params(call.litellm_params) and _may_be_caused_by_images(error)
+    )
+
+
+def _without_images_after_refusal(
+    call: DecisionsCall, error: BaseLLMException | litellm.Timeout
+) -> DecisionsCall | None:
     images: Final = input_images(call.ir_request.input)
-    if not images or not _drops_params(call.litellm_params) or not _refuses_request_content(error):
+    if not images or not _goes_again_without_images(call, error):
         return None
     without_images: Final = _with_images_kept(call.ir_request.input, tuple(False for _ in images))
     if _leaves_no_input(without_images):
@@ -984,7 +1007,7 @@ async def _aposted_without_refused_images(
 ) -> DecisionsIRResponse:
     try:
         return await _aposted(call, body, logged_body)
-    except BaseLLMException as error:
+    except (BaseLLMException, litellm.Timeout) as error:
         retry: Final = _without_images_after_refusal(call, error)
         if retry is None:
             raise
@@ -997,7 +1020,7 @@ def _posted_without_refused_images(
 ) -> DecisionsIRResponse:
     try:
         return _posted(call, body, logged_body)
-    except BaseLLMException as error:
+    except (BaseLLMException, litellm.Timeout) as error:
         retry: Final = _without_images_after_refusal(call, error)
         if retry is None:
             raise
