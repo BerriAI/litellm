@@ -97,7 +97,7 @@ def test_adaptive_router_state_returns_snapshots(client, auth_as, monkeypatch):
     bandit.get_state_snapshot = AsyncMock(return_value=snap)
     from litellm.types.router import TaggedPreRoutingStrategy
 
-    fake_router.adaptive_routers = {
+    fake_router.registry.return_value.plugins.return_value = {
         "ar-1": [TaggedPreRoutingStrategy(tags=(), strategy=bandit)]
     }
     monkeypatch.setattr(ps, "llm_router", fake_router)
@@ -126,7 +126,7 @@ def test_adaptive_router_state_not_configured_404(client, auth_as, monkeypatch):
     from litellm.proxy._types import LitellmUserRoles
 
     fake_router = MagicMock()
-    fake_router.adaptive_routers = {}
+    fake_router.registry.return_value.plugins.return_value = {}
     monkeypatch.setattr(ps, "llm_router", fake_router)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):

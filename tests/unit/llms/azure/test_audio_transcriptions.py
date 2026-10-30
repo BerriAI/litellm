@@ -4,7 +4,7 @@ from typing import Final
 
 import httpx
 import pytest
-from openai import AzureOpenAI
+from openai import AsyncAzureOpenAI, AzureOpenAI
 
 import litellm
 from litellm.cost_calculator import completion_cost
@@ -107,3 +107,56 @@ async def test_azure_transcribe_model_mapping():
         assert response._hidden_params["model"] == "whisper-1"
         assert response._hidden_params["custom_llm_provider"] == "azure"
         assert response.text is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response_format", "body", "content_type", "expected_text"),
+    [
+        ("json", b'{"text":"Four score and seven years ago"}', "application/json", "Four score and seven years ago"),
+        (
+            "vtt",
+            b"WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nFour score and seven years ago",
+            "text/vtt",
+            "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nFour score and seven years ago",
+        ),
+        (
+            "verbose_json",
+            b'{"task":"transcribe","language":"English","duration":2.0,"text":"Four score and seven years ago"}',
+            "application/json",
+            "Four score and seven years ago",
+        ),
+    ],
+)
+async def test_azure_transcription_parses_response_formats(
+    response_format: str,
+    body: bytes,
+    content_type: str,
+    expected_text: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            content=body,
+            headers={"content-type": content_type},
+        )
+
+    async with AsyncAzureOpenAI(
+        api_key="test-key",
+        api_version="2024-06-01",
+        azure_endpoint="https://example.cognitiveservices.azure.com",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    ) as client:
+        response = await litellm.atranscription(
+            model="azure/whisper-1",
+            file=_audio_file(),
+            api_base="https://example.openai.azure.com",
+            api_key="test-key",
+            api_version="2024-06-01",
+            response_format=response_format,
+            timestamp_granularities=["word"] if response_format == "verbose_json" else None,
+            client=client,
+            drop_params=True,
+        )
+
+    assert response.text == expected_text

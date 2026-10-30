@@ -2,7 +2,7 @@
 Unit tests for the auto-router per-session benchmarks rollup writer.
 
 The classification SQL itself runs against a real Postgres in
-tests/proxy_behavior/spend/test_autorouter_session_rollup.py; these tests cover the
+tests/integration/spend/test_autorouter_session_rollup.py; these tests cover the
 request-time transaction builder and the flush contract with an injected fake client.
 """
 

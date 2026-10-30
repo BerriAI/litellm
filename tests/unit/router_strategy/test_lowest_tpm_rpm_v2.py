@@ -43,7 +43,7 @@ def restore_verbose_logger_level() -> Iterator[None]:
 
 @pytest.mark.usefixtures("restore_verbose_logger_level")
 def test_tpm_rpm_updated():
-    from tests.local_testing.create_mock_standard_logging_payload import create_standard_logging_payload
+    from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
 
     test_cache = DualCache()
     lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
@@ -98,7 +98,7 @@ def test_tpm_rpm_updated():
 
 @pytest.mark.usefixtures("restore_verbose_logger_level")
 def test_get_available_deployments():
-    from tests.local_testing.create_mock_standard_logging_payload import create_standard_logging_payload
+    from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
 
     test_cache = DualCache()
     model_list = [
@@ -190,7 +190,7 @@ def test_router_get_available_deployments():
     """
     Test if routers 'get_available_deployments' returns the lowest tpm deployment
     """
-    from tests.local_testing.create_mock_standard_logging_payload import create_standard_logging_payload
+    from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
 
     model_list = [
         {
@@ -287,7 +287,7 @@ def test_router_skip_rate_limited_deployments():
     """
     Test if routers 'get_available_deployments' raises No Models Available error if max tpm would be reached by message
     """
-    from tests.local_testing.create_mock_standard_logging_payload import create_standard_logging_payload
+    from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
 
     model_list = [
         {

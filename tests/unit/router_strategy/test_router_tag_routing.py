@@ -3,12 +3,16 @@
 
 
 import logging
-from typing import Final
+from typing import Final, Literal
+from unittest.mock import patch
 
 import pytest
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
+from litellm.types.router import RouterErrors
 
 
 async def _routed_model_ids(
@@ -1365,14 +1369,17 @@ def test_chain_allows_fail_open_true_when_any_member_sets_flag():
         {"model_info": {}, "litellm_params": {"tags": ["provider:anthropic"]}},
         {"model_info": {"allow_fail_open": True}, "litellm_params": {"tags": ["provider:openai"]}},
     ]
-    assert _chain_allows_fail_open(deployments, frozenset(), frozenset({"provider:anthropic"}), frozenset()) is True
+    assert (
+        _chain_allows_fail_open(deployments, deployments, frozenset(), frozenset({"provider:anthropic"}), frozenset())
+        is True
+    )
 
 
 def test_chain_allows_fail_open_false_by_default():
     from litellm.router_strategy.tag_based_routing import _chain_allows_fail_open
 
     deployments = [{"model_info": {}}, {}]
-    assert _chain_allows_fail_open(deployments, frozenset(), frozenset(), frozenset()) is False
+    assert _chain_allows_fail_open(deployments, deployments, frozenset(), frozenset(), frozenset()) is False
 
 
 def test_chain_allows_fail_open_true_when_no_required_tag_is_known_at_all():
@@ -1384,7 +1391,10 @@ def test_chain_allows_fail_open_true_when_no_required_tag_is_known_at_all():
     deployments = [
         {"model_info": {"allow_fail_open": True}, "litellm_params": {"tags": ["default", "reasoning_type:low"]}},
     ]
-    assert _chain_allows_fail_open(deployments, frozenset(), frozenset({"reasoning_type:high"}), frozenset()) is True
+    assert (
+        _chain_allows_fail_open(deployments, deployments, frozenset(), frozenset({"reasoning_type:high"}), frozenset())
+        is True
+    )
 
 
 def test_unknown_required_tag_hides_an_answer_denies_fail_open():
@@ -1405,7 +1415,11 @@ def test_unknown_required_tag_hides_an_answer_denies_fail_open():
     # fail-open must be denied even though the flag is set on the group.
     assert (
         _chain_allows_fail_open(
-            deployments, frozenset(), frozenset({"region:us-east", "totally-invented-tag-nobody-has"}), frozenset()
+            deployments,
+            deployments,
+            frozenset(),
+            frozenset({"region:us-east", "totally-invented-tag-nobody-has"}),
+            frozenset(),
         )
         is False
     )
@@ -1432,7 +1446,9 @@ def test_unknown_required_tag_allows_fail_open_when_no_answer_is_hidden():
     # carries both, so this is a genuinely unsatisfiable combination, not an invented
     # tag masking a narrower answer. Fail-open must proceed normally.
     assert (
-        _chain_allows_fail_open(deployments, frozenset(), frozenset({"region:us-east", "region:eu"}), frozenset())
+        _chain_allows_fail_open(
+            deployments, deployments, frozenset(), frozenset({"region:us-east", "region:eu"}), frozenset()
+        )
         is True
     )
 
@@ -1494,8 +1510,8 @@ def test_chain_allows_fail_open_true_when_prefixed_unknown_required_tag_is_confi
         },
     ]
     required_set = frozenset({"provider:anthropic", "typo-tag"})
-    assert _chain_allows_fail_open(deployments, frozenset(), required_set, frozenset()) is False
-    assert _chain_allows_fail_open(deployments, frozenset(), required_set, required_set) is True
+    assert _chain_allows_fail_open(deployments, deployments, frozenset(), required_set, frozenset()) is False
+    assert _chain_allows_fail_open(deployments, deployments, frozenset(), required_set, required_set) is True
 
 
 # --- get_deployments_for_tag required-AND ("&") integration tests ---
@@ -1761,6 +1777,141 @@ async def test_required_and_combined_with_positive_unmatched_raises_by_default()
 
 
 # --- get_deployments_for_tag allow_fail_open integration tests ---
+
+
+def _fail_open_router(opted_in_group: str | None = "chat", route: str = "model") -> litellm.Router:
+    model_name: Final = "chat-*" if route == "wildcard" else "chat"
+    team_info: Final = {"team_id": "team-a", "team_public_model_name": "public-chat"} if route == "team" else {}
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": model_name if opted_in_group in (None, "chat") else opted_in_group,
+                "litellm_params": {"model": "openai/gpt-6.1-sol", "api_key": "unused", "tags": ["vision"]},
+                "model_info": {"id": "opted-in", "allow_fail_open": opted_in_group is not None, **team_info},
+            },
+            {
+                "model_name": model_name,
+                "litellm_params": {"model": "openai/gpt-6.1-sol", "api_key": "unused", "tags": ["region:eu"]},
+                "model_info": {"id": "remaining", **team_info},
+            },
+        ],
+        routing_groups=(
+            [{"group_name": "public-chat", "models": ["chat"], "routing_strategy": "simple-shuffle"}]
+            if route == "routing_group"
+            else None
+        ),
+        model_group_alias={"public-chat": "chat"} if route == "alias" else {},
+        enable_tag_filtering=True,
+        optional_pre_call_checks=["responses_api_deployment_check"],
+    )
+
+
+def _response_id_for_remaining_deployment() -> str:
+    return ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="openai", model_id="remaining", response_id="resp_previous"
+    )
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize("narrowing", ("affinity", "cooldown"))
+@pytest.mark.parametrize("tags", (("component:chat-search",), ("&vision",), ("!region:eu",)))
+@pytest.mark.parametrize("route", ("model", "routing_group", "wildcard", "team", "alias"))
+async def test_tag_fail_open_survives_deployment_narrowing(
+    narrowing: Literal["affinity", "cooldown"], tags: tuple[str, ...], route: str
+) -> None:
+    router: Final = _fail_open_router(route=route)
+    requested_model: Final = "chat" if route == "model" else "chat-test" if route == "wildcard" else "public-chat"
+    with patch("time.time", return_value=1_700_000_000.0):
+        if narrowing == "cooldown":
+            router.cooldown_cache.add_deployment_to_cooldown(
+                model_id="opted-in",
+                original_exception=RuntimeError("unavailable"),
+                exception_status=500,
+                cooldown_time=60,
+            )
+        candidates: Final = await router.async_get_healthy_deployments(
+            model=requested_model,
+            request_kwargs={
+                "litellm_metadata": {"tags": list(tags), "inherited_tags": [], "user_api_key_team_id": "team-a"},
+                **(
+                    {"previous_response_id": _response_id_for_remaining_deployment()} if narrowing == "affinity" else {}
+                ),
+            },
+        )
+    assert isinstance(candidates, (list, tuple))
+    assert tuple(deployment["model_info"]["id"] for deployment in candidates) == ("remaining",)
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize("route", ("routing_group", "wildcard", "team", "alias"))
+async def test_tag_fail_open_resolves_public_model_names(route: str) -> None:
+    router: Final = _fail_open_router(route=route)
+    candidates: Final = await router.async_get_healthy_deployments(
+        model="chat-test" if route == "wildcard" else "public-chat",
+        request_kwargs={
+            "litellm_metadata": {"tags": ["component:chat-search"], "user_api_key_team_id": "team-a"},
+        },
+    )
+    assert isinstance(candidates, (list, tuple))
+    assert {deployment["model_info"]["id"] for deployment in candidates} == {"opted-in", "remaining"}
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize("opted_in_group", (None, "other-group"))
+async def test_tag_fail_open_requires_opt_in_in_the_requested_group(opted_in_group: str | None) -> None:
+    router: Final = _fail_open_router(opted_in_group)
+    with pytest.raises(ValueError, match=RouterErrors.no_deployments_with_tag_routing.value):
+        await router.async_get_healthy_deployments(
+            model="chat",
+            request_kwargs={
+                "previous_response_id": _response_id_for_remaining_deployment(),
+                "litellm_metadata": {"tags": ["component:chat-search"], "inherited_tags": []},
+            },
+        )
+
+
+@pytest.mark.asyncio()
+async def test_tag_fail_open_does_not_use_another_teams_opt_in() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "openai/gpt-6.1-sol", "api_key": "unused"},
+                "model_info": {
+                    "id": team_id,
+                    "team_id": team_id,
+                    "team_public_model_name": "public-chat",
+                    "allow_fail_open": team_id == "team-a",
+                },
+            }
+            for team_id in ("team-a", "team-b")
+        ],
+        enable_tag_filtering=True,
+    )
+    with pytest.raises(ValueError, match=RouterErrors.no_deployments_with_tag_routing.value):
+        await router.async_get_healthy_deployments(
+            model="public-chat",
+            request_kwargs={
+                "litellm_metadata": {"tags": ["component:chat-search"], "user_api_key_team_id": "team-b"},
+            },
+        )
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize("inherited_tag", ("&vision", "!region:eu"))
+async def test_tag_fail_open_preserves_inherited_policy_after_affinity(inherited_tag: str) -> None:
+    router: Final = _fail_open_router()
+    with pytest.raises(ValueError, match=RouterErrors.no_deployments_with_tag_routing.value):
+        await router.async_get_healthy_deployments(
+            model="chat",
+            request_kwargs={
+                "previous_response_id": _response_id_for_remaining_deployment(),
+                "litellm_metadata": {
+                    "tags": [inherited_tag, "component:chat-search"],
+                    "inherited_tags": [inherited_tag],
+                },
+            },
+        )
 
 
 @pytest.mark.asyncio()
@@ -3171,3 +3322,204 @@ async def test_chat_request_carrying_litellm_metadata_still_routes_on_proxy_merg
     )
 
     assert deployment["model_info"]["id"] == "team-a-deployment"
+
+
+def _baggage_mapped_metadata(client_tags: list[str], inherited_tags: list[str]) -> dict:
+    from types import SimpleNamespace
+    from typing import cast
+
+    from fastapi import Request
+
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    request = cast(Request, SimpleNamespace(state=SimpleNamespace(litellm_baggage_mapped_tags=("usecase:a",))))
+    data = {"metadata": {"tags": client_tags, "inherited_tags": inherited_tags}}
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, data)
+    return data["metadata"]
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize(
+    "client_tags,inherited_tags,expected_model_id",
+    [
+        ([], [], "default-deployment"),
+        (["usecase:a"], [], "usecase-deployment"),
+        ([], ["usecase:a"], "usecase-deployment"),
+    ],
+)
+async def test_baggage_mapped_tags_classify_spend_without_selecting_deployments(
+    client_tags, inherited_tags, expected_model_id
+):
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4o", "tags": ["usecase:a"]},
+                "model_info": {"id": "usecase-deployment"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4o-mini", "tags": ["default"]},
+                "model_info": {"id": "default-deployment"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+    metadata = _baggage_mapped_metadata(client_tags, inherited_tags)
+    assert "usecase:a" in metadata["tags"]
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata=dict(metadata),
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == expected_model_id
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize(
+    "client_tags,inherited_tags,expected_model_id",
+    [
+        ([], [], "tier-b"),
+        (["usecase:a"], [], "tier-a"),
+        ([], ["usecase:a"], "tier-a"),
+    ],
+)
+async def test_baggage_mapped_tags_never_select_a_tagged_pre_routing_strategy(
+    client_tags, inherited_tags, expected_model_id
+):
+    from litellm.types.router import TaggedPreRoutingStrategy
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "smart",
+                "litellm_params": {"model": "openai/gpt-4o"},
+                "model_info": {"id": "plain-smart"},
+            },
+            {
+                "model_name": "tier-a",
+                "litellm_params": {"model": "openai/gpt-4o"},
+                "model_info": {"id": "tier-a"},
+            },
+            {
+                "model_name": "tier-b",
+                "litellm_params": {"model": "openai/gpt-4o-mini"},
+                "model_info": {"id": "tier-b"},
+            },
+        ],
+        num_retries=0,
+    )
+    router.auto_routers = {
+        "smart": [
+            TaggedPreRoutingStrategy(tags=("usecase:b",), strategy=_RewriteToTierStrategy("tier-b")),
+            TaggedPreRoutingStrategy(tags=("usecase:a",), strategy=_RewriteToTierStrategy("tier-a")),
+        ]
+    }
+    metadata = _baggage_mapped_metadata(client_tags, inherited_tags)
+    assert "usecase:a" in metadata["tags"]
+
+    response = await router.acompletion(
+        model="smart",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata=dict(metadata),
+        mock_response="hi",
+    )
+
+    assert response._hidden_params["model_id"] == expected_model_id
+
+
+def _tag_router(model_list: list[dict[str, object]], tag_routing_prefix: str = "route:") -> litellm.Router:
+    return litellm.Router(model_list=model_list, enable_tag_filtering=True, tag_routing_prefix=tag_routing_prefix)
+
+
+def _deployment(model_id: str, tags: list[str]) -> dict[str, object]:
+    return {
+        "model_name": "chat",
+        "litellm_params": {
+            "model": "gpt-4o",
+            "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+            **({"tags": tags} if tags else {}),
+        },
+        "model_info": {"id": model_id},
+    }
+
+
+async def _routed_to(router: litellm.Router, metadata: dict[str, object]) -> str:
+    response: Final = await router.acompletion(
+        model="chat", messages=[{"role": "user", "content": "hi"}], metadata=metadata, mock_response="hi"
+    )
+    return response._hidden_params["model_id"]
+
+
+async def _pool(router: litellm.Router, metadata: dict[str, object]) -> frozenset[str]:
+    request_deployments: Final = router.get_model_list(model_name="chat")
+    deployments: Final = await get_deployments_for_tag(
+        llm_router_instance=router,
+        model="chat",
+        healthy_deployments=request_deployments,
+        request_deployments=request_deployments,
+        request_kwargs={"metadata": metadata},
+    )
+    return frozenset(deployment["model_info"]["id"] for deployment in deployments)
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize("tags", [["user_id:234"], ["&region:nowhere"]])
+async def test_tag_routing_prefix_ignores_unprefixed_caller_tags_on_an_untagged_group(tags):
+    router = _tag_router([_deployment("untagged", [])])
+
+    assert await _routed_to(router, {"tags": tags}) == "untagged"
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize("tags", [["region:eu"], ["!region:eu"], ["&region:eu"], ["user_id:234"]])
+async def test_tag_routing_prefix_ignores_unprefixed_caller_tags_on_a_tagged_group(tags):
+    router = _tag_router([_deployment("eu-1", ["region:eu"]), _deployment("us-1", ["region:us"])])
+
+    assert await _pool(router, {"tags": tags}) == {"eu-1", "us-1"}
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        ({"tags": ["user_id:234", "route:region:us"]}, "us-1"),
+        ({"tags": ["route:region:eu", "!region:eu"]}, "eu-1"),
+        ({"tags": ["&region:eu", "user_id:234"], "inherited_tags": ["&region:eu"]}, "eu-1"),
+        ({"tags": ["!region:eu", "user_id:234"], "inherited_tags": ["!region:eu"]}, "us-1"),
+        ({"tags": ["user_id:234", "region:us"], "inherited_tags": ["region:us"]}, "us-1"),
+    ],
+    ids=["prefixed-caller-tag", "unprefixed-twin-ignored", "policy-require", "policy-exclude", "policy-positive"],
+)
+async def test_tag_routing_prefix_routes_on_prefixed_and_policy_tags(metadata, expected):
+    router = _tag_router([_deployment("eu-1", ["region:eu"]), _deployment("us-1", ["region:us"])])
+
+    assert await _pool(router, metadata) == {expected}
+
+
+@pytest.mark.asyncio()
+async def test_tag_routing_prefix_caller_cannot_route_around_a_policy_requirement():
+    router = _tag_router([_deployment("eu-1", ["region:eu"]), _deployment("us-1", ["region:us"])])
+
+    with pytest.raises(ValueError, match=RouterErrors.no_deployments_with_tag_routing.value):
+        await _routed_to(router, {"tags": ["&region:eu", "route:region:us"], "inherited_tags": ["&region:eu"]})
+
+
+@pytest.mark.asyncio()
+async def test_without_tag_routing_prefix_an_unknown_caller_tag_still_refuses_an_untagged_group():
+    router = _tag_router([_deployment("untagged", [])], tag_routing_prefix="")
+
+    with pytest.raises(ValueError, match=RouterErrors.no_deployments_with_tag_routing.value):
+        await _routed_to(router, {"tags": ["user_id:234"]})
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize(("tags", "expected"), [(["region:eu"], {"eu-1"}), (["!region:eu"], {"us-1"})])
+async def test_without_tag_routing_prefix_unprefixed_caller_tags_still_route(tags, expected):
+    router = _tag_router(
+        [_deployment("eu-1", ["region:eu"]), _deployment("us-1", ["region:us"])], tag_routing_prefix=""
+    )
+
+    assert await _pool(router, {"tags": tags}) == expected

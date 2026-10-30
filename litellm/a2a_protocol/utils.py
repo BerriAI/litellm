@@ -4,13 +4,18 @@ Utility functions for A2A protocol.
 
 import hashlib
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import has_attributes
 
 if TYPE_CHECKING:
     from a2a.types import SendMessageRequest, SendStreamingMessageRequest
+
+
+class _SupportsModelDump(Protocol):
+    def model_dump(self, *, mode: str) -> object: ...
 
 
 class A2ARequestUtils:
@@ -74,7 +79,7 @@ class A2ARequestUtils:
     @staticmethod
     def get_input_message_from_request(
         request: "SendMessageRequest | SendStreamingMessageRequest",
-    ) -> Any:
+    ) -> object:
         """
         Extract the input message from an A2A request.
 
@@ -84,7 +89,7 @@ class A2ARequestUtils:
         Returns:
             The message object/dict or None
         """
-        params: Final = getattr(request, "params", None)
+        params: Final[object] = getattr(request, "params", None)
         if params is None:
             return None
         return getattr(params, "message", None)
@@ -127,10 +132,12 @@ class A2ARequestUtils:
         # the dict branch — request-side parts are a2a-sdk Part RootModels whose
         # kind/text live on part.root, which the object branch cannot read. This
         # mirrors how the response side already works (it operates on model_dump).
-        input_message = A2ARequestUtils.get_input_message_from_request(request)
-        if input_message is not None and hasattr(input_message, "model_dump"):
-            input_message = input_message.model_dump(mode="json")
-        input_text: Final = A2ARequestUtils.extract_text_from_message(input_message)
+        input_message: Final = A2ARequestUtils.get_input_message_from_request(request)
+        input_text: Final = A2ARequestUtils.extract_text_from_message(
+            input_message.model_dump(mode="json")
+            if has_attributes(input_message, _SupportsModelDump, "model_dump")
+            else input_message
+        )
         prompt_tokens: Final = A2ARequestUtils.count_tokens(input_text)
 
         # Count output tokens

@@ -51,9 +51,9 @@ pub use credential::{
     CredentialFileRef, CredentialLookup, CredentialLookupFuture, CredentialPlan,
     CredentialPlanResolution, CredentialRef, CredentialResolver, CredentialResolverHandle,
 };
-pub use error::{Error, ErrorDetail, ErrorSource};
+pub use error::{Error, ErrorDetail};
 pub use http::CredentialPlacement;
-pub use params::{AwsParams, ParamSpec, VertexParams};
+pub use params::{AwsParams, ParamKind, ParamSpec, VertexParams};
 pub use policy::{CredentialPlanKind, CredentialRule, ExistingHeaderBehavior, ProviderAuthPolicy};
 pub use secret::SecretValue;
 pub use token::{ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};

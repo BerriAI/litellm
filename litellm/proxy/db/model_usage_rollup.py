@@ -19,6 +19,7 @@ from litellm.constants import (
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES, SpendLogsPayload
 from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
 from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL, rollup_lock_timeout_setting
+from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -59,6 +60,7 @@ class ModelUsageTransaction:
     prompt_tokens: int
     completion_tokens: int
     successful: bool
+    counts_as_request: bool = True
 
 
 def model_usage_task_type(request_tags: str) -> str:
@@ -78,12 +80,12 @@ def model_usage_task_type(request_tags: str) -> str:
     )
 
 
-def _is_internal_call(metadata: str) -> bool:
+def _internal_call_origin(metadata: str) -> object:
     try:
         decoded: Final = _METADATA.validate_json(metadata)
     except ValidationError:
-        return False
-    return bool(decoded.get(INTERNAL_CALL_ORIGIN_METADATA_KEY))
+        return None
+    return decoded.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)
 
 
 def _date_from_start_time(start_time: datetime | str) -> str | None:
@@ -94,7 +96,8 @@ def _date_from_start_time(start_time: datetime | str) -> str | None:
 
 def build_model_usage_transaction(payload: SpendLogsPayload) -> ModelUsageTransaction | None:
     date: Final = _date_from_start_time(payload["startTime"])
-    if date is None or _is_internal_call(payload["metadata"]):
+    origin: Final = _internal_call_origin(payload["metadata"])
+    if date is None or (origin and origin != BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN):
         return None
     model: Final = payload["model"] or "unknown"
     return ModelUsageTransaction(
@@ -109,6 +112,7 @@ def build_model_usage_transaction(payload: SpendLogsPayload) -> ModelUsageTransa
         prompt_tokens=payload["prompt_tokens"],
         completion_tokens=payload["completion_tokens"],
         successful=payload["status"] == "success",
+        counts_as_request=not origin,
     )
 
 
@@ -142,8 +146,9 @@ async def flush_model_usage_transactions(
                     spend = sum(entry.spend for entry in entries)
                     prompt_tokens = sum(entry.prompt_tokens for entry in entries)
                     completion_tokens = sum(entry.completion_tokens for entry in entries)
-                    successful = sum(1 for entry in entries if entry.successful)
-                    failed = len(entries) - successful
+                    requests = tuple(entry for entry in entries if entry.counts_as_request)
+                    successful = sum(1 for entry in requests if entry.successful)
+                    failed = len(requests) - successful
                     key_fields = {
                         "date": key.date,
                         "model_group": key.model_group,
@@ -159,7 +164,7 @@ async def flush_model_usage_transactions(
                                 "spend": spend,
                                 "prompt_tokens": prompt_tokens,
                                 "completion_tokens": completion_tokens,
-                                "request_count": len(entries),
+                                "request_count": len(requests),
                                 "successful_requests": successful,
                                 "failed_requests": failed,
                             },
@@ -167,7 +172,7 @@ async def flush_model_usage_transactions(
                                 "spend": {"increment": spend},
                                 "prompt_tokens": {"increment": prompt_tokens},
                                 "completion_tokens": {"increment": completion_tokens},
-                                "request_count": {"increment": len(entries)},
+                                "request_count": {"increment": len(requests)},
                                 "successful_requests": {"increment": successful},
                                 "failed_requests": {"increment": failed},
                             },

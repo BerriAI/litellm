@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from litellm.a2a_protocol import exception_mapping_utils as emu
-from litellm.a2a_protocol.exceptions import A2ALocalhostURLError
+from litellm.a2a_protocol.exceptions import A2AError, A2ALocalhostURLError
 
 
 def _localhost_error() -> A2ALocalhostURLError:
@@ -15,6 +15,20 @@ def _localhost_error() -> A2ALocalhostURLError:
         base_url="https://agent.example",
         original_error=ConnectionError("boom"),
     )
+
+
+def test_map_a2a_exception_adds_protocol_version_hint_for_kind_field_error():
+    with pytest.raises(A2AError) as error:
+        emu.map_a2a_exception(RuntimeError('Message type "lf.a2a.v1.Task" has no field named "kind"'))
+
+    assert "a2a_protocol_version: " in str(error.value)
+
+
+def test_map_a2a_exception_does_not_add_protocol_version_hint_for_other_errors():
+    with pytest.raises(A2AError) as error:
+        emu.map_a2a_exception(RuntimeError("unrelated agent error"))
+
+    assert "a2a_protocol_version" not in str(error.value)
 
 
 @pytest.mark.asyncio

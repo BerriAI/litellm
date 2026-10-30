@@ -12,7 +12,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import suppress
-from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Optional
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Optional, Protocol
 from urllib.parse import urlsplit
 
 import httpx
@@ -23,13 +23,15 @@ from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
 from openai.types.completion_usage import CompletionUsage
+from pydantic import BaseModel, TypeAdapter
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
 
 import litellm
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
-from litellm.litellm_core_utils.token_counter import token_counter
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
+from litellm.litellm_core_utils.token_counter import token_counter, usage_tokenizer_model
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
@@ -49,6 +51,16 @@ _AZURE_OPENAI_INIT_PARAMS: Final[tuple[str, ...]] = _get_client_init_params(Azur
 
 
 _OPENAI_API_HOST: Final[str] = "api.openai.com"
+
+
+class _ModelDumpable(Protocol):
+    def model_dump(self) -> dict[str, object]: ...  # mutable-ok: pydantic model_dump returns a dict
+
+
+def model_dump_provider_response(response: _ModelDumpable) -> dict[str, object]:  # mutable-ok: callers need a dict
+    if isinstance(response, BaseModel):
+        return response.model_dump(exclude_unset=True)
+    return response.model_dump()
 
 
 _OPENAI_HTTPX_DEFAULT_TIMEOUT: Final = CompletionTimeout.normalize(openai.DEFAULT_TIMEOUT)
@@ -92,6 +104,19 @@ def is_openai_backed_api_base(api_base: str) -> bool:
     return hostname is not None and (hostname == _OPENAI_API_HOST or hostname.endswith(f".{_OPENAI_API_HOST}"))
 
 
+_OPENAI_AGENTS_API_RESOURCES: Final = frozenset({"agents", "vaults"})
+
+
+def openai_api_resource(path: str) -> str | None:
+    segments: Final = tuple(segment for segment in path.split("/") if segment)
+    resource_segments: Final = segments[1:] if segments[:1] == ("v1",) else segments
+    return next(iter(resource_segments), None)
+
+
+def is_openai_agents_api_path(path: str) -> bool:
+    return openai_api_resource(path) in _OPENAI_AGENTS_API_RESOURCES
+
+
 class OpenAIError(BaseLLMException):
     def __init__(
         self,
@@ -123,6 +148,9 @@ class OpenAIError(BaseLLMException):
         )
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 ####### Error Handling Utils for OpenAI API #######################
 ###################################################################
 def drop_params_from_unprocessable_entity_error(
@@ -141,19 +169,20 @@ def drop_params_from_unprocessable_entity_error(
     """
     invalid_params: Final[list[str]] = []
     if isinstance(e, httpx.HTTPStatusError):
-        error_json: Final = e.response.json()
+        error_json: Final = decoded_json_object(_DECODED_JSON.validate_python(e.response.json()))
         error_message: Final = error_json.get("error", {})
         error_body = error_message
     else:
         error_body = e.body
-    if error_body is not None and isinstance(error_body, dict) and error_body.get("message"):
-        message = error_body.get("message", {})
+    error_mapping: Final = as_str_mapping(error_body)
+    if isinstance(error_mapping, dict) and error_mapping.get("message"):
+        message = error_mapping.get("message", {})
         if isinstance(message, str):
             try:
-                message = json.loads(message)
+                message = _DECODED_JSON.validate_python(json.loads(message))
             except json.JSONDecodeError:
                 message = {"detail": message}
-        detail: Final = message.get("detail")
+        detail: Final = decoded_json_object(message).get("detail")
 
         if isinstance(detail, list) and len(detail) > 0 and isinstance(detail[0], dict):
             for error_dict in detail:
@@ -226,7 +255,7 @@ async def _aiter_once(chunk: ChatCompletionChunk) -> AsyncIterator[ChatCompletio
 
 
 def build_output_token_limit_response(
-    e: openai.BadRequestError, data: Mapping[str, object], is_async: bool
+    e: openai.BadRequestError, data: Mapping[str, object], is_async: bool, base_model: str | None
 ) -> tuple[httpx.Headers, ChatCompletion | Iterator[ChatCompletionChunk] | AsyncIterator[ChatCompletionChunk]]:
     """Synthesize the length-truncated response the provider itself returns for slightly larger output budgets.
 
@@ -235,11 +264,19 @@ def build_output_token_limit_response(
     """
     model: Final[str] = str(data.get("model", ""))
     messages: Final = data.get("messages")
-    prompt_tokens: Final = token_counter(model=model, messages=messages) if isinstance(messages, list) else 0
+    prompt_tokens: Final = (
+        token_counter(model=usage_tokenizer_model(model, base_model), messages=messages)
+        if isinstance(messages, list)
+        else 0
+    )
     if not data.get("stream"):
         return e.response.headers, _output_token_limit_completion(model, prompt_tokens)
     chunk: Final = _output_token_limit_chunk(model)
     return e.response.headers, (_aiter_once(chunk) if is_async else _iter_once(chunk))
+
+
+def _is_loop_bound(client_initialization_params: Mapping[str, object]) -> bool:
+    return client_initialization_params.get("is_async") is not False
 
 
 class BaseOpenAILLM:
@@ -256,7 +293,9 @@ class BaseOpenAILLM:
             client_initialization_params=client_initialization_params,
             client_type=client_type,
         )
-        _cached_client: Final = litellm.in_memory_llm_clients_cache.get_cache(_cache_key)
+        _cached_client: Final = litellm.in_memory_llm_clients_cache.get_cache(
+            _cache_key, loop_bound=_is_loop_bound(client_initialization_params)
+        )
         return _cached_client
 
     @staticmethod
@@ -297,6 +336,7 @@ class BaseOpenAILLM:
             value=openai_client,
             ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
             litellm_owned_client=litellm_owned_client,
+            loop_bound=_is_loop_bound(client_initialization_params),
         )
 
     @staticmethod
@@ -395,6 +435,10 @@ class BaseOpenAILLM:
             follow_redirects=True,
             http2=http2_enabled(),
         )
+
+    @classmethod
+    def get_sync_http_client(cls) -> httpx.Client | None:
+        return cls._get_sync_http_client()
 
 
 class OpenAICredentials(NamedTuple):

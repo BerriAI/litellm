@@ -9,6 +9,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import XAI_API_BASE
 from litellm.exceptions import AuthenticationError
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.xai.common_utils import XAIModelInfo, xai_reported_cost_in_usd
 from litellm.secret_managers.main import get_secret_str
@@ -249,10 +250,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         else:
             api_base = api_base or litellm.api_base or get_secret_str("XAI_API_BASE") or XAI_API_BASE
 
-        # Remove trailing slashes
-        api_base = api_base.rstrip("/")
-
-        return f"{api_base}/responses"
+        return join_api_base(api_base, "responses")
 
     def transform_response_api_response(
         self,

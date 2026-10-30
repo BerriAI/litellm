@@ -1,6 +1,6 @@
 import json
 from collections.abc import Mapping
-from typing import cast
+from typing import Final, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -1321,6 +1321,40 @@ def test_gemini_realtime_pipecat_semantic_vad_omits_realtime_input_config():
     setup = json.loads(messages[0])["setup"]
     assert "realtimeInputConfig" not in setup
     assert setup["tools"][0]["function_declarations"][0]["name"] == "terminate_call"
+
+
+@pytest.mark.parametrize(
+    ("create_response", "expected_detection"),
+    [
+        (False, {"disabled": True}),
+        (True, {"disabled": False, "prefixPaddingMs": 200, "silenceDurationMs": 700}),
+    ],
+)
+def test_gemini_turn_detection_tuning_is_dropped_when_auto_response_is_off(
+    create_response: bool, expected_detection: dict[str, object]
+):
+    session_update: Final = {
+        "type": "session.update",
+        "session": {
+            "audio": {
+                "input": {
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "create_response": create_response,
+                        "prefix_padding_ms": 200,
+                        "silence_duration_ms": 700,
+                    }
+                },
+            },
+        },
+    }
+    messages: Final = GeminiRealtimeConfig().transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-live-2.5-flash-native-audio",
+        session_configuration_request=None,
+    )
+    setup: Final = json.loads(messages[0])["setup"]
+    assert setup["realtimeInputConfig"]["automaticActivityDetection"] == expected_detection
 
 
 def test_gemini_input_audio_buffer_commit_maps_to_audio_stream_end():

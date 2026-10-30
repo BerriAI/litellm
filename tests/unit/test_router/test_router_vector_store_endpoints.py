@@ -99,3 +99,64 @@ def test_vector_store_update_forwards_expires_after_to_provider() -> None:
     assert sent["expires_after"] == expires_after
     assert result["expires_after"]["days"] == 7
     assert result["expires_at"] == 1699668576
+
+
+def test_vector_store_retrieve_and_delete_return_provider_responses() -> None:
+    with respx.mock(assert_all_called=True) as mock:
+        retrieve_route: Final = mock.get(f"{VECTOR_STORES_URL}/vs_test123").mock(
+            return_value=httpx.Response(
+                200,
+                json={"id": "vs_test123", "object": "vector_store", "status": "completed"},
+            )
+        )
+        delete_route: Final = mock.delete(f"{VECTOR_STORES_URL}/vs_test123").mock(
+            return_value=httpx.Response(
+                200,
+                json={"id": "vs_test123", "object": "vector_store.deleted", "deleted": True},
+            )
+        )
+        router: Final = Router(model_list=[])
+        retrieved: Final = router.vector_store_retrieve(
+            vector_store_id="vs_test123",
+            custom_llm_provider="openai",
+        )
+        deleted: Final = router.vector_store_delete(
+            vector_store_id="vs_test123",
+            custom_llm_provider="openai",
+        )
+
+    assert retrieve_route.call_count == 1
+    assert delete_route.call_count == 1
+    assert retrieved["id"] == "vs_test123"
+    assert deleted["deleted"] is True
+
+
+@pytest.mark.asyncio
+async def test_avector_store_retrieve_and_delete_return_provider_responses() -> None:
+    with respx.mock(assert_all_called=True) as mock:
+        retrieve_route: Final = mock.get(f"{VECTOR_STORES_URL}/vs_test123").mock(
+            return_value=httpx.Response(
+                200,
+                json={"id": "vs_test123", "object": "vector_store", "status": "completed"},
+            )
+        )
+        delete_route: Final = mock.delete(f"{VECTOR_STORES_URL}/vs_test123").mock(
+            return_value=httpx.Response(
+                200,
+                json={"id": "vs_test123", "object": "vector_store.deleted", "deleted": True},
+            )
+        )
+        router: Final = Router(model_list=[])
+        retrieved: Final = await router.avector_store_retrieve(
+            vector_store_id="vs_test123",
+            custom_llm_provider="openai",
+        )
+        deleted: Final = await router.avector_store_delete(
+            vector_store_id="vs_test123",
+            custom_llm_provider="openai",
+        )
+
+    assert retrieve_route.call_count == 1
+    assert delete_route.call_count == 1
+    assert retrieved["id"] == "vs_test123"
+    assert deleted["deleted"] is True

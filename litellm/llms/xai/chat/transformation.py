@@ -32,6 +32,7 @@ from ...openai.chat.gpt_transformation import (
 )
 
 _RESPONSE_BODY: Final = TypeAdapter(dict[object, object], config=ConfigDict(hide_input_in_errors=True))
+_FILTERED_TOOL: Final = TypeAdapter(object)
 
 
 def _usage_restated_from_xai_ticks(usage: Usage | None) -> Usage | None:
@@ -204,11 +205,13 @@ class XAIChatConfig(OpenAIGPTConfig):
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             elif param == "tools" and value is not None:
-                tools = []
-                for tool in value:
-                    tool = filter_value_from_dict(tool, "strict")
-                    if tool is not None:
-                        tools.append(tool)
+                tools = [
+                    filtered_tool
+                    for filtered_tool in (
+                        _FILTERED_TOOL.validate_python(filter_value_from_dict(tool, "strict")) for tool in value
+                    )
+                    if filtered_tool is not None
+                ]
                 if len(tools) > 0:
                     optional_params["tools"] = tools
             elif param in supported_openai_params:

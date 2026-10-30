@@ -13,7 +13,8 @@ use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::Error;
-use litellm_storage_clickhouse::Connection;
+use litellm_error::Source;
+use litellm_storage_clickhouse::{Connection, Error as StorageError};
 
 fn max_insert_bytes() -> Result<usize, Error> {
     let name = "CLICKHOUSE_TRACE_MAX_INSERT_BYTES";
@@ -22,9 +23,9 @@ fn max_insert_bytes() -> Result<usize, Error> {
             .parse::<usize>()
             .ok()
             .filter(|value| *value > 0)
-            .ok_or(Error::InvalidLimit(name)),
+            .ok_or(StorageError::InvalidLimit(name).into()),
         Err(std::env::VarError::NotPresent) => Ok(64 * 1024 * 1024),
-        Err(_) => Err(Error::InvalidLimit(name)),
+        Err(_) => Err(StorageError::InvalidLimit(name).into()),
     }
 }
 
@@ -55,7 +56,11 @@ pub async fn insert_rows(
 
 pub fn encode_rows(rows: Vec<InsertRow>) -> Result<String, Error> {
     let body = write_rows(&rows, None, Vec::new(), usize::MAX)?;
-    String::from_utf8(body).map_err(|_| Error::InvalidRow)
+    String::from_utf8(body).map_err(invalid_row)
+}
+
+fn invalid_row(error: impl std::error::Error + Send + Sync + 'static) -> Error {
+    StorageError::InvalidRow(Source::new(error)).into()
 }
 
 fn prepare_insert(
@@ -73,9 +78,9 @@ fn prepare_insert(
     )?;
     let body = encoder
         .into_inner()
-        .map_err(|_| Error::InvalidRow)?
+        .map_err(|error| invalid_row(error.into_error()))?
         .finish()
-        .map_err(|_| Error::InvalidRow)?;
+        .map_err(invalid_row)?;
     Ok((token, body))
 }
 
@@ -102,7 +107,7 @@ impl<W: Write> Write for LimitedWriter<W> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         if bytes.len() > self.remaining {
             self.exceeded = true;
-            return Err(std::io::Error::other(Error::InsertTooLarge));
+            return Err(std::io::Error::other(StorageError::InsertTooLarge));
         }
         let written = self.inner.write(bytes)?;
         self.remaining -= written;
@@ -126,17 +131,18 @@ fn write_rows<W: Write>(
         exceeded: false,
     };
     for (index, row) in rows.iter().enumerate() {
+        let row = EncodedRow::new(row, received_ms)?;
         let result = (|| {
             if index != 0 {
                 writer.write_all(b"\n").map_err(serde_json::Error::io)?;
             }
-            serde_json::to_writer(&mut writer, &EncodedRow { row, received_ms })
+            serde_json::to_writer(&mut writer, &row)
         })();
-        if result.is_err() {
+        if let Err(error) = result {
             return Err(if writer.exceeded {
-                Error::InsertTooLarge
+                StorageError::InsertTooLarge.into()
             } else {
-                Error::InvalidRow
+                invalid_row(error)
             });
         }
     }
@@ -144,25 +150,37 @@ fn write_rows<W: Write>(
 }
 
 struct EncodedRow<'a> {
-    row: &'a InsertRow,
+    fields: Vec<(&'a str, Cow<'a, Value>)>,
     received_ms: Option<u64>,
+}
+
+impl<'a> EncodedRow<'a> {
+    fn new(row: &'a InsertRow, received_ms: Option<u64>) -> Result<Self, Error> {
+        let fields = row
+            .iter()
+            .map(|(name, value)| Ok((name.as_str(), insert_value(name, value)?)))
+            .collect::<Result<_, Error>>()?;
+        Ok(Self {
+            fields,
+            received_ms,
+        })
+    }
 }
 
 impl Serialize for EncodedRow<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(None)?;
         let mut received_ms = self.received_ms;
-        for (name, value) in self.row {
-            if name.as_str() >= "EngineReceivedMs"
+        for (name, value) in &self.fields {
+            if *name >= "EngineReceivedMs"
                 && let Some(timestamp) = received_ms.take()
             {
                 map.serialize_entry("EngineReceivedMs", &timestamp)?;
             }
-            if name == "EngineReceivedMs" && self.received_ms.is_some() {
+            if *name == "EngineReceivedMs" && self.received_ms.is_some() {
                 continue;
             }
-            let value = insert_value(name, value).map_err(serde::ser::Error::custom)?;
-            map.serialize_entry(name, &value)?;
+            map.serialize_entry(name, value)?;
         }
         if let Some(timestamp) = received_ms {
             map.serialize_entry("EngineReceivedMs", &timestamp)?;
@@ -171,21 +189,23 @@ impl Serialize for EncodedRow<'_> {
     }
 }
 
+const TIMESTAMP_FIELDS: [&str; 3] = ["start_time", "end_time", "completion_start_time"];
+
 fn insert_value<'a>(name: &str, value: &'a Value) -> Result<Cow<'a, Value>, Error> {
-    let multiplier = match name {
-        "start_time" | "end_time" | "completion_start_time" => 1_000_000,
-        _ => return Ok(Cow::Borrowed(value)),
+    let Some(&field) = TIMESTAMP_FIELDS.iter().find(|field| **field == name) else {
+        return Ok(Cow::Borrowed(value));
     };
-    if name == "completion_start_time" && value.is_null() {
+    if field == "completion_start_time" && value.is_null() {
         return Ok(Cow::Borrowed(value));
     }
-    let timestamp = value.as_i64().ok_or(Error::InvalidRow)?;
-    let datetime = OffsetDateTime::from_unix_timestamp_nanos(i128::from(timestamp) * multiplier)
-        .map_err(|_| Error::InvalidRow)?;
+    let out_of_range = |source| Error::TimestampOutOfRange { field, source };
+    let timestamp = value.as_i64().ok_or(Error::NonIntegerTimestamp { field })?;
+    let datetime = OffsetDateTime::from_unix_timestamp_nanos(i128::from(timestamp) * 1_000_000)
+        .map_err(|error| out_of_range(Source::new(error)))?;
     datetime
         .format(&Rfc3339)
         .map(|value| Cow::Owned(Value::String(value)))
-        .map_err(|_| Error::InvalidRow)
+        .map_err(|error| out_of_range(Source::new(error)))
 }
 
 #[cfg(test)]
@@ -204,10 +224,11 @@ mod tests {
         ];
         let encoded = write_rows(&rows, None, Vec::new(), usize::MAX).unwrap();
         assert!(write_rows(&rows, None, Vec::new(), encoded.len()).is_ok());
-        assert!(matches!(
-            write_rows(&rows, None, Vec::new(), encoded.len() - 1),
-            Err(Error::InsertTooLarge)
-        ));
+        assert!(
+            write_rows(&rows, None, Vec::new(), encoded.len() - 1)
+                .unwrap_err()
+                .is_insert_too_large()
+        );
     }
 
     #[rstest]
@@ -264,10 +285,11 @@ mod tests {
     fn stamped_insert_enforces_the_encoded_limit() {
         let rows = vec![BTreeMap::new()];
         assert!(prepare_insert(&rows, 1, 22).is_ok());
-        assert!(matches!(
-            prepare_insert(&rows, 1, 21),
-            Err(Error::InsertTooLarge)
-        ));
+        assert!(
+            prepare_insert(&rows, 1, 21)
+                .unwrap_err()
+                .is_insert_too_large()
+        );
     }
 
     #[rstest]
@@ -282,15 +304,36 @@ mod tests {
         assert_eq!(insert_value(field, &input).unwrap().as_ref(), &expected);
     }
 
+    fn rejected_start_time(input: Value) -> Error {
+        prepare_insert(&[BTreeMap::from([("start_time".into(), input)])], 456, 4096).unwrap_err()
+    }
+
     #[rstest]
     #[case::fractional(json!(1.5))]
     #[case::string(json!("1234"))]
     #[case::null(Value::Null)]
-    #[case::out_of_range(json!(i64::MAX))]
-    fn invalid_spend_dates_fail_before_transport(#[case] input: Value) {
+    fn non_integer_spend_dates_fail_before_transport(#[case] input: Value) {
+        let error = rejected_start_time(input);
+        assert!(error.is_request());
         assert!(matches!(
-            prepare_insert(&[BTreeMap::from([("start_time".into(), input)])], 456, 4096),
-            Err(Error::InvalidRow)
+            error,
+            Error::NonIntegerTimestamp {
+                field: "start_time"
+            }
         ));
+    }
+
+    #[rstest]
+    fn out_of_range_spend_dates_keep_their_cause() {
+        let error = rejected_start_time(json!(i64::MAX));
+        assert!(error.is_request());
+        let cause = std::error::Error::source(&error)
+            .and_then(|cause| cause.downcast_ref::<Source>())
+            .expect("time cause");
+        assert!(
+            cause
+                .downcast_ref::<time::error::ComponentRange>()
+                .is_some()
+        );
     }
 }

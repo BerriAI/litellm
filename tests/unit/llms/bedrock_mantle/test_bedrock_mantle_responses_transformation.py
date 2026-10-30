@@ -9,6 +9,7 @@ gate, the URL construction for both paths, and the shared Bearer auth.
 
 import copy
 import logging
+from typing import Final
 
 import pytest
 from botocore.exceptions import (
@@ -572,6 +573,32 @@ class TestBedrockMantleServiceTier:
         assert "priority" in str(mock_warning.call_args)
 
 
+class TestBedrockMantleRefusedEffort:
+    def test_dropping_a_refused_effort_does_not_suggest_declaring_levels_mantle_ignores(
+        self, local_cost_map: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        refused: Final = next(
+            level
+            for level in ("none", "minimal", "low")
+            if litellm.model_cost["gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is False
+        )
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            params: Final = BedrockMantleResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": refused}},
+                model="openai.gpt-6.1-sol",
+                drop_params=True,
+            )
+
+        assert "reasoning" not in params
+        drop_warnings: Final = [
+            record.getMessage()
+            for record in caplog.records
+            if f"Dropping reasoning.effort={refused!r}" in record.getMessage()
+        ]
+        assert len(drop_warnings) == 1
+        assert "model_info" not in drop_warnings[0]
+
+
 class TestBedrockMantleReasoningSummary:
     @pytest.mark.parametrize("summary", ["concise", "detailed"])
     def test_unsupported_reasoning_summary_dropped_when_drop_params_true(self, summary):
@@ -624,6 +651,38 @@ class TestBedrockMantleReasoningSummary:
             drop_params=drop_params,
         )
         assert params["reasoning"] == {"effort": "medium", "summary": "auto"}
+
+    def test_auto_summary_on_still_drops_a_client_detailed_summary(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium", "summary": "detailed"}},
+            model="openai.gpt-5.6-sol",
+            drop_params=True,
+        )
+        assert params["reasoning"] == {"effort": "medium"}
+
+    def test_auto_summary_on_still_rejects_a_client_detailed_summary_without_drop_params(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+        cfg = BedrockMantleResponsesAPIConfig()
+        with pytest.raises(litellm.UnsupportedParamsError):
+            cfg.map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "medium", "summary": "detailed"}},
+                model="openai.gpt-5.6-sol",
+                drop_params=False,
+            )
+
+    @pytest.mark.parametrize("use_openai_path, expected", [(True, "auto"), (False, "detailed")])
+    def test_auto_reasoning_summary_is_a_level_the_path_accepts(self, use_openai_path, expected):
+        cfg = BedrockMantleResponsesAPIConfig(use_openai_path=use_openai_path)
+        summary = cfg.auto_reasoning_summary()
+        assert summary == expected
+        params = cfg.map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium", "summary": summary}},
+            model="openai.gpt-5.6-sol" if use_openai_path else "openai.gpt-oss-120b",
+            drop_params=False,
+        )
+        assert params["reasoning"] == {"effort": "medium", "summary": summary}
 
     def test_reasoning_summary_kept_on_standard_path(self):
         cfg = BedrockMantleResponsesAPIConfig(use_openai_path=False)

@@ -14,6 +14,8 @@ Ensures cooldowns are applied correctly.
 from collections.abc import MutableMapping
 from typing import Final, cast  # noqa: TID251  # narrows the untyped request dict for mutation
 
+from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.credential_accessor import sends_api_key_secret_reference
 from litellm.types.utils import server_owned_wif_litellm_params
 
 clientside_credential_keys: Final = ["api_key", "api_base", "base_url"]
@@ -114,6 +116,16 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
     # redirected upstream.
     if "api_base" in request_kwargs or "base_url" in request_kwargs:
         from litellm.llms.github_copilot.per_user_auth import github_copilot_auth_mode
+
+        if sends_api_key_secret_reference(litellm_params):  # pyright: ignore[reportUnknownArgumentType]  # litellm_params is the untyped request dict
+            raise BadRequestError(
+                message=(
+                    "Rejected Request: this deployment's api_key is an oidc/ secret reference, so a request cannot "
+                    "send it to an api_base of its own. Send your own api_key with the api_base."
+                ),
+                model=None,
+                llm_provider=None,
+            )
 
         # A per-user OAuth credential must survive the clear: dropping
         # litellm_credential_name / github_copilot_auth_type would flip the call to

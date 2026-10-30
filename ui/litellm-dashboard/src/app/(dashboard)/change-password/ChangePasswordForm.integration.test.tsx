@@ -10,6 +10,7 @@ let mockPasswordResetRequired = false;
 vi.mock("@/components/networking", () => ({
   changePasswordCall: (...args: unknown[]) => mockChangePasswordCall(...args),
   getProxyBaseUrl: () => "",
+  getUiPageUrl: (url: string) => url,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({

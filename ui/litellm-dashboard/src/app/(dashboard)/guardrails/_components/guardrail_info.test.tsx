@@ -10,6 +10,7 @@ vi.mock("@/components/networking", () => ({
   getGuardrailUISettings: vi.fn(),
   getGuardrailProviderSpecificParams: vi.fn(),
   updateGuardrailCall: vi.fn(),
+  deleteGuardrailCall: vi.fn(),
 }));
 
 // Mock ContentFilterManager
@@ -65,7 +66,9 @@ describe("Guardrail Info", () => {
 
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
 
-    render(<GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />);
+    render(
+      <GuardrailInfoView guardrailId="123" onClose={() => {}} onDeleted={() => {}} accessToken="123" isAdmin={true} />,
+    );
 
     // Wait for the loading to complete and data to be rendered
     await waitFor(() => {
@@ -103,7 +106,9 @@ describe("Guardrail Info", () => {
 
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
 
-    render(<GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />);
+    render(
+      <GuardrailInfoView guardrailId="123" onClose={() => {}} onDeleted={() => {}} accessToken="123" isAdmin={true} />,
+    );
 
     expect(await screen.findAllByText("pre_call, post_call (tag-based)")).not.toHaveLength(0);
   });
@@ -131,7 +136,9 @@ describe("Guardrail Info", () => {
 
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
 
-    render(<GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />);
+    render(
+      <GuardrailInfoView guardrailId="123" onClose={() => {}} onDeleted={() => {}} accessToken="123" isAdmin={true} />,
+    );
 
     const logo = await screen.findByAltText("Presidio PII logo");
     expect(logo).toHaveAttribute("src", expect.stringContaining("microsoft_azure.svg"));
@@ -162,7 +169,7 @@ describe("Guardrail Info", () => {
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
 
     const { container } = render(
-      <GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />,
+      <GuardrailInfoView guardrailId="123" onClose={() => {}} onDeleted={() => {}} accessToken="123" isAdmin={true} />,
     );
 
     await waitFor(() => {
@@ -212,7 +219,9 @@ describe("Guardrail Info", () => {
 
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
 
-    render(<GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />);
+    render(
+      <GuardrailInfoView guardrailId="123" onClose={() => {}} onDeleted={() => {}} accessToken="123" isAdmin={true} />,
+    );
 
     await waitFor(() => {
       expect(screen.getByText("PII Entity Configuration")).toBeInTheDocument();
@@ -245,7 +254,9 @@ describe("Guardrail Info", () => {
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
     vi.mocked(networking.updateGuardrailCall).mockResolvedValue({ status: "success" });
 
-    render(<GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />);
+    render(
+      <GuardrailInfoView guardrailId="123" onClose={() => {}} onDeleted={() => {}} accessToken="123" isAdmin={true} />,
+    );
 
     await waitFor(() => {
       expect(screen.getByText("Settings")).toBeInTheDocument();
@@ -331,7 +342,9 @@ describe("Guardrail Info", () => {
     });
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
 
-    render(<GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />);
+    render(
+      <GuardrailInfoView guardrailId="123" onClose={() => {}} onDeleted={() => {}} accessToken="123" isAdmin={true} />,
+    );
 
     expect(await screen.findByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "false");
@@ -355,10 +368,90 @@ describe("Guardrail Info when the guardrail cannot be loaded", () => {
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
     const onClose = vi.fn();
 
-    render(<GuardrailInfoView guardrailId="stale-id" onClose={onClose} accessToken="123" isAdmin={true} />);
+    render(
+      <GuardrailInfoView
+        guardrailId="stale-id"
+        onClose={onClose}
+        onDeleted={() => {}}
+        accessToken="123"
+        isAdmin={true}
+      />,
+    );
 
     expect(await screen.findByText("Guardrail not found")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /back to guardrails/i }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  describe("Delete from the Settings card", () => {
+    const dbGuardrail = {
+      guardrail_id: "123",
+      guardrail_name: "Test Guardrail",
+      litellm_params: { guardrail: "presidio", mode: "pre_call", default_on: true },
+      guardrail_definition_location: "db",
+    };
+    const uiSettings = {
+      supported_entities: [],
+      supported_actions: [],
+      pii_entity_categories: [],
+      supported_modes: ["pre_call"],
+    };
+    const mockDbGuardrail = () => {
+      vi.mocked(networking.getGuardrailInfo).mockResolvedValue(dbGuardrail);
+      vi.mocked(networking.getGuardrailUISettings).mockResolvedValue(uiSettings);
+      vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
+    };
+
+    const openDeleteModalAndConfirm = async () => {
+      fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+      const modal = within(await screen.findByRole("dialog"));
+      expect(modal.getByText(/silently stop running it/)).toBeInTheDocument();
+      const confirmButton = modal.getByRole("button", { name: "Delete" });
+      expect(confirmButton).toBeDisabled();
+      fireEvent.change(modal.getByPlaceholderText("Test Guardrail"), { target: { value: "Test Guardrail" } });
+      fireEvent.click(confirmButton);
+    };
+
+    it("deletes the guardrail and calls onDeleted once the admin types its name", async () => {
+      mockDbGuardrail();
+      vi.mocked(networking.deleteGuardrailCall).mockResolvedValue({});
+      const onDeleted = vi.fn();
+      render(
+        <GuardrailInfoView guardrailId="123" onClose={() => {}} onDeleted={onDeleted} accessToken="tok" isAdmin />,
+      );
+
+      await openDeleteModalAndConfirm();
+
+      await waitFor(() => expect(onDeleted).toHaveBeenCalledTimes(1));
+      expect(networking.deleteGuardrailCall).toHaveBeenCalledWith("tok", "123");
+    });
+
+    it("hides Delete while the settings are being edited", async () => {
+      mockDbGuardrail();
+      render(<GuardrailInfoView guardrailId="123" onClose={() => {}} onDeleted={() => {}} accessToken="tok" isAdmin />);
+
+      fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Edit Settings" }));
+
+      expect(await screen.findByRole("button", { name: "Save Changes" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Edit Settings" })).not.toBeInTheDocument();
+    });
+
+    it("does not call onDeleted when the delete request fails", async () => {
+      mockDbGuardrail();
+      vi.mocked(networking.deleteGuardrailCall).mockRejectedValue(new Error("boom"));
+      const onDeleted = vi.fn();
+      render(
+        <GuardrailInfoView guardrailId="123" onClose={() => {}} onDeleted={onDeleted} accessToken="tok" isAdmin />,
+      );
+
+      await openDeleteModalAndConfirm();
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(networking.deleteGuardrailCall).toHaveBeenCalledTimes(1);
+      expect(onDeleted).not.toHaveBeenCalled();
+    });
   });
 });

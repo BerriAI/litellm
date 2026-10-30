@@ -31,6 +31,7 @@ EXCLUDED_GUARD_ONLY_VARS = {
 EXCLUDED_ROLLOUT_FLAGS = {
     "LITELLM_USE_RUST_OCR",
     "LITELLM_RUST",
+    "LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST",
 }
 
 # Internal infrastructure tuning parameters for streaming/queue management

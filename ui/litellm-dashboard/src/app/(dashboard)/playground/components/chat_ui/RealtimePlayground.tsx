@@ -1,11 +1,12 @@
 "use client";
 
+import { useTerminology } from "@/contexts/TerminologyContext";
 import { CircleX, Mic, MicOff, Send, Volume2 } from "lucide-react";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { getProxyBaseUrl } from "@/components/networking";
+import { getGatewayBaseUrl } from "@/components/networking";
 import { OPEN_AI_VOICE_SELECT_OPTIONS } from "./chatConstants";
 
 interface RealtimeMessage {
@@ -27,6 +28,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
   customProxyBaseUrl,
   selectedGuardrails,
 }) => {
+  const term = useTerminology();
   const [messages, setMessages] = useState<RealtimeMessage[]>([]);
   const [inputText, setInputText] = useState("");
   const [isConnected, setIsConnected] = useState(false);
@@ -96,7 +98,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
     try {
       audioContextRef.current = new AudioContext({ sampleRate: 24000 });
 
-      const baseUrl = customProxyBaseUrl || getProxyBaseUrl();
+      const baseUrl = customProxyBaseUrl || getGatewayBaseUrl();
       const wsBase = baseUrl.replace(/^http/, "ws");
       let url = `${wsBase}/v1/realtime?model=${encodeURIComponent(selectedModel)}`;
       if (selectedGuardrails && selectedGuardrails.length > 0) {
@@ -408,8 +410,8 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
             <Volume2 className="size-12" />
             <span className="text-lg text-muted-foreground">Realtime Voice Playground</span>
             <p className="text-sm text-muted-foreground text-center max-w-md">
-              Click <b>Connect</b> to start a realtime session. You can speak using your microphone or type messages.
-              The AI will respond with voice and text.
+              Click <b>Connect</b> to start a realtime session. You can speak using your microphone or type messages.{" "}
+              {term("The AI will respond with voice and text.")}
             </p>
           </div>
         )}
@@ -428,7 +430,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
                     : "bg-muted text-foreground rounded-bl-md"
                 }`}
               >
-                <div className="text-xs font-medium mb-0.5 opacity-70">{msg.role === "user" ? "You" : "AI"}</div>
+                <div className="text-xs font-medium mb-0.5 opacity-70">{msg.role === "user" ? "You" : term("AI")}</div>
                 <div className="text-sm whitespace-pre-wrap">{msg.content}</div>
               </div>
             )}

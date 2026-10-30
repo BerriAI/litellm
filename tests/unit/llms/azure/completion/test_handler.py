@@ -50,3 +50,15 @@ async def test_acompletion_surfaces_the_status_and_headers_of_a_rejected_request
 
     assert rejected.value.status_code == 400
     assert rejected.value.litellm_response_headers["x-request-id"] == "req-1"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_azure_instruct_max_retries_zero_sends_one_request(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(url__startswith=COMPLETIONS_URL).mock(
+        return_value=Response(500, json={"error": {"message": "temporary failure"}})
+    )
+
+    with pytest.raises(litellm.APIError):
+        text_completion(**AZURE_TEXT_CALL, max_retries=0)
+
+    assert route.call_count == 1

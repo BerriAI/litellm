@@ -14,7 +14,7 @@ bare string with no provider beside them; an operator who writes ``deepseek-r1``
 Azure would otherwise be priced against whoever else owns that name.
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Final, NamedTuple
 
 from litellm._logging import verbose_router_logger
@@ -80,12 +80,11 @@ def _models_in(router: "Router", group_name: str) -> tuple[Baseline, ...]:
     straight at a provider model rather than at a configured group, and prices under
     its own name because there is no deployment to override it.
     """
-    indices: Final = router.model_name_to_deployment_indices.get(group_name)
-    if not indices:
+    deployments: Final = router.deployments_named(group_name)
+    if not deployments:
         return (Baseline(qualified),) if (qualified := canonical_model(group_name)) else ()
 
-    def candidate(index: int) -> Baseline | None:
-        deployment: Final = router.model_list[index]
+    def candidate(deployment: Mapping[str, object]) -> Baseline | None:
         params: Final = deployment.get("litellm_params")
         if not isinstance(params, dict):
             return None
@@ -98,7 +97,7 @@ def _models_in(router: "Router", group_name: str) -> tuple[Baseline, ...]:
         deployment_id: Final = info.get("id") if isinstance(info, dict) else None
         return Baseline(qualified, str(deployment_id) if deployment_id else None)
 
-    return tuple(c for index in indices if (c := candidate(index)) is not None)
+    return tuple(c for deployment in deployments if (c := candidate(deployment)) is not None)
 
 
 def _priced(router: "Router", candidate: Baseline) -> tuple[float, Baseline] | None:
@@ -115,7 +114,7 @@ def _priced(router: "Router", candidate: Baseline) -> tuple[float, Baseline] | N
 
     provider, _, model_name = candidate.model.partition("/")
     try:
-        info: Final = router.get_deployment_model_info(candidate.deployment_id or "", candidate.model)
+        info: Final = router.cached_deployment_model_info(candidate.deployment_id or "", candidate.model)
         if info is None:
             return None
         prompt_cost, completion_cost = generic_cost_per_token(

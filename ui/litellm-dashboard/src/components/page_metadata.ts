@@ -5,6 +5,7 @@
 
 // Page descriptions for UI Settings configuration
 export const pageDescriptions: Record<string, string> = {
+  home: "Usage at a glance, recent launches and blog updates",
   "api-keys": "Manage virtual keys for API access and authentication",
   "llm-playground": "Interactive playground for testing LLM requests",
   models: "Configure and manage LLM models and endpoints",
@@ -42,6 +43,7 @@ export const pageDescriptions: Record<string, string> = {
   skills: "Browse and manage Claude Code skills",
   usage: "View legacy usage dashboard",
   "router-settings": "Configure routing and load balancing settings",
+  telemetry: "Choose which anonymous usage telemetry this proxy collects and see the last report",
   "logging-and-alerts": "Set up logging and alert configurations",
   "admin-panel": "Access admin panel and settings",
 };

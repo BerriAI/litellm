@@ -1,39 +1,36 @@
 import asyncio
-import signal
 import threading
+from contextlib import AsyncExitStack
 from pathlib import Path
 from queue import SimpleQueue
 from types import MappingProxyType
 from typing import Final
 from urllib.parse import urlsplit
 
-import psutil
 import pytest
 from integration._support.client import Gateway, eventually
-from integration._support.process import graceful_stop_seconds, owned_proxy_process
+from integration._support.process import WorkerHealthcheck, graceful_stop_seconds, owned_proxy_process
 from integration.providers._assistants_route_errors_support import (
     MAPPED_BY_STATUS,
     MARKED_ROUTES,
     ROUTE_BY_NAME,
     Call,
+    Held,
     answer_all,
     assert_answered_with_its_own_marker,
     assistants_wire,
     held_error_peer,
     held_one_by_one,
     held_upstream_connections,
-    live_worker_pids,
     marker_of,
     new_marker,
-    open_upstream_connections,
     openai_assistants_config,
     provider_requests,
     worker_pids,
 )
 
 _STATUSES: Final = (400, 404, 429, 500, 503)
-_MIN_CALLS: Final = 20
-_MAX_CALLS: Final = 60
+_PER_WORKER: Final = 10
 _STARTUP_COMPLETE: Final = "Application startup complete."
 
 
@@ -45,7 +42,9 @@ def _startups(log: Path) -> tuple[int, int]:
 async def test_worker_sigkill_mid_burst_leaves_the_sibling_answering_each_mapped_status(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    calls: Final = tuple(Call(MARKED_ROUTES[index % len(MARKED_ROUTES)], new_marker()) for index in range(_MAX_CALLS))
+    calls: Final = tuple(
+        Call(MARKED_ROUTES[index % len(MARKED_ROUTES)], new_marker()) for index in range(2 * _PER_WORKER)
+    )
     follow_up: Final = Call(ROUTE_BY_NAME["get_thread"], new_marker())
     status_by_marker: Final = MappingProxyType(
         {
@@ -59,25 +58,30 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_answering_each_mapped
         port: Final = urlsplit(wire.url).port
         assert port is not None
         config: Final = openai_assistants_config(tmp_path, port, 60)
-        with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as owned:
+        with owned_proxy_process(
+            gateway, tmp_path, {}, config=config, workers=2, healthcheck=WorkerHealthcheck.LENIENT
+        ) as owned:
             eventually(lambda: _startups(owned.log), lambda found: found == (2, 2), seconds=120)
-            workers: Final = live_worker_pids(owned.log)
-            assert len(workers) == 2, workers
-
-            def both_workers_hold_enough() -> bool:
-                held: Final = tuple(open_upstream_connections(pid, port) for pid in workers)
-                return sum(held) >= _MIN_CALLS and min(held) > 0
-
+            victim_pid, survivor_pid = sorted(eventually(owned.worker_pids, lambda pids: len(pids) == 2))
             try:
-                async with held_one_by_one(owned.gateway, calls, arrived, both_workers_hold_enough) as held:
-                    held_by: Final = await asyncio.to_thread(held_upstream_connections, workers, port, len(held.calls))
-                    assert min(held_by.values()) > 0, held_by
-                    victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-                    victim: Final = psutil.Process(victim_pid)
-                    victim.suspend()
-                    victim.send_signal(signal.SIGKILL)
-                    release.set()
-                    served: Final = await held.answers()
+                async with AsyncExitStack() as bursts:
+                    with owned.suspended(survivor_pid):
+                        on_victim: Final = await bursts.enter_async_context(
+                            held_one_by_one(owned.gateway, calls[:_PER_WORKER], arrived, lambda: False)
+                        )
+                    with owned.suspended(victim_pid):
+                        on_survivor: Final = await bursts.enter_async_context(
+                            held_one_by_one(owned.gateway, calls[_PER_WORKER:], arrived, lambda: False)
+                        )
+                    held: Final = Held(on_victim.calls + on_survivor.calls, on_victim.pending + on_survivor.pending)
+                    held_by: Final = await asyncio.to_thread(
+                        held_upstream_connections, (victim_pid, survivor_pid), port, len(held.calls)
+                    )
+                    assert held_by == {victim_pid: _PER_WORKER, survivor_pid: _PER_WORKER}, held_by
+                    with owned.replacing_worker(victim_pid) as kill:
+                        await asyncio.to_thread(kill)
+                        release.set()
+                        served: Final = await held.answers()
             finally:
                 release.set()
             (answered,) = await answer_all(owned.gateway, (follow_up,))

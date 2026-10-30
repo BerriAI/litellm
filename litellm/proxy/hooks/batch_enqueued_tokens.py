@@ -107,6 +107,7 @@ _RESERVE_RESULT_ADAPTER: Final = TypeAdapter(tuple[int, int])
 _POPPED_VALUE_ADAPTER: Final = TypeAdapter(str | bytes | None)
 _STORED_COUNTER_ADAPTER: Final = TypeAdapter(int | None)
 _RESERVATION_ADAPTER: Final = TypeAdapter(BatchEnqueuedTokenReservation)
+_LOCAL_RECORD_ADAPTER: Final = TypeAdapter(object)
 
 
 class _ScriptRunner(Protocol):
@@ -445,10 +446,12 @@ class BatchEnqueuedTokenStore:
 
     async def _pop_local_record(self, batch_id: str, span: "Span | None") -> object:
         async with self._lock:
-            stored = await self.internal_usage_cache.async_get_cache(
-                key=self._record_key(batch_id),
-                litellm_parent_otel_span=span,
-                local_only=True,
+            stored: Final = _LOCAL_RECORD_ADAPTER.validate_python(
+                await self.internal_usage_cache.async_get_cache(
+                    key=self._record_key(batch_id),
+                    litellm_parent_otel_span=span,
+                    local_only=True,
+                )
             )
             if stored is None:
                 return None
@@ -456,12 +459,16 @@ class BatchEnqueuedTokenStore:
         return stored
 
     async def _get_local_counter(self, scope: BatchEnqueuedTokenScope, span: "Span | None") -> int:
-        stored = await self.internal_usage_cache.async_get_cache(
-            key=self._counter_key(scope),
-            litellm_parent_otel_span=span,
-            local_only=True,
+        return (
+            _STORED_COUNTER_ADAPTER.validate_python(
+                await self.internal_usage_cache.async_get_cache(
+                    key=self._counter_key(scope),
+                    litellm_parent_otel_span=span,
+                    local_only=True,
+                )
+            )
+            or 0
         )
-        return _STORED_COUNTER_ADAPTER.validate_python(stored) or 0
 
     async def _set_local_counter(self, scope: BatchEnqueuedTokenScope, value: int, span: "Span | None") -> None:
         await self.internal_usage_cache.async_set_cache(

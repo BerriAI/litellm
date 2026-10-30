@@ -18,10 +18,9 @@ impl<T> Recognized<T> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use rstest::rstest;
     use serde_json::json;
-
-    use super::*;
 
     #[rstest]
     #[case::known(json!(7), Recognized::Known(7))]

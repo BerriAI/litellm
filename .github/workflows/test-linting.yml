@@ -21,7 +21,17 @@ jobs:
       pull-requests: read
       actions: read
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    services:
+      redis:
+        image: redis@sha256:e2debfb7956fa12c7ddc79d7e645c8cf26b30c99a6e9161ea9bf4171e1668a5f
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -38,11 +48,13 @@ jobs:
         if: steps.changes.outputs.decision != 'skip'
         env:
           GH_TOKEN: ${{ github.token }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           retry() { "$@" || { sleep 15; "$@"; } || { sleep 30; "$@"; }; }
-          MERGE_BASE=$(retry gh api "repos/${{ github.repository }}/compare/${BASE_SHA}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
+          BASE_REF=$(gh api "repos/${GITHUB_REPOSITORY}/branches/${EVENT_BASE_REF}" --jq .name) || BASE_REF=$(retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .base.ref)
+          MERGE_BASE=$(retry gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE_REF}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
           test -n "$MERGE_BASE"
           retry git fetch --no-tags --depth=1 origin "$MERGE_BASE"
           echo "GATE_BASE_SHA=$MERGE_BASE" >> "$GITHUB_ENV"
@@ -156,6 +168,14 @@ jobs:
         run: |
           uv run --no-sync python scripts/test_quality_gate.py --base "$GATE_BASE_SHA"
 
+      - name: Check OpenAPI docs (POST routes without a request schema, description or 200 schema, delta vs merge-base counts)
+        if: steps.changes.outputs.decision != 'skip'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          uv sync --frozen --group proxy-dev --group e2e-dev --extra proxy
+          uv run --no-sync python scripts/openapi_docs_gate.py --base "$GATE_BASE_SHA"
+
       - name: Print OpenAI version
         if: steps.changes.outputs.decision != 'skip'
         run: |
@@ -181,8 +201,9 @@ jobs:
         if: steps.changes.outputs.decision != 'skip'
         env:
           LITELLM_MASTER_KEY: sk-e2e-harness-tests-reach-no-proxy
+          E2E_CACHE_TEST_REDIS_URL: redis://127.0.0.1:6379/0
         run: |
-          if ! git diff --name-only --diff-filter=ACMRD "$GATE_BASE_SHA" HEAD -- tests/e2e tests/e2e_harness ':(exclude)tests/e2e/ui' pyproject.toml uv.lock .github/workflows/test-linting.yml | grep -q .; then
+          if ! git diff --name-only --diff-filter=ACMRD "$GATE_BASE_SHA" HEAD -- tests/e2e tests/e2e_harness ':(exclude)tests/e2e/ui' tests/code_coverage_tests/test_provider_replay_harness.py tests/code_coverage_tests/test_provider_cache.py pyproject.toml uv.lock .github/workflows/test-linting.yml | grep -q .; then
             echo "No changed e2e harness files; skipping."
             exit 0
           fi
@@ -190,6 +211,9 @@ jobs:
           CLAUDE_VERSION="$(retry uv run --no-sync python tests/e2e/claude_code/pr_gate_version_resolver.py)"
           tests/e2e/claude_code/cron_vm/install_claude_code.sh "$CLAUDE_VERSION" "$RUNNER_TEMP/claude-cli"
           PATH="$RUNNER_TEMP/claude-cli:$PATH" uv run --no-sync pytest -q tests/e2e_harness
+          uv run --no-sync pytest --tb=short -q --noconftest -o addopts= -o "pythonpath=tests/e2e tests/e2e_harness" -p no:rerunfailures \
+            tests/code_coverage_tests/test_provider_replay_harness.py \
+            tests/code_coverage_tests/test_provider_cache.py
 
       - name: Check for circular imports
         if: steps.changes.outputs.decision != 'skip'
@@ -242,6 +266,7 @@ jobs:
     name: ui
     permissions:
       contents: read
+      pull-requests: read
     runs-on: ubuntu-latest
     timeout-minutes: 8
     defaults:
@@ -259,16 +284,12 @@ jobs:
         id: changed
         env:
           GH_TOKEN: ${{ github.token }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          # base.sha is the base branch tip from when the PR was opened, while
-          # actions/checkout leaves HEAD on a merge of the PR into the *current*
-          # base tip. "$BASE_SHA"...HEAD therefore spans every base-branch commit
-          # landed since, so a PR that touches no UI file still gets linted
-          # against hundreds of other people's files. Diff the PR head against its
-          # own merge base instead, which is exactly what this PR changed.
-          merge_base=$(gh api "repos/${{ github.repository }}/compare/${BASE_SHA}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
+          base_ref=$(gh api "repos/${GITHUB_REPOSITORY}/branches/${EVENT_BASE_REF}" --jq .name) || base_ref=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .base.ref)
+          merge_base=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${base_ref}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
           test -n "$merge_base"
           git fetch --no-tags --depth=1 origin "$merge_base" "$HEAD_SHA"
           : > "$RUNNER_TEMP/prettier_files.txt"
@@ -354,10 +375,10 @@ jobs:
             exit 0
           fi
           files="$(git diff --name-only "$base" HEAD)"
-          if grep -Eq '^(litellm/(proxy|types)/|ui/litellm-dashboard/(src/lib/http/schema\.d\.ts|scripts/gen-api-types\.mjs|package(-lock)?\.json)$|\.github/workflows/test-linting\.yml$)' <<< "$files"; then
+          if grep -Eq '^(litellm/|enterprise/|(pyproject\.toml|uv\.lock)$|ui/litellm-dashboard/(src/lib/http/schema\.d\.ts|scripts/gen-api-types\.mjs|package(-lock)?\.json)$|\.github/workflows/test-linting\.yml$)' <<< "$files"; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
-            echo "No proxy, types or generator changes in this pull request, nothing to verify."
+            echo "No litellm, enterprise, dependency or generator changes in this pull request, nothing to verify."
             echo "relevant=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -502,6 +523,12 @@ jobs:
       - name: check_provider_folders_documented
         run: uv run --no-sync python ./tests/code_coverage_tests/check_provider_folders_documented.py
 
+      - name: check_provider_endpoints_support_generated
+        run: uv run --no-sync python scripts/generate_provider_endpoints_support.py --check
+
+      - name: test_generate_provider_endpoints_support
+        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_generate_provider_endpoints_support.py
+
       - name: check_prisma_binary_cache
         run: uv run --no-sync python ./tests/code_coverage_tests/check_prisma_binary_cache.py
 
@@ -517,8 +544,8 @@ jobs:
       - name: test_unit_passed_gate
         run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_unit_passed_gate.py
 
-      - name: test_e2e_changed_gate
-        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_e2e_changed_gate.py tests/code_coverage_tests/test_e2e_idp_stack.py
+      - name: test_e2e_idp_stack
+        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_e2e_idp_stack.py
 
       - name: test_e2e_metadata
         env:
@@ -532,6 +559,9 @@ jobs:
 
       - name: router_code_coverage
         run: uv run --no-sync python ./tests/code_coverage_tests/router_code_coverage.py
+
+      - name: router_surface_check
+        run: uv run --no-sync python ./tests/code_coverage_tests/router_surface_check.py
 
       - name: test_chat_completion_imports
         run: uv run --no-sync python ./tests/code_coverage_tests/test_chat_completion_imports.py
@@ -578,6 +608,9 @@ jobs:
       - name: check_unsafe_enterprise_import
         run: uv run --no-sync python ./tests/code_coverage_tests/check_unsafe_enterprise_import.py
 
+      - name: check_telemetry_imports
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_telemetry_imports.py
+
       - name: ban_copy_deepcopy_kwargs
         run: uv run --no-sync python ./tests/code_coverage_tests/ban_copy_deepcopy_kwargs.py
 
@@ -593,11 +626,14 @@ jobs:
       - name: check_migrations_no_data_rewrites
         run: uv run --no-sync python ./tests/code_coverage_tests/check_migrations_no_data_rewrites.py
 
-      - name: check_greptile_files_json
-        run: uv run --no-sync python ./tests/code_coverage_tests/check_greptile_files_json.py
+      - name: check_migrations_lock_timeout
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_migrations_lock_timeout.py
 
-      - name: test_check_greptile_files_json
-        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_check_greptile_files_json.py
+      - name: check_no_none_string_error_fields
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_no_none_string_error_fields.py
+
+      - name: test_check_no_none_string_error_fields
+        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_check_no_none_string_error_fields.py
 
       - name: check_no_publicly_known_master_key
         run: uv run --no-sync python ./tests/code_coverage_tests/check_no_publicly_known_master_key.py

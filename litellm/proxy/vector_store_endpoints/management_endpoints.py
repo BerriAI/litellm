@@ -13,6 +13,7 @@ import json
 from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 if TYPE_CHECKING:
@@ -88,6 +89,8 @@ _LITELLM_PARAMS_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=fro
 
 _REDACT_LITELLM_PARAMS_MAX_DEPTH: Final = 10
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
 
 def _redact_sensitive_litellm_params(litellm_params: object, _depth: int = 0) -> Any:
     """
@@ -115,7 +118,7 @@ def _redact_sensitive_litellm_params(litellm_params: object, _depth: int = 0) ->
         return None
     if isinstance(litellm_params, str):
         try:
-            parsed: Final[object] = json.loads(litellm_params)
+            parsed: Final = _DECODED_JSON.validate_python(json.loads(litellm_params))
         except (TypeError, ValueError):
             return REDACTED_BY_LITELM_STRING
         return json.dumps(_redact_sensitive_litellm_params(parsed, _depth + 1))

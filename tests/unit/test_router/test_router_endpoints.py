@@ -1,10 +1,14 @@
 import asyncio
+import json
 import os
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import httpx
 import litellm
 import pytest
 from litellm import Router
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 @pytest.fixture
@@ -571,6 +575,39 @@ async def test_init_vector_store_api_endpoints():
     )
 
     mock_original_function.assert_called_once_with(vector_store_id="test-store", custom_llm_provider="openai")
+
+
+@pytest.mark.asyncio
+async def test_avector_store_create_sends_only_the_callers_metadata_to_the_provider():
+    def echo_vector_store(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "vs_echo",
+                "object": "vector_store",
+                "created_at": 0,
+                "name": body["name"],
+                "usage_bytes": 0,
+                "file_counts": {"in_progress": 0, "completed": 0, "failed": 0, "cancelled": 0, "total": 0},
+                "status": "completed",
+                "metadata": body.get("metadata"),
+            },
+        )
+
+    router: Final = Router(
+        model_list=[{"model_name": "gpt-5", "litellm_params": {"model": "openai/gpt-5", "api_key": "sk-test"}}]
+    )
+
+    response: Final = await router.avector_store_create(
+        model="gpt-5",
+        name="x",
+        metadata={"team": "llmproxy"},
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(echo_vector_store)),
+    )
+
+    assert response["id"] == "vs_echo"
+    assert response["metadata"] == {"team": "llmproxy"}
 
 
 def test_apply_default_settings():

@@ -9,6 +9,9 @@ const WORD_FORM_BUDGET_DURATIONS: Record<string, string> = {
 export const canonicalBudgetDuration = (duration: string | null | undefined): string | null =>
   duration ? WORD_FORM_BUDGET_DURATIONS[duration] ?? duration : null;
 
+export const keyOrganizationId = (key: { organization_id?: string | null; org_id?: string | null }): string | null =>
+  key.organization_id || key.org_id || null;
+
 // Determine the key_type display value from allowed_routes
 export const keyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): string => {
   if (!allowedRoutes || allowedRoutes.length === 0) return "default";

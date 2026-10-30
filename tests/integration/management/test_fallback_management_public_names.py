@@ -1,6 +1,7 @@
 import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from functools import partial
 from itertools import chain
 from pathlib import Path
@@ -10,23 +11,51 @@ import httpx
 import psutil
 import pytest
 from pydantic import JsonValue
+from redis import Redis
 
-from tests.integration._support.client import Gateway, Scenario, eventually, object_value, string_value
+from tests.integration._support.client import (
+    Gateway,
+    Scenario,
+    eventually,
+    gateway_from_environment,
+    object_value,
+    string_value,
+)
 from tests.integration._support.database import read_rows
-from tests.integration._support.process import OwnedProxy, owned_proxy_process
-from tests.integration._support.redis_process import owned_redis
+from tests.integration._support.process import (
+    MIGRATE_DEPLOY,
+    OwnedProxy,
+    owned_proxy_process,
+    setup_only_proxy_run,
+    worker_configuration,
+)
+from tests.integration._support.redis_process import OwnedRedis, owned_redis
 
-pytestmark: Final = pytest.mark.timeout(300)
+pytestmark: Final = [pytest.mark.timeout(300), pytest.mark.shares_worker_state]
 
 PROVIDER_KEY: Final = "integration-provider-key"
 EVICTION_WARNING: Final = "config cache eviction of router_settings failed"
 REFUSED: Final = frozenset({401, 403})
+PROXY_CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
+
+
+@pytest.fixture(scope="module")
+def migrated_database(tmp_path_factory: pytest.TempPathFactory) -> None:
+    with gateway_from_environment() as gateway:
+        completed: Final = setup_only_proxy_run(
+            gateway,
+            {},
+            config=worker_configuration(PROXY_CONFIG, tmp_path_factory.mktemp("migrate")),
+            workers=1,
+            database_setup=MIGRATE_DEPLOY,
+        )
+    assert completed.returncode == 0, completed.stdout[-3000:] + completed.stderr[-3000:]
 
 
 @pytest.fixture
 def upstream(gateway: Gateway) -> Iterator[httpx.Client]:
     with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as client:
-        client.get("/__observations").raise_for_status()
+        client.delete("/__observations").raise_for_status()
         yield client
 
 
@@ -179,7 +208,7 @@ def test_rule_by_team_public_name_fires_on_chat_completions(gateway: Gateway, up
         created: Final = _create_fallback(gateway, scenario, primary, [fallback])
         assert created.status_code == 200, created.text
         upstream.post(f"/__scripts/{primary_provider}", json={"statuses": [500]}).raise_for_status()
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         answered: Final = eventually(
             lambda: gateway.request(
                 "POST",
@@ -334,6 +363,7 @@ def test_context_window_and_content_policy_types_persist(gateway: Gateway) -> No
         assert policy in covered, covered
 
 
+@pytest.mark.usefixtures("migrated_database")
 def test_fallback_write_survives_a_redis_outage(gateway: Gateway, tmp_path: Path) -> None:
     with owned_redis(tmp_path) as cache:
         overrides: Final = {"REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port)}
@@ -357,6 +387,40 @@ def test_fallback_write_survives_a_redis_outage(gateway: Gateway, tmp_path: Path
                 cache.start()
 
 
+@contextmanager
+def _refusing_cache_deletes(cache: OwnedRedis) -> Iterator[None]:
+    with Redis(host=cache.host, port=cache.port) as client:
+        client.acl_setuser("default", enabled=True, commands=["-del", "-unlink"])
+        try:
+            yield
+        finally:
+            client.acl_setuser("default", enabled=True, commands=["+del", "+unlink"])
+
+
+@pytest.mark.usefixtures("migrated_database")
+def test_consecutive_creates_keep_every_rule_when_redis_refuses_the_cache_eviction(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with owned_redis(tmp_path) as cache:
+        overrides: Final = {"REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port)}
+        with owned_proxy_process(gateway, tmp_path, overrides, database_setup=()) as owned:
+            with owned.gateway.scenario() as scenario:
+                target: Final = scenario.model(model=f"openai/x3t-{uuid.uuid4().hex}")
+                first: Final = scenario.model(model=f"openai/x3a-{uuid.uuid4().hex}")
+                second: Final = scenario.model(model=f"openai/x3b-{uuid.uuid4().hex}")
+                for model in (target, first, second):
+                    _wait_until_served(owned.gateway, model)
+                with _refusing_cache_deletes(cache):
+                    created: Final = tuple(
+                        _create_fallback(owned.gateway, scenario, model, [target]) for model in (first, second)
+                    )
+                    assert all(response.status_code == 200 for response in created), [r.text for r in created]
+                    covered: Final = _covered_models(_stored_fallbacks())
+                    assert {first, second} <= covered, covered
+                    assert EVICTION_WARNING in owned.log.read_text(), owned.log.read_text()[-3000:]
+
+
+@pytest.mark.usefixtures("migrated_database")
 def test_fallback_write_survives_a_worker_kill(gateway: Gateway, tmp_path: Path) -> None:
     with owned_proxy_process(gateway, tmp_path, {}, workers=2, database_setup=()) as owned:
         with owned.gateway.scenario() as scenario:
@@ -368,12 +432,15 @@ def test_fallback_write_survives_a_worker_kill(gateway: Gateway, tmp_path: Path)
                 _wait_until_served(owned.gateway, model)
             assert _create_fallback(owned.gateway, scenario, before, [target]).status_code == 200
             victim: Final = eventually(lambda: _workers(owned), lambda workers: len(workers) == 2)[0]
-            victim.kill()
             fresh: Final = scenario.cleanups.enter_context(
                 httpx.Client(base_url=owned.gateway.client.base_url, timeout=15, trust_env=False)
             )
             survivor: Final = Gateway(fresh, owned.gateway.key, owned.gateway.upstream_url)
-            degraded: Final = tuple(_create_fallback(survivor, scenario, model, [target]) for model in (after, last))
+            with owned.replacing_worker(victim.pid) as kill:
+                kill()
+                degraded: Final = tuple(
+                    _create_fallback(survivor, scenario, model, [target]) for model in (after, last)
+                )
             assert all(response.status_code == 200 for response in degraded), [r.text for r in degraded]
             covered: Final = _covered_models(_stored_fallbacks())
             assert {before, after, last} <= covered, covered

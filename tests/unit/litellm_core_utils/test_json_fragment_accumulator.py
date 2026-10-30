@@ -1,5 +1,8 @@
 import json
 import time
+import tracemalloc
+from collections.abc import Iterator
+from typing import Final
 from unittest.mock import patch
 
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
@@ -175,40 +178,48 @@ def test_accumulation_of_many_fragments_is_not_quadratic():
     assert elapsed_ms < 50, f"1000-fragment append took {elapsed_ms:.1f} ms (expected < 50 ms); O(n^2) regression?"
 
 
-def test_draining_many_concatenated_values_is_not_quadratic():
-    """
-    Regression guard: peeling N JSON values already sitting in one buffer,
-    one pop_next_value() call per value with no new fragments in between,
-    must be O(n) total. Re-copying the shrinking remainder on every pop
-    (slicing a new string instead of advancing a cursor) makes total drain
-    time scale with the square of the buffer size.
+def _popped_values(accumulator: JSONFragmentAccumulator) -> Iterator[object]:
+    while True:
+        found, value = accumulator.pop_next_value()
+        if not found:
+            return
+        yield value
 
-    Uses a doubling ratio rather than an absolute ms budget so it isn't
-    flaky on a slower or busier CI runner: doubling the input should
-    roughly double an O(n) drain's time but roughly quadruple an O(n^2)
-    drain's time, and that ratio holds regardless of machine speed.
-    """
 
-    def drain_time_ms(n: int) -> float:
-        accumulator = JSONFragmentAccumulator()
-        accumulator.append('{"a": 1}' * n)
-        start = time.perf_counter()
-        drained = 0
-        while True:
-            found, _ = accumulator.pop_next_value()
-            if not found:
-                break
-            drained += 1
-        assert drained == n
-        return (time.perf_counter() - start) * 1000
+def _streamed(fragments: tuple[str, ...]) -> JSONFragmentAccumulator:
+    accumulator: Final = JSONFragmentAccumulator()
+    for fragment in fragments:
+        accumulator.append(fragment)
+    return accumulator
 
-    small_ms = drain_time_ms(40_000)
-    large_ms = drain_time_ms(80_000)
 
-    ratio = large_ms / max(small_ms, 0.001)
-    assert ratio < 3.0, (
-        f"doubling drained values scaled time by {ratio:.2f}x ({small_ms:.1f} ms -> {large_ms:.1f} ms); "
-        "expected roughly 2x for O(n); O(n^2) regression?"
+def _drain_peak_bytes(fragments: tuple[str, ...]) -> int:
+    accumulator: Final = _streamed(fragments)
+    first_found, _ = accumulator.pop_next_value()
+    assert first_found is True
+    already_tracing: Final = tracemalloc.is_tracing()
+    if not already_tracing:
+        tracemalloc.start()
+    tracemalloc.reset_peak()
+    baseline, _ = tracemalloc.get_traced_memory()
+    try:
+        drained: Final = sum(1 for _ in _popped_values(accumulator))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        if not already_tracing:
+            tracemalloc.stop()
+    assert drained == len(fragments) - 1
+    return peak - baseline
+
+
+def test_draining_many_concatenated_values_never_copies_the_remainder():
+    value: Final = '{"text": "' + "x" * 20 + '"}'
+    fragments: Final = tuple(value if index % 2 else f" {value}" for index in range(40_000))
+    payload_bytes: Final = sum(len(fragment) for fragment in fragments)
+    peak_bytes: Final = _drain_peak_bytes(fragments)
+    assert peak_bytes < payload_bytes // 4, (
+        f"draining {len(fragments)} values allocated a peak of {peak_bytes} bytes over a {payload_bytes} byte payload, "
+        "copying the remainder on every pop?"
     )
 
 

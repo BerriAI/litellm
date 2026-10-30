@@ -15,6 +15,7 @@ import pytest
 from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from litellm.llms.base_llm.files.transformation import FileListModelScope
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import BATCH_CREATE_HIDDEN_PARAM
 from litellm.types.llms.openai import FileListPage, OpenAIFileObject
@@ -221,7 +222,7 @@ async def test_should_pass_credentials_to_afile_retrieve():
     }
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(
+    mock_router.registry.return_value.credentials = MagicMock(
         return_value=mock_credentials
     )
 
@@ -642,6 +643,22 @@ async def test_afile_list_denies_a_caller_with_no_identity_at_all():
         purpose=None,
         litellm_parent_otel_span=None,
         user_api_key_dict=UserAPIKeyAuth(parent_otel_span=None),
+    )
+
+    assert response.data == []
+    assert response.has_more is False
+    assert table.find_many_calls == []
+
+
+@pytest.mark.asyncio
+async def test_afile_list_reads_no_rows_when_no_deployment_can_hold_a_file() -> None:
+    managed_files, table = _make_managed_files_over_rows([_make_managed_file_row("unified-mine")])
+
+    response: Final = await managed_files.afile_list(
+        purpose=None,
+        litellm_parent_otel_span=None,
+        user_api_key_dict=_make_user_api_key_dict(),
+        model_scope=FileListModelScope(frozenset()),
     )
 
     assert response.data == []
@@ -1079,7 +1096,7 @@ async def test_should_not_double_wrap_already_unified_output_file_id():
         "custom_llm_provider": "openai",
     }
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(
+    mock_router.registry.return_value.credentials = MagicMock(
         return_value=mock_credentials
     )
     mock_afile_retrieve = AsyncMock(return_value=_make_file_object(provider_file_id))
@@ -1160,7 +1177,7 @@ async def test_afile_content_passes_trusted_model_credentials_to_router():
     )
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(
+    mock_router.registry.return_value.credentials = MagicMock(
         return_value={
             "custom_llm_provider": "bedrock",
             "s3_bucket_name": "my-bucket",
@@ -1269,7 +1286,7 @@ async def test_afile_delete_returns_managed_id_for_stored_provider_output():
     stored_file = _make_file_object(provider_file_id)
     managed_files, table = _managed_files_with_deletion_row(unified_file_id, provider_file_id, stored_file)
     router = MagicMock(
-        get_deployment_credentials_with_provider=MagicMock(return_value=None),
+        **{"registry.return_value.credentials.return_value": None},
         afile_delete=AsyncMock(return_value=FileDeleted(id=provider_file_id, object="file", deleted=True)),
     )
     response = await managed_files.afile_delete(
@@ -1363,7 +1380,7 @@ async def test_afile_content_error_reports_unified_id_not_provider_uri():
     )
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(return_value=None)
+    mock_router.registry.return_value.credentials = MagicMock(return_value=None)
     mock_router.afile_content = AsyncMock(side_effect=Exception("deployment failed"))
 
     with pytest.raises(Exception, match='LiteLLM Managed File object with') as exc_info:
@@ -1500,6 +1517,51 @@ async def test_create_still_upserts_and_claims_attribution():
 
 
 @pytest.mark.asyncio
+async def test_a_stored_background_response_names_its_creators_end_user_and_holds_none_of_its_output():
+    """Billing reads only a stored response's status and model, so neither the row nor its cache
+    entry keeps what the model generated, and the row names the end user the create billed to."""
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    managed_files, mock_prisma = _make_object_store_instance()
+    generated_text = "the generated answer"
+    response = ResponsesAPIResponse(
+        id="resp_unified",
+        object="response",
+        status="completed",
+        created_at=1,
+        model="gpt-5.6",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_1",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": generated_text, "annotations": []}],
+            }
+        ],
+        background=True,
+    )
+
+    await managed_files.store_unified_object_id(
+        unified_object_id="resp_unified",
+        file_object=response,
+        litellm_parent_otel_span=None,
+        model_object_id="resp_provider",
+        file_purpose="response",
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-the-creator", end_user_id="customer-42", parent_otel_span=None),
+        persist_attribution=True,
+    )
+
+    written = mock_prisma.db.litellm_managedobjecttable.upsert.await_args.kwargs["data"]
+    cached = managed_files.internal_usage_cache.async_set_cache.await_args.kwargs["value"]
+    assert generated_text not in json.dumps(written, default=str)
+    assert generated_text not in json.dumps(cached, default=str)
+    assert json.loads(written["create"]["file_object"])["status"] == "completed"
+    assert written["create"]["end_user_id"] == "customer-42"
+    assert generated_text in response.model_dump_json()
+
+
+@pytest.mark.asyncio
 async def test_default_callers_still_create_their_rows():
     """create_if_missing defaults to True, so the fine-tune, Responses and managed
     /v1/batches callers, none of which passes it, keep upserting exactly as before."""
@@ -1625,7 +1687,7 @@ async def test_hook_mint_prefers_input_file_target_model_names():
     )
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(return_value={})
+    mock_router.registry.return_value.credentials = MagicMock(return_value={})
 
     with (
         patch("litellm.afile_retrieve", AsyncMock(return_value=_make_file_object())),
@@ -1655,7 +1717,7 @@ async def test_hook_mint_falls_back_to_response_input_file_id_target_models():
     }
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(return_value={})
+    mock_router.registry.return_value.credentials = MagicMock(return_value={})
 
     with (
         patch("litellm.afile_retrieve", AsyncMock(return_value=_make_file_object())),
@@ -1874,7 +1936,7 @@ async def test_afile_delete_passes_trusted_model_credentials_to_router():
     managed_files.delete_unified_file_id = AsyncMock(return_value=_make_file_object(unified_file_id))
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(
+    mock_router.registry.return_value.credentials = MagicMock(
         return_value={
             "custom_llm_provider": "bedrock",
             "s3_bucket_name": "my-bucket",
@@ -1984,7 +2046,7 @@ async def test_afile_delete_storage_backed_row_deletes_stored_content_not_provid
         ),
     )
     router = MagicMock(
-        get_deployment_credentials_with_provider=MagicMock(return_value=None),
+        **{"registry.return_value.credentials.return_value": None},
         afile_delete=AsyncMock(),
     )
 
@@ -2028,7 +2090,7 @@ async def test_afile_content_storage_backed_row_returns_stored_bytes_not_provide
         ),
     )
     router = MagicMock(
-        get_deployment_credentials_with_provider=MagicMock(return_value=None),
+        **{"registry.return_value.credentials.return_value": None},
         afile_content=AsyncMock(),
     )
 

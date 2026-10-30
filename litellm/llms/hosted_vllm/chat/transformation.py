@@ -11,7 +11,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.prompt_templates.factory import parse_mime_type
 from litellm.litellm_core_utils.reasoning_effort_utils import (
-    reasoning_effort_from_thinking_budget,
+    reasoning_effort_from_thinking,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -96,12 +96,13 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
             non_default_params["tools"] = _tools
 
         thinking: Final = non_default_params.pop("thinking", None)
-        if thinking is not None and isinstance(thinking, dict):
-            if thinking.get("type") == "enabled":
-                if "reasoning_effort" not in non_default_params:
-                    non_default_params["reasoning_effort"] = reasoning_effort_from_thinking_budget(
-                        thinking.get("budget_tokens", 0)
-                    )
+        thinking_effort: Final = (
+            None
+            if "reasoning_effort" in non_default_params
+            else reasoning_effort_from_thinking(thinking, drop_params=drop_params)
+        )
+        if thinking_effort is not None:
+            non_default_params["reasoning_effort"] = thinking_effort
 
         return super().map_openai_params(non_default_params, optional_params, model, drop_params)
 

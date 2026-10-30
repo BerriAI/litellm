@@ -1,0 +1,106 @@
+name: LiteLLM Rust DB
+
+on:
+  push:
+    paths:
+      - "litellm-rust/crates/db/**"
+      - "litellm-rust/Cargo.toml"
+      - "litellm-rust/Cargo.lock"
+      - "litellm-rust/clippy.toml"
+      - "litellm-proxy-extras/litellm_proxy_extras/migrations/**"
+      - "**/schema.prisma"
+      - ".cargo/**"
+      - "rust-toolchain.toml"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/actions/setup-uv-with-retries/**"
+      - ".github/workflows/test-rust-db.yml"
+  pull_request:
+    branches:
+      - main
+      - "litellm_**"
+    paths:
+      - "litellm-rust/crates/db/**"
+      - "litellm-rust/Cargo.toml"
+      - "litellm-rust/Cargo.lock"
+      - "litellm-rust/clippy.toml"
+      - "litellm-proxy-extras/litellm_proxy_extras/migrations/**"
+      - "**/schema.prisma"
+      - ".cargo/**"
+      - "rust-toolchain.toml"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/actions/setup-uv-with-retries/**"
+      - ".github/workflows/test-rust-db.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  db-queries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16.6@sha256:557fea37a744d5f4c8faab304b0a90858b53ab119735a88c131fd19dab802f36
+        env:
+          POSTGRES_DB: litellm
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d litellm"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/litellm
+      SQLX_OFFLINE: "false"
+    defaults:
+      run:
+        working-directory: litellm-rust
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - run: rustup toolchain install --no-self-update
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: litellm-rust
+          cache-on-failure: true
+
+      - name: Install Python dependencies
+        working-directory: .
+        run: uv sync --frozen --extra extra-proxy
+
+      - name: Deploy Prisma migrations
+        working-directory: .
+        run: uv run --no-sync prisma migrate deploy --schema litellm-proxy-extras/litellm_proxy_extras/schema.prisma
+
+      - name: Install SQLx CLI
+        run: cargo install sqlx-cli --version 0.9.0 --locked --no-default-features -F postgres
+
+      - name: Check SQLx query metadata
+        working-directory: litellm-rust/crates/db
+        run: cargo sqlx prepare --check
+
+      - name: Test database queries
+        run: cargo test -p litellm-db --locked -- --include-ignored

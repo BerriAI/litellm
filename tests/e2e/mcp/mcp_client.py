@@ -42,6 +42,7 @@ class McpServerNewBody(BaseModel):
     static_headers: dict[str, str] | None = None
     allowed_tools: list[str] | None = None
     mcp_access_groups: list[str] | None = None
+    tool_name_to_description: dict[str, str] | None = None
 
 
 class McpServerNewResponse(BaseModel):
@@ -131,6 +132,34 @@ class McpCallToolBody(BaseModel):
     server_id: str
 
 
+class McpVirtualToolCallBody(BaseModel):
+    name: str
+    arguments: dict[str, McpToolArg]
+
+
+class McpToolsListParams(BaseModel):
+    server_id: str | None = None
+
+
+class McpToolSearchSettings(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    embedding_model: str | None = None
+    top_k: int = 5
+    similarity_threshold: float = 0.0
+    core_tools: tuple[str, ...] = ()
+
+
+class McpToolSearchSettingsResponse(BaseModel):
+    values: McpToolSearchSettings
+
+
+class McpToolSearchSettingsUpdateResponse(BaseModel):
+    message: str
+    status: str
+    settings: McpToolSearchSettings
+
+
 class McpCallContent(BaseModel):
     type: str | None = None
     text: str | None = None
@@ -166,6 +195,7 @@ class McpClient:
         static_headers: dict[str, str] | None = None,
         allowed_tools: list[str] | None = None,
         mcp_access_groups: list[str] | None = None,
+        tool_name_to_description: Mapping[str, str] | None = None,
     ) -> str:
         return unwrap(
             self.proxy.transport.post(
@@ -180,6 +210,9 @@ class McpClient:
                     static_headers=static_headers,
                     allowed_tools=allowed_tools,
                     mcp_access_groups=mcp_access_groups,
+                    tool_name_to_description=(
+                        dict(tool_name_to_description) if tool_name_to_description is not None else None
+                    ),
                 ),
                 response_type=McpServerNewResponse,
             )
@@ -244,14 +277,21 @@ class McpClient:
         mcp_access_groups: list[str] | None = None,
         mcp_toolsets: list[str] | None = None,
         models: list[str] | None = None,
+        mcp_tool_search_enabled: bool | None = None,
     ) -> str:
         object_permission = (
             ObjectPermission(
                 mcp_servers=mcp_servers,
                 mcp_access_groups=mcp_access_groups,
                 mcp_toolsets=mcp_toolsets,
+                mcp_tool_search_enabled=mcp_tool_search_enabled,
             )
-            if mcp_servers is not None or mcp_access_groups is not None or mcp_toolsets is not None
+            if (
+                mcp_servers is not None
+                or mcp_access_groups is not None
+                or mcp_toolsets is not None
+                or mcp_tool_search_enabled is not None
+            )
             else None
         )
         return self.proxy.generate_key(
@@ -263,13 +303,36 @@ class McpClient:
         )
 
     @step("List the MCP tools the key can see from /mcp-rest/tools/list")
-    def list_tools(self, key: str) -> Result[McpToolsListResponse]:
+    def list_tools(self, key: str, server_id: str | None = None) -> Result[McpToolsListResponse]:
         return self.proxy.transport.get(
             "/mcp-rest/tools/list",
             headers=ApiKeyHeaders(x_litellm_api_key=key),
-            params=NoBody(),
+            params=McpToolsListParams(server_id=server_id),
             response_type=McpToolsListResponse,
         )
+
+    @step("Read the MCP tool search settings from /get/mcp_tool_search_settings")
+    def get_mcp_tool_search_settings(self) -> McpToolSearchSettings:
+        return unwrap(
+            self.proxy.transport.get(
+                "/get/mcp_tool_search_settings",
+                headers=self.proxy.transport.master,
+                params=NoBody(),
+                response_type=McpToolSearchSettingsResponse,
+            )
+        ).values
+
+    @step("Update the MCP tool search settings with /update/mcp_tool_search_settings")
+    def update_mcp_tool_search_settings(self, settings: McpToolSearchSettings) -> None:
+        _ = unwrap(
+            self.proxy.transport.patch(
+                "/update/mcp_tool_search_settings",
+                headers=self.proxy.transport.master,
+                json=settings,
+                response_type=McpToolSearchSettingsUpdateResponse,
+            )
+        )
+        settle_propagation(time.monotonic())
 
     @step('Wait for /mcp-rest/tools/list to show the MCP server\'s tool matching "{needle}"')
     def await_tool(self, key: str, server_id: str, needle: str) -> str:
@@ -416,6 +479,21 @@ class McpClient:
             json=McpCallToolBody(
                 name=name, arguments=dict(arguments), server_id=server_id
             ),
+            response_type=McpCallToolResponse,
+        )
+
+    @step("Call the MCP virtual tool {name} through /mcp-rest/tools/call")
+    def call_virtual_tool(
+        self,
+        key: str,
+        *,
+        name: str,
+        arguments: McpToolArguments,
+    ) -> Result[McpCallToolResponse]:
+        return self.proxy.transport.post(
+            "/mcp-rest/tools/call",
+            headers=ApiKeyHeaders(x_litellm_api_key=key),
+            json=McpVirtualToolCallBody(name=name, arguments=dict(arguments)),
             response_type=McpCallToolResponse,
         )
 

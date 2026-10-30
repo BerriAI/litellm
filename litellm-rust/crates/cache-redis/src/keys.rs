@@ -16,7 +16,7 @@ where
                 redis::cmd("TTL")
                     .arg(key)
                     .query::<i64>(connection)
-                    .map_err(|_| Error::Unavailable)
+                    .map_err(Error::unavailable)
             })
             .await?;
         Ok(u64::try_from(ttl).ok().map(Duration::from_secs))
@@ -36,7 +36,7 @@ where
                 .arg(key)
                 .arg(ttl)
                 .query(connection)
-                .map_err(|_| Error::Unavailable)
+                .map_err(Error::unavailable)
         })
         .await
     }

@@ -2,11 +2,14 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 
 
 import litellm
 from litellm.caching import RedisCache
+from litellm.caching.caching import Cache
+from litellm.proxy.caching_routes import _extract_cache_params
 from litellm.proxy.proxy_server import app
 
 client = TestClient(app)
@@ -334,3 +337,63 @@ def test_cache_redis_info_no_cache():
 
     # Restore original cache
     litellm.cache = original_cache
+
+
+def _use_redis_backed_cache(monkeypatch, backend_attributes):
+    cache = Cache(type="redis", host="localhost", port=6379, password="hello")
+    vars(cache.cache).update(backend_attributes)
+    monkeypatch.setattr(litellm, "cache", cache)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("host", "redis.internal"),
+        ("port", 6379),
+        ("port", "6379"),
+        ("namespace", "team-a"),
+        ("redis_version", 7.2),
+        ("redis_version", 7),
+        ("redis_version", "7.2.4"),
+    ],
+)
+def test_extract_cache_params_keeps_each_backend_value_and_its_type(monkeypatch, field, value):
+    _use_redis_backed_cache(monkeypatch, {field: value})
+
+    params = _extract_cache_params()
+
+    assert sorted(params) == ["host", "namespace", "port", "redis_kwargs", "redis_version"]
+    assert repr(params[field]) == repr(value)
+
+
+def test_extract_cache_params_reads_connection_settings_and_masks_the_password(monkeypatch):
+    _use_redis_backed_cache(monkeypatch, {})
+
+    redis_kwargs = _extract_cache_params()["redis_kwargs"]
+
+    assert redis_kwargs["host"] == "localhost"
+    assert repr(redis_kwargs["port"]) == "6379"
+    assert "hello" not in json.dumps(redis_kwargs)
+
+
+def test_extract_cache_params_reports_every_malformed_backend_field(monkeypatch):
+    _use_redis_backed_cache(monkeypatch, {"host": 7, "namespace": 5, "redis_version": ["7"]})
+
+    with pytest.raises(ValidationError) as exc_info:
+        _extract_cache_params()
+
+    assert exc_info.value.title == "HealthCheckCacheParams"
+    assert sorted({error["loc"][0] for error in exc_info.value.errors()}) == ["host", "namespace", "redis_version"]
+
+
+def test_extract_cache_params_is_empty_when_no_cache_is_configured(monkeypatch):
+    monkeypatch.setattr(litellm, "cache", None)
+
+    assert _extract_cache_params() == {}
+
+
+@pytest.mark.parametrize("attribute_name", [1, None, (1, 2), b"host"])
+def test_extract_cache_params_is_empty_when_a_backend_attribute_name_is_not_a_string(monkeypatch, attribute_name):
+    _use_redis_backed_cache(monkeypatch, {attribute_name: "redis.internal"})
+
+    assert _extract_cache_params() == {}, attribute_name

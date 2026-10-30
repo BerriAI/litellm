@@ -33,7 +33,7 @@ def test_owned_redis_outage_recovers_requests_and_real_response_cache(gateway: G
                         with Redis(host=cache.host, port=cache.port, socket_timeout=1) as client:
                             eventually(client.ping, bool)
                             eventually(lambda: client.pubsub_numsub("litellm_proxy.auth_cache_invalidation")[0][1], lambda count: count >= 1, seconds=8)
-                        upstream.get("/__observations").raise_for_status()
+                        upstream.delete("/__observations").raise_for_status()
                         first: Final = candidate.chat(model, key=key, text=identity + generation)
                         second: Final = candidate.chat(model, key=key, text=identity + generation)
                         assert first["id"] == second["id"]
@@ -47,7 +47,7 @@ def test_owned_redis_outage_recovers_requests_and_real_response_cache(gateway: G
                             )
                         if generation == "before":
                             cache.stop()
-                            upstream.get("/__observations").raise_for_status()
+                            upstream.delete("/__observations").raise_for_status()
                             during: Final = candidate.chat(model, key=key, text=identity + "during")
                             assert during["usage"]["total_tokens"] == 40
                             assert len(upstream.get("/__observations").json()["requests"]) == 1

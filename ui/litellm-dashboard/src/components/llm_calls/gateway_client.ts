@@ -1,5 +1,5 @@
 import OpenAI, { type ClientOptions } from "openai";
-import { getProxyBaseUrl } from "@/components/networking";
+import { getGatewayBaseUrl } from "@/components/networking";
 import { getAuthHeaderName } from "@/lib/http/runtime";
 
 type GatewayClientOptions = Pick<ClientOptions, "baseURL" | "defaultHeaders" | "fetch" | "maxRetries" | "timeout"> & {
@@ -11,7 +11,7 @@ export function createGatewayClient({ accessToken, ...options }: GatewayClientOp
   const config: ClientOptions = {
     ...options,
     apiKey: accessToken,
-    baseURL: options.baseURL || getProxyBaseUrl(),
+    baseURL: options.baseURL || getGatewayBaseUrl(),
     dangerouslyAllowBrowser: true,
     defaultHeaders: {
       Authorization: null,

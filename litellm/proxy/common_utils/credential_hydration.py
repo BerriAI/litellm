@@ -18,8 +18,8 @@ from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.router_utils.clientside_credential_handler import clientside_credential_keys
 from litellm.types.router import (
     GenericLiteLLMParams,
-    server_owned_wif_fields_named,
     server_owned_wif_fields_present,
+    server_owned_wif_fields_written,
 )
 from litellm.types.utils import CredentialItem, LlmProviders, server_owned_wif_litellm_params
 
@@ -68,7 +68,7 @@ def decrypted_or_stored(key: str, value: str) -> str:
     return value if decrypted is None else decrypted
 
 
-def _decrypted(db_credential: CredentialItem) -> CredentialItem:
+def decrypted_credential(db_credential: CredentialItem) -> CredentialItem:
     """The stored credential with every value decrypted, leaving already-plaintext values alone."""
     decrypted_values: Final = MappingProxyType(
         {
@@ -99,7 +99,7 @@ async def hydrate_named_credential_authoritative(
     db_credential: Final = await CredentialsRepository(prisma_client).find_by_name(credential_name)
     if db_credential is None:
         return await hydrate_named_credential(credential_name, prisma_client)
-    return _decrypted(db_credential)
+    return decrypted_credential(db_credential)
 
 
 async def hydrate_named_credential(
@@ -114,7 +114,7 @@ async def hydrate_named_credential(
     db_credential: Final = await CredentialsRepository(prisma_client).find_by_name(credential_name)
     if db_credential is None:
         return None
-    return _decrypted(db_credential)
+    return decrypted_credential(db_credential)
 
 
 async def named_credential_wif_fields(
@@ -129,11 +129,17 @@ async def named_credential_wif_fields(
     refuses whenever either side says the credential is server-owned.
     """
     matching: Final = tuple(c for c in litellm.credential_list if c.credential_name == credential_name)
-    in_memory: Final = tuple(chain.from_iterable(server_owned_wif_fields_named(c.credential_values) for c in matching))
+    in_memory: Final = tuple(
+        chain.from_iterable(server_owned_wif_fields_written(c.credential_values) for c in matching)
+    )
     if prisma_client is None:
         return in_memory
     db_credential: Final = await CredentialsRepository(prisma_client).find_by_name(credential_name)
-    stored: Final = () if db_credential is None else server_owned_wif_fields_named(db_credential.credential_values)
+    stored: Final = (
+        ()
+        if db_credential is None
+        else server_owned_wif_fields_written(decrypted_credential(db_credential).credential_values)
+    )
     return tuple(dict.fromkeys(in_memory + stored))
 
 
@@ -165,7 +171,7 @@ async def effective_server_owned_wif_fields(
     touching the field.
     """
     from_stored: Final = () if stored is None else server_owned_wif_fields_present(stored)
-    from_incoming: Final = () if incoming is None else server_owned_wif_fields_named(incoming.keys())
+    from_incoming: Final = () if incoming is None else server_owned_wif_fields_written(incoming)
     from_credential: Final = tuple(
         chain.from_iterable(
             await asyncio.gather(

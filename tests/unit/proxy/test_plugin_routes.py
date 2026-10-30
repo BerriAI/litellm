@@ -15,7 +15,10 @@ import asyncio
 from unittest.mock import MagicMock
 
 import pytest
+import respx
+from starlette.requests import Request
 
+import litellm
 from litellm.proxy._types import (
     ConfigGeneralSettings,
     LitellmUserRoles,
@@ -230,3 +233,90 @@ def test_configured_custom_key_header_is_stripped() -> None:
         assert "x-my-tenant-key" in _request_strip_headers()
     finally:
         proxy_server.general_settings = original
+
+
+def _plugin_proxy_request(headers: dict[str, str]) -> Request:
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": b'{"q": 1}', "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/plugin-proxy/p/items",
+            "query_string": b"page=2",
+            "headers": [(name.lower().encode(), value.encode()) for name, value in headers.items()],
+        },
+        receive,
+    )
+
+
+@pytest.mark.parametrize(
+    ("user_id", "expected_identity_headers"),
+    [
+        ("admin-1", {"x-litellm-user-id": "admin-1", "x-litellm-user-role": "proxy_admin"}),
+        (None, {"x-litellm-user-role": "proxy_admin"}),
+        ("", {"x-litellm-user-role": "proxy_admin"}),
+    ],
+)
+def test_plugin_proxy_forwards_caller_identity_and_replaces_the_caller_credential(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    user_id: str | None,
+    expected_identity_headers: dict[str, str],
+) -> None:
+    from litellm.proxy.plugin_routes import plugin_proxy
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    register_plugins_from_config(
+        {"plugins": [{"name": "p", "url": "http://plugin.example", "plugin_key": "sk-plugin"}]}
+    )
+    upstream = respx_mock.post("http://plugin.example/items?page=2").respond(text="plugin says hi")
+
+    response = asyncio.run(
+        plugin_proxy(
+            "p",
+            "items",
+            _plugin_proxy_request({"Authorization": "Bearer sk-caller", "X-Trace-Id": "t-1"}),
+            UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN, user_id=user_id),
+        )
+    )
+    register_plugins_from_config({})
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    forwarded = upstream.calls[0].request
+    assert response.status_code == 200
+    assert response.body == b"plugin says hi"
+    assert forwarded.content == b'{"q": 1}'
+    assert forwarded.headers["authorization"] == "Bearer sk-plugin"
+    assert forwarded.headers["x-trace-id"] == "t-1"
+    assert {
+        name: value for name, value in forwarded.headers.items() if name.startswith("x-litellm-user-")
+    } == expected_identity_headers
+
+
+def test_plugin_proxy_refuses_non_admin_callers_without_contacting_the_plugin(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    from litellm.proxy.plugin_routes import plugin_proxy
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    register_plugins_from_config({"plugins": [{"name": "p", "url": "http://plugin.example"}]})
+    upstream = respx_mock.post("http://plugin.example/items?page=2").respond(text="plugin says hi")
+
+    response = asyncio.run(
+        plugin_proxy(
+            "p",
+            "items",
+            _plugin_proxy_request({"Authorization": "Bearer sk-caller"}),
+            UserAPIKeyAuth(api_key="sk-user", user_role=LitellmUserRoles.INTERNAL_USER, user_id="user-1"),
+        )
+    )
+    register_plugins_from_config({})
+
+    assert response.status_code == 403
+    assert response.body == b"Plugin proxy access requires proxy_admin role."
+    assert not upstream.called

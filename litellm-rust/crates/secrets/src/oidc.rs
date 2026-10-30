@@ -191,7 +191,7 @@ impl OidcResolver {
                     .header("Accept", "application/json; api-version=2.0")
                     .send()
                     .await
-                    .map_err(|_| Error::OidcHttp)?;
+                    .map_err(|error| Error::OidcHttp(error.into()))?;
                 if response.status() != reqwest::StatusCode::OK {
                     return Err(Error::OidcStatus(response.status().as_u16()));
                 }
@@ -199,7 +199,10 @@ impl OidcResolver {
                 struct Token {
                     value: Option<SecretValue>,
                 }
-                let token: Token = response.json().await.map_err(|_| Error::OidcResponse)?;
+                let token: Token = response
+                    .json()
+                    .await
+                    .map_err(|error| Error::OidcResponse(error.into()))?;
                 if let Some(value) = &token.value {
                     self.cache
                         .insert(
@@ -225,11 +228,14 @@ impl OidcResolver {
                     .header("Metadata-Flavor", "Google")
                     .send()
                     .await
-                    .map_err(|_| Error::OidcHttp)?;
+                    .map_err(|error| Error::OidcHttp(error.into()))?;
                 if response.status() != reqwest::StatusCode::OK {
                     return Err(Error::OidcStatus(response.status().as_u16()));
                 }
-                let token = response.text().await.map_err(|_| Error::OidcResponse)?;
+                let token = response
+                    .text()
+                    .await
+                    .map_err(|error| Error::OidcResponse(error.into()))?;
                 let now = (self.clock)();
                 let ttl = oidc_token_cache_ttl(&token, now, GOOGLE_TOKEN_MAX_TTL);
                 let value = SecretValue::new(token);
@@ -259,7 +265,7 @@ async fn read_file(path: &str) -> Result<SecretValue, Error> {
     tokio::fs::read_to_string(path)
         .await
         .map(|value| SecretValue::new(value.replace("\r\n", "\n").replace('\r', "\n")))
-        .map_err(|_| Error::OidcFile)
+        .map_err(Error::OidcFile)
 }
 
 async fn read_allowed_file(
@@ -271,7 +277,7 @@ async fn read_allowed_file(
     }
     let resolved = tokio::fs::canonicalize(path)
         .await
-        .map_err(|_| Error::OidcFile)?;
+        .map_err(Error::OidcFile)?;
     let allowed = environment
         .get(OIDC_ALLOWED_CREDENTIAL_DIRS)
         .filter(|v| !v.is_empty())
@@ -283,7 +289,7 @@ async fn read_allowed_file(
             return tokio::fs::read_to_string(&resolved)
                 .await
                 .map(|value| SecretValue::new(value.replace("\r\n", "\n").replace('\r', "\n")))
-                .map_err(|_| Error::OidcFile);
+                .map_err(Error::OidcFile);
         }
     }
     Err(Error::UnsafeOidcPath)

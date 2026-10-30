@@ -8,10 +8,13 @@ Covers:
 - Response processing with correct indices
 """
 
+import json
 from collections.abc import Callable
 from typing import Final
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.exceptions import BadRequestError
@@ -627,3 +630,25 @@ class TestFileContentBlocks:
             },
         )
         assert result.usage.prompt_tokens_details.image_tokens == 258
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_embedding(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents"
+    ).mock(return_value=httpx.Response(200, json={"embeddings": [{"values": [0.0123, -0.0456, 0.0789]}]}))
+
+    response: Final = litellm.embedding(
+        model="gemini/gemini-embedding-001",
+        input="Hello, world!",
+        api_key="gemini-test-key",
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "requests": [{"model": "models/gemini-embedding-001", "content": {"parts": [{"text": "Hello, world!"}]}}]
+    }
+    assert response.model == "gemini-embedding-001"
+    assert [(item.index, item.embedding) for item in response.data] == [(0, [0.0123, -0.0456, 0.0789])]
+    expected_prompt_tokens: Final = litellm.token_counter(model="gemini/gemini-embedding-001", text="Hello, world!")
+    assert response.usage.prompt_tokens == expected_prompt_tokens
+    assert response.usage.total_tokens == expected_prompt_tokens

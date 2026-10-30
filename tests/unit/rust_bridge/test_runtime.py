@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Generator
-from types import SimpleNamespace
 from typing import Final, Protocol
 
 import pytest
@@ -10,27 +9,14 @@ from litellm.exceptions import APIError
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import bindings, configuration, runtime
+from litellm.rust_bridge._native import RustBridgeDeclined, RustUpstreamError
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.lifecycle import Complete, Open, Yield
-from litellm.rust_bridge.streams import Stream, SyncStream
-
-
-class RustBridgeDeclined(Exception):
-    pass
-
-
-class RustUpstreamError(Exception):
-    pass
+from litellm.rust_bridge.execution import AsyncStream, Complete, StreamChunk, SyncStream
 
 
 @pytest.fixture(autouse=True)
-def native_exceptions(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
-    native: Final = SimpleNamespace(
-        RustBridgeDeclined=RustBridgeDeclined,
-        RustUpstreamError=RustUpstreamError,
-    )
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
+def rust_configuration(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
     monkeypatch.delenv("LITELLM_RUST", raising=False)
     configuration.reset_rust_configuration()
     yield
@@ -276,16 +262,13 @@ async def test_native_response_marker_reaches_caller_with_existing_metadata(
 
 class ScriptedStreamExecution:
     def __init__(self, chunks: tuple[bytes, ...]) -> None:
-        self._steps: Final = iter((*(Yield(chunk) for chunk in chunks), Complete(None)))
+        self._steps: Final = iter((*(StreamChunk(chunk) for chunk in chunks), Complete(None)))
         self.closed = False
 
-    def start(self) -> Open:
-        return Open(None)
-
-    def resume_value(self, value: object) -> Yield | Complete:
+    def send(self, value: object) -> StreamChunk | Complete:
         return next(self._steps)
 
-    def resume_error(self, error: BaseException) -> Complete:
+    def throw(self, error: BaseException) -> Complete:
         return Complete(None)
 
     def close(self) -> None:
@@ -299,7 +282,7 @@ async def test_native_stream_marker_reaches_caller_without_wrapping_or_consuming
 ) -> None:
     chunks: Final = (b"event: message_start\n\n", b"event: message_stop\n\n")
     execution: Final = ScriptedStreamExecution(chunks)
-    stream: Final[Stream | SyncStream] = Stream(execution) if asynchronous else SyncStream(execution)
+    stream: Final[AsyncStream | SyncStream] = AsyncStream(execution, {}) if asynchronous else SyncStream(execution, {})
     bound: Final[bindings.NativeBinding[Callable[[], object]]] = bindings.NativeBinding(
         "messages", validate=lambda _: None
     )
@@ -324,7 +307,7 @@ async def test_native_stream_marker_reaches_caller_without_wrapping_or_consuming
     assert result is stream
     assert get_hidden_params_dict(result) == {"additional_headers": {"x-litellm-rust": "true"}}
     assert not execution.closed
-    delivered: Final = tuple([chunk async for chunk in result]) if isinstance(result, Stream) else tuple(result)
+    delivered: Final = tuple([chunk async for chunk in result]) if isinstance(result, AsyncStream) else tuple(result)
     assert delivered == chunks
     assert execution.closed
 

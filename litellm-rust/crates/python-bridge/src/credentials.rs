@@ -10,9 +10,18 @@ use pyo3::{
     types::{PyDict, PyString},
 };
 
-const NOT_CALLABLE: &str = "Azure AD token provider must be callable";
 const NOT_A_STRING: &str = "Azure AD token must be a string, got {}";
 const FAILED: &str = "Failed to get Azure AD token: {}";
+
+#[derive(Debug, thiserror::Error)]
+#[error("Azure AD token provider must be callable")]
+struct NotCallable;
+
+impl From<NotCallable> for PyErr {
+    fn from(error: NotCallable) -> Self {
+        PyTypeError::new_err(litellm_error::Report::new(&error).to_string())
+    }
+}
 
 /// The `azure_ad_token_provider` keyword argument, kept alive for the rest of the call.
 pub(crate) struct CallerTokenProvider {
@@ -36,7 +45,7 @@ impl CallerTokenProvider {
     pub(crate) fn acquire(&self, py: Python<'_>) -> PyResult<ResolvedCredential> {
         let provider = self.provider.bind(py);
         if !provider.is_callable() {
-            return Err(PyTypeError::new_err(NOT_CALLABLE));
+            return Err(NotCallable.into());
         }
         let token = wrap_failure(
             py,

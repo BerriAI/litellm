@@ -107,8 +107,7 @@ class TestResolveBaseline:
         served; a dashboard counterfactual must not be able to take routing down."""
 
         class Exploding:
-            @property
-            def model_name_to_deployment_indices(self):
+            def deployments_named(self, model_name):
                 raise RuntimeError("router is mid-reload")
 
         assert resolve_baseline(Exploding(), ["anything"]) is None

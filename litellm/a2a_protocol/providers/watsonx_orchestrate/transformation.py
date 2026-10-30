@@ -8,11 +8,31 @@ WXO uses a REST API (not A2A/JSON-RPC) with an async-poll execution model:
 """
 
 import asyncio
-from collections.abc import AsyncIterator, Mapping
-from typing import Any, Final
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+from itertools import chain
+from typing import Final
 from uuid import uuid4
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
+from litellm.llms.openai.common_utils import decoded_json_object
+
+
+def _a2a_text_part(part: object) -> Sequence[object]:
+    part_fields: Final = as_str_mapping(part)
+    if not isinstance(part_fields, dict):
+        return ()
+    if part_fields.get("kind") in (None, "", "text") and part_fields.get("text"):
+        return (part_fields["text"],)
+    return ()
+
+
+def _join_with_spaces(texts: Sequence[object]) -> str:
+    strings: Final = [text for text in texts if isinstance(text, str)]
+    if len(strings) == len(texts):
+        return " ".join(strings)
+    first_bad: Final = next(position for position, text in enumerate(texts) if not isinstance(text, str))
+    raise TypeError(f"sequence item {first_bad}: expected str instance, {type(texts[first_bad]).__name__} found")
 
 
 class WatsonxOrchestrateTransformation:
@@ -29,22 +49,16 @@ class WatsonxOrchestrateTransformation:
         return f"{cp4d_host.rstrip('/')}/orchestrate/cpd/instances/{instance_id}"
 
     @staticmethod
-    def extract_text_from_a2a_params(params: dict[str, Any]) -> str:
+    def extract_text_from_a2a_params(params: Mapping[str, object]) -> str:
         """
         Extract user message text from A2A MessageSendParams.
 
         A2A format: params.message.parts[*] where part.kind == "text"
         """
-        message: Final = params.get("message", {})
-        parts: Final = message.get("parts", [])
-        texts: Final = []
-        for part in parts:
-            if not isinstance(part, dict):
-                continue
-            kind = part.get("kind")
-            if kind in (None, "", "text") and part.get("text"):
-                texts.append(part["text"])
-        return " ".join(texts) or ""
+        message: Final = decoded_json_object(params.get("message", {}))
+        parts: Final[Iterable[object]] = iter_items(message.get("parts", []))
+        texts: Final = list(chain.from_iterable(map(_a2a_text_part, parts)))
+        return _join_with_spaces(texts) or ""
 
     @staticmethod
     def build_wxo_run_body(

@@ -1,5 +1,5 @@
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -14,7 +14,7 @@ from litellm.llms.gemini.common_utils import (
     get_gemini_image_web_search_requests,
     map_gemini_image_tools_params,
 )
-from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, map_vertex_image_size
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -33,8 +33,12 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+_DECODED_JSON: Final = TypeAdapter(object)
 _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_CONTAINER: Final[TypeAdapter[Mapping[str, object] | str | Sequence[object]]] = TypeAdapter(
+    Mapping[str, object] | str | Sequence[object], config=ConfigDict(hide_input_in_errors=True)
+)
 
 
 class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
@@ -85,8 +89,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                     if k == "n":
                         mapped_params["candidate_count"] = v
                     elif k == "size":
-                        # Map OpenAI size format to Gemini aspectRatio
-                        mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(v)
+                        continue
                     elif k in ("aspectRatio", "aspect_ratio"):
                         mapped_params["aspectRatio"] = v
                     elif k in ("imageSize", "image_size"):
@@ -99,21 +102,22 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                     elif k not in ("tools", "web_search_options", "imageConfig"):
                         mapped_params[k] = v
 
+        if "size" in non_default_params and "size" not in optional_params:
+            image_params: Final = _JSON_OBJECT.validate_python(mapped_params)
+            image_config: Final = _JSON_OBJECT.validate_python(image_params.get("imageConfig", {}))
+            size_params: Final = {
+                key: value
+                for key, value in (
+                    map_vertex_image_size(non_default_params["size"], model) or {"aspectRatio": "1:1"}
+                ).items()
+                if key not in image_config
+            }
+            return map_gemini_image_tools_params(
+                _JSON_OBJECT.validate_python(non_default_params), {**size_params, **image_params}
+            )
+
         mapped_params = map_gemini_image_tools_params(non_default_params, mapped_params)
         return mapped_params
-
-    def _map_size_to_aspect_ratio(self, size: str) -> str:
-        """
-        Map OpenAI size format to Gemini aspect ratio format
-        """
-        aspect_ratio_map: Final = {
-            "1024x1024": "1:1",
-            "1792x1024": "16:9",
-            "1024x1792": "9:16",
-            "1280x896": "4:3",
-            "896x1280": "3:4",
-        }
-        return aspect_ratio_map.get(size, "1:1")
 
     def _resolve_vertex_project(self) -> str | None:
         return (
@@ -296,7 +300,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         Transform Gemini image generation response to litellm ImageResponse format
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -308,25 +312,27 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             model_response.data = []
 
         # Gemini image generation models return in candidates format
-        candidates: Final = response_data.get("candidates", [])
+        response_object: Final = _JSON_OBJECT.validate_python(response_data)
+        candidates: Final = _JSON_CONTAINER.validate_python(response_object.get("candidates", []))
         for candidate in candidates:
-            content = candidate.get("content", {})
-            parts = content.get("parts", [])
-            for part in parts:
+            content = _JSON_OBJECT.validate_python(_JSON_OBJECT.validate_python(candidate).get("content", {}))
+            parts = _JSON_CONTAINER.validate_python(content.get("parts", []))
+            for raw_part in parts:
+                part = raw_part if isinstance(raw_part, str) else _JSON_CONTAINER.validate_python(raw_part)
                 # Look for inlineData with image
                 if "inlineData" in part:
-                    inline_data = part["inlineData"]
+                    part_object = _JSON_OBJECT.validate_python(part)
+                    inline_data = _JSON_CONTAINER.validate_python(part_object["inlineData"])
                     if "data" in inline_data:
-                        thought_sig = part.get("thoughtSignature")
+                        thought_sig = part_object.get("thoughtSignature")
                         model_response.data.append(
                             ImageObject(
-                                b64_json=inline_data["data"],
+                                b64_json=_JSON_OBJECT.validate_python(inline_data)["data"],
                                 url=None,
                                 provider_specific_fields=({"thought_signature": thought_sig} if thought_sig else None),
                             )
                         )
 
-        response_object: Final = _JSON_OBJECT.validate_python(response_data)
         if usage_metadata := response_object.get("usageMetadata", None):
             model_response.usage = self._transform_image_usage(_JSON_DICT.validate_python(usage_metadata))
 

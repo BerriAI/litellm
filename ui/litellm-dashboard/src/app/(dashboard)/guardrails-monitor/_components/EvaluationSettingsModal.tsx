@@ -1,3 +1,4 @@
+import { useTerminology } from "@/contexts/TerminologyContext";
 import { Play } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { fetchAvailableModels, type ModelGroup } from "@/components/llm_calls/fetch_models";
@@ -47,6 +48,7 @@ export function EvaluationSettingsModal({
   accessToken,
   onRunEvaluation,
 }: EvaluationSettingsModalProps) {
+  const term = useTerminology();
   const [prompt, setPrompt] = useState(DEFAULT_PROMPT);
   const [schema, setSchema] = useState(DEFAULT_SCHEMA);
   const [model, setModel] = useState<string | null>(null);
@@ -95,8 +97,8 @@ export function EvaluationSettingsModal({
           <DialogTitle>Evaluation Settings</DialogTitle>
           <DialogDescription>
             {guardrailName
-              ? `Configure AI evaluation for ${guardrailName}`
-              : "Configure AI evaluation for re-running on logs"}
+              ? `${term("Configure AI evaluation for")} ${guardrailName}`
+              : term("Configure AI evaluation for re-running on logs")}
           </DialogDescription>
         </DialogHeader>
 

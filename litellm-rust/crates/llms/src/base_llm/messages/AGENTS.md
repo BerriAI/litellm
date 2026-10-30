@@ -1,5 +1,7 @@
-This directory owns the shared Messages provider adapter contract, its execution inputs such as `MessagesTransformContext`, and provider-independent transformation machinery. Public request, response, content-block, and event schemas belong in `litellm-llms-types::formats::messages`. Call orchestration belongs in `inference-messages`, and provider implementations belong in `llms/src/<provider>/messages`
+# rules
 
-Do not import provider implementations or embed their policy in shared trait defaults, normalization, or context defaults. A context carries inputs the shared adapter contract needs, not every provider's settings. Thinking-budget choices and model-specific restrictions do not become format rules merely because several providers host Claude
-
-Shared normalization must implement LiteLLM's provider-independent Messages input contract. Provider-specific metadata filtering, tool-ID rewriting, web-search replay policy, beta selection, and thinking translation belong in the provider implementation. Let each adapter explicitly opt into applicable shared provider helpers
+- Owns the Messages adapter contract, its execution inputs such as `MessagesTransformContext`, and provider-independent machinery
+- A context carries only inputs the contract needs, not every provider's settings
+- Shared normalization implements LiteLLM's provider-independent Messages input contract
+- Metadata filtering, tool-ID rewriting, web-search replay, beta selection, thinking translation and thinking budgets are provider policy. Adapters opt into shared provider helpers explicitly
+- Restrictions common to Claude hosts are still provider policy, not format rules

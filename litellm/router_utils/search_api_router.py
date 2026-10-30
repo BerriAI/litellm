@@ -155,10 +155,9 @@ class SearchAPIRouter:
 
             available_search_tool_names: Final = [tool.get("search_tool_name") for tool in router_instance.search_tools]
             verbose_router_logger.debug(
-                "Inside SearchAPIRouter.async_search_with_fallbacks() - search_tool_name: %s, Available Search Tools: %s, kwargs: %s",
+                "Inside SearchAPIRouter.async_search_with_fallbacks() - search_tool_name: %s, Available Search Tools: %s",
                 search_tool_name,
                 available_search_tool_names,
-                kwargs,
             )
 
             # Use the existing retry/fallback infrastructure

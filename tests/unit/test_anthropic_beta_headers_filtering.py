@@ -17,7 +17,9 @@ import pytest
 
 import litellm
 from litellm.anthropic_beta_headers_manager import (
+    GetAnthropicBetaHeadersConfig,
     filter_and_transform_beta_headers,
+    get_beta_headers_config,
     update_headers_with_filtered_beta,
     update_request_with_filtered_beta,
 )
@@ -429,13 +431,13 @@ class TestAnthropicBetaHeadersFiltering:
         assert filtered == ["fine-grained-tool-streaming-2025-05-14"]
 
     @pytest.mark.parametrize(
-        "provider", ["anthropic", "bedrock", "bedrock_converse", "vertex_ai", "databricks"]
+        "provider", ["anthropic", "azure_ai", "bedrock", "bedrock_converse", "vertex_ai", "databricks"]
     )
     def test_thinking_binding_controls_forwarded(self, provider):
         """`thinking.block_binding` (preserved thinking, Claude Fable 5.1) is only
         accepted alongside thinking-binding-controls-2026-08-01. The body field is
         forwarded untouched, so stripping the header (previously unknown, hence
-        dropped) makes Bedrock and Vertex reject the request with
+        dropped) makes Bedrock, Vertex and Azure AI Foundry reject the request with
         "thinking.adaptive.block_binding: Extra inputs are not permitted"."""
         filtered = filter_and_transform_beta_headers(
             beta_headers=["thinking-binding-controls-2026-08-01"],
@@ -558,3 +560,13 @@ class TestAnthropicBetaHeadersFiltering:
         headers = {"anthropic-version": "2023-06-01"}
 
         assert update_headers_with_filtered_beta(headers, "bedrock_mantle") == {"anthropic-version": "2023-06-01"}
+
+
+@pytest.mark.parametrize("flag", ["LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "LITELLM_OFFLINE_MODE"])
+def test_local_flags_load_bundled_beta_headers_without_fetching(monkeypatch, flag):
+    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+    monkeypatch.setenv(flag, "True")
+    with patch("litellm.anthropic_beta_headers_manager.httpx.get") as remote_get:
+        config = get_beta_headers_config(url="https://example.test/anthropic_beta_headers_config.json")
+    remote_get.assert_not_called()
+    assert config == GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()

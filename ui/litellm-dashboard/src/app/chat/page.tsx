@@ -1,11 +1,8 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState, useLayoutEffect } from "react";
-import { Plus, ChevronDown, Check, X } from "lucide-react";
+import { Plus, ChevronDown, Paperclip, ImageIcon, X } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Skeleton } from "@/components/ui/skeleton";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/lib/toast";
 import { useRouter } from "next/navigation";
@@ -13,41 +10,63 @@ import { useChatShell } from "@/contexts/ChatShellContext";
 import { getChatRoutes } from "@/components/chat/ChatShell";
 import ChatMessages from "@/components/chat/ChatMessages";
 import MCPConnectPicker from "@/components/chat/MCPConnectPicker";
-import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
-import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
-import type { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
-import type { MCPEvent } from "@/components/chat/types";
-import { getProviderLogoAndName } from "@/components/provider_info_helpers";
+import { fetchAvailableModels, type ModelGroup } from "@/components/llm_calls/fetch_models";
+import type { AssistantMessageUpdate, ChatAttachment, ChatMessage } from "@/components/chat/types";
+import ChatModelPicker, { isChatModel, modelChatMode, type ChatMode } from "@/components/chat/ChatModelPicker";
+import MoyaiChatComposer from "@/components/chat/moyai/MoyaiChatComposer";
+import MoyaiChatHome from "@/components/chat/moyai/MoyaiChatHome";
+import { runChatRequest } from "@/components/chat/runChatRequest";
+import { readChatAttachment, MAX_CHAT_ATTACHMENTS, CHAT_ATTACHMENT_ACCEPT } from "@/components/chat/attachmentHelpers";
+import ChatFileChip from "@/components/chat/ChatFileChip";
 import { useQueryState } from "nuqs";
 
-const SUGGESTIONS = ["Write", "Learn", "Code", "Brainstorm"];
 const LOCALSTORAGE_MODEL_KEY = "litellm_chat_selected_model";
 
-function getGreeting(): string {
-  const h = new Date().getHours();
-  if (h >= 5 && h < 12) return "Good morning";
-  if (h >= 12 && h < 17) return "Good afternoon";
-  return "Good evening";
+type ReplayMessage = Pick<ChatMessage, "role" | "content" | "attachments" | "generatedImages" | "mcpEvents">;
+
+function hasMessageContent(text: string, images: ChatAttachment[], mode: ChatMode): boolean {
+  return Boolean(text.trim()) || (mode === "chat" && images.length > 0);
 }
 
-// Extract provider from model name for logo lookup.
-// Handles prefixed models ("groq/llama-3"), and detects well-known providers by keyword.
-function getProviderFromModelName(modelName: string): string {
-  if (!modelName) return "";
-  const lower = modelName.toLowerCase();
-  const slash = lower.indexOf("/");
-  if (slash > 0) return lower.slice(0, slash);
-  // Keyword matching — order matters (more specific first)
-  if (lower.includes("claude")) return "anthropic";
-  if (lower.includes("gemini")) return "gemini";
-  if (lower.includes("gpt") || lower.includes("chatgpt") || /^o[0-9]/.test(lower)) return "openai";
-  if (lower.includes("mistral") || lower.includes("codestral")) return "mistral";
-  if (lower.includes("llama")) return "meta_llama";
-  if (lower.includes("deepseek")) return "deepseek";
-  if (lower.includes("grok")) return "xai";
-  if (lower.includes("command")) return "cohere";
-  if (lower.includes("nova") || lower.includes("titan")) return "bedrock";
-  return "";
+function AttachmentPreview({
+  attachments,
+  disabled,
+  onRemove,
+}: {
+  attachments: ChatAttachment[];
+  disabled: boolean;
+  onRemove: (id: string) => void;
+}) {
+  if (!attachments.length) return null;
+  return (
+    <div className="flex w-full flex-wrap gap-3 px-4 pt-4" aria-label="Attached files">
+      {attachments.map((attachment) => (
+        <div key={attachment.id} className={attachment.kind === "file" ? "relative max-w-64" : "relative w-20"}>
+          {attachment.kind === "file" ? (
+            <ChatFileChip file={attachment} />
+          ) : (
+            <>
+              {/* User attachments use local data URLs, not the image optimizer. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={attachment.url} alt={attachment.name} className="h-20 w-20 rounded-xl border object-cover" />
+              <p className="mt-1 truncate text-[11px] text-muted-foreground">{attachment.name}</p>
+            </>
+          )}
+          <Button
+            type="button"
+            variant="secondary"
+            size="icon-xs"
+            aria-label={`Remove ${attachment.name}`}
+            className="absolute -right-2 -top-2 rounded-full"
+            disabled={disabled}
+            onClick={() => onRemove(attachment.id)}
+          >
+            <X className="size-3" />
+          </Button>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export default function ChatConversationPage() {
@@ -55,8 +74,7 @@ export default function ChatConversationPage() {
   const router = useRouter();
   const {
     accessToken,
-    userId,
-    userEmail,
+    conversations,
     selectedMCPServers,
     setSelectedMCPServers,
     activeConversationId,
@@ -70,12 +88,19 @@ export default function ChatConversationPage() {
   } = useChatShell();
 
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
-  const [models, setModels] = useState<string[]>([]);
+  const [models, setModels] = useState<ModelGroup[]>([]);
+  const [mode, setMode] = useState<ChatMode>("chat");
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [isReadingAttachments, setIsReadingAttachments] = useState(false);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const readAttachmentsRef = useRef(false);
+  const draftVersionRef = useRef(0);
   const [isLoadingModels, setIsLoadingModels] = useState(true);
-  const [modelSelectorOpen, setModelSelectorOpen] = useState(false);
-  const [modelSearchText, setModelSearchText] = useState("");
 
   const [responsesSessionId, setResponsesSessionId] = useState<string | null>(null);
+  const responsesSessionGenerationRef = useRef(0);
+  const previousResponsesConversationRef = useRef(activeConversationId);
   const [prevConversationIdForSessionReset, setPrevConversationIdForSessionReset] = useState(activeConversationId);
   const [isStreaming, setIsStreaming] = useState(false);
   const [inputText, setInputText] = useState("");
@@ -83,7 +108,7 @@ export default function ChatConversationPage() {
   const [storageBannerDismissed, setStorageBannerDismissed] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const requestConversationRef = useRef<string | null>(null);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const streamScrollLock = useRef<number | null>(null);
@@ -97,12 +122,14 @@ export default function ChatConversationPage() {
     if (!accessToken) return;
     fetchAvailableModels(accessToken)
       .then((data) => {
-        const names = (data || []).map((m: { model_group?: string }) => m.model_group ?? "").filter(Boolean);
-        setModels(names);
+        const available = (data || []).filter(isChatModel);
+        const names = available.map((model) => model.model_group);
+        setModels(available);
         try {
           const saved = localStorage.getItem(LOCALSTORAGE_MODEL_KEY);
           if (saved && names.includes(saved)) {
             setSelectedModel(saved);
+            setMode(modelChatMode(available.find((model) => model.model_group === saved)!));
             return;
           }
         } catch {
@@ -110,32 +137,111 @@ export default function ChatConversationPage() {
         }
         if (names.length > 0) {
           setSelectedModel(names[0]);
-          localStorage.setItem(LOCALSTORAGE_MODEL_KEY, names[0]);
+          setMode(modelChatMode(available[0]));
         }
       })
       .catch(() => toast.error("Could not load models"))
       .finally(() => setIsLoadingModels(false));
   }, [accessToken]);
 
+  useLayoutEffect(() => {
+    if (
+      previousResponsesConversationRef.current !== null &&
+      previousResponsesConversationRef.current !== activeConversationId
+    ) {
+      responsesSessionGenerationRef.current += 1;
+    }
+    previousResponsesConversationRef.current = activeConversationId;
+  }, [activeConversationId]);
+
   // Reset the responses session when switching between conversations so that
   // previous_response_id from conversation A is never sent for conversation B.
   if (activeConversationId !== prevConversationIdForSessionReset) {
     setPrevConversationIdForSessionReset(activeConversationId);
     setResponsesSessionId(null);
+    setAttachments([]);
+    setAttachmentError(null);
+    setInputText("");
   }
 
-  const selectModel = useCallback((model: string) => {
-    setSelectedModel(model);
-    localStorage.setItem(LOCALSTORAGE_MODEL_KEY, model);
-    setModelSelectorOpen(false);
-    setModelSearchText("");
-  }, []);
+  useEffect(() => {
+    draftVersionRef.current += 1;
+    if (abortControllerRef.current && requestConversationRef.current !== activeConversationId) {
+      abortControllerRef.current.abort();
+    }
+  }, [activeConversationId]);
+
+  const selectModel = useCallback(
+    (model: ModelGroup) => {
+      if (modelChatMode(model) === "image" && attachments.length > 0) {
+        setAttachmentError("Remove the attached files before switching to image generation.");
+        return;
+      }
+      responsesSessionGenerationRef.current += 1;
+      setSelectedModel(model.model_group);
+      setMode(modelChatMode(model));
+      setResponsesSessionId(null);
+      setAttachmentError(null);
+      try {
+        localStorage.setItem(LOCALSTORAGE_MODEL_KEY, model.model_group);
+      } catch {
+        return;
+      }
+    },
+    [attachments.length],
+  );
+
+  const addAttachments = async (files: File[]) => {
+    if (mode !== "chat" || files.length === 0) return;
+    if (isStreaming || readAttachmentsRef.current) return;
+    if (attachments.length + files.length > MAX_CHAT_ATTACHMENTS) {
+      setAttachmentError(`Attach up to ${MAX_CHAT_ATTACHMENTS} files per message.`);
+      return;
+    }
+    const draftVersion = draftVersionRef.current;
+    readAttachmentsRef.current = true;
+    setIsReadingAttachments(true);
+    setAttachmentError(null);
+    try {
+      const images = await Promise.all(files.map(readChatAttachment));
+      if (draftVersion === draftVersionRef.current) setAttachments((current) => [...current, ...images]);
+    } catch (error) {
+      if (draftVersion === draftVersionRef.current)
+        setAttachmentError(error instanceof Error ? error.message : "Could not read these files.");
+    } finally {
+      readAttachmentsRef.current = false;
+      setIsReadingAttachments(false);
+    }
+  };
+
+  const handleAttachmentInput = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    void addAttachments(files);
+  };
+
+  useEffect(
+    () => () => {
+      abortControllerRef.current?.abort();
+      draftVersionRef.current += 1;
+    },
+    [],
+  );
 
   const handleSend = useCallback(
-    async (text: string, historyOverride?: Array<{ role: "user" | "assistant"; content: string }>) => {
+    async (
+      text: string,
+      historyOverride?: ReplayMessage[],
+      attachmentOverride?: ChatAttachment[],
+      generationModel?: string,
+    ) => {
       const trimmed = text.trim();
-      if (!trimmed || !selectedModel || isStreaming) return;
-      const model = selectedModel;
+      const images = attachmentOverride ?? attachments;
+      const requestMode = generationModel ? "image" : mode;
+      const model = generationModel ?? selectedModel;
+      if (!hasMessageContent(trimmed, images, requestMode) || !model) return;
+      if (isStreaming || abortControllerRef.current || readAttachmentsRef.current) return;
+      const sessionGeneration = responsesSessionGenerationRef.current;
       setInputText("");
 
       let convId = activeConversationId;
@@ -145,11 +251,21 @@ export default function ChatConversationPage() {
         setConversationIdInUrl(convId);
       }
 
-      appendMessage(convId, { role: "user", content: trimmed });
-      appendMessage(convId, { role: "assistant", content: "" });
+      const imageGeneration = requestMode === "image" ? { model, prompt: trimmed } : undefined;
+      const userMessage = {
+        role: "user" as const,
+        content: trimmed,
+        attachments: images.length > 0 ? images : undefined,
+        imageGeneration,
+      };
+      appendMessage(convId, userMessage);
+      appendMessage(convId, { role: "assistant", content: "", imageGeneration });
+      setAttachments([]);
+      setAttachmentError(null);
 
       setIsStreaming(true);
       abortControllerRef.current = new AbortController();
+      requestConversationRef.current = convId;
 
       // When historyOverride is set (edit / retry), the existing server-side
       // session chain covers messages that were just truncated and is no longer
@@ -167,86 +283,34 @@ export default function ChatConversationPage() {
       // On the very first turn (no session yet), we send the full history.
       const previousResponseId = historyOverride ? null : responsesSessionId;
 
-      const history: Array<{ role: "user" | "assistant"; content: string }> = historyOverride
-        ? [...historyOverride, { role: "user" as const, content: trimmed }]
-        : previousResponseId
-          ? [{ role: "user" as const, content: trimmed }]
-          : [
-              // Explicitly filter to only user/assistant roles — tool messages
-              // lack a required tool_call_id and would cause API errors.
-              ...(activeConversation?.messages ?? [])
-                .filter(
-                  (m): m is typeof m & { role: "user" | "assistant" } => m.role === "user" || m.role === "assistant",
-                )
-                .map((m) => ({ role: m.role, content: m.content })),
-              { role: "user" as const, content: trimmed },
-            ];
+      const history: ReplayMessage[] = [
+        ...(historyOverride ?? (previousResponseId ? [] : activeConversation?.messages ?? [])),
+        userMessage,
+      ];
+      const requestController = abortControllerRef.current;
 
-      let accumulatedContent = "";
-      let accumulatedReasoning = "";
-      // MCP events accumulated locally so we can persist them to the message
-      // without relying on component state (which would cause stale closures).
-      const accumulatedMCPEvents: MCPEvent[] = [];
-      // Track clean completion so partial events are not shown on error/abort.
-      let streamCompletedCleanly = false;
-
+      const request = {
+        model,
+        mode: requestMode,
+        prompt: trimmed,
+        accessToken,
+        signal: requestController.signal,
+        messages: history,
+        previousResponseId,
+        mcpServers: selectedMCPServers,
+        onResponseId: (id: string | null) => {
+          if (responsesSessionGenerationRef.current === sessionGeneration) setResponsesSessionId(id);
+        },
+        onUpdate: (updates: AssistantMessageUpdate) => updateLastAssistantMessage(convId, updates),
+      };
       try {
-        await makeOpenAIResponsesRequest(
-          history,
-          (_role: string, chunk: string) => {
-            accumulatedContent += chunk;
-            updateLastAssistantMessage(convId!, { content: accumulatedContent });
-          },
-          model,
-          accessToken,
-          undefined, // tags
-          abortControllerRef.current.signal,
-          (rc: string) => {
-            accumulatedReasoning += rc;
-            updateLastAssistantMessage(convId!, { reasoningContent: accumulatedReasoning });
-          },
-          (timeToFirstToken: number) => updateLastAssistantMessage(convId!, { timeToFirstToken }),
-          (usage: TokenUsage) => updateLastAssistantMessage(convId!, { usage }),
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          selectedMCPServers.length > 0 ? selectedMCPServers : undefined,
-          previousResponseId,
-          (id: string) => setResponsesSessionId(id),
-          (event: MCPEvent) => {
-            // Accumulate locally only — persisted once in finally to avoid
-            // one full localStorage write per MCP event during streaming.
-            accumulatedMCPEvents.push(event);
-          },
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          true,
-          (totalLatency: number) => updateLastAssistantMessage(convId!, { totalLatency }),
-        );
-        streamCompletedCleanly = true;
-      } catch (err: unknown) {
-        if (err instanceof Error && err.name === "AbortError") {
-          updateLastAssistantMessage(convId!, {
-            content: accumulatedContent + " [stopped]",
-          });
-        } else {
-          updateLastAssistantMessage(convId!, {
-            content: "[Something went wrong. The partial response has been saved.]",
-          });
-        }
+        await runChatRequest(request);
       } finally {
-        // Only persist MCP events on clean completion — partial events from an
-        // aborted or errored turn would show incomplete tool calls to the user.
-        if (accumulatedMCPEvents.length > 0 && streamCompletedCleanly) {
-          updateLastAssistantMessage(convId!, { mcpEvents: accumulatedMCPEvents });
+        if (abortControllerRef.current === requestController) {
+          setIsStreaming(false);
+          abortControllerRef.current = null;
+          requestConversationRef.current = null;
         }
-        setIsStreaming(false);
-        abortControllerRef.current = null;
       }
     },
     [
@@ -254,6 +318,8 @@ export default function ChatConversationPage() {
       activeConversation,
       selectedModel,
       selectedMCPServers,
+      mode,
+      attachments,
       accessToken,
       createConversation,
       appendMessage,
@@ -271,33 +337,24 @@ export default function ChatConversationPage() {
   const handleEditAndResend = useCallback(
     (messageId: string, newContent: string) => {
       if (!activeConversationId || isStreaming) return;
+      if (abortControllerRef.current || readAttachmentsRef.current) return;
       // Compute the truncated history synchronously before the async state update lands,
       // so handleSend receives the correct pre-edit context rather than the stale closure value.
       const msgs = activeConversation?.messages ?? [];
       const idx = msgs.findIndex((m) => m.id === messageId);
-      const priorMessages = (idx === -1 ? msgs : msgs.slice(0, idx))
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+      if (idx < 0) return;
+      const original = msgs[idx];
+      if (!original.imageGeneration && (mode !== "chat" || !selectedModel)) {
+        setAttachmentError("Choose a chat model before resending this message.");
+        return;
+      }
+      if (!newContent.trim() && !original.attachments?.length) return;
+      const priorMessages = msgs.slice(0, idx);
       truncateFromMessage(activeConversationId, messageId);
-      handleSend(newContent, priorMessages);
+      handleSend(newContent, priorMessages, original.attachments ?? [], original.imageGeneration?.model);
     },
-    [activeConversationId, isStreaming, activeConversation, truncateFromMessage, handleSend],
+    [activeConversationId, isStreaming, activeConversation, truncateFromMessage, handleSend, mode, selectedModel],
   );
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend(inputText);
-    }
-  };
-
-  // Auto-resize textarea
-  useEffect(() => {
-    const ta = textareaRef.current;
-    if (!ta) return;
-    ta.style.height = "auto";
-    ta.style.height = `${Math.min(ta.scrollHeight, 180)}px`;
-  }, [inputText]);
 
   // Track scroll position to show/hide scroll-to-bottom button
   useEffect(() => {
@@ -345,178 +402,152 @@ export default function ChatConversationPage() {
   }, [activeConversation?.messages]);
 
   const showBlankState = !activeConversation || activeConversation.messages.length === 0;
-  const displayName = userEmail?.split("@")[0] ?? userId ?? "";
-  const greeting = displayName ? `${getGreeting()}, ${displayName}` : getGreeting();
 
-  // Filtered models: selected one floats to the top, then alphabetical
-  const filteredModels = (
-    modelSearchText ? models.filter((m) => m.toLowerCase().includes(modelSearchText.toLowerCase())) : models
-  ).sort((a, b) => {
-    if (a === selectedModel) return -1;
-    if (b === selectedModel) return 1;
-    return 0;
-  });
-
-  const modelSelectorContent = (
-    <div className="w-[280px] h-[400px] flex flex-col overflow-hidden">
-      <div className="p-2 pb-1">
-        <Input
-          autoFocus
-          value={modelSearchText}
-          onChange={(e) => setModelSearchText(e.target.value)}
-          placeholder="Search models..."
-          className="h-8 text-[13px]"
-        />
-      </div>
-      <ScrollArea className="flex-1 h-0">
-        {filteredModels.map((m) => {
-          const checked = m === selectedModel;
-          const provider = getProviderFromModelName(m);
-          const { logo } = provider ? getProviderLogoAndName(provider) : { logo: "" };
-          return (
-            <Button
-              key={m}
-              variant="ghost"
-              onClick={() => selectModel(m)}
-              className={`h-auto w-full justify-start gap-2 rounded px-3 py-[7px] font-normal ${checked ? "bg-accent" : ""}`}
-            >
-              {logo ? (
-                <img
-                  src={logo}
-                  alt=""
-                  className="w-4 h-4 object-contain shrink-0"
-                  onError={(e) => {
-                    (e.currentTarget as HTMLImageElement).style.display = "none";
-                  }}
-                />
-              ) : (
-                <span className="w-4 shrink-0" />
-              )}
-              <span className="flex-1 text-left text-[13px] text-foreground overflow-hidden text-ellipsis whitespace-nowrap">
-                {m}
-              </span>
-              {checked && <Check className="h-3.5 w-3.5 text-primary shrink-0" />}
-            </Button>
-          );
-        })}
-      </ScrollArea>
-    </div>
-  );
-
-  const modelSelectorTrigger = isLoadingModels ? (
-    <Skeleton className="w-40 h-8" />
-  ) : (
-    <Popover
-      open={modelSelectorOpen}
-      onOpenChange={(open) => {
-        setModelSelectorOpen(open);
-        if (!open) setModelSearchText("");
-      }}
-    >
-      <PopoverTrigger
-        render={
-          <Button variant="outline" size="sm" className="max-w-[240px] justify-start gap-1.5 overflow-hidden">
-            {selectedModel ? (
+  const inputBar = (inConversation: boolean) => {
+    const preparing = isLoadingModels || isReadingAttachments;
+    const submitDisabled = !hasMessageContent(inputText, attachments, mode) || !selectedModel || preparing;
+    return (
+      <div
+        onDragOver={(event) => {
+          if (mode === "chat" && event.dataTransfer.types.includes("Files")) event.preventDefault();
+        }}
+        onDrop={(event) => {
+          if (mode === "chat" && event.dataTransfer.files.length) {
+            event.preventDefault();
+            void addAttachments(Array.from(event.dataTransfer.files));
+          }
+        }}
+      >
+        <MoyaiChatComposer
+          inConversation={inConversation}
+          value={inputText}
+          onChange={setInputText}
+          onSubmit={() => void handleSend(inputText)}
+          onCancel={handleStop}
+          placeholder={
+            mode === "image"
+              ? "Describe the image you want to create…"
+              : inConversation
+                ? "Send a message..."
+                : "Describe a change, paste an error, or ask a question…"
+          }
+          isLoading={isStreaming}
+          submitLabel={mode === "image" ? "Generate image" : "Send"}
+          submitDisabled={submitDisabled}
+          onPaste={(event) => {
+            const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
+            if (mode === "chat" && images.length > 0) {
+              event.preventDefault();
+              void addAttachments(images);
+            }
+          }}
+          attachmentPreview={
+            <AttachmentPreview
+              attachments={attachments}
+              disabled={isStreaming}
+              onRemove={(id) => setAttachments((current) => current.filter((item) => item.id !== id))}
+            />
+          }
+          modelPicker={
+            <ChatModelPicker
+              models={models}
+              selectedModel={selectedModel}
+              loading={isLoadingModels}
+              disabled={isStreaming || isReadingAttachments}
+              onSelect={selectModel}
+            />
+          }
+          tools={
+            mode === "chat" ? (
               <>
-                {(() => {
-                  const provider = getProviderFromModelName(selectedModel);
-                  const { logo } = provider ? getProviderLogoAndName(provider) : { logo: "" };
-                  return logo ? (
-                    <img
-                      src={logo}
-                      alt=""
-                      className="w-4 h-4 object-contain shrink-0"
-                      onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).style.display = "none";
-                      }}
+                <input
+                  ref={attachmentInputRef}
+                  type="file"
+                  accept={CHAT_ATTACHMENT_ACCEPT}
+                  multiple
+                  aria-label="Upload files"
+                  className="sr-only"
+                  disabled={isStreaming || isReadingAttachments}
+                  onChange={handleAttachmentInput}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Attach files"
+                  title="Attach images, PDF, Word (.docx), Excel (.xlsx), text, or code files (up to 4 files, 10 MB each)"
+                  disabled={isStreaming || isReadingAttachments || attachments.length >= MAX_CHAT_ATTACHMENTS}
+                  onClick={() => attachmentInputRef.current?.click()}
+                >
+                  <Paperclip className="size-4" />
+                </Button>
+                <Popover open={mcpPopoverOpen} onOpenChange={setMcpPopoverOpen}>
+                  <PopoverTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={isStreaming}
+                        aria-label="Connect tools"
+                        className="gap-1.5 text-muted-foreground"
+                      >
+                        <Plus className="size-3.5" />
+                        <span>Tools</span>
+                        {selectedMCPServers.length > 0 && (
+                          <span className="text-primary">{selectedMCPServers.length}</span>
+                        )}
+                      </Button>
+                    }
+                  />
+                  <PopoverContent side="top" align="start" className="p-0 w-auto">
+                    <MCPConnectPicker
+                      accessToken={accessToken}
+                      selectedServers={selectedMCPServers}
+                      onChange={setSelectedMCPServers}
                     />
-                  ) : null;
-                })()}
-                <span className="overflow-hidden text-ellipsis whitespace-nowrap">{selectedModel}</span>
+                  </PopoverContent>
+                </Popover>
               </>
             ) : (
-              <span className="text-muted-foreground">Select model</span>
-            )}
-            <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
-          </Button>
-        }
-      />
-      <PopoverContent align="start" side="top" className="p-0 w-auto">
-        {modelSelectorContent}
-      </PopoverContent>
-    </Popover>
-  );
-
-  const inputBar = (inConversation: boolean) => (
-    <div className="bg-background rounded-xl border shadow-[0_1px_6px_rgba(0,0,0,0.06)] overflow-hidden">
-      <textarea
-        ref={textareaRef}
-        value={inputText}
-        onChange={(e) => setInputText(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder={inConversation ? "Send a message..." : "How can I help you today?"}
-        className="w-full border-none outline-none resize-none text-[15px] text-foreground bg-transparent font-[inherit] box-border"
-        style={{
-          minHeight: inConversation ? 52 : 80,
-          padding: inConversation ? "16px 20px 8px" : "20px 20px 8px",
-        }}
-      />
-      <div
-        className="flex items-center justify-between border-t"
-        style={{ padding: inConversation ? "4px 12px 10px" : "8px 12px 12px" }}
-      >
-        <div className="flex items-center gap-2 min-w-0">
-          {modelSelectorTrigger}
-          <Popover open={mcpPopoverOpen} onOpenChange={setMcpPopoverOpen}>
-            <PopoverTrigger
-              render={
-                <Button variant="outline" size="sm" className="gap-1 px-2.5 text-muted-foreground">
-                  <Plus className="h-3.5 w-3.5" />
-                  {selectedMCPServers.length > 0 && (
-                    <span className="text-xs text-primary font-medium">{selectedMCPServers.length}</span>
-                  )}
-                </Button>
-              }
-            />
-            <PopoverContent side="top" align="start" className="p-0 w-auto">
-              <MCPConnectPicker
-                accessToken={accessToken}
-                selectedServers={selectedMCPServers}
-                onChange={setSelectedMCPServers}
-              />
-            </PopoverContent>
-          </Popover>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {inConversation && selectedMCPServers.length > 0 && (
-            <span className="text-xs text-muted-foreground max-w-[160px] overflow-hidden text-ellipsis whitespace-nowrap">
-              {selectedMCPServers.length} tool{selectedMCPServers.length > 1 ? "s" : ""} connected
-            </span>
-          )}
-          {isStreaming ? (
-            <Button variant="outline" size="icon-sm" onClick={handleStop} className="rounded-full shrink-0">
-              <div className="w-2.5 h-2.5 bg-foreground rounded-[2px]" />
-            </Button>
-          ) : (
-            <Button
-              size="sm"
-              onClick={() => handleSend(inputText)}
-              disabled={!inputText.trim() || isLoadingModels || !selectedModel}
-            >
-              Send
-            </Button>
-          )}
-        </div>
+              <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                <ImageIcon className="size-4" />
+                Create an image from your description
+              </span>
+            )
+          }
+        />
+        {isReadingAttachments && (
+          <p role="status" className="mt-2 text-xs text-muted-foreground">
+            Preparing files…
+          </p>
+        )}
+        {attachments.some((attachment) => attachment.kind === "file") && (
+          <p className="mt-2 text-xs text-muted-foreground">File support depends on the selected model and provider.</p>
+        )}
+        {attachmentError && (
+          <p role="alert" className="mt-2 text-sm text-destructive">
+            {attachmentError}
+          </p>
+        )}
+        {!isLoadingModels && !selectedModel && (
+          <p className="mt-2 text-sm text-muted-foreground">
+            {mode === "image"
+              ? "No image-generation models are available. Ask your admin to add one to Model Hub."
+              : "No chat models are available for your account."}
+          </p>
+        )}
+        <p className="moyai-chat-home-composer-hint">
+          {mode === "image" ? "Describe an image · Enter to generate" : "Drop files or paste images · Enter to send"}
+        </p>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <>
       {storageUnavailable && !storageBannerDismissed && (
         <div className="bg-warning/10 border-b border-warning/20 px-5 py-1.5 text-[13px] text-warning flex justify-between items-center">
-          <span>Chat history won&apos;t be saved in this browser session</span>
+          <span>Some chat history or attachments could not be saved or restored.</span>
           <Button
             variant="ghost"
             size="icon-xs"
@@ -528,74 +559,55 @@ export default function ChatConversationPage() {
         </div>
       )}
 
-      <div className="flex-1 min-h-0 overflow-hidden flex flex-col bg-background">
+      <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
         {showBlankState ? (
-          <div className="flex-1 flex flex-col items-center justify-center px-6 pb-20">
-            <h1 className="m-0 mb-8 text-[28px] font-semibold text-foreground tracking-tight text-center">
-              {greeting}
-            </h1>
-
-            <p className="-mt-4 mb-7 text-sm text-muted-foreground text-center max-w-[520px] leading-relaxed">
-              Chat with 100+ LLMs + MCP tools; authenticate once, use them here.{" "}
-              <Button
-                variant="link"
-                onClick={() => router.push(getChatRoutes().integrations)}
-                className="h-auto p-0 text-sm font-medium"
-              >
-                Open Integrations -&gt;
-              </Button>
-            </p>
-
-            <div className="w-full max-w-[680px]">{inputBar(false)}</div>
-
-            <div className="flex gap-2 mt-3.5 flex-wrap justify-center">
-              {SUGGESTIONS.map((s) => (
-                <Button
-                  key={s}
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setInputText(s + ": ")}
-                  className="rounded-full px-4 text-muted-foreground"
-                >
-                  {s}
-                </Button>
-              ))}
-            </div>
-          </div>
+          <MoyaiChatHome
+            imageMode={mode === "image"}
+            draft={inputText}
+            busy={isStreaming}
+            conversations={conversations}
+            onSelectConversation={(id) => {
+              void setConversationIdInUrl(id);
+            }}
+            onPrompt={setInputText}
+          >
+            {inputBar(false)}
+          </MoyaiChatHome>
         ) : (
-          <div className="flex-1 min-h-0 flex flex-col mx-auto w-full px-6 relative" style={{ maxWidth: 760 }}>
-            <div
-              ref={messagesScrollRef}
-              className="flex-1 min-h-0 overflow-auto pt-6"
-              style={{ overflowAnchor: "none" }}
-            >
-              <ChatMessages
-                messages={activeConversation!.messages}
-                isStreaming={isStreaming}
-                onEditMessage={handleEditAndResend}
-              />
-            </div>
-            {showScrollButton && (
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => {
-                  const el = messagesScrollRef.current;
-                  if (el) {
-                    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-                    if (streamScrollLock.current !== null) {
-                      streamScrollLock.current = el.scrollHeight;
+          <div className="moyai-chat-conversation">
+            <header className="moyai-chat-conversation-header">
+              <h1>{activeConversation!.title}</h1>
+            </header>
+            <div className="moyai-chat-transcript-layout">
+              <div ref={messagesScrollRef} className="moyai-chat-transcript" style={{ overflowAnchor: "none" }}>
+                <ChatMessages
+                  messages={activeConversation!.messages}
+                  isStreaming={isStreaming}
+                  onEditMessage={handleEditAndResend}
+                />
+              </div>
+              {showScrollButton && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => {
+                    const el = messagesScrollRef.current;
+                    if (el) {
+                      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+                      if (streamScrollLock.current !== null) {
+                        streamScrollLock.current = el.scrollHeight;
+                      }
                     }
-                  }
-                }}
-                className="absolute bottom-[100px] left-1/2 -translate-x-1/2 z-chrome rounded-full border bg-background/75 text-muted-foreground shadow-sm backdrop-blur-md hover:bg-background/95"
-                aria-label="Scroll to bottom"
-              >
-                <ChevronDown className="h-3 w-3" />
-              </Button>
-            )}
+                  }}
+                  className="absolute bottom-[100px] left-1/2 -translate-x-1/2 z-chrome rounded-full border bg-background/75 text-muted-foreground shadow-sm backdrop-blur-md hover:bg-background/95"
+                  aria-label="Scroll to bottom"
+                >
+                  <ChevronDown className="h-3 w-3" />
+                </Button>
+              )}
 
-            <div className="py-3 pb-6">{inputBar(true)}</div>
+              <div className="moyai-chat-composer-wrap">{inputBar(true)}</div>
+            </div>
           </div>
         )}
       </div>

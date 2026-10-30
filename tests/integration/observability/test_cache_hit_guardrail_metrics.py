@@ -1,6 +1,5 @@
 import asyncio
 import json
-import subprocess
 import uuid
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
@@ -15,9 +14,11 @@ import pytest
 import yaml
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.process import owned_proxy_process
+from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from prometheus_client.parser import text_string_to_metric_families
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 GUARDRAIL_PATH: Final = "/beta/litellm_basic_guardrail_api"
 DEPLOYMENT_FAILURE: Final = "litellm_deployment_failure_responses_total"
@@ -178,7 +179,7 @@ class Rig:
     guardrail_name: str
     policy: Wire
     provider: Wire
-    process: subprocess.Popen[bytes]
+    owned: OwnedProxy
 
 
 @contextmanager
@@ -228,7 +229,7 @@ def _rig(
                 identity,
                 policy,
                 provider,
-                owned.process,
+                owned,
             )
 
 
@@ -578,7 +579,6 @@ def test_two_identical_cache_hit_rejects_increment_populated_series(gateway: Gat
 
 def test_two_identical_cache_hit_rejects_write_matching_spend_rows(gateway: Gateway, tmp_path: Path) -> None:
     """E1b: both cache-hit rejects land a failure spend row."""
-    pytest.skip("BUG: roughly one in four back-to-back cache-hit rejects never lands its LiteLLM_SpendLogs row")
     marker: Final = uuid.uuid4().hex
     with _rig(gateway, tmp_path, marker) as rig:
         text: Final = "cache hit control e1b " + marker

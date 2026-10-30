@@ -11,13 +11,15 @@ Covers the three defects from the ticket:
 """
 
 import cProfile
+import json
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Final
 
 import pytest
+from litellm_enterprise.enterprise_callbacks import secret_detection
 from litellm_enterprise.enterprise_callbacks.secret_detection import (
     _default_detect_secrets_config,
     _ENTERPRISE_SecretDetection,
@@ -46,6 +48,251 @@ def _isolate_masked_entity_count():
 
 def _guardrail() -> _ENTERPRISE_SecretDetection:
     return _ENTERPRISE_SecretDetection(guardrail_name="hide-secrets", event_hook="pre_call", default_on=True)
+
+
+def test_tool_payload_scans_raw_values_and_key_context_without_changing_keys():
+    payload = {
+        "password": "hunter2brahms9x",
+        "command": "export API_TOKEN=0123456789abcdef0123456789abcdef01234567",
+        AWS_KEY: "safe",
+        "path": 'C:\\tmp\\"config"',
+        "count": 7,
+        "optional": None,
+        "enabled": False,
+        "nested": [f"AWS_ACCESS_KEY_ID={AWS_KEY}\nkeep this line", "safe"],
+    }
+    result = _guardrail().redact_tool_payload(payload)
+    assert result.keys() == payload.keys()
+    assert result["password"] == "[REDACTED]"
+    assert result["command"] == "export API_TOKEN=[REDACTED]"
+    assert result["nested"] == ["AWS_ACCESS_KEY_ID=[REDACTED]\nkeep this line", "safe"]
+    assert result[AWS_KEY] == "safe"
+    assert result["path"] == payload["path"]
+    assert result["count"] == 7
+    assert result["optional"] is None
+    assert result["enabled"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        '{"env":"AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE","env":"safe"}',
+        '{"env":"AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE",broken',
+        json.dumps({"password": "hunter2brahms9x", "ok": True}),
+    ),
+)
+async def test_tool_arguments_native_hook_cannot_forward_unredacted_credentials(arguments):
+    data = {
+        "messages": [
+            {
+                "role": "assistant",
+                "tool_calls": [{"id": "call_1", "function": {"name": "save_config", "arguments": arguments}}],
+            }
+        ]
+    }
+    await _guardrail().async_pre_call_hook(UserAPIKeyAuth(), DualCache(), data, "acompletion")
+    rewritten = data["messages"][0]["tool_calls"][0]["function"]["arguments"]
+    assert AWS_KEY not in rewritten
+    assert "hunter2brahms9x" not in rewritten
+    assert "[REDACTED]" in rewritten
+
+
+@pytest.mark.asyncio
+async def test_deeply_nested_tool_arguments_are_redacted():
+    arguments = '{"k":' * 200 + json.dumps(f"AWS_ACCESS_KEY_ID={AWS_KEY}") + "}" * 200
+    data = {
+        "messages": [
+            {
+                "role": "assistant",
+                "tool_calls": [{"id": "call_1", "function": {"name": "save_config", "arguments": arguments}}],
+            }
+        ]
+    }
+    await _guardrail().async_pre_call_hook(UserAPIKeyAuth(), DualCache(), data, "acompletion")
+    rewritten = data["messages"][0]["tool_calls"][0]["function"]["arguments"]
+    assert json.loads(rewritten) == json.loads(arguments.replace(AWS_KEY, "[REDACTED]"))
+
+
+@pytest.mark.parametrize("password", ("hunter2\\brahms9x", "hunter2\tbrahms9x"))
+def test_tool_payload_redacts_keyword_values_that_need_json_escaping(password):
+    assert _guardrail().redact_tool_payload({"password": password, "path": ".env"}) == {
+        "password": "[REDACTED]",
+        "path": ".env",
+    }
+
+
+@pytest.mark.parametrize(
+    ("password", "redacted"),
+    (('Zx9qL2mN8vB4"kR7Tq', '[REDACTED]"kR7Tq'), ('Zx9qL2mN8vB4\\"kR7Tq', '[REDACTED]"kR7Tq')),
+    ids=("quote", "backslash-quote"),
+)
+def test_tool_payload_redacts_a_keyword_match_that_stops_inside_an_escape(password: str, redacted: str) -> None:
+    assert _guardrail().redact_tool_payload({"password": password}) == {"password": redacted}
+
+
+def _recorded_scans(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    scanned: Final[list[str]] = []
+    scan: Final = secret_detection._scan_lines
+
+    def recorded(lines: Sequence[str]) -> frozenset[tuple[str, str]]:
+        scanned.append(lines[0])
+        return scan(lines)
+
+    monkeypatch.setattr(secret_detection, "_scan_lines", recorded)
+    return scanned
+
+
+def test_clean_scans_are_reused_and_secret_scans_are_not(monkeypatch: pytest.MonkeyPatch) -> None:
+    scanned: Final = _recorded_scans(monkeypatch)
+    guardrail: Final = _guardrail()
+    for _ in range(2):
+        assert guardrail.redact_text("nothing sensitive here") == "nothing sensitive here"
+        assert guardrail.redact_text(f"AWS_ACCESS_KEY_ID={AWS_KEY}") == "AWS_ACCESS_KEY_ID=[REDACTED]"
+    assert _guardrail().redact_text("nothing sensitive here") == "nothing sensitive here"
+    assert scanned == [
+        "nothing sensitive here",
+        f"AWS_ACCESS_KEY_ID={AWS_KEY}",
+        f"AWS_ACCESS_KEY_ID={AWS_KEY}",
+        "nothing sensitive here",
+    ]
+
+
+def test_clean_scan_reuse_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    scanned: Final = _recorded_scans(monkeypatch)
+    monkeypatch.setattr(secret_detection, "_CLEAN_SCAN_CACHE_SIZE", 2)
+    guardrail: Final = _guardrail()
+    for text in ("first", "second", "first", "third", "second", "first"):
+        guardrail.scan_message_for_secrets(text)
+    assert scanned == ["first", "second", "third", "second", "first"]
+
+
+def test_interleaved_agent_sessions_reuse_their_clean_scans(monkeypatch: pytest.MonkeyPatch) -> None:
+    scanned: Final[list[str]] = []
+
+    def clean_scan(lines: Sequence[str]) -> frozenset[tuple[str, str]]:
+        scanned.append(lines[0])
+        return frozenset()
+
+    monkeypatch.setattr(secret_detection, "_scan_lines", clean_scan)
+    guardrail: Final = _guardrail()
+    sessions: Final = [[f"session {session} turn {turn}" for turn in range(201)] for session in range(25)]
+    for history in sessions:
+        for text in history:
+            guardrail.redact_text(text)
+    scanned.clear()
+    for history in sessions:
+        for text in history:
+            guardrail.redact_text(text)
+    assert scanned == []
+
+
+def test_overlapping_secrets_are_replaced_longest_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    guardrail: Final = _guardrail()
+    detected: Final = [
+        {"type": "Secret Keyword", "value": "\\u0041\\u0042"},
+        {"type": "Secret Keyword", "value": "ABCD"},
+    ]
+
+    def overlapping_scan(text: str) -> list[dict[str, str]]:
+        return detected
+
+    monkeypatch.setattr(guardrail, "scan_message_for_secrets", overlapping_scan)
+    assert guardrail.redact_tool_payload({"token": "ABCDxyz"}) == {"token": "[REDACTED]xyz"}
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_records_secrets_found_only_in_tool_payloads():
+    data = {
+        "system": "You are a coding agent",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "t1", "name": "write", "input": {"env": f"AWS_ACCESS_KEY_ID={AWS_KEY}"}}
+                ],
+            },
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "written"}]},
+        ],
+        "metadata": {},
+    }
+    await _guardrail().async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type="anthropic_messages"
+    )
+    assert data["messages"][0]["content"][0]["input"] == {"env": "AWS_ACCESS_KEY_ID=[REDACTED]"}
+    recorded = _recorded(data)
+    assert recorded["guardrail_response"] == "mask"
+    assert recorded["masked_entity_count"] == {"AWS Access Key": 1}
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    (
+        ({"password": ["hunter2brahms9x", "safe"]}, {"password": ["[REDACTED]", "safe"]}),
+        (["a8f5f167f44f4964e6c998dee827110c", "safe"], ["[REDACTED]", "safe"]),
+        ({"password" + " " * 100: ["hunter2brahms9x"]}, {"password" + " " * 100: ["[REDACTED]"]}),
+    ),
+    ids=("credential-key-over-list", "unkeyed-high-entropy", "whitespace-padded-credential-key"),
+)
+def test_list_items_are_scanned_beside_their_parent_key_or_quoted(payload, expected):
+    assert _guardrail().redact_tool_payload(payload) == expected
+
+
+@pytest.mark.parametrize(
+    ("key", "items"),
+    (("k" * 10_000, 1000), ("\u0000" * 64, 3000), ("tok " * 250_000, 2000)),
+    ids=("long", "control-characters", "long-over-many-items"),
+)
+def test_keys_over_a_list_build_one_bounded_context(monkeypatch: pytest.MonkeyPatch, key: str, items: int) -> None:
+    contexts: Final[list[str]] = []
+    scans: Final[list[str]] = []
+    key_context: Final = secret_detection._key_context
+    guardrail: Final = _guardrail()
+    scan: Final = guardrail.scan_message_for_secrets
+
+    def recorded_context(value: str) -> str:
+        contexts.append(value)
+        return key_context(value)
+
+    def recorded_scan(text: str) -> list[dict[str, str]]:
+        scans.append(text)
+        return scan(text)
+
+    monkeypatch.setattr(secret_detection, "_key_context", recorded_context)
+    monkeypatch.setattr(guardrail, "scan_message_for_secrets", recorded_scan)
+    secret_line: Final = f"AWS_ACCESS_KEY_ID={AWS_KEY}"
+    result: Final = guardrail.redact_tool_payload({key: ["v"] * items + [secret_line]})
+    assert result == {key: ["v"] * items + ["AWS_ACCESS_KEY_ID=[REDACTED]"]}
+    assert contexts == [key]
+    longest: Final = secret_detection._KEY_CONTEXT + len('"": ') + len(json.dumps(secret_line))
+    assert max(len(line) for line in scans[0].splitlines()) == longest
+
+
+def test_long_multi_line_tool_strings_are_scanned_in_bounded_runs_beside_their_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scans: Final[list[str]] = []
+    guardrail: Final = _guardrail()
+    scan: Final = guardrail.scan_message_for_secrets
+
+    def recorded_scan(text: str) -> list[dict[str, str]]:
+        scans.append(text)
+        return scan(text)
+
+    monkeypatch.setattr(guardrail, "scan_message_for_secrets", recorded_scan)
+    code: Final = "\n".join(f"const value{i} = compute({i}); // step {i}" for i in range(2000))
+    padding: Final = "a" * 5000
+    payload: Final = {
+        "password": "hunter2brahms9x\nsecond",
+        "secret": f"{padding}\nzq7Lm2Xv9Rt4Kp\nthird\n{padding}",
+        "content": f"AWS_ACCESS_KEY_ID={AWS_KEY}\n{code}",
+    }
+    assert guardrail.redact_tool_payload(payload) == {
+        "password": "[REDACTED]",
+        "secret": "[REDACTED]\n[REDACTED]",
+        "content": f"AWS_ACCESS_KEY_ID=[REDACTED]\n{code}",
+    }
+    assert max(len(line) for line in scans[0].splitlines()) < len(code)
 
 
 def _recorded(request_data: dict) -> dict:

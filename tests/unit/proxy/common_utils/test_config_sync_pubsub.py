@@ -1,7 +1,7 @@
 import asyncio
 import json
 import random
-from typing import Callable, Coroutine, Iterable, List, Optional, Tuple
+from typing import Callable, Coroutine, Final, Iterable, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -519,6 +519,32 @@ async def test_redis_error_leads_to_backoff_and_resubscribe() -> None:
     assert broken.closed is True
     assert healthy.subscribed_channels == [CONFIG_SYNC_CHANNEL]
     assert resyncs == ["resync"]
+
+
+@pytest.mark.parametrize("broken_type", (_BrokenPubSub, _CloseFailingBrokenPubSub))
+async def test_reconnect_recovers_missed_config_without_another_message(broken_type: type[_BrokenPubSub]) -> None:
+    broken: Final = broken_type()
+    healthy: Final = _QueuePubSub()
+    cache: Final = _FakeRedisCache(_ScriptedPubSubRedisClient((broken, healthy)))
+    recovered: Final = asyncio.Event()
+    reload_config: Final = AsyncMock(side_effect=recovered.set)
+    subscriber: Final = ConfigSyncSubscriber(
+        redis_cache=cache,
+        resync_callbacks=(reload_config,),
+        debounce_seconds=0.0,
+        jitter_max_seconds=0.0,
+        backoff_initial_seconds=0.0,
+        backoff_max_seconds=0.0,
+    )
+
+    subscriber.start()
+    try:
+        await asyncio.wait_for(recovered.wait(), timeout=1)
+    finally:
+        await subscriber.stop()
+
+    assert healthy.subscribed_channels == [CONFIG_SYNC_CHANNEL]
+    reload_config.assert_awaited_once_with()
 
 
 async def test_failing_resync_callback_does_not_kill_subscriber() -> None:

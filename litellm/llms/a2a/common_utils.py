@@ -22,13 +22,17 @@ class A2AError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: dict[str, Any] = {},
+        headers: dict[str, str] = {},
     ):
         super().__init__(
             status_code=status_code,
             message=message,
             headers=headers,
         )
+
+
+def _message_role(message: Mapping[str, object]) -> object:
+    return message.get("role", "user")
 
 
 def convert_messages_to_prompt(messages: list[AllMessageValues]) -> str:
@@ -51,7 +55,7 @@ def convert_messages_to_prompt(messages: list[AllMessageValues]) -> str:
 
         # Get role
         if isinstance(msg, BaseModel):
-            role = msg.model_dump().get("role", "user")
+            role = _message_role(msg.model_dump())
         elif isinstance(msg, dict):
             role = msg.get("role", "user")
         else:

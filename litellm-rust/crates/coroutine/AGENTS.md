@@ -3,7 +3,7 @@
 Core must pause mid-call to ask the host for things it cannot do itself (Python callbacks, secret and token reads, `before_send` rewrites, stream demand), then continue where it stopped. Any change to this crate must keep every requirement below. The alternatives section says which one each rejected design breaks
 
 - R1 Core never calls the host: it names an op and waits for the answer, so it stays free of PyO3 and of any other host runtime
-- R2 Async host work is awaited by the host's own driver in the caller's asyncio task (`litellm/rust_bridge/lifecycle.py`), so `contextvars` writes reach the caller. A Rust-side `into_future` would run it in a copied context
+- R2 Async host work is awaited by the host's own driver in the caller's asyncio task (`litellm/rust_bridge/execution.py`), so `contextvars` writes reach the caller. A Rust-side `into_future` would run it in a copied context
 - R3 The body awaits real I/O (HTTP, `spawn_blocking`, timers) between yields, so `resume` is itself a future driven by the caller's runtime
 - R4 Route code stays straight-line async (`host.route(OcrOp::ReadDocument).await?`) instead of hand-written states
 - R5 Each op fixes its answer type at compile time: a host cannot answer `ReadDocument` with a token, and core never matches a result variant it did not ask for

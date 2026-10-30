@@ -1,7 +1,6 @@
 import base64
 import json
 import math
-import signal
 import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
@@ -63,7 +62,7 @@ from integration.authorization._hidden_alias_budget import (
 )
 from pydantic import JsonValue
 
-pytestmark: Final = pytest.mark.timeout(240)
+pytestmark: Final = [pytest.mark.timeout(240), pytest.mark.shares_worker_state]
 
 # $0 comes from litellm's own cost-map row (model_prices_and_context_window.json, added 2025-10-14 in 900a57f5b1f):
 # Lemonade is a local inference server, so there is no vendor price for the row to drift from. A row that gains a
@@ -1050,7 +1049,13 @@ def test_failed_primary_does_not_fall_back_to_a_shadowing_alias_for_exhausted_ke
         key: Final = exhausted_key(rig, scenario)
         scenario.cleanups.callback(clear_provider_script, rig)
         script_provider(rig, 1)
-        _assert_provider_failure(fresh_chat(rig.gateway, rig.failing_free, key, marker, {"fallbacks": [shadow]}))
+        failed: Final = fresh_chat(rig.gateway, rig.failing_free, key, marker, {"fallbacks": [shadow]})
+        assert failed.status_code == 500, failed.text
+        assert "Controlled provider failure" in failed.text, failed.text
+        assert error_type(failed) != "budget_exceeded", failed.text
+        message: Final = str(object_value(JSON_OBJECT.validate_json(failed.content)["error"])["message"])
+        budget_sentences: Final = tuple(sentence for sentence in message.split(". ") if "budget" in sentence.lower())
+        assert budget_sentences and all(shadow in sentence for sentence in budget_sentences), message
         assert upstream_hits(upstream_requests(rig.gateway.upstream_url), marker) == 1
         _assert_no_served_row(key, marker)
 
@@ -1384,7 +1389,7 @@ def test_killing_one_worker_keeps_the_shadowing_alias_refused(rig: AliasRig, tmp
             settle_candidate(candidate, target, exhausted, BUDGET_EXCEEDED, seconds=120)
             settle_candidate(candidate, shadow, exhausted, BUDGET_EXCEEDED, seconds=120)
             victim: Final = before[0]
-            victim.send_signal(signal.SIGKILL)
+            owned.kill_worker(victim.pid)
             eventually(lambda: _workers(root), _replaced(victim), seconds=120)
             settle_candidate(candidate, shadow, exhausted, BUDGET_EXCEEDED, seconds=120)
             assert chat_statuses(candidate, shadow, exhausted, GATEWAY_BURST) == {BUDGET_EXCEEDED}

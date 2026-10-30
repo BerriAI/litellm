@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Bubble, BubbleContent } from "@/components/ui/Bubble";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { Skeleton } from "@/components/ui/skeleton";
 import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -17,7 +18,9 @@ import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import ReasoningContent from "@/components/chat_ui/ReasoningContent";
 import MCPEventsDisplay from "@/components/chat_ui/MCPEventsDisplay";
 import ResponseMetrics from "@/components/chat_ui/ResponseMetrics";
-import { ChatMessage } from "./types";
+import { ChatAttachment, ChatImageAttachment, ChatMessage } from "./types";
+import ChatFileChip from "./ChatFileChip";
+import { isChatImageUrl } from "./imageHelpers";
 
 const REDACTED_KEY_PATTERNS = /token|key|secret|password|auth/i;
 
@@ -70,14 +73,18 @@ function MarkdownCodeRenderer({
 const markdownComponents: Components = {
   code: MarkdownCodeRenderer,
   pre: ({ node, ...props }) => <pre className="max-w-full overflow-x-auto" {...props} />,
+  h1: ({ node, ...props }) => <h1 className="mt-6 mb-2 text-xl font-semibold tracking-tight first:mt-0" {...props} />,
+  h2: ({ node, ...props }) => <h2 className="mt-6 mb-2 text-lg font-semibold tracking-tight first:mt-0" {...props} />,
+  h3: ({ node, ...props }) => <h3 className="mt-5 mb-2 text-base font-semibold tracking-tight first:mt-0" {...props} />,
   p: ({ node, ...props }) => <p className="my-3 first:mt-0 last:mb-0" {...props} />,
+  blockquote: ({ node, ...props }) => <blockquote className="my-3 border-l-2 pl-4 text-muted-foreground" {...props} />,
   ul: ({ node, ...props }) => <ul className="my-3 list-disc space-y-1 pl-5" {...props} />,
   ol: ({ node, ...props }) => <ol className="my-3 list-decimal space-y-1 pl-5" {...props} />,
   table: ({ node, ...props }) => <Table {...props} />,
   thead: ({ node, ...props }) => <TableHeader {...props} />,
   tbody: ({ node, ...props }) => <TableBody {...props} />,
   tr: ({ node, ...props }) => <TableRow {...props} />,
-  th: ({ node, ...props }) => <TableHead {...props} />,
+  th: ({ node, ...props }) => <TableHead className="whitespace-normal py-2" {...props} />,
   td: ({ node, ...props }) => <TableCell {...props} />,
 };
 
@@ -86,18 +93,68 @@ const markdownWithoutImages: Components = {
   img: ({ alt }) => <span>{alt || "Image omitted"}</span>,
 };
 
+function ChatImage({ image, allowImages }: { image: ChatImageAttachment; allowImages: boolean }) {
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  if (!allowImages) return <span className="text-sm text-muted-foreground">{image.name}</span>;
+  if (!isChatImageUrl(image.url) || failedUrl === image.url) {
+    return (
+      <div className="rounded-xl border bg-muted p-4 text-sm text-muted-foreground">
+        {image.name} — image unavailable. Start a new chat and attach a saved copy to use it again.
+      </div>
+    );
+  }
+  return (
+    <figure className="m-0 min-w-0 space-y-1.5">
+      {/* User-supplied and generated images may be data URLs or come from any configured provider. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={image.url}
+        alt={image.name}
+        className="max-h-96 w-full rounded-xl border object-contain"
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        onError={() => setFailedUrl(image.url)}
+      />
+      <Button
+        variant="ghost"
+        size="xs"
+        nativeButton={false}
+        role="link"
+        render={<a href={image.url} target="_blank" rel="noopener noreferrer" download={image.name} />}
+      >
+        Open image
+      </Button>
+    </figure>
+  );
+}
+
+function ChatImages({ images, allowImages }: { images?: ChatAttachment[]; allowImages: boolean }) {
+  if (!images?.length) return null;
+  return (
+    <div className={`grid gap-3 ${images.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
+      {images.map((image) =>
+        image.kind === "file" ? (
+          <ChatFileChip key={image.id} file={image} />
+        ) : (
+          <ChatImage key={image.id} image={image} allowImages={allowImages} />
+        ),
+      )}
+    </div>
+  );
+}
+
 interface UserBubbleProps {
   message: ChatMessage;
+  allowImages: boolean;
   onEdit?: (messageId: string, newContent: string) => void;
   isStreaming?: boolean;
 }
 
-function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
-  const [hovered, setHovered] = useState(false);
+function UserBubble({ message, allowImages, onEdit, isStreaming }: UserBubbleProps) {
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(message.content);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const showEditAction = hovered && !isStreaming && Boolean(onEdit);
+  const showEditAction = !isStreaming && Boolean(onEdit);
 
   useEffect(() => {
     if (editing && textareaRef.current) {
@@ -115,7 +172,8 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
 
   const handleSave = () => {
     const trimmed = editValue.trim();
-    if (trimmed && trimmed !== message.content && onEdit) {
+    const hasContent = Boolean(trimmed || message.attachments?.length);
+    if (hasContent && trimmed !== message.content && onEdit) {
       onEdit(message.id, trimmed);
     }
     setEditing(false);
@@ -136,6 +194,11 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
     return (
       <div className="flex flex-col items-end">
         <div className="w-[72%] bg-background border-2 border-primary rounded-xl overflow-hidden shadow-[0_0_0_3px_rgba(var(--primary)/0.1)]">
+          {message.attachments?.length ? (
+            <div className="p-3">
+              <ChatImages images={message.attachments} allowImages={allowImages} />
+            </div>
+          ) : null}
           <Textarea
             ref={textareaRef}
             aria-label="Edit message"
@@ -155,7 +218,7 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
             >
               Cancel
             </Button>
-            <Button size="sm" onClick={handleSave} disabled={!editValue.trim()}>
+            <Button size="sm" onClick={handleSave} disabled={!editValue.trim() && !message.attachments?.length}>
               Save & Send
             </Button>
           </div>
@@ -165,12 +228,8 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
   }
 
   return (
-    <div
-      className="flex flex-col items-end w-full"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      <div className="flex min-w-0 max-w-[80%] items-end gap-1.5">
+    <div className="group/user-message flex flex-col items-end w-full">
+      <div className="moyai-chat-user-row flex min-w-0 items-end gap-1.5">
         {showEditAction && (
           <TooltipProvider delay={300}>
             <Tooltip>
@@ -184,7 +243,7 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
                       setEditValue(message.content);
                       setEditing(true);
                     }}
-                    className="text-muted-foreground hover:text-foreground shrink-0"
+                    className="text-muted-foreground hover:text-foreground shrink-0 opacity-0 group-hover/user-message:opacity-100 group-focus-within/user-message:opacity-100 [@media(hover:none)]:opacity-100"
                   >
                     <Pencil className="size-3.5" />
                   </Button>
@@ -196,8 +255,11 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
             </Tooltip>
           </TooltipProvider>
         )}
-        <Bubble variant="muted" align="end" className="max-w-full">
-          <BubbleContent className="whitespace-pre-wrap">{message.content}</BubbleContent>
+        <Bubble variant="muted" align="end" className="moyai-chat-user-bubble max-w-full">
+          <BubbleContent className="space-y-3 whitespace-pre-wrap">
+            <ChatImages images={message.attachments} allowImages={allowImages} />
+            {message.content && <div>{message.content}</div>}
+          </BubbleContent>
         </Bubble>
       </div>
       <span className="text-[11px] text-muted-foreground mt-1">{formatTimestamp(message.timestamp)}</span>
@@ -212,6 +274,7 @@ interface AssistantBubbleProps {
   isStreaming: boolean;
   isTypingIndicator: boolean;
   mcpEvents?: ChatMessage["mcpEvents"];
+  actions?: React.ReactNode;
 }
 
 function AssistantBubble({
@@ -221,6 +284,7 @@ function AssistantBubble({
   isStreaming,
   isTypingIndicator,
   mcpEvents,
+  actions,
 }: AssistantBubbleProps) {
   const [reasoningKey, setReasoningKey] = useState(0);
   const prevStreamingRef = useRef<boolean>(isStreaming);
@@ -232,10 +296,19 @@ function AssistantBubble({
     prevStreamingRef.current = isStreaming;
   }, [isStreaming]);
 
-  const showReasoningPlaceholder = isLastMessage && isStreaming && !message.reasoningContent;
+  const isReceivingResponse = isLastMessage && isStreaming;
+  const showReasoningPlaceholder = isReceivingResponse && !message.reasoningContent && !message.imageGeneration;
   const showReasoning = !!message.reasoningContent || showReasoningPlaceholder;
 
   if (isTypingIndicator) {
+    if (message.imageGeneration) {
+      return (
+        <div role="status" className="w-full max-w-sm space-y-3">
+          <Skeleton className="aspect-square w-full rounded-2xl" />
+          <p className="text-sm text-muted-foreground">Creating your image…</p>
+        </div>
+      );
+    }
     return (
       <div className="flex flex-col items-start">
         <div className="flex items-center gap-1 px-1 py-2.5">
@@ -253,7 +326,7 @@ function AssistantBubble({
   }
 
   return (
-    <Bubble variant="ghost" className="w-full items-start">
+    <Bubble variant="ghost" className="moyai-chat-assistant-bubble w-full items-start">
       {showReasoning &&
         (showReasoningPlaceholder ? (
           <ThinkingPlaceholder />
@@ -262,6 +335,7 @@ function AssistantBubble({
         ))}
 
       <BubbleContent className="w-full text-foreground">
+        <ChatImages images={message.generatedImages} allowImages={allowImages} />
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           components={allowImages ? markdownComponents : markdownWithoutImages}
@@ -271,7 +345,7 @@ function AssistantBubble({
         {stoppedSuffix && <span className="text-muted-foreground italic"> [stopped]</span>}
       </BubbleContent>
 
-      <CopyButton text={mainContent} />
+      {actions ?? (mainContent.trim() && <CopyButton text={mainContent} />)}
       {mcpEvents && mcpEvents.length > 0 && (
         <div className="mt-2 max-w-full">
           <MCPEventsDisplay events={mcpEvents} />
@@ -421,6 +495,7 @@ interface Props {
 
 interface ChatMessageContentProps {
   message: ChatMessage;
+  actions?: React.ReactNode;
   allowImages?: boolean;
   isStreaming?: boolean;
   isLastMessage?: boolean;
@@ -433,23 +508,26 @@ export function ChatMessageContent({
   isStreaming = false,
   isLastMessage = true,
   onEditMessage,
+  actions,
 }: ChatMessageContentProps) {
   if (message.role === "user") {
-    return <UserBubble message={message} onEdit={onEditMessage} isStreaming={isStreaming} />;
+    return <UserBubble message={message} allowImages={allowImages} onEdit={onEditMessage} isStreaming={isStreaming} />;
   }
 
   if (message.role === "tool") {
     return <ToolCard message={message} />;
   }
 
+  const isEmptyResponse = message.content === "" && !message.generatedImages?.length;
   return (
     <AssistantBubble
       message={message}
       allowImages={allowImages}
       isLastMessage={isLastMessage}
       isStreaming={isStreaming}
-      isTypingIndicator={isLastMessage && isStreaming && message.content === ""}
+      isTypingIndicator={isLastMessage && isStreaming && isEmptyResponse}
       mcpEvents={message.mcpEvents}
+      actions={actions}
     />
   );
 }

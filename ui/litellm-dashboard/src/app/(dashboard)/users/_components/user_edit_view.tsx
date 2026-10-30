@@ -315,7 +315,14 @@ export function UserEditView({
           </FormField>
 
           <FormField control={form.control} name="budget_duration" label="Reset Budget">
-            {({ id, value, onChange }) => <BudgetDurationDropdown id={id} value={value} onChange={onChange} />}
+            {({ id, value, onChange }) => (
+              <BudgetDurationDropdown
+                id={id}
+                value={value}
+                onChange={onChange}
+                placeholder={isBulkEdit ? "No change" : undefined}
+              />
+            )}
           </FormField>
 
           {!isBulkEdit && (
@@ -403,6 +410,7 @@ export function UserEditView({
                     onChange={onChange}
                     value={value}
                     accessToken={accessToken || ""}
+                    userId={isBulkEdit ? null : userData.user_id}
                     placeholder="Select MCP servers or access groups (optional)"
                   />
                 )}

@@ -10,7 +10,6 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias
 
 from litellm.models.credentials import CredentialItem
-from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
 from litellm.repositories.base_repository import DbRecord, record_to_dict
 from litellm.repositories.prisma_protocols import TableActions
 
@@ -45,6 +44,8 @@ class CredentialsRepository:
 
     @property
     def table(self) -> "_CredentialsTable":
+        from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
+
         return wrap_table_actions_for_config_sync(
             actions=self.prisma_client.db.litellm_credentialstable,
             table_name="litellm_credentialstable",

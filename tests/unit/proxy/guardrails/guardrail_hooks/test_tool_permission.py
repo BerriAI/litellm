@@ -5,6 +5,8 @@ Unit tests for Tool Permission Guardrail (OpenAI tool_calls semantics)
 import json
 import logging
 import re
+from itertools import chain
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -24,10 +26,16 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     PermissionError,
 )
 from litellm.types.utils import (
+    ChatCompletionCustomToolCallPayload,
+    ChatCompletionDeltaToolCall,
+    ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
     Choices,
+    Delta,
+    Function,
     ModelResponse,
     ModelResponseStream,
+    StreamingChoices,
 )
 
 
@@ -425,6 +433,41 @@ class TestToolPermissionGuardrail:
         assert "berri" in choice.message.content
 
     @pytest.mark.asyncio
+    async def test_rewrite_denies_only_the_choice_whose_call_is_denied_when_choices_share_a_call_id(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="choice-guardrail",
+            rules=[{"id": "deny_bash", "tool_name": "Bash", "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action="rewrite",
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    index=index,
+                    finish_reason="tool_calls",
+                    message={
+                        "tool_calls": [
+                            {"id": "call_shared", "type": "function", "function": {"name": name, "arguments": "{}"}}
+                        ]
+                    },
+                )
+                for index, name in enumerate(("Bash", "Read"))
+            ]
+        )
+
+        await guardrail.async_post_call_success_hook(
+            data={"guardrails": ["choice-guardrail"]}, user_api_key_dict=UserAPIKeyAuth(), response=response
+        )
+
+        kept: Final = [
+            [tool_call.function.name for tool_call in choice.message.tool_calls or ()]
+            for choice in response.choices
+            if isinstance(choice, Choices)
+        ]
+        assert kept == [[], ["Read"]]
+
+    @pytest.mark.asyncio
     async def test_async_post_call_success_hook_missing_arguments_blocks_param_rule(
         self,
     ):
@@ -750,6 +793,78 @@ class TestToolPermissionGuardrail:
         assert new_data["function_call"] == "none"
         assert new_data["tool_choice"] == "none"
 
+    @staticmethod
+    def _tool_search_turn(*loaded_names: str) -> dict:
+        return {
+            "role": "assistant",
+            "content": None,
+            "provider_specific_fields": {
+                "tool_search_items": [
+                    {"type": "tool_search_call", "call_id": "ts_1", "execution": "client"},
+                    {
+                        "type": "tool_search_output",
+                        "call_id": "ts_1",
+                        "tools": [{"type": "function", "name": name} for name in loaded_names],
+                    },
+                ]
+            },
+        }
+
+    def _replayed_run_shell_request(self) -> dict:
+        return {
+            "tools": [{"type": "function", "function": {"name": "get_weather"}}, {"type": "tool_search"}],
+            "messages": [
+                {"role": "user", "content": "check the weather, then clean up the disk"},
+                self._tool_search_turn("get_weather"),
+                self._tool_search_turn("run_shell"),
+            ],
+        }
+
+    @staticmethod
+    def _deny_run_shell(on_disallowed_action: str) -> ToolPermissionGuardrail:
+        return ToolPermissionGuardrail(
+            guardrail_name="test-tool-permission",
+            rules=[{"id": "deny_shell", "tool_name": r"^run_shell$", "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action=on_disallowed_action,
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_hook_blocks_tool_loaded_by_replayed_tool_search(self):
+        guardrail = self._deny_run_shell("block")
+
+        with patch.object(guardrail, "should_run_guardrail", return_value=True):
+            with pytest.raises(HTTPException) as excinfo:
+                await guardrail.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(),
+                    cache=DualCache(default_in_memory_ttl=1),
+                    data=self._replayed_run_shell_request(),
+                    call_type="completion",
+                )
+
+        assert excinfo.value.status_code == 400
+        assert "run_shell" in json.dumps(excinfo.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_hook_rewrite_drops_replayed_tool_search_loading_denied_tool(self):
+        guardrail = self._deny_run_shell("rewrite")
+        data = self._replayed_run_shell_request()
+
+        with patch.object(guardrail, "should_run_guardrail", return_value=True):
+            new_data = await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(default_in_memory_ttl=1),
+                data=data,
+                call_type="completion",
+            )
+
+        assert isinstance(new_data, dict)
+        user_turn, weather_search, shell_search = new_data["messages"]
+        assert user_turn == {"role": "user", "content": "check the weather, then clean up the disk"}
+        assert weather_search == self._tool_search_turn("get_weather")
+        assert shell_search == {"role": "assistant", "content": None, "provider_specific_fields": {}}
+        assert [tool.get("function", {}).get("name") for tool in new_data["tools"]] == ["get_weather", None]
+
     @pytest.mark.asyncio
     async def test_async_post_call_streaming_iterator_hook_plain_text_yields_chunks(
         self,
@@ -792,6 +907,46 @@ class TestToolPermissionGuardrail:
             "Hook must preserve the original response content; "
             f"got: {chunks[0].choices[0].delta.content!r}"
         )
+
+    @pytest.mark.asyncio
+    async def test_async_post_call_streaming_iterator_hook_re_emits_each_choice_of_an_n2_tool_call_stream(self):
+        def chunk(choice_index: int, tool_call: ChatCompletionDeltaToolCall) -> ModelResponseStream:
+            return ModelResponseStream(
+                id="chatcmpl-n2-tools",
+                created=1700000000,
+                model="gpt-4.1-mini",
+                object="chat.completion.chunk",
+                choices=[StreamingChoices(index=choice_index, delta=Delta(tool_calls=[tool_call]))],
+            )
+
+        def fragment(arguments: str, name: str | None = None) -> ChatCompletionDeltaToolCall:
+            return ChatCompletionDeltaToolCall(
+                id="call_shared" if name else None,
+                index=0,
+                type="function",
+                function=Function(name=name, arguments=arguments),
+            )
+
+        async def _stream():
+            for streamed in (
+                chunk(0, fragment("", name="Bash")),
+                chunk(1, fragment("", name="Bash")),
+                chunk(0, fragment('{"command": "ls"}')),
+                chunk(1, fragment('{"command": "pwd"}')),
+            ):
+                yield streamed
+
+        re_emitted: Final = [
+            chunk
+            async for chunk in self.guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(), response=_stream(), request_data={}
+            )
+        ]
+
+        assert [
+            (choice.index, [(call.function.name, call.function.arguments) for call in choice.delta.tool_calls])
+            for choice in chain.from_iterable(streamed.choices for streamed in re_emitted)
+        ] == [(0, [("Bash", '{"command": "ls"}')]), (1, [("Bash", '{"command": "pwd"}')])]
 
     def test_modify_response_with_permission_errors(self):
         # Setup a response with one tool_call
@@ -878,6 +1033,35 @@ class TestToolPermissionGuardrail:
         assert isinstance(choice.message.content, str)
         assert "Permission denied" in choice.message.content
 
+
+    def test_modify_response_with_permission_errors_keeps_custom_tool_call_in_another_choice(self):
+        denied_call = ChatCompletionMessageToolCall(
+            id="call_bash", type="function", function=Function(name="Bash", arguments="{}")
+        )
+        custom_call = ChatCompletionMessageCustomToolCall(
+            id="call_patch", custom=ChatCompletionCustomToolCallPayload(name="apply_patch", input="*** Begin Patch")
+        )
+        response = ModelResponse(
+            choices=[
+                Choices(index=0, message={"role": "assistant", "content": None, "tool_calls": [denied_call]}),
+                Choices(index=1, message={"role": "assistant", "content": None, "tool_calls": [custom_call]}),
+            ]
+        )
+        denied_tools = [
+            (
+                denied_call,
+                PermissionError(tool_name="Bash", rule_id="deny_bash", message="Tool 'Bash' denied by rule 'deny_bash'"),
+            )
+        ]
+
+        self.guardrail._modify_response_with_permission_errors(response, denied_tools)
+
+        kept = [
+            [call.id for call in choice.message.tool_calls or []]
+            for choice in response.choices
+            if isinstance(choice, Choices)
+        ]
+        assert kept == [[], ["call_patch"]]
 
 class TestToolPermissionGuardrailIntegration:
     """Integration tests for Tool Permission Guardrail"""
@@ -1306,6 +1490,54 @@ class TestToolPermissionGuardrailAnthropicMessages:
         )["message"]
         assert message_start["id"].startswith("chatcmpl-"), "the rewritten stream must not adopt the upstream message id"
         assert message_start["model"] == "claude-sonnet-4-5", "the rewritten stream reports the model the upstream served"
+
+    @pytest.mark.asyncio
+    async def test_rewrite_mode_keeps_the_allowed_tool_use_verdict_with_its_explanation(self):
+        """Claude Code auto mode reads the classifier verdict from message_delta. The rewrite changes
+        no text the explanation could repeat, so the allowed call keeps its verdict whole."""
+        default_on_rewriting: Final = ToolPermissionGuardrail(
+            guardrail_name="anthropic-rewrite-default-on",
+            rules=self.rules,
+            default_action="deny",
+            on_disallowed_action="rewrite",
+            event_hook=GuardrailEventHooks.post_call,
+            default_on=True,
+        )
+        bash_verdict: Final = {"type": "evaluated", "outcome": "flagged", "explanation": "lists the home directory"}
+        safeguard_results: Final = [
+            {
+                "type": "dangerous_tool_use",
+                "status": {
+                    "type": "available",
+                    "tool_uses": {"tu_ok": bash_verdict, "tu_bad": {"type": "evaluated", "outcome": "not_flagged"}},
+                },
+            }
+        ]
+        bash_chunks: Final = self._sse_chunks("Bash", "tu_ok")
+        read_chunks: Final = self._sse_chunks("Read", "tu_bad")
+        read_tool_use: Final = [chunk.replace(b'"index": 1', b'"index": 2') for chunk in read_chunks[4:7]]
+        message_delta: Final = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "safeguard_results": safeguard_results},
+            "usage": {"output_tokens": 5},
+        }
+        chunks: Final = [
+            *bash_chunks[:7],
+            *read_tool_use,
+            f"event: message_delta\ndata: {json.dumps(message_delta)}\n\n".encode(),
+            bash_chunks[-1],
+        ]
+
+        body: Final = b"".join(await self._drain(default_on_rewriting, chunks)).decode()
+        delta: Final = next(
+            json.loads(line[6:])["delta"]
+            for line in body.splitlines()
+            if line.startswith("data: ") and json.loads(line[6:]).get("type") == "message_delta"
+        )
+        assert "Permission denied" in body
+        assert delta["safeguard_results"] == [
+            {"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": {"tu_ok": bash_verdict}}}
+        ]
 
     @pytest.mark.asyncio
     async def test_message_start_without_a_dict_message_fails_closed(self):

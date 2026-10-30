@@ -1,6 +1,7 @@
 import inspect
 import json
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1551,6 +1552,22 @@ def test_environment_redis_url_used_when_caller_names_no_target(mock_from_url, m
     get_redis_client()
 
     mock_from_url.assert_called_once()
+
+
+def test_redis_client_resolves_environment_override_before_creation(
+    monkeypatch: pytest.MonkeyPatch,
+    clean_redis_environment: None,
+    clear_llm_client_cache: None,
+) -> None:
+    monkeypatch.setenv("LITELLM_TEST_REDIS_PASSWORD", "resolved-redis-password")
+
+    client: Final = get_redis_client(
+        host="redis-host",
+        port=6379,
+        password="os.environ/LITELLM_TEST_REDIS_PASSWORD",
+    )
+
+    assert client.connection_pool.connection_kwargs["password"] == "resolved-redis-password"
 
 
 @pytest.mark.parametrize("falsy_ssl", [False, None, 0, ""])

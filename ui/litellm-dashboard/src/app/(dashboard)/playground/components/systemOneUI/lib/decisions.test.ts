@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { validateSystemOnePayload } from "./validatePayload";
+import { validateSystemOnePayload, validateOpenAIDecisionsPayload } from "./validatePayload";
 import { systemOneResponseSchema } from "./schemas";
+import { openAIDecisionsExample } from "./example";
 
 const request = {
   model: "configured-decision-model",
@@ -79,5 +80,55 @@ describe("native decisions validation", () => {
       usage: null,
     };
     expect(systemOneResponseSchema.parse(response)).toEqual(response);
+  });
+});
+
+describe("/v1/decisions validation", () => {
+  const example = openAIDecisionsExample("jev-latest");
+  const validateOpenAI = (value: unknown) => validateOpenAIDecisionsPayload(JSON.stringify(value));
+
+  it("keeps input, question arrays, provider extensions and optional model omission intact", () => {
+    const payload = { input: example.input, questions: example.questions, provider_option: { enabled: true } };
+    expect(validateOpenAI(payload)).toEqual({ isValid: true, payload, issues: [] });
+    expect(validateOpenAI(example).isValid).toBe(true);
+  });
+
+  it("accepts multimodal messages and boolean choices without converting them to strings", () => {
+    const payload = {
+      input: [
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: "Does this show an error?" },
+            { type: "input_image", image_url: "data:image/png;base64,example" },
+          ],
+        },
+      ],
+      questions: [{ type: "choice", instructions: "Is this an error?", choices: [{ value: true }, { value: false }] }],
+    };
+    expect(validateOpenAI(payload)).toEqual({ isValid: true, payload, issues: [] });
+  });
+
+  it.each([
+    request,
+    { ...example, questions: [] },
+    { ...example, questions: request.questions },
+    { ...example, input: {} },
+    { ...example, questions: [{ type: "noul", instructions: "Test" }] },
+    { ...example, questions: [{ type: "predicate" }] },
+    { ...example, questions: [{ type: "predicate", instructions: "Test", criteria: {} }] },
+    { ...example, questions: [{ type: "choice", instructions: "Test", choices: [{ value: true }] }] },
+    {
+      ...example,
+      questions: [{ type: "choice", instructions: "Test", choices: [{ value: true }, { value: "true" }] }],
+    },
+    { ...example, questions: [{ type: "score", instructions: "Test", levels: [{ label: "Low" }] }] },
+  ])("rejects the wrong endpoint's shape and invalid question definitions %#", (payload) => {
+    expect(validateOpenAI(payload).isValid).toBe(false);
+  });
+
+  it("rejects blank and malformed JSON without throwing", () => {
+    expect(validateOpenAIDecisionsPayload(" ").issues[0]?.path).toBe("root");
+    expect(validateOpenAIDecisionsPayload("{").issues[0]?.path).toBe("syntax");
   });
 });

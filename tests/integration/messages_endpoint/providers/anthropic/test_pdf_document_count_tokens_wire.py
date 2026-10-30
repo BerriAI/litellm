@@ -22,8 +22,8 @@ from integration._support.pdf_document import (
     pdf_bytes,
     pdf_data_url,
     pdf_document,
-    rendered_tokens,
     responses_input_file,
+    rendered_tokens,
     text_document,
 )
 from integration._support.provider import SharedProvider
@@ -70,31 +70,33 @@ def _turn(blocks: Sequence[JsonValue]) -> list[JsonValue]:
     return messages_body(_MODEL, blocks, _ASK)["messages"]
 
 
-def _count(gateway: Gateway, provider: SharedProvider, blocks: Sequence[JsonValue]) -> int:
-    provider.expect(COUNT_REFUSED)
-    response: Final = gateway.request("POST", "/v1/messages/count_tokens", {"model": _MODEL, "messages": _turn(blocks)})
-    assert response.status_code == 200, response.text
-    assert [(request.method, request.target) for request in provider.received()] == [("POST", COUNT_TOKENS_TARGET)]
-    return _int(_JSON_OBJECT.validate_json(response.content)["input_tokens"])
-
-
-def _local(gateway: Gateway, parts: Sequence[JsonValue]) -> int:
+def _local(gateway: Gateway, provider: SharedProvider, parts: Sequence[JsonValue]) -> int:
     response: Final = gateway.request(
         "POST", "/utils/token_counter", {"model": _MODEL, "messages": _turn(parts)}, params={"call_endpoint": "false"}
     )
     assert response.status_code == 200, response.text
+    assert provider.received() == ()
     return _int(_JSON_OBJECT.validate_json(response.content)["total_tokens"])
 
 
-def _responses_count(gateway: Gateway, provider: SharedProvider, items: Sequence[JsonValue]) -> int:
-    provider.expect(COUNT_REFUSED)
+def _responses_count(gateway: Gateway, model: str, pages: Sequence[Page]) -> int:
     response: Final = gateway.request(
         "POST",
         "/v1/responses/input_tokens",
-        {"model": _MODEL, "input": [{"role": "user", "content": [*items, {"type": "input_text", "text": _ASK}]}]},
+        {
+            "model": model,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        responses_input_file(pdf_data_url(pages)),
+                        {"type": "input_text", "text": _ASK},
+                    ],
+                }
+            ],
+        },
     )
     assert response.status_code == 200, response.text
-    assert [(request.method, request.target) for request in provider.received()] == [("POST", COUNT_TOKENS_TARGET)]
     payload: Final = _JSON_OBJECT.validate_json(response.content)
     assert payload["object"] == "response.input_tokens", response.text
     return _int(payload["input_tokens"])
@@ -144,108 +146,123 @@ def _prompt_tokens(call_id: str) -> int:
 
 
 @pytest.mark.parametrize("pages", [1, 3, 12])
-def test_count_tokens_fallback_prices_each_blank_page_as_a_rendered_image(
+def test_utils_token_counter_prices_each_blank_page_as_a_rendered_image(
     gateway: Gateway, provider: SharedProvider, pages: int
 ) -> None:
     letter_pages: Final = (LETTER,) * pages
-    with_document: Final = _count(gateway, provider, [pdf_document(letter_pages)])
-    without: Final = _count(gateway, provider, [])
+    with_document: Final = _local(gateway, provider, [pdf_document(letter_pages)])
+    without: Final = _local(gateway, provider, [])
     assert with_document - without == rendered_tokens(letter_pages), (with_document, without)
 
 
-def test_count_tokens_fallback_adds_a_page_text_to_its_rendered_image(
+def test_utils_token_counter_adds_a_page_text_to_its_rendered_image(
     gateway: Gateway, provider: SharedProvider
 ) -> None:
-    text_page: Final = _count(gateway, provider, [pdf_document((Page(text=_TEXT),))])
-    blank_page: Final = _count(gateway, provider, [pdf_document((LETTER,))])
-    text_source: Final = _count(gateway, provider, [text_document(_TEXT)])
-    without: Final = _count(gateway, provider, [])
+    text_page: Final = _local(gateway, provider, [pdf_document((Page(text=_TEXT),))])
+    blank_page: Final = _local(gateway, provider, [pdf_document((LETTER,))])
+    text_source: Final = _local(gateway, provider, [text_document(_TEXT)])
+    without: Final = _local(gateway, provider, [])
     assert text_source - without > 0, (text_source, without)
     assert text_page - blank_page == text_source - without, (text_page, blank_page, text_source, without)
 
 
-def test_count_tokens_fallback_prices_a_page_by_its_rendered_area(gateway: Gateway, provider: SharedProvider) -> None:
+def test_utils_token_counter_prices_a_page_by_its_rendered_area(
+    gateway: Gateway, provider: SharedProvider
+) -> None:
     mixed: Final = (LETTER, NARROW, LETTER)
-    without: Final = _count(gateway, provider, [])
-    narrow: Final = _count(gateway, provider, [pdf_document((NARROW,))])
+    without: Final = _local(gateway, provider, [])
+    narrow: Final = _local(gateway, provider, [pdf_document((NARROW,))])
     assert narrow - without == rendered_tokens((NARROW,)), (narrow, without)
-    assert _count(gateway, provider, [pdf_document(mixed)]) - without == rendered_tokens(mixed)
+    assert _local(gateway, provider, [pdf_document(mixed)]) - without == rendered_tokens(mixed)
 
 
-def test_count_tokens_fallback_prices_every_document_in_the_turn(gateway: Gateway, provider: SharedProvider) -> None:
-    both: Final = _count(gateway, provider, [pdf_document((LETTER,) * 3), pdf_document((LETTER,))])
-    without: Final = _count(gateway, provider, [])
+def test_utils_token_counter_prices_every_document_in_the_turn(gateway: Gateway, provider: SharedProvider) -> None:
+    both: Final = _local(gateway, provider, [pdf_document((LETTER,) * 3), pdf_document((LETTER,))])
+    without: Final = _local(gateway, provider, [])
     assert both - without == rendered_tokens((LETTER,) * 4), (both, without)
 
 
-def test_count_tokens_fallback_prices_a_pdf_without_pages_as_nothing(
-    gateway: Gateway, provider: SharedProvider
-) -> None:
-    assert _count(gateway, provider, [pdf_document(())]) == _count(gateway, provider, [])
+def test_utils_token_counter_prices_a_pdf_without_pages_as_nothing(gateway: Gateway, provider: SharedProvider) -> None:
+    assert _local(gateway, provider, [pdf_document(())]) == _local(gateway, provider, [])
 
 
-def test_count_tokens_fallback_adds_title_and_context_once_per_document(
+def test_utils_token_counter_adds_title_and_context_once_per_document(
     gateway: Gateway, provider: SharedProvider
 ) -> None:
-    without: Final = _count(gateway, provider, [])
-    plain: Final = _count(gateway, provider, [pdf_document((LETTER,))])
-    annotated: Final = _count(gateway, provider, [pdf_document((LETTER,), title=_TITLE, context=_CONTEXT)])
-    title: Final = _count(gateway, provider, [text_document(_TITLE)]) - without
-    context: Final = _count(gateway, provider, [text_document(_CONTEXT)]) - without
+    without: Final = _local(gateway, provider, [])
+    plain: Final = _local(gateway, provider, [pdf_document((LETTER,))])
+    annotated: Final = _local(gateway, provider, [pdf_document((LETTER,), title=_TITLE, context=_CONTEXT)])
+    title: Final = _local(gateway, provider, [text_document(_TITLE)]) - without
+    context: Final = _local(gateway, provider, [text_document(_CONTEXT)]) - without
     assert title > 0 and context > 0, (title, context)
     assert annotated - plain == title + context, (annotated, plain, title, context)
 
 
 @pytest.mark.parametrize("label", list(_UNREADABLE))
-def test_count_tokens_fallback_prices_unreadable_pdf_bytes_like_one_image(
+def test_utils_token_counter_prices_unreadable_pdf_bytes_like_one_image(
     gateway: Gateway, provider: SharedProvider, label: str
 ) -> None:
     data: Final = _UNREADABLE[label]
-    as_pdf: Final = _count(gateway, provider, [document(base64_source(data))])
-    as_png: Final = _count(gateway, provider, [document(base64_source(data, media_type="image/png"))])
-    without: Final = _count(gateway, provider, [])
+    as_pdf: Final = _local(gateway, provider, [document(base64_source(data))])
+    as_png: Final = _local(gateway, provider, [document(base64_source(data, media_type="image/png"))])
+    without: Final = _local(gateway, provider, [])
     assert as_pdf == as_png, (as_pdf, as_png)
     assert 0 <= as_pdf - without < rendered_tokens((LETTER,)), (as_pdf, without)
 
 
-def test_count_tokens_fallback_reads_a_list_wrapped_base64_string_like_the_bare_string(
+def test_utils_token_counter_reads_a_list_wrapped_base64_string_like_the_bare_string(
     gateway: Gateway, provider: SharedProvider
 ) -> None:
     raw: Final = encoded(pdf_bytes((LETTER,)))
-    wrapped: Final = _count(gateway, provider, [document(base64_source([raw]))])
-    assert wrapped == _count(gateway, provider, [document(base64_source(raw))]), wrapped
+    wrapped: Final = _local(gateway, provider, [document(base64_source([raw]))])
+    assert wrapped == _local(gateway, provider, [document(base64_source(raw))]), wrapped
 
 
-def test_count_tokens_fallback_reads_an_owner_locked_pdf(gateway: Gateway, provider: SharedProvider) -> None:
+def test_utils_token_counter_reads_an_owner_locked_pdf(gateway: Gateway, provider: SharedProvider) -> None:
     pages: Final = (LETTER, LETTER)
     locked: Final = document(base64_source(encoded(_locked(pdf_bytes(pages), ""))))
-    assert _count(gateway, provider, [locked]) - _count(gateway, provider, []) == rendered_tokens(pages)
+    assert _local(gateway, provider, [locked]) - _local(gateway, provider, []) == rendered_tokens(pages)
 
 
-def test_count_tokens_fallback_parses_only_the_pdf_media_type(gateway: Gateway, provider: SharedProvider) -> None:
+def test_utils_token_counter_parses_only_the_pdf_media_type(gateway: Gateway, provider: SharedProvider) -> None:
     raw: Final = encoded(pdf_bytes((LETTER,)))
-    without: Final = _count(gateway, provider, [])
-    labelled: Final = _count(gateway, provider, [document(base64_source(raw))])
+    without: Final = _local(gateway, provider, [])
+    labelled: Final = _local(gateway, provider, [document(base64_source(raw))])
     assert labelled - without == rendered_tokens((LETTER,)), (labelled, without)
-    mislabelled: Final = _count(gateway, provider, [document(base64_source(raw, media_type="application/x-pdf"))])
-    assert mislabelled == _count(gateway, provider, [document(base64_source(raw, media_type="image/png"))])
+    mislabelled: Final = _local(gateway, provider, [document(base64_source(raw, media_type="application/x-pdf"))])
+    assert mislabelled == _local(gateway, provider, [document(base64_source(raw, media_type="image/png"))])
 
 
-def test_utils_token_counter_prices_a_chat_file_by_its_pages(gateway: Gateway) -> None:
-    one: Final = _local(gateway, [chat_file(pdf_data_url((LETTER,)))])
-    three: Final = _local(gateway, [chat_file(pdf_data_url((LETTER,) * 3))])
+def test_messages_count_tokens_surfaces_provider_refusal_without_returning_tokens(
+    gateway: Gateway, provider: SharedProvider
+) -> None:
+    provider.expect(COUNT_REFUSED)
+    response: Final = gateway.request(
+        "POST",
+        "/v1/messages/count_tokens",
+        {"model": _MODEL, "messages": _turn([pdf_document((LETTER,))])},
+    )
+    assert response.status_code == 400, response.text
+    assert "input_tokens" not in response.text, response.text
+    assert [(request.method, request.target) for request in provider.received()] == [("POST", COUNT_TOKENS_TARGET)]
+
+
+def test_utils_token_counter_prices_a_chat_file_by_its_pages(gateway: Gateway, provider: SharedProvider) -> None:
+    one: Final = _local(gateway, provider, [chat_file(pdf_data_url((LETTER,)))])
+    three: Final = _local(gateway, provider, [chat_file(pdf_data_url((LETTER,) * 3))])
     assert three - one == rendered_tokens((LETTER,) * 2), (three, one)
-    text_page: Final = _local(gateway, [chat_file(pdf_data_url((Page(text=_TEXT),)))])
-    text_part: Final = _local(gateway, [chat_file(pdf_data_url((LETTER,))), {"type": "text", "text": _TEXT}])
+    text_page: Final = _local(gateway, provider, [chat_file(pdf_data_url((Page(text=_TEXT),)))])
+    text_part: Final = _local(gateway, provider, [chat_file(pdf_data_url((LETTER,))), {"type": "text", "text": _TEXT}])
     assert text_part - one > 0, (text_part, one)
     assert text_page - one == text_part - one, (text_page, text_part, one)
 
 
-def test_responses_input_tokens_fallback_prices_an_input_file_by_its_pages(
-    gateway: Gateway, provider: SharedProvider
-) -> None:
-    one: Final = _responses_count(gateway, provider, [responses_input_file(pdf_data_url((LETTER,)))])
-    three: Final = _responses_count(gateway, provider, [responses_input_file(pdf_data_url((LETTER,) * 3))])
+def test_responses_input_tokens_prices_an_input_file_by_its_pages(gateway: Gateway, provider: SharedProvider) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(model="xai/grok-4.20", api_base=f"{provider.wire.url}/v1")
+        one: Final = _responses_count(gateway, model, (LETTER,))
+        three: Final = _responses_count(gateway, model, (LETTER,) * 3)
+        assert provider.received() == ()
     assert three - one == rendered_tokens((LETTER,) * 2), (three, one)
 
 

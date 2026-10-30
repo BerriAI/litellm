@@ -1,4 +1,4 @@
-"""Agent harnesses: run Claude Code, Codex, OpenCode, Deep Agents or Tool Loop on any LiteLLM model.
+"""Agent harnesses: run Claude Code, Codex, OpenCode, pi, Deep Agents or Tool Loop on any LiteLLM model.
 
 The entrypoints live on the top-level package:
 
@@ -30,6 +30,7 @@ from litellm.harness.options import (
     CodexOptions,
     DeepAgentsOptions,
     OpenCodeOptions,
+    PiOptions,
     ToolLoopOptions,
 )
 from litellm.harness.runtime import (
@@ -78,6 +79,7 @@ __all__ = (
     "OpenCodeOptions",
     "OptionsMismatch",
     "OutputInvalid",
+    "PiOptions",
     "Reasoning",
     "Result",
     "SandboxError",
