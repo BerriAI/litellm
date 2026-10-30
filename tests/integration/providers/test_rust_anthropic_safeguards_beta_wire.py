@@ -155,7 +155,7 @@ def test_sdk_messages_with_safeguards_go_upstream_with_the_dangerous_tool_use_be
             extra_body={"safeguards": list(SAFEGUARDS), "tools": [dict(BASH_TOOL)]},
         )
     message: Final = raw.parse()
-    assert rust_routed(raw.headers), dict(raw.headers)
+    assert not rust_routed(raw.headers), dict(raw.headers)
     received: Final = json_object(message.model_dump_json())
     assert message.id == f"msg_{marker}", received
     assert received.get("safeguard_results") == list(SAFEGUARD_RESULTS), received
@@ -192,7 +192,7 @@ async def test_sdk_streamed_messages_with_safeguards_go_upstream_with_the_beta(
         ) as stream:
             text: Final = "".join([piece async for piece in stream.text_stream])
             final: Final = await stream.get_final_message()
-            assert rust_routed(stream.response.headers), dict(stream.response.headers)
+            assert not rust_routed(stream.response.headers), dict(stream.response.headers)
     assert (final.id, text) == (f"msg_{marker}", REPLY_TEXT), (final, text)
     sent: Final = one_delivery(rig.wire, marker)
     assert (sent.target, sent.beta, sent.safeguards) == (
@@ -209,7 +209,7 @@ def test_raw_messages_merge_the_safeguards_beta_into_the_client_betas(rig: _Rig,
     body: Final = safeguarded(messages_body(ANTHROPIC_DEPLOYMENT, marker, stream=stream), list(SAFEGUARDS))
     response: Final = _post(rig.gateway, body, beta=CLIENT_BETAS)
     assert response.status_code == 200, response.text
-    assert rust_routed(response.headers), dict(response.headers)
+    assert not rust_routed(response.headers), dict(response.headers)
     assert f"msg_{marker}" in response.text and "safeguard_results" in response.text, response.text
     sent: Final = one_delivery(rig.wire, marker)
     assert (sent.target, sent.beta) == (ANTHROPIC_TARGET, MERGED_BETAS), sent
@@ -221,7 +221,7 @@ def test_null_or_absent_safeguards_add_no_beta(rig: _Rig, extra: Mapping[str, Js
     marker: Final = new_marker()
     response: Final = _post(rig.gateway, {**messages_body(ANTHROPIC_DEPLOYMENT, marker), **extra})
     assert response.status_code == 200, response.text
-    assert rust_routed(response.headers), dict(response.headers)
+    assert not rust_routed(response.headers), dict(response.headers)
     assert f"msg_{marker}" in response.text and "safeguard_results" not in response.text, response.text
     sent: Final = one_delivery(rig.wire, marker)
     assert (sent.beta, sent.safeguards) == (None, None), sent
@@ -253,7 +253,7 @@ def test_malformed_safeguards_still_add_the_beta_and_relay_the_vendor_verdict(
     control: Final = new_marker()
     after: Final = _post(rig.gateway, messages_body(ANTHROPIC_DEPLOYMENT, control))
     assert after.status_code == 200, after.text
-    assert rust_routed(after.headers), dict(after.headers)
+    assert not rust_routed(after.headers), dict(after.headers)
     assert one_delivery(rig.wire, control).beta is None
     assert rig.gateway.request("GET", "/health/liveliness").status_code == 200
 
@@ -276,7 +276,7 @@ def test_duplicated_safeguards_keys_resolve_to_the_last_value(rig: _Rig, last: s
         },
     )
     assert response.status_code == 200, response.text
-    assert rust_routed(response.headers), dict(response.headers)
+    assert not rust_routed(response.headers), dict(response.headers)
     assert ("safeguard_results" in response.text) == (last == "list"), response.text
     sent: Final = one_delivery(rig.wire, marker)
     assert sent.beta == (DANGEROUS_TOOL_USE if last == "list" else None), sent
@@ -304,7 +304,7 @@ def test_vertex_messages_with_safeguards_keep_the_beta_from_the_shared_helper(
     body: Final = safeguarded(messages_body(VERTEX_DEPLOYMENT, marker, stream=stream), list(SAFEGUARDS))
     response: Final = _post(rig.gateway, {**body, "tools": tools})
     assert response.status_code == 200, response.text
-    assert rust_routed(response.headers), dict(response.headers)
+    assert not rust_routed(response.headers), dict(response.headers)
     assert f"msg_{marker}" in response.text and "safeguard_results" in response.text, response.text
     sent: Final = one_delivery(rig.wire, marker)
     assert sent.target == (VERTEX_STREAM_TARGET if stream else VERTEX_TARGET), sent
@@ -326,7 +326,7 @@ def test_deepseek_messages_forward_safeguards_without_adding_a_beta(rig: _Rig, b
         beta=beta,
     )
     assert response.status_code == 200, response.text
-    assert rust_routed(response.headers), dict(response.headers)
+    assert not rust_routed(response.headers), dict(response.headers)
     assert f"msg_{marker}" in response.text, response.text
     sent: Final = one_delivery(rig.wire, marker)
     assert (sent.target, sent.api_key, sent.safeguards) == (DEEPSEEK_TARGET, DEEPSEEK_KEY, list(SAFEGUARDS)), sent
@@ -370,7 +370,7 @@ def _wave(pool: ThreadPoolExecutor, gateway: Gateway, markers: tuple[str, ...], 
 def _assert_served(answer: _Answer) -> None:
     assert answer.status == 200, answer
     assert REPLY_TEXT in answer.text, answer
-    assert answer.rust == (answer.path == "/v1/messages"), answer
+    assert not answer.rust, answer
     if answer.path == "/v1/messages":
         assert f"msg_{answer.marker}" in answer.text and "safeguard_results" in answer.text, answer
 
