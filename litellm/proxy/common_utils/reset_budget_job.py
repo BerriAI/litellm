@@ -1463,7 +1463,7 @@ class ResetBudgetJob:
     @staticmethod
     @with_service_target(SPEND_COUNTERS_TARGET)
     async def _reset_expired_window(
-        window: dict,
+        window: dict[str, object],
         counter_key: str,
         spend_counter_cache: DualCache,
         now: datetime,
@@ -1474,7 +1474,7 @@ class ResetBudgetJob:
     ) -> bool:
         """Reset a single budget window if expired. Returns True if the window was reset."""
         reset_at_str: Final = window.get("reset_at")
-        if not reset_at_str:
+        if not isinstance(reset_at_str, str) or not reset_at_str:
             return False
         reset_at: Final = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00")).replace(tzinfo=None)
         if reset_at > now:
@@ -1496,7 +1496,7 @@ class ResetBudgetJob:
         await publish_auth_cache_invalidation(
             cache_key=floor_key, new_value=new_value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS
         )
-        budget_duration: Final = window["budget_duration"]
+        budget_duration: Final = str(window["budget_duration"])
         next_reset_at: Final = compute_budget_reset_at(budget_duration=budget_duration, settings=reset_settings)
         window["reset_at"] = next_reset_at.isoformat()
         await ResetBudgetJob._roll_window_spend_row(
