@@ -13,7 +13,7 @@ from typing_extensions import ReadOnly, Required
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import (
-    OWN_REPORTED_COST_READER_PROVIDERS,
+    PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS,
     chunk_usage,
     mark_usage_cost_as_litellm_bill,
     provider_reported_usage_cost,
@@ -1420,7 +1420,7 @@ def _set_stream_builder_response_cost(
 def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
     if logging_obj is None:
         return
-    if _logged_provider(logging_obj) in OWN_REPORTED_COST_READER_PROVIDERS and isinstance(
+    if _logged_provider(logging_obj) in PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS and isinstance(
         getattr(usage, "cost", None), (int, float)
     ):
         return

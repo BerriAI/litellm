@@ -1017,7 +1017,7 @@ def chunk_usage(chunk: object) -> object:
     return getattr(chunk, "usage", None)
 
 
-OWN_REPORTED_COST_READER_PROVIDERS: Final = frozenset({"xai", "perplexity", "opencode_go"})
+PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS: Final = frozenset({"xai", "perplexity", "opencode_go"})
 
 
 LITELLM_BILLED_USAGE_COST: Final = "litellm_billed_usage_cost"
@@ -1040,9 +1040,10 @@ def _usage_cost_is_litellm_bill(response: object) -> bool:
 
 
 def billed_usage_cost(response: object, custom_llm_provider: str | None) -> float | None:
-    """The charge an OpenAI-compatible upstream reports in ``usage.cost``, skipped for providers with their own reader
-    and once litellm rewrote ``usage.cost`` to its own bill (the stream builder and the Responses terminal event do)."""
-    if custom_llm_provider in OWN_REPORTED_COST_READER_PROVIDERS or _usage_cost_is_litellm_bill(response):
+    """The charge an OpenAI-compatible upstream reports in ``usage.cost``, skipped for providers billed from their own
+    usage fields and once litellm rewrote ``usage.cost`` to its own bill (the stream builder and the Responses terminal
+    event do)."""
+    if custom_llm_provider in PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS or _usage_cost_is_litellm_bill(response):
         return None
     cost: Final = provider_reported_usage_cost(_usage_field(response, "usage"), custom_llm_provider)
     return cost if cost is not None and math.isfinite(cost) and cost >= 0 else None
