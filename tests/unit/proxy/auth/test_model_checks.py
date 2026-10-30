@@ -518,6 +518,46 @@ def test_wildcard_credential_hydration_preserves_missing_credential_name(
     }
 
 
+@pytest.mark.parametrize("unset_value", [None, "", " \t"])
+def test_wildcard_discovery_inherits_blank_params_from_the_named_credential(
+    monkeypatch: pytest.MonkeyPatch, unset_value: str | None
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+    from litellm.types.utils import CredentialItem
+    from litellm.utils import AvailableModelsCache
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.setattr("litellm.utils._model_cache", AvailableModelsCache())
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="relay",
+                credential_info={},
+                credential_values={"api_base": "https://credential.example/v1", "api_key": "stored-key"},
+            )
+        ],
+    )
+    params: Final = LiteLLM_Params(
+        model="openai/*", api_base=unset_value, api_key=unset_value, litellm_credential_name="relay"
+    )
+    original: Final = params.model_dump()
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.get("https://credential.example/v1/models").respond(
+            200, json={"object": "list", "data": [{"id": "credential-test-model", "object": "model"}]}
+        )
+        result: Final = get_known_models_from_wildcard("openai/*", params)
+        assert result == ["openai/credential-test-model"]
+        authorization: Final = upstream.calls.last.request.headers["Authorization"]
+
+    assert authorization == "Bearer stored-key"
+    assert params.model_dump() == original
+
+
 def test_hydrate_credential_name_none_leaves_params_untouched(monkeypatch):
     import litellm
     from litellm.proxy.auth.model_checks import _hydrate_litellm_credential_name
