@@ -110,7 +110,7 @@ def _resolve_model_for_cost_lookup(model: str) -> ResolvedCostModel:
     if llm_router is not None:
         try:
             # Get deployments for this model name (handles aliases, wildcards, etc.)
-            deployments: Final = llm_router.get_model_list(model_name=model)
+            deployments: Final = llm_router.registry().deployments(model)
 
             if deployments and len(deployments) > 0:
                 first_deployment: Final = deployments[0]

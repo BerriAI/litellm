@@ -107,6 +107,7 @@ ignored_function_names = [
     "_deployment_num_retries",  # Tested through the deployment num_retries mid-stream budget test in test_router.py
     "_request_fallback_list",  # Tested through every mid-stream retry test in test_router.py
     "_request_model_group",  # Tested through test_anthropic_messages_retry_budget_precedence_direct_call
+    "_search_tool_support",  # Tested through the test_get_search_tool_support_* tests
     "_mid_stream_retry_trigger",  # Tested through the retry policy mid-stream budget test in test_router.py
     "_anthropic_messages_group_retry_policy",  # Tested through the retry budget precedence test in test_router.py
     "_anthropic_messages_resolved_retry_policy",  # Tested through the malformed retry policy tests in test_router.py
@@ -185,6 +186,14 @@ ignored_function_names = [
 ]
 
 
+def public_name(function_name):
+    """
+    The deprecated public name a ``_core_<name>`` router member is reached through. Tests that call the
+    old name run the core member, since ``DeprecatedRouterMembers`` forwards it there.
+    """
+    return function_name.removeprefix("_core_")
+
+
 def main():
     router_file = [
         "./litellm/router.py",
@@ -204,12 +213,16 @@ def main():
         router_functions.extend(get_functions_from_router(file))
     print("router_functions: ", router_functions)
     called_functions_in_tests = get_all_functions_called_in_tests(tests_dir)
-    untested_functions = [fn for fn in router_functions if fn not in called_functions_in_tests]
+    untested_functions = [
+        fn
+        for fn in router_functions
+        if fn not in called_functions_in_tests and public_name(fn) not in called_functions_in_tests
+    ]
 
     if untested_functions:
         all_untested_functions = []
         for func in untested_functions:
-            if func not in ignored_function_names:
+            if func not in ignored_function_names and public_name(func) not in ignored_function_names:
                 all_untested_functions.append(func)
         untested_perc = (len(all_untested_functions)) / len(router_functions)
         print("untested_perc: ", untested_perc)
