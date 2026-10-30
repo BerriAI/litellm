@@ -314,7 +314,7 @@ def configured_router(monkeypatch):
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", [{"model_name": "gpt-4"}])
     monkeypatch.setattr(proxy_server, "user_model", None)
-    monkeypatch.setattr(proxy_server, "_get_proxy_model_info", lambda model: model)
+    monkeypatch.setattr(proxy_server, "_get_proxy_model_info", lambda model, caller_aliases: model)
     yield router
 
 
@@ -678,9 +678,9 @@ def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
 ) -> None:
     """``acme-lite`` has a deployment of its own, ``acme-pro`` is an alias of it, ``acme-max`` is a
     routing group over it, and ``my-openai/gpt-acme-*`` is a narrower wildcard, so calls to those names
-    never reach the catch-all or ``my-openai/*``, which still list them. Such a row shows no price, even
-    where another provider's model goes by the same name, and every price shown is the one calls are
-    billed at."""
+    never reach the catch-all or ``my-openai/*``, which still list them. Such a row shows no price or
+    provider, even where another provider's model goes by the same name, and every price shown is the one
+    calls are billed at."""
     from litellm.proxy.auth import model_checks
 
     catalog: Final = {
@@ -791,6 +791,23 @@ def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
         ("fireworks-wildcard", "acme-pro"),
         ("openai-wildcard", "my-openai/gpt-acme-lite"),
     ]
+    shown_models: Final = {
+        (row["model_info"]["id"], row["model_name"]): (
+            row["model_info"].get("litellm_provider"),
+            row["model_info"].get("key"),
+        )
+        for row in response.json()["data"]
+        if "*" not in row["model_name"] and row["model_info"]["id"] != "deepseek-acme-lite"
+    }
+    assert shown_models == dict.fromkeys(
+        [
+            ("fireworks-wildcard", "acme-lite"),
+            ("fireworks-wildcard", "acme-max"),
+            ("fireworks-wildcard", "acme-pro"),
+            ("openai-wildcard", "my-openai/gpt-acme-lite"),
+        ],
+        (None, None),
+    )
     assert listed[("deepseek-acme-lite", "acme-lite")] == (7e-07, 8e-07)
     assert {key: prices for key, prices in listed.items() if key[0] != "deepseek-acme-lite"} == {
         ("fireworks-wildcard", "acme-lite"): (None, None),
@@ -1023,6 +1040,42 @@ def test_model_info_prices_a_wildcard_row_aliased_to_a_sibling_name_as_the_alias
     _invalidate_model_cost_lowercase_map()
 
 
+def test_model_info_prices_a_wildcard_row_the_proxy_renames_as_the_model_its_calls_reach(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """The proxy renames a requested model through the global ``model_alias_map``, the key's ``aliases`` and the
+    key's ``router_settings.model_group_alias`` before the router sees it. A row renamed to another deployment
+    shows no price or provider, and a row renamed to a sibling name of its own wildcard shows that sibling's
+    price."""
+    _catch_all_and_shadowed_wildcard_router(monkeypatch)
+    monkeypatch.setattr(litellm, "model_alias_map", {"my-fw/acme-max": "acme-lite"})
+
+    with auth_as(
+        aliases={"openai/gpt-5.6-acme": "acme-lite"},
+        router_settings={"model_group_alias": {"my-fw/acme-pro": "my-fw/acme-mini"}},
+    ):
+        rows: Final = _expanded_wildcard_rows(client)
+
+    shown: Final = {
+        name: (
+            row["model_info"].get("input_cost_per_token"),
+            row["model_info"].get("output_cost_per_token"),
+            row["model_info"].get("litellm_provider"),
+        )
+        for name, row in rows.items()
+    }
+    assert shown == {
+        "my-fw/acme-max": (None, None, None),
+        "my-fw/acme-mini": (5e-08, 6e-08, "fireworks_ai"),
+        "my-fw/acme-pro": (5e-08, 6e-08, "fireworks_ai"),
+        "openai/gpt-5.6-acme": (None, None, None),
+    }
+    _invalidate_model_cost_lowercase_map()
+
+
 def test_saving_a_replayed_model_info_wildcard_row_stores_none_of_its_shown_metadata(
     client: TestClient,
     auth_as: Callable[[], AbstractContextManager[object]],
@@ -1031,7 +1084,8 @@ def test_saving_a_replayed_model_info_wildcard_row_stores_none_of_its_shown_meta
 ) -> None:
     """An API client that saves a ``/model/info`` row back unchanged, apart from one edit, must not pin the
     cost-map metadata the row showed onto the wildcard, whether the row is a catch-all name carrying its
-    provider, a name an alias sends to another deployment, or a name an alias sends to a sibling name."""
+    provider or a name an alias sends to a sibling name. A name an alias sends to another deployment shows
+    no metadata to pin."""
     from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
     from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment
 
@@ -1062,7 +1116,11 @@ def test_saving_a_replayed_model_info_wildcard_row_stores_none_of_its_shown_meta
     shown_metadata: Final = {
         name: set(row["model_info"]) - set(sources[row["model_info"]["id"]]["model_info"]) for name, row in rows.items()
     }
-    assert all(shown_metadata.values()), shown_metadata
+    assert sorted(name for name, row in rows.items() if row["model_info"].get("key")) == [
+        "my-fw/acme-max",
+        "my-fw/acme-mini",
+        "openai/gpt-5.6-acme",
+    ]
     assert {name: info["access_groups"] for name, info in stored.items()} == dict.fromkeys(rows, ["prod"])
     assert {name: shown_metadata[name] & set(info) for name, info in stored.items()} == dict.fromkeys(rows, set())
     _invalidate_model_cost_lowercase_map()

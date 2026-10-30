@@ -62,6 +62,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY
 from litellm.proxy.auth.model_checks import (
+    GLOBAL_ALIASES_ONLY,
     model_info_cost_map_entry,
     routed_model_name,
     routes_through_deployment,
@@ -83,6 +84,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.common_utils.model_listing_utils import CallerAliases, served_model
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
@@ -1271,19 +1273,23 @@ def _ptu_priced_deployment(model_params: Deployment) -> Deployment:
     )
 
 
-def _live_cost_map_model(db_model: Deployment, listed_name: str | None, llm_router: Router | None) -> str | None:
+def _live_cost_map_model(
+    db_model: Deployment, listed_name: str | None, llm_router: Router | None, caller_aliases: CallerAliases
+) -> str | None:
     stored_model: Final = _decrypted_model(db_model.litellm_params.model)
     if stored_model is None or listed_name is None:
         return stored_model
     model_id: Final = db_model.model_info.id
-    return wildcard_listed_priced_model(
+    served_name: Final = served_model(listed_name, caller_aliases)
+    priced: Final = wildcard_listed_priced_model(
         db_model.model_name,
         stored_model,
-        listed_name if llm_router is None else routed_model_name(llm_router, listed_name),
+        served_name if llm_router is None else routed_model_name(llm_router, served_name),
         routes_through_wildcard=llm_router is None
         or model_id is None
-        or routes_through_deployment(llm_router, model_id, listed_name, db_model.model_info.team_id),
+        or routes_through_deployment(llm_router, model_id, served_name, db_model.model_info.team_id),
     )
+    return priced if isinstance(priced, str) else stored_model
 
 
 def _cost_map_entry(
@@ -1291,10 +1297,13 @@ def _cost_map_entry(
     incoming_model_info: Mapping[str, object],
     listed_name: str | None,
     llm_router: Router | None,
+    caller_aliases: CallerAliases,
 ) -> Mapping[str, object]:
     base_model: Final = incoming_model_info.get("base_model")
     lookup: Final = (
-        base_model if isinstance(base_model, str) else _live_cost_map_model(db_model, listed_name, llm_router)
+        base_model
+        if isinstance(base_model, str)
+        else _live_cost_map_model(db_model, listed_name, llm_router, caller_aliases)
     )
     return MappingProxyType({}) if lookup is None else model_info_cost_map_entry(lookup)
 
@@ -1320,6 +1329,8 @@ def update_db_model(
     updated_patch: updateDeployment,
     loaded_catalog: LoadedCatalog = GetModelCostMap.loaded_model_cost_map,
     llm_router: Router | None = None,
+    caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY,
+    listed_name: str | None = None,
 ) -> PrismaCompatibleUpdateDBModel:
     if updated_patch.model_info is not None:
         _raise_if_ptu_cost_attribution_disabled(updated_patch.model_info.model_dump(exclude_none=True))
@@ -1351,7 +1362,9 @@ def update_db_model(
         incoming_model_info: Final = updated_patch.model_info.model_dump(exclude_none=True)
         echoed_fields: Final = echoed_cost_map_fields(
             incoming_model_info,
-            _cost_map_entry(db_model, incoming_model_info, updated_patch.model_name, llm_router),
+            _cost_map_entry(
+                db_model, incoming_model_info, listed_name or updated_patch.model_name, llm_router, caller_aliases
+            ),
             _loaded_catalog_entry(incoming_model_info, loaded_catalog),
         )
         stored_model_info_fields: Final[Mapping[str, object]] = without_server_derived_pricing(incoming_model_info)
@@ -1535,6 +1548,7 @@ async def patch_model(
         llm_router,
         premium_user,
         prisma_client,
+        request_caller_aliases,
         store_model_in_db,
         user_api_key_cache,
     )
@@ -1705,6 +1719,7 @@ async def patch_model(
             prisma_client=prisma_client,
             write_row=write_row,
             llm_router=llm_router,
+            caller_aliases=await request_caller_aliases(user_api_key_dict),
         )
 
         if updated_model is None:
@@ -2061,6 +2076,7 @@ async def _update_team_model_in_db(
     prisma_client: PrismaClient,
     write_row: Callable[[PrismaCompatibleUpdateDBModel], Awaitable[_RowT]],
     llm_router: Router | None = None,
+    caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY,
 ) -> _RowT:
     """
     Handle team model updates with proper alias management.
@@ -2105,7 +2121,11 @@ async def _update_team_model_in_db(
 
     # No team_id in patch, proceed with standard update
     if patch_team_id is None:
-        return await write_row(update_db_model(db_model=db_model, updated_patch=patch_data, llm_router=llm_router))
+        return await write_row(
+            update_db_model(
+                db_model=db_model, updated_patch=patch_data, llm_router=llm_router, caller_aliases=caller_aliases
+            )
+        )
 
     # Determine public model name
     public_model_name: Final = _get_public_model_name(
@@ -2126,7 +2146,15 @@ async def _update_team_model_in_db(
             ),
         }
     )
-    row: Final = await write_row(update_db_model(db_model=db_model, updated_patch=team_patch, llm_router=llm_router))
+    row: Final = await write_row(
+        update_db_model(
+            db_model=db_model,
+            updated_patch=team_patch,
+            llm_router=llm_router,
+            caller_aliases=caller_aliases,
+            listed_name=patch_data.model_name,
+        )
+    )
 
     if is_new_team_assignment:
         await _setup_new_team_model_assignment(

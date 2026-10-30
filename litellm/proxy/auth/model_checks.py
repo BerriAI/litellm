@@ -5,6 +5,7 @@ import functools
 import itertools
 import re
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
@@ -13,6 +14,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+from litellm.proxy.common_utils.model_listing_utils import CallerAliases, served_model
 from litellm.proxy.common_utils.token_count_settings import cost_map_entry
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.router import Router
@@ -566,7 +568,20 @@ def wildcard_filled_model(model_name_pattern: str, litellm_model: str, listed_na
     )
 
 
-def wildcard_row_priced_model(row: Mapping[str, object], llm_router: Router | None) -> str | None:
+GLOBAL_ALIASES_ONLY: Final = CallerAliases(team=None, key=None)
+
+
+@dataclass(frozen=True, slots=True)
+class RoutedElsewhere:
+    pass
+
+
+ROUTED_ELSEWHERE: Final = RoutedElsewhere()
+
+
+def wildcard_row_priced_model(
+    row: Mapping[str, object], llm_router: Router | None, caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY
+) -> str | RoutedElsewhere | None:
     model_id: Final = _model_info_field(row, "id")
     listed_name: Final = row.get("model_name")
     if llm_router is None or not isinstance(model_id, str) or not isinstance(listed_name, str):
@@ -579,19 +594,20 @@ def wildcard_row_priced_model(row: Mapping[str, object], llm_router: Router | No
     source_model: Final = _litellm_model(source)
     if not isinstance(source_pattern, str) or not isinstance(source_model, str) or _litellm_model(row) == source_model:
         return None
+    served_name: Final = served_model(listed_name, caller_aliases)
     return wildcard_listed_priced_model(
         source_pattern,
         source_model,
-        routed_model_name(llm_router, listed_name),
-        routes_through_wildcard=routes_through_deployment(llm_router, model_id, listed_name, _deployment_team_id(row)),
+        routed_model_name(llm_router, served_name),
+        routes_through_wildcard=routes_through_deployment(llm_router, model_id, served_name, _deployment_team_id(row)),
     )
 
 
 def wildcard_listed_priced_model(
     model_name_pattern: str, wildcard_model: str, routed_name: str, routes_through_wildcard: bool
-) -> str:
+) -> str | RoutedElsewhere:
     if not routes_through_wildcard:
-        return wildcard_model
+        return ROUTED_ELSEWHERE
     filled: Final = wildcard_filled_model(model_name_pattern, wildcard_model, routed_name)
     if filled is None:
         return wildcard_model

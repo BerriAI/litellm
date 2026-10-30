@@ -287,6 +287,11 @@ def _dispatch(model_id: str, layers: Sequence[_AliasLayer]) -> tuple[str, bool]:
     return reduce(_through_layer, layers, (model_id, False))
 
 
+def served_model(model_id: str, aliases: CallerAliases) -> str:
+    target, _ = _dispatch(model_id, _alias_layers(aliases))
+    return target
+
+
 def _lookup_id(name: str, lookup_by_response: Mapping[str, str], lookup_ids: Container[str]) -> str | None:
     if name in lookup_by_response:
         return lookup_by_response[name]

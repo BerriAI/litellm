@@ -4494,6 +4494,47 @@ class TestModelInfoCostMapEchoFilter:
         assert info["access_groups"] == ["prod"]
         assert set(info).isdisjoint(entry), "one listed model's metadata must not be saved onto the whole wildcard"
 
+    @pytest.mark.asyncio
+    async def test_echo_of_a_team_wildcard_row_is_not_persisted_on_the_wildcard(self):
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import _update_team_model_in_db
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "team-openai/*",
+                    "litellm_params": {"model": "openai/*", "api_key": "x"},
+                    "model_info": {"id": "dep-team-wildcard", "team_id": "team-a"},
+                }
+            ]
+        )
+        entry = litellm.get_model_info("openai/gpt-5.6")
+        echo = {**entry, "id": "dep-team-wildcard", "team_id": "team-a", "access_groups": ["prod"]}
+        db_model = Deployment(
+            model_name="team-openai/*",
+            litellm_params=LiteLLM_Params(model="openai/*"),
+            model_info=ModelInfo(id="dep-team-wildcard", team_id="team-a"),
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"),
+            patch("litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"),
+        ):
+            result = await _update_team_model_in_db(
+                db_model=db_model,
+                patch_data=updateDeployment(model_name="team-openai/gpt-5.6", model_info=ModelInfo(**echo)),
+                user_api_key_dict=UserAPIKeyAuth(user_id="test_user", user_role=LitellmUserRoles.PROXY_ADMIN),
+                prisma_client=MockPrismaClient(team_exists=True),
+                write_row=_passthrough_row,
+                llm_router=router,
+            )
+
+        info = json.loads(result["model_info"])
+        assert info["access_groups"] == ["prod"]
+        assert set(info).isdisjoint(entry), "one listed model's metadata must not be saved onto a team's wildcard"
+
     def test_an_edited_value_survives_the_echo_filter(self):
         import litellm
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
