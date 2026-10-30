@@ -291,6 +291,32 @@ def test_native_catalog_lists_the_keys_other_chat_models_after_chatgpts(
 
 
 @pytest.mark.parametrize(
+    ("client_version", "expected_efforts"),
+    [
+        pytest.param("0.165.0", ["low", "max"], id="a codex that parses custom efforts gets them all"),
+        pytest.param("0.137.0", ["low"], id="an older codex gets only the efforts it parses"),
+    ],
+)
+def test_native_catalog_offers_the_declared_reasoning_efforts_the_requesting_codex_parses(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    client_version: str,
+    expected_efforts: list[str],
+) -> None:
+    declared: Final = {
+        **_open_weights("open-weights"),
+        "model_info": {"supports_reasoning": True, "reasoning_effort_levels": ["low", "max"]},
+    }
+    monkeypatch.setattr(proxy_server, "llm_router", Router(model_list=[declared]))
+    respx_mock.get(f"{_BASE}/models").respond(json=_UPSTREAM_CATALOG, headers={"etag": '"upstream-v1"'})
+    response: Final = client.get(f"/backend-api/codex/models?client_version={client_version}", headers=_HEADERS)
+    assert response.status_code == 200
+    (added,) = response.json()["models"][len(_UPSTREAM_CATALOG["models"]) :]
+    assert [level["effort"] for level in added["supported_reasoning_levels"]] == expected_efforts
+
+
+@pytest.mark.parametrize(
     "upstream",
     [
         pytest.param(httpx.Response(503, json={"detail": "busy"}, headers={"etag": '"e"'}), id="non-200"),
@@ -1393,6 +1419,37 @@ def test_codex_namespace_tool_reaches_fireworks_as_a_namespace(
     assert response.status_code == 200, response.text
     assert json.loads(provider.calls.last.request.content)["tools"] == [_CLOCK_NAMESPACE]
 
+
+
+@pytest.mark.parametrize(
+    ("drop_params", "expected_tools"),
+    [
+        pytest.param({}, [_CLOCK_NAMESPACE], id="codex's drop_params default merges the copies"),
+        pytest.param({"drop_params": False}, [_CLOCK_NAMESPACE, _CLOCK_NAMESPACE], id="the caller's off sends each"),
+    ],
+)
+def test_codex_tool_list_repeated_on_every_turn_reaches_fireworks_merged_only_under_drop_params(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    mixed_router: Router,
+    drop_params: dict[str, bool],
+    expected_tools: list[dict[str, object]],
+) -> None:
+    _account_catalog(respx_mock)
+    provider: Final = _open_weights_provider(respx_mock)
+    response: Final = client.post(
+        "/backend-api/codex/responses",
+        json={
+            "model": "open-weights",
+            "input": [_CLOCK_TOOLS, _USER_TURN, _CLOCK_TOOLS],
+            "stream": False,
+            "store": False,
+            **drop_params,
+        },
+        headers=_ACCOUNT_HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    assert json.loads(provider.calls.last.request.content)["tools"] == expected_tools
 
 _CUSTOM_EXEC_TOOL: Final = {"type": "custom", "name": "exec", "description": "Run a command", "format": {"type": "text"}}
 _XAI_SEARCH_CALL: Final = {

@@ -117,6 +117,94 @@ def test_unknown_model_entry_carries_every_field_codex_deserializes_without_a_de
     assert (entry["context_window"], entry["base_instructions"], entry["service_tiers"]) == (272000, _PROMPT, [])
 
 
+_NO_REASONING_BODY = (
+    '{"models":[{"slug":"gpt-6-astra","display_name":"gpt-6-astra","description":null,'
+    '"supported_reasoning_levels":[],"shell_type":"unified_exec","visibility":"list","supported_in_api":true,'
+    '"priority":0,"service_tiers":[],"availability_nux":null,"upgrade":null,"support_verbosity":false,'
+    '"supports_reasoning_summaries":false,"supports_parallel_tool_calls":false,"default_verbosity":null,'
+    '"apply_patch_tool_type":null,"truncation_policy":{"mode":"bytes","limit":10000},'
+    '"experimental_supported_tools":[],"context_window":272000,"base_instructions":"base prompt",'
+    '"supports_search_tool":false}]}'
+)
+
+
+@pytest.mark.parametrize("efforts", [None, ()], ids=["unknown", "non-reasoning"])
+@pytest.mark.parametrize("client_version", ["0.165.0", "0.120.0", None])
+def test_unknown_or_no_reasoning_efforts_keep_the_fallback_entry_byte_for_byte(efforts, client_version):
+    """The body an unknown model got before reasoning efforts reached the catalog."""
+    assert (
+        _body(_row("gpt-6-astra", supported_reasoning_efforts=efforts), client_version=client_version).json
+        == _NO_REASONING_BODY
+    )
+
+
+_ABSENT = object()
+
+
+@pytest.mark.parametrize(
+    ("efforts", "client_version", "levels", "default"),
+    [
+        (("low", "high", "max"), "0.165.0", ["low", "high", "max"], "low"),
+        (("high", "xhigh", "max"), "0.165.0", ["high", "xhigh", "max"], "high"),
+        (
+            ("none", "low", "medium", "high", "xhigh", "max"),
+            "0.165.0",
+            ["none", "low", "medium", "high", "xhigh", "max"],
+            "none",
+        ),
+        (("low", "medium", "high"), "0.165.0", ["low", "medium", "high"], "medium"),
+        (("none", "low", "max"), "0.137.0", ["none", "low"], "none"),
+        (("none",), "0.165.0", ["none"], "none"),
+        (("low", "turbo"), "0.165.0", ["low", "turbo"], "low"),
+        (("low", "high", "max"), "0.138.0", ["low", "high", "max"], "low"),
+        (("low", "high", "max"), "0.137.9", ["low", "high"], "low"),
+        (("low", "high", "max"), "0.138.0-alpha.2", ["low", "high"], "low"),
+        (("minimal", "max"), "not-a-version", ["minimal"], "minimal"),
+        pytest.param(("minimal", "max"), "9" * 5000, ["minimal"], "minimal", id="version-past-int-digit-limit"),
+        (("low", "turbo"), None, ["low"], "low"),
+        (("max",), "0.137.0", [], _ABSENT),
+    ],
+)
+def test_unknown_model_offers_the_group_efforts_its_codex_release_parses(efforts, client_version, levels, default):
+    (entry,) = _models(_row("gpt-6-astra", supported_reasoning_efforts=efforts), client_version=client_version)
+
+    assert [level["effort"] for level in entry["supported_reasoning_levels"]] == levels
+    assert all(
+        level["description"] == f"Sends reasoning_effort={level['effort']} upstream"
+        for level in entry["supported_reasoning_levels"]
+    )
+    assert entry.get("default_reasoning_level", _ABSENT) == default
+
+
+@pytest.mark.parametrize(
+    "levels",
+    [[{"effort": "medium", "description": "Codex's own medium"}], [{"effort": "medium"}]],
+    ids=["described", "undescribed"],
+)
+def test_a_model_codex_knows_keeps_its_own_reasoning_levels(levels):
+    stock = CodexStockModel.model_validate(
+        {
+            "slug": "gpt-5.5",
+            "display_name": "GPT-5.5",
+            "priority": 3,
+            "visibility": "list",
+            "default_reasoning_level": "medium",
+            "supported_reasoning_levels": levels,
+        }
+    )
+
+    (entry,) = json.loads(
+        codex_models_response_json(
+            (_row("gpt-5.5", supported_reasoning_efforts=("low", "max")),),
+            stock={"gpt-5.5": stock},
+            instructions=_PROMPT,
+            client_version="0.165.0",
+        ).json
+    )["models"]
+
+    assert (entry["default_reasoning_level"], entry["supported_reasoning_levels"]) == ("medium", levels)
+
+
 def test_known_model_keeps_codex_stock_entry_listed_under_the_served_id():
     (entry,) = _models(_row("gpt-daybreak"))
 
@@ -546,6 +634,9 @@ def test_catalog_rows_read_the_router_by_each_entry_lookup_id():
             upstream_model="openai/gpt-5.5",
             display_name="Team 5.5",
             service_tiers=(["ultrafast"], None),
+            supported_reasoning_efforts=router.get_model_group_info(
+                "model_name_team-1_c0ffee"
+            ).supported_reasoning_efforts,
             search_tool_support=(None, None),
         ),
         CodexCatalogRow(
@@ -577,6 +668,7 @@ def test_catalog_rows_read_an_alias_off_its_target_under_the_alias_name():
         max_input_tokens=9,
         upstream_model="openai/gpt-6-astra",
         service_tiers=(["ultrafast"],),
+        supported_reasoning_efforts=router.get_model_group_info("gpt-6-astra").supported_reasoning_efforts,
         search_tool_support=(None,),
     )
     (entry,) = json.loads(codex_model_list_body(listing, (("gpt-6", "gpt-6"),), router))["models"]
@@ -654,29 +746,79 @@ def test_model_list_body_takes_stock_metadata_off_the_deployment_the_key_team_ro
     assert [entry["slug"] for entry in served("team-2")] == ["coding-model", "coding"]
 
 
+def test_model_list_body_offers_what_model_group_info_reports_for_each_listed_model():
+    """Declared, unknown and non-reasoning groups through a real router, a hidden alias read like its
+    target, and the requesting Codex's version deciding which declared levels it is offered."""
+    vllm = {"model": "hosted_vllm/qa-local-coder", "api_base": "https://vllm.example/v1"}
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "declared",
+                "litellm_params": vllm,
+                "model_info": {"supports_reasoning": True, "reasoning_effort_levels": ["low", "high", "max"]},
+            },
+            {"model_name": "unknown", "litellm_params": vllm},
+            {"model_name": "non-reasoning", "litellm_params": vllm, "model_info": {"supports_reasoning": False}},
+        ],
+        model_group_alias={"hidden-declared": {"model": "declared", "hidden": True}},
+    )
+    names = ("declared", "unknown", "non-reasoning", "hidden-declared")
+    listing = tuple(
+        {"id": name, "object": "model", "created": 0, "owned_by": "openai", "mode": "chat"} for name in names
+    )
+    entries = tuple((name, name) for name in names)
+
+    def offered(client_version):
+        body = codex_model_list_body(listing, entries, router, client_version=client_version)
+        return {
+            entry["slug"]: (
+                [level["effort"] for level in entry["supported_reasoning_levels"]],
+                entry.get("default_reasoning_level"),
+            )
+            for entry in json.loads(body)["models"]
+        }
+
+    assert router.get_model_group_info("declared").supported_reasoning_efforts == ("low", "high", "max")
+    assert offered("0.165.0") == {
+        "declared": (["low", "high", "max"], "low"),
+        "unknown": ([], None),
+        "non-reasoning": ([], None),
+        "hidden-declared": (["low", "high", "max"], "low"),
+    }
+    assert offered("0.137.0")["declared"] == (["low", "high"], "low")
+
+
 def test_catalog_rows_without_a_router_carry_only_the_listing():
     listing = ({"id": "plain", "object": "model", "created": 0, "owned_by": "openai", "mode": "chat"},)
 
     assert codex_catalog_rows(listing, (("plain", "plain"),), None) == (CodexCatalogRow(id="plain", mode="chat"),)
 
 
-def test_entry_names_a_default_reasoning_level_exactly_when_the_served_entry_carries_one():
+@pytest.mark.parametrize("client_version", [None, "0.165.0"])
+def test_entry_names_a_default_reasoning_level_exactly_when_the_served_entry_carries_one(client_version):
     router = litellm.Router(
         model_list=[
             {"model_name": "open-weights", "litellm_params": {"model": "fireworks_ai/open-weights"}},
             {"model_name": "coding-model", "litellm_params": {"model": "openai/gpt-5.5"}},
+            {
+                "model_name": "max-only",
+                "litellm_params": {"model": "hosted_vllm/qa-local-coder", "api_base": "https://vllm.example/v1"},
+                "model_info": {"supports_reasoning": True, "reasoning_effort_levels": ["max"]},
+            },
         ]
     )
-    names = ("open-weights", "coding-model")
+    names = ("open-weights", "coding-model", "max-only")
     listing = tuple(
         {"id": name, "object": "model", "created": 0, "owned_by": "openai", "mode": "chat"} for name in names
     )
-    served = json.loads(codex_model_list_body(listing, tuple((name, name) for name in names), router))["models"]
+    served = json.loads(
+        codex_model_list_body(listing, tuple((name, name) for name in names), router, client_version=client_version)
+    )["models"]
 
-    assert [codex_entry_names_default_reasoning_level(entry["slug"], router, None) for entry in served] == [
-        "default_reasoning_level" in entry for entry in served
-    ]
-    assert ["default_reasoning_level" in entry for entry in served] == [False, True]
+    assert [
+        codex_entry_names_default_reasoning_level(entry["slug"], router, None, client_version) for entry in served
+    ] == ["default_reasoning_level" in entry for entry in served]
+    assert ["default_reasoning_level" in entry for entry in served] == [False, True, client_version is not None]
 
 
 def test_codex_tool_search_is_offered_off_the_route_and_model_info_and_only_when_every_deployment_answers_it():

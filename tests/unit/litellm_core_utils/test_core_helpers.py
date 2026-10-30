@@ -26,6 +26,8 @@ from litellm.litellm_core_utils.core_helpers import (
     normalize_drop_params,
     preserve_upstream_non_openai_attributes,
     process_response_headers,
+    qualify_agentic_followup_model,
+    qualify_provider_stripped_model,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
     set_provider_response_headers_in_hidden_params,
@@ -635,6 +637,87 @@ class TestProviderResponseHeadersInHiddenParams:
 
         assert get_provider_response_headers_from_hidden_params(sibling) is None
         assert "additional_headers" not in sibling._hidden_params
+
+
+@pytest.mark.parametrize(
+    "model,provider,expected",
+    [
+        ("mantle/anthropic.claude-sonnet-5", "bedrock", "bedrock/mantle/anthropic.claude-sonnet-5"),
+        ("invoke/anthropic.claude-v2", "bedrock", "bedrock/invoke/anthropic.claude-v2"),
+        ("openai/gpt-4o", "openrouter", "openrouter/openai/gpt-4o"),
+        ("gpt-4o", "openai", "openai/gpt-4o"),
+        ("claude-sonnet-4-5", "anthropic", "anthropic/claude-sonnet-4-5"),
+    ],
+)
+def test_the_provider_prefix_is_restored(model: str, provider: str, expected: str) -> None:
+    assert qualify_provider_stripped_model(model, provider) == expected
+
+
+@pytest.mark.parametrize(
+    "model,provider",
+    [
+        ("bedrock/mantle/anthropic.claude-sonnet-5", "bedrock"),
+        ("openai/gpt-4o", "openai"),
+        ("cohere/command-a-03-2025", "cohere_chat"),
+        ("ai21/jamba-1.5-large", "ai21_chat"),
+        ("anthropic/claude-2", "anthropic_text"),
+    ],
+)
+def test_an_already_qualified_model_is_left_alone(model: str, provider: str) -> None:
+    assert qualify_provider_stripped_model(model, provider) == model
+
+
+def test_a_provider_that_only_shares_a_prefix_is_still_qualified() -> None:
+    assert qualify_provider_stripped_model("openai_like/foo", "openai") == "openai/openai_like/foo"
+
+
+def test_no_provider_leaves_the_model_untouched() -> None:
+    assert qualify_provider_stripped_model("gpt-4o", "") == "gpt-4o"
+
+
+def test_a_cross_provider_patched_model_is_dispatched_as_the_hook_asked() -> None:
+    assert qualify_agentic_followup_model("anthropic/claude-sonnet-4-5", "gpt-4o", "openai") == (
+        "anthropic/claude-sonnet-4-5"
+    )
+
+
+def test_a_bare_patched_model_takes_the_request_provider() -> None:
+    assert qualify_agentic_followup_model("gpt-4o-mini", "gpt-4o", "openai") == "openai/gpt-4o-mini"
+
+
+def test_a_sub_path_request_model_keeps_its_provider() -> None:
+    assert qualify_agentic_followup_model(None, "mantle/anthropic.claude-sonnet-5", "bedrock") == (
+        "bedrock/mantle/anthropic.claude-sonnet-5"
+    )
+
+
+def test_an_unpatched_ordinary_model_takes_the_request_provider() -> None:
+    assert qualify_agentic_followup_model(None, "gpt-4o", "openai") == "openai/gpt-4o"
+
+
+def test_a_patched_model_already_holding_the_request_provider_is_left_alone() -> None:
+    assert qualify_agentic_followup_model("openai/gpt-4o", "gpt-4o", "openai") == "openai/gpt-4o"
+
+
+@pytest.mark.parametrize("patched", ["", None])
+def test_a_patch_without_a_model_falls_back_to_the_request_model(patched: str | None) -> None:
+    assert qualify_agentic_followup_model(patched, "gpt-4o", "openai") == "openai/gpt-4o"
+
+
+def test_a_patched_sub_path_model_still_takes_the_request_provider() -> None:
+    assert qualify_agentic_followup_model("mantle/anthropic.claude-sonnet-5", "gpt-4o", "bedrock") == (
+        "bedrock/mantle/anthropic.claude-sonnet-5"
+    )
+
+
+def test_a_patched_model_on_a_json_configured_provider_reaches_that_provider() -> None:
+    assert qualify_agentic_followup_model("aihubmix/gpt-4o", "gpt-4o", "openai") == "aihubmix/gpt-4o"
+
+
+def test_a_patch_echoing_the_request_model_keeps_the_request_provider() -> None:
+    assert qualify_agentic_followup_model("openai/gpt-4o", "openai/gpt-4o", "openrouter") == (
+        "openrouter/openai/gpt-4o"
+    )
 
 
 def test_spend_metadata_merge_survives_the_logging_thread_inserting_into_the_request_metadata() -> None:

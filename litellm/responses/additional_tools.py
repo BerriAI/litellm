@@ -91,6 +91,8 @@ def _unique_tools(tools: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, o
 def hoist_additional_tools(
     input: str | ResponseInputParam,
     tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None,
+    *,
+    drop_params: bool,
 ) -> HoistedAdditionalTools:
     existing: Final = tuple(tools or ())
     if isinstance(input, str):
@@ -105,6 +107,8 @@ def hoist_additional_tools(
         len(items),
     )
     remaining_input: Final = [item for item in input if not _is_additional_tools_item(item)]
+    if not drop_params:
+        return HoistedAdditionalTools(input=remaining_input, tools=(*existing, *hoisted), hoisted=hoisted)
     unique: Final = tuple(
         cast("ALL_RESPONSES_API_TOOL_PARAMS", tool)  # cast-ok: a merged namespace is rebuilt from the same tool dicts
         for tool in _unique_tools((*existing, *hoisted))
@@ -112,7 +116,7 @@ def hoist_additional_tools(
     return HoistedAdditionalTools(input=remaining_input, tools=unique, hoisted=hoisted)
 
 
-def with_additional_tools_hoisted(request: Mapping[str, object]) -> Mapping[str, object]:
+def with_additional_tools_hoisted(request: Mapping[str, object], *, drop_params: bool) -> Mapping[str, object]:
     request_input: Final = request.get("input")
     if not isinstance(request_input, list):
         return request
@@ -120,7 +124,7 @@ def with_additional_tools_hoisted(request: Mapping[str, object]) -> Mapping[str,
     top_level_tools: Final = cast(  # cast-ok: tools are forwarded as sent, as inference does
         "tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]", _ITEMS.validate_python(request.get("tools") or ())
     )
-    hoisted: Final = hoist_additional_tools(input_items, top_level_tools)
+    hoisted: Final = hoist_additional_tools(input_items, top_level_tools, drop_params=drop_params)
     if not hoisted.hoisted:
         return request
     return {**request, "input": hoisted.input, "tools": list(hoisted.tools)}

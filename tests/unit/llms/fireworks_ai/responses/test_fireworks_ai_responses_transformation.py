@@ -1,5 +1,5 @@
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Final, TypedDict, cast
 from unittest.mock import MagicMock, patch
@@ -7,6 +7,7 @@ from urllib.parse import quote
 
 import httpx
 import pytest
+import respx
 from openai.types.responses import (
     EasyInputMessage,
     ResponseFunctionToolCall,
@@ -79,6 +80,14 @@ def _mock_http_client(response_body: Mapping[str, object]) -> MagicMock:
     response.text = json.dumps(response_body)
     client.post.return_value = response
     return client
+
+
+def _fireworks_responses_route(model: str) -> respx.Route:
+    return respx.post(FIREWORKS_RESPONSES_URL).mock(return_value=httpx.Response(200, json=_fireworks_response(model)))
+
+
+def _routed_body(route: respx.Route) -> Mapping[str, object]:
+    return json.loads(route.calls.last.request.content)
 
 
 def _sent_request(client: MagicMock) -> tuple[str, Mapping[str, str], Mapping[str, object]]:
@@ -179,6 +188,60 @@ def test_responses_call_folds_developer_items_into_instructions() -> None:
     assert tuple(body["input"]) == (
         {"role": "user", "content": "Hi there"},
         {"role": "user", "content": [{"type": "input_text", "text": "What is the capital of France?"}]},
+    )
+
+
+@respx.mock
+def test_responses_call_keeps_developer_items_in_place_for_a_deployment_that_accepts_later_system_items() -> None:
+    route: Final = _fireworks_responses_route("accounts/fireworks/models/accepts-later-system")
+    litellm.responses(
+        model="fireworks_ai/accounts/fireworks/models/accepts-later-system",
+        instructions="You are Codex",
+        input=[
+            {"role": "user", "content": "Hi there"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ],
+        model_info={"id": "deployment-1", "supports_mid_conversation_system": True},
+        api_key="fw-test-key",
+    )
+    body: Final = _routed_body(route)
+    assert body["instructions"] == "You are Codex"
+    assert tuple(body["input"]) == (
+        {"role": "user", "content": "Hi there"},
+        {"role": "system", "content": "Answer with exactly one word.", "type": "message"},
+        {"role": "user", "content": "What is the capital of France?"},
+    )
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("model_info", "closing_role"),
+    [(None, "system"), ({"id": "deployment-1", "supports_mid_conversation_system": False}, "user")],
+)
+def test_responses_call_sends_the_closing_developer_item_as_a_user_turn_only_for_a_declared_system_first_deployment(
+    model_info: Mapping[str, object] | None, closing_role: str
+) -> None:
+    route: Final = _fireworks_responses_route("accounts/fireworks/models/kimi-k3")
+    litellm.responses(
+        model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+        input=[
+            {"role": "user", "content": "Hi there"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+            {"type": "message", "role": "assistant", "content": "Paris"},
+            {"role": "developer", "content": "Reply with PONG."},
+        ],
+        model_info=model_info,
+        api_key="fw-test-key",
+    )
+    body: Final = _routed_body(route)
+    assert body["instructions"] == "Answer with exactly one word."
+    assert tuple(body["input"]) == (
+        {"role": "user", "content": "Hi there"},
+        {"role": "user", "content": "What is the capital of France?"},
+        {"type": "message", "role": "assistant", "content": "Paris"},
+        {"role": closing_role, "content": "Reply with PONG.", "type": "message"},
     )
 
 
@@ -387,7 +450,16 @@ def test_transform_request_moves_codex_additional_tools_item_into_tools(instruct
     assert request.get("instructions") == instructions
 
 
-def test_transform_request_merges_codex_additional_tools_into_existing_tools_once() -> None:
+@pytest.mark.parametrize(
+    ("drop_params", "expected_clock_copies"),
+    [
+        pytest.param(True, 1, id="merged once under drop_params"),
+        pytest.param(None, 2, id="forwarded as sent without drop_params"),
+    ],
+)
+def test_transform_request_merges_codex_additional_tools_into_existing_tools_only_under_drop_params(
+    drop_params: bool | None, expected_clock_copies: int
+) -> None:
     weather_tool: Final = {
         "type": "function",
         "name": "get_weather",
@@ -398,10 +470,10 @@ def test_transform_request_merges_codex_additional_tools_into_existing_tools_onc
         model="accounts/fireworks/models/glm-5p3",
         input=cast(ResponseInputParam, [CODEX_ADDITIONAL_TOOLS_ITEM, user_item, CODEX_ADDITIONAL_TOOLS_ITEM]),
         response_api_optional_request_params={"tools": [weather_tool]},
-        litellm_params=GenericLiteLLMParams(),
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
         headers={},
     )
-    assert tuple(request["tools"]) == (weather_tool, CODEX_CLOCK_NAMESPACE_TOOL)
+    assert tuple(request["tools"]) == (weather_tool, *(CODEX_CLOCK_NAMESPACE_TOOL,) * expected_clock_copies)
     assert tuple(request["input"]) == (user_item,)
 
 
@@ -720,3 +792,40 @@ def test_responses_call_forwards_litellm_user_id_as_user(
     _, _, body = _sent_request(client)
     assert body.get("user") == expected_user
     assert "fireworks_forward_user_id" not in body
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("model_info", "expected_instructions", "expected_input"),
+    [
+        (None, "Answer in one word.", ({"role": "user", "content": "What is the capital of France?"},)),
+        (
+            {"id": "deployment-1", "supports_mid_conversation_system": True},
+            None,
+            (
+                {"role": "user", "content": "What is the capital of France?"},
+                {"role": "system", "content": "Answer in one word.", "type": "message"},
+            ),
+        ),
+    ],
+)
+def test_responses_call_forwards_developer_items_in_place_only_when_the_deployment_itself_declares_true(
+    declare_mid_conversation_system: Callable[[str, bool], None],
+    model_info: Mapping[str, object] | None,
+    expected_instructions: str | None,
+    expected_input: tuple[Mapping[str, object], ...],
+) -> None:
+    declare_mid_conversation_system("fireworks_ai/accounts/fireworks/models/shared-backend", True)
+    route: Final = _fireworks_responses_route("accounts/fireworks/models/shared-backend")
+    litellm.responses(
+        model="fireworks_ai/accounts/fireworks/models/shared-backend",
+        input=[
+            {"role": "user", "content": "What is the capital of France?"},
+            {"role": "developer", "content": "Answer in one word."},
+        ],
+        model_info=model_info,
+        api_key="fw-test-key",
+    )
+    body: Final = _routed_body(route)
+    assert body.get("instructions") == expected_instructions
+    assert tuple(body["input"]) == expected_input

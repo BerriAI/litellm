@@ -17,6 +17,8 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.anthropic_beta_gated_fields import active_beta_values, log_beta_gated_strips, strip_beta_gated_thinking
+from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
     RESPONSE_FORMAT_TOOL_NAME,
@@ -117,6 +119,7 @@ from litellm.utils import (
 )
 
 from ..common_utils import (
+    DROP_DISABLED_REASONING_EFFORT_WARNING,
     BedrockError,
     BedrockModelInfo,
     bedrock_cache_point_ttl_supported,
@@ -1192,11 +1195,7 @@ class AmazonConverseConfig(BaseConfig):
                         ),
                         status_code=400,
                     )
-                verbose_logger.debug(
-                    "Dropping unsupported `reasoning_effort=%s` for Bedrock model=%s.",
-                    value,
-                    model,
-                )
+                verbose_logger.warning(DROP_DISABLED_REASONING_EFFORT_WARNING, "reasoning_effort", value, model)
             elif param == "reasoning_effort" and isinstance(value, str):
                 self._handle_reasoning_effort_parameter(
                     model=model, reasoning_effort=value, optional_params=optional_params
@@ -1828,7 +1827,16 @@ class AmazonConverseConfig(BaseConfig):
                 filtered_tools.append(tool)
 
         base_model: Final = BedrockModelInfo.get_base_model(model)
-        client_beta_list: Final = get_anthropic_beta_from_headers(headers or {})
+        header_beta_list: Final = get_anthropic_beta_from_headers(headers or {})
+        client_beta_list: Final = header_beta_list or filter_and_transform_beta_headers(
+            sorted(
+                active_beta_values(
+                    {},
+                    additional_request_params.get("anthropic_beta"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # additional_request_params is a bare dict
+                )
+            ),
+            provider="bedrock_converse",
+        )
         eager_beta: Final = (
             (ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,)
             if base_model.startswith("anthropic")
@@ -1836,7 +1844,15 @@ class AmazonConverseConfig(BaseConfig):
             and ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER not in client_beta_list
             else ()
         )
-        anthropic_beta_list: Final = [*client_beta_list, *eager_beta]
+        thinking_betas: Final = AnthropicModelInfo().thinking_betas(
+            additional_request_params.get("thinking"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # additional_request_params is a bare dict
+        )
+        missing_thinking_betas: Final = (
+            tuple(beta for beta in thinking_betas if beta not in client_beta_list)
+            if base_model.startswith("anthropic")
+            else ()
+        )
+        anthropic_beta_list: Final = [*client_beta_list, *eager_beta, *missing_thinking_betas]
 
         # Only separate tools if computer use tools are actually present
         if filtered_tools and self.is_computer_use_tool_used(filtered_tools, model):
@@ -1906,7 +1922,8 @@ class AmazonConverseConfig(BaseConfig):
                 else:
                     computer_use_header = "computer-use-2024-10-22"
 
-                anthropic_beta_list.append(computer_use_header)
+                if computer_use_header not in anthropic_beta_list:
+                    anthropic_beta_list.append(computer_use_header)
                 # Transform computer use tools to proper Bedrock format
                 transformed_computer_tools: Final = self._transform_computer_use_tools(computer_use_tools)
                 additional_request_params["tools"] = transformed_computer_tools
@@ -2031,6 +2048,16 @@ class AmazonConverseConfig(BaseConfig):
         bedrock_tools, anthropic_beta_list = self._process_tools_and_beta(
             original_tools, model, headers, additional_request_params, litellm_params, deployment_model
         )
+        requested_thinking: Final = additional_request_params.get("thinking")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # _prepare_request_params hands back a bare dict
+        body_betas: Final = additional_request_params.get("anthropic_beta")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # same bare dict
+        gated_thinking: Final = strip_beta_gated_thinking(
+            requested_thinking,  # pyright: ignore[reportUnknownArgumentType]  # same bare dict
+            active_beta_values({}, body_betas) | frozenset(anthropic_beta_list),  # pyright: ignore[reportUnknownArgumentType]  # _process_tools_and_beta hands back a bare list
+            drop_params=drop_params,
+        )
+        if gated_thinking.stripped:
+            log_beta_gated_strips(gated_thinking.stripped, model=model, provider="bedrock_converse")
+            additional_request_params["thinking"] = gated_thinking.thinking
 
         # Append cachePoint to tools if cache_control_injection_points has tool_config
         cache_injection_points: Final = additional_request_params.pop("cache_control_injection_points", None)

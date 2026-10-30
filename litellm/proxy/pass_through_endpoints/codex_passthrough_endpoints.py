@@ -37,6 +37,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     get_client_requested_model,
     read_request_body,  # pyright: ignore[reportUnknownVariableType]  # returns a bare dict, validated at the call
 )
+from litellm.proxy.litellm_pre_call_utils import should_auto_drop_params_for_agentic_cli
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import pass_through_request
 from litellm.proxy.response_api_endpoints.endpoints import responses_api
 from litellm.responses.additional_tools import with_additional_tools_hoisted
@@ -114,8 +115,9 @@ def _serves_by_name(deployment: Deployment, names: frozenset[str]) -> bool:
 
 
 def _candidate_deployments(model: str, llm_router: "Router", team_id: str | None) -> tuple[Deployment, ...]:
+    registry: Final = llm_router.registry()
     candidates: Final = tuple(
-        llm_router.get_deployment(model_id) for model_id in llm_router.get_candidate_model_ids_for_route(model, team_id)
+        registry.deployment(model_id) for model_id in registry.names(model, kind="route_candidates", team_id=team_id)
     )
     return tuple(deployment for deployment in candidates if deployment is not None)
 
@@ -129,7 +131,7 @@ def _routes_to_litellm(model: object, llm_router: "Router | None", team_id: str 
     ):
         return False
     deployments: Final = _candidate_deployments(model, llm_router, team_id)
-    names: Final = frozenset({model, llm_router.get_model_from_alias(model=model) or model})
+    names: Final = frozenset({model, llm_router.registry().resolve(model, kind="alias") or model})
     return bool(deployments) and all(_serves_by_name(deployment, names) for deployment in deployments)
 
 
@@ -311,7 +313,7 @@ def _supports_no_effort(model: str, llm_router: "Router", team_id: str | None) -
 
 
 def _with_provider_default_reasoning(
-    body: Mapping[str, object], llm_router: "Router | None", team_id: str | None
+    body: Mapping[str, object], llm_router: "Router | None", team_id: str | None, client_version: str | None
 ) -> Mapping[str, object]:
     model: Final = body.get("model")
     try:
@@ -323,7 +325,7 @@ def _with_provider_default_reasoning(
         or not isinstance(model, str)
         or llm_router is None
         or not _drops_params(body, model, llm_router, team_id)
-        or codex_entry_names_default_reasoning_level(model, llm_router, team_id)
+        or codex_entry_names_default_reasoning_level(model, llm_router, team_id, client_version)
         or _supports_no_effort(model, llm_router, team_id)
     ):
         return body
@@ -402,23 +404,39 @@ def _takes_codex_tools(deployment: Deployment) -> bool:
 
 
 def _with_tools_the_targets_accept(
-    body: Mapping[str, object], deployments: tuple[Deployment, ...]
+    body: Mapping[str, object], deployments: tuple[Deployment, ...], drop_params: bool
 ) -> Mapping[str, object]:
     if all(_is_openai_api(deployment) for deployment in deployments):
         return body
     if all(_takes_codex_tools(deployment) for deployment in deployments):
-        return with_additional_tools_hoisted(body)
+        return with_additional_tools_hoisted(body, drop_params=drop_params)
     return {**body, _CHAT_COMPLETIONS_BRIDGE: True}
 
 
-def _litellm_body(body: Mapping[str, object], llm_router: "Router | None", team_id: str | None) -> Mapping[str, object]:
-    wrapped: Final = _with_wrapped_reasoning(_with_provider_default_reasoning(body, llm_router, team_id))
+def _drops_params_for_client(
+    body: Mapping[str, object], model: str, llm_router: "Router", team_id: str | None, user_agent: str
+) -> bool:
+    from litellm.proxy.proxy_server import proxy_config
+
+    return _drops_params(body, model, llm_router, team_id) or should_auto_drop_params_for_agentic_cli(
+        user_agent, "drop_params" in body, proxy_config
+    )
+
+
+def _litellm_body(
+    body: Mapping[str, object], llm_router: "Router | None", team_id: str | None, headers: Mapping[str, str]
+) -> Mapping[str, object]:
+    wrapped: Final = _with_wrapped_reasoning(
+        _with_provider_default_reasoning(body, llm_router, team_id, _codex_client_version(headers))
+    )
     model: Final = body.get("model")
     if not isinstance(model, str) or llm_router is None:
         return wrapped
     deployments: Final = _candidate_deployments(model, llm_router, team_id)
     return _with_tools_the_targets_accept(
-        _with_reasoning_the_targets_can_decrypt(wrapped, model, llm_router, deployments), deployments
+        _with_reasoning_the_targets_can_decrypt(wrapped, model, llm_router, deployments),
+        deployments,
+        _drops_params_for_client(body, model, llm_router, team_id, headers.get("user-agent", "")),
     )
 
 
@@ -565,7 +583,7 @@ async def _catalog(
     etag: Final = None if upstream_etag is None else await _remembered_models_etag(caller, upstream_etag, rows, cache)
     if not rows:
         return upstream
-    merged: Final = merged_codex_catalog(upstream_body, rows)
+    merged: Final = merged_codex_catalog(upstream_body, rows, client_version=request.query_params.get("client_version"))
     return _with_etag(upstream, merged if merged is not None else upstream_body, etag)
 
 
@@ -581,7 +599,7 @@ async def _responses(
 
     body: Final = _JSON_OBJECT.validate_python(await read_request_body(request))
     if await _serves_through_litellm(body.get("model"), llm_router, user_api_key_dict, headers, cache):
-        litellm_body: Final = _litellm_body(body, llm_router, user_api_key_dict.team_id)
+        litellm_body: Final = _litellm_body(body, llm_router, user_api_key_dict.team_id, headers)
         return await responses_api(
             _as_litellm_responses_request(request, json.dumps(litellm_body).encode(), litellm_body),
             fastapi_response,
