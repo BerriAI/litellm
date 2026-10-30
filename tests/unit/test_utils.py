@@ -8652,7 +8652,7 @@ def test_validate_tool_choice_without_model_is_still_a_400():
 def test_completion_message_without_role_is_a_400(messages: list[dict[str, str | None]], index: int):
     """A message with no role is the caller's mistake, rejected before any provider sees it, never sent as assistant."""
     with pytest.raises(
-        litellm.MalformedRequestFieldError, match=re.escape(f"Missing required parameter: 'messages[{index}].role'.")
+        litellm.MissingMessageRoleError, match=re.escape(f"Missing required parameter: 'messages[{index}].role'.")
     ) as exc_info:
         litellm.completion(model=MODEL, messages=messages, mock_response="Hello there!")
     assert exc_info.value.status_code == 400
@@ -8673,6 +8673,7 @@ def test_completion_message_without_role_is_a_400(messages: list[dict[str, str |
             ],
         },
         {"content": None, "function_call": {"name": "get_weather", "arguments": "{}"}},
+        {"content": "ok", "tool_calls": []},
     ],
 )
 def test_completion_role_less_tool_call_turn_is_sent_as_assistant(call_turn: dict[str, object]):

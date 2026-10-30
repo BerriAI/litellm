@@ -1467,6 +1467,7 @@ from .exceptions import (
     BadRequestError,
     ImageFetchError,
     MalformedRequestFieldError as MalformedRequestFieldError,
+    MissingMessageRoleError as MissingMessageRoleError,
     VectorStoreSearchError,
     NotFoundError,
     PermissionDeniedError,

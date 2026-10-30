@@ -506,6 +506,7 @@ from .exceptions import (
     ContentPolicyViolationError,
     ContextWindowExceededError,
     MalformedRequestFieldError,
+    MissingMessageRoleError,
     ModelNotMappedError,
     NotFoundError,
     OpenAIError,
@@ -9248,9 +9249,7 @@ def validate_and_fix_openai_messages(
             ),
         )
         cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
-        if not cleaned_message.get("role") and (
-            cleaned_message.get("tool_calls") or cleaned_message.get("function_call")
-        ):
+        if not cleaned_message.get("role") and ("tool_calls" in cleaned_message or "function_call" in cleaned_message):
             cleaned_message["role"] = "assistant"
         new_messages.append(cleaned_message)
     return validate_chat_completion_user_messages(messages=new_messages, model=model, request_kwargs=request_kwargs)
@@ -9322,12 +9321,12 @@ def validate_chat_completion_user_messages(
         List[dict]: The validated messages
 
     Raises:
-        MalformedRequestFieldError: If a message has no role
+        MissingMessageRoleError: If a message has no role
         ValueError: If any message is invalid
     """
     for idx, m in enumerate(messages):
         if "role" not in m or not m["role"]:
-            raise MalformedRequestFieldError(
+            raise MissingMessageRoleError(
                 message=f"Missing required parameter: 'messages[{idx}].role'.",
                 model=model,
                 llm_provider=_deployment_provider({**(request_kwargs or {}), "model": model}),

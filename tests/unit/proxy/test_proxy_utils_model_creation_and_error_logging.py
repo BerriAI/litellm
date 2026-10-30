@@ -1813,6 +1813,13 @@ class TestPostCallFailureHookLLMExceptionAlerting:
         assert (await self._alerted(exc_info.value)).called is False
 
     @pytest.mark.asyncio
+    async def test_malformed_tools_field_still_alerts(self):
+        exc = litellm.MalformedRequestFieldError(
+            message="tools: Input should be a valid list", model="openai/gpt-5.6", llm_provider="openai"
+        )
+        assert (await self._alerted(exc)).called is True
+
+    @pytest.mark.asyncio
     async def test_genuine_llm_api_error_still_alerts(self):
         assert (await self._alerted(Exception("upstream 503"))).called is True
 
