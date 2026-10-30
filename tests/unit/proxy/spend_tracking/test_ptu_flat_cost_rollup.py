@@ -11,7 +11,6 @@ import pytest
 import litellm.proxy.spend_tracking.ptu_flat_cost_rollup as ptu_rollup
 from litellm.constants import PTU_ROLLUP_MAX_BACKFILL_DAYS, PTU_SENTINEL_API_KEY
 from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
-from litellm.types.router import ModelInfo
 from litellm.proxy.spend_tracking.ptu_flat_cost_rollup import (
     PTUModel,
     _active_hours_on_day,
@@ -21,6 +20,7 @@ from litellm.proxy.spend_tracking.ptu_flat_cost_rollup import (
     run_ptu_flat_cost_rollup,
     run_scheduled_ptu_rollup,
 )
+from litellm.types.router import ModelInfo
 
 DAY = date(2026, 7, 30)
 TODAY = date(2026, 7, 31)
@@ -652,8 +652,7 @@ def _pod_lock(acquired):
     lock = MagicMock()
     lock.pod_id = "this-pod"
     lock.redis_cache = MagicMock()
-    lock.redis_cache.async_get_cache = AsyncMock(return_value="this-pod")
-    lock.get_redis_lock_key = MagicMock(return_value="lock-key")
+    lock.is_held = AsyncMock(return_value=True)
     lock.acquire_lock = AsyncMock(return_value=acquired)
     lock.release_lock = AsyncMock()
     return lock
@@ -784,9 +783,7 @@ class _FakeSentinelTable:
         """The batch delete of a deployment day's rows. Every clause is honoured and an unexpected
         one fails, so a dropped scope cannot pass silently."""
         assert set(where) == {"date", "api_key", "model"}
-        doomed = [
-            k for k in self.rows if k[1] == where["date"] and k[2] == where["api_key"] and k[3] == where["model"]
-        ]
+        doomed = [k for k in self.rows if k[1] == where["date"] and k[2] == where["api_key"] and k[3] == where["model"]]
         for k in doomed:
             del self.rows[k]
 
@@ -1032,21 +1029,14 @@ async def test_scheduled_rollup_alerts_from_under_the_pod_lock_too():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "lock_read",
-    [
-        pytest.param(AsyncMock(side_effect=RuntimeError("redis down")), id="redis-unreachable"),
-        pytest.param(AsyncMock(return_value=None), id="lock-key-missing"),
-    ],
-)
-async def test_scheduled_rollup_runs_the_day_when_the_lock_is_unavailable_but_unheld(lock_read):
+async def test_scheduled_rollup_runs_the_day_when_the_lock_is_unavailable_but_unheld():
     """acquire_lock reports contention and a Redis outage identically. Treating both as
     "someone else has it" would skip the day on every pod at once, losing every team's
     charge for that date; the reconcile is safe to run twice, so the day wins."""
     rows = [_model_row(model_info={"ptu_count": 5, "cost_per_ptu_per_hour": 2.0, "team_id": "t"})]
     prisma, table = _prisma_with_models(rows)
     lock = _pod_lock(acquired=False)
-    lock.redis_cache.async_get_cache = lock_read
+    lock.is_held = AsyncMock(return_value=False)
 
     result = await run_scheduled_ptu_rollup(prisma, pod_lock_manager=lock, target_date=DAY)
 
