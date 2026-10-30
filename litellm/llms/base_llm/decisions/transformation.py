@@ -12,6 +12,7 @@ from pydantic_core import ErrorDetails
 from typing_extensions import TypeIs, assert_never  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 import litellm
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -255,13 +256,17 @@ def _is_json_array(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: only
     return isinstance(value, Sequence)
 
 
-def _holds_no_text(value: object) -> bool:
+def _holds_no_text(value: object, depth: int = 0) -> bool:
+    if value is None:
+        return True
     if isinstance(value, str):
         return not value.strip()
+    if depth >= DEFAULT_MAX_RECURSE_DEPTH:
+        return False
     if _is_json_object(value):
-        return all(map(_holds_no_text, value.values()))
+        return all(_holds_no_text(item, depth + 1) for name, item in value.items() if name != "type")
     if _is_json_array(value):
-        return all(map(_holds_no_text, value))
+        return all(_holds_no_text(item, depth + 1) for item in value)
     return False
 
 

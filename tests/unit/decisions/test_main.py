@@ -4807,8 +4807,19 @@ _NOT_AN_IMAGE_REQUEST: Final[Mapping[str, object]] = MappingProxyType(
 @pytest.mark.usefixtures("cloudflare_account")
 @pytest.mark.parametrize(
     "state",
-    ("", [], {}, "  ", [""], {"a": ""}, {"a": [" "]}),
-    ids=("string", "list", "object", "blank", "list-of-empty", "object-of-empty", "nested-blank"),
+    ("", [], {}, "  ", [""], {"a": ""}, {"a": [" "]}, [None], {"a": None}, [{"type": "input_text", "text": ""}]),
+    ids=(
+        "string",
+        "list",
+        "object",
+        "blank",
+        "list-of-empty",
+        "object-of-empty",
+        "nested-blank",
+        "list-of-null",
+        "object-of-null",
+        "empty-text-part",
+    ),
 )
 async def test_an_empty_state_with_only_a_dropped_image_is_refused_when_the_model_always_took_images(
     state: object, respx_mock: respx.MockRouter
@@ -4830,6 +4841,27 @@ async def test_a_state_with_something_in_it_still_reaches_the_model_after_its_on
     route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
 
     await litellm.asystemone(model="cloudflare/clef", state=state, **_NOT_AN_IMAGE_REQUEST)
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["state"] == state
+    assert sent.get("images", []) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_account")
+@pytest.mark.parametrize("state", ("", [], {}, "  ", [""], {"a": ""}, [None]), ids=str)
+async def test_a_blank_state_still_reaches_the_model_when_its_only_image_drops_for_its_declared_type(
+    state: object, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+
+    await litellm.asystemone(
+        model="cloudflare/clef",
+        state=state,
+        questions=_SYSTEMONE_PREDICATE,
+        images=[{"content_type": "image/gif", "base64": "R0lGODlh"}],
+        drop_params=True,
+    )
 
     sent: Final = json.loads(route.calls.last.request.content)
     assert sent["state"] == state
@@ -4869,6 +4901,33 @@ async def test_decisions_input_with_no_text_and_only_a_dropped_image_is_refused(
         )
 
     assert route.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_account")
+async def test_decisions_input_with_no_text_still_reaches_the_model_when_its_image_drops_for_its_declared_type(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+
+    await litellm.adecisions(
+        model="cloudflare/clef",
+        input=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": ""},
+                    {"type": "input_image", "image_url": "data:image/gif;base64,R0lGODlh"},
+                ],
+            }
+        ],
+        questions=_DECISIONS_PREDICATE,
+        drop_params=True,
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["state"] == ""
+    assert sent.get("images", []) == []
 
 
 @pytest.mark.asyncio

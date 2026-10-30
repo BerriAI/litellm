@@ -708,9 +708,10 @@ def _checked_image_types(call: DecisionsCall) -> DecisionsCall:
     error: Final = _media_type_error(media_types, input_images(call.ir_request.input))
     if media_types is None or error is None:
         return call
-    return _dropped_or_refused(
-        call, with_images_where(call.ir_request.input, partial(_has_media_type_in, media_types)), error
-    )
+    kept_input: Final = with_images_where(call.ir_request.input, partial(_has_media_type_in, media_types))
+    if _drops_params(call.litellm_params) and not _leaves_no_input(kept_input):
+        return replace(call, ir_request=replace(call.ir_request, input=kept_input))
+    raise _refusal(call, error)
 
 
 def _refused_over_count(call: DecisionsCall) -> DecisionsCall:
