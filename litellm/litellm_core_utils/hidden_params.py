@@ -1,9 +1,9 @@
 from collections.abc import Iterator, Mapping, MutableMapping
-from functools import lru_cache
+from functools import cache, lru_cache
 from types import MappingProxyType
 from typing import Final, Protocol, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, create_model
 
 from litellm.types.llms.base import HiddenParams
 
@@ -61,18 +61,25 @@ def stored_attribute(obj: object, name: str) -> object:
     return extras.get(name)
 
 
+@cache
+def _assigned_extras_join_fields_set() -> bool:
+    probe: Final = create_model("_ExtraAssignmentProbe", __config__=ConfigDict(extra="allow"))()
+    setattr(probe, "assigned", None)
+    return "assigned" in probe.model_fields_set
+
+
 @lru_cache(maxsize=1024)
 def _writes_plain_extra(model_class: type[BaseModel], name: str) -> bool:
     config: Final = model_class.model_config
     return (
         model_class.__setattr__ is BaseModel.__setattr__
-        and config.get("extra") == "allow"
         and not config.get("frozen")
         and not config.get("validate_assignment")
         and not name.startswith("_")
         and name not in model_class.__pydantic_fields__
         and name not in model_class.__class_vars__
-        and getattr(model_class, name, None) is None
+        and not hasattr(model_class, name)
+        and _assigned_extras_join_fields_set()
     )
 
 

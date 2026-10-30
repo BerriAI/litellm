@@ -2192,7 +2192,9 @@ class ModelResponseBase(OpenAIObject):
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
         private: Final = self.__pydantic_private__
-        return self._hidden_params if private is None else private["_hidden_params"]
+        if private is None or "_hidden_params" not in private:
+            return self._hidden_params
+        return private["_hidden_params"]
 
     @hidden_params.setter
     def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation

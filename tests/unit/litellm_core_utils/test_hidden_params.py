@@ -315,7 +315,7 @@ def test_served_from_cache_is_true_only_for_a_response_the_cache_stamped(
     assert served_from_cache(object()) is False
 
 
-class _ExtraModel(BaseModel):
+class _ExtraModel(BaseModel):  # frozen-ok: the assignment tests need a model that accepts attribute writes
     model_config = ConfigDict(extra="allow")
 
     declared: str | None = None
@@ -335,22 +335,30 @@ class _FrozenExtraModel(BaseModel):
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
-class _ValidatedExtraModel(BaseModel):
+class _ValidatedExtraModel(BaseModel):  # frozen-ok: the assignment tests need a model that accepts attribute writes
     model_config = ConfigDict(extra="allow", validate_assignment=True)
 
     __pydantic_extra__: dict[str, int]
 
 
-class _IgnoredExtraModel(BaseModel):
+class _IgnoredExtraModel(BaseModel):  # frozen-ok: the assignment tests need a model that accepts attribute writes
     model_config = ConfigDict(extra="ignore")
 
 
-class _MirroringModel(BaseModel):
+class _MirroringModel(BaseModel):  # frozen-ok: the assignment tests need a model that accepts attribute writes
     model_config = ConfigDict(extra="allow")
 
     def __setattr__(self, name: str, value: object) -> None:
         super().__setattr__(name, value)
         super().__setattr__(f"{name}_copy", value)
+
+
+class _NoneClassAttribute:
+    inherited = None
+
+
+class _InheritingExtraModel(_NoneClassAttribute, BaseModel):  # frozen-ok: assignment tests need attribute writes
+    model_config = ConfigDict(extra="allow")
 
 
 def _assignment_outcome(model: BaseModel, assign: Callable[[], None], name: str) -> tuple[object, ...]:
@@ -376,6 +384,7 @@ def _assignment_outcome(model: BaseModel, assign: Callable[[], None], name: str)
         pytest.param(_ValidatedExtraModel, "fresh", "5", id="validate-assignment"),
         pytest.param(_IgnoredExtraModel, "fresh", 1, id="extra-ignore"),
         pytest.param(_MirroringModel, "fresh", 1, id="setattr-override"),
+        pytest.param(_InheritingExtraModel, "inherited", 1, id="class-attribute-set-to-none"),
     ],
 )
 def test_set_extra_attribute_matches_setattr(build: Callable[[], BaseModel], name: str, value: object) -> None:
@@ -386,6 +395,16 @@ def test_set_extra_attribute_matches_setattr(build: Callable[[], BaseModel], nam
     actual: Final = _assignment_outcome(through_helper, lambda: set_extra_attribute(through_helper, name, value), name)
 
     assert actual == expected
+
+
+@pytest.mark.parametrize("response_type", [ModelResponse, ModelResponseStream])
+def test_hidden_params_raises_attribute_error_once_deleted(
+    response_type: type[ModelResponse | ModelResponseStream],
+) -> None:
+    response: Final = response_type()
+    del response._hidden_params
+
+    assert getattr(response, "hidden_params", "fallback") == "fallback"
 
 
 def _round_trip(response: ModelResponse | ModelResponseStream) -> ModelResponse | ModelResponseStream:
