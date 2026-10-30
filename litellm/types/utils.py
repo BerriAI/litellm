@@ -7,6 +7,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     Final,
     Literal,
@@ -38,6 +39,7 @@ from openai.types.moderation_create_response import (
 )
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     FieldSerializationInfo,
@@ -45,6 +47,7 @@ from pydantic import (
     JsonValue,
     PrivateAttr,
     SkipValidation,
+    TypeAdapter,
     ValidationError,
     field_serializer,
     field_validator,
@@ -1199,7 +1202,7 @@ class ChatCompletionTokenLogprob(OpenAIObject):
     unlikely.
     """
 
-    top_logprobs: list[TopLogprob]
+    top_logprobs: list[TopLogprob] = Field(default_factory=list)
     """List of the most likely tokens and their log probability, at this token
     position.
 
@@ -1236,8 +1239,12 @@ class ChatCompletionTokenLogprob(OpenAIObject):
 
 
 class ChoiceLogprobs(OpenAIObject):
+    model_config = ConfigDict(defer_build=False)
+
     content: list[ChatCompletionTokenLogprob] | None = None
     """A list of message content tokens with log probability information."""
+
+    refusal: Sequence[ChatCompletionTokenLogprob] | None = None
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -1250,6 +1257,21 @@ class ChoiceLogprobs(OpenAIObject):
     def __getitem__(self, key):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
+
+
+def _sdk_logprobs_as_dict(logprobs: object) -> object:
+    if isinstance(logprobs, ChoiceLogprobs) or not isinstance(logprobs, BaseModel):
+        return logprobs
+    return logprobs.model_dump(exclude_unset=True)
+
+
+CHOICE_LOGPROBS_OR_JSON: Final[TypeAdapter[ChoiceLogprobs | JsonValue]] = TypeAdapter(
+    Annotated[
+        ChoiceLogprobs | JsonValue,
+        Field(union_mode="left_to_right"),
+        BeforeValidator(_sdk_logprobs_as_dict),
+    ]
+)
 
 
 class FunctionCall(OpenAIObject):
@@ -1765,7 +1787,7 @@ class Choices(SafeAttributeModel, OpenAIObject):
                 params["message"] = Message(**dump)
         if logprobs is not None:
             if isinstance(logprobs, dict):
-                params["logprobs"] = ChoiceLogprobs(**logprobs)
+                params["logprobs"] = CHOICE_LOGPROBS_OR_JSON.validate_python(logprobs)
             else:
                 params["logprobs"] = logprobs
         else:
@@ -2131,8 +2153,8 @@ class StreamingChoices(OpenAIObject):
         if enhancements is not None:
             self.enhancements = enhancements
 
-        if logprobs is not None and isinstance(logprobs, dict):
-            self.logprobs = ChoiceLogprobs(**logprobs)
+        if isinstance(logprobs, (dict, BaseModel)):
+            self.logprobs = CHOICE_LOGPROBS_OR_JSON.validate_python(logprobs)
         else:
             self.logprobs = logprobs
 
@@ -4155,6 +4177,8 @@ DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
         "supports_assistant_prefill",
         "supports_bedrock_native_structured_output",
         "supports_pdf_input",
+        "reasoning_modes",
+        "reasoning_contexts",
     }
 )
 
