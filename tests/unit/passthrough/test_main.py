@@ -142,6 +142,28 @@ async def test_allm_passthrough_route_keyless_hosted_vllm_without_api_base_sends
     assert route.calls[0].request.headers["authorization"] == expected_authorization
 
 
+@pytest.mark.asyncio
+async def test_allm_passthrough_route_empty_vllm_api_key_sends_no_authorization_header(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VLLM_API_BASE", _API_BASE)
+    monkeypatch.setenv("VLLM_API_KEY", "")
+    monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
+    monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
+    route: Final = respx_mock.post(f"{_API_BASE}/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    response: Final = await allm_passthrough_route(
+        method="POST",
+        endpoint="v1/chat/completions",
+        model="hosted_vllm/my-deployment",
+        json={"model": "anything", "messages": [{"role": "user", "content": "Hello"}]},
+        client=AsyncHTTPHandler(),
+    )
+    assert response.status_code == 200
+    assert "authorization" not in route.calls[0].request.headers
+
+
 @pytest.mark.parametrize(
     ("api_base", "api_key", "expected_authorization"),
     [

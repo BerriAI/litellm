@@ -49,7 +49,7 @@ class VLLMModelInfo(BaseLLMModelInfo):
         api_base: str | None = None,
     ) -> dict:
         upstream_key: Final = self.upstream_api_key(api_key, api_base)
-        return headers if upstream_key is None else {**headers, **self.upstream_auth_headers(upstream_key)}
+        return {**headers, **self.upstream_auth_headers(upstream_key)} if upstream_key else headers
 
     def upstream_api_key(self, api_key: str | None, api_base: str | None) -> str | None:
         return api_key
