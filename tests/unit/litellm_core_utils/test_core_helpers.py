@@ -69,9 +69,7 @@ def test_preserve_upstream_non_openai_attributes_keeps_scalar_and_structured_val
         scalar_attribute="scalar",
         structured_attribute={"items": ["value"]},
     )
-    model_response: Final = ModelResponseStream(
-        choices=[StreamingChoices(index=0, delta=Delta(content="hello"))]
-    )
+    model_response: Final = ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="hello"))])
 
     preserve_upstream_non_openai_attributes(model_response, original_chunk)
 
@@ -262,9 +260,7 @@ class TestMapFinishReasonAnthropic:
             ("content_filtered", "content_filter"),
         ],
     )
-    def test_anthropic_finish_reasons(
-        self, provider_reason: str, expected: str
-    ) -> None:
+    def test_anthropic_finish_reasons(self, provider_reason: str, expected: str) -> None:
         assert map_finish_reason(provider_reason) == expected
 
     def test_refusal(self):
@@ -336,9 +332,7 @@ class TestMapFinishReasonZhipu:
 
 
 class TestMapFinishReasonOpenAIPassthrough:
-    @pytest.mark.parametrize(
-        "reason", ["stop", "length", "tool_calls", "function_call", "content_filter"]
-    )
+    @pytest.mark.parametrize("reason", ["stop", "length", "tool_calls", "function_call", "content_filter"])
     def test_openai_values_pass_through(self, reason):
         assert map_finish_reason(reason) == reason
 
@@ -349,9 +343,7 @@ class TestMapFinishReasonGenericError:
         assert map_finish_reason("error") == "stop"
 
     def test_lowercase_error_does_not_warn(self, mocker):
-        warn = mocker.patch(
-            "litellm.litellm_core_utils.core_helpers.verbose_logger.warning"
-        )
+        warn = mocker.patch("litellm.litellm_core_utils.core_helpers.verbose_logger.warning")
         assert map_finish_reason("error") == "stop"
         warn.assert_not_called()
 
@@ -369,8 +361,7 @@ class TestFinishReasonMapOutputsAreValid:
         """Every value in _FINISH_REASON_MAP must be a valid OpenAI finish reason."""
         for provider_reason, openai_reason in _FINISH_REASON_MAP.items():
             assert openai_reason in VALID_OPENAI_FINISH_REASONS, (
-                f"Mapped value '{openai_reason}' (from '{provider_reason}') "
-                f"is not a valid OpenAI finish reason"
+                f"Mapped value '{openai_reason}' (from '{provider_reason}') is not a valid OpenAI finish reason"
             )
 
 
@@ -380,28 +371,18 @@ class TestRedactNestedMatchAndRegexKeys:
             "assessments": [
                 {
                     "sensitiveInformationPolicy": {
-                        "piiEntities": [
-                            {"type": "NAME", "match": "secret-name", "action": "BLOCKED"}
-                        ]
+                        "piiEntities": [{"type": "NAME", "match": "secret-name", "action": "BLOCKED"}]
                     },
-                    "wordPolicy": {
-                        "customWords": [{"match": "badword", "action": "BLOCKED"}]
-                    },
+                    "wordPolicy": {"customWords": [{"match": "badword", "action": "BLOCKED"}]},
                 }
             ],
             "regex": "should-redact-key-named-regex",
         }
         out = redact_nested_match_and_regex_keys(payload)
-        assert out["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
-            "match"
-        ] == "[REDACTED]"
-        assert out["assessments"][0]["wordPolicy"]["customWords"][0]["match"] == (
-            "[REDACTED]"
-        )
+        assert out["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0]["match"] == "[REDACTED]"
+        assert out["assessments"][0]["wordPolicy"]["customWords"][0]["match"] == ("[REDACTED]")
         assert out["regex"] == "[REDACTED]"
-        assert payload["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][
-            0
-        ]["match"] == "secret-name"
+        assert payload["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0]["match"] == "secret-name"
 
     def test_passes_through_none_and_str(self):
         assert redact_nested_match_and_regex_keys(None) is None
@@ -564,13 +545,17 @@ class TestIsExpectedClientError:
         assert is_expected_client_error(over_budget) is True
 
         litellm_limit = RateLimitError(
-            message="key over rpm", llm_provider="anthropic", model="claude-haiku-4-5",
+            message="key over rpm",
+            llm_provider="anthropic",
+            model="claude-haiku-4-5",
             category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
         )
         assert is_expected_client_error(litellm_limit) is True
 
         vendor_limit = RateLimitError(
-            message="rate limited upstream", llm_provider="anthropic", model="claude-haiku-4-5",
+            message="rate limited upstream",
+            llm_provider="anthropic",
+            model="claude-haiku-4-5",
             category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
         )
         assert is_expected_client_error(vendor_limit) is False
@@ -808,7 +793,7 @@ class TestReceiveStampSurvivesASecondMetadataBucket:
 def test_billed_usage_cost_bills_any_chat_upstream_without_its_own_reader() -> None:
     from types import SimpleNamespace
 
-    from litellm.litellm_core_utils.core_helpers import billed_usage_cost, mark_usage_cost_as_litellm_bill
+    from litellm.litellm_core_utils.core_helpers import billed_usage_cost
     from litellm.types.utils import ModelResponse, Usage
 
     usage = Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120, cost=0.037)
@@ -817,8 +802,20 @@ def test_billed_usage_cost_bills_any_chat_upstream_without_its_own_reader() -> N
     assert billed_usage_cost(chat, "openrouter") == 0.037
     assert billed_usage_cost(chat, "xai") is None
     assert billed_usage_cost(SimpleNamespace(usage=usage), "openai") == 0.037
-    priced_by_litellm = ModelResponse(usage=usage)
-    priced_by_litellm._hidden_params["response_cost"] = 0.037
-    assert billed_usage_cost(priced_by_litellm, "openai") == 0.037
-    mark_usage_cost_as_litellm_bill(priced_by_litellm, 0.037)
-    assert billed_usage_cost(priced_by_litellm, "openai") is None
+
+
+def test_billed_usage_cost_keeps_the_upstream_charge_after_litellm_wrote_its_bill_into_usage_cost() -> None:
+    from litellm.litellm_core_utils.core_helpers import billed_usage_cost, stamp_litellm_bill_on_usage
+    from litellm.types.utils import ModelResponse, Usage
+
+    reported = ModelResponse(usage=Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120, cost=0.037))
+    stamp_litellm_bill_on_usage(reported, reported.usage, 0.0407)
+    stamp_litellm_bill_on_usage(reported, reported.usage, 0.0407)
+    assert reported.usage.cost == 0.0407
+    assert reported._hidden_params["response_cost"] == 0.0407
+    assert billed_usage_cost(reported, "openai") == 0.037
+
+    unreported = ModelResponse(usage=Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120))
+    stamp_litellm_bill_on_usage(unreported, unreported.usage, 0.0015)
+    assert unreported.usage.cost == 0.0015
+    assert billed_usage_cost(unreported, "openai") is None

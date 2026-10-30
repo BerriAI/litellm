@@ -5347,6 +5347,46 @@ def test_stream_chunk_builder_keeps_provider_reported_usage_cost():
     assert response._hidden_params["response_cost"] == pytest.approx(0.5)
 
 
+def test_completion_cost_on_a_stamped_stream_still_bills_the_reported_charge():
+    usage_chunk: Final = _stream_builder_text_chunk("gpt-4o", "")
+    usage_chunk.usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15, cost=0.5)
+    chunks: Final = [
+        _stream_builder_text_chunk("gpt-4o", "Hello ", finish_reason="stop"),
+        usage_chunk,
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=_stream_builder_logging_obj()
+    )
+
+    assert response is not None
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(0.5)
+
+
+def test_stream_chunk_builder_stamps_a_zero_operator_price_over_a_reported_cost():
+    logging_obj: Final = _stream_builder_logging_obj()
+    logging_obj.litellm_params = {
+        **logging_obj.litellm_params,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+    }
+    logging_obj.custom_cost_per_token = {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+    usage_chunk: Final = _stream_builder_text_chunk("gpt-4o", "")
+    usage_chunk.usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15, cost=0.5)
+    chunks: Final = [
+        _stream_builder_text_chunk("gpt-4o", "Hello ", finish_reason="stop"),
+        usage_chunk,
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=logging_obj
+    )
+
+    assert response is not None
+    assert getattr(response.usage, "cost", None) == 0.0
+    assert response._hidden_params["response_cost"] == 0.0
+
+
 def test_stream_chunk_builder_prices_alias_from_openai_sdk_usage_chunk():
     from openai.types.completion_usage import CompletionUsage
 

@@ -15,8 +15,8 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import (
     PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS,
     chunk_usage,
-    mark_usage_cost_as_litellm_bill,
     provider_reported_usage_cost,
+    stamp_litellm_bill_on_usage,
 )
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import BEDROCK_TRACE_FIELDS, object_items, object_mapping
@@ -1425,11 +1425,10 @@ def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_o
     ):
         return
     computed_cost: Final = logging_obj.response_cost_calculator(result=response)
-    if not isinstance(computed_cost, (int, float)) or computed_cost <= 0:
+    if isinstance(computed_cost, bool) or not isinstance(computed_cost, (int, float)) or computed_cost < 0:
         return
-    setattr(usage, "cost", computed_cost)
-    _set_hidden_response_cost(response, float(computed_cost))
-    mark_usage_cost_as_litellm_bill(response, float(computed_cost))
+    if computed_cost > 0 or isinstance(getattr(usage, "cost", None), (int, float)):
+        stamp_litellm_bill_on_usage(response, usage, float(computed_cost))
 
 
 def _field_of(value: object, name: str) -> object:
