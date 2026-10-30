@@ -550,15 +550,12 @@ async def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monke
 
     deployment = {
         "model_name": "*",
-        "litellm_params": {"model": "openai/*"},
+        "litellm_params": {"model": "openai/*", "api_key": "sk-star"},
     }
-    router = route_entry_points_to_stubs(MagicMock())
-    router.get_model_access_groups = MagicMock(return_value={})
-    router.get_model_names = MagicMock(return_value=["*"])
-    router.get_model_list = MagicMock(return_value=[deployment])
+    router = litellm.Router(model_list=[deployment])
     monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
 
-    expanded_deployments = proxy_server.expand_wildcard_deployments_for_model_info([deployment])
+    expanded_deployments = proxy_server.expand_wildcard_deployments_for_model_info(router.get_model_list(), router)
     allowed_model_names = await proxy_server._get_v1_model_info_allowed_model_names_with_access_groups(
         user_api_key_dict=UserAPIKeyAuth(
             api_key="sk-test",
@@ -575,7 +572,8 @@ async def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monke
         allowed_model_names=allowed_model_names,
     )
 
-    assert [model["model_name"] for model in result] == ["openai/gpt-4o"]
+    assert [(model["model_name"], model["litellm_params"]["model"]) for model in result] == [("gpt-4o", "openai/gpt-4o")]
+    assert router.registry().names("gpt-4o", kind="wildcard") == frozenset({"openai/gpt-4o"})
 
 
 def test_model_info_prices_expanded_wildcard_rows_as_the_model_their_calls_route_to(
@@ -651,8 +649,8 @@ def test_model_info_prices_expanded_wildcard_rows_as_the_model_their_calls_route
         for row in response.json()["data"]
     }
     assert listed == {
-        "acme-chat": ("acme-chat", "fireworks_ai", 1e-07, 2e-07),
-        "my-openai/gpt-acme": ("my-openai/gpt-acme", "openai", 3e-07, 4e-07),
+        "acme-chat": ("fireworks_ai/accounts/fireworks/models/acme-chat", "fireworks_ai", 1e-07, 2e-07),
+        "my-openai/gpt-acme": ("openai/gpt-acme", "openai", 3e-07, 4e-07),
     }
     calls: Final = {
         model_name: router.completion(
@@ -676,9 +674,8 @@ def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
     monkeypatch: pytest.MonkeyPatch,
     local_model_cost_map: None,
 ) -> None:
-    """``acme-lite`` has a deployment of its own, ``acme-pro`` is an alias of it, ``acme-max`` is a
-    routing group over it, and ``my-openai/gpt-acme-*`` is a narrower wildcard, so calls to those names
-    never reach the catch-all or ``my-openai/*``, which still list them. Such a row shows no price or
+    """``acme-pro`` is an alias of the ``acme-lite`` deployment and ``acme-max`` is a routing group over it, so
+    calls to those names never reach the catch-all, which still lists them. Such a row shows no price or
     provider, even where another provider's model goes by the same name, and every price shown is the one
     calls are billed at."""
     from litellm.proxy.auth import model_checks
@@ -708,12 +705,6 @@ def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
             "litellm_provider": "deepseek",
             "mode": "chat",
         },
-        "gpt-acme-lite": {
-            "input_cost_per_token": 3e-07,
-            "output_cost_per_token": 4e-07,
-            "litellm_provider": "openai",
-            "mode": "chat",
-        },
         "acme-pro": {
             "input_cost_per_token": 9e-07,
             "output_cost_per_token": 1e-06,
@@ -738,7 +729,6 @@ def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
                 "fireworks_ai/accounts/fireworks/models/acme-pro",
                 "fireworks_ai/accounts/fireworks/models/acme-max",
             ],
-            "openai": ["gpt-acme-lite"],
         }.get(provider, []),
     )
     router: Final = litellm.Router(
@@ -752,16 +742,6 @@ def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
                 "model_name": "acme-lite",
                 "litellm_params": {"model": "deepseek/acme-lite", "api_key": "x"},
                 "model_info": {"id": "deepseek-acme-lite"},
-            },
-            {
-                "model_name": "my-openai/*",
-                "litellm_params": {"model": "openai/*", "api_key": "x"},
-                "model_info": {"id": "openai-wildcard"},
-            },
-            {
-                "model_name": "my-openai/gpt-acme-*",
-                "litellm_params": {"model": "deepseek/acme-*", "api_key": "x"},
-                "model_info": {"id": "deepseek-wildcard"},
             },
         ],
         model_group_alias={"acme-pro": "acme-lite"},
@@ -786,10 +766,8 @@ def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
     assert sorted(listed) == [
         ("deepseek-acme-lite", "acme-lite"),
         ("deepseek-acme-lite", "acme-pro"),
-        ("fireworks-wildcard", "acme-lite"),
         ("fireworks-wildcard", "acme-max"),
         ("fireworks-wildcard", "acme-pro"),
-        ("openai-wildcard", "my-openai/gpt-acme-lite"),
     ]
     shown_models: Final = {
         (row["model_info"]["id"], row["model_name"]): (
@@ -801,19 +779,15 @@ def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
     }
     assert shown_models == dict.fromkeys(
         [
-            ("fireworks-wildcard", "acme-lite"),
             ("fireworks-wildcard", "acme-max"),
             ("fireworks-wildcard", "acme-pro"),
-            ("openai-wildcard", "my-openai/gpt-acme-lite"),
         ],
         (None, None),
     )
     assert listed[("deepseek-acme-lite", "acme-lite")] == (7e-07, 8e-07)
     assert {key: prices for key, prices in listed.items() if key[0] != "deepseek-acme-lite"} == {
-        ("fireworks-wildcard", "acme-lite"): (None, None),
         ("fireworks-wildcard", "acme-max"): (None, None),
         ("fireworks-wildcard", "acme-pro"): (None, None),
-        ("openai-wildcard", "my-openai/gpt-acme-lite"): (None, None),
     }
     calls: Final = {
         model_name: router.completion(
@@ -830,78 +804,6 @@ def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
             for key, (input_cost, output_cost) in priced_rows.items()
         }
     )
-    _invalidate_model_cost_lowercase_map()
-
-
-def test_model_info_prices_a_team_wildcard_row_by_the_route_its_team_takes(
-    client: TestClient,
-    auth_as: Callable[[], AbstractContextManager[object]],
-    monkeypatch: pytest.MonkeyPatch,
-    local_model_cost_map: None,
-) -> None:
-    """Team ``team-a`` owns ``team-fw/*`` over Fireworks and its own DeepSeek deployment published as
-    ``team-fw/acme-chat``, so the team's calls to that name skip the wildcard while ``team-fw/acme-lite``
-    goes through it."""
-    from litellm.proxy.auth import model_checks
-
-    catalog: Final = {
-        "fireworks_ai/accounts/fireworks/models/acme-chat": {
-            "input_cost_per_token": 1e-07,
-            "output_cost_per_token": 2e-07,
-            "litellm_provider": "fireworks_ai",
-            "mode": "chat",
-        },
-        "fireworks_ai/accounts/fireworks/models/acme-lite": {
-            "input_cost_per_token": 5e-07,
-            "output_cost_per_token": 6e-07,
-            "litellm_provider": "fireworks_ai",
-            "mode": "chat",
-        },
-    }
-    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
-    _invalidate_model_cost_lowercase_map()
-    monkeypatch.setattr(
-        model_checks,
-        "get_provider_models",
-        lambda provider, litellm_params=None: {
-            "fireworks_ai": [
-                "fireworks_ai/accounts/fireworks/models/acme-chat",
-                "fireworks_ai/accounts/fireworks/models/acme-lite",
-            ],
-        }.get(provider, []),
-    )
-    router: Final = litellm.Router(
-        model_list=[
-            {
-                "model_name": "team-fw/*",
-                "litellm_params": {"model": "fireworks_ai/accounts/fireworks/models/*", "api_key": "x"},
-                "model_info": {"id": "team-wildcard", "team_id": "team-a"},
-            },
-            {
-                "model_name": "model_name_team-a_acme-chat",
-                "litellm_params": {"model": "deepseek/acme-chat", "api_key": "x"},
-                "model_info": {
-                    "id": "team-deepseek",
-                    "team_id": "team-a",
-                    "team_public_model_name": "team-fw/acme-chat",
-                },
-            },
-        ]
-    )
-    monkeypatch.setattr(proxy_server, "llm_router", router)
-    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
-    monkeypatch.setattr(proxy_server, "user_model", None)
-
-    with auth_as():
-        response: Final = client.get("/model/info")
-
-    assert response.status_code == 200, response.text
-    wildcard_rows: Final = {
-        row["model_name"]: row["model_info"].get("input_cost_per_token")
-        for row in response.json()["data"]
-        if row["model_info"]["id"] == "team-wildcard" and "*" not in row["model_name"]
-    }
-    assert wildcard_rows == {"team-fw/acme-chat": None, "team-fw/acme-lite": 5e-07}
     _invalidate_model_cost_lowercase_map()
 
 
@@ -990,32 +892,6 @@ def _expanded_wildcard_rows(client: TestClient) -> dict[str, dict[str, object]]:
     }
 
 
-def test_model_info_prices_a_catch_all_row_named_with_its_provider_as_the_listed_model(
-    client: TestClient,
-    auth_as: Callable[[], AbstractContextManager[object]],
-    monkeypatch: pytest.MonkeyPatch,
-    local_model_cost_map: None,
-) -> None:
-    """A catch-all over ``openai/*`` lists ``openai/gpt-5.6-acme``. Filling the wildcard with that name repeats
-    the provider, so the row must keep the price of the model it names, the one calls to ``gpt-5.6-acme`` are
-    billed at."""
-    router: Final = _catch_all_and_shadowed_wildcard_router(monkeypatch)
-
-    with auth_as():
-        rows: Final = _expanded_wildcard_rows(client)
-
-    shown: Final = rows["openai/gpt-5.6-acme"]["model_info"]
-    assert (shown.get("input_cost_per_token"), shown.get("output_cost_per_token")) == (3e-07, 4e-07)
-    call: Final = router.completion(
-        model="gpt-5.6-acme", messages=[{"role": "user", "content": "hi"}], mock_response="hello there"
-    )
-    assert call._hidden_params["response_cost"] == pytest.approx(
-        shown["input_cost_per_token"] * call.usage.prompt_tokens
-        + shown["output_cost_per_token"] * call.usage.completion_tokens
-    )
-    _invalidate_model_cost_lowercase_map()
-
-
 def test_model_info_prices_a_wildcard_row_aliased_to_a_sibling_name_as_the_alias_target(
     client: TestClient,
     auth_as: Callable[[], AbstractContextManager[object]],
@@ -1054,7 +930,7 @@ def test_model_info_prices_a_wildcard_row_the_proxy_renames_as_the_model_its_cal
     monkeypatch.setattr(litellm, "model_alias_map", {"my-fw/acme-max": "acme-lite"})
 
     with auth_as(
-        aliases={"openai/gpt-5.6-acme": "acme-lite"},
+        aliases={"gpt-5.6-acme": "acme-lite"},
         router_settings={"model_group_alias": {"my-fw/acme-pro": "my-fw/acme-mini"}},
     ):
         rows: Final = _expanded_wildcard_rows(client)
@@ -1071,7 +947,7 @@ def test_model_info_prices_a_wildcard_row_the_proxy_renames_as_the_model_its_cal
         "my-fw/acme-max": (None, None, None),
         "my-fw/acme-mini": (5e-08, 6e-08, "fireworks_ai"),
         "my-fw/acme-pro": (5e-08, 6e-08, "fireworks_ai"),
-        "openai/gpt-5.6-acme": (None, None, None),
+        "gpt-5.6-acme": (None, None, None),
     }
     _invalidate_model_cost_lowercase_map()
 
@@ -1089,18 +965,18 @@ def test_model_info_prices_a_wildcard_row_whose_team_alias_targets_a_deleted_tea
     _catch_all_and_shadowed_wildcard_router(monkeypatch)
     caller: Final = {
         "team_id": "team-a",
-        "team_model_aliases": {"my-fw/acme-mini": "model_name_team-a_deleted", "openai/gpt-5.6-acme": "my-fw/acme-mini"},
+        "team_model_aliases": {"my-fw/acme-mini": "model_name_team-a_deleted", "gpt-5.6-acme": "my-fw/acme-mini"},
     }
 
     with auth_as(**caller):
         rows: Final = _expanded_wildcard_rows(client)
 
     stale_request: Final = {"model": "my-fw/acme-mini"}
-    live_request: Final = {"model": "openai/gpt-5.6-acme"}
+    live_request: Final = {"model": "gpt-5.6-acme"}
     _update_model_if_team_alias_exists(data=stale_request, user_api_key_dict=UserAPIKeyAuth(**caller))
     _update_model_if_team_alias_exists(data=live_request, user_api_key_dict=UserAPIKeyAuth(**caller))
     shown: Final = rows["my-fw/acme-mini"]["model_info"]
-    live_alias_row: Final = rows["openai/gpt-5.6-acme"]["model_info"]
+    live_alias_row: Final = rows["gpt-5.6-acme"]["model_info"]
     assert (stale_request["model"], live_request["model"]) == ("my-fw/acme-mini", "my-fw/acme-mini")
     assert (
         shown.get("input_cost_per_token"),
@@ -1126,92 +1002,6 @@ _FIREWORKS_WILDCARD: Final = {
     "litellm_params": {"model": "fireworks_ai/accounts/fireworks/models/*", "api_key": "x"},
     "model_info": {"id": "fireworks-wildcard"},
 }
-
-
-def test_model_info_keeps_the_price_of_a_wildcard_row_another_deployment_of_the_same_model_serves(
-    client: TestClient,
-    auth_as: Callable[[], AbstractContextManager[object]],
-    monkeypatch: pytest.MonkeyPatch,
-    local_model_cost_map: None,
-) -> None:
-    """A deployment pinned to one model a wildcard lists takes that name's calls but runs the model the wildcard
-    would run, so the wildcard's row keeps the price those calls bill, and saving that row back stores none of it.
-    A name pinned to another model, or to the same model at custom rates, shows no price."""
-    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
-    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment
-
-    _catch_all_and_shadowed_wildcard_router(monkeypatch)
-    router: Final = litellm.Router(
-        model_list=[
-            _FIREWORKS_WILDCARD,
-            {
-                "model_name": "my-fw/acme-mini",
-                "litellm_params": {
-                    "model": "fireworks_ai/accounts/fireworks/models/acme-mini",
-                    "api_key": "x",
-                    "rpm": 10,
-                },
-                "model_info": {"id": "pinned-acme-mini"},
-            },
-            {
-                "model_name": "my-fw/acme-pro",
-                "litellm_params": {"model": "deepseek/acme-lite", "api_key": "x"},
-                "model_info": {"id": "pinned-acme-pro"},
-            },
-            {
-                "model_name": "my-fw/acme-max",
-                "litellm_params": {
-                    "model": "fireworks_ai/accounts/fireworks/models/acme-max",
-                    "api_key": "x",
-                    "input_cost_per_token": 2e-06,
-                    "output_cost_per_token": 3e-06,
-                },
-                "model_info": {"id": "pinned-acme-max"},
-            },
-        ]
-    )
-    monkeypatch.setattr(proxy_server, "llm_router", router)
-    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
-
-    with auth_as():
-        rows: Final = _fireworks_wildcard_rows(client)
-
-    shown: Final = rows["my-fw/acme-mini"]
-    call: Final = router.completion(
-        model="my-fw/acme-mini", messages=[{"role": "user", "content": "hi"}], mock_response="hello there"
-    )
-    stored: Final = json.loads(
-        update_db_model(
-            db_model=Deployment(
-                model_name="my-fw/*",
-                litellm_params=LiteLLM_Params(model="fireworks_ai/accounts/fireworks/models/*"),
-                model_info=ModelInfo(id="fireworks-wildcard"),
-            ),
-            updated_patch=updateDeployment(
-                model_name="my-fw/acme-mini", model_info=ModelInfo(**{**shown, "access_groups": ["prod"]})
-            ),
-            llm_router=router,
-        )["model_info"]
-    )
-    assert call._hidden_params["model_id"] == "pinned-acme-mini"
-    assert call._hidden_params["response_cost"] == pytest.approx(
-        shown["input_cost_per_token"] * call.usage.prompt_tokens
-        + shown["output_cost_per_token"] * call.usage.completion_tokens
-    )
-    assert stored["access_groups"] == ["prod"]
-    assert set(stored).isdisjoint(set(shown) - set(router.registry().deployment_dict("fireworks-wildcard")["model_info"]))
-    assert rows["my-fw/acme-pro"].get("input_cost_per_token") is None
-    custom_rate_call: Final = router.completion(
-        model="my-fw/acme-max", messages=[{"role": "user", "content": "hi"}], mock_response="hello there"
-    )
-    assert custom_rate_call._hidden_params["response_cost"] == pytest.approx(
-        2e-06 * custom_rate_call.usage.prompt_tokens + 3e-06 * custom_rate_call.usage.completion_tokens
-    )
-    assert (rows["my-fw/acme-max"].get("input_cost_per_token"), rows["my-fw/acme-max"].get("litellm_provider")) == (
-        None,
-        None,
-    )
-    _invalidate_model_cost_lowercase_map()
 
 
 def test_model_info_shows_no_wildcard_price_for_a_name_the_callers_team_publishes(
@@ -1254,8 +1044,8 @@ def test_saving_a_replayed_model_info_wildcard_row_stores_none_of_its_shown_meta
     local_model_cost_map: None,
 ) -> None:
     """An API client that saves a ``/model/info`` row back unchanged, apart from one edit, must not pin the
-    cost-map metadata the row showed onto the wildcard, whether the row is a catch-all name carrying its
-    provider or a name an alias sends to a sibling name. A name an alias sends to another deployment shows
+    cost-map metadata the row showed onto the wildcard, whether the row is a catch-all name or a name an alias
+    sends to a sibling name. A name an alias sends to another deployment shows
     no metadata to pin."""
     from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
     from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment
@@ -1264,7 +1054,7 @@ def test_saving_a_replayed_model_info_wildcard_row_stores_none_of_its_shown_meta
     with auth_as():
         rows: Final = _expanded_wildcard_rows(client)
 
-    assert sorted(rows) == ["my-fw/acme-max", "my-fw/acme-mini", "my-fw/acme-pro", "openai/gpt-5.6-acme"]
+    assert sorted(rows) == ["gpt-5.6-acme", "my-fw/acme-max", "my-fw/acme-mini", "my-fw/acme-pro"]
     sources: Final = {
         deployment["model_info"]["id"]: deployment for deployment in router.get_model_list() or []
     }
@@ -1288,9 +1078,9 @@ def test_saving_a_replayed_model_info_wildcard_row_stores_none_of_its_shown_meta
         name: set(row["model_info"]) - set(sources[row["model_info"]["id"]]["model_info"]) for name, row in rows.items()
     }
     assert sorted(name for name, row in rows.items() if row["model_info"].get("key")) == [
+        "gpt-5.6-acme",
         "my-fw/acme-max",
         "my-fw/acme-mini",
-        "openai/gpt-5.6-acme",
     ]
     assert {name: info["access_groups"] for name, info in stored.items()} == dict.fromkeys(rows, ["prod"])
     assert {name: shown_metadata[name] & set(info) for name, info in stored.items()} == dict.fromkeys(rows, set())

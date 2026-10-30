@@ -24,10 +24,16 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import chunk_usage, provider_reported_usage_cost
+from litellm.litellm_core_utils.core_helpers import (
+    UPSTREAM_USAGE_COST,
+    chunk_usage,
+    provider_reported_usage_cost,
+    stamp_litellm_bill_on_usage,
+)
 from litellm.litellm_core_utils.hidden_params import (
     HIDDEN_PARAMS_ATTR,
     get_hidden_params,
+    set_extra_attribute,
     set_hidden_param,
     stored_attribute,
 )
@@ -97,12 +103,17 @@ def _stamp_usage_cost(
     usage_chunk: ModelResponse | TextCompletionResponse | ModelResponseStream,
     complete_response: ModelResponse | TextCompletionResponse | ModelResponseStream,
 ) -> None:
-    bill: Final = (get_hidden_params(complete_response) or {}).get("response_cost")
+    complete_hidden: Final = get_hidden_params(complete_response) or {}
+    bill: Final = complete_hidden.get("response_cost")
     usage: Final[object] = getattr(usage_chunk, "usage", None)
     if usage is None or isinstance(bill, bool) or not isinstance(bill, (int, float)):
         return
-    if bill > 0 or isinstance(getattr(usage, "cost", None), (int, float)):
-        setattr(usage, "cost", float(bill))  # noqa: B010  # cost is an optional extra on the usage model
+    if bill <= 0 and not isinstance(getattr(usage, "cost", None), (int, float)):
+        return
+    chunk_hidden: Final = get_hidden_params(usage_chunk)
+    if chunk_hidden is not None and UPSTREAM_USAGE_COST in complete_hidden:
+        chunk_hidden[UPSTREAM_USAGE_COST] = complete_hidden[UPSTREAM_USAGE_COST]
+    stamp_litellm_bill_on_usage(usage_chunk, usage, float(bill))
 
 
 def _stamp_served_service_tier(response: ModelResponseStream, complete_streaming_response: ModelResponse) -> None:
@@ -1035,7 +1046,7 @@ class CustomStreamWrapper:
             _initial_delta: Final = model_response.choices[0].delta.model_dump()
 
             _initial_delta.pop("role", None)
-            model_response.choices[0].delta = Delta(**_initial_delta)
+            set_extra_attribute(model_response.choices[0], "delta", Delta(**_initial_delta))
         return model_response
 
     def _prebuilt_plain_delta(self, chunk: object) -> Delta | None:
@@ -1061,13 +1072,13 @@ class CustomStreamWrapper:
     def _set_role_on_fresh_delta(self, model_response: ModelResponseStream) -> None:
         delta: Final = model_response.choices[0].delta
         if self.sent_first_chunk is False:
-            delta.role = "assistant"
+            set_extra_attribute(delta, "role", "assistant")
             self.sent_first_chunk = True
             return
         if not _holds_only_scalars(delta):
             self.strip_role_from_delta(model_response)
             return
-        delta.role = None
+        set_extra_attribute(delta, "role", None)
         if "provider_specific_fields" not in delta.model_fields_set:
             delta.provider_specific_fields = None
 
@@ -1186,8 +1197,8 @@ class CustomStreamWrapper:
                             and _holds_only_scalars(upstream_delta)
                         )
                         if can_reuse_choice and upstream_choice is not None:
-                            model_response.choices[0].finish_reason = None  # rebind-ok: keep reused choice
-                            model_response.choices[0].index = upstream_choice.index  # rebind-ok: keep reused choice
+                            set_extra_attribute(model_response.choices[0], "finish_reason", None)
+                            set_extra_attribute(model_response.choices[0], "index", upstream_choice.index)
                             _prepend_upstream_choice_extras(
                                 model_response.choices[0],
                                 upstream_choice,
@@ -1212,11 +1223,7 @@ class CustomStreamWrapper:
                     else:
                         return
                     model_response.system_fingerprint = upstream_chunk.system_fingerprint
-                    setattr(
-                        model_response,
-                        "citations",
-                        stored_attribute(upstream_chunk, "citations"),
-                    )
+                    set_extra_attribute(model_response, "citations", stored_attribute(upstream_chunk, "citations"))
                     preserve_upstream_non_openai_attributes(
                         model_response=model_response,
                         original_chunk=original_chunk,

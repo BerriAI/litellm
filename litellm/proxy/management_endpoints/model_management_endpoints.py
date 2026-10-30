@@ -66,7 +66,6 @@ from litellm.proxy.auth.model_checks import (
     WildcardDeployment,
     model_info_cost_map_entry,
     wildcard_deployment_priced_model,
-    wildcard_listed_priced_model,
 )
 from litellm.proxy.auth.team_grants import team_model_aliases
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -84,7 +83,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.proxy.common_utils.model_listing_utils import CallerAliases, dispatched_model
+from litellm.proxy.common_utils.model_listing_utils import CallerAliases
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
@@ -494,6 +493,7 @@ async def _raise_on_invalid_credential_name(
 
 AUTO_ROUTER_CAPABILITY_SLOT_LOCK_KEY: Final = 5_872_301
 _CAPABILITY_LOCK_SQL: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock($1)"
+_MODEL_ROW_LOCK_SQL: Final = 'SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_id = $1 FOR UPDATE'
 _STORED_LITELLM_PARAMS_SQL: Final = (
     "(CASE jsonb_typeof(litellm_params) WHEN 'string' THEN (litellm_params #>> '{}')::jsonb ELSE litellm_params END)"
 )
@@ -641,6 +641,7 @@ async def _auto_router_capability_slot(
     effective_params: Mapping[str, object],
     model_id: str | None,
     member_write: MemberAutoRouterWrite | None = None,
+    lock_model_row: bool = False,
 ) -> AsyncGenerator[_ProxyModelTable, None]:
     """Hand out the model table to write through while the row's claim on a licensed capability is settled.
 
@@ -657,6 +658,9 @@ async def _auto_router_capability_slot(
 
     A heuristic-v1 router whose tuning has moved off its recorded baseline is judged the same
     way under the same lock, against the DB rows plus this proxy's config.yaml routers.
+
+    ``lock_model_row`` runs the write in a transaction holding the row's ``FOR UPDATE`` lock,
+    so a caller that re-reads the row through the yielded table writes onto its committed state.
     """
     from litellm.proxy.proxy_server import (
         _license_check,  # pyright: ignore[reportPrivateUsage]  # existing capability slot reads the proxy license singleton
@@ -670,7 +674,8 @@ async def _auto_router_capability_slot(
     baselines: Final = heuristic_v1_tuning_baselines
     tuning_candidate: Final = _tuning_candidate(effective_params, model_id=model_id)
     judges_tuning: Final = baselines is not None and is_mutable_tuned_candidate(tuning_candidate, baselines)
-    if member_write is None and (limit is None or (not capabilities and not judges_tuning)):
+    checks_license: Final = member_write is not None or (limit is not None and (bool(capabilities) or judges_tuning))
+    if not checks_license and not lock_model_row:
         yield _proxy_model_table(prisma_client)
         return
     transaction_client: Final = _ModelTransactionClient.model_validate(prisma_client.db)
@@ -681,14 +686,15 @@ async def _auto_router_capability_slot(
     )
     async with transaction as tx_ctx:
         tables: Final[_TxModelTables] = tx_ctx
-        await tx_ctx.query_raw(_CAPABILITY_LOCK_SQL, AUTO_ROUTER_CAPABILITY_SLOT_LOCK_KEY)
+        if checks_license:
+            await tx_ctx.query_raw(_CAPABILITY_LOCK_SQL, AUTO_ROUTER_CAPABILITY_SLOT_LOCK_KEY)
+        locked_model_id: Final = (
+            member_write.model_id if member_write is not None else (model_id if lock_model_row else None)
+        )
+        if locked_model_id is not None:
+            await tx_ctx.query_raw(_MODEL_ROW_LOCK_SQL, locked_model_id)
         config_rows: Final = () if llm_router is None else tuple(llm_router.registry().deployments(source="config"))
         if member_write is not None:
-            if member_write.model_id is not None:
-                await tx_ctx.query_raw(
-                    'SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_id = $1 FOR UPDATE',
-                    member_write.model_id,
-                )
             pinned_client: Final = _TransactionClient(tx_ctx)
             team_where: Final[prisma_types.LiteLLM_TeamTableWhereUniqueInput] = {"team_id": member_write.team_id}
             team_include: Final[prisma_types.LiteLLM_TeamTableInclude] = {"litellm_model_table": True}
@@ -760,7 +766,8 @@ async def _auto_router_capability_slot(
                 prisma_client=pinned_client,
                 llm_router=llm_router,
             )
-        for capability in capabilities:
+        judged_capabilities: Final = capabilities if checks_license else ()
+        for capability in judged_capabilities:
             if (
                 violation := await _claimed_capability_violation(
                     tables, capability=capability, config_rows=config_rows, model_id=model_id, limit=limit
@@ -769,7 +776,7 @@ async def _auto_router_capability_slot(
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN, detail=f"{violation} {AUTO_ROUTER_LICENSE_REMEDY}"
                 )
-        if judges_tuning and baselines is not None:
+        if checks_license and judges_tuning and baselines is not None:
             model_rows: Final = await ModelRepository(_TransactionClient(tx_ctx)).find_all_except(model_id or "")
             _raise_on_tuning_quota_violation(
                 candidate=tuning_candidate,
@@ -1057,6 +1064,16 @@ def _raise_if_ptu_cost_attribution_disabled(incoming_model_info: Mapping[str, ob
     )
 
 
+_ACCESS_GROUPS: Final[TypeAdapter[tuple[str, ...] | None]] = TypeAdapter(tuple[str, ...] | None)
+
+
+def _raise_if_access_groups_malformed(model_info_writes: Mapping[str, object]) -> None:
+    try:
+        _ACCESS_GROUPS.validate_python(model_info_writes.get("access_groups"))
+    except ValidationError:
+        raise HTTPException(status_code=400, detail="model_info.access_groups must be a list of strings") from None
+
+
 def _validate_ptu_model_info(model_info: Mapping[str, object]) -> None:
     """Enforce the PTU cross-field invariant on the effective model_info.
 
@@ -1277,39 +1294,35 @@ def _ptu_priced_deployment(model_params: Deployment) -> Deployment:
     )
 
 
-def _live_cost_map_model(
-    db_model: Deployment, listed_name: str | None, llm_router: Router | None, caller_aliases: CallerAliases
-) -> str | None:
+@dataclass(frozen=True, slots=True)
+class _ListedRow:
+    name: str | None = None
+    llm_router: Router | None = None
+    caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY
+
+
+_NO_LISTED_ROW: Final = _ListedRow()
+
+
+def _live_cost_map_model(db_model: Deployment, listed_row: _ListedRow) -> str | None:
     stored_model: Final = _decrypted_model(db_model.litellm_params.model)
-    if stored_model is None or listed_name is None:
-        return stored_model
     model_id: Final = db_model.model_info.id
-    if llm_router is None or model_id is None:
-        return wildcard_listed_priced_model(
-            db_model.model_name, stored_model, dispatched_model(listed_name, caller_aliases)
-        )
+    if stored_model is None or listed_row.name is None or listed_row.llm_router is None or model_id is None:
+        return stored_model
     priced: Final = wildcard_deployment_priced_model(
-        llm_router,
+        listed_row.llm_router,
         WildcardDeployment(model_id, db_model.model_name, stored_model, db_model.model_info.team_id),
-        listed_name,
-        caller_aliases,
+        listed_row.name,
+        listed_row.caller_aliases,
     )
     return priced if isinstance(priced, str) else stored_model
 
 
 def _cost_map_entry(
-    db_model: Deployment,
-    incoming_model_info: Mapping[str, object],
-    listed_name: str | None,
-    llm_router: Router | None,
-    caller_aliases: CallerAliases,
+    db_model: Deployment, incoming_model_info: Mapping[str, object], listed_row: _ListedRow = _NO_LISTED_ROW
 ) -> Mapping[str, object]:
     base_model: Final = incoming_model_info.get("base_model")
-    lookup: Final = (
-        base_model
-        if isinstance(base_model, str)
-        else _live_cost_map_model(db_model, listed_name, llm_router, caller_aliases)
-    )
+    lookup: Final = base_model if isinstance(base_model, str) else _live_cost_map_model(db_model, listed_row)
     return MappingProxyType({}) if lookup is None else model_info_cost_map_entry(lookup)
 
 
@@ -1323,6 +1336,112 @@ def _loaded_catalog_entry(
     if not isinstance(catalog_key, str):
         return MappingProxyType({})
     return loaded_catalog().get(catalog_key, MappingProxyType({}))
+
+
+_LEGACY_UPDATE_IGNORED_MODEL_INFO_FIELDS: Final = frozenset(
+    {
+        "id",
+        "db_model",
+        "created_at",
+        "created_by",
+        "updated_at",
+        "updated_by",
+        "blocked",
+        "member_auto_router",
+        "team_id",
+        "team_public_model_name",
+        "direct_access",
+        "access_via_team_ids",
+        COST_MAP_LOOKUP_KEY,
+        *PTU_MODEL_INFO_FIELDS,
+    }
+)
+
+
+def legacy_update_model_info_changes(
+    db_model: Deployment,
+    incoming_model_info: ModelInfo,
+    discovered_model_info: Mapping[str, object] = MappingProxyType({}),
+    loaded_catalog: LoadedCatalog = GetModelCostMap.loaded_model_cost_map,
+    listed_row: _ListedRow = _NO_LISTED_ROW,
+) -> Mapping[str, object]:
+    """The ``model_info`` fields ``POST /model/update`` persists from its request.
+
+    Only fields the caller sent with a value count, so ``ModelInfo`` defaults and the blank
+    strings typed clients send for unset fields never overwrite stored values. Server-owned,
+    display-only, team, PTU and pricing fields keep their dedicated write paths. As on
+    ``update_db_model``, only a body carrying the ``key`` that ``/model/info`` emits is an echo:
+    its values equal to the cost map entry of the base model the row has after the write, the
+    entry ``key`` names, or a limit discovered from the upstream stay display-only, and an echoed
+    value that differs from the stored override resets that override (``None``).
+    """
+    stored: Final = db_model.model_info.model_dump(exclude_none=True)
+    requested: Final = incoming_model_info.model_dump(exclude_unset=True, exclude_none=True)
+    sent: Final = {k: v for k, v in requested.items() if k not in _LEGACY_UPDATE_IGNORED_MODEL_INFO_FIELDS and v != ""}
+    echoed: Final = frozenset(
+        echoed_cost_map_fields(
+            requested,
+            _cost_map_entry(db_model, {**stored, **sent}, listed_row),
+            _loaded_catalog_entry(requested, loaded_catalog),
+            discovered_model_info,
+        )
+    )
+    kept: Final = without_server_derived_pricing(sent)
+    return MappingProxyType(
+        {
+            **{k: getattr(incoming_model_info, k) for k in kept if k not in echoed},
+            **{k: None for k, v in kept.items() if k in echoed and stored.get(k) not in (None, v)},
+        }
+    )
+
+
+def _legacy_update_model_info_writes(
+    current: Deployment,
+    incoming_model_info: ModelInfo,
+    discovered_model_info: Mapping[str, object],
+    member_marker: bool | None,
+    listed_row: _ListedRow,
+) -> Mapping[str, object]:
+    changes: Final = {
+        **legacy_update_model_info_changes(current, incoming_model_info, discovered_model_info, listed_row=listed_row),
+        **({"member_auto_router": member_marker} if member_marker is not None else {}),
+    }
+    return MappingProxyType({k: v for k, v in changes.items() if getattr(current.model_info, k, None) != v})
+
+
+async def _locked_legacy_update_model_info_json(
+    table: _ProxyModelTable,
+    model_id: str,
+    incoming_model_info: ModelInfo,
+    discovered_model_info: Mapping[str, object],
+    member_marker: bool | None,
+    listed_row: _ListedRow,
+) -> str | None:
+    row: Final = await table.find_unique(where={"model_id": model_id})
+    if row is None:
+        return None
+    payload: Final = row.model_dump()
+    writes: Final = _legacy_update_model_info_writes(
+        Deployment(**payload), incoming_model_info, discovered_model_info, member_marker, listed_row
+    )
+    if not writes:
+        return None
+    stored_model_info: Final[object] = payload.get("model_info")
+    stored: Final = (
+        TypeAdapter(dict[str, object]).validate_json(stored_model_info)
+        if isinstance(stored_model_info, str)
+        else TypeAdapter(dict[str, object]).validate_python(stored_model_info or {})
+    )
+    return (
+        TypeAdapter(dict[str, object])
+        .dump_json(
+            {
+                **{k: v for k, v in stored.items() if k not in writes},
+                **{k: v for k, v in writes.items() if v is not None},
+            }
+        )
+        .decode()
+    )
 
 
 def _param_keys_to_remove(patch: updateDeployment) -> tuple[str, ...]:
@@ -1368,7 +1487,9 @@ def update_db_model(
         echoed_fields: Final = echoed_cost_map_fields(
             incoming_model_info,
             _cost_map_entry(
-                db_model, incoming_model_info, listed_name or updated_patch.model_name, llm_router, caller_aliases
+                db_model,
+                incoming_model_info,
+                _ListedRow(listed_name or updated_patch.model_name, llm_router, caller_aliases),
             ),
             _loaded_catalog_entry(incoming_model_info, loaded_catalog),
         )
@@ -3204,6 +3325,7 @@ async def update_model(
         llm_router,
         premium_user,
         prisma_client,
+        request_caller_aliases,
         store_model_in_db,
         user_api_key_cache,
     )
@@ -3335,22 +3457,35 @@ async def update_model(
             renamed_update: Final[PrismaCompatibleUpdateDBModel] = (
                 {**base_update, "model_name": renamed_to} if renamed_to is not None else base_update
             )
-            _data: Final[PrismaCompatibleUpdateDBModel] = (
-                {
-                    **renamed_update,
-                    "model_info": deployment.model_info.model_copy(
-                        update=MappingProxyType({"member_auto_router": member_marker})
-                    ).model_dump_json(exclude_none=True),
-                }
-                if member_marker is not None
-                else renamed_update
+            discovered_model_info: Final[Mapping[str, int]] = (
+                llm_router.registry().discovered_model_info(_model_id)
+                if llm_router is not None
+                else MappingProxyType({})
             )
+            listed_row: Final = _ListedRow(
+                model_params.model_name, llm_router, await request_caller_aliases(user_api_key_dict)
+            )
+            requested_model_info: Final = _legacy_update_model_info_writes(
+                deployment, _model_info, discovered_model_info, member_marker, listed_row
+            )
+            _raise_if_access_groups_malformed(requested_model_info)
             async with _auto_router_capability_slot(
                 prisma_client,
                 effective_params=effective_params,
                 model_id=_model_id,
                 member_write=member_write,
+                lock_model_row=bool(requested_model_info),
             ) as table:
+                model_info_json: Final = (
+                    await _locked_legacy_update_model_info_json(
+                        table, _model_id, _model_info, discovered_model_info, member_marker, listed_row
+                    )
+                    if requested_model_info
+                    else None
+                )
+                _data: Final[PrismaCompatibleUpdateDBModel] = (
+                    {**renamed_update, "model_info": model_info_json} if model_info_json is not None else renamed_update
+                )
                 model_response: Final = await table.update(
                     where={"model_id": _model_id},
                     data=_data,

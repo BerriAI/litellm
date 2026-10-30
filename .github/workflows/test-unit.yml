@@ -73,9 +73,21 @@ jobs:
         timeout-minutes: 5
         uses: ./.github/actions/cache-cargo-build
 
+      - name: Set up sccache
+        if: steps.changes.outputs.decision != 'skip' && steps.rust-bridge-cache.outputs.cache-hit != 'true'
+        uses: mozilla-actions/sccache-action@d651010b8da762cde178750d8eda7b5febfe147a
+        with:
+          version: "v0.18.0"
+
       - name: Build editable Rust bridge
         if: steps.changes.outputs.decision != 'skip' && steps.rust-bridge-cache.outputs.cache-hit != 'true'
         timeout-minutes: 15
+        env:
+          RUSTC_WRAPPER: sccache
+          SCCACHE_GHA_ENABLED: "true"
+          SCCACHE_GHA_VERSION: litellm-ci-v1
+          SCCACHE_GHA_RW_MODE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}
+          CARGO_INCREMENTAL: "0"
         run: |
           mkdir -p rust-bridge-dist
           uv run --no-project --with maturin==1.15.0 python -c 'import maturin; maturin.build_editable("rust-bridge-dist")'

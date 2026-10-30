@@ -633,6 +633,8 @@ def _is_client_error_exception(exc: Exception) -> bool:
         return exc.status_code < 500
     if isinstance(exc, ProxyException):
         return not (exc.code.isdigit() and int(exc.code) >= 500)
+    if isinstance(exc, litellm.BudgetExceededError):
+        return exc.status_code < 500
     return False
 
 
@@ -9500,7 +9502,7 @@ async def _agent_access_group_visible_models(
 ) -> frozenset[str] | None:
     """Models an agent key may still list once its attached access groups cap it, ``None`` when
     nothing caps it, so ``/v1/models`` never advertises a model the same key would be denied on."""
-    from litellm.proxy.auth.model_checks import get_complete_model_list, get_team_models
+    from litellm.proxy.auth.model_checks import get_complete_model_list, get_team_models, run_model_listing
 
     if not user_api_key_dict.agent_id:
         return None
@@ -9521,17 +9523,20 @@ async def _agent_access_group_visible_models(
     if not granted:
         return frozenset()
     return frozenset(
-        get_complete_model_list(
-            key_models=granted,
-            team_models=(),
-            proxy_model_list=proxy_model_list,
-            user_model=None,
-            infer_model_from_keys=False,
-            return_wildcard_routes=return_wildcard_routes,
-            llm_router=llm_router,
-            model_access_groups=model_access_groups,
-            include_model_access_groups=include_model_access_groups,
-            team_id=team_id,
+        await run_model_listing(
+            partial(
+                get_complete_model_list,
+                key_models=granted,
+                team_models=(),
+                proxy_model_list=proxy_model_list,
+                user_model=None,
+                infer_model_from_keys=False,
+                return_wildcard_routes=return_wildcard_routes,
+                llm_router=llm_router,
+                model_access_groups=model_access_groups,
+                include_model_access_groups=include_model_access_groups,
+                team_id=team_id,
+            )
         )
     )
 
@@ -9576,6 +9581,7 @@ async def get_available_models_for_user(
         get_complete_model_list,
         get_key_models,
         get_team_models,
+        run_model_listing,
     )
 
     # Get proxy model list and access groups
@@ -9656,18 +9662,21 @@ async def get_available_models_for_user(
     )
 
     # Get complete model list
-    complete_models: Final = get_complete_model_list(
-        key_models=granted_key_models,
-        team_models=granted_team_models,
-        proxy_model_list=proxy_model_list,
-        user_model=user_model,
-        infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
-        return_wildcard_routes=return_wildcard_routes,
-        llm_router=llm_router,
-        model_access_groups=model_access_groups,
-        include_model_access_groups=include_model_access_groups,
-        only_model_access_groups=only_model_access_groups,
-        team_id=effective_team_id,
+    complete_models: Final = await run_model_listing(
+        partial(
+            get_complete_model_list,
+            key_models=granted_key_models,
+            team_models=granted_team_models,
+            proxy_model_list=proxy_model_list,
+            user_model=user_model,
+            infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
+            return_wildcard_routes=return_wildcard_routes,
+            llm_router=llm_router,
+            model_access_groups=model_access_groups,
+            include_model_access_groups=include_model_access_groups,
+            only_model_access_groups=only_model_access_groups,
+            team_id=effective_team_id,
+        )
     )
     all_models: Final = (
         list(
