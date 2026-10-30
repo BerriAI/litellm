@@ -1449,6 +1449,33 @@ async def test_streaming_buffered_block_raises_with_the_block_status(response_st
     assert raised.value.status_code == expected_status
 
 
+async def test_a_buffered_streamed_block_reaches_the_client_as_its_block_status(monkeypatch: pytest.MonkeyPatch):
+    """The status has to survive the proxy's stream error path, not only sit on the exception.
+    Dropping it answered LibreChat with an HTTP 500 for a 403 block (TL-2934)."""
+    import litellm
+    from litellm.proxy.common_request_processing import create_response
+    from litellm.proxy.proxy_server import (
+        async_data_generator,  # pyright: ignore[reportUnknownVariableType]  # its response parameter is untyped
+    )
+
+    g = _make_guardrail(
+        event_hook="post_call",
+        decisions=[_decision_response({"action": "block", "message": "leaked secret", "response_status": 403})],
+    )
+    monkeypatch.setattr(litellm, "callbacks", [g])
+
+    response = await create_response(
+        async_data_generator(  # pyright: ignore[reportArgumentType]  # yields str | bytes; the proxy hands create_response the same generator
+            response=_aiter(_stream_chunks()), user_api_key_dict=UserAPIKeyAuth(), request_data=_request_data()
+        ),
+        media_type="text/event-stream",
+        headers={},
+    )
+
+    assert response.status_code == 403
+    assert json.loads(bytes(response.body))["error"]["message"] == "leaked secret"
+
+
 async def test_streaming_buffered_holds_chunks_until_decision():
     call_order: list[str] = []
 
