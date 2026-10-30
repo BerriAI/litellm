@@ -2363,13 +2363,19 @@ _TAGGED_ROLE_ARN = "arn:aws:iam::123456789012:role/TaggedRole"
 class _TagAwareSTSClient:
     """STS stand-in for a trust policy that only admits sessions carrying exactly the expected tags."""
 
-    def __init__(self, expected_tags: tuple = (), access_key: str = "ASIATAGGEDSESSION") -> None:
+    def __init__(
+        self,
+        expected_tags: tuple = (),
+        access_key: str = "ASIATAGGEDSESSION",
+        caller_arn: str = "arn:aws:iam::111111111111:user/litellm-proxy-pod",
+    ) -> None:
         self.expected_tags = expected_tags
         self.access_key = access_key
+        self.caller_arn = caller_arn
         self.assume_role_calls: list = []
 
     def get_caller_identity(self):
-        return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+        return {"Arn": self.caller_arn}
 
     def assume_role_with_web_identity(self, **params):
         return {
@@ -2509,6 +2515,57 @@ def test_irsa_same_account_assume_role_sends_session_tags(tmp_path):
     assert sts.assume_role_calls == [
         {"RoleArn": _TAGGED_ROLE_ARN, "RoleSessionName": "test-session", "Tags": _SESSION_TAGS}
     ]
+
+
+def _running_as_tagged_role_env(tmp_path, runtime: str) -> dict:
+    match runtime:
+        case "ecs":
+            return _os_environ_without_aws_keys()
+        case "irsa":
+            return {**_os_environ_without_aws_keys(), **_irsa_env(tmp_path, _TAGGED_ROLE_ARN)}
+        case _:
+            raise AssertionError(runtime)
+
+
+_TAGGED_ROLE_AMBIENT_SESSION_ARN = "arn:aws:sts::123456789012:assumed-role/TaggedRole/ambient-session"
+
+
+@pytest.mark.parametrize("runtime", ["ecs", "irsa"])
+def test_get_credentials_assumes_its_own_role_to_apply_session_tags(tmp_path, runtime):
+    sts = _TagAwareSTSClient(expected_tags=_SORTED_SESSION_TAGS, caller_arn=_TAGGED_ROLE_AMBIENT_SESSION_ARN)
+
+    with (
+        patch.dict(os.environ, _running_as_tagged_role_env(tmp_path, runtime), clear=True),
+        patch("boto3.client", return_value=sts),
+    ):
+        credentials = BaseAWSLLM().get_credentials(
+            aws_role_name=_TAGGED_ROLE_ARN,
+            aws_session_name="team-session",
+            aws_session_tags=list(_SESSION_TAGS),
+        )
+
+    assert credentials.access_key == "ASIATAGGEDSESSION"
+    assert sts.assume_role_calls == [
+        {"RoleArn": _TAGGED_ROLE_ARN, "RoleSessionName": "team-session", "Tags": _SORTED_SESSION_TAGS}
+    ]
+
+
+@pytest.mark.parametrize("runtime", ["ecs", "irsa"])
+def test_get_credentials_surfaces_a_denied_tagged_self_assume_instead_of_dropping_the_tags(tmp_path, runtime):
+    sts = _TagAwareSTSClient(expected_tags=(), caller_arn=_TAGGED_ROLE_AMBIENT_SESSION_ARN)
+
+    with (
+        patch.dict(os.environ, _running_as_tagged_role_env(tmp_path, runtime), clear=True),
+        patch("boto3.client", return_value=sts),
+        pytest.raises(ClientError, match="sts:TagSession"),
+    ):
+        BaseAWSLLM().get_credentials(
+            aws_role_name=_TAGGED_ROLE_ARN,
+            aws_session_name="team-session",
+            aws_session_tags=list(_SESSION_TAGS),
+        )
+
+    assert [call["Tags"] for call in sts.assume_role_calls] == [_SORTED_SESSION_TAGS]
 
 
 def test_get_credentials_canonicalizes_session_tag_order_for_the_cache():

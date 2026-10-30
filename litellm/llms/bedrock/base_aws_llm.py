@@ -1289,7 +1289,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         caller's key skips both. ``aws_session_name`` defaults inside this fetcher rather than in
         ``get_credentials`` so the cache key stays stable when the caller does not supply one.
         """
-        if self._is_already_running_as_role(aws_role_name, ssl_verify=ssl_verify):
+        if not aws_session_tags and self._is_already_running_as_role(aws_role_name, ssl_verify=ssl_verify):
             verbose_logger.debug(
                 "Already running as target role %s, using ambient credentials",
                 aws_role_name,
@@ -1409,7 +1409,15 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             sts_response = sts_client.assume_role(**assume_role_params)
         except Exception as e:
             error_str: Final = str(e)
-            if "AccessDenied" in error_str:
+            if "AccessDenied" in error_str and aws_session_tags:
+                verbose_logger.error(
+                    "AssumeRole AccessDenied for %s with aws_session_tags set. Ambient credentials cannot carry "
+                    "session tags, so the role's trust policy must allow sts:AssumeRole and sts:TagSession for "
+                    "the caller, even when the caller is that same role. Re-raising. Error: %s",
+                    aws_role_name,
+                    error_str,
+                )
+            elif "AccessDenied" in error_str:
                 # Only fall back to ambient credentials if we can positively
                 # confirm the caller is already the target role (same account,
                 # partition, and role name).  This avoids silently using the
