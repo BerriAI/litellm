@@ -1,6 +1,6 @@
 import time
 import types
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, Optional, cast
 
 import httpx
@@ -44,12 +44,17 @@ from litellm.utils import (
     CustomStreamWrapper,
     ProviderConfigManager,
     convert_to_model_response_object,
+    get_base_model_from_metadata,
 )
 
 from ...types.llms.openai import *
 from ..base import BaseLLM
-from .chat.gpt_5_transformation import OpenAIGPT5Config
-from .chat.gpt_transformation import OpenAIGPTConfig, OpenAIUnknownModelConfig
+from .chat.gpt_reasoning_transformation import OpenAIGPT5Config
+from .chat.gpt_transformation import (
+    OpenAIGPTConfig,
+    OpenAIUnknownModelConfig,
+    translate_developer_role_for_openai_compatible_endpoint,
+)
 from .chat.o_series_transformation import OpenAIOSeriesConfig
 from .common_utils import (
     BaseOpenAILLM,
@@ -59,6 +64,7 @@ from .common_utils import (
     is_openai_backed_api_base,
     is_output_token_limit_error,
     model_dump_provider_response,
+    upstream_error_response,
 )
 from .workload_identity import (
     build_async_openai_client,
@@ -204,6 +210,19 @@ class OpenAIConfig(BaseConfig):
             return litellm.openAIGPTAudioConfig.get_supported_openai_params(model=model)
         else:
             return self._gpt_config_for_model(model).get_supported_openai_params(model=model)
+
+    def translate_developer_role_to_system_role(
+        self,
+        messages: Sequence[AllMessageValues],
+        *,
+        model: str,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+        model_info: object,
+    ) -> Sequence[AllMessageValues]:
+        return translate_developer_role_for_openai_compatible_endpoint(
+            messages, model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, model_info=model_info
+        )
 
     def _gpt_config_for_model(self, model: str) -> OpenAIGPTConfig:
         if type(self) is OpenAIConfig and not OpenAIGPTConfig.is_openai_catalog_model(model):
@@ -557,7 +576,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         except openai.BadRequestError as e:
             if not is_output_token_limit_error(e):
                 raise
-            return build_output_token_limit_response(e=e, data=data, is_async=True)
+            return build_output_token_limit_response(
+                e=e,
+                data=data,
+                is_async=True,
+                base_model=get_base_model_from_metadata(logging_obj.model_call_details),
+            )
         except Exception as e:
             raise e
 
@@ -604,7 +628,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         except openai.BadRequestError as e:
             if not is_output_token_limit_error(e):
                 raise
-            return build_output_token_limit_response(e=e, data=data, is_async=False)
+            return build_output_token_limit_response(
+                e=e,
+                data=data,
+                is_async=False,
+                base_model=get_base_model_from_metadata(logging_obj.model_call_details),
+            )
         except Exception as e:
             if raw_response is not None:
                 raise Exception(
@@ -955,6 +984,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             raise OpenAIError(
                 status_code=status_code,
                 message=error_text,
+                response=upstream_error_response(e),
                 headers=error_headers,
                 body=error_body,
             )
@@ -1082,6 +1112,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 raise OpenAIError(
                     status_code=status_code,
                     message=message,
+                    response=upstream_error_response(e),
                     headers=error_headers,
                     body=exception_body,
                 )
@@ -1254,6 +1285,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         raise OpenAIError(
                             status_code=getattr(e, "status_code", 500),
                             message=str(e),
+                            response=upstream_error_response(e),
                             headers=error_headers,
                             body=exception_body,
                         )
@@ -1381,7 +1413,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
+            raise OpenAIError(
+                status_code=status_code,
+                message=error_text,
+                response=upstream_error_response(e),
+                headers=error_headers,
+            )
 
     def embedding(
         self,
@@ -1471,7 +1508,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
+            raise OpenAIError(
+                status_code=status_code,
+                message=error_text,
+                response=upstream_error_response(e),
+                headers=error_headers,
+            )
 
     async def aimage_generation(
         self,
@@ -1638,7 +1680,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 original_response=str(e),
             )
             if hasattr(e, "status_code"):
-                raise OpenAIError(status_code=getattr(e, "status_code", 500), message=str(e))
+                raise OpenAIError(
+                    status_code=getattr(e, "status_code", 500),
+                    message=str(e),
+                    response=upstream_error_response(e),
+                )
             else:
                 raise OpenAIError(status_code=500, message=str(e))
 

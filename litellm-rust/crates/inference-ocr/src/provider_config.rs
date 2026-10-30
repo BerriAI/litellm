@@ -1,6 +1,8 @@
 use litellm_auth::{InputSource, SecretValue, Sourced};
-use litellm_core_utils::get_llm_provider_logic::{LlmProviders, get_custom_llm_provider};
-use litellm_inference::provider::{ResolvedProvider, resolve_llm_provider};
+use litellm_core_utils::get_llm_provider_logic::{
+    CustomLlmProvider, LlmProviders, get_custom_llm_provider,
+};
+use litellm_inference::provider::ResolvedProvider;
 use litellm_llms::{
     aws_textract::ocr::{
         analyze_transformation::TextractAnalyzeDocumentConfig, common_utils::TextractOperation,
@@ -241,18 +243,20 @@ pub(crate) fn resolve_provider_config<'a>(
     model: &'a str,
     custom_llm_provider: Option<&'a str>,
 ) -> Result<(ResolvedProvider<'a>, OcrConfigKind), Error> {
-    let provider = match resolve_llm_provider(model, custom_llm_provider, "ocr") {
-        Ok(provider) => provider,
-        Err(_) if get_custom_llm_provider(model, custom_llm_provider).is_none() => {
-            ResolvedProvider {
-                model,
-                provider: LlmProviders::Mistral,
-            }
-        }
-        Err(litellm_inference::Error::InvalidProvider(provider)) => {
-            return Err(Error::InvalidProvider(provider));
-        }
-        Err(error) => return Err(Error::InvalidProvider(error.to_string())),
+    let provider = match get_custom_llm_provider(model, custom_llm_provider) {
+        None => ResolvedProvider {
+            model,
+            provider: LlmProviders::Mistral,
+        },
+        Some(CustomLlmProvider {
+            model,
+            custom_llm_provider,
+        }) => ResolvedProvider {
+            model,
+            provider: custom_llm_provider
+                .parse()
+                .map_err(|_| Error::InvalidProvider(custom_llm_provider.to_owned()))?,
+        },
     };
     let config = match provider.provider {
         LlmProviders::AwsTextract => match TextractOperation::from_model(provider.model)? {
