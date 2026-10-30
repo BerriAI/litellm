@@ -95,6 +95,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
     request_tags_from_metadata,
 )
 from litellm.redis.stores.managed_files import ManagedFileStore, TransportManagedFileStore, file_key
+from litellm.redis.stores.managed_objects import ManagedObjectStore, TransportManagedObjectStore, object_key
 from litellm.redis.transport.contract import RedisFailure
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -655,6 +656,24 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             await local_cache.async_set_cache(file_key(file_id), value, local_only=True)
         return value
 
+    async def _cache_object(self, unified_object_id: str, record: Mapping[str, object]) -> None:
+        cache: Final = self._metadata_cache()
+        local_cache: Final = cache.local
+        await local_cache.async_set_cache(object_key(unified_object_id), record, local_only=True)
+        if cache.redis is None:
+            return
+        store: Final[ManagedObjectStore] = TransportManagedObjectStore(cache.redis.transport())
+        try:
+            seconds: Final = (
+                int(cache.in_memory_ttl)
+                if cache.in_memory_ttl is not None and not math.isnan(cache.in_memory_ttl)
+                else cache.redis.default_ttl
+            )
+            ttl: Final = timedelta(seconds=seconds)
+        except (OverflowError, ValueError):
+            return
+        await store.write_object(unified_object_id, record, ttl=ttl)
+
     @staticmethod
     def _get_prometheus_logger():
         """Find PrometheusLogger from litellm.callbacks, if registered."""
@@ -785,11 +804,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             file_purpose=file_purpose,
             file_object=stored_object,
         )
-        await self.internal_usage_cache.async_set_cache(
-            key=unified_object_id,
-            value=litellm_managed_object.model_dump(),
-            litellm_parent_otel_span=litellm_parent_otel_span,
-        )
+        await self._cache_object(unified_object_id, litellm_managed_object.model_dump())
 
         from prisma import Json
 
