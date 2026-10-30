@@ -89,9 +89,13 @@ def _aiand_catalog() -> frozenset[str]:
     return frozenset(name for name, info in litellm.model_cost.items() if info.get("litellm_provider") == "aiand")
 
 
-AIAND_RETIRED: Final = frozenset(
-    {"aiand/deepseek-ai/deepseek-v4-flash", "aiand/zai-org/glm-5.2", "aiand/moonshotai/kimi-k2.7-code"}
-)
+AIAND_RETIREMENT_DATES: Final = {
+    "aiand/deepseek-ai/deepseek-v4-flash": "2026-10-27",
+    "aiand/zai-org/glm-5.2": "2026-10-27",
+    "aiand/moonshotai/kimi-k2.7-code": "2026-10-27",
+    "aiand/deepseek-ai/deepseek-v4.1-flash": "2026-10-30",
+}
+AIAND_RETIRED: Final = frozenset(AIAND_RETIREMENT_DATES)
 
 
 def test_aiand_wildcard_lists_only_its_live_models():
@@ -102,8 +106,8 @@ def test_aiand_wildcard_lists_only_its_live_models():
 
 
 def test_aiand_retired_models_carry_their_retirement_date():
-    for model in sorted(AIAND_RETIRED):
-        assert litellm.model_cost[model]["deprecation_date"] == "2026-10-27"
+    for model, retired_on in AIAND_RETIREMENT_DATES.items():
+        assert litellm.model_cost[model]["deprecation_date"] == retired_on
 
 
 def test_aiand_calls_are_billed_from_their_cost_rows():
