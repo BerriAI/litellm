@@ -9956,7 +9956,12 @@ class ProviderConfigManager:
             )
 
             return get_dashscope_family_rerank_config(provider.value)
-        return litellm.CohereRerankConfig()
+        from litellm.llms.greenpt.rerank.transformation import GreenPTRerankConfig
+
+        config_class: Final = {
+            litellm.LlmProviders.GREENPT: GreenPTRerankConfig,
+        }.get(provider, litellm.CohereRerankConfig)
+        return config_class()
 
     @staticmethod
     @lru_cache(maxsize=1)
