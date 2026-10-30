@@ -436,6 +436,39 @@ def _input_item_role(input_item: Mapping[str, object]) -> str:
     return cast(str, input_item.get("role") or "user")  # cast-ok: client-supplied role forwarded verbatim, unvalidated
 
 
+def _lacks_required_role(item: object) -> bool:
+    if not isinstance(item, Mapping):
+        return False
+    fields: Final = _STR_KEY_DICT_ADAPTER.validate_python(item)
+    if fields.get("role"):
+        return False
+    item_type: Final = fields.get("type")
+    if item_type is None:
+        is_item_reference: Final = bool(fields.get("id")) and fields.get("content") is None
+        return not is_item_reference
+    return item_type == "message"
+
+
+def _first_item_without_role(input: object) -> int | None:
+    if not isinstance(input, list):
+        return None
+    items: Final = _OBJECT_LIST_ADAPTER.validate_python(input)
+    return next((index for index, item in enumerate(items) if _lacks_required_role(item)), None)
+
+
+def reject_input_item_without_role(input: object, model: str, custom_llm_provider: str | None) -> None:
+    index: Final = _first_item_without_role(input)
+    if index is None:
+        return
+    param: Final = f"input[{index}].role"
+    raise litellm.BadRequestError(
+        message=f"Missing required parameter: '{param}'.",
+        model=model,
+        llm_provider=custom_llm_provider or "",
+        body={"type": "invalid_request_error", "param": param, "code": "missing_required_parameter"},
+    )
+
+
 SessionMessage: TypeAlias = (
     AllMessageValues
     | GenericChatCompletionMessage

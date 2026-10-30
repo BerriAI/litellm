@@ -3984,6 +3984,14 @@ async def test_responses_count_on_claude_rejects_forced_tool_choice_without_drop
     assert (rejected.value.code, "forced tool use" in rejected.value.message) == ("400", True)
 
 
+@pytest.mark.asyncio
+async def test_responses_count_on_claude_names_an_input_item_without_a_role(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ProxyException) as rejected:
+        await _claude_count(monkeypatch, {}, {"input": [{"content": "Weather?"}]})
+
+    assert (rejected.value.code, rejected.value.param) == ("400", "input[0].role")
+
+
 def _texts(message: JsonValue) -> list[str]:
     assert isinstance(message, dict)
     content: Final = message["content"]

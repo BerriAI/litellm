@@ -15503,7 +15503,7 @@ async def _count_request_tokens(
         )
     )
     if isinstance(chat_count, ChatCountBridgeError):
-        raise ProxyException(message=chat_count.message, type="invalid_request_error", param=None, code=400)
+        raise ProxyException(message=chat_count.message, type="invalid_request_error", param=chat_count.param, code=400)
     ladder: Final = (
         None
         if provider_counter is None

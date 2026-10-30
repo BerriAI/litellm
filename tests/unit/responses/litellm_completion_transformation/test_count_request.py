@@ -130,6 +130,18 @@ async def test_claude_count_request_rejects_a_malformed_tool_flag_without_drop_p
 
 
 @pytest.mark.asyncio
+async def test_claude_count_request_rejects_an_item_without_a_role_at_its_index_in_the_callers_input() -> None:
+    rejected: Final = await _claude_count(
+        {"input": [{"type": "additional_tools", "tools": [_WEATHER_TOOL]}, {"content": "Weather in SF?"}]},
+        DropPolicy(drop_params=False, additional_drop_params=frozenset()),
+    )
+
+    assert isinstance(rejected, ChatCountBridgeError)
+    assert rejected.param == "input[1].role"
+    assert "input[1].role" in rejected.message
+
+
+@pytest.mark.asyncio
 async def test_claude_count_request_leaves_out_tools_the_deployment_drops() -> None:
     policy: Final = DropPolicy(drop_params=False, additional_drop_params=frozenset({"tools"}))
 

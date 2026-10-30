@@ -1624,6 +1624,19 @@ class TestVertexResponsesBatchInputTranslation:
         with pytest.raises(ValueError, match="missing required `input` field"):
             _wrap_entries([_responses_entry(body={"model": "gemini-2.5-flash"})])
 
+    def test_item_without_a_role_fails_the_upload_naming_it(self):
+        with pytest.raises(litellm.BadRequestError, match=r"input\[1\]\.role"):
+            _wrap_entries(
+                [
+                    _responses_entry(
+                        body={
+                            "model": "gemini-2.5-flash",
+                            "input": [{"role": "user", "content": "ping"}, {"content": "no role"}],
+                        }
+                    )
+                ]
+            )
+
     @pytest.mark.parametrize(
         "entry",
         [

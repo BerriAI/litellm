@@ -20,6 +20,7 @@ from litellm.responses.litellm_completion_transformation.streaming_iterator impo
 from litellm.responses.litellm_completion_transformation.tool_search import has_client_tool_search
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
+    reject_input_item_without_role,
     with_compaction_items_as_params,
 )
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
@@ -74,6 +75,7 @@ class LiteLLMCompletionTransformationHandler:
         | BaseResponsesAPIStreamingIterator
         | Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
     ):
+        reject_input_item_without_role(input, model, custom_llm_provider)
         hoisted: Final = hoist_additional_tools(
             input,
             responses_api_request.get("tools"),

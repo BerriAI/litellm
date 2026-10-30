@@ -4517,6 +4517,19 @@ def _batch_line_with_body(field: str, value: object) -> str:
             id="string-messages",
         ),
         pytest.param(
+            json.dumps(
+                {
+                    **_VALID_BATCH_RECORD,
+                    "url": "/v1/responses",
+                    "body": {"model": _VALID_BATCH_RECORD["body"]["model"], "input": [{"content": "no role"}]},
+                }
+            ).encode()
+            + b"\n",
+            "Batch input file line 1 could not be converted to a Bedrock batch record: "
+            "litellm.BadRequestError: Missing required parameter: 'input[0].role'.",
+            id="responses-item-without-role",
+        ),
+        pytest.param(
             f"{_VALID_BATCH_LINE}\n{'[' * 1_000_000}{']' * 1_000_000}\n".encode(),
             "Batch input file line 2 could not be parsed",
             id="deep-nesting",

@@ -32,6 +32,7 @@ def responses_batch_body_to_chat_body(
     """
     from litellm.responses.litellm_completion_transformation.transformation import (
         LiteLLMCompletionResponsesConfig,
+        reject_input_item_without_role,
     )
 
     responses_input: Final = openai_request_body.get("input")
@@ -41,6 +42,7 @@ def responses_batch_body_to_chat_body(
             f"model={openai_request_body.get('model', '')}"
         )
     model: Final = openai_request_body.get("model")
+    reject_input_item_without_role(responses_input, model if isinstance(model, str) else "", custom_llm_provider)
     chat_input: Final = cast(str | ResponseInputParam, responses_input)  # cast-ok: forwarded as sent
     responses_request: Final = cast(  # cast-ok: client-supplied fields forwarded verbatim, as real time does
         ResponsesAPIOptionalRequestParams,

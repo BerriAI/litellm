@@ -29,6 +29,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD
+from openai.types.responses import ResponseCompactionItem
 
 
 class _StopForwarding(Exception):
@@ -310,3 +311,77 @@ async def test_bridged_next_turn_replays_a_turn_stored_under_the_id_the_client_h
         ("assistant", json.dumps([{"type": "text", "text": "Noted."}])),
         ("user", json.dumps([{"type": "text", "text": "Double it"}])),
     ]
+
+
+_USER_TURN: Final = {"role": "user", "content": "hello"}
+
+
+@pytest.mark.parametrize(
+    ("input_items", "param"),
+    [
+        ([{"content": "hi"}], "input[0].role"),
+        ([{"role": None, "content": "hi"}], "input[0].role"),
+        ([{"role": "", "content": "hi"}], "input[0].role"),
+        ([{"type": "message", "content": "hi"}], "input[0].role"),
+        ([{"type": "message", "id": "msg_1"}], "input[0].role"),
+        ([{"content": [{"type": "input_text", "text": "hi"}]}], "input[0].role"),
+        ([{"content": None}], "input[0].role"),
+        ([{}], "input[0].role"),
+        ([{"id": "msg_1", "content": "hi"}], "input[0].role"),
+        ([_USER_TURN, {"content": "bye"}], "input[1].role"),
+        ([{"type": "additional_tools", "tools": []}, {"content": "hi"}], "input[1].role"),
+    ],
+)
+def test_input_item_without_role_answers_400_naming_it_and_sends_nothing(input_items, param):
+    forwarded: Final[list[object]] = []
+
+    with patch("litellm.completion", lambda **kwargs: forwarded.append(kwargs)):
+        with pytest.raises(litellm.BadRequestError) as raised:
+            LiteLLMCompletionTransformationHandler().response_api_handler(
+                model="claude-sonnet-5-5",
+                input=input_items,
+                responses_api_request={},
+                custom_llm_provider="anthropic",
+            )
+
+    assert forwarded == []
+    assert raised.value.status_code == 400
+    assert raised.value.param == param
+    assert raised.value.type == "invalid_request_error"
+    assert raised.value.code == "missing_required_parameter"
+    assert param in str(raised.value)
+    assert raised.value.llm_provider == "anthropic"
+
+
+@pytest.mark.parametrize(
+    "input_items",
+    [
+        "hello",
+        [_USER_TURN],
+        [_USER_TURN, {"id": "msg_1"}],
+        [_USER_TURN, {"type": "item_reference", "id": "msg_1"}],
+        [_USER_TURN, {"type": "reasoning", "id": "rs_1", "summary": []}],
+        [
+            {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "done"},
+        ],
+        [ResponseCompactionItem(id="cmp_1", encrypted_content="opaque", type="compaction"), _USER_TURN],
+    ],
+)
+def test_role_less_shapes_openai_accepts_still_reach_the_provider(input_items):
+    captured: Final[dict[str, object]] = {}
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        raise _StopForwarding()
+
+    with patch("litellm.completion", fake_completion):
+        with pytest.raises(_StopForwarding):
+            LiteLLMCompletionTransformationHandler().response_api_handler(
+                model="claude-sonnet-5-5",
+                input=input_items,
+                responses_api_request={},
+                custom_llm_provider="anthropic",
+            )
+
+    assert captured["messages"]
