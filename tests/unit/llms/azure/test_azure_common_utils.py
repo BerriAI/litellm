@@ -11,6 +11,8 @@ from unittest.mock import ANY, MagicMock, patch
 
 import httpx
 import pytest
+import respx
+from openai import AsyncAzureOpenAI
 
 import litellm
 from litellm.llms.azure.common_utils import (
@@ -26,11 +28,12 @@ from litellm.llms.azure.common_utils import (
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
-from litellm.types.router import GenericLiteLLMParams
+from litellm.types.router import GenericLiteLLMParams, LiteLLM_Params
 from litellm.types.secret_managers.get_azure_ad_token_provider import (
     AzureCredentialType,
 )
 from litellm.types.utils import CallTypes
+from litellm.utils import get_model_region
 
 
 # Mock the necessary dependencies
@@ -2492,3 +2495,225 @@ def test_an_azure_client_litellm_built_its_own_http_client_for_is_still_closed(m
     closer.reap()
 
     assert wrapper.is_closed() is True
+
+
+def test_full_deployment_url_keeps_its_extra_query_params_on_the_sdk_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    def echo_url(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-url",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt",
+                "choices": [
+                    {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": str(request.url)}}
+                ],
+            },
+        )
+
+    monkeypatch.setattr(litellm, "client_session", httpx.Client(transport=httpx.MockTransport(echo_url)))
+    client: Final = BaseAzureLLM().get_azure_openai_client(
+        api_key="azure-key",
+        api_base="https://gateway.example.com/openai/deployments/gpt/chat/completions"
+        "?api-version=2024-10-21&subscription-key=abc",
+        api_version="2025-02-01-preview",
+        litellm_params={},
+        _is_async=False,
+    )
+
+    response: Final = client.chat.completions.create(model="gpt", messages=[{"role": "user", "content": "hi"}])
+
+    sent: Final = httpx.URL(response.choices[0].message.content or "")
+    assert sent.path == "/openai/deployments/gpt/chat/completions"
+    assert dict(sent.params) == {"api-version": "2025-02-01-preview", "subscription-key": "abc"}
+
+
+def _echo_chat_completion(content: str) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-echo",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "gpt",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": content}}],
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "deployment_url,expected_path,expected_params",
+    [
+        pytest.param(
+            "https://extensions.example.com/openai/deployments/gpt/extensions/chat/completions?api-version=2024-02-01",
+            "/openai/deployments/gpt/extensions/chat/completions",
+            {"api-version": "2025-02-01-preview"},
+            id="on_your_data_extensions_route",
+        ),
+        pytest.param(
+            "https://blank-query.example.com/openai/deployments/gpt/chat/completions"
+            "?api-version=2024-10-21&subscription-key=",
+            "/openai/deployments/gpt/chat/completions",
+            {"api-version": "2025-02-01-preview", "subscription-key": ""},
+            id="blank_query_value",
+        ),
+    ],
+)
+def test_full_deployment_url_reaches_the_same_operation_with_its_query(
+    monkeypatch: pytest.MonkeyPatch, deployment_url: str, expected_path: str, expected_params: dict[str, str]
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "client_session",
+        httpx.Client(transport=httpx.MockTransport(lambda request: _echo_chat_completion(str(request.url)))),
+    )
+    client: Final = BaseAzureLLM().get_azure_openai_client(
+        api_key="azure-key",
+        api_base=deployment_url,
+        api_version="2025-02-01-preview",
+        litellm_params={},
+        _is_async=False,
+    )
+
+    response: Final = client.chat.completions.create(model="gpt", messages=[{"role": "user", "content": "hi"}])
+
+    sent: Final = httpx.URL(response.choices[0].message.content or "")
+    assert sent.path == expected_path
+    assert dict(sent.params) == expected_params
+
+
+def _auth_headers_of(request: httpx.Request) -> httpx.Response:
+    return _echo_chat_completion(
+        json.dumps({"api-key": request.headers.get("api-key"), "authorization": request.headers.get("authorization")})
+    )
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    "api_key,litellm_params,expected_headers",
+    [
+        pytest.param(
+            "azure-key", {}, {"api-key": "azure-key", "authorization": "Bearer azure-key"}, id="api_key_sends_both"
+        ),
+        pytest.param(
+            "azure-key",
+            {"azure_ad_token": "entra-token"},
+            {"api-key": None, "authorization": "Bearer entra-token"},
+            id="ad_token_wins_over_api_key",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_azure_sdk_client_sends_the_auth_headers_sdk_2_sent(
+    monkeypatch: pytest.MonkeyPatch,
+    is_async: bool,
+    api_key: str,
+    litellm_params: dict[str, str],
+    expected_headers: dict[str, str | None],
+) -> None:
+    transport: Final = httpx.MockTransport(_auth_headers_of)
+    monkeypatch.setattr(litellm, "client_session", httpx.Client(transport=transport))
+    monkeypatch.setattr(litellm, "aclient_session", httpx.AsyncClient(transport=transport))
+    client: Final = BaseAzureLLM().get_azure_openai_client(
+        api_key=api_key,
+        api_base=f"https://auth-{is_async}-{len(litellm_params)}.example.com",
+        api_version="2025-02-01-preview",
+        litellm_params=litellm_params,
+        _is_async=is_async,
+    )
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    response: Final = (
+        await client.chat.completions.create(model="gpt", messages=messages)
+        if isinstance(client, AsyncAzureOpenAI)
+        else client.chat.completions.create(model="gpt", messages=messages)
+    )
+
+    assert json.loads(response.choices[0].message.content or "{}") == expected_headers
+
+
+def _region_only_for_key_and_bearer(request: httpx.Request) -> httpx.Response:
+    if (request.headers.get("api-key"), request.headers.get("authorization")) != ("azure-key", "Bearer azure-key"):
+        return httpx.Response(401, json={"error": {"message": "denied"}})
+    return httpx.Response(
+        200,
+        headers={"x-ms-region": "eastus"},
+        json={"id": "chatcmpl-region", "object": "chat.completion", "created": 0, "model": "gpt", "choices": []},
+    )
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    ["https://region-lookup.openai.azure.com", "https://gateway.ai.cloudflare.com/v1/account/gateway/azure-openai/res"],
+)
+def test_azure_region_lookup_sends_the_key_and_bearer_headers(monkeypatch: pytest.MonkeyPatch, api_base: str) -> None:
+    session: Final = httpx.Client(transport=httpx.MockTransport(_region_only_for_key_and_bearer))
+    monkeypatch.setattr(litellm, "client_session", session)
+    params: Final = LiteLLM_Params(model="azure/gpt-region", api_key="azure-key", api_base=api_base)
+
+    assert get_model_region(litellm_params=params, mode="chat") == "eastus"
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_azure_v1_deployment_keyed_only_by_the_openai_api_key_env_sends_that_key(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, is_async: bool
+) -> None:
+    for name in ("AZURE_API_KEY", "AZURE_OPENAI_API_KEY", "AZURE_AD_TOKEN", "AZURE_OPENAI_AD_TOKEN", "AZURE_CLIENT_ID"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "azure-key-in-openai-env")
+    monkeypatch.setenv("OPENAI_ADMIN_KEY", "sk-admin-key-for-org-apis")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    api_base: Final = f"https://envkey-{is_async}.openai.azure.com"
+    route: Final = respx_mock.post(f"{api_base}/openai/v1/chat/completions").respond(
+        200,
+        json={
+            "id": "chatcmpl-envkey",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "gpt-4o-mini",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}],
+        },
+    )
+    request: Final = {
+        "model": "azure/gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "api_base": api_base,
+        "api_version": "v1",
+    }
+
+    response: Final = await litellm.acompletion(**request) if is_async else litellm.completion(**request)
+
+    assert response.choices[0].message.content == "hi"
+    assert route.calls.last.request.headers["authorization"] == "Bearer azure-key-in-openai-env"
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_azure_v1_deployment_with_no_credential_is_an_authentication_error(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, is_async: bool
+) -> None:
+    for name in (
+        "AZURE_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_AD_TOKEN",
+        "AZURE_OPENAI_AD_TOKEN",
+        "AZURE_CLIENT_ID",
+        "OPENAI_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    api_base: Final = f"https://nokey-{is_async}.openai.azure.com"
+    route: Final = respx_mock.post(f"{api_base}/openai/v1/embeddings").respond(200, json={})
+    request: Final = {
+        "model": "azure/text-embedding-3-small",
+        "input": ["hi"],
+        "api_base": api_base,
+        "api_version": "v1",
+    }
+
+    with pytest.raises(litellm.AuthenticationError):
+        await litellm.aembedding(**request) if is_async else litellm.embedding(**request)
+
+    assert not route.called

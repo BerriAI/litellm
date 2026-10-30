@@ -70,6 +70,12 @@ trap 'exit 143' TERM
 
 export PATH="$PWD/.venv/bin:$PATH"
 export PYTHONPATH="$PWD:$PWD/tests:$PWD/tests/e2e"
+if [ "$suite" = extensions ]; then
+  retained_openai="$(mktemp -d)/retained-openai"
+  uv venv --quiet --python 3.12 "$retained_openai"
+  uv pip install --quiet --python "$retained_openai/bin/python" --exclude-newer 2026-04-29T00:00:00Z openai==2.33.0
+  export RETAINED_OPENAI_PYTHON="$retained_openai/bin/python"
+fi
 export DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:5432/circle_test"
 export REDIS_HOST=127.0.0.1 REDIS_PORT=6379
 export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 16)" LITELLM_SALT_KEY=sk-integration-salt
@@ -269,6 +275,7 @@ env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_PROXY_READ_REPLICA_URL="$INTEGRATION_PROXY_READ_REPLICA_URL" \
   INTEGRATION_ROUTING="$INTEGRATION_ROUTING" \
   MCP_TEST_PEER_PYTHON="${MCP_TEST_PEER_PYTHON:-}" \
+  RETAINED_OPENAI_PYTHON="${RETAINED_OPENAI_PYTHON:-}" \
   .venv/bin/python tests/integration/run.py "$suite" --results "$results" \
   "${shard_arguments[@]}"
 

@@ -1364,7 +1364,7 @@ jobs:
         run: |
           .github/scripts/uv_sync_with_retries.sh --frozen --group dev --group proxy-dev --extra proxy --no-install-workspace
           cp rust-bridge-dist/litellm/rust_bridge/_native.* litellm/rust_bridge/
-          uv pip install "openai==${OPENAI_VERSION:?}" --exclude-newer-package openai=2026-10-07T00:00:00Z
+          uv pip install "openai==${OPENAI_VERSION:?}" --override <(echo "openai==${OPENAI_VERSION:?}") --exclude-newer-package openai=2026-10-07T00:00:00Z
           uv run --no-sync python -c 'import os, openai; assert openai.__version__ == os.environ["OPENAI_VERSION"], openai.__version__'
 
       - name: Run OpenAI SDK compatibility tests

@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping
 from typing import Final
 
 import httpx
@@ -13,7 +13,7 @@ from openai import (
     BadRequestError,
     OpenAI,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RETRIES
@@ -52,6 +52,7 @@ from .common_utils import (
     process_azure_headers,
     redact_azure_auth_headers,
     select_azure_base_url_or_endpoint,
+    with_one_azure_sdk_credential,
 )
 from .image_generation import (
     AzureFoundryMAIImageGenerationConfig,
@@ -136,6 +137,16 @@ def check_dynamic_azure_params(
 
 
 _check_dynamic_azure_params = check_dynamic_azure_params
+
+
+class _AzureDefaultQuery(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    default_query: Mapping[str, str] | None = None
+
+
+def _with_default_query(url: str, default_query: Mapping[str, str] | None) -> str:
+    return str(httpx.URL(url).copy_merge_params(default_query)) if default_query else url
 
 
 class AzureChatCompletion(BaseAzureLLM, BaseLLM):
@@ -946,6 +957,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             "/"
         )
         api_version: Final[str] = azure_client_params.get("api_version", "")
+        default_query: Final = _AzureDefaultQuery.model_validate(azure_client_params).default_query
         if model is None:
             model = ""
 
@@ -970,17 +982,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             route="/openai/images/generations",
         )
         if v1_url is not None:
-            return v1_url
+            return _with_default_query(v1_url, default_query)
 
-        if "/openai/deployments/" in api_base:
-            base_url_with_deployment = api_base
-        else:
-            base_url_with_deployment = api_base + "/openai/deployments/" + model
-
-        base_url_with_deployment += "/images/generations"
-        base_url_with_deployment += "?api-version=" + api_version
-
-        return base_url_with_deployment
+        deployment_url: Final = (
+            api_base if "/openai/deployments/" in api_base else f"{api_base}/openai/deployments/{model}"
+        )
+        return _with_default_query(f"{deployment_url}/images/generations?api-version={api_version}", default_query)
 
     async def aimage_generation(
         self,
@@ -1332,21 +1339,29 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 api_base += "/"
             api_base += f"{model}"
             client = AzureOpenAI(
-                base_url=api_base,
-                api_version=api_version,
-                api_key=api_key,
-                timeout=timeout,
-                http_client=client_session,
+                **with_one_azure_sdk_credential(
+                    {
+                        "base_url": api_base,
+                        "api_version": api_version,
+                        "api_key": api_key,
+                        "timeout": timeout,
+                        "http_client": client_session,
+                    }
+                )
             )
             model = None
             # cloudflare ai gateway, needs model=None
         else:
             client = AzureOpenAI(
-                api_version=api_version,
-                azure_endpoint=api_base,
-                api_key=api_key,
-                timeout=timeout,
-                http_client=client_session,
+                **with_one_azure_sdk_credential(
+                    {
+                        "api_version": api_version,
+                        "azure_endpoint": api_base,
+                        "api_key": api_key,
+                        "timeout": timeout,
+                        "http_client": client_session,
+                    }
+                )
             )
 
             # only run this check if it's not cloudflare ai gateway

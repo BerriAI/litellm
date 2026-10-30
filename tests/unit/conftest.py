@@ -2,10 +2,13 @@ import asyncio
 import base64
 import importlib
 import os
+import sys
 import shutil
 import tempfile
 from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass, field
+from functools import partial
+from importlib.metadata import version
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
@@ -289,7 +292,9 @@ def isolate_litellm_globals() -> Iterator[None]:
     original_callback_holders: Final = frozenset(litellm_router_module._routers_holding_global_callbacks)
     original_reset: Final = {name: getattr(litellm, name) for name in RESET_TO_NONE_GLOBALS}
     original_restored: Final = {name: getattr(litellm, name) for name in RESTORED_GLOBALS if hasattr(litellm, name)}
-    original_clients: Final = {name: litellm.__dict__[name] for name in MODULE_LEVEL_CLIENTS if name in litellm.__dict__}
+    original_clients: Final = {
+        name: litellm.__dict__[name] for name in MODULE_LEVEL_CLIENTS if name in litellm.__dict__
+    }
     original_loggers: Final = {
         logger: (logger.level, logger.disabled, logger.propagate, list(logger.handlers), list(logger.filters))
         for logger in ALL_LOGGERS
@@ -477,6 +482,35 @@ FAKE_PROVIDER_CREDENTIALS: Final = MappingProxyType(
 def fake_provider_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     for name, value in FAKE_PROVIDER_CREDENTIALS.items():
         monkeypatch.setenv(name, value)
+
+
+@pytest.fixture
+def openai_token_exchange_via_httpx(monkeypatch: pytest.MonkeyPatch) -> None:
+    if int(version("openai").split(".")[0]) < 3:
+        return
+    import httpx2
+    import openai.auth._workload as workload_module
+
+    native_client_factory: Final = workload_module.DefaultHttpx2Client
+
+    def send_through_httpx(request: httpx2.Request) -> httpx2.Response:
+        with httpx.Client(trust_env=False) as client:
+            try:
+                response: Final = client.send(
+                    httpx.Request(
+                        request.method, str(request.url), headers=dict(request.headers), content=request.content
+                    )
+                )
+            except httpx.TransportError as error:
+                native_error: Final = getattr(httpx2, type(error).__name__, httpx2.TransportError)
+                raise native_error(str(error), request=request) from error
+        return httpx2.Response(response.status_code, headers=dict(response.headers), content=response.content)
+
+    monkeypatch.setattr(
+        workload_module,
+        "DefaultHttpx2Client",
+        partial(native_client_factory, transport=httpx2.MockTransport(send_through_httpx), trust_env=False),
+    )
 
 
 @pytest.fixture

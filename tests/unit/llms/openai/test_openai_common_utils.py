@@ -79,10 +79,11 @@ API_FUNCTION_PARAMS = [
 
 @pytest.mark.parametrize("function_name,is_async,args", API_FUNCTION_PARAMS)
 @pytest.mark.asyncio
-async def test_openai_client_reuse(function_name, is_async, args):
+async def test_openai_client_reuse(function_name, is_async, args, monkeypatch: pytest.MonkeyPatch):
     """
     Test that multiple API calls reuse the same OpenAI client
     """
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-client-reuse")
 
     # Determine which client class to mock based on whether the test is async
     client_path = "litellm.llms.openai.openai.AsyncOpenAI" if is_async else "litellm.llms.openai.openai.OpenAI"
@@ -588,3 +589,33 @@ async def test_azure_gateway_and_image_variations_use_the_callers_async_session(
         )
         assert response.data[0].url == "https://example.com/image.png"
         assert not session.is_closed
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_unkeyed_openai_deployment_never_sends_the_openai_admin_key(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, is_async: bool
+) -> None:
+    monkeypatch.setenv("OPENAI_ADMIN_KEY", "sk-admin-key-for-org-apis")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    api_base: Final = f"https://unkeyed-{is_async}.example.com/v1"
+    route: Final = respx_mock.post(f"{api_base}/chat/completions").respond(
+        200,
+        json={
+            "id": "chatcmpl-unkeyed",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "gpt-4o-mini",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}],
+        },
+    )
+    request: Final = {
+        "model": "openai/gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "api_base": api_base,
+    }
+
+    with pytest.raises(litellm.AuthenticationError, match=r"Missing credentials|The api_key client option must be set"):
+        await litellm.acompletion(**request) if is_async else litellm.completion(**request)
+
+    assert not route.called

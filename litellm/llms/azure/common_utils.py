@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextlib import closing
 from types import MappingProxyType
 from typing import Final, Literal, NamedTuple, cast
+from urllib.parse import SplitResult, parse_qsl, urlsplit, urlunsplit
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
@@ -21,7 +22,12 @@ from litellm.litellm_core_utils.single_flight import SingleFlight, single_flight
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from litellm.llms.openai.common_utils import BaseOpenAILLM, OpenAIAsyncHTTPClient, OpenAIHTTPClient
+from litellm.llms.openai.common_utils import (
+    BaseOpenAILLM,
+    OpenAIAsyncHTTPClient,
+    OpenAIHTTPClient,
+    openai_sdk_key_params,
+)
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
     single_flight_bearer_token_provider,
@@ -52,6 +58,17 @@ class _AsyncAzureClientParams(TypedDict, total=False, extra_items=object):
 
 
 _ASYNC_AZURE_CLIENT_PARAMS_ADAPTER: Final = TypeAdapter(_AsyncAzureClientParams)
+
+
+@with_config(ConfigDict(extra="allow"))
+class _AzureSdkClientParams(TypedDict, total=False, extra_items=object):
+    api_key: ReadOnly[str | None]
+    azure_ad_token: ReadOnly[str | None]
+    azure_ad_token_provider: ReadOnly[Callable[[], str] | None]
+    default_headers: ReadOnly[Mapping[str, str]]
+
+
+_AZURE_SDK_CLIENT_PARAMS_ADAPTER: Final = TypeAdapter(_AzureSdkClientParams)
 
 
 class _AzureGatewayClientParams(TypedDict, total=False, extra_items=object):
@@ -361,16 +378,36 @@ def get_azure_ad_token_from_oidc(
     )
 
 
-def select_azure_base_url_or_endpoint(azure_client_params: dict):
-    azure_endpoint: Final = azure_client_params.get("azure_endpoint", None)
-    if azure_endpoint is not None:
-        # see : https://github.com/openai/openai-python/blob/3d61ed42aba652b547029095a7eb269ad4e1e957/src/openai/lib/azure.py#L192
-        if "/openai/deployments" in azure_endpoint:
-            # this is base_url, not an azure_endpoint
-            azure_client_params["base_url"] = azure_endpoint
-            azure_client_params.pop("azure_endpoint")
+_DEPLOYMENT_OPERATION_PATH: Final = re.compile(
+    r"(?P<deployment>.*/openai/deployments/[^/]+(?:/extensions)?)"
+    r"/(?:chat/completions|completions|embeddings|audio/(?:transcriptions|translations|speech)|images/(?:generations|edits))/?"
+)
 
-    return azure_client_params
+
+def _azure_deployment_base_url(deployment_url: SplitResult) -> str:
+    operation_path: Final = _DEPLOYMENT_OPERATION_PATH.fullmatch(deployment_url.path)
+    deployment_path: Final = deployment_url.path if operation_path is None else operation_path["deployment"]
+    return urlunsplit(deployment_url._replace(path=deployment_path, query="", fragment=""))
+
+
+def _azure_deployment_extra_query(deployment_url: SplitResult) -> Mapping[str, str]:
+    return {
+        name: value for name, value in parse_qsl(deployment_url.query, keep_blank_values=True) if name != "api-version"
+    }
+
+
+def select_azure_base_url_or_endpoint(azure_client_params: Mapping[str, object]):
+    azure_endpoint: Final = azure_client_params.get("azure_endpoint", None)
+    # see : https://github.com/openai/openai-python/blob/3d61ed42aba652b547029095a7eb269ad4e1e957/src/openai/lib/azure.py#L192
+    if not isinstance(azure_endpoint, str) or "/openai/deployments" not in azure_endpoint:
+        return dict(azure_client_params)
+    deployment_url: Final = urlsplit(azure_endpoint)
+    extra_query: Final = _azure_deployment_extra_query(deployment_url)
+    return {
+        **{name: value for name, value in azure_client_params.items() if name != "azure_endpoint"},
+        "base_url": _azure_deployment_base_url(deployment_url),
+        **({"default_query": extra_query} if extra_query else {}),
+    }
 
 
 def get_azure_ad_token(
@@ -490,6 +527,25 @@ def get_azure_ad_token(
 
 _AZURE_AUTH_HEADER_NAMES: Final = frozenset(("api-key", "authorization"))
 _REDACTED_AZURE_HEADER_VALUE: Final = "***REDACTED***"
+
+
+_AZURE_SDK_AUTH_PARAMS: Final = ("azure_ad_token", "azure_ad_token_provider", "api_key")
+
+
+def with_one_azure_sdk_credential(azure_client_params: Mapping[str, object]) -> _AzureSdkClientParams:
+    without_auth: Final = {
+        name: value for name, value in azure_client_params.items() if name not in _AZURE_SDK_AUTH_PARAMS
+    }
+    chosen: Final = next(
+        (name for name in _AZURE_SDK_AUTH_PARAMS[:-1] if azure_client_params.get(name) is not None), "api_key"
+    )
+    credential: Final = azure_client_params.get(chosen)
+    bearer_for_api_key: Final = (
+        {"default_headers": {"Authorization": f"Bearer {credential}"}}
+        if chosen == "api_key" and isinstance(credential, str) and credential
+        else {}
+    )
+    return _AZURE_SDK_CLIENT_PARAMS_ADAPTER.validate_python({**without_auth, chosen: credential, **bearer_for_api_key})
 
 
 def _resolve_azure_ad_token(azure_client_params: Mapping[str, object]) -> str | None:
@@ -642,10 +698,12 @@ class BaseAzureLLM(BaseOpenAILLM):
                 else v1_token_provider
             )
 
-            v1_params: Final[_AzureV1ClientParams] = {
-                "api_key": v1_api_key,
-                "base_url": f"{ensure_api_route(api_base or '', 'openai/v1')}/",
-            }
+            v1_base_url: Final = f"{ensure_api_route(api_base or '', 'openai/v1')}/"
+            v1_params: Final[_AzureV1ClientParams] = (
+                {"api_key": v1_api_key, "base_url": v1_base_url}
+                if callable(v1_api_key)
+                else {**openai_sdk_key_params(v1_api_key), "base_url": v1_base_url}
+            )
             if "timeout" in azure_client_params:
                 v1_params["timeout"] = azure_client_params["timeout"]
             if "max_retries" in azure_client_params:
@@ -653,7 +711,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             if "http_client" in azure_client_params:
                 v1_params["http_client"] = azure_client_params["http_client"]
 
-            verbose_logger.debug("Using Azure v1 API with base_url: %s", v1_params["base_url"])
+            verbose_logger.debug("Using Azure v1 API with base_url: %s", v1_base_url)
 
             if _is_async is True:
                 openai_client = AsyncOpenAI(**v1_params)
@@ -663,7 +721,9 @@ class BaseAzureLLM(BaseOpenAILLM):
             # Traditional Azure API uses AzureOpenAI client
             if _is_async is True:
                 async_azure_client_params: Final[_AsyncAzureClientParams] = (
-                    _ASYNC_AZURE_CLIENT_PARAMS_ADAPTER.validate_python(azure_client_params)
+                    _ASYNC_AZURE_CLIENT_PARAMS_ADAPTER.validate_python(
+                        with_one_azure_sdk_credential(azure_client_params)
+                    )
                 )
                 async_token_provider_candidate: Final = async_azure_client_params.get("azure_ad_token_provider")
                 async_azure_client_params_with_threaded_provider: Final[_AsyncAzureClientParams] = (
@@ -676,7 +736,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 )
                 openai_client = AsyncAzureOpenAI(**async_azure_client_params_with_threaded_provider)
             else:
-                openai_client = AzureOpenAI(**azure_client_params)
+                openai_client = AzureOpenAI(**with_one_azure_sdk_credential(azure_client_params))
 
         # save client in-memory cache
         self.set_cached_openai_client(
@@ -836,9 +896,9 @@ class BaseAzureLLM(BaseOpenAILLM):
                 azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
 
             if acompletion is True:
-                client = AsyncAzureOpenAI(**azure_client_params)
+                client = AsyncAzureOpenAI(**with_one_azure_sdk_credential(azure_client_params))
             else:
-                client = AzureOpenAI(**azure_client_params)
+                client = AzureOpenAI(**with_one_azure_sdk_credential(azure_client_params))
         return client
 
     @staticmethod

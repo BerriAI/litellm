@@ -7029,7 +7029,13 @@ def embedding(
 
             azure_ad_token: Final = optional_params.pop("azure_ad_token", None) or get_secret_str("AZURE_AD_TOKEN")
 
-            api_key = api_key or litellm.api_key or litellm.azure_key or get_secret_str("AZURE_API_KEY")
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.azure_key
+                or get_secret_str("AZURE_API_KEY")
+                or get_secret_str("AZURE_OPENAI_API_KEY")
+            )
 
             if api_base is None:
                 raise ValueError("No API Base provided for Azure OpenAI LLM provider. Set 'AZURE_API_BASE' in .env")
@@ -8621,7 +8627,13 @@ def transcription(
 
         azure_ad_token: Final = kwargs.pop("azure_ad_token", None) or get_secret_str("AZURE_AD_TOKEN")
 
-        api_key = api_key or litellm.api_key or litellm.azure_key or get_secret_str("AZURE_API_KEY")
+        api_key = (
+            api_key
+            or litellm.api_key
+            or litellm.azure_key
+            or get_secret_str("AZURE_API_KEY")
+            or get_secret_str("AZURE_OPENAI_API_KEY")
+        )
 
         optional_params["extra_headers"] = extra_headers
 

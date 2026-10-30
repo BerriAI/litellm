@@ -4151,7 +4151,7 @@ def test_azure_passthrough_keeps_its_own_openai_beta_rule(
 
 
 @pytest.fixture
-def openai_wif_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def openai_wif_env(monkeypatch: pytest.MonkeyPatch, tmp_path, openai_token_exchange_via_httpx: None) -> None:
     from litellm.llms.openai.workload_identity import _workload_identity_auth
 
     token_file: Final = tmp_path / "subject_token.jwt"

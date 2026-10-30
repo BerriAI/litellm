@@ -415,6 +415,20 @@ class TestResponseAPILoggingUtils:
         assert result.prompt_tokens_details.cache_creation_tokens == 10059
         assert result.prompt_tokens_details.cached_tokens == 0
 
+    def test_transform_response_api_usage_keeps_cache_creation_tokens_without_cache_writes(self) -> None:
+        unvalidated_usage: Final = ResponseAPIUsage.model_construct(
+            input_tokens=100,
+            output_tokens=1,
+            total_tokens=101,
+            input_tokens_details={"cached_tokens": 0, "cache_creation_tokens": 50},
+        )
+
+        usage: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(unvalidated_usage)
+
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cache_creation_tokens == 50
+        assert usage.prompt_tokens_details.cache_write_tokens == 50
+
     @pytest.mark.parametrize("as_model", [False, True])
     def test_transform_response_api_usage_prices_12h_cache_writes(self, as_model: bool) -> None:
         usage_data: Final = {

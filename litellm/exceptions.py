@@ -11,8 +11,9 @@
 
 import datetime
 import enum
+import sys
 from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 import openai
@@ -20,6 +21,9 @@ import openai
 import litellm
 from litellm.types.utils import LiteLLMCommonStrings
 from litellm.types.vector_stores import VectorStoreSearchFailure
+
+if TYPE_CHECKING:
+    import httpx2
 
 
 class RateLimitErrorCategory(str, enum.Enum):
@@ -116,17 +120,29 @@ def validate_rate_limit_type(value: object) -> str | None:
     return None
 
 
-def _upstream_body(response: object) -> bytes:
-    if not isinstance(response, httpx.Response):
+def upstream_http_response(upstream: object) -> "httpx.Response | httpx2.Response | None":
+    if isinstance(upstream, httpx.Response):
+        return upstream
+    if "httpx2" not in sys.modules:
+        return None
+    import httpx2
+
+    return upstream if isinstance(upstream, httpx2.Response) else None
+
+
+def _upstream_body(response: "httpx.Response | httpx2.Response | None") -> bytes:
+    if response is None:
         return b""
     try:
         return response.content
-    except httpx.ResponseNotRead:
+    except RuntimeError:
         return b""
 
 
-def _request_without_credentials(upstream: object, fallback_url: str) -> httpx.Request:
-    if not isinstance(upstream, httpx.Response):
+def _request_without_credentials(
+    upstream: "httpx.Response | httpx2.Response | None", fallback_url: str
+) -> httpx.Request:
+    if upstream is None:
         return httpx.Request(method="POST", url=fallback_url)
     try:
         upstream_request: Final = upstream.request
@@ -134,12 +150,12 @@ def _request_without_credentials(upstream: object, fallback_url: str) -> httpx.R
         return httpx.Request(method="POST", url=fallback_url)
     return httpx.Request(
         method=upstream_request.method,
-        url=upstream_request.url.copy_with(userinfo=b"", query=None, fragment=None),
+        url=httpx.URL(str(upstream_request.url)).copy_with(userinfo=b"", query=None, fragment=None),
     )
 
 
-def _upstream_elapsed(upstream: object) -> datetime.timedelta | None:
-    if not isinstance(upstream, httpx.Response):
+def _upstream_elapsed(upstream: "httpx.Response | httpx2.Response | None") -> datetime.timedelta | None:
+    if upstream is None:
         return None
     try:
         return upstream.elapsed
@@ -147,15 +163,26 @@ def _upstream_elapsed(upstream: object) -> datetime.timedelta | None:
         return None
 
 
+def _upstream_headers(upstream: "httpx.Response | httpx2.Response | None") -> httpx.Headers:
+    match upstream:
+        case None:
+            return httpx.Headers()
+        case httpx.Response(headers=headers):
+            return httpx.Headers(headers)
+        case _:
+            return httpx.Headers(upstream.headers.multi_items())
+
+
 def error_response_without_credentials(status_code: int, upstream: object, fallback_url: str) -> httpx.Response:
+    upstream_response: Final = upstream_http_response(upstream)
     response: Final = httpx.Response(
         status_code=status_code,
-        stream=httpx.ByteStream(_upstream_body(upstream)),
-        request=_request_without_credentials(upstream, fallback_url),
+        stream=httpx.ByteStream(_upstream_body(upstream_response)),
+        request=_request_without_credentials(upstream_response, fallback_url),
     )
     _ = response.read()
-    response.headers = httpx.Headers(upstream.headers if isinstance(upstream, httpx.Response) else None)
-    elapsed: Final = _upstream_elapsed(upstream)
+    response.headers = _upstream_headers(upstream_response)
+    elapsed: Final = _upstream_elapsed(upstream_response)
     if elapsed is not None:
         response.elapsed = elapsed
     return response

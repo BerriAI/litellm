@@ -3,12 +3,14 @@ import gzip
 import importlib
 import json
 import os
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from importlib.metadata import version
 from types import ModuleType
 from typing import Final, Literal, Protocol
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
+import httpx2
 import pytest
 import respx
 from openai import AsyncOpenAI, AzureOpenAI, OpenAI
@@ -34,6 +36,7 @@ from litellm.llms.openai.openai import (
 from litellm.types.utils import (
     ImageResponse,
     ModelResponse,
+    ModelResponseStream,
     PromptTokensDetails,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -469,6 +472,58 @@ async def test_mapped_error_carries_the_upstream_error_response(
     assert raised.value.response.headers["x-upstream-trace"] == "trace-7"
 
 
+
+_SDK_TAKES_HTTPX2: Final = pytest.mark.skipif(
+    int(version("openai").split(".")[0]) < 3, reason="openai SDK 2 accepts only httpx clients"
+)
+
+
+def _sdk_default_transport_rejecting(_request: httpx2.Request) -> httpx2.Response:
+    return httpx2.Response(
+        400,
+        content=_UPSTREAM_ERROR_BODY,
+        headers={"x-request-id": "req_upstream_400", "x-upstream-trace": "trace-7", "content-type": "application/json"},
+    )
+
+
+async def _completion_on_the_sdks_default_transport() -> None:
+    client: Final = OpenAI(
+        api_key="transport-only",
+        base_url=_UPSTREAM_BASE,
+        max_retries=0,
+        http_client=httpx2.Client(transport=httpx2.MockTransport(_sdk_default_transport_rejecting)),
+    )
+    litellm.completion(messages=_MESSAGES, client=client, **_upstream("openai", "gpt-5.6"))
+
+
+async def _acompletion_on_the_sdks_default_transport() -> None:
+    client: Final = AsyncOpenAI(
+        api_key="transport-only",
+        base_url=_UPSTREAM_BASE,
+        max_retries=0,
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(_sdk_default_transport_rejecting)),
+    )
+    await litellm.acompletion(messages=_MESSAGES, client=client, **_upstream("openai", "gpt-5.6"))
+
+
+@_SDK_TAKES_HTTPX2
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    (_completion_on_the_sdks_default_transport, _acompletion_on_the_sdks_default_transport),
+    ids=("sync", "async"),
+)
+async def test_mapped_error_keeps_the_upstream_error_response_from_the_sdks_httpx2_transport(
+    route: Callable[[], Awaitable[None]],
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as raised:
+        await route()
+
+    assert raised.value.response.text == _UPSTREAM_ERROR_BODY
+    assert raised.value.response.headers["x-request-id"] == "req_upstream_400"
+    assert raised.value.response.headers["x-upstream-trace"] == "trace-7"
+    assert raised.value.response.request.url == httpx.URL(f"{_UPSTREAM_BASE}/chat/completions")
+
 _UPSTREAM_SERVER_ERROR_BODY: Final = (
     '{"error":{"message":"The server had an error while processing your request.","type":"server_error",'
     '"param":null,"code":null}}'
@@ -543,6 +598,29 @@ _PROVIDER_KEY: Final = "sk-provider-secret"
 _QUERY_SECRET: Final = "query-secret"
 
 
+def _httpx_client_answering(status_code: int, body: str) -> httpx.Client:
+    return httpx.Client(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(status_code, content=body, headers={"content-type": "application/json"})
+        )
+    )
+
+
+def _httpx2_client_answering(status_code: int, body: str) -> httpx2.Client:
+    return httpx2.Client(
+        transport=httpx2.MockTransport(
+            lambda _request: httpx2.Response(status_code, content=body, headers={"content-type": "application/json"})
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "http_client_answering",
+    (
+        pytest.param(_httpx_client_answering, id="httpx"),
+        pytest.param(_httpx2_client_answering, id="httpx2", marks=_SDK_TAKES_HTTPX2),
+    ),
+)
 @pytest.mark.parametrize("provider", ("openai", "litellm_proxy"))
 @pytest.mark.parametrize(
     ("status_code", "mapped_error", "body"),
@@ -559,20 +637,18 @@ _QUERY_SECRET: Final = "query-secret"
     ),
 )
 def test_mapped_error_keeps_the_upstream_body_without_the_provider_credentials(
-    provider: str, status_code: int, mapped_error: type[Exception], body: str
+    http_client_answering: Callable[[int, str], httpx.Client | httpx2.Client],
+    provider: str,
+    status_code: int,
+    mapped_error: type[Exception],
+    body: str,
 ) -> None:
     client: Final = OpenAI(
         api_key=_PROVIDER_KEY,
         base_url=_UPSTREAM_BASE,
         default_query={"key": _QUERY_SECRET},
         max_retries=0,
-        http_client=httpx.Client(
-            transport=httpx.MockTransport(
-                lambda _request: httpx.Response(
-                    status_code, content=body, headers={"content-type": "application/json"}
-                )
-            )
-        ),
+        http_client=http_client_answering(status_code, body),
     )
 
     with pytest.raises(mapped_error) as raised:
@@ -712,6 +788,84 @@ async def test_acompletion_streams_text_deltas_over_injected_transport(
             part.choices[0].finish_reason for part in reversed(chunks) if part.choices and part.choices[0].finish_reason
         )
         assert last_finish == "stop"
+
+
+def _sse_event(delta: Mapping[str, str], finish: str | None) -> bytes:
+    body: Final = {
+        "id": "chatcmpl-dropped",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "gpt-5.6",
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+    }
+    return f"data: {json.dumps(body)}\n\n".encode()
+
+
+_FINISHED_EVENTS_WITHOUT_DONE: Final = (
+    _sse_event({"role": "assistant", "content": "Hel"}, None),
+    _sse_event({"content": "lo"}, "stop"),
+)
+
+
+def _finished_then_dropped_transport(http_backend: ModuleType) -> object:
+    class FinishedThenDropped(http_backend.SyncByteStream, http_backend.AsyncByteStream):
+        def __iter__(self) -> Iterator[bytes]:
+            yield from _FINISHED_EVENTS_WITHOUT_DONE
+            raise http_backend.ReadError("peer closed the connection before [DONE]")
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            for event in _FINISHED_EVENTS_WITHOUT_DONE:
+                yield event
+            raise http_backend.ReadError("peer closed the connection before [DONE]")
+
+    return http_backend.MockTransport(
+        lambda _request: http_backend.Response(
+            200, headers={"content-type": "text/event-stream"}, stream=FinishedThenDropped()
+        )
+    )
+
+
+def _streamed_text_and_finish_reasons(chunks: list[ModelResponseStream]) -> tuple[str, list[str]]:
+    text: Final = "".join(part.choices[0].delta.content or "" for part in chunks if part.choices)
+    finish_reasons: Final = [part.choices[0].finish_reason for part in chunks if part.choices and part.choices[0].finish_reason]
+    return text, finish_reasons
+
+
+@pytest.mark.asyncio
+async def test_acompletion_ends_a_finished_stream_cleanly_when_the_connection_drops_before_done(
+    http_backend: ModuleType,
+):
+    async with http_backend.AsyncClient(transport=_finished_then_dropped_transport(http_backend)) as http_client:
+        stream: Final = await litellm.acompletion(
+            model="openai/gpt-5.6",
+            client=AsyncOpenAI(api_key="transport-only", http_client=http_client),
+            messages=[{"role": "user", "content": "dropped-stream-request"}],
+            stream=True,
+            num_retries=0,
+            max_retries=0,
+        )
+
+        async def drain() -> list[ModelResponseStream]:
+            return [part async for part in stream]
+
+        chunks: Final = await asyncio.wait_for(drain(), timeout=10)
+
+    assert _streamed_text_and_finish_reasons(chunks) == ("Hello", ["stop"])
+
+
+def test_completion_ends_a_finished_stream_cleanly_when_the_connection_drops_before_done(http_backend: ModuleType):
+    with http_backend.Client(transport=_finished_then_dropped_transport(http_backend)) as http_client:
+        stream: Final = litellm.completion(
+            model="openai/gpt-5.6",
+            client=OpenAI(api_key="transport-only", http_client=http_client),
+            messages=[{"role": "user", "content": "dropped-stream-request"}],
+            stream=True,
+            num_retries=0,
+            max_retries=0,
+        )
+        chunks: Final = list(stream)
+
+    assert _streamed_text_and_finish_reasons(chunks) == ("Hello", ["stop"])
 
 
 @pytest.mark.asyncio

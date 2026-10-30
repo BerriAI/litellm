@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypeVar, cast
 
 import anyio
 import httpx
+from openai.types import Completion
 from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
@@ -36,6 +37,7 @@ from litellm.litellm_core_utils.model_response_utils import (
 )
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.llms.custom_httpx.transport_errors import TransportErrorKind, chained_transport_error_kind
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams
@@ -55,7 +57,7 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import GenericStreamingChunk as GChunk
 
-from ..exceptions import OpenAIError, Timeout
+from ..exceptions import OpenAIError
 from .core_helpers import map_finish_reason, process_response_headers
 from .exception_mapping_utils import exception_type, with_deployment_api_base
 from .llm_response_utils.get_api_base import get_api_base
@@ -91,6 +93,28 @@ def _next_sync_or_exhausted(it: Iterator[object]) -> object:
         return next(it)
     except StopIteration:
         return _SYNC_ITER_EXHAUSTED
+
+
+def _choice_progress(chunk: object) -> tuple[tuple[int, bool], ...]:
+    match chunk:
+        case ChatCompletionChunk(choices=choices):
+            return tuple((choice.index, bool(choice.finish_reason)) for choice in choices or ())
+        case ModelResponseStream(choices=choices):
+            return tuple((choice.index, bool(choice.finish_reason)) for choice in choices or ())
+        case Completion(choices=choices):
+            return tuple((choice.index, bool(choice.finish_reason)) for choice in choices or ())
+        case {"is_finished": bool() as is_finished}:
+            return ((0, is_finished),)
+        case _:
+            return ()
+
+
+def _ends_every_choice(chunk: object) -> bool:
+    match chunk:
+        case {"is_finished": True}:
+            return True
+        case _:
+            return False
 
 
 def _stamp_usage_cost(
@@ -139,12 +163,6 @@ def _delta_from_upstream(upstream_delta: "BaseModel | _UpstreamDeltaLike | None"
         return Delta(**dict(iter(upstream_delta)))
     except Exception:
         return None
-
-
-def _is_transport_timeout(error: BaseException) -> bool:
-    return isinstance(error, httpx.TimeoutException) or (
-        isinstance(error, Timeout) and isinstance(error.__cause__, httpx.TimeoutException)
-    )
 
 
 def _skips_stream_fallback(status_code: int | None) -> bool:
@@ -351,6 +369,8 @@ class CustomStreamWrapper:
         self._provider_response_model: str | None = None
         self.received_finish_reason: str | None = None
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
+        self._streamed_choice_indices: frozenset[int] = frozenset()
+        self._finished_choice_indices: frozenset[int] = frozenset()
         self.special_tokens = [
             "<|assistant|>",
             "<|system|>",
@@ -1109,11 +1129,16 @@ class CustomStreamWrapper:
         """
         return delta is not None and stored_attribute(delta, attribute_name) is not None
 
-    def _copy_delta_attribute(self, source_delta, target_delta, attribute_name: str) -> None:
+    def _copy_delta_attribute(self, source_delta: object, target_delta: object, attribute_name: str) -> None:
         """
         Copy a specific attribute from source delta to target delta.
         """
-        setattr(target_delta, attribute_name, getattr(source_delta, attribute_name))
+        value: Final = stored_attribute(source_delta, attribute_name)
+        setattr(
+            target_delta,
+            attribute_name,
+            value.model_dump(exclude_unset=True) if isinstance(value, BaseModel) else value,
+        )
 
     def _has_any_special_delta_attributes(self, delta: object) -> bool:
         """
@@ -1336,6 +1361,7 @@ class CustomStreamWrapper:
         completion_obj: dict[str, object],
     ) -> _ProviderChunkResult:
         response_obj: dict[str, Any] = {}
+        self._record_choice_progress(chunk)
         if (
             isinstance(chunk, ModelResponseStream)
             and self.custom_llm_provider is not None
@@ -2085,7 +2111,7 @@ class CustomStreamWrapper:
                 ):
                     chunk = self.completion_stream
                 else:
-                    chunk = next(self.completion_stream)
+                    chunk = self._next_sync_chunk()
                 if chunk is not None and chunk != b"":
                     print_verbose(
                         f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk.decode('utf-8', errors='replace') if isinstance(chunk, bytes) else chunk}; custom_llm_provider: {self.custom_llm_provider}"
@@ -2249,6 +2275,31 @@ class CustomStreamWrapper:
             self.close()
             self._handle_stream_fallback_error(e)
 
+    def _next_sync_chunk(self) -> object:
+        try:
+            return next(self.completion_stream)
+        except Exception as e:
+            if (
+                not self._every_choice_finished()
+                or chained_transport_error_kind(e) is not TransportErrorKind.DROPPED_CONNECTION
+            ):
+                raise
+            raise StopIteration from e
+
+    def _record_choice_progress(self, chunk: object) -> None:
+        progress: Final = _choice_progress(chunk)
+        self._streamed_choice_indices = self._streamed_choice_indices.union(index for index, _ in progress)
+        self._finished_choice_indices = (
+            self._streamed_choice_indices
+            if _ends_every_choice(chunk)
+            else self._finished_choice_indices.union(index for index, finished in progress if finished)
+        )
+
+    def _every_choice_finished(self) -> bool:
+        return (
+            self.received_finish_reason is not None and self._streamed_choice_indices <= self._finished_choice_indices
+        )
+
     def fetch_sync_stream(self):
         if self.completion_stream is None and self.make_call is not None:
             # Call make_call to get the completion stream
@@ -2357,21 +2408,20 @@ class CustomStreamWrapper:
                         return usage_free_chunk
         except (StopAsyncIteration, StopIteration):
             return await self._finalize_completed_stream(cache_hit=cache_hit)
-        except httpx.TimeoutException as e:  # if httpx read timeout error occues
-            traceback_exception = traceback.format_exc()
-            ## ADD DEBUG INFORMATION - E.G. LITELLM REQUEST TIMEOUT
-            traceback_exception += f"\nLiteLLM Default Request Timeout - {litellm.request_timeout}"
-            self._dispatch_stream_failure(e, traceback_exception)
-            await self.aclose()
-            self._handle_stream_fallback_error(e)
-        except (httpx.ReadError, httpx.RemoteProtocolError) as e:
-            if self.received_finish_reason is None:
-                await self.aclose()
-                self._log_stream_failure_and_raise(e)
-            return await self._finalize_completed_stream(cache_hit=cache_hit)
         except Exception as e:
-            await self.aclose()
-            self._log_stream_failure_and_raise(e)
+            match chained_transport_error_kind(e):
+                case TransportErrorKind.DROPPED_CONNECTION if self._every_choice_finished():
+                    return await self._finalize_completed_stream(cache_hit=cache_hit)
+                case TransportErrorKind.TIMEOUT:
+                    traceback_exception: Final = (
+                        f"{traceback.format_exc()}\nLiteLLM Default Request Timeout - {litellm.request_timeout}"
+                    )
+                    self._dispatch_stream_failure(e, traceback_exception)
+                    await self.aclose()
+                    self._handle_stream_fallback_error(e)
+                case _:
+                    await self.aclose()
+                    self._log_stream_failure_and_raise(e)
 
     async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
         if self.sent_last_chunk is True:
@@ -2664,7 +2714,7 @@ class CustomStreamWrapper:
         # Raise non-retriable client errors directly (skip fallback).
         # Exception: 429 (rate-limit) IS retriable/transient — allow it
         # through so the Router can switch to a different model group.
-        if not _is_transport_timeout(e) and (
+        if chained_transport_error_kind(e) is not TransportErrorKind.TIMEOUT and (
             _skips_stream_fallback(mapped_status_code) or _skips_stream_fallback(original_status_code)
         ):
             raise mapped_exception

@@ -322,7 +322,7 @@ def assert_compacted(compacted: CompactedResponse, model: str, text: str) -> Non
                 "encrypted_content": COMPACT_STATE,
             }
         ],
-        "usage": dict(COMPACT_USAGE),
+        "usage": {**COMPACT_USAGE, "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0}},
     }, compacted.model_dump_json()
 
 

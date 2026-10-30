@@ -182,7 +182,7 @@ TOKEN_EXCHANGE_URL: Final = "https://auth.openai.com/oauth/token"
 
 
 @pytest.fixture
-def openai_wif_token_file(monkeypatch, tmp_path):
+def openai_wif_token_file(monkeypatch, tmp_path, openai_token_exchange_via_httpx: None):
     token_file = tmp_path / "subject_token.jwt"
     token_file.write_text("subject-token-from-file")
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)

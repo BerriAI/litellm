@@ -5,6 +5,7 @@ from typing import Any, Final, Literal, Optional, Union
 from unittest.mock import MagicMock, patch
 
 import httpx
+import httpx2
 import openai
 import pytest
 from fastapi import HTTPException
@@ -2443,10 +2444,8 @@ def test_completion_perplexity_exception_on_openai_client(monkeypatch):
             model="perplexity/mistral-7b-instruct",
             messages=[{"role": "user", "content": "hello"}],
         )
-    assert (
-        "The api_key client option must be set either by passing api_key to the client or by setting the PERPLEXITY_API_KEY environment variable"
-        in str(exc_info.value)
-    )
+    assert "PERPLEXITY_API_KEY" in str(exc_info.value)
+    assert "OPENAI_API_KEY" not in str(exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -3086,3 +3085,33 @@ def test_openai_error_matched_by_its_message_keeps_the_upstream_body(
     assert error_response.headers["x-request-id"] == "req-openai"
     assert "sk-openai-secret" not in str(error_response.request.headers)
     assert error_response.request.content == b""
+
+
+@pytest.mark.parametrize("custom_llm_provider", ("openai", "azure"))
+def test_sdk_error_on_httpx2_keeps_the_upstream_body_without_the_provider_credentials(
+    custom_llm_provider: str,
+) -> None:
+    body: Final = json.dumps(
+        {"error": {"message": "Unsupported value: 'temperature'", "type": "invalid_request_error", "code": None}}
+    )
+    sent_request: Final = httpx2.Request(
+        "POST",
+        "https://resource.openai.azure.com/openai/v1/chat/completions?api-key=sdk-query-secret",
+        headers={"authorization": "Bearer sk-openai-secret"},
+        content=b'{"messages":[{"role":"user","content":"hi"}]}',
+    )
+    upstream: Final = httpx2.Response(400, content=body, headers={"x-request-id": "req-sdk3"}, request=sent_request)
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        exception_type(
+            model="gpt-5.6",
+            original_exception=openai.BadRequestError(
+                "Unsupported value: 'temperature'", response=upstream, body=json.loads(body)
+            ),
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    assert raised.value.response.text == body
+    assert raised.value.response.headers["x-request-id"] == "req-sdk3"
+    assert str(raised.value.response.request.url) == "https://resource.openai.azure.com/openai/v1/chat/completions"
+    assert "sk-openai-secret" not in str(raised.value.response.request.headers)

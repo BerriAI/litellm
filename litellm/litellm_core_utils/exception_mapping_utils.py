@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or
 from litellm.litellm_core_utils.secret_redaction import redact_string as redact_secret_string
 from litellm.llms.bedrock.common_utils import bedrock_model_reaches_converse_by_default
 from litellm.llms.bigmodel.common_utils import raise_bigmodel_business_error
+from litellm.llms.custom_httpx.transport_errors import TransportErrorKind, transport_error_classes
 from litellm.types.utils import LlmProviders
 
 from ..exceptions import (
@@ -39,6 +40,7 @@ from ..exceptions import (
     Timeout,
     UnprocessableEntityError,
     error_response_without_credentials,
+    upstream_http_response,
 )
 
 
@@ -274,6 +276,10 @@ class _ProviderHTTPException(Protocol):
 
 
 _ERROR_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
+_OPENAI_CLIENT_MISSING_CREDENTIALS_MESSAGES: Final = (
+    "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable",
+    "Missing credentials. Please pass an `api_key`",
+)
 
 
 def _openai_cyber_policy_body(original_exception: _ProviderHTTPException) -> Mapping[str, object] | None:
@@ -308,9 +314,10 @@ def _litellm_proxy_response(
 
 
 def _without_credentials(response: httpx.Response | None) -> httpx.Response | None:
-    if not isinstance(response, httpx.Response):
+    upstream: Final = upstream_http_response(response)
+    if upstream is None:
         return response
-    return error_response_without_credentials(response.status_code, response, "https://docs.litellm.ai/docs")
+    return error_response_without_credentials(upstream.status_code, upstream, "https://docs.litellm.ai/docs")
 
 
 def _upstream_reply(response: httpx.Response | None) -> httpx.Response | None:
@@ -473,10 +480,7 @@ def _map_openai_exception(
             litellm_debug_info=extra_information,
             body=getattr(original_exception, "body", None),
         )
-    elif (
-        "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable"
-        in error_str
-    ):
+    elif any(marker in error_str for marker in _OPENAI_CLIENT_MISSING_CREDENTIALS_MESSAGES):
         raise AuthenticationError(
             message=f"AuthenticationError: {exception_provider} - {message}",
             llm_provider=custom_llm_provider,
@@ -2159,7 +2163,7 @@ def _map_azure_exception(
             response=response,
             body=getattr(original_exception, "body", None),
         )
-    elif "The api_key client option must be set either by passing api_key to the client or by setting" in error_str:
+    elif any(marker in error_str for marker in _OPENAI_CLIENT_MISSING_CREDENTIALS_MESSAGES):
         raise AuthenticationError(
             message=f"{exception_provider} AuthenticationError - {message}",
             llm_provider=custom_llm_provider,
@@ -2620,7 +2624,7 @@ def exception_type(
             ################################################################################
 
             if (
-                isinstance(original_exception, httpx.TimeoutException)
+                isinstance(original_exception, transport_error_classes(TransportErrorKind.TIMEOUT))
                 or "Request Timeout Error" in error_str
                 or "Request timed out" in error_str
                 or "Timed out generating response" in error_str
