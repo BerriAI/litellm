@@ -148,6 +148,7 @@ class OpenAITokenCounter(BaseTokenCounter):
         messages_format: TokenCountMessagesFormat,
         output_format: JsonValue,
         api_base: str | None,
+        drop_params: bool,
     ) -> ResponsesCountRequestParts:
         match messages_format:
             case "anthropic":
@@ -158,6 +159,7 @@ class OpenAITokenCounter(BaseTokenCounter):
                     tools=tools,
                     output_format=output_format,
                     maps_tool_search=openai_runs_tool_search(model_to_use, api_base),
+                    drop_params=drop_params,
                 )
             case "openai":
                 input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
@@ -237,6 +239,7 @@ class OpenAITokenCounter(BaseTokenCounter):
             messages_format=messages_format,
             output_format=output_format,
             api_base=resolved.api_base,
+            drop_params=deployment_drops_params(deployment),
         )
 
         # If no input items were produced (e.g., system-only messages), fall back to local counting

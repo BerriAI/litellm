@@ -20,7 +20,11 @@ from litellm.llms.anthropic.messages.native.utils import normalize_native_messag
 from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
-from litellm.responses.litellm_completion_transformation.tool_search import tools_with_anthropic_tool_search_mapped
+from litellm.llms.openai.responses.transformation import keeps_anthropic_tool_search
+from litellm.responses.litellm_completion_transformation.tool_search import (
+    tools_with_anthropic_tool_search_mapped,
+    tools_without_anthropic_tool_search,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.anthropic import AnthropicMessagesRequest, AnthropicOutputSchema
 from litellm.types.llms.openai import ResponsesAPIRequestParams, replayable_responses_input
@@ -159,6 +163,14 @@ def chat_content_blocks_to_responses_content(
     if any(part["type"] != "input_text" for part in parts):
         return parts
     return "\n".join(part["text"] for part in parts if part["type"] == "input_text")
+
+
+def _tools_inference_sends(
+    model: str, tools: Sequence[Mapping[str, object]], *, drop_params: bool
+) -> Sequence[Mapping[str, object]] | None:
+    if keeps_anthropic_tool_search(model, tools, drop_params=drop_params):
+        return tools_with_anthropic_tool_search_mapped(tools)
+    return tools_without_anthropic_tool_search(tools)
 
 
 class OpenAICountTokensConfig:
@@ -345,6 +357,7 @@ class OpenAICountTokensConfig:
         tools: Sequence[Mapping[str, object]] | None,
         output_format: JsonValue = None,
         maps_tool_search: bool = False,
+        drop_params: bool = False,
     ) -> ResponsesCountRequestParts:
         """Convert with the adapter /v1/messages inference uses, so the count sees the same input it bills."""
         anthropic_request: Final = AnthropicMessagesRequest(
@@ -366,7 +379,9 @@ class OpenAICountTokensConfig:
             translated.get("text"),
         )
         counted_tools: Final = (
-            tools_with_anthropic_tool_search_mapped(translated_tools) if maps_tool_search else translated_tools
+            _tools_inference_sends(model, translated_tools, drop_params=drop_params)
+            if maps_tool_search and translated_tools is not None
+            else translated_tools
         )
         return input_items, instructions, None if counted_tools is None else tuple(counted_tools), text
 

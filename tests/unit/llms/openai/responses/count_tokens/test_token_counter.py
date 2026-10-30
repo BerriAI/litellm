@@ -204,10 +204,17 @@ TOOL_SEARCH_TOOLS: Final[list[dict[str, object]]] = [
         "defer_loading": True,
     },
 ]
+UNDEFERRED_TOOL_SEARCH_TOOLS: Final[list[dict[str, object]]] = [
+    TOOL_SEARCH_TOOLS[0],
+    {key: value for key, value in TOOL_SEARCH_TOOLS[1].items() if key != "defer_loading"},
+]
 
 
 async def _counted_tools(
-    monkeypatch: pytest.MonkeyPatch, model: str, litellm_params: Mapping[str, object]
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    litellm_params: Mapping[str, object],
+    tools: list[dict[str, object]] = TOOL_SEARCH_TOOLS,
 ) -> list[tuple[object, object, object]]:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock:
@@ -219,11 +226,11 @@ async def _counted_tools(
             contents=None,
             deployment={"litellm_params": {"api_key": "sk-test", **litellm_params}},
             request_model=f"openai/{model}",
-            tools=TOOL_SEARCH_TOOLS,
+            tools=tools,
             messages_format="anthropic",
         )
-        tools: Final = json.loads(route.calls.last.request.content)["tools"]
-    return [(tool.get("type"), tool.get("name"), tool.get("defer_loading")) for tool in tools]
+        counted: Final = json.loads(route.calls.last.request.content)["tools"]
+    return [(tool.get("type"), tool.get("name"), tool.get("defer_loading")) for tool in counted]
 
 
 @pytest.mark.asyncio
@@ -234,6 +241,24 @@ async def test_anthropic_tool_search_is_counted_as_the_openai_tool_search_infere
         ("tool_search", None, None),
         ("function", "get_weather", True),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tools", "expected"),
+    [
+        pytest.param(
+            TOOL_SEARCH_TOOLS,
+            [("tool_search", None, None), ("function", "get_weather", True)],
+            id="a-tool-is-deferred",
+        ),
+        pytest.param(UNDEFERRED_TOOL_SEARCH_TOOLS, [("function", "get_weather", None)], id="nothing-is-deferred"),
+    ],
+)
+async def test_drop_params_counts_anthropic_tool_search_only_where_inference_keeps_it(
+    monkeypatch: pytest.MonkeyPatch, tools: list[dict[str, object]], expected: list[tuple[object, object, object]]
+) -> None:
+    assert await _counted_tools(monkeypatch, "gpt-5.6-luna", {"drop_params": True}, tools) == expected
 
 
 @pytest.mark.asyncio

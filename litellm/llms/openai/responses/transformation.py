@@ -158,10 +158,15 @@ def _tool_deferral(tool: object) -> _ToolDeferral:
         return _ToolDeferral()
 
 
-def _runs_tool_search(model: str, tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS]) -> bool:
+def _runs_tool_search(model: str, tools: Sequence[object]) -> bool:
     return any(_tool_deferral(tool).defers for tool in tools) and litellm.supports_tool_search(
         model=model, custom_llm_provider=LlmProviders.OPENAI.value
     )
+
+
+def keeps_anthropic_tool_search(model: str, tools: Sequence[object], *, drop_params: bool) -> bool:
+    callers_own_search: Final = any(is_openai_tool_search_tool(tool) for tool in tools)
+    return callers_own_search or not drop_params or _runs_tool_search(model, tools)
 
 
 def _without_defer_loading(tool: ALL_RESPONSES_API_TOOL_PARAMS) -> ALL_RESPONSES_API_TOOL_PARAMS:
@@ -728,8 +733,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     ) -> Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None:
         if tools is None or not any(is_anthropic_tool_search_chat_tool(tool) for tool in tools):
             return tools
-        callers_own_search: Final = any(is_openai_tool_search_tool(tool) for tool in tools)
-        if callers_own_search or not drops_params(litellm_params) or _runs_tool_search(model, tools):
+        if keeps_anthropic_tool_search(model, tools, drop_params=drops_params(litellm_params)):
             return tools_with_anthropic_tool_search_mapped(tools)
         verbose_logger.warning(
             "Dropping tool search under drop_params: OpenAI model '%s' cannot run it or no tool is deferred, so every "
