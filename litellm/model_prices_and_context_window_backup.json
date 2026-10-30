@@ -13478,6 +13478,10 @@
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "azure_ai",
+        "token_count_framing": 149,
+        "token_count_tool_framing": 302,
+        "token_count_responses_framing": 145,
+        "token_count_responses_tool_framing": 100,
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
         "mode": "chat",
@@ -54348,6 +54352,8 @@
         "input_cost_per_token_above_200k_tokens_batches": 2e-06,
         "input_cost_per_token_batches": 1e-06,
         "litellm_provider": "xai",
+        "token_count_framing": 185,
+        "token_count_tool_framing": 214,
         "max_input_tokens": 1000000,
         "max_output_tokens": 1000000,
         "mode": "chat",
@@ -62521,7 +62527,9 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "token_count_framing": 23,
+        "token_count_tool_framing": 12
     },
     "deepseek/deepseek-v4-flash-vision-exp": {
         "cache_creation_input_token_cost": 0.0,
@@ -62627,7 +62635,9 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "token_count_framing": 76,
+        "token_count_tool_framing": 75
     },
     "tencent/deepseek-v4-pro": {
         "cache_creation_input_token_cost": 0.0,
@@ -63913,6 +63923,7 @@
         "input_cost_per_token": 3e-07,
         "input_cost_per_token_priority": 3.75e-07,
         "litellm_provider": "fireworks_ai",
+        "token_count_framing": 23,
         "max_input_tokens": 1048576,
         "max_output_tokens": 393216,
         "mode": "chat",
@@ -64011,6 +64022,7 @@
         "input_cost_per_token": 3e-07,
         "input_cost_per_token_priority": 3.75e-07,
         "litellm_provider": "fireworks_ai",
+        "token_count_framing": 23,
         "max_input_tokens": 1048576,
         "max_output_tokens": 393216,
         "mode": "chat",

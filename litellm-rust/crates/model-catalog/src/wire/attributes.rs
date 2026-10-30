@@ -106,7 +106,10 @@ attributes! {
     thinking_always_on: bool,
     token_count_framing: u64 as Count,
     token_count_model: TokenCountModel,
+    token_count_responses_framing: u64 as Count,
+    token_count_responses_tool_framing: u64 as Count,
     token_count_tokenizer: TokenCountTokenizer,
+    token_count_tool_framing: u64 as Count,
     /// Provider default tokens-per-minute limit.
     tpm: u64 as Count,
     use_openai_responses_path: bool,

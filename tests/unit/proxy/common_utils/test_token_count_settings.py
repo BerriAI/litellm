@@ -131,6 +131,107 @@ def test_shipped_australian_count_region_stays_with_an_australian_deployment() -
     assert settings.count_model == TokenCountModel(model="au.anthropic.claude-opus-5-5", region="ap-southeast-4")
 
 
+_ABSENT: Final = object()
+
+
+@pytest.mark.parametrize(
+    ("key", "field"),
+    [
+        ("token_count_tool_framing", "tool_framing"),
+        ("token_count_responses_framing", "responses_framing"),
+        ("token_count_responses_tool_framing", "responses_tool_framing"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("configured", "default", "expected"),
+    [
+        (_ABSENT, 151, 151),
+        (40, 151, 40),
+        (0, 151, 0),
+        (40.0, _ABSENT, 40),
+        (-1, 151, 151),
+        (True, 151, 151),
+        ("40", _ABSENT, None),
+    ],
+)
+def test_each_request_kind_framing_reads_its_value_like_framing(
+    key: str, field: str, configured: object, default: object, expected: int | None
+) -> None:
+    settings: Final = resolve_token_count_settings(
+        configured={} if configured is _ABSENT else {key: configured},
+        default={} if default is _ABSENT else {key: default},
+        deployment_region=_in_us_west_2,
+    )
+    assert getattr(settings, field) == expected
+
+
+def _hidden_prompts(settings: TokenCountSettings) -> tuple[int, int, int, int]:
+    return (
+        settings.hidden_prompt_tokens(carries_tools=False, responses_api=False),
+        settings.hidden_prompt_tokens(carries_tools=True, responses_api=False),
+        settings.hidden_prompt_tokens(carries_tools=False, responses_api=True),
+        settings.hidden_prompt_tokens(carries_tools=True, responses_api=True),
+    )
+
+
+@pytest.mark.parametrize(
+    ("default", "expected"),
+    [
+        ({}, (0, 0, 0, 0)),
+        ({"token_count_framing": 23}, (23, 23, 23, 23)),
+        ({"token_count_framing": 185, "token_count_tool_framing": 214}, (185, 214, 185, 214)),
+        (
+            {
+                "token_count_framing": 149,
+                "token_count_tool_framing": 300,
+                "token_count_responses_framing": 145,
+                "token_count_responses_tool_framing": 104,
+            },
+            (149, 300, 145, 104),
+        ),
+        ({"token_count_framing": 149, "token_count_tool_framing": 0}, (149, 0, 149, 0)),
+        ({"token_count_framing": 149, "token_count_responses_tool_framing": 0}, (149, 149, 149, 0)),
+        ({"token_count_framing": 149, "token_count_responses_framing": 145}, (149, 149, 145, 145)),
+    ],
+)
+def test_hidden_prompt_is_the_most_specific_framing_set_for_the_request_api_and_tools(
+    default: dict[str, object], expected: tuple[int, int, int, int]
+) -> None:
+    settings: Final = resolve_token_count_settings(configured={}, default=default, deployment_region=_in_us_west_2)
+    assert _hidden_prompts(settings) == expected
+
+
+_PER_API_COST_MAP: Final = {
+    "token_count_framing": 149,
+    "token_count_tool_framing": 300,
+    "token_count_responses_framing": 145,
+    "token_count_responses_tool_framing": 104,
+}
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        ({}, (149, 300, 145, 104)),
+        ({"token_count_framing": 500}, (500, 500, 500, 500)),
+        ({"token_count_framing": 0}, (0, 0, 0, 0)),
+        ({"token_count_tool_framing": 250}, (149, 250, 145, 250)),
+        ({"token_count_framing": 500, "token_count_tool_framing": 250}, (500, 250, 500, 250)),
+        ({"token_count_responses_framing": 120}, (149, 300, 120, 120)),
+        ({"token_count_tool_framing": 250, "token_count_responses_framing": 120}, (149, 250, 120, 120)),
+        ({"token_count_responses_tool_framing": 90}, (149, 300, 145, 90)),
+        ({"token_count_framing": -1}, (149, 300, 145, 104)),
+    ],
+)
+def test_an_operator_framing_applies_to_every_request_kind_the_cost_map_splits_more_finely(
+    configured: dict[str, object], expected: tuple[int, int, int, int]
+) -> None:
+    settings: Final = resolve_token_count_settings(
+        configured=configured, default=_PER_API_COST_MAP, deployment_region=_in_us_west_2
+    )
+    assert _hidden_prompts(settings) == expected
+
+
 def test_no_setting_anywhere_means_the_model_counts_itself_without_framing() -> None:
     assert resolve_token_count_settings(
         configured={}, default={}, deployment_region=_in_us_west_2

@@ -638,8 +638,14 @@ def test_token_counter_tools_match_billed_prompt_for_json_tool_chat_templates(
         ("deepseek/deepseek-chat:free", "DeepSeek-V4-Flash-0731"),
         ("deepseek-reasoner", "DeepSeek-V4-Flash-0731"),
         ("deepseek/deepseek-flash", "DeepSeek-V4-Flash-0731"),
-        ("DeepSeek-V4.1-Flash", "deepseek-v3.2"),
-        ("accounts/fireworks/models/deepseek-v4p1-flash", "deepseek-v3.2"),
+        ("DeepSeek-V4.1-Flash", "accounts/fireworks/models/deepseek-v4p1-flash"),
+        ("databricks-deepseek-v4-1-flash", "accounts/fireworks/models/deepseek-v4p1-flash"),
+        ("deepseek-ai/deepseek-v4.1-flash-maas", "accounts/fireworks/models/deepseek-v4p1-flash"),
+        ("deepseek-v4p1-flash-1017", "accounts/fireworks/models/deepseek-v4p1-flash"),
+        ("grok-4.1-fast-non-reasoning", "grok-4-1-fast-reasoning"),
+        ("xai.grok-4.1-fast", "grok-4-1-fast-reasoning"),
+        ("grok-4.3-latest", "grok-4.3"),
+        ("xai.grok-4-3", "grok-4.3"),
         ("Qwen/Qwen3.5-122B-A10B", "databricks-qwen35-122b-a10b"),
         ("qwen3-235b-a22b", "mistral-large-latest"),
     ],
@@ -704,6 +710,48 @@ def test_token_counter_tool_choice_adds_nothing_for_deepseek_v4(tool_choice: obj
     ) == token_counter_new(model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools)
 
 
+# A request with a one-function tool billed 283 prompt tokens on xAI grok-4.3 without tool_choice and 297 with a
+# named one, and 357 and 358 on Azure AI Foundry grok-4-1-fast-reasoning, on 2026-10-29
+@pytest.mark.parametrize("model", ["grok-4.3", "grok-4-1-fast-reasoning"])
+def test_token_counter_counts_a_named_tool_choice_for_grok(model: str):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
+    named: Final = {"type": "function", "function": {"name": "get_weather"}}
+
+    assert token_counter_new(
+        model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=named
+    ) > token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+
+
+def _counted_with_strict(model: str, **strict: bool) -> int:
+    return token_counter_new(
+        model=model, messages=list(_USER_MESSAGES), tools=[_openai_tool({**_WEATHER_FUNCTION, **strict})]
+    )
+
+
+# A one-function tool billed the same prompt tokens with strict unset and false on 2026-10-29: 357 through Azure AI
+# Foundry grok-4-1-fast-reasoning chat and 283 through xAI grok-4.3
+@pytest.mark.parametrize("model", ["grok-4-1-fast-reasoning", "grok-4.3"])
+def test_token_counter_renders_a_false_strict_like_an_unset_one_for_grok(model: str):
+    assert (
+        _counted_with_strict(model, strict=False)
+        == _counted_with_strict(model)
+        < _counted_with_strict(model, strict=True)
+    )
+
+
+# A one-function tool billed 5 prompt tokens more with strict false than unset, the same as with strict true, on
+# 2026-10-30: 310 against 305 through Baseten DeepSeek-V4.1-Flash and 309 against 304 through Together
+@pytest.mark.parametrize(
+    "model", ["accounts/fireworks/models/deepseek-v4p1-flash", "deepseek-v4-flash", "qwen3.5-plus"]
+)
+def test_token_counter_renders_a_false_strict_like_a_true_one_for_other_chat_templates(model: str):
+    assert (
+        _counted_with_strict(model, strict=False)
+        == _counted_with_strict(model, strict=True)
+        > _counted_with_strict(model)
+    )
+
+
 @pytest.mark.parametrize(
     ("tool_choice", "expected_tool_choice"),
     [
@@ -759,9 +807,17 @@ def test_token_counter_counts_anthropic_tools_as_sent_to_chat_template_families(
 
 # Qwen3.5's chat_template.jinja opens a system turn for the tool schemas when the request has none, 5 tokens that a
 # request with a system message already pays, while DeepSeek V4's encoding_dsv4.py appends them to the first turn
-# either way (both read on Hugging Face on 2026-10-17)
+# either way (both read on Hugging Face on 2026-10-17). A system message cost the same with and without a tool on
+# Fireworks deepseek-v4p1-flash, Azure AI Foundry grok-4-1-fast-reasoning and xAI grok-4.3 on 2026-10-29
 @pytest.mark.parametrize(
-    ("model", "implicit_system_turn_tokens"), [("DeepSeek-V4-Flash-0731", 0), ("databricks-qwen35-122b-a10b", 5)]
+    ("model", "implicit_system_turn_tokens"),
+    [
+        ("DeepSeek-V4-Flash-0731", 0),
+        ("databricks-qwen35-122b-a10b", 5),
+        ("accounts/fireworks/models/deepseek-v4p1-flash", 0),
+        ("grok-4-1-fast-reasoning", 0),
+        ("grok-4.3", 0),
+    ],
 )
 def test_token_counter_counts_the_tools_system_turn_only_without_a_system_message(
     model: str, implicit_system_turn_tokens: int

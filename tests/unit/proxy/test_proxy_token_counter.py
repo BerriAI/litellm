@@ -1921,6 +1921,23 @@ async def test_uncountable_model_without_framing_raises():
 
 
 @pytest.mark.parametrize(
+    "settings",
+    [
+        TokenCountSettings(framing=None, count_model=None, tool_framing=300),
+        TokenCountSettings(framing=None, count_model=None, responses_framing=145),
+        TokenCountSettings(framing=None, count_model=None, responses_tool_framing=100),
+    ],
+)
+@pytest.mark.asyncio
+async def test_uncountable_model_with_only_a_request_kind_framing_falls_through_to_the_local_estimate(
+    settings: TokenCountSettings,
+):
+    counter: Final = _ScriptedCounter({"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=404)})
+
+    assert isinstance(await _ladder(counter, settings), ProviderCountFailure)
+
+
+@pytest.mark.parametrize(
     ("count_model", "counted_as"),
     [
         (None, "us.anthropic.claude-sonnet-5-5"),
@@ -2743,6 +2760,457 @@ async def test_framing_comes_from_the_row_the_deployment_provider_or_base_model_
     assert prefixed.total_tokens == litellm.token_counter(model="system.ai.kimi-k3", messages=messages) + framing
     assert split.total_tokens == prefixed.total_tokens
     assert aliased.total_tokens == litellm.token_counter(model="gpt-5.4-mini", messages=messages) + framing
+
+
+@pytest.mark.asyncio
+async def test_a_tool_request_counts_its_framing_in_place_of_the_plain_one_per_api(monkeypatch: pytest.MonkeyPatch):
+    def deployment(name: str, model_info: dict[str, object]) -> dict[str, object]:
+        return {
+            "model_name": name,
+            "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": f"sk-unused-{name}"},
+            "model_info": model_info,
+        }
+
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                deployment("plain", {}),
+                deployment("chat", {"token_count_framing": 7, "token_count_tool_framing": 50}),
+                deployment(
+                    "per-api",
+                    {
+                        "token_count_framing": 7,
+                        "token_count_tool_framing": 50,
+                        "token_count_responses_framing": 5,
+                        "token_count_responses_tool_framing": 2,
+                    },
+                ),
+            ]
+        ),
+    )
+    messages: Final = [{"role": "user", "content": "What is the weather in Paris?"}]
+    tools: Final = [_KIMI_WEATHER]
+
+    async def count(model: str, request_tools: list[dict[str, object]] | None, responses: bool) -> int:
+        response: Final = await count_request_tokens(
+            request=TokenCountRequest(model=model, messages=messages, tools=request_tools),
+            responses_request={"model": model, "input": "What is the weather in Paris?"} if responses else None,
+        )
+        return response.total_tokens
+
+    plain_with_tools: Final = await count("plain", tools, responses=False)
+    plain_without_tools: Final = await count("plain", None, responses=False)
+
+    assert await count("plain", tools, responses=True) == plain_with_tools
+    assert await count("chat", tools, responses=False) == plain_with_tools + 50
+    assert await count("chat", None, responses=False) == plain_without_tools + 7
+    assert await count("chat", [], responses=False) == plain_without_tools + 7
+    assert await count("chat", tools, responses=True) == plain_with_tools + 50
+    assert await count("chat", None, responses=True) == plain_without_tools + 7
+    assert await count("per-api", tools, responses=False) == plain_with_tools + 50
+    assert await count("per-api", tools, responses=True) == plain_with_tools + 2
+    assert await count("per-api", None, responses=True) == plain_without_tools + 5
+
+
+_GET_WEATHER: Final = {
+    "name": "get_weather",
+    "description": "Get the current weather for a city",
+    "input_schema": {
+        "type": "object",
+        "properties": {"city": {"type": "string", "description": "City name"}},
+        "required": ["city"],
+    },
+}
+_THREE_TOOLS: Final = (
+    _GET_WEATHER,
+    {
+        "name": "get_time",
+        "description": "Get the local time in a timezone",
+        "input_schema": {
+            "type": "object",
+            "properties": {"timezone": {"type": "string", "description": "IANA timezone"}},
+            "required": ["timezone"],
+        },
+    },
+    {
+        "name": "search_docs",
+        "description": "Search internal documents and return the top matches",
+        "input_schema": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}, "limit": {"type": "integer", "description": "Max results"}},
+            "required": ["query"],
+        },
+    },
+)
+_FORM_FIELDS: Final = tuple(f"field_{index}" for index in range(10))
+_FILL_FORM: Final = {
+    "name": "fill_form",
+    "description": "Fill a form",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            field: {"type": "string", "description": f"Value for field number {index}"}
+            for index, field in enumerate(_FORM_FIELDS)
+        },
+        "required": list(_FORM_FIELDS),
+    },
+}
+_WEATHER_SYSTEM: Final = "You are a helpful assistant that answers weather questions briefly."
+_AZURE_GROK_4_1: Final = "azure_ai/grok-4-1-fast-reasoning"
+_FIREWORKS_DEEPSEEK_V4_1: Final = "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash"
+_XAI_GROK_4_3: Final = "xai/grok-4.3"
+_NATIVE_RESPONSES_BASE: Final = {
+    _AZURE_GROK_4_1: "https://unused.services.ai.azure.com/models",
+    _FIREWORKS_DEEPSEEK_V4_1: "https://unused.invalid",
+    _XAI_GROK_4_3: "https://unused.invalid",
+}
+
+
+def _responses_function(tool: Mapping[str, object], **strict: bool | None) -> dict[str, object]:
+    return {
+        "type": "function",
+        "name": tool["name"],
+        "description": tool["description"],
+        "parameters": tool["input_schema"],
+        **strict,
+    }
+
+
+def _get_weather_copies(count: int) -> tuple[dict[str, object], ...]:
+    return tuple({**_GET_WEATHER, "name": f"get_weather_{index}"} for index in range(count))
+
+
+# usage.input_tokens plus cache_read_input_tokens that POST /v1/messages billed for these requests with the user turn
+# "What is the weather in Paris?" through Azure AI Foundry grok-4-1-fast-reasoning, Fireworks deepseek-v4p1-flash and
+# xAI grok-4.3 on 2026-10-29, and usage.prompt_tokens that POST /v1/chat/completions billed through DeepSeek's API on
+# 2026-10-30
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "system", "tools", "billed_prompt_tokens"),
+    [
+        (_AZURE_GROK_4_1, None, (), 163),
+        (_AZURE_GROK_4_1, None, (_GET_WEATHER,), 357),
+        (_AZURE_GROK_4_1, None, _THREE_TOOLS, 445),
+        (_AZURE_GROK_4_1, None, (_FILL_FORM,), 550),
+        (_AZURE_GROK_4_1, _WEATHER_SYSTEM, (_GET_WEATHER,), 368),
+        (_FIREWORKS_DEEPSEEK_V4_1, None, (), 37),
+        (_FIREWORKS_DEEPSEEK_V4_1, None, (_GET_WEATHER,), 304),
+        (_FIREWORKS_DEEPSEEK_V4_1, None, _THREE_TOOLS, 430),
+        (_FIREWORKS_DEEPSEEK_V4_1, None, (_FILL_FORM,), 550),
+        (_FIREWORKS_DEEPSEEK_V4_1, _WEATHER_SYSTEM, (_GET_WEATHER,), 315),
+        (_XAI_GROK_4_3, None, (), 199),
+        (_XAI_GROK_4_3, None, (_GET_WEATHER,), 283),
+        (_XAI_GROK_4_3, None, _THREE_TOOLS, 402),
+        (_XAI_GROK_4_3, None, (_FILL_FORM,), 530),
+        (_XAI_GROK_4_3, _WEATHER_SYSTEM, (_GET_WEATHER,), 297),
+        ("deepseek/deepseek-v4-flash", None, (), 37),
+        ("deepseek/deepseek-v4-flash", None, (_GET_WEATHER,), 304),
+        ("deepseek/deepseek-v4-flash", None, _THREE_TOOLS, 430),
+        ("deepseek/deepseek-v4-flash", _WEATHER_SYSTEM, (_GET_WEATHER,), 315),
+        ("deepseek/deepseek-v4-pro", None, (), 90),
+        ("deepseek/deepseek-v4-pro", None, (_GET_WEATHER,), 367),
+        ("deepseek/deepseek-v4-pro", None, _THREE_TOOLS, 493),
+        ("deepseek/deepseek-v4-pro", _WEATHER_SYSTEM, (_GET_WEATHER,), 378),
+    ],
+)
+async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    system: str | None,
+    tools: tuple[dict[str, object], ...],
+    billed_prompt_tokens: int,
+):
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "billed",
+                    "litellm_params": {"model": model, "api_key": "unused", "api_base": "https://unused.invalid"},
+                }
+            ]
+        ),
+    )
+
+    counted: Final = await token_counter(
+        request=TokenCountRequest(
+            model="billed",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=list(tools) or None,
+            system=system,
+        )
+    )
+
+    assert counted.count_source == "local_estimate"
+    assert abs(counted.total_tokens - billed_prompt_tokens) <= billed_prompt_tokens * 0.05
+
+
+# usage.input_tokens that POST /v1/responses billed for these requests with the input "What is the weather in Paris?"
+# through Azure AI Foundry grok-4-1-fast-reasoning, Fireworks deepseek-v4p1-flash and xAI grok-4.3 on 2026-10-29
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "system", "tools", "billed_prompt_tokens"),
+    [
+        (_AZURE_GROK_4_1, None, (), 159),
+        (_AZURE_GROK_4_1, None, (_GET_WEATHER,), 159),
+        (_AZURE_GROK_4_1, None, _THREE_TOOLS, 257),
+        (_AZURE_GROK_4_1, None, (_FILL_FORM,), 352),
+        (_AZURE_GROK_4_1, _WEATHER_SYSTEM, (_GET_WEATHER,), 170),
+        (_FIREWORKS_DEEPSEEK_V4_1, None, (_GET_WEATHER,), 304),
+        (_XAI_GROK_4_3, None, (_GET_WEATHER,), 283),
+    ],
+)
+async def test_responses_estimate_matches_the_billed_responses_prompt_with_the_shipped_framing(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    system: str | None,
+    tools: tuple[dict[str, object], ...],
+    billed_prompt_tokens: int,
+):
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "billed",
+                    "litellm_params": {"model": model, "api_key": "unused", "api_base": _NATIVE_RESPONSES_BASE[model]},
+                }
+            ]
+        ),
+    )
+
+    counted: Final = await count_request_tokens(
+        request=TokenCountRequest(
+            model="billed",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=[_responses_function(tool) for tool in tools] or None,
+            system=system,
+        ),
+        responses_request={"model": "billed", "input": "What is the weather in Paris?"},
+    )
+
+    assert counted.count_source == "local_estimate"
+    assert abs(counted.total_tokens - billed_prompt_tokens) <= billed_prompt_tokens * 0.05
+
+
+def _single_deployment_router(litellm_params: dict[str, object], model_info: dict[str, object]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "counted",
+                "litellm_params": {"api_key": "unused", **litellm_params},
+                "model_info": model_info,
+            }
+        ]
+    )
+
+
+async def _count_with_router(
+    monkeypatch: pytest.MonkeyPatch, router: Router, tools: tuple[dict[str, object], ...], responses: bool
+) -> int:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    counted: Final = await count_request_tokens(
+        request=TokenCountRequest(
+            model="counted",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=list(tools) or None,
+        ),
+        responses_request={"model": "counted", "input": "What is the weather in Paris?"} if responses else None,
+    )
+    return counted.total_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tools", [(), (_GET_WEATHER,), _THREE_TOOLS, (_FILL_FORM,)])
+@pytest.mark.parametrize("responses", [False, True])
+async def test_a_custom_deployment_name_counts_like_the_base_model_it_names(
+    monkeypatch: pytest.MonkeyPatch, tools: tuple[dict[str, object], ...], responses: bool
+):
+    api_base: Final = _NATIVE_RESPONSES_BASE[_AZURE_GROK_4_1]
+    custom_name: Final = _single_deployment_router(
+        {"model": "azure_ai/prod-grok", "api_base": api_base}, {"base_model": _AZURE_GROK_4_1}
+    )
+    row_name: Final = _single_deployment_router({"model": _AZURE_GROK_4_1, "api_base": api_base}, {})
+
+    assert await _count_with_router(monkeypatch, custom_name, tools, responses) == await _count_with_router(
+        monkeypatch, row_name, tools, responses
+    )
+
+
+# usage.input_tokens that POST /v1/responses billed through Azure AI Foundry grok-4-1-fast-reasoning on 2026-10-29 for
+# the input "What is the weather in Paris?" with these function tools, strict left unset or sent as false or null,
+# the same on the .services.ai.azure.com and .openai.azure.com hosts
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tools", "strict", "billed_prompt_tokens"),
+    [
+        ((_GET_WEATHER,), {}, 159),
+        ((_GET_WEATHER,), {"strict": False}, 155),
+        ((_GET_WEATHER,), {"strict": None}, 155),
+        (_THREE_TOOLS, {}, 257),
+        (_get_weather_copies(5), {}, 345),
+        (_get_weather_copies(10), {}, 575),
+        (_get_weather_copies(10), {"strict": False}, 535),
+        (_get_weather_copies(10), {"strict": None}, 535),
+    ],
+)
+@pytest.mark.parametrize(
+    ("litellm_params", "model_info"),
+    [
+        ({"model": _AZURE_GROK_4_1, "api_base": _NATIVE_RESPONSES_BASE[_AZURE_GROK_4_1]}, {}),
+        (
+            {"model": "azure/grok-4-1-fast-reasoning", "api_base": "https://unused.openai.azure.com/openai/v1"},
+            {"base_model": _AZURE_GROK_4_1},
+        ),
+    ],
+)
+async def test_azure_responses_estimate_stays_at_or_just_over_the_billed_prompt_as_function_tools_are_added(
+    monkeypatch: pytest.MonkeyPatch,
+    tools: tuple[dict[str, object], ...],
+    strict: dict[str, bool | None],
+    billed_prompt_tokens: int,
+    litellm_params: dict[str, object],
+    model_info: dict[str, object],
+):
+    router: Final = _single_deployment_router(litellm_params, model_info)
+
+    counted: Final = await _count_with_router(
+        monkeypatch, router, tuple(_responses_function(tool, **strict) for tool in tools), responses=True
+    )
+
+    assert billed_prompt_tokens <= counted <= billed_prompt_tokens * 1.02
+
+
+# POST /v1/responses billed the same usage.input_tokens with strict unset and false on 2026-10-29, 283 for one tool
+# through xAI grok-4.3
+@pytest.mark.asyncio
+async def test_a_responses_host_that_bills_an_unset_strict_like_false_counts_them_alike(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    router: Final = _single_deployment_router(
+        {"model": _XAI_GROK_4_3, "api_base": _NATIVE_RESPONSES_BASE[_XAI_GROK_4_3]}, {}
+    )
+
+    unset: Final = await _count_with_router(monkeypatch, router, (_responses_function(_GET_WEATHER),), responses=True)
+
+    assert unset == await _count_with_router(
+        monkeypatch, router, (_responses_function(_GET_WEATHER, strict=False),), responses=True
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("built_in_tool", "responses"),
+    [({"type": "web_search"}, True), ({"type": "web_search_20250305", "name": "web_search"}, False)],
+)
+async def test_a_request_whose_only_tools_are_built_in_counts_like_one_without_tools(
+    monkeypatch: pytest.MonkeyPatch, built_in_tool: dict[str, object], responses: bool
+):
+    router: Final = _single_deployment_router(
+        {"model": _AZURE_GROK_4_1, "api_base": _NATIVE_RESPONSES_BASE[_AZURE_GROK_4_1]}, {}
+    )
+
+    assert await _count_with_router(monkeypatch, router, (built_in_tool,), responses) == await _count_with_router(
+        monkeypatch, router, (), responses
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tools", [(), (_GET_WEATHER,), _THREE_TOOLS])
+async def test_a_responses_count_the_proxy_bridges_to_chat_completions_frames_like_the_chat_count(
+    monkeypatch: pytest.MonkeyPatch, tools: tuple[dict[str, object], ...]
+):
+    bridged: Final = _single_deployment_router(
+        {"model": _AZURE_GROK_4_1, "api_base": "https://unused.cognitiveservices.azure.com/models"}, {}
+    )
+    native: Final = _single_deployment_router(
+        {"model": _AZURE_GROK_4_1, "api_base": _NATIVE_RESPONSES_BASE[_AZURE_GROK_4_1]}, {}
+    )
+    chat_count: Final = await _count_with_router(monkeypatch, bridged, tools, responses=False)
+
+    assert await _count_with_router(monkeypatch, bridged, tools, responses=True) == chat_count
+    assert await _count_with_router(monkeypatch, native, tools, responses=True) != chat_count
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("from_router_defaults", [False, True])
+async def test_a_responses_count_that_asks_for_the_chat_completions_bridge_frames_like_the_chat_count(
+    monkeypatch: pytest.MonkeyPatch, from_router_defaults: bool
+):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "counted",
+                "litellm_params": {
+                    "api_key": "unused",
+                    "model": _AZURE_GROK_4_1,
+                    "api_base": _NATIVE_RESPONSES_BASE[_AZURE_GROK_4_1],
+                },
+                "model_info": {},
+            }
+        ],
+        default_litellm_params={"use_chat_completions_api": True} if from_router_defaults else None,
+    )
+    chat_count: Final = await _count_with_router(monkeypatch, router, (_GET_WEATHER,), responses=False)
+
+    counted: Final = await count_request_tokens(
+        request=TokenCountRequest(
+            model="counted",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=[_GET_WEATHER],
+        ),
+        responses_request={
+            "model": "counted",
+            "input": "What is the weather in Paris?",
+            **({} if from_router_defaults else {"use_chat_completions_api": True}),
+        },
+    )
+
+    assert counted.total_tokens == chat_count
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_chat_completions_api", ["maybe", {"a": 1}])
+async def test_a_responses_count_with_a_malformed_bridge_flag_reads_it_the_way_the_responses_route_does(
+    monkeypatch: pytest.MonkeyPatch, use_chat_completions_api: object
+):
+    router: Final = _single_deployment_router(
+        {"model": _AZURE_GROK_4_1, "api_base": _NATIVE_RESPONSES_BASE[_AZURE_GROK_4_1]}, {}
+    )
+    chat_count: Final = await _count_with_router(monkeypatch, router, (_GET_WEATHER,), responses=False)
+
+    counted: Final = await count_request_tokens(
+        request=TokenCountRequest(
+            model="counted",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=[_GET_WEATHER],
+        ),
+        responses_request={
+            "model": "counted",
+            "input": "What is the weather in Paris?",
+            "use_chat_completions_api": use_chat_completions_api,
+        },
+    )
+
+    assert counted.total_tokens == chat_count
+
+
+@pytest.mark.asyncio
+async def test_an_azure_responses_count_leaves_strict_unset_for_templates_not_measured_there(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    router: Final = _single_deployment_router(
+        {"model": "azure_ai/deepseek-v4.1-flash", "api_base": "https://unused.services.ai.azure.com/models"}, {}
+    )
+
+    async def counted(**strict: bool) -> int:
+        return await _count_with_router(monkeypatch, router, (_responses_function(_GET_WEATHER, **strict),), True)
+
+    assert await counted() < await counted(strict=True)
 
 
 _KIMI_WEATHER: Final = {
