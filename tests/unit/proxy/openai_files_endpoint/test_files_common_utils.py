@@ -14,6 +14,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     apply_team_provider_credentials,
     apply_unified_file_ids,
+    batch_deployment_id,
     decode_deployment_from_file_id,
     decode_model_from_file_id,
     encode_file_id_with_model,
@@ -26,12 +27,13 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import InternalUsageCache, handle_exception_on_proxy
 from litellm.types.utils import LiteLLMBatch
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 _RAW_MODEL_WITH_PROMPT: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
 
 
 def test_get_credentials_for_model_rejects_an_unknown_model_without_persisting_the_raw_model():
-    llm_router: Final = MagicMock()
+    llm_router: Final = route_entry_points_to_stubs(MagicMock())
     llm_router.get_deployment_credentials_with_provider.return_value = None
 
     with pytest.raises(ProxyModelNotFoundError) as raised:
@@ -411,7 +413,7 @@ def test_add_internal_model_credentials_attaches_an_immutable_snapshot():
         add_internal_model_credentials,
     )
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment_credentials_with_provider = MagicMock(
         return_value={"s3_bucket_name": "configured-bucket", "aws_region_name": "us-east-1"}
     )
@@ -439,7 +441,7 @@ def test_add_internal_model_credentials_is_a_noop_without_a_resolvable_deploymen
         add_internal_model_credentials,
     )
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment_credentials_with_provider = MagicMock(return_value=credentials)
     data = {"batch_id": "unified-batch-id"}
 
@@ -456,7 +458,7 @@ def test_add_internal_model_credentials_survives_a_failing_deployment_lookup():
         add_internal_model_credentials,
     )
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=KeyError("deployment-gone"))
     data = {"batch_id": "unified-batch-id"}
 
@@ -890,3 +892,85 @@ def test_a_provider_id_carries_no_deployment_hint(raw_id: str):
 @pytest.mark.parametrize("unvalidated_id", [None, 123, ["file-abc123"]])
 def test_a_non_string_id_from_a_request_body_decodes_to_no_model_or_deployment(unvalidated_id: object):
     assert (decode_model_from_file_id(unvalidated_id), decode_deployment_from_file_id(unvalidated_id)) == (None, None)
+
+
+def _azure_deployment(model_group: str, sku_host: str, mode: str, **model_info: object) -> dict[str, object]:
+    return {
+        "model_name": model_group,
+        "litellm_params": {
+            "model": f"azure/{sku_host}",
+            "api_base": f"https://{sku_host}.openai.azure.com",
+            "api_key": "dummy-key",
+            "api_version": "2025-04-01-preview",
+        },
+        "model_info": {"mode": mode, **model_info},
+    }
+
+
+def test_batch_deployment_of_a_mixed_group_resolves_to_its_batch_deployment_credentials():
+    router: Final = Router(
+        model_list=[
+            _azure_deployment("gpt-mixed", "chat-sku", "chat", id="chat-id"),
+            _azure_deployment("gpt-mixed", "batch-sku", "batch", id="batch-id"),
+        ]
+    )
+
+    deployment_id: Final = batch_deployment_id(router, "gpt-mixed")
+    credentials: Final = get_credentials_for_model(llm_router=router, model_id=deployment_id or "gpt-mixed")
+
+    assert deployment_id == "batch-id"
+    assert credentials["api_base"] == "https://batch-sku.openai.azure.com"
+
+
+@pytest.mark.parametrize(
+    "model_list",
+    [
+        [
+            _azure_deployment("gpt-mixed", "chat-sku", "chat", id="chat-id"),
+            _azure_deployment("gpt-mixed", "other-chat-sku", "chat", id="other-chat-id"),
+        ],
+        [
+            {"model_name": "gpt-mixed", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "dummy-key"}},
+            _azure_deployment("gpt-mixed", "batch-sku", "batch", id="batch-id"),
+        ],
+        [
+            _azure_deployment("gpt-mixed", "chat-sku", "chat", id="chat-id", team_id="team-a"),
+            _azure_deployment("gpt-mixed", "batch-sku", "batch", id="batch-id", team_id="team-a"),
+        ],
+    ],
+    ids=["no-batch-deployment", "batch-rule-drops-nothing", "team-owned-deployments"],
+)
+def test_batch_deployment_is_none_when_the_group_needs_no_batch_override(model_list: list[dict[str, object]]):
+    assert batch_deployment_id(Router(model_list=model_list), "gpt-mixed") is None
+
+
+def test_batch_deployment_is_none_without_a_router():
+    assert batch_deployment_id(None, "gpt-mixed", preferred_deployment_id="batch-id") is None
+
+
+@pytest.mark.parametrize(
+    ("preferred_deployment_id", "expected"),
+    [
+        ("second-batch-id", "second-batch-id"),
+        (None, "first-batch-id"),
+        ("removed-id", "first-batch-id"),
+        ("other-group-batch-id", "first-batch-id"),
+        ("chat-id", "first-batch-id"),
+        ("paused-batch-id", "first-batch-id"),
+    ],
+    ids=["still-batch-ready", "no-hint", "removed", "other-group", "chat-deployment", "paused"],
+)
+def test_batch_deployment_keeps_a_hinted_deployment_only_while_it_is_batch_ready_in_the_group(
+    preferred_deployment_id: str | None, expected: str
+):
+    router: Final = Router(
+        model_list=[
+            _azure_deployment("gpt-mixed", "chat-sku", "chat", id="chat-id"),
+            _azure_deployment("gpt-mixed", "paused-sku", "batch", id="paused-batch-id", blocked=True),
+            _azure_deployment("gpt-mixed", "first-batch-sku", "batch", id="first-batch-id"),
+            _azure_deployment("gpt-mixed", "second-batch-sku", "batch", id="second-batch-id"),
+            _azure_deployment("gpt-other", "other-batch-sku", "batch", id="other-group-batch-id"),
+        ]
+    )
+
+    assert batch_deployment_id(router, "gpt-mixed", preferred_deployment_id=preferred_deployment_id) == expected
