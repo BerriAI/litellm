@@ -10,10 +10,13 @@ from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpcore
 import httpx
 import pytest
 import respx
+import websockets.exceptions
 from botocore.credentials import RefreshableCredentials
+from h2.events import ConnectionTerminated
 
 import litellm
 from litellm._logging import verbose_logger
@@ -2785,6 +2788,194 @@ async def test_async_realtime_error_event_send_failure_still_closes():
     assert client_ws.events == [("close", (1011, "Internal server error: vertex token refresh exploded"))]
 
 
+_GEMINI_LIVE_SETUP_COMPLETE = json.dumps({"setupComplete": {}})
+_GEMINI_LIVE_TEXT_TURN = json.dumps({"serverContent": {"modelTurn": {"parts": [{"text": "Blue."}]}}})
+_GEMINI_LIVE_TURN_COMPLETE = json.dumps({"serverContent": {"turnComplete": True}})
+
+
+class _ScriptedRealtimeBackend:
+    """Backend socket that answers the first setup frame with the scripted replies
+    and closes once the client is done, so both bridge loops run to completion."""
+
+    def __init__(self, replies_after_setup):
+        self.sent = []
+        self.closed = asyncio.Event()
+        self._replies_after_setup = list(replies_after_setup)
+        self._inbox = asyncio.Queue()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def send(self, payload):
+        self.sent.append(payload)
+        if "setup" in json.loads(payload):
+            for reply in self._replies_after_setup:
+                self._inbox.put_nowait(reply)
+
+    def close_after_replies(self):
+        self._inbox.put_nowait(None)
+
+    async def recv(self, decode=True):
+        reply = await self._inbox.get()
+        if reply is None:
+            self.closed.set()
+            raise websockets.exceptions.ConnectionClosedOK(None, None)
+        return reply
+
+
+class _ScriptedRealtimeClient:
+    def __init__(self, messages, backend):
+        self.scope = {"headers": []}
+        self.exceptions = websockets.exceptions
+        self.sent = []
+        self._messages = list(messages)
+        self._backend = backend
+
+    async def send_text(self, payload):
+        self.sent.append(payload)
+
+    async def receive_text(self):
+        if self._messages:
+            return self._messages.pop(0)
+        self._backend.close_after_replies()
+        await self._backend.closed.wait()
+        raise websockets.exceptions.ConnectionClosedOK(None, None)
+
+    async def close(self, code=None, reason=None):
+        return None
+
+
+def _realtime_logging_obj():
+    logging_obj = Mock()
+    logging_obj.litellm_trace_id = "trace-lit-6974"
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.dispatch_failure_handlers = AsyncMock()
+    return logging_obj
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model, session, backend_modality, client_modality, backend_turn, drop_params",
+    [
+        (
+            "gemini-live-2.5-flash",
+            {"type": "realtime", "output_modalities": ["text"]},
+            "TEXT",
+            "text",
+            [_GEMINI_LIVE_TEXT_TURN],
+            False,
+        ),
+        ("gemini-live-2.5-flash", {"modalities": ["text"]}, "TEXT", "text", [_GEMINI_LIVE_TEXT_TURN], False),
+        (
+            "gemini-live-2.5-flash-native-audio",
+            {"type": "realtime", "output_modalities": ["text"]},
+            "AUDIO",
+            "audio",
+            [],
+            True,
+        ),
+    ],
+)
+async def test_async_realtime_vertex_first_session_update_builds_the_only_setup(
+    model, session, backend_modality, client_modality, backend_turn, drop_params: bool, monkeypatch
+):
+    """Regression for text-only Vertex Live sessions answered in audio: the
+    connect-time default setup (AUDIO) used to go out before the client's
+    session.update, and Gemini accepts only one setup per connection, so the
+    requested modality was dropped and billed at the audio rate. The setup now
+    goes out on the client's first message, built from session.update when that
+    comes first. Under drop_params an audio-only model still gets AUDIO, and the
+    client learns the downgrade from session.updated."""
+    from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
+
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    backend = _ScriptedRealtimeBackend([_GEMINI_LIVE_SETUP_COMPLETE, *backend_turn, _GEMINI_LIVE_TURN_COMPLETE])
+    client_ws = _ScriptedRealtimeClient(
+        [
+            json.dumps({"type": "session.update", "session": session}),
+            json.dumps(
+                {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "What color is the sky? One word."}],
+                    },
+                }
+            ),
+            json.dumps({"type": "response.create"}),
+        ],
+        backend,
+    )
+    handler = BaseLLMHTTPHandler()
+
+    with patch.object(handler, "_open_realtime_backend_ws", AsyncMock(return_value=backend)):
+        await asyncio.wait_for(
+            handler.async_realtime(
+                model=model,
+                websocket=client_ws,
+                logging_obj=_realtime_logging_obj(),
+                provider_config=VertexAIRealtimeConfig(
+                    access_token="fake-token", project="fake-project", location="us-central1", drop_params=drop_params
+                ),
+                headers={},
+            ),
+            timeout=10,
+        )
+
+    backend_frames = [json.loads(frame) for frame in backend.sent]
+    setups = [frame["setup"] for frame in backend_frames if "setup" in frame]
+    assert len(setups) == 1
+    assert "setup" in backend_frames[0]
+    assert setups[0]["generationConfig"]["responseModalities"] == [backend_modality]
+    assert any("clientContent" in frame for frame in backend_frames[1:])
+
+    client_events = [json.loads(frame) for frame in client_ws.sent]
+    event_types = [event["type"] for event in client_events]
+    assert event_types[:2] == ["session.created", "session.updated"]
+    assert client_events[1]["session"]["modalities"] == [client_modality]
+    if backend_turn:
+        assert "response.output_text.delta" in event_types
+        assert "response.output_audio_transcript.delta" not in event_types
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_sends_setup_at_connect_when_provider_cannot_build_it_from_session_update():
+    """Bedrock Nova Sonic style providers keep the connect-time setup and get no
+    synthetic session.created."""
+    setup = json.dumps({"event": {"sessionStart": {}}})
+    backend = _ScriptedRealtimeBackend([])
+    client_ws = _ScriptedRealtimeClient([], backend)
+    provider_config = Mock()
+    provider_config.get_complete_url.return_value = "wss://backend.example/live"
+    provider_config.validate_environment.return_value = {}
+    provider_config.requires_session_configuration.return_value = True
+    provider_config.builds_setup_from_session_update.return_value = False
+    provider_config.session_configuration_request.return_value = setup
+    provider_config.unbilled_usage_on_session_close.return_value = None
+    provider_config.open_backend = AsyncMock(return_value=None)
+    provider_config.wrap_backend.side_effect = lambda opened: opened
+    handler = BaseLLMHTTPHandler()
+
+    with patch.object(handler, "_open_realtime_backend_ws", AsyncMock(return_value=backend)):
+        await asyncio.wait_for(
+            handler.async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=client_ws,
+                logging_obj=_realtime_logging_obj(),
+                provider_config=provider_config,
+                headers={},
+            ),
+            timeout=10,
+        )
+
+    assert backend.sent == [setup]
+    assert client_ws.sent == []
+
+
 class _JSONBodyAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def get_supported_openai_params(self, model):
         return []
@@ -4911,6 +5102,160 @@ async def test_async_realtime_bridges_a_transcription_session_through_the_provid
     assert [bytes(request.audio) for request in speech_client.requests[1:]] == [b"\x00\x01" * 800, b"\x00\x01" * 800]
 
 
+class _FakeSonioxSocket:
+    def __init__(self) -> None:
+        self.sent: Final[list[str | bytes]] = []
+        self._responses: Final[asyncio.Queue[str]] = asyncio.Queue()
+
+    async def __aenter__(self) -> "_FakeSonioxSocket":
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        return None
+
+    async def send(self, message: str | bytes) -> None:
+        self.sent.append(message)
+        if message == '{"type":"finalize"}':
+            tokens = [{"text": "Hello", "is_final": True}, {"text": "<fin>", "is_final": True}]
+            await self._responses.put(json.dumps({"tokens": tokens, "total_audio_proc_ms": 1200}))
+
+    async def recv(self, decode: bool | None = None) -> str:
+        return await self._responses.get()
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_bridges_a_soniox_transcription_through_the_wrapped_websocket():
+    import websockets.exceptions  # noqa: F401  # binds the submodule so async_realtime's except clause resolves, as in the proxy process
+
+    from litellm.llms.soniox.realtime.transformation import SonioxRealtimeBackend, SonioxRealtimeConfig
+
+    upstream = _FakeSonioxSocket()
+    wrapped: list[object] = []
+    provider_config = SonioxRealtimeConfig(
+        wrap=lambda backend: wrapped.append(backend) or SonioxRealtimeBackend(backend)
+    )
+    audio = b"\x00\x01" * 800
+    client_ws = _ScriptedClientWebSocket(
+        [
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "type": "transcription",
+                        "audio": {
+                            "input": {
+                                "format": {"type": "audio/pcm", "rate": 16000},
+                                "transcription": {"model": "stt-rt-v5", "language": "en"},
+                                "turn_detection": None,
+                            }
+                        },
+                    },
+                }
+            ),
+            json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(audio).decode()}),
+            json.dumps({"type": "input_audio_buffer.commit"}),
+        ],
+        last_event_type="conversation.item.input_audio_transcription.completed",
+    )
+    logging_obj = Mock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+    logging_obj.dispatch_failure_handlers = AsyncMock()
+    handler = BaseLLMHTTPHandler()
+
+    with patch.object(handler, "_open_realtime_backend_ws", AsyncMock(return_value=upstream)) as dial:
+        await handler.async_realtime(
+            model="stt-rt-v5",
+            websocket=client_ws,
+            logging_obj=logging_obj,
+            provider_config=provider_config,
+            headers={},
+            api_key="soniox-key",
+            query_params={"model": "stt-rt-v5", "intent": "transcription"},
+        )
+
+    assert dial.await_args.args[1:3] == (
+        "wss://stt-rt.soniox.com/transcribe-websocket",
+        {"Authorization": "Bearer soniox-key"},
+    )
+    assert wrapped == [upstream]
+    assert json.loads(upstream.sent[0]) == {
+        "model": "stt-rt-v5",
+        "audio_format": "pcm_s16le",
+        "sample_rate": 16000,
+        "num_channels": 1,
+        "enable_endpoint_detection": False,
+        "language_hints": ["en"],
+    }
+    assert upstream.sent[1:] == [audio, '{"type":"finalize"}']
+    events = client_ws.sent_events()
+    assert [event["type"] for event in events] == [
+        "session.created",
+        "session.updated",
+        "input_audio_buffer.speech_started",
+        "conversation.item.input_audio_transcription.delta",
+        "conversation.item.input_audio_transcription.completed",
+    ]
+    assert events[-1]["transcript"] == "Hello"
+    assert events[-1]["usage"] == {"type": "duration", "seconds": 1.2}
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_soniox_rejects_a_bad_session_update_and_still_transcribes_audio_sent_without_one():
+    import websockets.exceptions  # noqa: F401  # binds the submodule so async_realtime's except clause resolves, as in the proxy process
+
+    from litellm.llms.soniox.realtime.transformation import SonioxRealtimeConfig
+
+    upstream = _FakeSonioxSocket()
+    audio = b"\x00\x01" * 800
+    client_ws = _ScriptedClientWebSocket(
+        [
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {"type": "transcription", "audio": {"input": {"format": {"type": "audio/pcmu"}}}},
+                }
+            ),
+            json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(audio).decode()}),
+            json.dumps({"type": "input_audio_buffer.commit"}),
+        ],
+        last_event_type="conversation.item.input_audio_transcription.completed",
+    )
+    logging_obj = Mock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+    logging_obj.dispatch_failure_handlers = AsyncMock()
+    handler = BaseLLMHTTPHandler()
+
+    with patch.object(handler, "_open_realtime_backend_ws", AsyncMock(return_value=upstream)):
+        await handler.async_realtime(
+            model="stt-rt-v5",
+            websocket=client_ws,
+            logging_obj=logging_obj,
+            provider_config=SonioxRealtimeConfig(),
+            headers={},
+            api_key="soniox-key",
+            query_params={"model": "stt-rt-v5", "intent": "transcription"},
+        )
+
+    assert json.loads(upstream.sent[0])["sample_rate"] == 24_000
+    assert upstream.sent[1:] == [audio, '{"type":"finalize"}']
+    events = client_ws.sent_events()
+    errors = [event for event in events if event["type"] == "error"]
+    assert errors == [
+        {
+            "type": "error",
+            "error": {"type": "invalid_request_error", "message": "Soniox realtime requires pcm16 input audio"},
+        }
+    ]
+    assert events[-1]["transcript"] == "Hello"
+
+
 @pytest.mark.asyncio
 async def test_responses_agentic_followup_does_not_repeat_request_params_from_plan_kwargs(monkeypatch):
     """A plan whose kwargs repeat a request param must not crash the Responses follow-up with a duplicate keyword"""
@@ -5634,6 +5979,96 @@ async def test_anthropic_messages_dropped_safeguards_send_neither_the_field_nor_
     assert "dangerous-tool-use-2026-09-03" not in sent.headers.get("anthropic-beta", ""), dict(sent.headers)
 
 
+_EMPTY_SEARCH_PAGE: Final = {
+    "object": "vector_store.search_results.page",
+    "search_query": "q",
+    "data": [],
+    "has_more": False,
+    "next_page": None,
+}
+
+
+def _close_with_goaway(request: httpx.Request) -> httpx.Response:
+    raise httpx.RemoteProtocolError("GOAWAY", request=request) from httpcore.RemoteProtocolError(ConnectionTerminated())
+
+
+def _hang_up(request: httpx.Request) -> httpx.Response:
+    raise httpx.RemoteProtocolError("Server disconnected without sending a response.", request=request)
+
+
+def _answer_search(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, json=_EMPTY_SEARCH_PAGE)
+
+
+async def _search_through(transport: httpx.MockTransport, is_async: bool) -> object:
+    search_kwargs: Final = {"vector_store_id": "vs_1", "query": "q", "custom_llm_provider": "openai", "api_key": "sk-test"}
+    if not is_async:
+        with httpx.Client(transport=transport) as sync_client:
+            return litellm.vector_stores.search(**search_kwargs, client=HTTPHandler(client=sync_client))
+    async with httpx.AsyncClient(transport=transport) as async_client:
+        client: Final = AsyncHTTPHandler()
+        await client.close()
+        client.client = async_client
+        return await litellm.vector_stores.asearch(**search_kwargs, client=client)
+
+
+class TestAgenticFollowUpKeepsTheProviderPrefix:
+    @staticmethod
+    async def _run_followup(
+        model: str, custom_llm_provider: str, patched_model: str | None = None
+    ) -> ModelResponse:
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+        from litellm.types.integrations.custom_logger import (
+            AgenticLoopPlan,
+            AgenticLoopRequestPatch,
+        )
+
+        response: Final = await BaseLLMHTTPHandler()._execute_chat_completion_agentic_plan(
+            plan=AgenticLoopPlan(
+                run_agentic_loop=True,
+                request_patch=AgenticLoopRequestPatch(
+                    messages=[{"role": "user", "content": "hi"}], model=patched_model
+                ),
+            ),
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"mock_response": "ok from followup"},
+            kwargs={},
+            custom_llm_provider=custom_llm_provider,
+            depth=0,
+            max_loops=2,
+            fingerprints=[],
+            fingerprint="fp",
+        )
+        assert isinstance(response, ModelResponse)
+        return response
+
+    @pytest.mark.asyncio
+    async def test_a_sub_path_model_still_resolves_a_provider(self) -> None:
+        response: Final = await self._run_followup("mantle/anthropic.claude-sonnet-5", "bedrock")
+
+        assert response.choices[0].message.content == "ok from followup"
+
+    @pytest.mark.asyncio
+    async def test_an_ordinary_model_still_resolves_a_provider(self) -> None:
+        response: Final = await self._run_followup("gpt-4o-mini", "openai")
+
+        assert response.choices[0].message.content == "ok from followup"
+
+    @pytest.mark.asyncio
+    async def test_a_hook_that_patches_another_providers_model_reaches_that_provider(self) -> None:
+        response: Final = await self._run_followup("gpt-4o", "openai", patched_model="anthropic/claude-sonnet-4-5")
+
+        assert response.model == "claude-sonnet-4-5"
+        assert response._hidden_params["custom_llm_provider"] == "anthropic"
+
+    @pytest.mark.asyncio
+    async def test_a_hook_echoing_an_org_style_model_stays_on_the_request_provider(self) -> None:
+        response: Final = await self._run_followup("openai/gpt-4o", "openrouter", patched_model="openai/gpt-4o")
+
+        assert response._hidden_params["custom_llm_provider"] == "openrouter"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("environment_base", [None, "ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"])
@@ -5743,6 +6178,24 @@ def test_vector_store_retrieve_handler_sends_id_before_azure_api_version_query()
     sent: Final = received[0]
     assert str(sent.url) == "https://x.openai.azure.com/openai/vector_stores/vs_abc?api-version=2025-04-01-preview"
     assert len(received) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+async def test_vector_store_search_sends_again_once_after_an_http2_goaway(is_async: bool) -> None:
+    sends: Final = iter((_close_with_goaway, _answer_search))
+    response: Final = await _search_through(httpx.MockTransport(lambda request: next(sends)(request)), is_async)
+    assert response["search_query"] == "q"
+    assert next(sends, None) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+async def test_vector_store_search_sends_once_when_the_connection_drops_without_a_goaway(is_async: bool) -> None:
+    sends: Final = iter((_hang_up, _answer_search))
+    with pytest.raises(litellm.InternalServerError, match="Server disconnected"):
+        await _search_through(httpx.MockTransport(lambda request: next(sends)(request)), is_async)
+    assert next(sends) is _answer_search
 
 
 @pytest.mark.asyncio
