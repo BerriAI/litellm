@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Final, Protocol
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
+import fakeredis
 import httpx
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -26,8 +27,19 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helpe
 from litellm.proxy.credential_endpoints.endpoints import _decode_flow_handle, get_llm_router
 from litellm.proxy.proxy_server import app
 from litellm.types.utils import CredentialItem
+from tests._support.fake_redis import fake_redis_cache
 
 client = TestClient(app)
+
+
+def _auth_with_redis(cache, auth):
+    redis_client: Final = cache.init_async_client()
+
+    async def authenticate():
+        litellm.in_memory_llm_clients_cache.set_cache(key=cache._get_async_client_cache_key(), value=redis_client)
+        return auth()
+
+    return authenticate
 
 
 def _as_admin():
@@ -1799,17 +1811,8 @@ def test_update_credential_purges_connections_when_github_host_changes(monkeypat
         proxy_server.prisma_client.db.litellm_userprovidercredentials = table
         proxy_server.prisma_client.writer_db = proxy_server.prisma_client.db
 
-        cached_values: Final[dict[str, object]] = {}  # mutable-ok: fake Redis stores invalidation writes
-
-        async def set_cache(key: str, value: str, **kwargs: object) -> None:
-            cached_values[key] = value
-
-        async def get_cache(key: str, **kwargs: object) -> object:
-            return cached_values.get(key)
-
-        redis_cache: Final = MagicMock()
-        redis_cache.async_set_cache = AsyncMock(side_effect=set_cache)
-        redis_cache.async_get_cache = AsyncMock(side_effect=get_cache)
+        server: Final = fakeredis.FakeServer()
+        redis_cache: Final = fake_redis_cache(server)
         monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache(redis_cache=redis_cache))
 
         session_key: Final = _session_cache_key("user-a", "copilot", "github.com")
@@ -1825,6 +1828,7 @@ def test_update_credential_purges_connections_when_github_host_changes(monkeypat
                 "credential_values": {"github_copilot_host": "octo.ghe.com"},
                 "credential_info": {},
             },
+            auth=_auth_with_redis(redis_cache, _as_admin),
         )
 
     assert response.status_code == 200, response.text
@@ -1835,7 +1839,7 @@ def test_update_credential_purges_connections_when_github_host_changes(monkeypat
         ]
     )
     table.delete_many.assert_awaited_once_with(where={"credential_name": "copilot"})
-    assert cached_values[upc._cache_key("user-a", "copilot")] == upc._NOT_CONNECTED
+    assert fakeredis.FakeRedis(server=server).get(upc._cache_key("user-a", "copilot")) == json.dumps(upc._NOT_CONNECTED).encode()
     assert _SESSION_CACHE.get_cache(session_key) is None
 
 
@@ -2901,18 +2905,14 @@ def test_delete_user_connection_fails_closed_when_the_tombstone_write_fails(monk
     """Redis attached but its set() raises: the disconnect must not delete the row,
     or the cached token would keep working until TTL with nothing left to revoke."""
     table = _patch_user_connection_env(monkeypatch, [_per_user_credential()], rows=[_connection_row()])
-    from types import SimpleNamespace
-
     from litellm.proxy import proxy_server
 
-    failing_redis = SimpleNamespace(
-        async_set_cache=AsyncMock(side_effect=ConnectionError("redis down")),
-        async_get_cache=AsyncMock(return_value=None),
-        async_delete_cache=AsyncMock(return_value=None),
-    )
+    server: Final = fakeredis.FakeServer()
+    server.connected = False
+    failing_redis: Final = fake_redis_cache(server)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache(redis_cache=failing_redis))
 
-    response = _call_as("DELETE", "/credentials/copilot-cred/user_connection", auth=_as_user())
+    response = _call_as("DELETE", "/credentials/copilot-cred/user_connection", auth=_auth_with_redis(failing_redis, _as_user()))
     assert response.status_code == 503, response.text
     table.delete_many.assert_not_awaited()
 
@@ -2922,19 +2922,13 @@ def test_delete_user_connection_fails_when_the_tombstone_write_silently_noops(mo
     without writing still looks successful. The disconnect must verify the
     tombstone by reading the key back and refuse to delete the row."""
     table = _patch_user_connection_env(monkeypatch, [_per_user_credential()], rows=[_connection_row()])
-    from types import SimpleNamespace
-
     from litellm.proxy import proxy_server
 
-    store: dict = {}
-    silent_redis = SimpleNamespace(
-        async_set_cache=AsyncMock(return_value=None),  # reports success, writes nothing
-        async_get_cache=AsyncMock(side_effect=lambda key: store.get(key)),
-        async_delete_cache=AsyncMock(return_value=None),
-    )
+    silent_redis: Final = fake_redis_cache(fakeredis.FakeServer())
+    monkeypatch.setattr(silent_redis.init_async_client(), "set", AsyncMock(return_value=None))
     monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache(redis_cache=silent_redis))
 
-    response = _call_as("DELETE", "/credentials/copilot-cred/user_connection", auth=_as_user())
+    response = _call_as("DELETE", "/credentials/copilot-cred/user_connection", auth=_auth_with_redis(silent_redis, _as_user()))
     assert response.status_code == 503, response.text
     table.delete_many.assert_not_awaited()
 
@@ -2944,16 +2938,16 @@ def test_user_connection_poll_reports_503_when_the_cache_overwrite_cannot_land(m
     both the overwrite and the delete must surface as a retryable 503 rather
     than a false "connected"."""
     table = _patch_user_connection_env(monkeypatch, [_per_user_credential()])
-    from types import SimpleNamespace
-
     from litellm.proxy import proxy_server
 
-    stale_redis = SimpleNamespace(
-        async_set_cache=AsyncMock(return_value=None),
-        async_get_cache=AsyncMock(return_value="stale-value"),
-        async_delete_cache=AsyncMock(return_value=None),
-    )
+    server: Final = fakeredis.FakeServer()
+    raw: Final = fakeredis.FakeRedis(server=server)
+    raw.set('user_provider_credential:["user-a","copilot-cred"]', json.dumps("stale-value"))
+    stale_redis: Final = fake_redis_cache(server)
+    monkeypatch.setattr(stale_redis.init_async_client(), "set", AsyncMock(return_value=None))
+    monkeypatch.setattr(stale_redis.init_async_client(), "delete", AsyncMock(return_value=0))
     monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache(redis_cache=stale_redis))
+    redis_auth: Final = _auth_with_redis(stale_redis, _as_user())
 
     with _github_http(
         {
@@ -2963,12 +2957,12 @@ def test_user_connection_poll_reports_503_when_the_cache_overwrite_cannot_land(m
             _GITHUB_USER_URL: {"login": "octo"},
         }
     ):
-        start = _call_as("POST", "/credentials/copilot-cred/user_connection/start", auth=_as_user())
+        start = _call_as("POST", "/credentials/copilot-cred/user_connection/start", auth=redis_auth)
         poll = _call_as(
             "POST",
             "/credentials/copilot-cred/user_connection/poll",
             json_body={"flow_handle": start.json()["flow_handle"]},
-            auth=_as_user(),
+            auth=redis_auth,
         )
     assert poll.status_code == 503, poll.text
     assert "cache could not be refreshed" in poll.text

@@ -3,8 +3,9 @@
 import json
 from types import SimpleNamespace
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import fakeredis
 import pytest
 
 from litellm.caching.dual_cache import DualCache
@@ -22,6 +23,7 @@ from litellm.proxy.credential_endpoints.user_provider_credentials import (
     set_user_provider_credential_cache,
     upsert_user_provider_credential,
 )
+from tests._support.fake_redis import fake_redis_cache
 
 
 def _prisma(table=None):
@@ -41,15 +43,7 @@ def _row(user_id="user-a", credential_name="copilot-cred", credential_b64="ciphe
 
 
 def _fake_redis(monkeypatch):
-    """A RedisCache backed by a fakeredis client; two DualCaches can share it."""
-    import fakeredis
-
-    from litellm.caching.redis_cache import RedisCache
-
-    fake = fakeredis.FakeAsyncRedis()
-    redis = RedisCache(host="localhost", port=6379)
-    monkeypatch.setattr(redis, "init_async_client", lambda: fake)
-    return redis
+    return fake_redis_cache(fakeredis.FakeServer())
 
 
 @pytest.fixture(autouse=True)
@@ -279,8 +273,9 @@ async def test_redis_read_failure_falls_back_to_the_database(monkeypatch):
     """A broken Redis must not 401 a connected user: reads degrade to a cache miss."""
     from litellm.proxy.credential_endpoints import user_provider_credentials as upc
 
-    redis = _fake_redis(monkeypatch)
-    monkeypatch.setattr(redis, "async_get_cache", AsyncMock(side_effect=RuntimeError("redis down")))
+    server: Final = fakeredis.FakeServer()
+    server.connected = False
+    redis = fake_redis_cache(server)
     cache = DualCache(redis_cache=redis)
 
     payload = GithubCopilotUserConnectionPayload(access_token="gho_secret", github_login="octo")
@@ -295,9 +290,9 @@ async def test_redis_read_failure_falls_back_to_the_database(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_redis_write_and_delete_failures_do_not_fail_the_request(monkeypatch):
-    redis = _fake_redis(monkeypatch)
-    monkeypatch.setattr(redis, "async_set_cache", AsyncMock(side_effect=RuntimeError("redis down")))
-    monkeypatch.setattr(redis, "async_delete_cache", AsyncMock(side_effect=RuntimeError("redis down")))
+    server: Final = fakeredis.FakeServer()
+    server.connected = False
+    redis = fake_redis_cache(server)
     cache = DualCache(redis_cache=redis)
 
     payload = GithubCopilotUserConnectionPayload(access_token="gho_secret", github_login="octo")
@@ -399,15 +394,13 @@ async def test_set_reports_connected_when_delete_clears_a_dropped_write():
     """async_set_cache swallows errors: a set that reports success but writes
     nothing is verified by read-back, and a working delete still resolves the
     stale entry."""
-    store: dict = {}
-    silent_redis = SimpleNamespace(
-        async_set_cache=AsyncMock(return_value=None),
-        async_get_cache=AsyncMock(side_effect=lambda key: store.get(key)),
-        async_delete_cache=AsyncMock(side_effect=lambda key: store.pop(key, None)),
-    )
+    silent_redis: Final = fake_redis_cache(fakeredis.FakeServer())
     cache = DualCache(redis_cache=silent_redis)
     payload = GithubCopilotUserConnectionPayload(access_token="gho_secret", github_login="octo")
-    assert await set_user_provider_credential_cache(cache, "user-a", "copilot-cred", payload)
+    await silent_redis.async_set_cache('user_provider_credential:["user-a","copilot-cred"]', "stale-value")
+    with patch.object(silent_redis.init_async_client(), "set", AsyncMock(return_value=None)):
+        assert await set_user_provider_credential_cache(cache, "user-a", "copilot-cred", payload)
+    assert await silent_redis.async_get_cache('user_provider_credential:["user-a","copilot-cred"]') is None
 
 
 @pytest.mark.asyncio
@@ -415,15 +408,15 @@ async def test_set_reports_failure_when_a_stale_entry_survives_both_attempts():
     """A write silently dropped while a not-connected marker stays cached means
     the caller cannot trust the connect: the helper reports failure instead of
     claiming success."""
-    stale = "stale-value"
-    silent_redis = SimpleNamespace(
-        async_set_cache=AsyncMock(return_value=None),
-        async_get_cache=AsyncMock(return_value=stale),
-        async_delete_cache=AsyncMock(return_value=None),
-    )
+    silent_redis: Final = fake_redis_cache(fakeredis.FakeServer())
     cache = DualCache(redis_cache=silent_redis)
     payload = GithubCopilotUserConnectionPayload(access_token="gho_secret", github_login="octo")
-    assert not await set_user_provider_credential_cache(cache, "user-a", "copilot-cred", payload)
+    await silent_redis.async_set_cache('user_provider_credential:["user-a","copilot-cred"]', "stale-value")
+    with (
+        patch.object(silent_redis.init_async_client(), "set", AsyncMock(return_value=None)),
+        patch.object(silent_redis.init_async_client(), "delete", AsyncMock(return_value=0)),
+    ):
+        assert not await set_user_provider_credential_cache(cache, "user-a", "copilot-cred", payload)
 
 
 @pytest.mark.asyncio
