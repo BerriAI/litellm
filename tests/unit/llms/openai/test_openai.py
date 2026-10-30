@@ -4,6 +4,7 @@ import importlib
 import json
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from importlib.metadata import version
 from types import ModuleType
 from typing import Final, Literal, Protocol
 from unittest.mock import MagicMock, Mock, patch
@@ -472,6 +473,11 @@ async def test_mapped_error_carries_the_upstream_error_response(
 
 
 
+_SDK_TAKES_HTTPX2: Final = pytest.mark.skipif(
+    int(version("openai").split(".")[0]) < 3, reason="openai SDK 2 accepts only httpx clients"
+)
+
+
 def _sdk_default_transport_rejecting(_request: httpx2.Request) -> httpx2.Response:
     return httpx2.Response(
         400,
@@ -500,6 +506,7 @@ async def _acompletion_on_the_sdks_default_transport() -> None:
     await litellm.acompletion(messages=_MESSAGES, client=client, **_upstream("openai", "gpt-5.6"))
 
 
+@_SDK_TAKES_HTTPX2
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "route",
@@ -607,7 +614,13 @@ def _httpx2_client_answering(status_code: int, body: str) -> httpx2.Client:
     )
 
 
-@pytest.mark.parametrize("http_client_answering", (_httpx_client_answering, _httpx2_client_answering), ids=("httpx", "httpx2"))
+@pytest.mark.parametrize(
+    "http_client_answering",
+    (
+        pytest.param(_httpx_client_answering, id="httpx"),
+        pytest.param(_httpx2_client_answering, id="httpx2", marks=_SDK_TAKES_HTTPX2),
+    ),
+)
 @pytest.mark.parametrize("provider", ("openai", "litellm_proxy"))
 @pytest.mark.parametrize(
     ("status_code", "mapped_error", "body"),
