@@ -23,7 +23,7 @@ def batch_model_name(base: str) -> str:
 
 OPENAI_BATCH_BACKEND: Final = "gpt-4o-mini"
 AZURE_BATCH_BACKEND: Final = "gpt-5.4-mini-batch"
-VERTEX_BATCH_BACKEND: Final = "gemini-2.5-flash"
+VERTEX_BATCH_BACKEND: Final = "gemini-3.8-flash"
 BEDROCK_BATCH_BACKEND: Final = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
@@ -81,7 +81,7 @@ class Provider:
                 return LiteLLMParamsBody(
                     model=f"vertex_ai/{VERTEX_BATCH_BACKEND}",
                     vertex_project="os.environ/VERTEXAI_PROJECT",
-                    vertex_location="us-central1",
+                    vertex_location="global",
                     vertex_credentials="os.environ/VERTEXAI_CREDENTIALS",
                     gcs_bucket_name="os.environ/GCS_BUCKET_NAME",
                     bucket_name="os.environ/GCS_BUCKET_NAME",

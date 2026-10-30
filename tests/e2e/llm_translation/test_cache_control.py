@@ -8,7 +8,7 @@ Each case asserts the feature actually happened, not just a 200. Coverage matrix
   cache-read usage tokens > 0. service_tier is out of scope for Bedrock; AWS
   Bedrock does not expose an OpenAI-style request service tier, so that cell is
   intentionally not covered here.
-- Vertex (gemini-2.5-flash): explicit context caching via ``cache_control``
+- Vertex (gemini-3.8-flash): explicit context caching via ``cache_control``
   with a 5-minute ttl. litellm builds the Vertex cache before the generate
   call, so a never-seen prefix must come back cached on its very first call
   (Gemini's implicit caching cannot hit a cold prefix). That call bills the
@@ -80,7 +80,7 @@ import os
 pytestmark = [pytest.mark.e2e, pytest.mark.provider_live]
 
 BEDROCK_MODEL = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
-VERTEX_MODEL = "vertex_ai/gemini-2.5-flash"
+VERTEX_MODEL = "vertex_ai/gemini-3.8-flash"
 ANTHROPIC_MODEL = "anthropic/claude-haiku-4-5-20251001"
 OPENAI_MODEL = "openai/gpt-5.6"
 VERTEX_CACHE_TTL: Final = "300s"
@@ -380,7 +380,7 @@ class TestCacheControl:
             LiteLLMParamsBody(
                 model=VERTEX_MODEL,
                 vertex_project=os.environ.get("VERTEXAI_PROJECT"),
-                vertex_location="us-central1",
+                vertex_location="global",
                 vertex_credentials=os.environ.get("VERTEXAI_CREDENTIALS"),
             ),
         )

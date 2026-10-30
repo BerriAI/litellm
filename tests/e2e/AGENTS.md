@@ -75,7 +75,7 @@ class TestPromptCompression:
 
     def test_prompt_compression_accumulate_spend(self, key_id, user_id):
         for _ in range(10):
-            response = self.resources.proxy.post("gemini-2.5-flash", key_id, user_id)
+            response = self.resources.proxy.post("gemini-3.8-flash", key_id, user_id)
         compressed_value = ...
         assert response.cost == compressed_value  # the cost was actually reduced
 ```

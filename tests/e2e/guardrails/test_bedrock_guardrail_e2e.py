@@ -48,7 +48,7 @@ def _without_assessments(value: JsonValue) -> JsonValue:
     return value
 
 
-MODEL = "gemini-2.5-flash"
+MODEL = "gemini-3.8-flash"
 # Matches the word/topic policy the guardrail this suite points at actually denies.
 # Content filters are not assumed: the guardrail resource carries no contentPolicy,
 # so a hate/violence prompt returns action=NONE and never blocks.

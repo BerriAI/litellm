@@ -1286,7 +1286,7 @@ class TestBedrockBatchGovCloud:
         assert fetched.id == batch.id
 
 
-GEMINI_FILES_RAW_MODEL = "gemini-2.5-flash"
+GEMINI_FILES_RAW_MODEL = "gemini-3.8-flash"
 
 
 class TestGeminiFiles:

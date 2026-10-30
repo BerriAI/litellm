@@ -20,8 +20,8 @@ from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
 
-GEMINI_STUDIO_DEPLOYMENT: Final = "gemini-2.5-flash"
-GEMINI_VERTEX_DEPLOYMENT: Final = "gemini-2.5-flash-vertex"
+GEMINI_STUDIO_DEPLOYMENT: Final = "gemini-3.8-flash"
+GEMINI_VERTEX_DEPLOYMENT: Final = "gemini-3.8-flash-vertex"
 GEMINI_DEPLOYMENTS = (
     pytest.param(
         GEMINI_STUDIO_DEPLOYMENT,

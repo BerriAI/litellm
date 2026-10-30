@@ -38,7 +38,7 @@ from models import ChatResponse, ChatTool, ChatToolFunction
 
 pytestmark = pytest.mark.e2e
 
-MODEL = "gemini-2.5-flash"
+MODEL = "gemini-3.8-flash"
 
 #: The one tool the guardrail permits, and one it does not. Both are declared by
 #: the caller in the request body; the guardrail reads them there.

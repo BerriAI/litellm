@@ -248,15 +248,15 @@ class TestTeamManagementRoutes:
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
         alias = f"e2e-team-info-{unique_marker()}"
-        team_id = _create_team(client, resources, alias, ["gemini-2.5-flash"])
+        team_id = _create_team(client, resources, alias, ["gemini-3.8-flash"])
 
         info = _read_team(client, team_id)
         assert info.team_id == team_id, f"/team/info echoed team_id {info.team_id!r}, requested {team_id!r}"
         assert info.team_info.team_alias == alias, (
             f"/team/info reports team_alias {info.team_info.team_alias!r}, configured {alias!r}"
         )
-        assert info.team_info.models == ["gemini-2.5-flash"], (
-            f"/team/info reports models {info.team_info.models}, configured ['gemini-2.5-flash']"
+        assert info.team_info.models == ["gemini-3.8-flash"], (
+            f"/team/info reports models {info.team_info.models}, configured ['gemini-3.8-flash']"
         )
 
     @pytest.mark.covers("mgmt.team.block.persists")
@@ -264,7 +264,7 @@ class TestTeamManagementRoutes:
     def test_block_then_unblock_persists_to_team_info(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
-        team_id = _create_team(client, resources, f"e2e-team-block-{unique_marker()}", ["gemini-2.5-flash"])
+        team_id = _create_team(client, resources, f"e2e-team-block-{unique_marker()}", ["gemini-3.8-flash"])
         assert not _read_team(client, team_id).team_info.blocked, "/team/info reports the team blocked before /team/block"
 
         _set_blocked(client, team_id, blocked=True)
@@ -287,7 +287,7 @@ class TestTeamManagementRoutes:
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
         user_id = _create_user(client, resources, f"e2e-team-mu-{unique_marker()}@example.com")
-        team_id = _create_team(client, resources, f"e2e-team-mu-{unique_marker()}", ["gemini-2.5-flash"])
+        team_id = _create_team(client, resources, f"e2e-team-mu-{unique_marker()}", ["gemini-3.8-flash"])
         client.add_team_member(team_id, user_id)
         assert _member_role(_read_team(client, team_id), user_id) == "user", (
             f"member {user_id} should start as role 'user' after /team/member_add"
@@ -312,7 +312,7 @@ class TestTeamManagementRoutes:
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
         user_id = _create_user(client, resources, f"e2e-team-md-{unique_marker()}@example.com")
-        team_id = _create_team(client, resources, f"e2e-team-md-{unique_marker()}", ["gemini-2.5-flash"])
+        team_id = _create_team(client, resources, f"e2e-team-md-{unique_marker()}", ["gemini-3.8-flash"])
         client.add_team_member(team_id, user_id)
         assert _member_role(_read_team(client, team_id), user_id) == "user", (
             f"/team/info does not list {user_id} as a member after /team/member_add"
@@ -378,7 +378,7 @@ class TestTeamManagementRoutes:
         user + team, plus a second user id the member could try to add."""
         member_id = _create_user(client, resources, f"e2e-team-fb-{unique_marker()}@example.com")
         other_id = _create_user(client, resources, f"e2e-team-fb-{unique_marker()}@example.com")
-        team_id = _create_team(client, resources, f"e2e-team-fb-{unique_marker()}", ["gemini-2.5-flash"])
+        team_id = _create_team(client, resources, f"e2e-team-fb-{unique_marker()}", ["gemini-3.8-flash"])
         client.add_team_member(team_id, member_id)
         member_key = _generate_key(client, resources, KeyGenerateBody(user_id=member_id, team_id=team_id))
         return member_id, other_id, member_key, team_id
@@ -534,7 +534,7 @@ class TestTeamAdminWithTpmLimitEnabled:
             pytest.param(TeamSettingsChange(rpm_limit=10), id="rpm_limit"),
             pytest.param(TeamSettingsChange(max_budget=0.5), id="max_budget"),
             pytest.param(TeamSettingsChange(team_alias="renamed-by-team-admin"), id="team_alias"),
-            pytest.param(TeamSettingsChange(models=["gemini-2.5-flash"]), id="models"),
+            pytest.param(TeamSettingsChange(models=["gemini-3.8-flash"]), id="models"),
             pytest.param(TeamSettingsChange(budget_duration="1d"), id="budget_duration"),
             pytest.param(TeamSettingsChange(metadata=TeamCustomMetadata(cost_center="team-admin")), id="metadata"),
         ],

@@ -32,7 +32,7 @@ from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
 
-MODEL = "gemini-2.5-flash"
+MODEL = "gemini-3.8-flash"
 
 
 class TestBedrockDuringCallStreaming:

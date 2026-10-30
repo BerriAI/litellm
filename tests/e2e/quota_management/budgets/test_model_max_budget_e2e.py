@@ -20,7 +20,7 @@ from models import ModelBudgetEntry
 pytestmark = pytest.mark.e2e
 
 CAPPED_MODEL = "claude-haiku-4-5"
-FREE_MODEL = "gemini-2.5-flash"
+FREE_MODEL = "gemini-3.8-flash"
 
 
 def _call(client: BudgetClient, key: str, model: str):

@@ -10,7 +10,7 @@ from models import LiteLLMParamsBody
 
 pytestmark = pytest.mark.e2e
 
-CHAT_MODEL = "gemini-2.5-flash"
+CHAT_MODEL = "gemini-3.8-flash"
 VIDEO_BACKEND = "vertex_ai/veo-3.1-fast-generate-001"
 
 

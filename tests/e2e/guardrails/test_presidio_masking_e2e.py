@@ -53,7 +53,7 @@ from models import (
 
 pytestmark = pytest.mark.e2e
 
-MODEL = "gemini-2.5-flash"
+MODEL = "gemini-3.8-flash"
 
 # A guardrail created via POST /guardrails reaches the worker that served the
 # create immediately, but every other worker only picks it up on its next
@@ -268,7 +268,7 @@ class TestPresidioPreCallMasking:
         prompt = _pii_prompt(unique_marker(), email)
 
         _assert_eventually_masked(
-            lambda: client.chat(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=128),
+            lambda: client.chat(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=512),
             _first_content,
             email=email,
         )
@@ -296,7 +296,7 @@ class TestPresidioPreCallMasking:
         prompt = _pii_prompt(unique_marker(), email)
 
         _assert_eventually_masked(
-            lambda: client.messages(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=128),
+            lambda: client.messages(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=512),
             _messages_text,
             email=email,
         )

@@ -5,7 +5,7 @@ teardown) instead of relying on a statically configured model, so the check is
 self-contained and never inherits pricing another suite or a stale config left on
 the shared proxy. custom-priced-flash sets input/output rates deliberately far
 above the canonical gemini price; the isolation sibling shares the same
-gemini/gemini-2.5-flash backend but sets no override. Three behaviors are checked
+gemini/gemini-3.8-flash backend but sets no override. Three behaviors are checked
 independently:
 
 - billing: a real call's logged cost breakdown charges input and output tokens at
@@ -37,12 +37,12 @@ from models import (
 
 pytestmark = pytest.mark.e2e
 
-BACKEND_MODEL = "gemini/gemini-2.5-flash"
+BACKEND_MODEL = "gemini/gemini-3.8-flash"
 GEMINI_API_KEY = "os.environ/GEMINI_API_KEY"
-# Deliberately ~100x above canonical gemini-2.5-flash (input 3e-7 / output 2.5e-6)
+# Deliberately ~100x above canonical gemini-3.8-flash (input 7.5e-7 / output 3.75e-6)
 # so an override that is ignored or under-applied bills at the base rate and fails.
-CUSTOM_INPUT_RATE = 5e-05
-CUSTOM_OUTPUT_RATE = 1e-04
+CUSTOM_INPUT_RATE = 7.5e-05
+CUSTOM_OUTPUT_RATE = 3.75e-04
 
 
 class _CostBreakdown(BaseModel):
@@ -78,7 +78,7 @@ def _provision(
     input_cost_per_token: float | None,
     output_cost_per_token: float | None,
 ) -> str:
-    """Register a fresh gemini/gemini-2.5-flash deployment (deleted on teardown) and
+    """Register a fresh gemini/gemini-3.8-flash deployment (deleted on teardown) and
     return its model name. With the cost fields set the deployment carries a custom
     pricing override; with them None it is a plain sibling on the same backend. The
     marker keeps the name unique so concurrent runs on the shared proxy never
@@ -251,7 +251,7 @@ class TestCustomPricing:
         assert sibling_entry is not None, f"{sibling} absent from /model/info"
 
         # custom-priced-flash overrides pricing; the sibling shares the same
-        # gemini/gemini-2.5-flash backend but sets no override, so it must keep its
+        # gemini/gemini-3.8-flash backend but sets no override, so it must keep its
         # own price. Equal rates mean the override leaked into the shared cost map.
         assert (
             sibling_entry.model_info.input_cost_per_token

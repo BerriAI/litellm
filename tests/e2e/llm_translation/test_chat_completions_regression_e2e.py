@@ -45,8 +45,8 @@ from passthrough_client import PassthroughClient
 pytestmark = pytest.mark.e2e
 
 COHERE_BACKEND = "cohere/command-r-08-2024"
-GEMINI_BACKEND = "gemini/gemini-2.5-flash"
-VERTEX_BACKEND: Final = "vertex_ai/gemini-2.5-flash"
+GEMINI_BACKEND = "gemini/gemini-3.8-flash"
+VERTEX_BACKEND: Final = "vertex_ai/gemini-3.8-flash"
 AZURE_OPENAI_BACKEND: Final = "azure/gpt-5.4-nano"
 AZURE_OPENAI_API_VERSION: Final = "v1"
 AZURE_FOUNDRY_BACKEND: Final = "azure_ai/claude-haiku-4-5"
@@ -243,7 +243,7 @@ _PERSON_SCHEMA: dict[str, object] = {
 
 OPENAI_CHAT_MODEL: Final = "gpt-5.5"
 ANTHROPIC_CHAT_MODEL: Final = "claude-haiku-4-5"
-GEMINI_FLASH_MODEL: Final = "gemini-2.5-flash"
+GEMINI_FLASH_MODEL: Final = "gemini-3.8-flash"
 
 CHAT_MODELS: Final = (
     pytest.param(
@@ -449,7 +449,7 @@ class TestVertexChatCompletions:
             LiteLLMParamsBody(
                 model=VERTEX_BACKEND,
                 vertex_project="os.environ/VERTEXAI_PROJECT",
-                vertex_location="us-central1",
+                vertex_location="global",
             ),
         )
         resources.defer(lambda: client.proxy.delete_model(model_id))
@@ -485,7 +485,8 @@ class TestVertexChatCompletions:
                             content=f"Reply with the single word pong. {unique_marker()}",
                         )
                     ],
-                    max_tokens=32,
+                    max_tokens=128,
+                    reasoning_effort="none",
                 ),
             )
         )
@@ -554,7 +555,7 @@ class TestVertexChatCompletions:
 
         response = unwrap(
             client.proxy.chat(
-                key, ChatBody(model=model, messages=_vision_messages(), max_tokens=32, reasoning_effort="none")
+                key, ChatBody(model=model, messages=_vision_messages(), max_tokens=256, reasoning_effort="none")
             )
         )
         _assert_describes_cat(response)
@@ -588,7 +589,8 @@ class TestVertexChatCompletions:
                         content=f"Count from 1 to 5, one number per line. {unique_marker()}",
                     )
                 ],
-                max_tokens=64,
+                max_tokens=128,
+                reasoning_effort="none",
                 stream=True,
             ),
         )
