@@ -14,12 +14,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from litellm.proxy.utils import PrismaClient
+from litellm.proxy.utils import _SHUTDOWN_RECONNECT_WAIT_SECONDS, PrismaClient
 from litellm.repositories.database import Database
 
 
@@ -68,7 +69,10 @@ async def test_shutdown_waits_for_hung_request_reconnect_to_time_out(
 
 
 @pytest.mark.asyncio
-async def test_shutdown_stops_waiting_for_a_reconnect_stuck_past_its_timeout(prisma_client: PrismaClient) -> None:
+async def test_shutdown_stops_waiting_for_a_held_reconnect_lock_after_the_fixed_limit(
+    prisma_client: PrismaClient,
+) -> None:
+    assert _SHUTDOWN_RECONNECT_WAIT_SECONDS < prisma_client._db_watchdog_reconnect_timeout_seconds
     await prisma_client._db_reconnect_lock.acquire()
     with patch.object(asyncio.get_running_loop(), "time", return_value=1000.0) as clock:
         closing: Final = asyncio.create_task(Database(prisma=prisma_client).aclose())
@@ -77,7 +81,7 @@ async def test_shutdown_stops_waiting_for_a_reconnect_stuck_past_its_timeout(pri
             assert not closing.done()
             prisma_client.db.disconnect.assert_not_awaited()
 
-            clock.return_value = 1000.0 + prisma_client._db_watchdog_reconnect_timeout_seconds + 60
+            clock.return_value = 1000.0 + _SHUTDOWN_RECONNECT_WAIT_SECONDS + 1
             await closing
         finally:
             closing.cancel()
@@ -138,6 +142,33 @@ async def test_shutdown_waits_for_spawned_engine_work_and_prevents_rearming(pris
     prisma_client._handle_writer_engine_replaced()
     await asyncio.sleep(0)
     assert not prisma_client._engine_tasks
+
+
+@pytest.mark.asyncio
+async def test_shutdown_disconnect_returns_when_an_engine_wait_thread_never_exits(
+    patched_prisma_import: MagicMock, mock_prisma_client: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DATABASE_URL_READ_REPLICA", raising=False)
+    monkeypatch.delenv("IAM_TOKEN_DB_AUTH", raising=False)
+    client: Final = PrismaClient(
+        database_url="postgresql://test:test@localhost:5432/test",
+        proxy_logging_obj=MagicMock(failure_handler=AsyncMock()),
+        engine_exit_wait_seconds=0.05,
+    )
+    client.db = mock_prisma_client.db
+    release: Final = threading.Event()
+    stuck: Final = threading.Thread(target=release.wait, daemon=True)
+    stuck.start()
+    client._engine_wait_threads = (stuck,)
+    client._closing = True
+    try:
+        await asyncio.wait_for(client.disconnect(), timeout=2)
+    finally:
+        release.set()
+        stuck.join(timeout=2)
+
+    client.db.disconnect.assert_awaited_once()
+    assert client._engine_wait_threads == ()
 
 
 _PROBE_SQL = "SELECT to_regclass($1) IS NOT NULL AS present"

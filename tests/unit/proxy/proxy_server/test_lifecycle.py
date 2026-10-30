@@ -326,7 +326,7 @@ async def test_proxy_shutdown_without_a_database_drains_audit_callbacks_before_t
 
 
 @pytest.mark.asyncio
-async def test_database_lifespan_propagates_disconnect_error_after_shutdown(monkeypatch):
+async def test_database_lifespan_logs_disconnect_error_after_shutdown_instead_of_raising(monkeypatch, caplog):
     fake_prisma = MagicMock()
     fake_prisma.disconnect = AsyncMock(side_effect=RuntimeError("db gone"))
     fake_prisma.stop_background_tasks = AsyncMock()
@@ -341,9 +341,12 @@ async def test_database_lifespan_propagates_disconnect_error_after_shutdown(monk
     monkeypatch.setattr(litellm, "cache", None, raising=False)
     monkeypatch.setattr(litellm, "success_callback", [], raising=False)
 
-    with pytest.raises(RuntimeError, match="db gone"):
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
         async with aclosing(database_runtime.Database(prisma=fake_prisma)):
             await proxy_shutdown_event()
+
+    fake_prisma.disconnect.assert_awaited_once()
+    assert "db gone" in caplog.text
 
 
 # ---------------------------------------------------------------------------

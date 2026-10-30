@@ -18,8 +18,12 @@ class Database:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         try:
             await self.prisma.stop_background_tasks()
-        finally:
+        except Exception:
+            verbose_proxy_logger.exception("Stopping database background tasks failed")
+        try:
             await self.prisma.disconnect()
+        except Exception:
+            verbose_proxy_logger.exception("Database disconnect failed")
 
 
 @asynccontextmanager

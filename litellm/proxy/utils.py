@@ -5187,7 +5187,8 @@ async def prefetch_config_params(prisma_client: "PrismaClient | None", param_nam
 _WRITER_WRITABILITY_PROBE_SQL: Final = "SELECT current_setting('transaction_read_only') AS transaction_read_only"
 _WRITER_WRITABILITY_PROBE_ROWS: Final = TypeAdapter(list[dict[str, object]])
 _READ_ONLY_RECREATE_BACKOFF_CAP_SECONDS: Final = 600
-_SHUTDOWN_RECONNECT_GRACE_SECONDS: Final = 5.0
+_SHUTDOWN_RECONNECT_WAIT_SECONDS: Final = 5.0
+_SHUTDOWN_ENGINE_EXIT_WAIT_SECONDS: Final = 5.0
 
 
 class _ForcedRecreateDeclined(Exception):
@@ -5272,6 +5273,7 @@ class PrismaClient:
         database_url: str,
         proxy_logging_obj: ProxyLogging,
         http_client: "HttpConfig | None" = None,
+        engine_exit_wait_seconds: float = _SHUTDOWN_ENGINE_EXIT_WAIT_SECONDS,
     ):
         ## init logging object
         self.baseline_accounting_transactions: list[BaselineAccountingRecord] = []
@@ -5374,6 +5376,7 @@ class PrismaClient:
             self.db = writer_wrapper  # Client to connect to Prisma db
         self._db_reconnect_lock = asyncio.Lock()
         self._closing: bool = False
+        self._engine_exit_wait_seconds: Final = engine_exit_wait_seconds
         self._engine_tasks: frozenset[asyncio.Task[object]] = frozenset()
         self._db_health_watchdog_task: asyncio.Task | None = None
         self._view_setup_task: asyncio.Task[_ViewSetupOutcome] | None = None
@@ -6626,7 +6629,12 @@ class PrismaClient:
         try:
             await self.db.disconnect()
             if self._closing:
-                await asyncio.gather(*(asyncio.to_thread(thread.join) for thread in self._engine_wait_threads))
+                await asyncio.gather(
+                    *(
+                        asyncio.to_thread(thread.join, self._engine_exit_wait_seconds)
+                        for thread in self._engine_wait_threads
+                    )
+                )
                 self._engine_wait_threads = ()
         except Exception as e:
             import traceback
@@ -6667,20 +6675,12 @@ class PrismaClient:
         await self._wait_for_inflight_reconnect()
 
     async def _wait_for_inflight_reconnect(self) -> None:
-        # Request-driven reconnects are not engine tasks. Wait for their bounded
-        # reconnect cycle to release the lock before disconnecting, otherwise a
-        # late reconnect can reopen the client after shutdown. A reconnect stuck
-        # past its own timeout must not block shutdown, so the wait is bounded too.
         waiter: Final = asyncio.ensure_future(self._db_reconnect_lock.acquire())
         waiter.add_done_callback(lambda acquired: acquired.cancelled() or self._db_reconnect_lock.release())
-        done, _pending = await asyncio.wait(
-            {waiter}, timeout=self._db_watchdog_reconnect_timeout_seconds + _SHUTDOWN_RECONNECT_GRACE_SECONDS
-        )
+        done, _pending = await asyncio.wait({waiter}, timeout=_SHUTDOWN_RECONNECT_WAIT_SECONDS)
         if waiter not in done:
             waiter.cancel()
-            verbose_proxy_logger.warning(
-                "Shutdown stopped waiting for an in-flight DB reconnect that outlived its timeout"
-            )
+            verbose_proxy_logger.warning("Shutdown stopped waiting for an in-flight DB reconnect")
 
     async def stop_background_tasks(self) -> None:
         self._closing = True
