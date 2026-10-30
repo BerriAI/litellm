@@ -47,6 +47,7 @@ from litellm.proxy.auth.auth_checks import (
     can_object_call_model,
     _can_object_call_vector_stores,
     _check_agent_access_group_model_access,
+    agent_model_grants,
     check_end_user_budget,
     _check_team_member_budget,
     personal_key_owner_teams,
@@ -5883,7 +5884,7 @@ async def test_team_member_budget_check_reads_from_spend_counter():
 
 
 class TestGuardrailModificationCheck:
-    """Defense-in-depth: `_guardrail_modification_check` must 403 when the
+    """Defense-in-depth: `guardrail_modification_check` must 403 when the
     caller's metadata attempts to modify any guardrail-related key and the
     team lacks the `modify_guardrails` permission. Checks both the
     historically-covered `guardrails` list and the bypass toggles that
@@ -5891,11 +5892,11 @@ class TestGuardrailModificationCheck:
     """
 
     def _call(self, request_body):
-        from litellm.proxy.auth.auth_checks import _guardrail_modification_check
+        from litellm.proxy.auth.auth_checks import guardrail_modification_check
 
         team_object = MagicMock()
         team_object.metadata = {}  # no permission
-        return _guardrail_modification_check(request_body=request_body, team_object=team_object)
+        return guardrail_modification_check(request_body=request_body, team_object=team_object)
 
     def test_noop_when_no_guardrail_keys_present(self):
         # no-op — should return silently
@@ -11292,6 +11293,15 @@ async def test_agent_access_groups_naming_no_model_deny_every_model():
         await _check_agent_access_group_model_access("gpt-5", agent_key, None, resolve)
 
     assert exc_info.value.type == ProxyErrorTypes.agent_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_agent_model_grants_names_every_model_the_agents_access_groups_allow():
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=[])
+    resolve, asked = _agent_model_ceiling_resolver(frozenset({"gpt-5", "openai/gpt-5.6"}))
+
+    assert await agent_model_grants(agent_key, resolve) == frozenset({"gpt-5", "openai/gpt-5.6"})
+    assert asked == ["agent-1"]
 
 
 @pytest.mark.asyncio

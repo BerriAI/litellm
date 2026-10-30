@@ -3,12 +3,14 @@ import copy
 import hashlib
 import os
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, cast, get_args
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
@@ -207,6 +209,46 @@ def guardrail_request_data_with_streaming(
     }
 
 
+_GUARDRAIL_ENTRY_WITH_SETTINGS: Final = TypeAdapter(Mapping[str, object])
+
+
+def merged_guardrail_entries(*entry_lists: Iterable[object]) -> list[object]:
+    """Merges guardrail lists so each guardrail is named once: the first ``{name: settings}`` entry naming it wins over
+    any plain name in either order, else its first plain name stays"""
+    entries: Final = tuple(chain.from_iterable(entry_lists))
+    settings_names: Final = tuple(_settings_entry_names(entry) for entry in entries)
+    named_with_settings: Final = frozenset[str]().union(*settings_names)
+    return [
+        entry
+        for index, entry in enumerate(entries)
+        if not _superseded_guardrail_entry(entries, settings_names, named_with_settings, index)
+    ]
+
+
+def guardrail_entry_names(entry: object) -> tuple[str, ...]:
+    if isinstance(entry, str):
+        return (entry,)
+    if isinstance(entry, dict):
+        return tuple(_GUARDRAIL_ENTRY_WITH_SETTINGS.validate_python(entry))
+    return ()
+
+
+def _settings_entry_names(entry: object) -> frozenset[str]:
+    return frozenset(guardrail_entry_names(entry)) if isinstance(entry, dict) else frozenset()
+
+
+def _superseded_guardrail_entry(
+    entries: tuple[object, ...],
+    settings_names: tuple[frozenset[str], ...],
+    named_with_settings: frozenset[str],
+    index: int,
+) -> bool:
+    entry: Final = entries[index]
+    if isinstance(entry, str):
+        return entry in named_with_settings or entry in entries[:index]
+    return bool(settings_names[index]) and settings_names[index] <= frozenset[str]().union(*settings_names[:index])
+
+
 def _request_is_streaming(data: object, event_type: GuardrailEventHooks | None = None) -> bool:
     if event_type in _REALTIME_STREAMING_HOOKS:
         return True
@@ -216,6 +258,15 @@ def _request_is_streaming(data: object, event_type: GuardrailEventHooks | None =
         data.get("stream") is True
         or data.get(SERVER_STREAMING_CLASSIFICATION_KEY) is SERVER_STREAMING_CLASSIFICATION_MARKER
     )
+
+
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _guardrails_listed_in(metadata: object) -> list[str | dict[str, DynamicGuardrailParams]]:
+    if not isinstance(metadata, dict):
+        return []
+    return metadata.get("guardrails") or []
 
 
 class CustomGuardrail(CustomLogger):
@@ -791,28 +842,22 @@ class CustomGuardrail(CustomLogger):
                 return True
             raise
 
-    def get_guardrail_from_metadata(self, data: dict) -> list[str] | list[dict[str, DynamicGuardrailParams]]:
+    def get_guardrail_from_metadata(self, data: dict) -> list[str | dict[str, DynamicGuardrailParams]]:
         """
-        Returns the guardrail(s) to be run from the metadata or root
+        Returns the guardrail(s) to be run from the root, else from both metadata fields together
         """
 
         if "guardrails" in data:
             return data["guardrails"]
-        # Check both metadata locations. For regular endpoints move_guardrails_to_metadata
-        # writes to "metadata"; for thread/assistant endpoints it writes to
-        # "litellm_metadata". We check the one that actually contains the "guardrails"
-        # key so that a non-empty litellm_metadata without guardrails does not shadow
-        # the merged list stored in metadata (which would cause team guardrails to be
-        # silently skipped while default_on=True policy guardrails still fire).
-        for meta_key in ("metadata", "litellm_metadata"):
-            meta = data.get(meta_key) or {}
-            if isinstance(meta, dict) and "guardrails" in meta:
-                return meta.get("guardrails") or []
-        return []
+        request_fields: Final = _REQUEST_FIELDS.validate_python(data)
+        return [
+            *_guardrails_listed_in(request_fields.get("metadata")),
+            *_guardrails_listed_in(request_fields.get("litellm_metadata")),
+        ]
 
     def _guardrail_is_in_requested_guardrails(
         self,
-        requested_guardrails: list[str] | list[dict[str, DynamicGuardrailParams]],
+        requested_guardrails: Sequence[str | dict[str, DynamicGuardrailParams]],
     ) -> bool:
         for _guardrail in requested_guardrails:
             if isinstance(_guardrail, dict):

@@ -98,7 +98,7 @@ impl litellm_secrets::source::SecretSource for ChangingSecrets {
         name: &'a str,
     ) -> futures_util::future::BoxFuture<
         'a,
-        Result<Option<litellm_secrets::SecretValue>, litellm_secrets::Error>,
+        Result<Option<litellm_secret_value::SecretValue>, litellm_secrets::Error>,
     > {
         Box::pin(async move {
             let revision = self.revision.load(Ordering::SeqCst);
@@ -112,7 +112,7 @@ impl litellm_secrets::source::SecretSource for ChangingSecrets {
             } else {
                 None
             };
-            Ok(value.map(litellm_secrets::SecretValue::new))
+            Ok(value.map(litellm_secret_value::SecretValue::new))
         })
     }
 }
