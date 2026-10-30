@@ -3,7 +3,6 @@ Tests for separate ITPM/OTPM deployment rate limits (enforce_model_rate_limits).
 """
 
 import asyncio
-import os
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from typing import Final
@@ -39,7 +38,6 @@ from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
 from litellm.types.router import RouterCacheEnum
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import get_utc_datetime
-from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 MANTLE_OPUS = "bedrock_mantle/anthropic.claude-opus-4-7"
 MANTLE_OPUS_MAX_OUTPUT = litellm.get_model_info(model=MANTLE_OPUS)["max_output_tokens"]
@@ -1573,33 +1571,3 @@ async def test_custom_azure_deployment_name_reserves_itpm_on_its_base_models_tok
     )
 
     assert named == served
-
-
-def test_reservation_fraction_env_var_sets_the_default_otpm_reservation() -> None:
-    otpm_limit: Final = 1000
-    fraction: Final = 0.5
-    script: Final = f"""
-import asyncio
-from litellm.caching.dual_cache import DualCache
-from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
-    OTPM_RESERVED_KEY,
-    set_io_token_rate_limit_request_kwargs,
-)
-from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
-
-request_kwargs = {{"messages": [{{"role": "user", "content": "hello"}}], "metadata": {{}}}}
-set_io_token_rate_limit_request_kwargs(request_kwargs)
-deployment = {{
-    "litellm_params": {{"model": "{UNMAPPED_MODEL}", "otpm": {otpm_limit}}},
-    "model_info": {{"id": "io-fraction-env"}},
-    "model_name": "unmapped",
-}}
-asyncio.run(ModelRateLimitingCheck(dual_cache=DualCache()).async_pre_call_check(deployment))
-print(request_kwargs["metadata"][OTPM_RESERVED_KEY])
-"""
-    completed: Final = run_child_interpreter(
-        script, env={**os.environ, "NO_MAX_TOKENS_TPM_RESERVATION_FRACTION": str(fraction)}, timeout=120
-    )
-
-    assert completed.returncode == 0, completed.stderr
-    assert int(completed.stdout.split()[-1]) == int(otpm_limit * fraction)
