@@ -49,6 +49,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAnnotation,
     ChatCompletionAnnotationURLCitation,
+    ChatCompletionAudioDelta,
     ChatCompletionResponseMessage,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
@@ -2568,6 +2569,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         functions: ChatCompletionToolCallFunctionChunk | None,
         chat_completion_logprobs: ChoiceLogprobs | None,
         image_response: list[ImageURLListItem] | None,
+        audio_response: ChatCompletionAudioResponse | None = None,
     ) -> StreamingChoices:
         """
         Helper method to create a streaming choice object for Vertex AI
@@ -2586,6 +2588,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 content=chat_completion_message.get("content"),
                 reasoning_content=chat_completion_message.get("reasoning_content"),
                 tool_calls=tools,
+                audio=ChatCompletionAudioDelta(data=audio_response.data) if audio_response is not None else None,
                 images=image_response,
                 function_call=functions,
                 annotations=annotations,
@@ -2795,6 +2798,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 continue
 
             image_response: list[ImageURLListItem] | None = None
+            audio_response: ChatCompletionAudioResponse | None = None
             chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
             chat_completion_logprobs: ChoiceLogprobs | None = None
             tools: list[ChatCompletionToolCallChunk] | None = None
@@ -2921,6 +2925,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     functions=functions,
                     chat_completion_logprobs=chat_completion_logprobs,
                     image_response=image_response,
+                    audio_response=audio_response,
                 )
                 model_response.choices.append(choice)
             elif isinstance(model_response, ModelResponse):
