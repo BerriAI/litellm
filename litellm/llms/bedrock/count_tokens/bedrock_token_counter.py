@@ -13,7 +13,11 @@ from typing_extensions import assert_never
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.anthropic.count_tokens.transformation import ChatCountTranslationError, anthropic_count_fields
+from litellm.llms.anthropic.count_tokens.transformation import (
+    ChatCountTranslationError,
+    anthropic_count_fields,
+    malformed_message_error,
+)
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_base_model
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
@@ -152,6 +156,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         resolved_model: Final = get_bedrock_base_model(counted_model)
         primary_tokenizer: Final = MANTLE_TOKENIZER_TYPE if use_mantle else RUNTIME_TOKENIZER_TYPE
         litellm_params: Final = (deployment or {}).get("litellm_params", {})
+        claude: Final = is_mantle_claude_model(resolved_model)
         translated: Final = (
             await anthropic_count_fields(
                 counted_model,
@@ -162,11 +167,14 @@ class BedrockTokenCounter(BaseTokenCounter):
                 _claude_count_translator(litellm_params),
                 chat_params,
             )
-            if is_mantle_claude_model(resolved_model)
+            if claude
             else None
         )
         if isinstance(translated, ChatCountTranslationError):
             return translated.response(request_model, model_to_use, primary_tokenizer)
+        malformed: Final = malformed_message_error(messages) if claude and translated is None else None
+        if malformed is not None:
+            return malformed.response(request_model, model_to_use, primary_tokenizer)
         runtime_request: Final = (
             _request_data(model_to_use, messages, tools, system)
             if translated is None

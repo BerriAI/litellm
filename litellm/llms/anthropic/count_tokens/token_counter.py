@@ -17,6 +17,7 @@ from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountFields,
     ChatCountTranslationError,
     anthropic_count_fields,
+    malformed_message_error,
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
@@ -93,6 +94,9 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 )
             case None:
                 pass
+
+        if (malformed := malformed_message_error(messages)) is not None:
+            return malformed.response(request_model, model_to_use, "anthropic_api")
 
         deployment = deployment or {}
         litellm_params: Final = deployment.get("litellm_params", {})

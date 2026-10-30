@@ -293,6 +293,52 @@ async def test_claude_count_rejects_a_lone_responses_tool_without_calling_bedroc
     assert bedrock.posted_hosts() == ()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_to_use", ("us.anthropic.claude-opus-5-5", "bedrock_mantle/anthropic.claude-opus-5-5"))
+async def test_claude_count_rejects_a_message_without_content_without_calling_bedrock(model_to_use: str) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=model_to_use,
+        messages=[{"role": "user"}],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-5-5",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+    assert result.error_message == "Message 0 must have a 'content' field"
+    assert bedrock.posted_hosts() == ()
+
+
+@pytest.mark.asyncio
+async def test_claude_count_sends_a_chat_tool_call_turn_sent_without_a_content_key() -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-opus-5-5",
+        messages=[
+            {"role": "user", "content": "Weather in SF?"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+        ],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-5-5",
+        messages_format="openai",
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 412)
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+
+
 _CLAUDE_REPLY: Final = {
     "id": "msg_1",
     "type": "message",

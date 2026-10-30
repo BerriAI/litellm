@@ -789,6 +789,54 @@ async def test_counter_rejects_input_chat_translation_would_leave_out_without_ca
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("httpx_transport_clients")
 @_COUNTERS
+@pytest.mark.parametrize("messages_format", ("anthropic", "openai"))
+@pytest.mark.parametrize(
+    ("message", "problem"),
+    (
+        ({"role": "user"}, "Message 1 must have a 'content' field"),
+        ({"content": "Hello"}, "Message 1 must have a 'role' field"),
+    ),
+    ids=("without-content", "without-role"),
+)
+async def test_counter_rejects_a_message_anthropic_rejects_without_calling_anthropic(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    messages_format: TokenCountMessagesFormat,
+    message: dict[str, JsonValue],
+    problem: str,
+) -> None:
+    result, bodies = await _counted_body(
+        counter_type, count_endpoint, [{"role": "user", "content": "Hi"}, message], None, messages_format
+    )
+
+    assert bodies == ()
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+    assert result.error_message == problem
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+async def test_counter_counts_a_chat_tool_call_turn_sent_without_a_content_key(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+) -> None:
+    turns: Final = [
+        {key: value for key, value in message.items() if (key, value) != ("content", None)}
+        for message in _CHAT_TOOL_TURNS
+    ]
+
+    result, bodies = await _counted_body(counter_type, count_endpoint, turns, None, "openai")
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 31)
+    assert len(bodies) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
 async def test_counter_sends_a_tool_with_a_non_string_type_to_anthropic_as_given(
     counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], count_endpoint: str
 ) -> None:

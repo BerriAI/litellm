@@ -347,6 +347,25 @@ async def anthropic_count_fields(
     return await asyncify(anthropic_fields_for_chat_tool_use)(model, messages, system, tools, translator, chat_params)
 
 
+def _message_problem(index: int, message: Mapping[str, object]) -> str | None:
+    if "role" not in message:
+        return f"Message {index} must have a 'role' field"
+    if "content" not in message:
+        return f"Message {index} must have a 'content' field"
+    return None
+
+
+def malformed_message_error(messages: Sequence[Mapping[str, object]]) -> ChatCountTranslationError | None:
+    return next(
+        (
+            ChatCountTranslationError(problem)
+            for index, message in enumerate(messages)
+            if (problem := _message_problem(index, message)) is not None
+        ),
+        None,
+    )
+
+
 class AnthropicCountTokensConfig:
     """
     Configuration and transformation logic for Anthropic CountTokens API.
