@@ -116,6 +116,18 @@ _AIOHTTP_EQUIVALENT_LIMITS: Final = httpx.Limits(
 )
 
 
+def _http2_spread_through_proxy(
+    proxy_url: str, verify: VerifyTypes, cert: CertTypes | None, limits: httpx.Limits
+) -> AsyncHTTP2ConnectionSpread:
+    lane_ssl_context: Final = httpx.create_ssl_context(verify=verify, cert=cert)
+    return AsyncHTTP2ConnectionSpread(
+        lambda lane_limits: AsyncHTTPTransport(
+            proxy=proxy_url, verify=lane_ssl_context, http2=True, limits=lane_limits
+        ),
+        limits,
+    )
+
+
 def _environment_proxy_mounts(
     build_proxy_transport: Callable[[str], _HttpxTransportT],
 ) -> Mapping[str, _HttpxTransportT | None]:
@@ -1498,9 +1510,10 @@ class AsyncHTTPHandler:
             else verify
         )
         if http2 or http2_enabled():
+            lane_ssl_context: Final = httpx.create_ssl_context(verify=transport_verify, cert=cert)
             return AsyncHTTP2ConnectionSpread(
                 lambda lane_limits: AsyncHTTPTransport(
-                    local_address=local_address, verify=transport_verify, cert=cert, http2=True, limits=lane_limits
+                    local_address=local_address, verify=lane_ssl_context, http2=True, limits=lane_limits
                 ),
                 limits,
             )
@@ -1520,12 +1533,7 @@ class AsyncHTTPHandler:
             return None
         if http2 or http2_enabled():
             return _environment_proxy_mounts(
-                lambda proxy_url: AsyncHTTP2ConnectionSpread(
-                    lambda lane_limits: AsyncHTTPTransport(
-                        proxy=proxy_url, verify=verify, cert=cert, http2=True, limits=lane_limits
-                    ),
-                    limits,
-                )
+                lambda proxy_url: _http2_spread_through_proxy(proxy_url, verify, cert, limits)
             )
         return _environment_proxy_mounts(
             lambda proxy_url: AsyncHTTPTransport(proxy=proxy_url, verify=verify, cert=cert, limits=limits)

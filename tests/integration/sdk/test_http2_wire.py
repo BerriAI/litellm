@@ -40,6 +40,7 @@ from integration._support.vertex import service_account_json
 
 STREAM_CHUNKS: Final = 3
 HELD_SEARCHES: Final = 150
+FEW_STREAMS: Final = 5
 HOLD_SECONDS: Final = 10.0
 PROBED_HEADERS: Final = frozenset({b"te", b"keep-alive", b"connection", b"proxy-connection", b"upgrade", b"x-probe"})
 VERTEX_SERVING_CONFIG_PATH: Final = (
@@ -53,6 +54,7 @@ class PeerLog:
     all_held_arrived: asyncio.Event = field(default_factory=asyncio.Event)
     token_requests: queue.SimpleQueue[str] = field(default_factory=queue.SimpleQueue)
     counted_client_ports: queue.SimpleQueue[int] = field(default_factory=queue.SimpleQueue)
+    held_searches: int = HELD_SEARCHES
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,7 +153,7 @@ async def _peer(log: PeerLog, scope: Scope, receive: ASGIReceiveCallable, send: 
 
 async def _hold_until_all_arrive(log: PeerLog, client_port: int) -> str:
     log.held_arrivals.put(client_port)
-    if log.held_arrivals.qsize() >= HELD_SEARCHES:
+    if log.held_arrivals.qsize() >= log.held_searches:
         log.all_held_arrived.set()
     waiter: Final = asyncio.ensure_future(log.all_held_arrived.wait())
     await asyncio.wait((waiter,), timeout=HOLD_SECONDS)
@@ -166,12 +168,13 @@ async def _send_json(send: ASGISendCallable, body: dict[str, object]) -> None:
     await send(HTTPResponseBodyEvent(type="http.response.body", body=json.dumps(body).encode(), more_body=False))
 
 
-@pytest.fixture
-def http2_tls_peer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[TlsPeer]:
+@contextmanager
+def _hypercorn_tls_peer(
+    tmp_path_factory: pytest.TempPathFactory, log: PeerLog, max_concurrent_streams: int
+) -> Iterator[TlsPeer]:
     cert_file, key_file = _write_self_signed_cert(tmp_path_factory.mktemp("h2certs"))
     port: Final = allocate_port()
     shutdown: Final = threading.Event()
-    log: Final = PeerLog()
 
     def _serve() -> None:
         loop: Final = asyncio.new_event_loop()
@@ -180,6 +183,7 @@ def http2_tls_peer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[TlsPeer
         config.certfile = str(cert_file)
         config.keyfile = str(key_file)
         config.alpn_protocols = ["h2", "http/1.1"]
+        config.h2_max_concurrent_streams = max_concurrent_streams
         loop.run_until_complete(
             serve(functools.partial(_peer, log), config, shutdown_trigger=lambda: asyncio.to_thread(shutdown.wait))
         )
@@ -195,9 +199,23 @@ def http2_tls_peer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[TlsPeer
             time.sleep(0.05)
     else:
         pytest.fail("hypercorn peer did not start")
-    yield TlsPeer(url=f"https://127.0.0.1:{port}", cert_file=cert_file, key_file=key_file, log=log)
-    shutdown.set()
-    thread.join(timeout=10)
+    try:
+        yield TlsPeer(url=f"https://127.0.0.1:{port}", cert_file=cert_file, key_file=key_file, log=log)
+    finally:
+        shutdown.set()
+        thread.join(timeout=10)
+
+
+@pytest.fixture
+def http2_tls_peer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[TlsPeer]:
+    with _hypercorn_tls_peer(tmp_path_factory, PeerLog(), Config().h2_max_concurrent_streams) as peer:
+        yield peer
+
+
+@pytest.fixture
+def few_streams_http2_tls_peer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[TlsPeer]:
+    with _hypercorn_tls_peer(tmp_path_factory, PeerLog(held_searches=4 * FEW_STREAMS), FEW_STREAMS) as peer:
+        yield peer
 
 
 def _async_exchange(base_url: str, ssl_verify: bool | None = False) -> Observed:
@@ -645,30 +663,44 @@ def test_vertex_search_keeps_its_http2_connection_across_an_idle_gap(
         assert accepted.qsize() == 1
 
 
-def test_async_http2_handler_opens_another_connection_once_the_streams_run_out(
-    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer
-) -> None:
+def _held_search_ids_and_client_ports(
+    monkeypatch: pytest.MonkeyPatch, peer: TlsPeer
+) -> tuple[list[str], frozenset[int]]:
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
-    _trust_peer_without_global_http2(monkeypatch, http2_tls_peer)
+    _trust_peer_without_global_http2(monkeypatch, peer)
 
     async def _burst() -> list[str]:
-        handler: Final = AsyncHTTPHandler(ssl_verify=str(http2_tls_peer.cert_file), http2=True)
+        handler: Final = AsyncHTTPHandler(ssl_verify=str(peer.cert_file), http2=True)
         try:
             responses: Final = await asyncio.gather(
-                *(handler.post(f"{http2_tls_peer.url}/hold:search", json={}) for _ in range(HELD_SEARCHES))
+                *(handler.post(f"{peer.url}/hold:search", json={}) for _ in range(peer.log.held_searches))
             )
             return [response.json()["results"][0]["id"] for response in responses]
         finally:
             await handler.close()
 
     search_ids: Final = asyncio.run(_burst())
-    client_ports: Final = frozenset(
-        http2_tls_peer.log.held_arrivals.get_nowait() for _ in range(http2_tls_peer.log.held_arrivals.qsize())
-    )
+    client_ports: Final = frozenset(peer.log.held_arrivals.get_nowait() for _ in range(peer.log.held_arrivals.qsize()))
+    return search_ids, client_ports
+
+
+def test_async_http2_handler_opens_another_connection_once_the_streams_run_out(
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer
+) -> None:
+    search_ids, client_ports = _held_search_ids_and_client_ports(monkeypatch, http2_tls_peer)
 
     assert search_ids == ["held-together"] * HELD_SEARCHES
     assert len(client_ports) == 2
+
+
+def test_async_http2_handler_opens_another_connection_at_the_peers_stream_limit(
+    monkeypatch: pytest.MonkeyPatch, few_streams_http2_tls_peer: TlsPeer
+) -> None:
+    search_ids, client_ports = _held_search_ids_and_client_ports(monkeypatch, few_streams_http2_tls_peer)
+
+    assert search_ids == ["held-together"] * few_streams_http2_tls_peer.log.held_searches
+    assert len(client_ports) == few_streams_http2_tls_peer.log.held_searches // FEW_STREAMS
 
 
 def test_http2_transport_opens_no_more_connections_than_its_cap(http2_tls_peer: TlsPeer) -> None:
