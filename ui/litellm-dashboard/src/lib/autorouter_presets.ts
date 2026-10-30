@@ -29,6 +29,7 @@ import {
 } from "@/components/add_model/complexity_router_tiers";
 import { DEFAULT_ESCALATION_KEYWORDS } from "@/components/add_model/EscalationKeywords";
 import { DEFAULT_MATCH_THRESHOLD } from "@/components/add_model/SemanticKeywordMatching";
+import { wildcardRoutes } from "@/lib/wildcard_routes";
 
 // `key` is the stable JSON object key (e.g. "anthropic_family"); `label` is display text and
 // never an identity.
@@ -110,31 +111,6 @@ const normalizeUnderlyingModel = (model: string): string | null => {
   return stripped.toLowerCase() || null;
 };
 
-// A linear glob scan rather than a RegExp: patterns are admin-controlled model_name values, and a
-// backtracking regex built from one ("a*a*a*...") can freeze another admin's dashboard.
-const matchesWildcard = (pattern: string, name: string): boolean => {
-  const parts = pattern.split("*");
-  if (parts.length === 1) return pattern === name;
-  const head = parts[0];
-  const tail = parts[parts.length - 1];
-  if (!name.startsWith(head) || !name.endsWith(tail)) return false;
-  if (name.length < head.length + tail.length) return false;
-  const scanEnd = name.length - tail.length;
-  const scanResult = parts.slice(1, -1).reduce((searchFrom: number, part: string) => {
-    if (searchFrom < 0) return -1;
-    const found = name.indexOf(part, searchFrom);
-    return found === -1 || found + part.length > scanEnd ? -1 : found + part.length;
-  }, head.length);
-  return scanResult >= 0;
-};
-
-const isProviderWide = (pattern: string): boolean => pattern.slice(pattern.indexOf("/") + 1) === "*";
-
-const listsCapturedIds = (pattern: string): boolean => {
-  const partialWord = pattern.slice(0, pattern.indexOf("*")).split("/").at(-1) ?? "";
-  return pattern.includes("/") && !isProviderWide(pattern) && !/[a-z0-9]$/i.test(partialWord);
-};
-
 export const buildModelAvailability = (
   modelGroups: Iterable<string>,
   deployments: readonly DeploymentModelRef[],
@@ -154,34 +130,15 @@ export const buildModelAvailability = (
         .map(normalizeUnderlyingModel)
         .map((key) => ({ key, modelGroup: deployment.modelGroup, sourceGroup: deployment.modelGroup })),
     );
-  // Mirrors get_known_models_from_wildcard: a bare "*" model_name lists provider-prefixed ids over a
-  // provider-wide wildcard and the text its "*" captures over a partial one, which only the router's
-  // substitution ties back to a model. A wildcard without a "/" lists nothing.
-  const wildcardPatterns = deployments.flatMap((deployment) =>
-    (deployment.modelGroup === "*" ? deployment.underlyingModels.filter(isProviderWide) : [deployment.modelGroup])
-      .filter((pattern) => pattern !== "*" && pattern.includes("*") && pattern.includes("/"))
-      .map((pattern) => ({ pattern, sourceGroup: deployment.modelGroup })),
-  );
-  const capturePatterns = deployments
-    .filter((deployment) => deployment.modelGroup === "*")
-    .flatMap((deployment) => deployment.underlyingModels.filter(listsCapturedIds));
   const unlistedGroups = Array.from(groups).filter((group) => !group.includes("*") && !deploymentGroups.has(group));
   const wildcardEntries = unlistedGroups.flatMap((group) =>
-    wildcardPatterns
-      .filter(({ pattern }) => matchesWildcard(pattern, group))
-      .map(({ sourceGroup }) => ({ key: normalizeUnderlyingModel(group), modelGroup: group, sourceGroup })),
+    wildcardRoutes(group, deployments).map(({ model, sourceGroup }) => ({
+      key: normalizeUnderlyingModel(model),
+      modelGroup: group,
+      sourceGroup,
+    })),
   );
-  const claimedGroups = new Set(wildcardEntries.map((entry) => entry.modelGroup));
-  const capturedEntries = unlistedGroups
-    .filter((group) => !claimedGroups.has(group))
-    .flatMap((group) =>
-      capturePatterns.map((pattern) => ({
-        key: normalizeUnderlyingModel(pattern.replace("*", () => group)),
-        modelGroup: group,
-        sourceGroup: "*",
-      })),
-    );
-  const entries = [...literalEntries, ...wildcardEntries, ...capturedEntries];
+  const entries = [...literalEntries, ...wildcardEntries];
   const grouped = new Map<string, Set<string>>();
   const providersByGroup = new Map<string, Set<string>>();
   for (const entry of entries) {

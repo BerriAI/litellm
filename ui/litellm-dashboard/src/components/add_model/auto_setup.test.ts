@@ -160,6 +160,17 @@ describe("deployedRouterModels", () => {
     expect(models[0]).toMatchObject({ name: "group", version: [5, 5], provider: "Anthropic, Bedrock" });
   });
 
+  it.each([
+    ["a bare-star catch-all", "*", ""],
+    ["a named alias", "claude/*", "claude/"],
+  ])("suggests the Claude ids %s lists over a partial wildcard", (_label, name, prefix) => {
+    const groups = ["haiku-4-5", "opus-5-5"].map((id) => ({ model_group: `${prefix}${id}`, mode: "chat" }));
+    const suggest = (row: AutoRouterDeployment) =>
+      names(recommendSolverPair(deployedRouterModels(groups, [row]), "balanced", "auto"));
+    expect(suggest(deployment(name, "anthropic/claude-*"))).toEqual([`${prefix}haiku-4-5`, `${prefix}opus-5-5`]);
+    expect(suggest(deployment(name, "anthropic/claude-*", { model_info: { blocked: true } }))).toBeNull();
+  });
+
   it("keeps arbitrary canonical names available without pretending an unversioned alias is latest", () => {
     expect(
       deployedRouterModels([{ model_group: "claude-opus-8-12" }, { model_group: "claude-opus-latest" }], []).map(

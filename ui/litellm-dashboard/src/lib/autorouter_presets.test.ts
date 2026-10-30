@@ -687,6 +687,58 @@ describe("autorouter_presets", () => {
       expect(availability.underlyingIndex.size).toBe(0);
     });
 
+    it("keeps a catch-all's declared base model from claiming every id the catch-all lists", () => {
+      const availability = buildModelAvailability(
+        ["fable-5", "sonnet-5"],
+        [{ modelGroup: "*", underlyingModels: ["anthropic/claude-*", "anthropic/claude-sonnet-5"] }],
+      );
+      expect(resolveAvailableModel("claude-sonnet-5", availability)).toBe("sonnet-5");
+      expect(resolveAvailableModel("claude-fable-5", availability)).toBe("fable-5");
+    });
+
+    it("credits no listed id to a catch-all over a single model", () => {
+      const availability = buildModelAvailability(
+        ["team-alias"],
+        [{ modelGroup: "*", underlyingModels: ["anthropic/claude-opus-5-5"] }],
+      );
+      expect(availability.underlyingIndex.size).toBe(0);
+    });
+
+    it("keys a named alias over a partial wildcard by the model it routes to", () => {
+      const availability = buildModelAvailability(
+        ["claude/haiku-4-5"],
+        [{ modelGroup: "claude/*", underlyingModels: ["anthropic/claude-*"] }],
+      );
+      expect(resolveAvailableModel("claude-haiku-4-5", availability)).toBe("claude/haiku-4-5");
+    });
+
+    it("keeps replacement patterns in a listed id literal", () => {
+      const availability = buildModelAvailability(
+        ["haiku-4-5$&"],
+        [{ modelGroup: "*", underlyingModels: ["anthropic/claude-*"] }],
+      );
+      expect(resolveAvailableModel("claude-haiku-4-5$&", availability)).toBe("haiku-4-5$&");
+    });
+
+    it("prefers an id a native catch-all lists over a cloud group serving the same model", () => {
+      const availability = buildModelAvailability(
+        ["a-cloud", "opus-5-5"],
+        [
+          { modelGroup: "a-cloud", underlyingModels: ["bedrock/anthropic.claude-opus-5-5"] },
+          { modelGroup: "*", underlyingModels: ["anthropic/claude-*"] },
+        ],
+      );
+      expect(resolveAvailableModel("claude-opus-5-5", availability)).toBe("opus-5-5");
+    });
+
+    it.each([
+      ["its head and tail would overlap", "team/a*a", "team/a"],
+      ["an earlier middle part is missing", "team/*x*y*", "team/y"],
+    ])("does not match a named wildcard when %s", (_label, pattern, group) => {
+      const availability = buildModelAvailability([group], [wildcardDeployment(pattern)]);
+      expect(availability.underlyingIndex.size).toBe(0);
+    });
+
     it("derives no pattern from a slashless wildcard model_name", () => {
       const availability = buildModelAvailability(["gpt-5.4"], [wildcardDeployment("gpt*")]);
       expect(availability.underlyingIndex.size).toBe(0);

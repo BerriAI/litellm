@@ -1,6 +1,7 @@
 import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import { isAutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
+import { type WildcardDeployment, wildcardRoutes } from "@/lib/wildcard_routes";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 
 export const ROUTER_FAMILIES = {
@@ -105,6 +106,19 @@ const identityOf = (deployment: AutoRouterDeployment): ModelIdentity | null =>
   parseModel(deployment.litellm_params?.model ?? "") ??
   parseModel(deployment.model_info?.base_model ?? deployment.litellm_params?.base_model ?? "");
 
+const routableDeployments = (deployments: readonly AutoRouterDeployment[]): WildcardDeployment[] =>
+  deployments.flatMap((row) => {
+    const model = row.litellm_params?.model;
+    return row.model_name && model && !row.model_info?.blocked
+      ? [{ modelGroup: row.model_name, underlyingModels: [model] }]
+      : [];
+  });
+
+const routedIdentities = (group: string, wildcards: readonly WildcardDeployment[]): (ModelIdentity | null)[] => {
+  const routes = wildcardRoutes(group, wildcards);
+  return routes.length > 0 ? routes.map(({ model }) => parseModel(model)) : [parseModel(group)];
+};
+
 const providerOf = (deployment: AutoRouterDeployment, group: ModelGroup, family?: RouterFamily): string => {
   const raw = deployment.litellm_params?.model ?? "";
   const provider =
@@ -152,8 +166,9 @@ export const routingModelGroups = (groups: readonly ModelGroup[]): ModelGroup[] 
 export const deployedRouterModels = (
   groups: readonly ModelGroup[],
   deployments: readonly AutoRouterDeployment[],
-): SolverModel[] =>
-  routingModelGroups(groups)
+): SolverModel[] => {
+  const wildcards = routableDeployments(deployments);
+  return routingModelGroups(groups)
     .map((group) => {
       const rows = deployments.filter((row) => row.model_name === group.model_group);
       const active = rows.filter((row) => !row.model_info?.blocked);
@@ -161,7 +176,7 @@ export const deployedRouterModels = (
       const hasWildcard =
         group.model_group.includes("*") || active.some((row) => row.litellm_params?.model?.includes("*"));
       const manualOnly = isRouter || hasWildcard || (rows.length > 0 && active.length === 0);
-      const identities = active.length > 0 ? active.map(identityOf) : [parseModel(group.model_group)];
+      const identities = active.length > 0 ? active.map(identityOf) : routedIdentities(group.model_group, wildcards);
       const first = identities[0];
       const homogeneous =
         first &&
@@ -183,6 +198,7 @@ export const deployedRouterModels = (
       };
     })
     .toSorted((a, b) => a.name.localeCompare(b.name));
+};
 
 const latestLines = (models: readonly RouterModel[]): RouterModel[] =>
   models.filter(
