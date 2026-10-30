@@ -51,6 +51,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     SafeRouteAdder,
     _build_passthrough_failure_request_payload,
     _registered_pass_through_routes,
+    _strip_client_guardrail_header_metadata,
     _truncate_upstream_error_body,
     _update_metadata_with_tags_in_header,
     _with_trace_context,
@@ -11472,3 +11473,37 @@ class TestInheritAuthGuardrails:
 
         assert "guardrails" not in pre_call[0].get("metadata", {})
         post_call.assert_not_awaited()
+
+
+class TestGuardrailResponseHeaders:
+    def test_pre_and_post_call_guardrails_are_combined_without_repeats(self):
+        headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=httpx.Headers({"content-type": "application/json"}),
+            guardrail_request_data=(
+                {"model": "gpt-5.6"},
+                {"litellm_params": {"metadata": {"applied_guardrails": ["pre"], "guardrail_scan_ids": ["scan-1"]}}},
+                {"metadata": {"applied_guardrails": ["pre", "post"]}},
+                None,
+            ),
+        )
+
+        assert headers["x-litellm-applied-guardrails"] == "pre,post"
+        assert headers["x-litellm-guardrail-scan-id"] == "scan-1"
+
+    def test_no_guardrail_data_adds_no_headers(self):
+        headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=httpx.Headers({"content-type": "application/json"}),
+            guardrail_request_data=({"metadata": {"tags": ["team-a"]}},),
+        )
+
+        assert headers == {"content-type": "application/json"}
+
+    def test_client_sent_guardrail_header_fields_are_stripped(self):
+        body: Final = {
+            "metadata": {"applied_guardrails": ["forged"], "pillar_flagged": True, "tags": ["team-a"]},
+            "litellm_metadata": {"guardrail_scan_ids": ["forged-scan"]},
+        }
+
+        _strip_client_guardrail_header_metadata(body)
+
+        assert body == {"metadata": {"tags": ["team-a"]}, "litellm_metadata": {}}
