@@ -34,6 +34,15 @@
     },
     "environment_variables": ["QUALIFIRE_API_KEY", "QUALIFIRE_WEBHOOK_URL"]
   },
+  "veqen": {
+    "event_types": ["llm_api_success", "llm_api_failure"],
+    "endpoint": "https://veqen-app.com/v1/integrations/litellm",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer {{environment_variables.VEQEN_API_KEY}}"
+    },
+    "environment_variables": ["VEQEN_API_KEY"]
+  },
   "ramp": {
     "event_types": ["llm_api_success"],
     "endpoint": "https://api.ramp.com/developer/v1/ai-usage/litellm",
