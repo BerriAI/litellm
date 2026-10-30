@@ -1,0 +1,76 @@
+{
+  "workflows": {
+    "header": {
+      "title": "Workflow Runs",
+      "subtitle": "Durable state tracking for agents and automated workflows"
+    },
+    "table": {
+      "columns": {
+        "run": "Run",
+        "type": "Type",
+        "status": "Status",
+        "created": "Created"
+      },
+      "loading": "Loading workflow runs…",
+      "empty": "No workflow runs yet",
+      "searchPlaceholder": "Search runs…"
+    },
+    "filters": {
+      "title": "Filters",
+      "description": "Narrow down workflow runs",
+      "status": "Status",
+      "type": "Type",
+      "allStatuses": "All statuses",
+      "typePlaceholder": "Filter by type…"
+    },
+    "status": {
+      "pending": "Pending",
+      "running": "Running",
+      "paused": "Paused",
+      "completed": "Completed",
+      "failed": "Failed"
+    },
+    "drawer": {
+      "srTitle": "Workflow run details",
+      "srDescription": "Metadata, timeline and messages for the selected workflow run",
+      "close": "close",
+      "refresh": "Refresh",
+      "timeline": "Timeline",
+      "eventCount_one": "{{count}} event",
+      "eventCount_other": "{{count}} events",
+      "messages": "Messages",
+      "noMessages": "No messages",
+      "noEvents": "No events recorded"
+    },
+    "metadata": {
+      "status": "status",
+      "created": "created",
+      "pr": "pr",
+      "state": "state",
+      "worktree": "worktree",
+      "grillSession": "grill session",
+      "session": "session"
+    },
+    "truncate": {
+      "more": "more",
+      "less": "less"
+    },
+    "tooltip": {
+      "type": "type: ",
+      "step": "step: ",
+      "seq": "seq: ",
+      "time": "time: ",
+      "data": "data: "
+    },
+    "timeAgo": {
+      "seconds": "{{count}}s ago",
+      "minutes": "{{count}}m ago",
+      "hours": "{{count}}h ago",
+      "days": "{{count}}d ago"
+    },
+    "duration": {
+      "ms": "{{count}}ms",
+      "seconds": "{{value}}s"
+    }
+  }
+}

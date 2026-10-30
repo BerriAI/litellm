@@ -26,9 +26,11 @@ from fastapi import (
     status,
 )
 from fastapi.responses import StreamingResponse
+from fastapi.routing import APIRoute
 from pydantic import TypeAdapter
 from starlette.datastructures import UploadFile as StarletteUploadFile
-from starlette.routing import BaseRoute, Route
+from starlette.routing import BaseRoute, Match, Route
+from starlette.types import Scope
 from starlette.websockets import WebSocketState
 from typing_extensions import ReadOnly
 from websockets.asyncio.client import connect
@@ -73,6 +75,7 @@ from litellm.llms.base_llm.managed_resources.utils import (
     resolve_passthrough_managed_id_provider,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.eu_jev.common_utils import eu_jev_scoped_model, eu_jev_upstream_body
 from litellm.llms.oss_decision import validate_oss_request
 from litellm.passthrough import BasePassthroughUtils
 from litellm.proxy._lazy_features import lazy_owned_routes
@@ -90,6 +93,7 @@ from litellm.proxy.auth.auth_utils import (
     get_request_route,
     request_dispatched_to_pass_through_endpoint,
 )
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
@@ -433,9 +437,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         parsed_url: Final = urlparse(url)
         if custom_llm_provider == "chatgpt":
             return EndpointType.OPENAI
-        if custom_llm_provider in ("typesafe", "laya", "bespoke") and parsed_url.path.removesuffix("/").endswith(
-            "/v1/systemone"
-        ):
+        if custom_llm_provider in ("typesafe", "eu_jev", "laya", "bespoke") and parsed_url.path.removesuffix(
+            "/"
+        ).endswith("/v1/systemone"):
             return EndpointType.DECISIONS
         if (
             ("generateContent") in url
@@ -1137,6 +1141,16 @@ def _unfiltered_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     return headers
 
 
+def _eu_jev_client_body(custom_llm_provider: str | None, body: Mapping[str, object]) -> Mapping[str, object] | None:
+    return MappingProxyType(dict(body)) if custom_llm_provider == "eu_jev" else None
+
+
+def _eu_jev_scoped_model_override(eu_jev_client_body: Mapping[str, object] | None) -> Mapping[str, str]:
+    if eu_jev_client_body is None:
+        return MappingProxyType({})
+    return MappingProxyType({"model": eu_jev_scoped_model(eu_jev_client_body)})
+
+
 async def pass_through_request(
     request: Request,
     target: str,
@@ -1255,7 +1269,12 @@ async def pass_through_request(
         strip_client_guardrail_information(client_body)
         if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
             _strip_client_pricing_overrides(client_body)
-        _parsed_body = client_body
+        eu_jev_client_body: Final = _eu_jev_client_body(custom_llm_provider, client_body)
+        scoped_client_body: Final = {
+            **client_body,
+            **_eu_jev_scoped_model_override(eu_jev_client_body),
+        }
+        _parsed_body = scoped_client_body
         if custom_llm_provider in ("laya", "bespoke"):
             decision_request: Final = TypeAdapter(Mapping[str, object]).validate_python(_parsed_body)
             checkpoint: Final = validate_oss_request(custom_llm_provider, decision_request)
@@ -1339,6 +1358,12 @@ async def pass_through_request(
             )
             _ = validate_oss_request(custom_llm_provider, decision_body)
             _parsed_body = TypeAdapter(dict[str, object]).validate_python(decision_body)
+        if eu_jev_client_body is not None:
+            _parsed_body = TypeAdapter(dict[str, object]).validate_python(  # rebind-ok: body is rebound per stage
+                eu_jev_upstream_body(
+                    TypeAdapter(Mapping[str, object]).validate_python(_parsed_body), eu_jev_client_body
+                )
+            )
         resolved_timeout: Final = resolve_pass_through_request_timeout(timeout)
         async_client_obj: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.PassThroughEndpoint,
@@ -1894,20 +1919,19 @@ async def pass_through_request(
         passthrough_logging_payload["response_body"] = response_body
         end_time: Final = datetime.now()
         if response.status_code < 400:
-            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
-                    httpx_response=response,
-                    response_body=response_body,
-                    url_route=str(url),
-                    result="",
-                    start_time=start_time,
-                    end_time=end_time,
-                    logging_obj=logging_obj,
-                    cache_hit=False,
-                    request_body=_parsed_body or {},
-                    custom_llm_provider=custom_llm_provider,
-                    **kwargs,
-                )
+            await pass_through_endpoint_logging.pass_through_async_success_handler(
+                finalize_before_dispatch=True,
+                httpx_response=response,
+                response_body=response_body,
+                url_route=str(url),
+                result="",
+                start_time=start_time,
+                end_time=end_time,
+                logging_obj=logging_obj,
+                cache_hit=False,
+                request_body=_parsed_body or {},
+                custom_llm_provider=custom_llm_provider,
+                **kwargs,
             )
             bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
@@ -1918,6 +1942,8 @@ async def pass_through_request(
             model_id=None,
             cache_key=None,
             api_base=str(url._uri_reference),
+            response_cost=logging_obj.finalized_cost.amount if logging_obj.finalized_cost is not None else None,
+            litellm_logging_obj=logging_obj,
         )
 
         # Call response headers hook
@@ -2239,17 +2265,23 @@ def create_pass_through_route(
                 stream,
             ) = await _parse_request_data_by_content_type(request)
 
-            if not InitPassThroughEndpointHelpers.is_registered_pass_through_route(route=path):
+            if not InitPassThroughEndpointHelpers.is_registered_pass_through_route(route=path) or (
+                custom_llm_provider is None and RouteChecks.is_builtin_eu_jev_decision_route(route=path)
+            ):
                 raise HTTPException(
                     status_code=404,
                     detail=f"Pass-through endpoint {endpoint} not found. This could have been deleted or not yet added to the proxy.",
                 )
 
-            passthrough_params: Final = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
-                route=path, method=request.method
+            serves_configured_route: Final = custom_llm_provider != "eu_jev"
+            passthrough_params: Final = (
+                InitPassThroughEndpointHelpers.get_registered_pass_through_route(route=path, method=request.method)
+                if serves_configured_route
+                else None
             )
             if (
-                passthrough_params is None
+                serves_configured_route
+                and passthrough_params is None
                 and InitPassThroughEndpointHelpers.get_registered_pass_through_route(route=path) is not None
             ):
                 raise HTTPException(
@@ -3392,6 +3424,37 @@ class InitPassThroughEndpointHelpers:
             verbose_proxy_logger.debug("Removed pass-through route from registry: %s", key)
 
     @staticmethod
+    def _llm_api_routes_of_route(route_info: Mapping[str, object]) -> tuple[str, ...]:
+        path: Final = route_info.get("path")
+        if not isinstance(path, str):
+            return ()
+        if route_info.get("type") == "subpath":
+            return (path, path.rstrip("/") + "/*")
+        return (path,)
+
+    @staticmethod
+    def llm_api_routes_of_endpoint(endpoint_id: str) -> frozenset[str]:
+        route_infos: Final = (
+            route_info
+            for route_info in _registered_pass_through_routes.values()
+            if route_info["endpoint_id"] == endpoint_id
+        )
+        return frozenset(chain.from_iterable(map(InitPassThroughEndpointHelpers._llm_api_routes_of_route, route_infos)))
+
+    @staticmethod
+    def auth_enforced_llm_api_routes() -> frozenset[str]:
+        route_infos: Final = (
+            route_info for route_info in _registered_pass_through_routes.values() if route_info.get("auth") is True
+        )
+        return frozenset(chain.from_iterable(map(InitPassThroughEndpointHelpers._llm_api_routes_of_route, route_infos)))
+
+    @staticmethod
+    def drop_llm_api_routes(routes: frozenset[str]) -> None:
+        openai_routes: Final = LiteLLMRoutes.openai_routes.value
+        for route in routes.intersection(openai_routes):
+            openai_routes.remove(route)
+
+    @staticmethod
     def clear_all_pass_through_routes():
         """Clear all pass-through routes from the registry"""
         _registered_pass_through_routes.clear()
@@ -3435,6 +3498,8 @@ class InitPassThroughEndpointHelpers:
                     return True
 
         comparison_route: Final = InitPassThroughEndpointHelpers._route_for_registry_lookup(route)
+        if RouteChecks.is_builtin_eu_jev_decision_route(route=comparison_route):
+            return True
 
         # Fast path: check if any registered route key contains this path
         # Keys are in format: "{endpoint_id}:exact:{path}:{methods}" or "{endpoint_id}:subpath:{path}:{methods}"
@@ -3510,6 +3575,25 @@ class InitPassThroughEndpointHelpers:
                         return _registered_pass_through_routes[key]
 
         return None
+
+    @staticmethod
+    def has_configured_route_ignoring_trailing_slash(route: str) -> bool:
+        bare_route: Final = route.rstrip("/")
+        return any(
+            InitPassThroughEndpointHelpers.get_registered_pass_through_route(route=form) is not None
+            for form in (bare_route, f"{bare_route}/")
+        )
+
+
+class YieldsToConfiguredPassThroughRoute(APIRoute):
+    def matches(self, scope: Scope) -> tuple[Match, Scope]:
+        match, child_scope = super().matches(scope)
+        if match is Match.NONE:
+            return match, child_scope
+        configured: Final = InitPassThroughEndpointHelpers.has_configured_route_ignoring_trailing_slash(
+            route=get_request_route(Request(scope))
+        )
+        return (Match.NONE, {}) if configured else (match, child_scope)
 
 
 def _get_combined_pass_through_endpoints(
@@ -3970,9 +4054,7 @@ async def update_pass_through_endpoints(
 
     # Update the list
     pass_through_endpoint_data[endpoint_index] = endpoint_dict
-
-    # Remove old routes from registry before they get re-registered
-    InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint_id)
+    replaced_llm_api_routes: Final = InitPassThroughEndpointHelpers.llm_api_routes_of_endpoint(endpoint_id)
 
     ## Update db
     updated_data: Final = ConfigFieldUpdate(
@@ -4022,6 +4104,9 @@ async def update_pass_through_endpoints(
             auth=updated_endpoint.auth,
             timeout=updated_endpoint.timeout,
         )
+    InitPassThroughEndpointHelpers.drop_llm_api_routes(
+        replaced_llm_api_routes - InitPassThroughEndpointHelpers.auth_enforced_llm_api_routes()
+    )
 
     return PassThroughEndpointResponse(endpoints=[updated_endpoint] if updated_endpoint else [])
 

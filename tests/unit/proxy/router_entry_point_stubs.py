@@ -50,7 +50,7 @@ def route_entry_points_to_stubs(router: _RouterDouble) -> _RouterDouble:
         if source == "routing_groups":
             return router.get_model_list_from_routing_groups(model_name=model_name)
         if source == "routed_group":
-            return router.get_model_list_of_routed_group(model_name)
+            return router.get_model_list_of_routed_group(model_name, **_given(team_id=team_id))
         if source == "routable":
             return router.get_routable_deployments(
                 model_name, *(() if request is None else (request,)), **_given(call_type=call_type)
