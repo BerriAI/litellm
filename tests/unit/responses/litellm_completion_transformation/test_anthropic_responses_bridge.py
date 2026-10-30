@@ -23,6 +23,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 )
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import Message, ModelResponse
+from tests.unit.proxy.conftest import httpx_transport
 
 
 def test_response_api_handler_merges_metadata_and_service_tier_without_error():
@@ -591,6 +592,31 @@ def _anthropic_message(*content: Mapping[str, object]) -> httpx.Response:
             "usage": {"input_tokens": 1, "output_tokens": 1},
         },
     )
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.parametrize("output", ["", [], [{"type": "input_text", "text": ""}]])
+def test_empty_responses_tool_output_reaches_anthropic_without_json_text(
+    respx_mock: respx.MockRouter, output: str | list[dict[str, str]]
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message({"type": "text", "text": "ok"})
+    )
+    response: Final = litellm.responses(
+        model=_MODEL,
+        api_key="mock_api_key",
+        input=[
+            {"role": "user", "content": "Check the weather"},
+            {"type": "function_call", "call_id": "call_empty", "name": "get_weather", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_empty", "output": output},
+        ],
+    )
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert response.output_text == "ok"
+    assert sent["messages"][-1] == {
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "call_empty", "content": ""}],
+    }
 
 
 def _replay(output: Sequence[BaseModel]) -> list[object]:
