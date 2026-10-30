@@ -636,6 +636,7 @@ class Logging(LiteLLMLoggingBaseClass):
     custom_pricing: bool = False
     custom_cost_per_token: CostPerToken | None = None
     custom_cost_per_second: float | None = None
+    a2a_agent_cost_params: Mapping[str, object] | None = None
     replaced_global_callback_keys: frozenset[str] = frozenset()
     stream_options = None
     litellm_request_debug: bool = False
@@ -1172,6 +1173,10 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
+
+    def bill_as_a2a_agent(self, agent_id: str, cost_params: Mapping[str, object]) -> None:
+        self.a2a_agent_cost_params = cost_params
+        self.model_call_details["agent_id"] = agent_id
 
     def record_agentic_loop_params(self, params: AgenticLoopParams) -> None:
         self.model_call_details["agentic_loop_params"] = params
@@ -2071,6 +2076,13 @@ class Logging(LiteLLMLoggingBaseClass):
             if isinstance(response_result, (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent))
             else response_result
         )
+
+        if self.a2a_agent_cost_params is not None:
+            from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
+
+            return A2ACostCalculator.agent_cost(
+                self.a2a_agent_cost_params, get_usage_object(completion_response=priced_result)
+            )
 
         result_hidden_params: Final = getattr(priced_result, HIDDEN_PARAMS_ATTR, None) or MappingProxyType({})
         if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(

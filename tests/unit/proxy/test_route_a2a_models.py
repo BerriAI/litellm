@@ -5,8 +5,12 @@ Maps to: litellm/proxy/agent_endpoints/a2a_routing.py
 """
 
 import base64
+import datetime
 import json
-from collections.abc import Iterator
+import uuid
+from collections.abc import Iterator, Mapping
+from types import MappingProxyType
+from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
@@ -17,11 +21,13 @@ import respx
 from fastapi import HTTPException
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.agent_endpoints.a2a_routing import route_a2a_agent_request
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 from litellm.proxy.agent_endpoints.databricks_oauth import databricks_app_oauth_token_cache
 from litellm.proxy.route_llm_request import route_request
 from litellm.types.agents import AgentResponse
+from litellm.types.utils import ModelResponse
 
 
 @pytest.mark.asyncio
@@ -330,7 +336,7 @@ async def test_route_a2a_bridge_agent_lets_the_request_win_except_for_the_agent_
         await route_a2a_agent_request(data=data, route_type="acompletion")
 
     sent = completion.call_args.kwargs
-    assert sent["metadata"] == proxy_metadata
+    assert sent["metadata"] == {**proxy_metadata, "model_group": "a2a/dbx-agent"}
     assert (sent["api_base"], sent["api_key"]) == (WORKSPACE, "pat-1")
     assert (sent["custom_inputs"], sent["timeout"]) == ({"tenant": "t-1"}, 30)
     assert sent["model"] == "databricks_agent/my-agent"
@@ -667,3 +673,107 @@ async def test_route_a2a_bridge_agent_calls_without_client_extra_headers_it_drop
     assert app.calls.last.request.headers["Authorization"] == "Bearer p"
     assert "X-N" not in app.calls.last.request.headers
     assert response.choices[0].message.content == "pong"
+
+
+PER_QUERY_PRICE: Final = {"cost_per_query": 0.05}
+PER_TOKEN_PRICE: Final = {"input_cost_per_token": 0.0001, "output_cost_per_token": 0.0002}
+
+
+def _priced_dbx_agent(name: str, price: Mapping[str, float]) -> AgentResponse:
+    return AgentResponse(
+        agent_id=f"{name}-id",
+        agent_name=name,
+        litellm_params={
+            "custom_llm_provider": "databricks_agent",
+            "model": "my-agent",
+            "api_base": WORKSPACE,
+            "api_key": "pat-1",
+            **price,
+        },
+        agent_card_params={"url": WORKSPACE},
+    )
+
+
+def _proxy_logging_obj() -> LiteLLMLoggingObj:
+    return LiteLLMLoggingObj(
+        model="a2a/agent",
+        messages=[{"role": "user", "content": "ping"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime.now(tz=datetime.timezone.utc),
+        litellm_call_id=str(uuid.uuid4()),
+        function_id="a2a-chat",
+    )
+
+
+async def _billed_chat_call(
+    registry: AgentRegistry, agent_name: str, request: Mapping[str, object] = MappingProxyType({})
+) -> tuple[float | None, ModelResponse, LiteLLMLoggingObj]:
+    logging_obj: Final = _proxy_logging_obj()
+    data: Final = {
+        "model": f"a2a/{agent_name}",
+        "messages": [{"role": "user", "content": "ping"}],
+        "metadata": {"user_api_key_hash": "key-hash", "model_group": "client-says"},
+        "litellm_logging_obj": logging_obj,
+        **request,
+    }
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry):
+        response: Final = await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+    return logging_obj.response_cost_calculator(result=response), response, logging_obj
+
+
+@respx.mock
+async def test_route_a2a_bridge_agents_bill_their_own_price_whatever_another_agent_was_billed(
+    httpx_transport: None,
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+    registry: Final = AgentRegistry()
+    for agent in (
+        _priced_dbx_agent("per-token", PER_TOKEN_PRICE),
+        _priced_dbx_agent("per-query", PER_QUERY_PRICE),
+        _priced_dbx_agent("unpriced", {}),
+    ):
+        registry.register_agent(agent)
+
+    per_token_cost, per_token_response, _ = await _billed_chat_call(registry, "per-token")
+    per_query_cost, _, _ = await _billed_chat_call(registry, "per-query")
+    unpriced_cost, _, _ = await _billed_chat_call(registry, "unpriced")
+
+    usage: Final = per_token_response.usage
+    assert usage.prompt_tokens > 0
+    assert per_token_cost == pytest.approx(usage.prompt_tokens * 0.0001 + usage.completion_tokens * 0.0002)
+    assert per_query_cost == pytest.approx(0.05)
+    assert unpriced_cost == 0.0
+    assert "databricks_agent/my-agent" not in litellm.model_cost
+
+
+@respx.mock
+async def test_route_a2a_bridge_agent_price_wins_over_the_callers_prices(httpx_transport: None) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+    client_prices: Final = {"cost_per_query": 0, "input_cost_per_token": 0, "output_cost_per_token": 0}
+
+    cost, _, _ = await _billed_chat_call(
+        _registry_with(_priced_dbx_agent("per-query", PER_QUERY_PRICE)), "per-query", client_prices
+    )
+
+    assert cost == pytest.approx(0.05)
+    assert "databricks_agent/my-agent" not in litellm.model_cost
+
+
+@respx.mock
+async def test_route_a2a_bridge_agent_call_is_attributed_to_the_agent(httpx_transport: None) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+
+    _, _, logging_obj = await _billed_chat_call(
+        _registry_with(_priced_dbx_agent("per-query", PER_QUERY_PRICE)), "per-query"
+    )
+
+    assert logging_obj.model_call_details["agent_id"] == "per-query-id"
+    metadata: Final = logging_obj.model_call_details["litellm_params"]["metadata"]
+    assert (metadata["model_group"], metadata["user_api_key_hash"]) == ("a2a/per-query", "key-hash")

@@ -13,12 +13,15 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.a2a_protocol.cost_calculator import a2a_cost_params
 from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+    AGENT_PRICING_PARAMS,
     agent_completion_kwargs,
     bridge_model_name,
 )
 from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.databricks_oauth import (
     resolve_databricks_backend_auth,
@@ -30,7 +33,7 @@ _HEADERS: Final = TypeAdapter(Mapping[str, str])
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _AGENT_PINNED_KWARGS: Final = ("api_base", "api_key")
 _AGENT_LAYERED_KWARGS: Final = ("custom_inputs", "extra_body")
-_CLIENT_TARGET_KWARGS: Final = ("api_base", "base_url")
+_CLIENT_DROPPED_KWARGS: Final = frozenset({"api_base", "base_url"}) | AGENT_PRICING_PARAMS
 _PROXY_HEADER_PREFIX: Final = "x-litellm-"
 
 
@@ -171,6 +174,9 @@ async def route_a2a_agent_request(
 
     if litellm_params.get("custom_llm_provider") in A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS:
         bridge_auth: Final = await resolve_databricks_backend_auth(litellm_params)
+        logging_obj: Final = data.get("litellm_logging_obj")
+        if isinstance(logging_obj, LiteLLMLoggingObj):
+            logging_obj.bill_as_a2a_agent(agent_id=agent.agent_id, cost_params=a2a_cost_params(litellm_params))
         return _call_route(route_type, _bridge_agent_request(data, agent, bridge_auth.litellm_params))
 
     # Get API base URL from agent config
@@ -194,8 +200,13 @@ def _bridge_agent_request(
 ) -> Mapping[str, object]:
     card_url: Final[object] = (agent.agent_card_params or {}).get("url")
     api_base: Final = {"api_base": card_url} if card_url else {}
-    request: Final = {key: value for key, value in data.items() if key not in _CLIENT_TARGET_KWARGS}
-    return _bridge_request_data({**request, **api_base}, litellm_params, agent.static_headers)
+    request: Final = {key: value for key, value in data.items() if key not in _CLIENT_DROPPED_KWARGS}
+    return _bridge_request_data({**request, **api_base, **_model_group(data)}, litellm_params, agent.static_headers)
+
+
+def _model_group(data: Mapping[str, object]) -> Mapping[str, object]:
+    metadata: Final = as_str_mapping(data.get("metadata"))
+    return {} if metadata is None else {"metadata": {**metadata, "model_group": data.get("model")}}
 
 
 def _call_route(route_type: str, request_data: Mapping[str, object]) -> object:
