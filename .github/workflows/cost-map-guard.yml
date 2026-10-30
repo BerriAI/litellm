@@ -30,7 +30,7 @@ jobs:
           EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          base_ref="$(gh api "repos/${GITHUB_REPOSITORY}/branches/${EVENT_BASE_REF}" --silent && echo "$EVENT_BASE_REF" || gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .base.ref)"
+          base_ref="$(gh api "repos/${GITHUB_REPOSITORY}/branches/${EVENT_BASE_REF}" --jq .name)" || base_ref="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .base.ref)"
           target="$(gh api "repos/${GITHUB_REPOSITORY}/branches/${base_ref}" --jq '.commit.sha')"
           merge_base="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${target}...${HEAD_SHA}" --jq '.merge_base_commit.sha')"
           git fetch --no-tags --depth=1 origin "$merge_base" "$HEAD_SHA" "$target"

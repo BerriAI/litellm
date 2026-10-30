@@ -27,22 +27,29 @@ UI_DASHBOARD: Final = "ui/litellm-dashboard"
 STACKED_BASE_REF: Final = "litellm_/stacked"
 RELEASE_BASE_REF: Final = "stable/next"
 BASE_REFS: Final = ("main", STACKED_BASE_REF, RELEASE_BASE_REF)
+RENAMED_BASE_REF: Final = "litellm_renamed_before_the_rerun"
 GITHUB_EXPRESSION: Final = re.compile(r"\$\{\{\s*(.+?)\s*\}\}")
 FAKE_GH: Final = r"""#!/usr/bin/env bash
 set -euo pipefail
 endpoint=${2%%\?*}
 endpoint=${endpoint#"repos/$GITHUB_REPOSITORY/"}
 commit() { git -C "$UPSTREAM" rev-parse --verify --quiet "$1^{commit}"; }
+renamed() { git -C "$UPSTREAM" config --get "renamed.$1.to" || printf '%s\n' "$1"; }
 case "$1 $endpoint ${3-} ${4-}" in
   "api compare/"*"..."*" --jq .merge_base_commit.sha")
     basehead=${endpoint#compare/}
     git -C "$UPSTREAM" merge-base "$(commit "${basehead%%...*}")" "$(commit "${basehead#*...}")" ;;
   "api pulls/1 --jq .base.ref")
     printf '%s\n' "$LIVE_BASE_REF" ;;
-  "api branches/"*" --silent ")
-    commit "refs/heads/${endpoint#branches/}" > /dev/null ;;
-  "api branches/"*" --jq .commit.sha")
-    commit "refs/heads/${endpoint#branches/}" ;;
+  "api branches/"*)
+    branch=$(renamed "${endpoint#branches/}")
+    sha=$(commit "refs/heads/$branch") || { [ "${3-}" = --silent ] || printf '{"message":"Not Found"}\n'; exit 1; }
+    case "${3-} ${4-}" in
+      "--silent ") ;;
+      "--jq .name") printf '%s\n' "$branch" ;;
+      "--jq .commit.sha") printf '%s\n' "$sha" ;;
+      *) echo "fake gh cannot answer: $*" >&2; exit 64 ;;
+    esac ;;
   "api pulls/1/reviews --paginate --slurp")
     printf '[[]]\n' ;;
   *)
@@ -428,6 +435,7 @@ def upstream(tmp_path_factory: pytest.TempPathFactory) -> StaleBaseUpstream:
     _git(path, "checkout", "-q", "feature")
     _commit_ui_file(path, "pull_request_work")
     _git(path, "merge", "-q", "--no-ff", "-m", "merge the newer base", STACKED_BASE_REF)
+    _git(path, "config", f"renamed.{RENAMED_BASE_REF}.to", STACKED_BASE_REF)
     return StaleBaseUpstream(
         path=path,
         stale_base=_sha(path, "main~1"),
@@ -454,6 +462,7 @@ BASE_REF_CASES: Final = (
     ("main", "main", "main"),
     ("stacked", STACKED_BASE_REF, STACKED_BASE_REF),
     ("rerun_after_the_stacked_base_was_deleted", "litellm_deleted_after_merge", "main"),
+    ("rerun_after_the_stacked_base_was_renamed", RENAMED_BASE_REF, STACKED_BASE_REF),
     ("rerun_after_a_retarget_off_main_to_a_stacked_branch", "main", STACKED_BASE_REF),
     ("rerun_after_a_retarget_off_main_to_a_release_branch", "main", RELEASE_BASE_REF),
 )

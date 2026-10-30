@@ -53,7 +53,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           retry() { "$@" || { sleep 15; "$@"; } || { sleep 30; "$@"; }; }
-          BASE_REF=$(gh api "repos/${GITHUB_REPOSITORY}/branches/${EVENT_BASE_REF}" --silent && echo "$EVENT_BASE_REF" || retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .base.ref)
+          BASE_REF=$(gh api "repos/${GITHUB_REPOSITORY}/branches/${EVENT_BASE_REF}" --jq .name) || BASE_REF=$(retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .base.ref)
           MERGE_BASE=$(retry gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE_REF}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
           test -n "$MERGE_BASE"
           retry git fetch --no-tags --depth=1 origin "$MERGE_BASE"
@@ -288,7 +288,7 @@ jobs:
           EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          base_ref=$(gh api "repos/${GITHUB_REPOSITORY}/branches/${EVENT_BASE_REF}" --silent && echo "$EVENT_BASE_REF" || gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .base.ref)
+          base_ref=$(gh api "repos/${GITHUB_REPOSITORY}/branches/${EVENT_BASE_REF}" --jq .name) || base_ref=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .base.ref)
           merge_base=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${base_ref}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
           test -n "$merge_base"
           git fetch --no-tags --depth=1 origin "$merge_base" "$HEAD_SHA"
