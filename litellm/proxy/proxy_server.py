@@ -7005,7 +7005,7 @@ class ProxyConfig:
                         )
 
                         reset_audit_log_callback_cache()
-                        _in_memory_loggers[:] = [cb for cb in _in_memory_loggers if not isinstance(cb, S3V2Logger)]
+                        _in_memory_loggers[:] = [cb for cb in _in_memory_loggers if type(cb) is not S3V2Logger]
 
         if redis_usage_cache is None:
             env_coordination_redis_cache: Final = await self._init_coordination_redis_env_fallback(

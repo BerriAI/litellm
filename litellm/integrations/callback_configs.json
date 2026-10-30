@@ -1,5 +1,32 @@
 [
   {
+    "id": "hex",
+    "displayName": "Hex",
+    "logo": null,
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "HEX_S3_BUCKET_NAME": {
+        "type": "text",
+        "ui_name": "S3 bucket name",
+        "description": "Bucket connected to Hex. AWS credentials come from the proxy's IAM role or standard AWS environment variables.",
+        "required": true
+      },
+      "HEX_S3_PATH": {
+        "type": "text",
+        "ui_name": "S3 path prefix",
+        "description": "Object prefix for spend records. Defaults to litellm-spend.",
+        "required": false
+      },
+      "HEX_S3_REGION_NAME": {
+        "type": "text",
+        "ui_name": "AWS region",
+        "description": "Bucket region. Defaults to AWS_REGION or us-east-1.",
+        "required": false
+      }
+    },
+    "description": "Export individual spend records to S3 for Hex analysis and dashboards. Connect this bucket in Hex to query historical data."
+  },
+  {
     "id": "arize",
     "displayName": "Arize",
     "logo": "arize.png",

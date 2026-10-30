@@ -67,6 +67,7 @@ from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
+from litellm.integrations.hex import HexLogger
 from litellm.integrations.langtrace import langtrace_trace_endpoint
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
@@ -5514,12 +5515,19 @@ def build_custom_logger_compatible_class(
         return _gcs_bucket_logger
     elif logging_integration == "s3_v2":
         for callback in _in_memory_loggers:
-            if isinstance(callback, S3V2Logger):
+            if type(callback) is S3V2Logger:
                 return callback
 
         _s3_v2_logger: Final = S3V2Logger()
         _in_memory_loggers.append(_s3_v2_logger)
         return _s3_v2_logger
+    elif logging_integration == "hex":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, HexLogger):
+                return callback
+        hex_logger: Final = HexLogger()
+        _in_memory_loggers.append(hex_logger)
+        return hex_logger
     elif logging_integration == "clickhouse":
         for callback in _in_memory_loggers:
             if isinstance(callback, ClickHouseSpendLogger):
@@ -6336,7 +6344,11 @@ def get_custom_logger_compatible_class(
                     return callback
         elif logging_integration == "s3_v2":
             for callback in _in_memory_loggers:
-                if isinstance(callback, S3V2Logger):
+                if type(callback) is S3V2Logger:
+                    return callback
+        elif logging_integration == "hex":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, HexLogger):
                     return callback
         elif logging_integration == "clickhouse":
             for callback in _in_memory_loggers:

@@ -138,6 +138,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "smtp_email",
     "deepeval",
     "s3_v2",
+    "hex",
     "clickhouse",
     "pointfive",
     "zerobus",
