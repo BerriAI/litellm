@@ -1,0 +1,239 @@
+schemaVersion: 3
+meta:
+  title: LiteLLM spend analytics
+  description: Request spend, token usage, errors, models, and teams from LiteLLM via S3 and Athena.
+  codeLanguage: PYTHON
+  timezone: UTC
+  autoRerunApp: true
+  logicQueryCacheTimeout:
+    type: disabled
+  publishedQueryCacheTimeout:
+    type: disabled
+cells:
+- cellId: bb3d1f25-5065-58b9-bca1-049cf32398de
+  cellLabel: Setup
+  cellType: MARKDOWN
+  config:
+    source: |-
+      # LiteLLM spend analytics
+
+      1. Enable `litellm_settings: {callbacks: [hex]}` on the proxy. Set `HEX_S3_BUCKET_NAME`, optionally `HEX_S3_REGION_NAME` and `HEX_S3_PATH` (default `litellm-spend`). Use the proxy's AWS IAM role to write logs.
+      2. Run the accompanying `hex_spend_table.sql` in Athena after replacing its bucket and prefix. Partition projection discovers new daily folders without a crawler or partition repair. Keep query results outside the log prefix.
+      3. Add an [Athena data connection](https://learn.hex.tech/docs/connect-to-data/data-connections/setup-guides/connect-to-amazon-athena) to Hex, preferably using an IAM role. Select that connection for the four SQL cells below and choose the database containing `litellm_hex_spend`.
+      4. Run all cells, publish the App, and configure a Hex scheduled run for your desired refresh interval. Refresh queries read newly uploaded records; this is not a live streaming dashboard.
+
+      This template covers the last 30 UTC calendar days, including today. Spend is in USD. Requests with unknown cost are counted separately rather than assumed free. No prompts, responses, raw errors, or API keys are exported. Team/user identifiers and key aliases are included; control access to the bucket and Hex project accordingly.
+
+      Uploads are buffered in process and retried by the S3 logger. A proxy crash can lose records that have not reached S3. Use your existing warehouse pipeline and native Hex connection instead if you already have one; this callback does not require a Hex API key.
+- cellId: b38ace16-60ff-5713-9fd4-c2afac69e732
+  cellLabel: Summary query
+  cellType: SQL
+  config:
+    dataFrameCell: false
+    dataConnectionId: null
+    resultVariableName: spend_summary
+    source: |-
+      SELECT COUNT(*) AS requests,
+             COALESCE(SUM(spend), 0) AS total_spend,
+             COUNT(*) FILTER (WHERE spend IS NULL) AS unknown_cost_requests,
+             COALESCE(SUM(total_tokens), 0) AS tokens,
+             COUNT(*) FILTER (WHERE status = 'failure') AS failed_requests,
+             AVG(response_time) AS average_latency_seconds
+      FROM litellm_hex_spend
+      WHERE log_date BETWEEN CAST(date_add('day', -29, current_date) AS varchar)
+                         AND CAST(current_date AS varchar)
+- cellId: b1ff3cf7-66ca-5013-90a0-5b7368c52773
+  cellLabel: Daily spend query
+  cellType: SQL
+  config:
+    dataFrameCell: false
+    dataConnectionId: null
+    resultVariableName: daily_spend
+    source: |-
+      SELECT log_date, COALESCE(SUM(spend), 0) AS spend,
+             COUNT(*) AS requests
+      FROM litellm_hex_spend
+      WHERE log_date BETWEEN CAST(date_add('day', -29, current_date) AS varchar)
+                         AND CAST(current_date AS varchar)
+      GROUP BY log_date
+      ORDER BY log_date
+- cellId: 08d70a66-b6f8-587c-9bcf-b71e639c4239
+  cellLabel: Model spend query
+  cellType: SQL
+  config:
+    dataFrameCell: false
+    dataConnectionId: null
+    resultVariableName: model_spend
+    source: |-
+      SELECT COALESCE(model_group, model, '(unassigned)') AS model,
+             COALESCE(SUM(spend), 0) AS spend, COUNT(*) AS requests,
+             COALESCE(SUM(total_tokens), 0) AS tokens
+      FROM litellm_hex_spend
+      WHERE log_date BETWEEN CAST(date_add('day', -29, current_date) AS varchar)
+                         AND CAST(current_date AS varchar)
+      GROUP BY 1
+      ORDER BY spend DESC
+- cellId: 5199f238-552a-5d14-8368-e83ce7414369
+  cellLabel: Team spend query
+  cellType: SQL
+  config:
+    dataFrameCell: false
+    dataConnectionId: null
+    resultVariableName: team_spend
+    source: |-
+      SELECT COALESCE(team_id, '(unassigned)') AS team_id,
+             COALESCE(SUM(spend), 0) AS spend, COUNT(*) AS requests,
+             COUNT(*) FILTER (WHERE status = 'failure') AS failed_requests,
+             AVG(response_time) AS average_latency_seconds
+      FROM litellm_hex_spend
+      WHERE log_date BETWEEN CAST(date_add('day', -29, current_date) AS varchar)
+                         AND CAST(current_date AS varchar)
+      GROUP BY 1
+      ORDER BY spend DESC
+- cellId: ab06dca2-ee5d-5b43-99f4-13dbbd6f0404
+  cellLabel: Spend (USD)
+  cellType: METRIC
+  config:
+    title: Spend (USD)
+    valueColumn: total_spend
+    valueRowIndex: 0
+    valueVariableName: spend_summary
+    showComparison: false
+- cellId: fc77975b-89e4-58de-ae86-846c534d2c25
+  cellLabel: Requests
+  cellType: METRIC
+  config:
+    title: Requests
+    valueColumn: requests
+    valueRowIndex: 0
+    valueVariableName: spend_summary
+    showComparison: false
+- cellId: 185f508e-ece0-5b72-9052-a27042ce4bdd
+  cellLabel: Tokens
+  cellType: METRIC
+  config:
+    title: Tokens
+    valueColumn: tokens
+    valueRowIndex: 0
+    valueVariableName: spend_summary
+    showComparison: false
+- cellId: 856624aa-0a40-5c27-99e9-873c98b16d4d
+  cellLabel: Failed requests
+  cellType: METRIC
+  config:
+    title: Failed requests
+    valueColumn: failed_requests
+    valueRowIndex: 0
+    valueVariableName: spend_summary
+    showComparison: false
+- cellId: ae69da31-e28b-5ace-b622-4376380822cb
+  cellLabel: Unknown cost requests
+  cellType: METRIC
+  config:
+    title: Unknown cost requests
+    valueColumn: unknown_cost_requests
+    valueRowIndex: 0
+    valueVariableName: spend_summary
+    showComparison: false
+- cellId: 55436d1d-3d4e-5068-b192-d540d488d9d0
+  cellLabel: Daily spend
+  cellType: CODE
+  config:
+    source: |-
+      import plotly.express as px
+
+      spend_trend = px.line(daily_spend, x="log_date", y="spend", markers=True,
+                            title="Daily spend (USD)", labels={"log_date": "Date (UTC)", "spend": "USD"})
+      spend_trend.update_layout(template="plotly_white")
+      spend_trend
+- cellId: 25ea0fa3-9a3c-58ed-949e-777ed64ce6dc
+  cellLabel: Spend by model
+  cellType: CODE
+  config:
+    source: |-
+      model_breakdown = px.bar(model_spend, x="model", y="spend",
+                               title="Spend by model (USD)", labels={"model": "Model", "spend": "USD"})
+      model_breakdown.update_layout(template="plotly_white")
+      model_breakdown
+- cellId: da2a4acb-bc46-55f8-b6e4-bf71306912ca
+  cellLabel: Dashboard title
+  cellType: MARKDOWN
+  config:
+    source: |-
+      # LiteLLM spend
+      Last 30 UTC calendar days. Refresh the app to query uploaded spend logs.
+appLayout:
+  visibleMetadataFields:
+  - LAST_RUN
+  tabs:
+  - name: Spend
+    rows:
+    - columns:
+      - start: 0
+        end: 120
+        elements:
+        - cellId: da2a4acb-bc46-55f8-b6e4-bf71306912ca
+          type: CELL
+          showSource: false
+          showLabel: false
+    - columns:
+      - start: 0
+        end: 40
+        elements:
+        - cellId: ab06dca2-ee5d-5b43-99f4-13dbbd6f0404
+          type: CELL
+          showSource: false
+          showLabel: false
+      - start: 40
+        end: 80
+        elements:
+        - cellId: fc77975b-89e4-58de-ae86-846c534d2c25
+          type: CELL
+          showSource: false
+          showLabel: false
+      - start: 80
+        end: 120
+        elements:
+        - cellId: 185f508e-ece0-5b72-9052-a27042ce4bdd
+          type: CELL
+          showSource: false
+          showLabel: false
+    - columns:
+      - start: 0
+        end: 60
+        elements:
+        - cellId: 856624aa-0a40-5c27-99e9-873c98b16d4d
+          type: CELL
+          showSource: false
+          showLabel: false
+      - start: 60
+        end: 120
+        elements:
+        - cellId: ae69da31-e28b-5ace-b622-4376380822cb
+          type: CELL
+          showSource: false
+          showLabel: false
+    - columns:
+      - start: 0
+        end: 120
+        elements:
+        - cellId: 55436d1d-3d4e-5068-b192-d540d488d9d0
+          type: CELL
+          showSource: false
+          showLabel: false
+    - columns:
+      - start: 0
+        end: 120
+        elements:
+        - cellId: 25ea0fa3-9a3c-58ed-949e-777ed64ce6dc
+          type: CELL
+          showSource: false
+          showLabel: false
+    - columns:
+      - start: 0
+        end: 120
+        elements:
+        - cellId: 5199f238-552a-5d14-8368-e83ce7414369
+          type: CELL
+          showSource: false
+          showLabel: false

@@ -14,7 +14,8 @@ class HexLogger(S3Logger):
     """Write spend-only JSON records using the standard AWS credential chain.
 
     Enable with ``callbacks: ["hex"]`` and ``HEX_S3_BUCKET_NAME``. Connect the
-    bucket to Hex to analyze historical records. Prompts, responses, API keys,
+    bucket through Hex's Athena connection to query newly arriving records.
+    Prompts, responses, API keys,
     arbitrary metadata, and error messages are never included in the export.
     """
 
@@ -40,6 +41,8 @@ class HexLogger(S3Logger):
             s3_endpoint_url=endpoint_url or os.getenv("HEX_S3_ENDPOINT_URL"),
             s3_flush_interval=flush_interval,
             s3_batch_size=batch_size,
+            s3_batch_file_upload=True,
+            s3_partition_granularity="day",
             # Keep the Hex destination independent of an existing S3 callback.
             s3_callback_params_override={},
         )

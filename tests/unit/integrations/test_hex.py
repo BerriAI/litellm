@@ -2,8 +2,8 @@ import json
 from datetime import datetime, timezone
 from typing import Final
 
-import pytest
 import httpx
+import pytest
 
 import litellm
 from litellm.integrations.hex import HexLogger
@@ -14,8 +14,8 @@ from litellm.litellm_core_utils.litellm_logging import (
     create_dummy_standard_logging_payload,
     get_custom_logger_compatible_class,
 )
-from litellm.proxy.management_endpoints.callback_management_endpoints import get_callback_configs
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.proxy.management_endpoints.callback_management_endpoints import get_callback_configs
 from litellm.types.utils import StandardLoggingPayload
 
 START: Final = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
@@ -110,11 +110,42 @@ async def test_hex_retains_a_rejected_spend_record_until_the_next_flush(
         assert logger.log_queue == []
         assert len(requests) == 2
         assert requests[0].content == requests[1].content
-        assert str(requests[1].url) == (
-            "https://s3.example.test/hex-analytics/litellm-spend/2026-10-30/time-12-00-00-000000_request-1.json"
-        )
+        assert str(requests[1].url).startswith("https://s3.example.test/hex-analytics/litellm-spend/2026-10-30/batch_")
+        assert str(requests[1].url).endswith(".jsonl")
         assert json.loads(requests[1].content)["spend"] == 0.125
         assert b"private" not in requests[1].content
+    finally:
+        await handler.client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_hex_uploads_multiple_requests_as_individual_rows_in_one_object(
+    monkeypatch: pytest.MonkeyPatch, spend_record: StandardLoggingPayload
+) -> None:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "synthetic-access-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "synthetic-signing-key")
+    monkeypatch.setenv("S3_PARTITION_GRANULARITY", "hour")
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200)
+
+    logger: Final = HexLogger(bucket_name="hex-analytics", endpoint_url="https://s3.example.test")
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+    logger.async_httpx_client = handler
+    try:
+        for request_id in ("request-1", "request-2"):
+            spend_record["id"] = request_id
+            await logger.async_log_success_event({"standard_logging_object": spend_record}, None, START, START)
+        await logger.flush_queue()
+        assert len(requests) == 1
+        rows: Final = [json.loads(line) for line in requests[0].content.splitlines()]
+        assert [row["id"] for row in rows] == ["request-1", "request-2"]
+        assert sum(row["spend"] for row in rows) == 0.25
+        assert "/2026-10-30/batch_" in str(requests[0].url)
+        assert requests[0].headers["content-type"] == "application/x-ndjson"
+        assert b"private" not in requests[0].content
     finally:
         await handler.client.aclose()
 
