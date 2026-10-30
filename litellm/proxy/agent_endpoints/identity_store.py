@@ -1,11 +1,19 @@
-import json
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Final
 
+from pydantic import TypeAdapter
+
 from litellm._internal_context import with_service_target
+from litellm.caching.redis_batch import active_request_redis_batch
 from litellm.proxy.agent_endpoints.managed_identity import classify_agent_subject
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
+from litellm.redis.stores.agent_identity_bindings import (
+    AgentIdentityBindingsStore,
+    TransportAgentIdentityBindingsStore,
+    binding_key,
+)
+from litellm.redis.transport.contract import RedisFailure
 from litellm.repositories.table_repositories import (
     AgentIdentityRepository,
     AgentsRepository,
@@ -22,6 +30,7 @@ from litellm.types.proxy.agent_identity import (
 )
 
 _AGENT_IDENTITIES_TARGET: Final = "agent_identities"
+_CACHED_BINDING: Final = TypeAdapter(object)
 
 if TYPE_CHECKING:
     from prisma.models import LiteLLM_VerifiedSubject
@@ -95,8 +104,7 @@ class AgentIdentityStore:
 
     @with_service_target(_AGENT_IDENTITIES_TARGET)
     async def _bound_agent_id(self, tenant_id: str, client_id: str) -> str | AgentIdentityFailure | None:
-        cache_key: Final = f"agent_identity:{json.dumps((tenant_id, client_id))}"
-        cached: Final[object] = await self.cache.async_get_cache(key=cache_key) if self.cache is not None else None
+        cached: Final = await self._cached_bound_agent_id(tenant_id, client_id)
         if isinstance(cached, str):
             return cached
         where: Final[LiteLLM_AgentIdentityWhereUniqueInput] = {
@@ -112,11 +120,39 @@ class AgentIdentityStore:
             return AgentIdentityFailure(code="policy_unavailable", message="Agent identity could not be loaded")
         if row is None:
             return await self.unbound_client(where)
-        if self.cache is not None:
-            await self.cache.async_set_cache(
-                key=cache_key, value=row.agent_id, ttl=get_management_object_ttl(self.cache)
-            )
+        await self._cache_bound_agent_id(tenant_id, client_id, row.agent_id)
         return row.agent_id
+
+    async def _cached_bound_agent_id(self, tenant_id: str, client_id: str) -> object:
+        if self.cache is None:
+            return None
+        key: Final = binding_key(tenant_id, client_id)
+        local: Final = _CACHED_BINDING.validate_python(await self.cache.async_get_cache(key, local_only=True))
+        if local is not None or self.cache.redis_cache is None:
+            return local
+        batch: Final = active_request_redis_batch(self.cache.redis_cache)
+        if batch is not None and batch.read_as_missing(key):
+            return None
+        store: Final[AgentIdentityBindingsStore] = TransportAgentIdentityBindingsStore(
+            self.cache.redis_cache.transport()
+        )
+        cached: Final = await store.get(tenant_id, client_id)
+        if isinstance(cached, RedisFailure):
+            return None
+        if cached is not None:
+            await self.cache.async_set_cache(key, cached, local_only=True)
+        return cached
+
+    async def _cache_bound_agent_id(self, tenant_id: str, client_id: str, agent_id: str) -> None:
+        if self.cache is None:
+            return
+        ttl: Final = get_management_object_ttl(self.cache)
+        await self.cache.async_set_cache(binding_key(tenant_id, client_id), agent_id, ttl=ttl, local_only=True)
+        if self.cache.redis_cache is not None:
+            store: Final[AgentIdentityBindingsStore] = TransportAgentIdentityBindingsStore(
+                self.cache.redis_cache.transport()
+            )
+            await store.put(tenant_id, client_id, agent_id, ttl=timedelta(seconds=ttl))
 
     async def resolve_verified_claims(
         self, claims: Mapping[str, object]
