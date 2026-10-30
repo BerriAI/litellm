@@ -2467,8 +2467,7 @@ class BaseLLMHTTPHandler:
                         )
                 else:
                     verbose_logger.debug(
-                        "Anthropic /v1/messages: invalid thinking signature; "
-                        "stripping thinking blocks and retrying (attempt %s/%s).",
+                        "Anthropic /v1/messages: retrying after a recoverable HTTP error (attempt %s/%s).",
                         len(recovered_errors) + 2,
                         max_attempts,
                     )
@@ -12850,7 +12849,7 @@ class BaseLLMHTTPHandler:
                 provider_config=text_to_speech_provider_config,
             )
 
-        speech_response: Final = text_to_speech_provider_config.transform_text_to_speech_response(
+        speech_response: Final = await text_to_speech_provider_config.async_transform_text_to_speech_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
