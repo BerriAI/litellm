@@ -8,7 +8,7 @@ Unit tests for per-user MCP OAuth token storage:
 
 import sys
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -22,7 +22,6 @@ for _mod in ("orjson",):
 from litellm.proxy.mcp_server.oauth2_token_cache import (  # noqa: E402
     MCPPerUserTokenCache,
     compute_per_user_token_ttl,
-    mcp_per_user_token_cache,
 )
 from litellm.types.mcp import MCPAuth, MCPTransport  # noqa: E402
 from litellm.types.mcp_server.mcp_server_manager import MCPServer  # noqa: E402
@@ -41,7 +40,7 @@ def _import_validate():
 
 
 def _make_server(**kwargs) -> MCPServer:
-    defaults: Dict[str, Any] = {
+    defaults: dict[str, Any] = {
         "server_id": "slack-test",
         "name": "Slack",
         "server_name": "slack",
@@ -294,45 +293,55 @@ class TestMCPPerUserTokenCache:
         )
 
     @pytest.mark.asyncio
-    async def test_set_encrypts_before_storing(self, cache, mock_dual_cache):
-        fake_encrypted = "encrypted_blob_xyz"
+    async def test_set_encrypts_before_storing_under_the_per_user_key(self, cache):
+        import json
+
+        import fakeredis
+
+        from litellm.caching.in_memory_cache import InMemoryCache
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+        from tests._support.fake_redis import fake_redis_cache
+
+        server = fakeredis.FakeServer()
+        shared = UserApiKeyCache(in_memory_cache=InMemoryCache(), redis_cache=fake_redis_cache(server))
         with (
             patch(
                 "litellm.proxy.mcp_server.oauth2_token_cache.encrypt_value_helper",
-                return_value=fake_encrypted,
+                return_value="encrypted_blob_xyz",
             ) as mock_encrypt,
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", shared),
         ):
-            await cache.set("alice", "slack-test", "xoxb-token", ttl=3540)
+            await cache.set("bob", "github-server", "ghp_token", ttl=3540)
 
-        mock_encrypt.assert_called_once_with("xoxb-token")
-        mock_dual_cache.async_set_cache.assert_called_once()
-        call_kwargs = mock_dual_cache.async_set_cache.call_args
-        assert call_kwargs[0][1] == fake_encrypted  # encrypted value stored
-        assert call_kwargs[1]["ttl"] == 3540
+        raw = fakeredis.FakeAsyncRedis(server=server)
+        mock_encrypt.assert_called_once_with("ghp_token")
+        assert await raw.get("mcp:per_user_token:bob:github-server") == json.dumps("encrypted_blob_xyz").encode()
+        assert await raw.ttl("mcp:per_user_token:bob:github-server") == 3540
 
     @pytest.mark.asyncio
-    async def test_set_uses_correct_cache_key(self, cache, mock_dual_cache):
+    async def test_delete_drops_the_token_here_and_in_redis_and_tells_peers(self, cache):
+        import fakeredis
+
+        from litellm.caching.in_memory_cache import InMemoryCache
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+        from tests._support.fake_redis import fake_redis_cache
+
+        server = fakeredis.FakeServer()
+        shared = UserApiKeyCache(in_memory_cache=InMemoryCache(), redis_cache=fake_redis_cache(server))
         with (
+            patch("litellm.proxy.mcp_server.oauth2_token_cache.encrypt_value_helper", return_value="enc"),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", shared),
             patch(
-                "litellm.proxy.mcp_server.oauth2_token_cache.encrypt_value_helper",
-                return_value="enc",
-            ),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache),
+                "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+                new=AsyncMock(),
+            ) as publish,
         ):
-            await cache.set("bob", "github-server", "ghp_token", ttl=3600)
-
-        key_used = mock_dual_cache.async_set_cache.call_args[0][0]
-        assert key_used == "mcp:per_user_token:bob:github-server"
-
-    @pytest.mark.asyncio
-    async def test_delete_calls_async_delete_cache(self, cache, mock_dual_cache):
-        mock_dual_cache.async_delete_cache = AsyncMock()
-        with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache):
+            await cache.set("alice", "slack-test", "token", ttl=60)
             await cache.delete("alice", "slack-test")
 
-        mock_dual_cache.async_delete_cache.assert_called_once_with(key="mcp:per_user_token:alice:slack-test")
-        mock_dual_cache.async_set_cache.assert_not_called()
+        assert shared.in_memory_cache.get_cache("mcp:per_user_token:alice:slack-test") is None
+        assert await fakeredis.FakeAsyncRedis(server=server).exists("mcp:per_user_token:alice:slack-test") == 0
+        publish.assert_awaited_once_with(cache_key="mcp:per_user_token:alice:slack-test")
 
     @pytest.mark.asyncio
     async def test_get_returns_none_on_decrypt_failure(self, cache, mock_dual_cache):

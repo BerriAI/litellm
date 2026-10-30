@@ -22,6 +22,11 @@ from litellm.redis.stores.mcp_agent_permission_links import (
     TransportMcpAgentPermissionLinkStore,
     agent_permission_link_key,
 )
+from litellm.redis.stores.mcp_per_user_token import (
+    McpPerUserTokenStore,
+    TransportMcpPerUserTokenStore,
+    per_user_token_key,
+)
 from litellm.redis.stores.mcp_user_permission_links import (
     USER_NO_MCP_PERMISSION_SENTINEL as _USER_NO_PERMISSION,
 )
@@ -410,6 +415,42 @@ async def fill_agent_permission_link(
                 cache.redis_cache.transport()
             )
             _ = await store.fill(agent_id, permission_id, ttl=timedelta(seconds=int(ttl)))
+
+
+async def get_mcp_per_user_token(cache: UserApiKeyCache, user_id: str, server_id: str) -> str | None:
+    key: Final = per_user_token_key(user_id, server_id)
+    local: Final[object] = await cache.async_get_cache(key=key, local_only=True)
+    if local is not None:
+        return local if isinstance(local, str) else None
+    if cache.redis_cache is None:
+        return None
+    batch: Final = active_request_redis_batch(cache.redis_cache)
+    if batch is not None and batch.read_as_missing(key):
+        return None
+    store: Final[McpPerUserTokenStore] = TransportMcpPerUserTokenStore(cache.redis_cache.transport())
+    blob: Final = await store.get(user_id, server_id)
+    if blob is None or isinstance(blob, RedisFailure):
+        return None
+    await cache.async_set_cache(key=key, value=blob, local_only=True)
+    return blob
+
+
+async def set_mcp_per_user_token(
+    cache: UserApiKeyCache, user_id: str, server_id: str, blob: str, *, ttl: float
+) -> None:
+    await cache.async_set_cache(key=per_user_token_key(user_id, server_id), value=blob, ttl=ttl, local_only=True)
+    if cache.redis_cache is None:
+        return
+    store: Final[McpPerUserTokenStore] = TransportMcpPerUserTokenStore(cache.redis_cache.transport())
+    _ = await store.put(user_id, server_id, blob, ttl=timedelta(seconds=int(ttl)))
+
+
+async def delete_mcp_per_user_token(cache: UserApiKeyCache, user_id: str, server_id: str) -> None:
+    cache.in_memory_cache.delete_cache(per_user_token_key(user_id, server_id))
+    if cache.redis_cache is None:
+        return
+    store: Final[McpPerUserTokenStore] = TransportMcpPerUserTokenStore(cache.redis_cache.transport())
+    _ = await store.delete(user_id, server_id)
 
 
 #: Cached under ``tag_registry_cache_key`` when the table exceeds ``TAG_REGISTRY_MAX_SIZE``:
