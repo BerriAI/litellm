@@ -32,7 +32,7 @@ from litellm.accounting import (
     PricingSnapshot,
 )
 from litellm.proxy.db import accounting_ledger
-from litellm.proxy.db.accounting_ledger import AccountingConflictError, AccountingEvent, AccountingLedger
+from litellm.proxy.db.accounting_ledger import AccountingConflictError, AccountingEvent, AccountingLedger, UsageWrite
 from litellm.types.utils import CallTypes
 from tests.integration._support.database import scratch_database
 from tests.integration._support.prisma_clients import connected_proxy_prisma
@@ -532,3 +532,47 @@ def test_family_cleanup_lookups_use_the_kind_source_index(ledger_database: str, 
         name == "LiteLLM_AccountingEvent_kind_source_event_id_idx" and "source_event_id" in str(condition)
         for name, condition in conditions
     ), conditions
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["before_commit", "after_commit", "conflict"])
+async def test_usage_batch_is_atomic_and_replay_preserves_receipts(
+    writer: _Writer, ledger_database: str, failure: str
+) -> None:
+    client, store = writer
+    events: Final = (_usage("caller", inbound=True), _usage("attempt"))
+    writes: Final = tuple(UsageWrite(event, _envelope(event), _TARGETS) for event in events)
+
+    @asynccontextmanager
+    async def interrupted() -> AsyncGenerator[Prisma]:
+        async with client.writer_db.tx() as tx:
+            yield tx
+            if failure == "before_commit":
+                raise RuntimeError("injected pre-commit failure")
+        if failure == "after_commit":
+            raise RuntimeError("injected lost acknowledgement")
+
+    if failure == "conflict":
+        await store.insert_usage_batch((writes[1],))
+        _complete_and_age(ledger_database)
+        rejected: Final = (writes[0], UsageWrite(events[1], _envelope(events[1], context={"changed": True}), _TARGETS))
+        with pytest.raises(AccountingConflictError):
+            await store.insert_usage_batch(rejected)
+        assert _rows(ledger_database, 'SELECT event_id FROM "LiteLLM_AccountingEvent"') == [("attempt",)]
+    else:
+        with pytest.raises(RuntimeError, match="injected"):
+            await AccountingLedger(interrupted).insert_usage_batch(writes)
+        count: Final = 2 if failure == "after_commit" else 0
+        assert _rows(ledger_database, 'SELECT count(*) FROM "LiteLLM_AccountingEvent"') == [(count,)]
+        assert _rows(ledger_database, 'SELECT count(*) FROM "LiteLLM_AccountingDelivery"') == [(count * len(_TARGETS),)]
+    await store.insert_usage_batch(writes)
+    recovered: Final = await store.load_usage_batch(tuple(event.event_id for event in events))
+    assert len(recovered) == 1
+    assert recovered[0].event == events[1]
+    assert json.loads(recovered[0].envelope) == json.loads(writes[1].envelope)
+    assert set(recovered[0].targets) == set(_TARGETS)
+    _complete_and_age(ledger_database)
+    before: Final = _rows(ledger_database, 'SELECT * FROM "LiteLLM_AccountingDelivery" ORDER BY event_id, target')
+    await store.insert_usage_batch((*writes, *writes))
+    assert _rows(ledger_database, 'SELECT * FROM "LiteLLM_AccountingDelivery" ORDER BY event_id, target') == before
+    assert _rows(ledger_database, 'SELECT count(*) FROM "LiteLLM_AccountingEvent"') == [(2,)]
