@@ -1737,6 +1737,7 @@ class Router(DeprecatedRouterMembers):
             max_size_in_memory=max(len(model_list or ()), 1),
             default_ttl=2 * MODEL_INFO_REFRESH_SECONDS,
         )
+        self._has_wildcard_catalog: bool = False
         self._routing_group_rows: tuple[DeploymentTypedDict, ...] | None = None
         self._init_routing_groups(None)
         self._provider_unresolved_deployments: tuple[Callable[[], Deployment | None], ...] = ()
@@ -12273,6 +12274,7 @@ class Router(DeprecatedRouterMembers):
         self._discovered_model_info_cache.max_size_in_memory = max(len(self._core_model_list), 1)
         self._discovered_model_info_cache.delete_cache(model_id)
         self._discovered_model_info_cache.set_cache(model_id, discovered)
+        self._has_wildcard_catalog = self._has_wildcard_catalog or bool(discovered.limits_by_model)
         self._invalidate_model_group_info_cache()
 
     async def _adiscover_openai_compatible_model_info(
@@ -12423,7 +12425,11 @@ class Router(DeprecatedRouterMembers):
         )
 
     def _wildcard_catalog_model_infos(self, model_name: str) -> Iterator[Mapping[str, object]]:
-        for deployment, routed_model in self._core_pattern_router.get_routed_deployments(model_name):
+        if not self._has_wildcard_catalog:
+            return
+        for deployment, routed_model in self._core_pattern_router.get_routed_deployments(
+            model_name, LlmProviders.OPENROUTER.value
+        ):
             configured = _configured_model_info(deployment)
             model_id = configured.get("id")
             discovered = self._core_get_discovered_model_info(
