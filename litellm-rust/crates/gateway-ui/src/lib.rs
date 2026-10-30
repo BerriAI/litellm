@@ -41,6 +41,7 @@ pub fn router(
     Router::new()
         .route("/v2/login", post(session::login))
         .route("/session/info", get(session::info))
+        .route("/management/v1/users/me", get(session::current_user))
         .route("/session/logout", post(session::logout))
         .layer(auth)
         .route("/.well-known/litellm-ui-config", get(session::discovery))
