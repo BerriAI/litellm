@@ -6,7 +6,9 @@ import type { Settings } from "./data";
 const post = vi.hoisted(() => vi.fn());
 vi.mock("@/components/networking", () => ({ apiClient: { post } }));
 
-beforeEach(() => post.mockReset());
+beforeEach(() => {
+  post.mockReset();
+});
 
 describe("ROI category setup", () => {
   it("includes extracted business context in discovery setup", async () => {

@@ -1,9 +1,10 @@
 import { TabsContent, TabsTrigger } from "@/components/ui/tabs";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
+import { isProxyAdminRole } from "@/utils/roles";
 import CategoryROI from "./CategoryROI";
 
 type Access = { role: string | null; view: string };
-const permitted = ({ role, view }: Access) => role === "proxy_admin" && view === "global";
+const permitted = ({ role, view }: Access) => isProxyAdminRole(role ?? "") && view === "global";
 
 export function ROIUsageTrigger(props: Access) {
   if (!permitted(props)) return null;

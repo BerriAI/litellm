@@ -108,7 +108,7 @@ class CategoryStorage:
         return await self.rows(
             "SELECT toString(toDate(start_time, 'UTC')) AS day, "
             "if(a.category_id = '', 'unclassified', a.category_id) AS category_id, "
-            "model, sum(ifNull(spend, 0)) AS spend, count() AS requests, countIf(isNull(spend)) AS unknown_cost_requests "
+            "model, sum(ifNull(spend_logs.spend, 0)) AS spend, count() AS requests, countIf(isNull(spend_logs.spend)) AS unknown_cost_requests "
             "FROM spend_logs FINAL "
             + _JOIN
             + " WHERE "

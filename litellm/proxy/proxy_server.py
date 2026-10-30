@@ -11522,9 +11522,10 @@ class ProxyStartupEvent:
             prisma_client=prisma_client,
         )
 
-        from litellm.proxy.management_endpoints.roi_categories_endpoints import run_roi_tick
+        from litellm.proxy.management_endpoints.roi_categories_endpoints import ROIJobScheduler, run_roi_tick
 
-        scheduler.add_job(
+        roi_scheduler: Final = cast(ROIJobScheduler, scheduler)  # cast-ok: APScheduler exposes this untyped job API
+        _ = roi_scheduler.add_job(
             run_roi_tick, "interval", seconds=30, id="roi_categories", max_instances=1, replace_existing=True
         )
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)

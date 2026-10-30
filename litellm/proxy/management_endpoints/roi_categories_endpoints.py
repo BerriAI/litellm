@@ -2,10 +2,10 @@ import asyncio
 import base64
 import binascii
 import os
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Annotated, Final, TypeAlias
+from typing import Annotated, Final, Protocol, TypeAlias
 from uuid import uuid4
 
 import httpx
@@ -38,6 +38,20 @@ from litellm.router_strategy.complexity_router.jev_classifier import RouterJevCl
 from litellm.rust_bridge.clickhouse import spend_storage_config
 from litellm.types.roi_calculator import ROISyncStatus
 from litellm.types.utils import ModelResponse
+
+
+class ROIJobScheduler(Protocol):
+    def add_job(
+        self,
+        func: Callable[[], Awaitable[None]],
+        trigger: str,
+        *,
+        seconds: int,
+        id: str,
+        max_instances: int,
+        replace_existing: bool,
+    ) -> object: ...
+
 
 router: Final = APIRouter(prefix="/roi/categories", tags=["ROI categories"])
 _RUNNING: Final = ROISyncStatus(
