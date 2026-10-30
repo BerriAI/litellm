@@ -1043,7 +1043,10 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
         elif value.get("litellm_provider") == "coralbricks":
             coralbricks_models.add(key)
         elif value.get("litellm_provider") == "aiand":
-            aiand_models.add(key)
+            if _is_past_deprecation_date(value):
+                aiand_models.discard(key)
+            else:
+                aiand_models.add(key)
         elif value.get("litellm_provider") == "reducto":
             reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":

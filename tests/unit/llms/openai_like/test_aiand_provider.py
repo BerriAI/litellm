@@ -89,11 +89,21 @@ def _aiand_catalog() -> frozenset[str]:
     return frozenset(name for name, info in litellm.model_cost.items() if info.get("litellm_provider") == "aiand")
 
 
-def test_aiand_wildcard_lists_its_priced_models():
+AIAND_RETIRED: Final = frozenset(
+    {"aiand/deepseek-ai/deepseek-v4-flash", "aiand/zai-org/glm-5.2", "aiand/moonshotai/kimi-k2.7-code"}
+)
+
+
+def test_aiand_wildcard_lists_only_its_live_models():
     catalog: Final = _aiand_catalog()
 
-    assert catalog
-    assert frozenset(get_known_models_from_wildcard("aiand/*")) == catalog
+    assert AIAND_RETIRED < catalog
+    assert frozenset(get_known_models_from_wildcard("aiand/*")) == catalog - AIAND_RETIRED
+
+
+def test_aiand_retired_models_carry_their_retirement_date():
+    for model in sorted(AIAND_RETIRED):
+        assert litellm.model_cost[model]["deprecation_date"] == "2026-10-27"
 
 
 def test_aiand_calls_are_billed_from_their_cost_rows():

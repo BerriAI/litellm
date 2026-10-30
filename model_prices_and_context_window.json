@@ -72033,6 +72033,7 @@
     },
     "aiand/deepseek-ai/deepseek-v4-flash": {
         "cache_read_input_token_cost": 8e-08,
+        "deprecation_date": "2026-10-27",
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "aiand",
         "max_input_tokens": 1048576,
@@ -72093,6 +72094,7 @@
     },
     "aiand/moonshotai/kimi-k2.7-code": {
         "cache_read_input_token_cost": 2e-07,
+        "deprecation_date": "2026-10-27",
         "input_cost_per_token": 7.5e-07,
         "litellm_provider": "aiand",
         "max_input_tokens": 262144,
@@ -72183,6 +72185,7 @@
     },
     "aiand/zai-org/glm-5.2": {
         "cache_read_input_token_cost": 3e-07,
+        "deprecation_date": "2026-10-27",
         "input_cost_per_token": 1e-06,
         "litellm_provider": "aiand",
         "max_input_tokens": 1048576,
