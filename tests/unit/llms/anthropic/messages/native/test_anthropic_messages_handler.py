@@ -1148,31 +1148,47 @@ _GET_WEATHER_TOOL: Final = {
     ],
     ids=["function_tool_bridged_to_responses", "no_tools_on_chat"],
 )
-async def test_azure_ai_on_azure_openai_host_streams_natively_with_the_bare_deployment(tools, expected_path):
-    captured = {}
+async def test_azure_ai_on_azure_openai_host_streams_natively_with_the_bare_deployment(tools, expected_path, monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
 
-    async def fake_send(self, request, **kwargs):
-        captured["body"] = json.loads(request.content)
-        captured["url"] = request.url
-        raise httpx.ConnectError("cut at the wire", request=request)
-
-    with (
-        patch.object(httpx.AsyncClient, "send", fake_send),
-        pytest.raises(openai.APIError),
-    ):
-        await litellm.anthropic.messages.acreate(
-            max_tokens=100,
-            messages=[{"role": "user", "content": "What is the weather in Berlin?"}],
-            model="azure_ai/gpt-6-luna",
-            api_base="https://qa-resource.cognitiveservices.azure.com",
-            api_key="test-api-key",
-            stream=True,
-            tools=tools,
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route(host="qa-resource.cognitiveservices.azure.com").mock(
+            side_effect=httpx.ConnectError("cut at the wire")
         )
+        with pytest.raises(openai.APIError):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "What is the weather in Berlin?"}],
+                model="azure_ai/gpt-6-luna",
+                api_base="https://qa-resource.cognitiveservices.azure.com",
+                api_key="test-api-key",
+                stream=True,
+                tools=tools,
+            )
 
-    assert captured["url"].path == expected_path
-    assert captured["body"]["model"] == "gpt-6-luna"
-    assert captured["body"]["stream"] is True
+    bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
+    assert {call.request.url.path for call in upstream.calls} == {expected_path}
+    assert {body["model"] for body in bodies} == {"gpt-6-luna"}
+    assert all(body["stream"] is True for body in bodies)
+
+
+@pytest.mark.asyncio
+async def test_bridged_messages_keep_the_region_of_a_regional_bedrock_mantle_model(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises(litellm.exceptions.ServiceUnavailableError):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "ping"}],
+                model="bedrock_mantle/eu-west-1/openai.gpt-oss-120b",
+                api_key="test-api-key",
+            )
+
+    assert {call.request.url.host for call in upstream.calls} == {"bedrock-mantle.eu-west-1.api.aws"}
 
 
 @pytest.mark.asyncio
