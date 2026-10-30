@@ -32,10 +32,15 @@ class HeldBy:
     owner: str
 
 
+@dataclass(frozen=True, slots=True)
+class Vacant:
+    pass
+
+
 class PodLockStore(Protocol):
     async def acquire(
         self, cronjob_id: str, owner: str, *, ttl: timedelta
-    ) -> Acquired | HeldBy | None | RedisFailure: ...
+    ) -> Acquired | HeldBy | Vacant | RedisFailure: ...
 
     async def holder(self, cronjob_id: str) -> HeldBy | None | RedisFailure: ...
 
@@ -46,13 +51,19 @@ class PodLockStore(Protocol):
 class TransportPodLockStore:
     transport: RedisTransport
 
-    async def acquire(self, cronjob_id: str, owner: str, *, ttl: timedelta) -> Acquired | HeldBy | None | RedisFailure:
+    async def acquire(
+        self, cronjob_id: str, owner: str, *, ttl: timedelta
+    ) -> Acquired | HeldBy | Vacant | RedisFailure:
         set_reply: Final = await self.transport.set(lock_key(cronjob_id), _encode(owner), ttl=ttl, nx=True)
         if isinstance(set_reply, RedisFailure):
             return set_reply
         if set_reply:
             return Acquired()
-        return await self.holder(cronjob_id)
+        match await self.holder(cronjob_id):
+            case None:
+                return Vacant()
+            case held:
+                return held
 
     async def holder(self, cronjob_id: str) -> HeldBy | None | RedisFailure:
         held: Final = await self.transport.get(lock_key(cronjob_id))

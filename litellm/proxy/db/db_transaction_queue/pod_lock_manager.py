@@ -9,7 +9,7 @@ from litellm.caching.redis_cache import RedisCache
 from litellm.constants import DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
 from litellm.proxy.db.db_transaction_queue.base_update_queue import service_logger_obj
 from litellm.redis.stores import pod_lock
-from litellm.redis.stores.pod_lock import Acquired, HeldBy, PodLockStore, TransportPodLockStore
+from litellm.redis.stores.pod_lock import Acquired, HeldBy, PodLockStore, TransportPodLockStore, Vacant
 from litellm.redis.transport.contract import RedisFailure
 from litellm.types.services import ServiceTypes
 
@@ -89,7 +89,7 @@ class PodLockManager:
                     "Pod %s could not acquire lock for cronjob_id=%s, held by pod %s.", self.pod_id, cronjob_id, owner
                 )
                 return False
-            case None | RedisFailure():
+            case Vacant() | RedisFailure():
                 return False
 
     @with_service_target(POD_LOCK_TARGET)
