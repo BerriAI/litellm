@@ -8,6 +8,8 @@ Keys, encoding, TTLs, Lua and reply decoding for each keyspace are spread across
 
 ## Shape
 
+`litellm/redis/stores/response_polling.py` is the reference
+
 - One module per keyspace in `litellm/redis/stores/<keyspace>.py`
 - The module defines a `Protocol` of domain operations, named for what the caller wants (`acquire`, `release`, `increment`, `get`), never for Redis commands
 - The Python implementation is a frozen dataclass that takes a `RedisTransport` and runs its own commands on it. It owns, and nothing outside it knows
@@ -33,6 +35,8 @@ class TransportSessionBudgetStore:
 
 ## Callers
 
+`ResponsePollingHandler` in `litellm/proxy/response_polling/polling_handler.py` is the reference caller
+
 - Depend on the keyspace's `Protocol`, built once from `redis_cache.transport()` and injected where the caller can take it
 - `match` the result, ending in `assert_never` when it has more than two cases
 - Keep policy in the caller: which TTL applies, fail open or closed, and the `with_service_target` that labels its commands. The transport already logs failures and emits service events
@@ -46,6 +50,7 @@ Add a store, not a new `RedisCache` method. A Python store is the finished state
 
 - Move the key builders, codec, TTLs, Lua and decoding verbatim. Keep policy in the caller
 - Keys and values already in Redis are a wire format. Old and new pods read each other's writes during a rolling deploy, so a move keeps them byte for byte
+  - polling state was written by `async_set_cache`, which runs `json.dumps` on a value that was already JSON text, so the store encodes with `json.dumps(json.dumps(state))` and decodes both layers
 - Changing a key, codec or TTL unit is never part of a move. It is its own change that writes a new versioned key and reads both for one release
 - Move one keyspace per change
 
@@ -67,7 +72,7 @@ Response cache identity (normalization, hashing into a logical key) is backend-i
 
 - Test the store through its caller against `fake_redis_cache(server)` from `tests/_support/fake_redis.py`. That is a real `RedisCache` on a `fakeredis.FakeServer`, so namespace, breaker and failure mapping are the production ones
 - Cover each result the caller acts on, that the TTL lands (`pttl` on a raw `FakeAsyncRedis`), and an outage (`server.connected = False`)
-- When a keyspace moves, seed with the old writer and read back with the old reader, so old and new pods read each other's writes
+- When a keyspace moves, seed with the old writer and read back with the old reader, so old and new pods read each other's writes. See `_seed` and `_legacy_read` in `tests/unit/proxy/response_polling/test_response_polling_handler.py`
 - Assert returned values and Redis state, never the commands sent
 
 ## Porting a store to Rust
