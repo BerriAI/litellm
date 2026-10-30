@@ -1243,6 +1243,11 @@ async def _collect(agen: AsyncIterator[object]) -> list[object]:
     return [item async for item in agen]
 
 
+def _sse_text(out: Sequence[object]) -> str:
+    """Emitted SSE frames as text. Provider frames are bytes and a refusal frame is a str."""
+    return "".join(item.decode() if isinstance(item, bytes) else item for item in out if isinstance(item, (bytes, str)))
+
+
 class _StreamWithHiddenParams:
     """Mimics CustomStreamWrapper: an async-iterable whose chunks are plain ModelResponseStream
     objects, but which itself carries _hidden_params (the provider response headers, snapshotted
@@ -1476,6 +1481,73 @@ async def test_a_buffered_streamed_block_reaches_the_client_as_its_block_status(
     assert json.loads(bytes(response.body))["error"]["message"] == "leaked secret"
 
 
+async def test_a_buffered_responses_stream_block_reaches_the_client_as_its_block_status(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The Responses error event carried a fixed 400, which the proxy answered with (TL-2934)."""
+    import litellm
+    from litellm.proxy.common_request_processing import create_response
+    from litellm.proxy.proxy_server import (
+        async_data_generator,  # pyright: ignore[reportUnknownVariableType]  # its response parameter is untyped
+    )
+
+    g = _make_guardrail(
+        event_hook="post_call",
+        decisions=[_decision_response({"action": "block", "message": "leaked secret", "response_status": 403})],
+    )
+    monkeypatch.setattr(litellm, "callbacks", [g])
+
+    response = await create_response(
+        async_data_generator(  # pyright: ignore[reportArgumentType]  # yields str | bytes; the proxy hands create_response the same generator
+            response=_aiter(_responses_stream_chunks()),
+            user_api_key_dict=UserAPIKeyAuth(),
+            request_data=_request_data(),
+            responses_stream_errors=True,
+        ),
+        media_type="text/event-stream",
+        headers={},
+    )
+
+    assert response.status_code == 403
+    assert json.loads(bytes(response.body))["error"]["message"] == "leaked secret"
+
+
+async def test_a_buffered_messages_stream_block_reaches_the_client_as_its_block_status(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A /v1/messages block was a raw error frame under a 200, so an Anthropic client saw a
+    successful call that failed mid-stream (TL-2934). ``restamp_model`` is set the way the proxy
+    sets it for every /v1/messages stream."""
+    import litellm
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing, create_response
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
+
+    g = _make_guardrail(
+        event_hook="post_call",
+        decisions=[_decision_response({"action": "block", "message": "leaked secret", "response_status": 403})],
+    )
+    monkeypatch.setattr(litellm, "callbacks", [g])
+
+    response = await create_response(
+        ProxyBaseLLMRequestProcessing.async_sse_data_generator(  # pyright: ignore[reportUnknownMemberType]  # its request_data parameter is an untyped dict
+            response=_aiter(_anthropic_sse_frames()),
+            user_api_key_dict=UserAPIKeyAuth(),
+            request_data=_request_data(),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+            restamp_model="claude-alias",
+        ),
+        media_type="text/event-stream",
+        headers={},
+    )
+
+    assert response.status_code == 403
+    assert json.loads(bytes(response.body)) == {
+        "type": "error",
+        "error": {"type": "permission_error", "message": "leaked secret"},
+    }
+
+
 async def test_streaming_buffered_holds_chunks_until_decision():
     call_order: list[str] = []
 
@@ -1591,9 +1663,9 @@ async def test_a_truncated_tool_argument_can_still_be_blocked():
             request_data=_request_data(),
         )
     )
-    blob = b"".join(item for item in out if isinstance(item, bytes))
-    assert b"secret in tool args" in blob
-    assert b"sk-live-TRUNC" not in blob
+    blob = _sse_text(out)
+    assert "secret in tool args" in blob
+    assert "sk-live-TRUNC" not in blob
 
 
 def _anthropic_sse_frames() -> list[bytes]:
@@ -1806,7 +1878,11 @@ async def test_a_chat_shaped_rewrite_of_a_messages_stream_fails_closed():
 
 
 async def test_streaming_raw_sse_block_emits_anthropic_error_frame():
-    g = _make_guardrail(decisions=[_decision_response({"action": "block", "message": "leaked secret"})])
+    from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame
+
+    g = _make_guardrail(
+        decisions=[_decision_response({"action": "block", "message": "leaked secret", "response_status": 403})]
+    )
     out = await _collect(
         g.async_post_call_streaming_iterator_hook(
             user_api_key_dict=UserAPIKeyAuth(),
@@ -1815,9 +1891,11 @@ async def test_streaming_raw_sse_block_emits_anthropic_error_frame():
         )
     )
     assert len(out) == 1
-    assert isinstance(out[0], bytes)
-    assert b"event: error" in out[0]
-    assert b"leaked secret" in out[0]
+    frame = out[0]
+    assert isinstance(frame, AnthropicErrorSseFrame)
+    assert frame.status_code == 403
+    assert frame.startswith("event: error\n")
+    assert frame.error_response["error"] == {"type": "permission_error", "message": "leaked secret"}
 
 
 def _unscannable_chunks() -> list[dict]:
@@ -2539,7 +2617,7 @@ async def test_a_buffered_messages_stream_gets_an_error_frame_when_the_service_f
             user_api_key_dict=UserAPIKeyAuth(), response=_aiter(_anthropic_sse_frames()), request_data=_request_data()
         )
     )
-    frames = b"".join(item for item in out if isinstance(item, bytes)).decode()
+    frames = _sse_text(out)
     assert "event: error" in frames
     assert "ThirdLaw guardrail request failed" in frames
     assert "hello" not in frames

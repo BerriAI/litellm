@@ -18,6 +18,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
+from litellm.anthropic_interface.exceptions import anthropic_error_sse_frame
 from litellm.caching import DualCache
 from litellm.exceptions import GuardrailRaisedException
 from litellm.exceptions import Timeout as LitellmTimeout
@@ -37,7 +38,6 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_body,
-    anthropic_sse_error_frames,
     assemble_anthropic_sse_body,
     sse_stream_text,
 )
@@ -1028,23 +1028,25 @@ class ThirdlawGuardrail(CustomGuardrail):
 
     @staticmethod
     def _stream_error_items(
-        message: str, surface: StreamSurface, collected: Sequence[object]
+        message: str, surface: StreamSurface, collected: Sequence[object], *, status_code: int
     ) -> Sequence[object] | None:
         """Terminal stream items framing a refusal in this surface's wire format.
 
         ``None`` means the surface cannot frame its own error, so the caller raises instead and
-        lets the proxy's data generator serialize it.
+        lets the proxy's data generator serialize it. ``status_code`` travels inside the frame:
+        when the refusal is the stream's first item the proxy answers with it as a JSON error,
+        and after a keepalive ping has flushed a 200 it is only the frame's body.
         """
         match surface:
             case StreamSurface.ANTHROPIC_MESSAGES:
-                return anthropic_sse_error_frames(message)
+                return (anthropic_error_sse_frame(status_code, message),)
             case StreamSurface.RESPONSES:
-                return ThirdlawGuardrail._responses_error_events(message, collected)
+                return ThirdlawGuardrail._responses_error_events(message, collected, status_code)
             case StreamSurface.CHAT_COMPLETIONS | StreamSurface.OPAQUE_SSE:
                 return None
 
     @staticmethod
-    def _responses_error_events(message: str, collected: Sequence[object]) -> Sequence[object]:
+    def _responses_error_events(message: str, collected: Sequence[object], status_code: int) -> Sequence[object]:
         """A ``/v1/responses`` refusal as an in-stream error event.
 
         A raised exception reaches the client as the proxy's ``{"error": ...}`` blob, which carries
@@ -1059,7 +1061,7 @@ class ThirdlawGuardrail(CustomGuardrail):
 
         return (
             OpenAIResponsesHandler().build_stream_error_items(
-                HTTPException(status_code=400, detail=message),
+                HTTPException(status_code=status_code, detail=message),
                 responses_so_far=collected,
             )
             or ()
@@ -1102,7 +1104,10 @@ class ThirdlawGuardrail(CustomGuardrail):
         except Exception as error:  # noqa: BLE001  # after keepalive flush a raise cannot reach the client; send a frame
             flushed_frames: Final = (
                 self._stream_error_items(
-                    f"ThirdLaw guardrail request failed: {_service_error_message(error)}", surface, collected
+                    f"ThirdLaw guardrail request failed: {_service_error_message(error)}",
+                    surface,
+                    collected,
+                    status_code=self._block_status(None),
                 )
                 if self._sse_headers_flushed(started)
                 else None
@@ -1136,9 +1141,10 @@ class ThirdlawGuardrail(CustomGuardrail):
 
         if decision.action == "block":
             message: Final = decision.message or "Content violates ThirdLaw policy"
-            block_items: Final = self._stream_error_items(message, surface, collected)
+            block_status: Final = self._block_status(decision.response_status)
+            block_items: Final = self._stream_error_items(message, surface, collected, status_code=block_status)
             if block_items is None:
-                raise self._streaming_block_error(message, response_status=decision.response_status)
+                raise self._streaming_block_error(message, response_status=block_status)
             for item in block_items:
                 yield item
             return
@@ -1193,7 +1199,9 @@ class ThirdlawGuardrail(CustomGuardrail):
                 for item in collected:
                     yield item
             return
-        refusal_items: Final = self._stream_error_items(refusal, surface, collected)
+        refusal_items: Final = self._stream_error_items(
+            refusal, surface, collected, status_code=self._block_status(None)
+        )
         if refusal_items is None:
             raise self._streaming_block_error(refusal)
         for item in refusal_items:
@@ -1323,9 +1331,10 @@ class ThirdlawGuardrail(CustomGuardrail):
             return
         if final_decision.action == "block":
             message: Final = final_decision.message or "Content violates ThirdLaw policy"
-            block_items: Final = self._stream_error_items(message, surface, collected)
+            block_status: Final = self._block_status(final_decision.response_status)
+            block_items: Final = self._stream_error_items(message, surface, collected, status_code=block_status)
             if block_items is None:
-                raise self._streaming_block_error(message, response_status=final_decision.response_status)
+                raise self._streaming_block_error(message, response_status=block_status)
             for item in block_items:
                 yield item
             return
