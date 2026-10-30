@@ -1301,17 +1301,31 @@ async def test_previous_response_id_pin_holds_even_after_its_deployment_failed()
     ) == [healthy_deployments[0]]
 
 
-def _mixed_web_search_router(optional_pre_call_checks: list[str]) -> litellm.Router:  # mutable-ok: Router signature
+def _mixed_web_search_router(
+    optional_pre_call_checks: list[str],  # mutable-ok: Router signature
+    orders: tuple[int | None, int | None] = (None, None),
+) -> litellm.Router:
+    no_search_order, search_order = orders
     return litellm.Router(
         model_list=[
             {
                 "model_name": "mixed",
-                "litellm_params": {"model": "openai/gpt-x", "api_key": "fake-key", "mock_response": "hi"},
+                "litellm_params": {
+                    "model": "openai/gpt-x",
+                    "api_key": "fake-key",
+                    "mock_response": "hi",
+                    **({} if no_search_order is None else {"order": no_search_order}),
+                },
                 "model_info": {"id": "no-search", "supports_web_search": False},
             },
             {
                 "model_name": "mixed",
-                "litellm_params": {"model": "openai/gpt-y", "api_key": "fake-key", "mock_response": "hi"},
+                "litellm_params": {
+                    "model": "openai/gpt-y",
+                    "api_key": "fake-key",
+                    "mock_response": "hi",
+                    **({} if search_order is None else {"order": search_order}),
+                },
                 "model_info": {"id": "search"},
             },
         ],
@@ -1360,6 +1374,83 @@ async def test_pin_on_a_deployment_without_web_search_yields_to_a_web_search_req
 
     assert plain._hidden_params["model_id"] == "no-search"
     assert searching._hidden_params["model_id"] == "search"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("orders", "searched_on"),
+    [((2, 1), "search"), ((None, 1), "search"), ((1, 2), "no-search"), ((1, None), "no-search")],
+    ids=["search-tier-first", "only-search-tier-ordered", "pinned-tier-first", "only-pinned-tier-ordered"],
+)
+@pytest.mark.parametrize(
+    ("optional_pre_call_checks", "pin_key"),
+    [
+        (
+            ["deployment_affinity"],
+            DeploymentAffinityCheck.get_affinity_cache_key(model_group="mixed", user_key="caller-1"),
+        ),
+        (
+            ["session_affinity"],
+            DeploymentAffinityCheck.get_session_affinity_cache_key(
+                model_group="mixed", session_id="session-1", user_key="caller-1"
+            ),
+        ),
+    ],
+    ids=["user-key-pin", "session-pin"],
+)
+async def test_pin_without_web_search_yields_to_a_web_search_request_only_when_search_sits_in_an_earlier_order_tier(
+    optional_pre_call_checks: list[str],  # mutable-ok: Router signature
+    pin_key: str,
+    orders: tuple[int | None, int | None],
+    searched_on: str,
+):
+    router: Final = _mixed_web_search_router(optional_pre_call_checks, orders)
+    await router.cache.async_set_cache(pin_key, {"model_id": "no-search"}, ttl=3600)
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    plain: Final = await router.acompletion(model="mixed", messages=messages, metadata=dict(_CALLER_METADATA))
+    searching: Final = await router.acompletion(
+        model="mixed", messages=messages, metadata=dict(_CALLER_METADATA), web_search_options={}
+    )
+
+    assert plain._hidden_params["model_id"] == "no-search"
+    assert searching._hidden_params["model_id"] == searched_on
+
+
+@pytest.mark.asyncio
+async def test_session_pin_on_a_later_order_tier_holds_for_a_web_search_request_when_it_can_search():
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "tiered",
+                "litellm_params": {
+                    "model": "openai/gpt-x",
+                    "api_key": "fake-key",
+                    "mock_response": "hi",
+                    "order": order,
+                },
+                "model_info": {"id": model_id},
+            }
+            for model_id, order in (("search-first-tier", 1), ("search-second-tier", 2))
+        ],
+        optional_pre_call_checks=["session_affinity"],
+    )
+    await router.cache.async_set_cache(
+        DeploymentAffinityCheck.get_session_affinity_cache_key(
+            model_group="tiered", session_id="session-1", user_key="caller-1"
+        ),
+        {"model_id": "search-second-tier"},
+        ttl=3600,
+    )
+
+    searching: Final = await router.acompletion(
+        model="tiered",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata=dict(_CALLER_METADATA),
+        web_search_options={},
+    )
+
+    assert searching._hidden_params["model_id"] == "search-second-tier"
 
 
 @pytest.mark.asyncio

@@ -31,7 +31,11 @@ from litellm.caching.dual_cache import DualCache
 from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.router_utils.common_utils import deployment_ids_failed_in_request, prefer_web_search_deployments
+from litellm.router_utils.common_utils import (
+    deployment_ids_failed_in_request,
+    prefer_web_search_deployments,
+    web_search_alternatives_to_pin,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes
 
@@ -470,7 +474,7 @@ class DeploymentAffinityCheck(CustomLogger):
 
                 if session_model_id and session_model_id not in failed_deployment_ids:
                     session_deployments: Final = self._pinned_deployments(
-                        typed_healthy_deployments, pin_candidates, session_model_id
+                        typed_healthy_deployments, pin_candidates, session_model_id, request_kwargs
                     )
                     if session_deployments is not None:
                         verbose_router_logger.debug(
@@ -505,7 +509,9 @@ class DeploymentAffinityCheck(CustomLogger):
         if not model_id or model_id in failed_deployment_ids:
             return typed_healthy_deployments
 
-        pinned_deployments: Final = self._pinned_deployments(typed_healthy_deployments, pin_candidates, model_id)
+        pinned_deployments: Final = self._pinned_deployments(
+            typed_healthy_deployments, pin_candidates, model_id, request_kwargs
+        )
         if pinned_deployments is None:
             verbose_router_logger.debug(
                 "DeploymentAffinityCheck: pinned deployment=%s not found in healthy_deployments",
@@ -522,14 +528,18 @@ class DeploymentAffinityCheck(CustomLogger):
 
     @classmethod
     def _pinned_deployments(
-        cls, healthy_deployments: Sequence[_DeploymentT], pin_candidates: Sequence[_DeploymentT], model_id: str
+        cls,
+        healthy_deployments: Sequence[_DeploymentT],
+        pin_candidates: Sequence[_DeploymentT],
+        model_id: str,
+        request_kwargs: Mapping[str, object],
     ) -> tuple[_DeploymentT, ...] | None:
         pinned: Final = cls._find_deployment_by_model_id(healthy_deployments=healthy_deployments, model_id=model_id)
         if pinned is None:
             return None
-        if cls._find_deployment_by_model_id(healthy_deployments=pin_candidates, model_id=model_id) is not None:
-            return (pinned,)
-        return (*pin_candidates, pinned)
+        if cls._find_deployment_by_model_id(healthy_deployments=pin_candidates, model_id=model_id) is None:
+            return (*pin_candidates, pinned)
+        return (*web_search_alternatives_to_pin(pinned, healthy_deployments, request_kwargs), pinned)
 
     async def _read_shared_session_pin(self, cache_key: str, ttl_seconds: int, parent_otel_span: Span | None) -> object:
         redis_cache: Final = self.cache.redis_cache

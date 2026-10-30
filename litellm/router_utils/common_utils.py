@@ -545,21 +545,19 @@ def _deployment_ids_retried_in_request(request_kwargs: Mapping[str, object]) -> 
     return tuple(chain.from_iterable(map(_breadcrumb_deployment_ids, breadcrumbs)))
 
 
-def prefer_web_search_deployments(
-    deployments: list[_DeploymentT],  # mutable-ok: router deployment-list contract
-    request_kwargs: Mapping[str, object] | None,
-    at_rate_limit: frozenset[str] = frozenset(),
-) -> list[_DeploymentT]:  # mutable-ok: returns a mutable deployment list
+def _web_search_tried_deployment_ids(
+    request_kwargs: Mapping[str, object] | None, at_rate_limit: frozenset[str]
+) -> frozenset[str] | None:
     if request_kwargs is None or not _is_web_search_request(
         request_kwargs.get("tools"), request_kwargs.get("web_search_options")
     ):
-        return deployments
+        return None
     if _retry_history_was_trimmed(request_kwargs.get("metadata")) or _retry_history_was_trimmed(
         request_kwargs.get("litellm_metadata")
     ):
         verbose_router_logger.debug("This request's retry history was trimmed, so every deployment stays")
-        return deployments
-    tried: Final = frozenset(
+        return None
+    return frozenset(
         (
             *as_excluded_deployment_ids(request_kwargs.get("_excluded_deployment_ids")),
             *as_retry_skipped_deployment_ids(request_kwargs.get("_retry_skipped_deployment_ids")),
@@ -567,6 +565,16 @@ def prefer_web_search_deployments(
             *at_rate_limit,
         )
     )
+
+
+def prefer_web_search_deployments(
+    deployments: list[_DeploymentT],  # mutable-ok: router deployment-list contract
+    request_kwargs: Mapping[str, object] | None,
+    at_rate_limit: frozenset[str] = frozenset(),
+) -> list[_DeploymentT]:  # mutable-ok: returns a mutable deployment list
+    tried: Final = _web_search_tried_deployment_ids(request_kwargs, at_rate_limit)
+    if tried is None:
+        return deployments
     untried: Final = (d for d in deployments if _deployment_id(d) not in tried)
     orders_with_an_untried_capable_deployment: Final = tuple(
         litellm.utils.get_deployment_order(d) for d in untried if _deployment_supports_web_search(d)
@@ -580,6 +588,15 @@ def prefer_web_search_deployments(
         if litellm.utils.get_deployment_order(d) not in orders_with_an_untried_capable_deployment
         or (_deployment_supports_web_search(d) and _deployment_id(d) not in tried)
     ]
+
+
+def web_search_alternatives_to_pin(
+    pinned: _DeploymentT, deployments: Sequence[_DeploymentT], request_kwargs: Mapping[str, object]
+) -> tuple[_DeploymentT, ...]:
+    tried: Final = _web_search_tried_deployment_ids(request_kwargs, frozenset())
+    if tried is None or _deployment_supports_web_search(pinned):
+        return ()
+    return tuple(d for d in deployments if _deployment_supports_web_search(d) and _deployment_id(d) not in tried)
 
 
 def pick_preferring_web_search(
