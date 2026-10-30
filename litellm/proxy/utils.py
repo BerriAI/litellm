@@ -713,6 +713,7 @@ def _ran_or_runs_outside_pipelines(
 ) -> bool:
     return callback is not None and (
         callback.pre_call_hook_ran_or_raised(data)
+        or callback.deployment_hook_ran(data)
         or any(
             callback._event_hook_is_event_type(hook)  # pyright: ignore[reportPrivateUsage]  # the only check of a guardrail's hooks
             for hook in GuardrailEventHooks
@@ -766,13 +767,25 @@ def _pipelines_settled_by(
     return pipelines[index:] if result.terminal_action != "allow" else pipelines[index : index + 1]
 
 
+def _steps_later_pipelines_still_run(
+    pipelines: Sequence[tuple[str, "GuardrailPipeline"]], index: int, result: PipelineExecutionResult
+) -> frozenset[str]:
+    """The steps of the later response pipelines, which still run when this pipeline's verdict lets the request on."""
+    if result.terminal_action != "allow":
+        return frozenset()
+    later: Final = tuple(
+        (policy_name, pipeline) for policy_name, pipeline in pipelines[index + 1 :] if pipeline.mode == "post_call"
+    )
+    return _pipeline_step_guardrail_names(later)
+
+
 def _drop_response_steps_that_did_not_run(
     data: dict[str, object],  # mutable-ok: the request's applied guardrails are trimmed in place
     pipelines: Sequence[tuple[str, "GuardrailPipeline"]],
-    steps_that_ran: frozenset[str],
+    steps_to_keep: frozenset[str],
 ) -> None:
     """
-    Drop from the applied guardrails the steps of these response pipelines that no pipeline ran,
+    Drop from the applied guardrails the steps of these response pipelines outside ``steps_to_keep``,
     unless their guardrail also runs outside pipelines. Every step is named up front, so a
     log built before the pipeline finished, such as a cache hit's, still lists the steps
     that ran. The list is trimmed in place, since a route's logging object may hold a
@@ -781,7 +794,7 @@ def _drop_response_steps_that_did_not_run(
     pre_call: Final = pipeline_managed_guardrail_names(data, "pre_call")
     post_call: Final = _pipeline_step_guardrail_names(pipelines)
     not_run: Final = frozenset(
-        name for name in post_call - steps_that_ran if _runs_only_in_pipelines(name, data, pre_call, post_call)
+        name for name in post_call - steps_to_keep if _runs_only_in_pipelines(name, data, pre_call, post_call)
     )
     if not not_run:
         return
@@ -2735,8 +2748,12 @@ class ProxyLogging:
             data.pop("prompt_version", None)
             data.pop("prompt_environment", None)
 
-    def _process_guardrail_metadata(self, data: dict) -> None:
-        """Process guardrails from metadata and add to applied_guardrails."""
+    def _process_guardrail_metadata(self, data: dict, *, skip_guardrails: bool = False) -> None:
+        """
+        Process guardrails from metadata and add to applied_guardrails, leaving out the pre_call
+        policy pipeline steps that have not run. With ``skip_guardrails`` the pipelines run on
+        another request, so every step is added.
+        """
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
@@ -2760,8 +2777,10 @@ class ProxyLogging:
             if not isinstance(applied_guardrails, list):
                 applied_guardrails = []
 
-            not_run: Final = _request_steps_that_have_not_run(
-                cast(dict[str, object], data)  # cast-ok: request payload
+            not_run: Final = (
+                frozenset[str]()
+                if skip_guardrails
+                else _request_steps_that_have_not_run(cast(dict[str, object], data))  # cast-ok: request payload
             )
             for guardrail_name in guardrails_in_metadata:
                 if (
@@ -2822,7 +2841,9 @@ class ProxyLogging:
             steps_that_ran = steps_that_ran | _steps_that_ran(result)
             if log_waits:
                 _drop_response_steps_that_did_not_run(
-                    request, _pipelines_settled_by(pipelines, index, result), steps_that_ran
+                    request,
+                    _pipelines_settled_by(pipelines, index, result),
+                    steps_that_ran | _steps_later_pipelines_still_run(pipelines, index, result),
                 )
 
             data = self._handle_pipeline_result(
@@ -3064,7 +3085,7 @@ class ProxyLogging:
                 and (guardrails_only or not caps.has_pre_call_override)
             ):
                 if data is not None:
-                    self._process_guardrail_metadata(data)
+                    self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
                 return data
 
             parallel_guardrails: Final[tuple[CustomGuardrail, ...]] = (
@@ -3168,17 +3189,17 @@ class ProxyLogging:
                 )
 
             if data is not None:
-                self._process_guardrail_metadata(data)
+                self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
 
             return data
         except SensitiveDataRouteException as e:
             data = await self._handle_sensitive_data_route_exception(e, data, user_api_key_dict)
             if data is not None:
-                self._process_guardrail_metadata(data)
+                self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
             return data
         except Exception:
             if data is not None:
-                self._process_guardrail_metadata(data)
+                self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
             raise
 
     async def _run_parallel_pre_call_guardrails(
@@ -4757,7 +4778,9 @@ class ProxyLogging:
             steps_that_ran = steps_that_ran | _steps_that_ran(result)
             if _stream_log_waits_for_its_pipelines(request_data):
                 _drop_response_steps_that_did_not_run(
-                    request_data, _pipelines_settled_by(pipelines, index, result), steps_that_ran
+                    request_data,
+                    _pipelines_settled_by(pipelines, index, result),
+                    steps_that_ran | _steps_later_pipelines_still_run(pipelines, index, result),
                 )
             try:
                 ProxyLogging._handle_pipeline_result(

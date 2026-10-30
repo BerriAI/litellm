@@ -45,6 +45,7 @@ _RUNS_EVERY_STEP: Final = "runs-every-step"
 _BLOCKS_AT_FIRST: Final = "blocks-at-first"
 _RESPONSE_STOPS_AFTER_FIRST: Final = "response-stops-after-first"
 _RESPONSE_RUNS_EVERY_STEP: Final = "response-runs-every-step"
+_RESPONSE_STOPS_AFTER_SECOND: Final = "response-stops-after-second"
 _SHIELDS_THEN_CHECKS: Final = "shields-then-checks"
 _MOVES_PAST_FIRST: Final = "moves-past-first"
 _RESPONSE_MOVES_PAST_FIRST: Final = "response-moves-past-first"
@@ -418,6 +419,9 @@ def _config(directory: Path, vendor: Wire, upstream: Wire) -> Path:
         _RESPONSE_RUNS_EVERY_STEP: _policy(
             "post_call", ((_RESPONSE_FIRST, "next", "block"), (_RESPONSE_SECOND, "next", "block"))
         ),
+        _RESPONSE_STOPS_AFTER_SECOND: _policy(
+            "post_call", ((_RESPONSE_SECOND, "allow", "block"), (_RESPONSE_FIRST, "next", "block"))
+        ),
         _SHIELDS_THEN_CHECKS: _policy(
             "pre_call", ((_PROMPT_SHIELD, "next", "block"), (_REQUEST_FIRST, "next", "block"))
         ),
@@ -693,6 +697,35 @@ def test_the_spend_log_and_the_trace_name_only_the_steps_that_ran(
     assert [ast.literal_eval(str(span["attributes"]["metadata.applied_guardrails"])) for span in spans] == [
         expected
     ] * len(spans), spans
+
+
+@pytest.mark.parametrize(
+    ("tag", "model_guardrail", "expected"),
+    [
+        pytest.param(_STOPS_AFTER_FIRST, _REQUEST_SECOND, [_REQUEST_FIRST, _REQUEST_SECOND], id="request-pipeline"),
+        pytest.param(
+            _RESPONSE_STOPS_AFTER_FIRST, _RESPONSE_SECOND, [_RESPONSE_FIRST, _RESPONSE_SECOND], id="response-pipeline"
+        ),
+    ],
+)
+def test_a_model_level_guardrail_the_pipeline_skipped_is_named_everywhere_once_the_model_runs_it(
+    rig: _Rig, tag: str, model_guardrail: str, expected: list[str]
+) -> None:
+    since: Final = recorded_spans(rig.traces)[0]
+    with rig.gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            api_base=f"{rig.upstream.url}/v1", api_key="sk-fixture", guardrails=[model_guardrail]
+        )
+        team: Final = scenario.team(metadata={"tags": [tag]})
+        key: Final = scenario.key(team_id=team)
+        rig.vendor.drain()
+        response: Final = rig.gateway.request(
+            "POST", "/v1/chat/completions", _body("/v1/chat/completions", model, False), key=key
+        )
+        header, rows, spans = _applied_in_header_spend_log_and_trace(rig, since, team, response)
+    assert response.status_code == 200, response.text
+    assert sorted(_steps_that_ran(rig)) == expected
+    assert (header, rows, spans) == (expected, [expected], [expected] * len(spans))
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["whole", "streamed"])
@@ -1005,17 +1038,22 @@ def agent(rig: _Rig) -> Iterator[str]:
 
 
 @pytest.mark.parametrize(
-    ("tag", "expected"),
+    ("tags", "expected"),
     [
-        pytest.param(_SCANS_AFTER_RELEASE, [_LIVE_FIRST, _LIVE_SECOND], id="every-step-passes"),
+        pytest.param((_SCANS_AFTER_RELEASE,), [_LIVE_FIRST, _LIVE_SECOND], id="every-step-passes"),
         pytest.param(
-            _RESPONSE_MOVES_PAST_FIRST, [_RESPONSE_BLOCKER, _RESPONSE_SECOND], id="first-step-flags-and-moves-on"
+            (_RESPONSE_MOVES_PAST_FIRST,), [_RESPONSE_BLOCKER, _RESPONSE_SECOND], id="first-step-flags-and-moves-on"
         ),
-        pytest.param(_RESPONSE_STOPS_AFTER_FIRST, [_RESPONSE_FIRST], id="first-step-allows"),
+        pytest.param((_RESPONSE_STOPS_AFTER_FIRST,), [_RESPONSE_FIRST], id="first-step-allows"),
+        pytest.param(
+            (_RESPONSE_STOPS_AFTER_FIRST, _RESPONSE_STOPS_AFTER_SECOND),
+            [_RESPONSE_FIRST, _RESPONSE_SECOND],
+            id="two-policies-each-run-the-step-the-other-skipped",
+        ),
     ],
 )
 def test_an_agent_message_names_every_response_step_that_ran_in_the_spend_log_and_the_trace(
-    rig: _Rig, agent: str, tag: str, expected: list[str]
+    rig: _Rig, agent: str, tags: tuple[str, ...], expected: list[str]
 ) -> None:
     since: Final = recorded_spans(rig.traces)[0]
     rig.vendor.drain()
@@ -1026,7 +1064,7 @@ def test_an_agent_message_names_every_response_step_that_ran_in_the_spend_log_an
         "parts": [{"kind": "text", "text": f"hello {uuid.uuid4().hex}"}],
     }
     with rig.gateway.scenario() as scenario:
-        team: Final = scenario.team(metadata={"tags": [tag]})
+        team: Final = scenario.team(metadata={"tags": list(tags)})
         response: Final = rig.gateway.request(
             "POST",
             f"/a2a/{agent}",
@@ -1035,7 +1073,7 @@ def test_an_agent_message_names_every_response_step_that_ran_in_the_spend_log_an
             headers={"Accept": "application/json"},
         )
     assert response.status_code == 200, response.text
-    assert list(_steps_that_ran(rig)) == expected
+    assert sorted(_steps_that_ran(rig)) == expected
     rows: Final = eventually(
         lambda: rig.gateway.rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE team_id = %s', (team,)),
         lambda found: len(found) == 1,

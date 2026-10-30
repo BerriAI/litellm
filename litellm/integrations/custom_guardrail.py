@@ -3,7 +3,7 @@ import copy
 import hashlib
 import os
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, cast, get_args
@@ -70,6 +70,7 @@ GUARDRAIL_SESSIONS_TARGET: Final = "guardrail_sessions"
 # proxy's metadata sanitizer.
 _PRE_CALL_EXECUTED_TOKEN: Final = secrets.token_hex(16)
 _PRE_CALL_RAISED_TOKEN: Final = secrets.token_hex(16)
+_DEPLOYMENT_HOOK_RAN_TOKEN: Final = secrets.token_hex(16)
 
 _GUARDRAIL_BLOCK_STATUS_CODES: Final = frozenset({400, 403, 422})
 
@@ -217,6 +218,25 @@ def _request_is_streaming(data: object, event_type: GuardrailEventHooks | None =
         data.get("stream") is True
         or data.get(SERVER_STREAMING_CLASSIFICATION_KEY) is SERVER_STREAMING_CLASSIFICATION_MARKER
     )
+
+
+def _str_collection(value: object) -> frozenset[str]:
+    if not isinstance(value, (list, tuple, set, frozenset)):
+        return frozenset()
+    items: Final = cast("Iterable[object]", value)  # cast-ok: a metadata collection of guardrail names
+    return frozenset(item for item in items if isinstance(item, str))
+
+
+def _request_carries_marker(data: Mapping[str, object], marker: str | None) -> bool:
+    if marker is None:
+        return False
+    for meta_key in ("metadata", "litellm_metadata"):
+        meta = data.get(meta_key)
+        if isinstance(meta, dict):
+            executed = meta.get(PRE_CALL_EXECUTED_GUARDRAILS_KEY)
+            if isinstance(executed, list) and marker in executed:
+                return True
+    return False
 
 
 class CustomGuardrail(CustomLogger):
@@ -825,11 +845,14 @@ class CustomGuardrail(CustomLogger):
 
         return False
 
-    def _pre_call_marker(self, *, raised: bool = False) -> str | None:
+    def _marker(self, token: str) -> str | None:
         name: Final = self.guardrail_name
         if not name:
             return None
-        return f"{_PRE_CALL_RAISED_TOKEN if raised else _PRE_CALL_EXECUTED_TOKEN}:{name}"
+        return f"{token}:{name}"
+
+    def _pre_call_marker(self, *, raised: bool = False) -> str | None:
+        return self._marker(_PRE_CALL_RAISED_TOKEN if raised else _PRE_CALL_EXECUTED_TOKEN)
 
     def mark_pre_call_hook_ran(self, data: dict[str, object], *, raised: bool = False) -> None:
         """
@@ -864,16 +887,47 @@ class CustomGuardrail(CustomLogger):
         return self._pre_call_hook_already_ran(data) or self._pre_call_hook_already_ran(data, raised=True)
 
     def _pre_call_hook_already_ran(self, data: Mapping[str, object], *, raised: bool = False) -> bool:
-        marker: Final = self._pre_call_marker(raised=raised)
-        if marker is None:
-            return False
-        for meta_key in ("metadata", "litellm_metadata"):
-            meta = data.get(meta_key)
-            if isinstance(meta, dict):
-                executed = meta.get(PRE_CALL_EXECUTED_GUARDRAILS_KEY)
-                if isinstance(executed, list) and marker in executed:
-                    return True
-        return False
+        return _request_carries_marker(data, self._pre_call_marker(raised=raised))
+
+    def deployment_hook_ran(self, data: Mapping[str, object]) -> bool:
+        """Whether a deployment-level hook ran this guardrail as a policy pipeline step of this request."""
+        return _request_carries_marker(data, self._marker(_DEPLOYMENT_HOOK_RAN_TOKEN))
+
+    def _record_deployment_hook_run(
+        self,
+        data: dict[str, object],  # mutable-ok: the request payload the run is recorded on
+    ) -> None:
+        """
+        Record that a deployment-level hook ran this guardrail when it is a policy pipeline step of
+        this request, and name it in the applied guardrails when the request's metadata lists it.
+        """
+        name: Final = self.guardrail_name
+        marker: Final = self._marker(_DEPLOYMENT_HOOK_RAN_TOKEN)
+        buckets: Final = tuple(
+            cast("dict[str, object]", bucket)  # cast-ok: metadata buckets are str-keyed
+            for bucket in (data.get("metadata"), data.get("litellm_metadata"))
+            if isinstance(bucket, dict)
+        )
+        policy_state: Final = next(
+            (bucket for bucket in buckets if name in _str_collection(bucket.get("_pipeline_managed_guardrails"))),
+            None,
+        )
+        if marker is None or policy_state is None:
+            return
+        recorded: Final = policy_state.get(PRE_CALL_EXECUTED_GUARDRAILS_KEY)
+        if not isinstance(recorded, list):
+            policy_state[PRE_CALL_EXECUTED_GUARDRAILS_KEY] = [marker]
+        elif marker not in recorded:
+            cast("list[object]", recorded).append(marker)  # cast-ok: markers are only compared as strings
+        requested: Final = next((bucket.get("guardrails") for bucket in buckets if "guardrails" in bucket), None)
+        if name not in _str_collection(requested):
+            return
+        metadata_bucket: Final = cast("dict[str, object]", get_or_create_metadata_bucket(data)[1])  # cast-ok: str keys
+        applied: Final = metadata_bucket.get("applied_guardrails")
+        if not isinstance(applied, list):
+            metadata_bucket["applied_guardrails"] = [name]
+        elif name not in applied:
+            cast("list[object]", applied).append(name)  # cast-ok: entries are only compared with names
 
     @classmethod
     def uses_apply_guardrail_interface(cls) -> bool:
@@ -922,12 +976,15 @@ class CustomGuardrail(CustomLogger):
             target: Final = self._deployment_hook_target()
             if target is not self:
                 kwargs["guardrail_to_apply"] = self
-            result: Final = await target.async_pre_call_hook(
-                user_api_key_dict=_user_api_key_auth_from_request(kwargs),
-                cache=dc,
-                data=kwargs,
-                call_type="completion" if call_type == CallTypes.completion else "acompletion",
-            )
+            try:
+                result: Final = await target.async_pre_call_hook(
+                    user_api_key_dict=_user_api_key_auth_from_request(kwargs),
+                    cache=dc,
+                    data=kwargs,
+                    call_type="completion" if call_type == CallTypes.completion else "acompletion",
+                )
+            finally:
+                self._record_deployment_hook_run(kwargs)
 
             if result is not None and isinstance(result, dict):
                 result_messages: Final = result.get("messages")
@@ -1011,6 +1068,9 @@ class CustomGuardrail(CustomLogger):
         finally:
             if target is not self:
                 request_data.pop("guardrail_to_apply", None)
+            self._record_deployment_hook_run(
+                cast("dict[str, object]", request_data)  # cast-ok: proxy request payloads are str-keyed
+            )
 
         if not self._is_valid_response_type(result):
             return None
