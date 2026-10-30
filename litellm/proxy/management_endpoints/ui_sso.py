@@ -1317,9 +1317,6 @@ def generic_response_convertor(
     team_id_to_upsert: Final = (
         upsert_candidate if isinstance(upsert_candidate, str) and upsert_candidate.strip() else None
     )
-    team_ids_with_upsert: Final = (
-        all_teams if team_id_to_upsert is None or team_id_to_upsert in all_teams else [*all_teams, team_id_to_upsert]
-    )
 
     # Determine user role based on role_mappings if available
     # Only apply role_mappings for GENERIC SSO provider
@@ -1387,7 +1384,7 @@ def generic_response_convertor(
         first_name=get_nested_value(response, generic_user_first_name_attribute_name),
         last_name=get_nested_value(response, generic_user_last_name_attribute_name),
         provider=get_nested_value(response, generic_provider_attribute_name),
-        team_ids=team_ids_with_upsert,
+        team_ids=all_teams,
         team_id_to_upsert=team_id_to_upsert,
         user_role=user_role,
         extra_fields=extra_fields,
@@ -1935,11 +1932,13 @@ async def add_missing_team_member(
     """
     - Get missing teams (diff b/w user_info.team_ids and sso_teams)
     - Drop the IdP groups that are not teams with one lookup, since group claims often carry many of them
-    - Create the ``team_id_to_upsert`` team when it is missing (``team_id_upsert``), the way the API JWT path does
+    - Join the ``team_id_to_upsert`` team too, creating it when it is missing (``team_id_upsert``), the way the API JWT path does;
+      it stays out of ``result.team_ids`` so restricted_sso_group and the access-token group fallback see only the claimed groups
     - Add missing user to missing teams, one at a time in sso_teams order, so user.teams keeps the claim's order
     """
     held_teams: Final = frozenset(user_info.teams or ())
-    missing_teams: Final = tuple(team_id for team_id in dict.fromkeys(sso_teams) if team_id not in held_teams)
+    claimed_teams: Final = sso_teams if team_id_to_upsert is None else (*sso_teams, team_id_to_upsert)
+    missing_teams: Final = tuple(team_id for team_id in dict.fromkeys(claimed_teams) if team_id not in held_teams)
     if not missing_teams:
         return
     existing: Final = await existing_team_ids(missing_teams)

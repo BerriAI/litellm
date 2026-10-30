@@ -11228,7 +11228,7 @@ def test_generic_sso_login_upserts_only_the_team_id_jwt_field_claim(
     assert (result.team_ids, result.team_id_to_upsert) == (expected_team_ids, expected_upsert)
 
 
-def test_generic_sso_login_upserts_the_team_id_jwt_field_team_when_db_team_mappings_are_set() -> None:
+def test_generic_sso_login_marks_the_team_id_jwt_field_team_for_upsert_without_adding_it_to_team_ids() -> None:
     from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
 
     result: Final = generic_response_convertor(
@@ -11237,7 +11237,40 @@ def test_generic_sso_login_upserts_the_team_id_jwt_field_team_when_db_team_mappi
         team_mappings=TeamMappings(team_ids_jwt_field="groups"),
     )
 
-    assert (result.team_ids, result.team_id_to_upsert) == (["g1", "finance"], "finance")
+    assert (result.team_ids, result.team_id_to_upsert) == (["g1"], "finance")
+
+
+def test_generic_sso_login_keeps_team_ids_empty_for_a_dept_only_user_so_the_access_token_group_fallback_runs() -> None:
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+    result: Final = generic_response_convertor(
+        response={"preferred_username": "alice", "email": "alice@example.com", "dept": "d1"},
+        jwt_handler=_upsert_jwt_handler(team_id_jwt_field="dept", team_id_upsert=True),
+        team_mappings=TeamMappings(team_ids_jwt_field="groups"),
+    )
+
+    assert (result.team_ids, result.team_id_to_upsert) == ([], "d1")
+
+
+def test_restricted_sso_group_still_rejects_a_user_whose_only_team_is_the_upserted_dept() -> None:
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler, generic_response_convertor
+
+    response: Final = {"preferred_username": "alice", "email": "alice@example.com", "dept": "X", "groups": []}
+    result: Final = generic_response_convertor(
+        response=response,
+        jwt_handler=_upsert_jwt_handler(team_id_jwt_field="dept", team_id_upsert=True),
+        team_mappings=TeamMappings(team_ids_jwt_field="groups"),
+    )
+
+    with pytest.raises(ProxyException) as denied:
+        SSOAuthenticationHandler.verify_user_in_restricted_sso_group(
+            general_settings={"ui_access_mode": {"type": "restricted_sso_group", "restricted_sso_group": "X"}},
+            result=result,
+            received_response=response,
+        )
+
+    assert denied.value.code == "403"
 
 
 def _recording_team_calls(
@@ -11257,7 +11290,7 @@ async def _only_group_teams_exist(team_ids: Sequence[str]) -> frozenset[str] | N
 
 
 @pytest.mark.asyncio
-async def test_sso_login_creates_only_the_upsert_team_and_does_so_before_joining_it() -> None:
+async def test_sso_login_joins_the_upsert_team_from_team_id_to_upsert_and_creates_it_before_the_join() -> None:
     from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
 
     events: Final[list[tuple[str, str]]] = []  # mutable-ok: records call order across awaited tasks
@@ -11265,18 +11298,18 @@ async def test_sso_login_creates_only_the_upsert_team_and_does_so_before_joining
 
     await add_missing_team_member(
         NewUserResponse(user_id="alice", key="sk-x", teams=None),
-        ["g1", "finance", "g2"],
+        ["g1", "g2"],
         add_team_member=add,
         existing_team_ids=_only_group_teams_exist,
         team_id_to_upsert="finance",
         create_team=create,
     )
 
-    assert events == [("join", "g1"), ("create", "finance"), ("join", "finance"), ("join", "g2")]
+    assert events == [("join", "g1"), ("join", "g2"), ("create", "finance"), ("join", "finance")]
 
 
 @pytest.mark.asyncio
-async def test_sso_login_skips_the_missing_team_id_jwt_field_team_when_team_id_upsert_is_off() -> None:
+async def test_sso_login_joins_only_the_claimed_groups_when_team_id_upsert_is_off() -> None:
     from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
 
     events: Final[list[tuple[str, str]]] = []  # mutable-ok: records call order across awaited tasks
@@ -11284,7 +11317,7 @@ async def test_sso_login_skips_the_missing_team_id_jwt_field_team_when_team_id_u
 
     await add_missing_team_member(
         NewUserResponse(user_id="alice", key="sk-x", teams=None),
-        ["g1", "finance", "g2"],
+        ["g1", "g2"],
         add_team_member=add,
         existing_team_ids=_only_group_teams_exist,
         create_team=create,
