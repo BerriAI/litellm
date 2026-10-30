@@ -8723,11 +8723,13 @@ class AvailableModelsCache(InMemoryCache):
 
         cache_key: Final = self._get_cache_key(custom_llm_provider, litellm_params)
 
-        result: Final = cast(list[str] | None, self.get_cache(cache_key))
+        result: Final = self._cached(cache_key)
 
-        if result is not None:
-            return copy.deepcopy(result)
-        return result
+        if isinstance(result, Sequence):
+            return list(result)
+        if self._cached(_failed_listing_key(cache_key)) is not None:
+            return []
+        return None
 
     def set_cached_model_info(
         self,
@@ -8737,11 +8739,45 @@ class AvailableModelsCache(InMemoryCache):
     ):
         """Set cached model info"""
         cache_key: Final = self._get_cache_key(custom_llm_provider, litellm_params)
-        self.set_cache(cache_key, copy.deepcopy(available_models))
+        self._store(cache_key, copy.deepcopy(available_models))
+
+    def set_failed_model_listing(
+        self, custom_llm_provider: str, litellm_params: LiteLLM_Params | None, ttl_seconds: float
+    ) -> None:
+        cache_key: Final = self._get_cache_key(custom_llm_provider, litellm_params)
+        self._store(_failed_listing_key(cache_key), True, ttl=ttl_seconds)
+
+    def listing_lock(self, custom_llm_provider: str, litellm_params: LiteLLM_Params | None) -> threading.RLock:
+        return _provider_listing_lock(self._get_cache_key(custom_llm_provider, litellm_params))
+
+    def _cached(self, key: str) -> Sequence[str] | bool | None:
+        return cast(Sequence[str] | bool | None, self.get_cache(key))
+
+    def _store(self, key: str, value: object, ttl: float | None = None) -> None:
+        self.set_cache(key, value, ttl=ttl)
+
+
+def _failed_listing_key(cache_key: str) -> str:
+    return f"{cache_key}:failed"
+
+
+_PROVIDER_LISTING_LOCK_GUARD: Final = threading.Lock()
+
+
+@lru_cache(maxsize=1024)
+def _cached_provider_listing_lock(cache_key: str) -> threading.RLock:
+    return threading.RLock()
+
+
+def _provider_listing_lock(cache_key: str) -> threading.RLock:
+    with _PROVIDER_LISTING_LOCK_GUARD:
+        return _cached_provider_listing_lock(cache_key)
 
 
 # Global cache instance
 _model_cache: Final = AvailableModelsCache()
+
+_FAILED_PROVIDER_LISTING_TTL_SECONDS: Final = 30
 
 
 def _infer_valid_provider_from_env_vars(
@@ -8790,20 +8826,27 @@ def _get_valid_models_from_provider_api(
     custom_llm_provider: str,
     litellm_params: LiteLLM_Params | None = None,
 ) -> list[str]:
-    try:
-        cached_result: Final = _model_cache.get_cached_model_info(custom_llm_provider, litellm_params)
+    with _model_cache.listing_lock(custom_llm_provider, litellm_params):
+        try:
+            cached_result: Final = _model_cache.get_cached_model_info(custom_llm_provider, litellm_params)
 
-        if cached_result is not None:
-            return cached_result
-        models: Final = provider_config.discover_models(
-            litellm_params=_provider_listing_params(custom_llm_provider, litellm_params)
-        )
+            if cached_result is not None:
+                return cached_result
+            models: Final = provider_config.discover_models(
+                litellm_params=_provider_listing_params(custom_llm_provider, litellm_params)
+            )
 
-        _model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
-        return models
-    except Exception as e:
-        verbose_logger.warning("Error getting valid models: %s", e)
-        return []
+            _model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
+            return models
+        except httpx.TimeoutException as e:
+            verbose_logger.warning("Error getting valid models: %s", e)
+            _model_cache.set_failed_model_listing(
+                custom_llm_provider, litellm_params, ttl_seconds=_FAILED_PROVIDER_LISTING_TTL_SECONDS
+            )
+            return []
+        except Exception as e:
+            verbose_logger.warning("Error getting valid models: %s", e)
+            return []
 
 
 def get_valid_models(
@@ -10464,6 +10507,10 @@ class ProviderConfigManager:
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 
             return AzureFoundryModelInfo(model=model)
+        elif LlmProviders.OPENROUTER == provider:
+            from litellm.llms.openrouter.common_utils import OpenRouterModelInfo
+
+            return OpenRouterModelInfo()
         return None
 
     @staticmethod

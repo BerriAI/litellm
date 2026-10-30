@@ -279,7 +279,9 @@ class PatternMatchRouter:
             PatternMatchRouter.set_deployment_model_name(
                 matched_pattern=pattern_match, litellm_deployment_litellm_model=deployment["litellm_params"]["model"]
             )
-            for deployment in self.patterns[pattern]
+            for deployment in self.patterns.get(  # pyright: ignore[reportUnknownMemberType]  # untyped deployment dicts
+                pattern, ()
+            )
         )
 
 
