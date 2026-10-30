@@ -52,6 +52,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     set_callbacks,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.thread_pool_executor import BoundedLoggingThreadPoolExecutor
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.cache_control_check import PROXY_CacheControlCheck
@@ -8549,6 +8550,86 @@ async def test_sync_failure_log_is_redacted_when_the_mask_outlasts_its_time_boun
 
     assert sync_logged == [_REDACTED_LOG]
     assert recorder.logged == [(_REDACTED_LOG, _REDACTED_LOG)]
+
+
+@pytest.mark.usefixtures("no_global_callbacks")
+def test_sync_failure_is_logged_redacted_when_the_logging_executor_drops_the_mask() -> None:
+    recorder: Final = _FailureLogRecorder()
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o-mini",
+        messages=copy.deepcopy(_RAW_LOG),
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="full-executor-failure",
+        function_id="full-executor-failure",
+        dynamic_failure_callbacks=[_NameMaskingGuardrail(), recorder],
+    )
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+
+    logging_obj.mask_failure_log_request(
+        mask_executor=BoundedLoggingThreadPoolExecutor(max_workers=1, max_pending_tasks=0)
+    )
+    logging_obj.failure_handler(litellm.ServiceUnavailableError("503", "openai", "gpt-4o-mini"), "tb")
+
+    assert recorder.logged == [(_REDACTED_LOG, _REDACTED_LOG)]
+
+
+class _ProxyRequestRecorder(_FailureLogRecorder):
+    def __init__(self) -> None:
+        super().__init__()
+        self.request_copies: list[tuple[object, object]] = []
+
+    def _record(self, kwargs: dict[str, object]) -> None:
+        super()._record(kwargs)
+        litellm_params: Final = cast(dict[str, object], kwargs["litellm_params"])
+        self.request_copies.append(
+            copy.deepcopy((kwargs["optional_params"], litellm_params["proxy_server_request"]))
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_global_callbacks")
+@pytest.mark.parametrize("sync", [True, False])
+@pytest.mark.parametrize(
+    ("guardrail_type", "logged_messages"),
+    [(_NameMaskingGuardrail, _MASKED_LOG), (_RaisingMaskingGuardrail, _REDACTED_LOG)],
+)
+async def test_failure_log_masks_the_prompt_copies_a_proxy_rejection_logs(
+    sync: bool, guardrail_type: type[_NameMaskingGuardrail], logged_messages: list[dict[str, str]]
+) -> None:
+    messages: Final = copy.deepcopy(_RAW_LOG)
+    guardrail: Final = guardrail_type()
+    recorder: Final = _ProxyRequestRecorder()
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o-mini",
+        messages=messages,
+        stream=False,
+        call_type="completion" if sync else "acompletion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="proxy-rejection-copies",
+        function_id="proxy-rejection-copies",
+        dynamic_failure_callbacks=[guardrail, recorder],
+        dynamic_async_failure_callbacks=[guardrail, recorder],
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={"metadata": {}, "proxy_server_request": {"url": "/chat/completions", "body": {"messages": messages}}},
+        optional_params={"messages": messages},
+    )
+    logging_obj.model_call_details["input"] = messages
+    error: Final = litellm.RateLimitError("429", "openai", "gpt-4o-mini")
+
+    if sync:
+        await asyncio.to_thread(logging_obj.failure_handler, error, "tb")
+    else:
+        await logging_obj.async_failure_handler(error, "tb")
+
+    assert len(recorder.request_copies) == 1
+    optional_params, proxy_server_request = recorder.request_copies[0]
+    assert cast(dict[str, object], optional_params)["messages"] == logged_messages
+    assert _RAW_PROMPT not in str(proxy_server_request)
+    assert "/chat/completions" in str(proxy_server_request)
+    assert messages == _RAW_LOG
 
 
 @pytest.mark.asyncio

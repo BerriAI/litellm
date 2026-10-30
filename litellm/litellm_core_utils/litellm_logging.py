@@ -6,6 +6,7 @@ import concurrent.futures
 import copy
 import datetime
 import functools
+import itertools
 import json
 import math
 import os
@@ -573,8 +574,52 @@ _REDACTED_RESULT: Final = TypeAdapter(object)
 _ORPHANED_FAILURE_LOG_TASKS: Final[set["asyncio.Future[None]"]] = set()  # mutable-ok: keeps orphaned tasks alive
 
 
-def _failure_log_hook_kwargs(details: Mapping[str, Any]) -> dict[str, object]:  # mutable-ok: hooks mask in place
+_ABSENT: Final = object()
+_LOGGED_PROMPT_COPY_PATHS: Final = (
+    ("input",),
+    ("optional_params", "messages"),
+    ("litellm_params", "proxy_server_request", "body", "messages"),
+)
+
+
+def _failure_log_hook_kwargs(details: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: hooks mask in place
     return {**details, "messages": copy.deepcopy(details.get("messages"))}
+
+
+def _logged_field(container: object, key: str) -> object:
+    if not isinstance(container, Mapping):
+        return _ABSENT
+    return cast(Mapping[str, object], container).get(key, _ABSENT)  # cast-ok: logged request dicts are str-keyed JSON
+
+
+def _with_field(inner: object, step: tuple[object, str]) -> object:
+    container, key = step
+    return {**cast(Mapping[str, object], container), key: inner}  # cast-ok: containers above a found copy are Mappings
+
+
+def _with_prompt_copy_replaced(
+    details: Mapping[str, object], path: Sequence[str], raw: object, replacement: object
+) -> Mapping[str, object]:
+    containers: Final = tuple(itertools.accumulate(path, _logged_field, initial=details))
+    if containers[-1] is not raw:
+        return details
+    rebuilt: Final = functools.reduce(_with_field, reversed(tuple(zip(containers, path))), replacement)
+    return cast(Mapping[str, object], rebuilt)  # cast-ok: the outermost rebuilt container is details
+
+
+def _with_prompt_copies_replaced(
+    details: Mapping[str, object], raw: object
+) -> dict[str, object]:  # mutable-ok: becomes the Logging object's model_call_details
+    if raw is None:
+        return dict(details)
+    replacement: Final = details.get("messages")
+    return dict(
+        functools.reduce(
+            lambda fields, path: _with_prompt_copy_replaced(fields, path, raw, replacement),
+            _LOGGED_PROMPT_COPY_PATHS,
+            details,
+        )
+    )
 
 
 def _keep_alive_until_done(task: "asyncio.Future[None]") -> None:
@@ -4210,7 +4255,9 @@ class Logging(LiteLLMLoggingBaseClass):
         return True
 
     def _redact_failure_log_request(self) -> None:
-        self.model_call_details = {**self.model_call_details, **redacted_request_entries(self.model_call_details)}
+        self.model_call_details = _with_prompt_copies_replaced(
+            {**self.model_call_details, **redacted_request_entries(self.model_call_details)}, self._unmasked_messages
+        )
 
     def redact_failure_log_request(self) -> None:
         masks_this_request: Final = any(
@@ -4255,6 +4302,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 self._report_failure_log_mask_error(guardrail)
                 self._redact_failure_log_request()
                 return
+        self.model_call_details = _with_prompt_copies_replaced(self.model_call_details, self._unmasked_messages)
 
     async def async_mask_failure_log_request(
         self,
@@ -4277,13 +4325,13 @@ class Logging(LiteLLMLoggingBaseClass):
                 mask.add_done_callback(lambda _: _keep_alive_until_done(asyncio.ensure_future(on_cancelled_async())))
             raise
 
-    def mask_failure_log_request(self) -> None:
+    def mask_failure_log_request(self, mask_executor: concurrent.futures.Executor = executor) -> None:
         if is_event_loop_running() or not self._claim_failure_log_mask():
             return
         maskers: Final = self._failure_log_maskers()
         if not maskers:
             return
-        masking: Final = executor.submit(
+        masking: Final = mask_executor.submit(
             functools.reduce, self._sync_failure_log_mask_step, maskers, self.model_call_details
         )
         try:
@@ -4291,14 +4339,17 @@ class Logging(LiteLLMLoggingBaseClass):
         except concurrent.futures.TimeoutError:
             self._redact_failure_log_request_after_timeout()
             return
+        except concurrent.futures.CancelledError:
+            self._redact_failure_log_request()
+            return
         if masked is None:
             self._redact_failure_log_request()
             return
-        self.model_call_details = dict(masked)
+        self.model_call_details = _with_prompt_copies_replaced(masked, self._unmasked_messages)
 
     def _sync_failure_log_mask_step(
-        self, details: Mapping[str, Any] | None, guardrail: CustomGuardrail
-    ) -> Mapping[str, Any] | None:
+        self, details: Mapping[str, object] | None, guardrail: CustomGuardrail
+    ) -> Mapping[str, object] | None:
         if details is None or not _runs_on_logging_only(guardrail, details):
             return details
         try:
