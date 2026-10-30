@@ -1178,6 +1178,64 @@ def test_azure_ai_keeps_parts_for_a_custom_deployment_name_whose_base_model_read
     assert request["messages"][0]["content"] == [breakpoint_part]
 
 
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        {"base_model": "azure/cost-tracking-row"},
+        {"base_model": "azure/cost-tracking-row", "model_info": {"id": "astra-deployment-id"}},
+    ],
+)
+def test_azure_ai_falls_back_to_the_model_name_when_the_base_model_row_does_not_read_breakpoints(
+    _local_model_cost_map, litellm_params: dict[str, object]
+):
+    breakpoint_part: Final = {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}}
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra",
+        messages=[{"role": "system", "content": [breakpoint_part]}],
+        optional_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == [breakpoint_part]
+
+
+@pytest.mark.parametrize(
+    "sent_marker, litellm_params, wire_part",
+    [
+        (
+            {"mode": "explicit", "ttl": "30m"},
+            {"drop_params": True},
+            {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}},
+        ),
+        ({"type": "ephemeral"}, {"drop_params": True}, {"type": "text", "text": "stable"}),
+        (
+            {"mode": "explicit", "ttl": "30m"},
+            {},
+            {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}},
+        ),
+    ],
+)
+def test_azure_ai_reshapes_breakpoints_for_foundry_only_under_drop_params(
+    _local_model_cost_map,
+    sent_marker: dict[str, object],
+    litellm_params: dict[str, object],
+    wire_part: dict[str, object],
+):
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "stable", "prompt_cache_breakpoint": sent_marker}]}
+        ],
+        optional_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == [wire_part]
+
+
 def test_azure_ai_reference_only_tool_result_is_sent_as_empty_text():
     messages: Final = [
         {"role": "user", "content": "load the WebFetch tool"},

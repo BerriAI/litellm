@@ -17,6 +17,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_tool_reference_parts_from_tool_messages,
     filter_value_from_dict,
     is_pdf_file_part,
+    prompt_cache_breakpoint_for_wire,
+    with_prompt_cache_breakpoint,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
@@ -29,7 +31,7 @@ from litellm.llms.openai.common_utils import drop_params_from_unprocessable_enti
 from litellm.llms.openai.openai import OpenAIChatCompletionResponseIterator, OpenAIConfig
 from litellm.llms.xai.chat.transformation import XAIChatConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, PromptCacheBreakpoint
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse, ModelResponseStream, ProviderField
 from litellm.utils import add_path_to_api_base, supports_tool_choice
@@ -85,19 +87,49 @@ def _with_only_text_parts(message: AllMessageValues) -> AllMessageValues:
     return cast(AllMessageValues, text_only)  # cast-ok: the same message, text parts only
 
 
-_DEPLOYMENT_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_FIELDS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _foundry_breakpoint(marker: object) -> PromptCacheBreakpoint | None:
+    if prompt_cache_breakpoint_for_wire(marker, drop_params=True) is None:
+        return None
+    return PromptCacheBreakpoint(mode="explicit")
+
+
+def _part_with_foundry_breakpoint(part: object) -> object:
+    if not isinstance(part, Mapping):
+        return part
+    fields: Final = _FIELDS.validate_python(part)
+    if "prompt_cache_breakpoint" not in fields:
+        return fields
+    unmarked: Final = {key: value for key, value in fields.items() if key != "prompt_cache_breakpoint"}
+    return with_prompt_cache_breakpoint(unmarked, _foundry_breakpoint(fields["prompt_cache_breakpoint"]))
+
+
+def _with_breakpoints_for_foundry(message: AllMessageValues, drop_params: bool) -> AllMessageValues:
+    renamed: Final = AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(_with_only_text_parts(message))
+    parts: Final = content_parts(renamed) if drop_params else ()
+    if not parts:
+        return renamed
+    foundry_message: Final = {**renamed, "content": [_part_with_foundry_breakpoint(part) for part in parts]}
+    return cast(AllMessageValues, foundry_message)  # cast-ok: the same message, its breakpoints in Foundry's shape
 
 
 def _deployment_reads_breakpoints(model: str, litellm_params: Mapping[str, object]) -> bool:
     base_model: Final = litellm_params.get("base_model")
-    named_model: Final = base_model if isinstance(base_model, str) and base_model else model
+    named_models: Final = (base_model, model) if isinstance(base_model, str) and base_model else (model,)
     model_info: Final = litellm_params.get("model_info")
     if not isinstance(model_info, Mapping):
-        return AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(named_model, "azure_ai")
-    deployment_flag: Final = _DEPLOYMENT_PARAMS.validate_python(model_info).get("supports_prompt_cache_breakpoint")
+        return any(
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(name, "azure_ai") for name in named_models
+        )
+    deployment_flag: Final = _FIELDS.validate_python(model_info).get("supports_prompt_cache_breakpoint")
     if isinstance(deployment_flag, bool):
         return deployment_flag
-    return AnthropicCacheControlHook.catalog_targets_openai_prompt_cache_breakpoint(named_model, "azure_ai")
+    return any(
+        AnthropicCacheControlHook.catalog_targets_openai_prompt_cache_breakpoint(name, "azure_ai")
+        for name in named_models
+    )
 
 
 class AzureAIChatCompletionResponseIterator(OpenAIChatCompletionResponseIterator):
@@ -290,6 +322,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         messages: list[AllMessageValues],
         model: str,
         reads_breakpoints: bool | None = None,
+        drop_params: bool = False,
     ) -> list:
         """
         - Azure AI Studio doesn't support content as a list. This handles:
@@ -306,7 +339,8 @@ class AzureAIStudioConfig(OpenAIConfig):
                keep their text parts, with each Anthropic `cache_control` mark renamed to a breakpoint the
                way the openai provider renames it. Every other part is dropped, exactly as the string
                conversion drops it, before the marks are renamed, so a message-level mark lands on the
-               last text part.
+               last text part. Under drop_params each breakpoint goes out as `{"mode": "explicit"}`, the only
+               shape Foundry takes, and a malformed one is dropped.
             3. If message contains an image, audio, or PDF file part, send as is (user-intended)
 
         Operates on a deep copy so the caller's messages keep their thinking blocks
@@ -319,10 +353,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         )
         copied_messages: Final = copy.deepcopy(drop_tool_reference_parts_from_tool_messages(messages))
         stripped_messages: Final = (
-            [
-                AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(_with_only_text_parts(message))
-                for message in copied_messages
-            ]
+            [_with_breakpoints_for_foundry(message, drop_params) for message in copied_messages]
             if deployment_reads_breakpoints
             else copied_messages
         )
@@ -397,7 +428,8 @@ class AzureAIStudioConfig(OpenAIConfig):
             "messages": self._transform_messages(
                 messages,
                 model,
-                _deployment_reads_breakpoints(model, _DEPLOYMENT_PARAMS.validate_python(litellm_params)),
+                _deployment_reads_breakpoints(model, _FIELDS.validate_python(litellm_params)),
+                bool(litellm_params.get("drop_params") or litellm.drop_params),
             ),
             **optional_params,
         }
