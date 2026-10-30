@@ -465,3 +465,18 @@ def test_router_sees_the_image_in_a_decision_input_routed_by_its_proxy_route() -
     )
 
     assert structured is not None and request_contains_image_content(structured)
+
+
+def test_decisions_handler_reads_a_responses_request_like_the_responses_handler() -> None:
+    request: Final = {
+        "input": [{"role": "user", "content": "Summarize the report"}],
+        "instructions": "Answer in one sentence",
+    }
+
+    decisions_messages: Final = DecisionsHandler().get_structured_messages(request)
+
+    assert decisions_messages == get_guardrail_translation_mapping(CallTypes.responses)().get_structured_messages(
+        request
+    )
+    assert decisions_messages is not None
+    assert {"role": "system", "content": "Answer in one sentence"} in decisions_messages

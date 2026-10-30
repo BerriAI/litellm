@@ -365,7 +365,7 @@ class DecisionsHandler(_DecisionAnswersTranslation):
         self,
         data: dict[str, object],  # mutable-ok: BaseTranslation hands over the request dict
     ) -> "list[AllMessageValues] | None":  # mutable-ok: overrides BaseTranslation.get_structured_messages
-        return OpenAIResponsesHandler().get_structured_messages({"input": data.get("input")})
+        return OpenAIResponsesHandler().get_structured_messages(data)
 
     async def process_input_messages(
         self,
