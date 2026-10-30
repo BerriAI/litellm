@@ -250,7 +250,11 @@ from litellm.proxy.hooks.sensitive_data_routing import (  # noqa: F401, RUF100  
     PROXY_SensitiveDataRoutingHandler,
     _PROXY_SensitiveDataRoutingHandler,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
 )
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_guardrails_from_auth_metadata
+from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
+    add_guardrails_from_auth_metadata,
+    normalized_metadata_slot,
+)
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
 from litellm.proxy.policy_engine.pipeline_executor import (
     PipelineExecutor,
@@ -3973,9 +3977,7 @@ class ProxyLogging:
             )
             request_data["litellm_logging_obj"] = litellm_logging_obj  # rebind-ok: lifted then popped by the caller
             request_data.update({REJECTED_BEFORE_REQUEST_SETUP_KEY: REJECTED_BEFORE_REQUEST_SETUP})
-            if "metadata" not in request_data:
-                request_data["metadata"] = {}
-            request_data["metadata"].update(user_api_key_logged_metadata)
+            normalized_metadata_slot(request_data, "metadata").update(user_api_key_logged_metadata)
 
         if litellm_logging_obj is not None:
             ## UPDATE LOGGING INPUT
