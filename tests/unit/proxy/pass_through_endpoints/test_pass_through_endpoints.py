@@ -77,6 +77,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
     EndpointType,
     PassthroughStandardLoggingPayload,
+    WebSocketSessionUsage,
 )
 from tests._master_key import MASTER_KEY
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -7734,6 +7735,102 @@ async def test_websocket_passthrough_sends_deepgram_audio_bytes_and_control_text
     assert [call.args[0] for call in upstream_ws.send.await_args_list] == [audio_chunk, close_stream]
     assert isinstance(upstream_ws.send.await_args_list[0].args[0], bytes)
     upstream_ws.close.assert_awaited_once()
+
+
+@dataclass(frozen=True, slots=True)
+class _LengthMeter:
+    rate: float
+
+    def measure(self, client_text: str) -> int:
+        return len(client_text)
+
+    def price(self, total: int) -> WebSocketSessionUsage:
+        return WebSocketSessionUsage(model="voice-1", custom_llm_provider="tts-provider", response_cost=total * self.rate)
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_logs_the_meters_price_for_the_client_text_it_delivered():
+    """Text frames reach the upstream unchanged and are measured, binary frames are not, and the session is logged at
+    the model, provider and cost the meter prices for the total."""
+    frames = ("hello", b"\x00\x01binary", "world!")
+    upstream_ws = RecordingUpstreamWebSocket()
+    websocket = _client_websocket(
+        AsyncMock(
+            side_effect=[
+                *(
+                    {"type": "websocket.receive", "bytes": frame}
+                    if isinstance(frame, bytes)
+                    else {"type": "websocket.receive", "text": frame}
+                    for frame in frames
+                ),
+                {"type": "websocket.disconnect"},
+            ]
+        )
+    )
+
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws),
+        patch(  # test-quality-ok: pass_through_endpoint_logging is a module global read inside websocket_passthrough_request; there is no injection seam
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints."
+            "pass_through_endpoint_logging.pass_through_async_success_handler",
+            new=AsyncMock(),
+        ) as success_handler,
+    ):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://upstream.example/v1/stream",
+            custom_headers={},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/provider/v1/stream",
+            accept_websocket=False,
+            meter=_LengthMeter(rate=0.5),
+        )
+
+    assert [call.args[0] for call in upstream_ws.send.await_args_list] == list(frames)
+    logging_obj = success_handler.call_args.kwargs["logging_obj"]
+    assert logging_obj.model == "voice-1"
+    assert logging_obj.model_call_details["model"] == "voice-1"
+    assert logging_obj.model_call_details["custom_llm_provider"] == "tts-provider"
+    assert logging_obj.model_call_details["response_cost"] == (len("hello") + len("world!")) * 0.5
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_meters_only_client_text_the_upstream_accepted():
+    upstream_ws = RecordingUpstreamWebSocket()
+    upstream_ws.send = AsyncMock(side_effect=[None, ConnectionError("upstream went away")])
+    websocket = _client_websocket(
+        AsyncMock(
+            side_effect=[
+                {"type": "websocket.receive", "text": "hello"},
+                {"type": "websocket.receive", "text": "never delivered"},
+                {"type": "websocket.disconnect"},
+            ]
+        )
+    )
+
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws),
+        patch(  # test-quality-ok: pass_through_endpoint_logging is a module global read inside websocket_passthrough_request; there is no injection seam
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints."
+            "pass_through_endpoint_logging.pass_through_async_success_handler",
+            new=AsyncMock(),
+        ) as success_handler,
+    ):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://upstream.example/v1/stream",
+            custom_headers={},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/provider/v1/stream",
+            accept_websocket=False,
+            meter=_LengthMeter(rate=0.5),
+        )
+
+    logging_obj = success_handler.call_args.kwargs["logging_obj"]
+    assert [call.args[0] for call in upstream_ws.send.await_args_list] == ["hello", "never delivered"]
+    assert logging_obj.model_call_details["response_cost"] == len("hello") * 0.5
 
 
 @pytest.mark.asyncio
