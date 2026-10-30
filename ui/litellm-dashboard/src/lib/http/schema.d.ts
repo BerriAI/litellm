@@ -7555,8 +7555,9 @@ export interface paths {
          *     ```
          *     else, the health checks will be run on models when /health is called.
          *
-         *     To skip deployments that set ``model_info.disable_background_health_check: true``
-         *     on ``GET /health`` as well as in the background loop, set
+         *     The background loop skips deployments that set ``model_info.disable_background_health_check: true``,
+         *     and image_generation, image_edit, and video_generation deployments unless they set it to ``false``,
+         *     since those probes generate billed media. To skip the same deployments on ``GET /health``, set
          *     ``general_settings.health_check_skip_disabled_background_models: true``.
          */
         get: operations["health_endpoint_health_get"];
@@ -30106,7 +30107,7 @@ export interface components {
             health_check_interval: number;
             /**
              * Health Check Skip Disabled Background Models
-             * @description When true, deployments with model_info.disable_background_health_check are skipped for on-demand GET /health as well as the background health loop.
+             * @description When true, deployments the background health loop skips (model_info.disable_background_health_check, which defaults to true for image_generation, image_edit, and video_generation deployments) are skipped for on-demand GET /health as well.
              * @default false
              */
             health_check_skip_disabled_background_models: boolean;

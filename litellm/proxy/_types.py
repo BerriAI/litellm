@@ -2694,8 +2694,9 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     health_check_skip_disabled_background_models: bool = Field(
         False,
         description=(
-            "When true, deployments with model_info.disable_background_health_check "
-            "are skipped for on-demand GET /health as well as the background health loop."
+            "When true, deployments the background health loop skips (model_info.disable_background_health_check, "
+            "which defaults to true for image_generation, image_edit, and video_generation deployments) "
+            "are skipped for on-demand GET /health as well."
         ),
     )
     background_health_check_model_groups: tuple[str, ...] | None = Field(

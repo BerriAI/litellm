@@ -1226,6 +1226,23 @@ def test_a_dependency_that_opted_out_of_health_checks_is_never_probed():
     assert [d["model_info"]["id"] for d in eligible] == ["router-1"]
 
 
+def test_health_skip_flag_also_skips_media_deployments_whose_mode_comes_from_the_cost_map():
+    """gemini/gemini-3-pro-image is mode image_generation in model_prices_and_context_window.json."""
+    image = {
+        "model_name": "image",
+        "litellm_params": {"model": "gemini/gemini-3-pro-image", "api_key": "sk-x"},
+        "model_info": {"id": "image-1"},
+    }
+    chat = {
+        "model_name": "chat",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"},
+        "model_info": {"id": "chat-1"},
+    }
+
+    assert hc_module._health_check_eligible([image, chat], skip_disabled=True) == (chat,)
+    assert hc_module._health_check_eligible([image, chat], skip_disabled=False) == (image, chat)
+
+
 def test_narrowing_by_an_id_that_matches_nothing_keeps_the_whole_list():
     """Pinned because the disabled-dependency fix moved this filter into its own helper."""
     deployments = [{"model_name": "a", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a-1"}}]

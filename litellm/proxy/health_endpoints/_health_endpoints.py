@@ -1238,8 +1238,9 @@ async def health_endpoint(
     ```
     else, the health checks will be run on models when /health is called.
 
-    To skip deployments that set ``model_info.disable_background_health_check: true``
-    on ``GET /health`` as well as in the background loop, set
+    The background loop skips deployments that set ``model_info.disable_background_health_check: true``,
+    and image_generation, image_edit, and video_generation deployments unless they set it to ``false``,
+    since those probes generate billed media. To skip the same deployments on ``GET /health``, set
     ``general_settings.health_check_skip_disabled_background_models: true``.
     """
     import time

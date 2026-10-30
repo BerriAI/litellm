@@ -652,6 +652,7 @@ from litellm.proxy.health_check import (
     health_check_filter_kwargs_from_general_settings,
     parse_background_health_check_model_groups,
     perform_health_check,
+    skips_background_health_check,
 )
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
 from litellm.proxy.health_endpoints.deployment_warning_endpoints import router as deployment_warning_router
@@ -4819,9 +4820,7 @@ async def _run_background_health_check():
         model_count_total = len(_llm_model_list)
 
         # filter out models that have disabled background health checks
-        _llm_model_list = [
-            m for m in _llm_model_list if not m.get("model_info", {}).get("disable_background_health_check", False)
-        ]
+        _llm_model_list = [m for m in _llm_model_list if not skips_background_health_check(m)]
         scoped_model_groups = (
             llm_router.settings().background_health_check_model_groups if llm_router is not None else None
         )

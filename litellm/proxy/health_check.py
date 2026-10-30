@@ -230,9 +230,9 @@ def health_check_filter_kwargs_from_general_settings(
     """
     Build kwargs for ``perform_health_check`` from ``general_settings``.
 
-    When ``health_check_skip_disabled_background_models`` is true, deployments with
-    ``model_info.disable_background_health_check`` are omitted from health runs
-    (including on-demand ``GET /health``), matching the background loop behavior.
+    When ``health_check_skip_disabled_background_models`` is true, deployments the
+    background loop skips are omitted from health runs (including on-demand
+    ``GET /health``).
     """
     g: Final = general_settings or {}
     return {
@@ -307,9 +307,21 @@ async def run_with_timeout(task, timeout):
         return {"error": "Timeout exceeded", "exception": timeout_exception}
 
 
-def _skips_health_checks(deployment: Mapping[str, object]) -> bool:
-    info: Final = deployment.get("model_info")
-    return bool(info.get("disable_background_health_check", False)) if isinstance(info, Mapping) else False
+_BILLED_MEDIA_GENERATION_MODES: Final = frozenset({"image_generation", "image_edit", "video_generation"})
+_STR_KEY_MAPPING: Final = TypeAdapter(Mapping[str, object])
+
+
+def _str_key_mapping(value: object) -> Mapping[str, object]:
+    return _STR_KEY_MAPPING.validate_python(value) if isinstance(value, Mapping) else MappingProxyType({})
+
+
+def skips_background_health_check(deployment: Mapping[str, object]) -> bool:
+    model_info: Final = _str_key_mapping(deployment.get("model_info"))
+    explicit: Final = model_info.get("disable_background_health_check")
+    if explicit is not None:
+        return bool(explicit)
+    litellm_params: Final = _str_key_mapping(deployment.get("litellm_params"))
+    return resolve_health_check_mode(model_info, litellm_params) in _BILLED_MEDIA_GENERATION_MODES
 
 
 def _health_check_eligible(
@@ -321,7 +333,7 @@ def _health_check_eligible(
     dependencies are drawn from alike, so an opted-out deployment cannot re-enter through a
     router that depends on it.
     """
-    return tuple(x for x in model_list if not (skip_disabled and _skips_health_checks(x)))
+    return tuple(x for x in model_list if not (skip_disabled and skips_background_health_check(x)))
 
 
 def _deployment_model(deployment: Mapping[str, object]) -> str | None:
@@ -970,9 +982,8 @@ async def perform_health_check(
 
     When ``health_check_skip_disabled_background_models`` is True (via
     ``general_settings.health_check_skip_disabled_background_models``), deployments
-    with ``model_info.disable_background_health_check: true`` are omitted from
-    this run (including targeted ``/health`` queries), consistent with the
-    background health loop.
+    the background health loop skips are omitted from this run (including targeted
+    ``/health`` queries).
 
     Returns:
         (bool): True if the health check passes, False otherwise.

@@ -772,3 +772,85 @@ async def test_run_background_health_check_probes_only_listed_model_groups(monke
         await _run_background_health_check()
 
     assert probed["ids"] == ["listed-1", "listed-2"]
+
+
+@pytest.mark.asyncio
+async def test_run_background_health_check_skips_billed_media_generation_unless_opted_in(monkeypatch):
+    monkeypatch.setattr(proxy_server, "health_check_interval", 60)
+    monkeypatch.setattr(proxy_server, "health_check_concurrency", 1)
+    monkeypatch.setattr(proxy_server, "health_check_details", True)
+    monkeypatch.setattr(proxy_server, "use_shared_health_check", False)
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "background_health_check_loop_active", False)
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_model_list",
+        [
+            {"model_name": "chat", "litellm_params": {"model": "openai/gpt-4o-mini"}, "model_info": {"id": "chat"}},
+            {
+                "model_name": "image",
+                "litellm_params": {"model": "gemini/gemini-3-pro-image"},
+                "model_info": {"id": "image", "mode": "image_generation"},
+            },
+            {
+                "model_name": "image-edit",
+                "litellm_params": {"model": "openai/gpt-image-1"},
+                "model_info": {"id": "image-edit", "mode": "image_edit"},
+            },
+            {
+                "model_name": "video",
+                "litellm_params": {"model": "openai/sora-2"},
+                "model_info": {"id": "video", "mode": "video_generation"},
+            },
+            {
+                "model_name": "speech",
+                "litellm_params": {"model": "openai/tts-1"},
+                "model_info": {"id": "speech", "mode": "audio_speech"},
+            },
+            {
+                "model_name": "image-opted-in",
+                "litellm_params": {"model": "gemini/gemini-3-pro-image"},
+                "model_info": {
+                    "id": "image-opted-in",
+                    "mode": "image_generation",
+                    "disable_background_health_check": False,
+                },
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        proxy_server,
+        "health_check_results",
+        {"healthy_endpoints": [], "unhealthy_endpoints": []},
+    )
+
+    probed = {}
+
+    async def _fake_direct(model_list, *_a, **_kw):
+        probed["ids"] = [m["model_info"]["id"] for m in model_list]
+        return ([], [], {})
+
+    monkeypatch.setattr(
+        proxy_server,
+        "_run_direct_health_check_with_instrumentation",
+        _fake_direct,
+    )
+    monkeypatch.setattr(proxy_server, "_schedule_background_health_check_db_save", lambda *a, **kw: None)
+    monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        proxy_server,
+        "health_check_filter_kwargs_from_general_settings",
+        lambda _gs: {},
+    )
+
+    async def _stop_sleep(_seconds):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(proxy_server.asyncio, "sleep", _stop_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _run_background_health_check()
+
+    assert probed["ids"] == ["chat", "speech", "image-opted-in"]
