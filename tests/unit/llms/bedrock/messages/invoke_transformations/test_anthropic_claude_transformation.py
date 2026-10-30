@@ -33,6 +33,7 @@ from litellm.llms.anthropic.messages.native.mid_conversation_system import (
     as_system_content_blocks,
 )
 from litellm.llms.bedrock.common_utils import (
+    BedrockError,
     ensure_bedrock_anthropic_messages_tool_names,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
@@ -4553,3 +4554,42 @@ async def test_bedrock_chat_fallback_to_anthropic_sends_the_tool_bedrock_cleaned
 
     (body,) = upstream.anthropic_bodies
     assert body["tools"] == [{"name": "get_weather", "input_schema": schema, **sent_extras}]
+
+
+_UNKNOWN_OPERATION_BODY: Final = {
+    "Output": {"__type": "com.amazon.coral.service#UnknownOperationException"},
+    "Version": "1.0",
+}
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("stream", "raised"),
+    [(False, litellm.BadRequestError), (True, BedrockError)],
+    ids=["non-stream", "stream"],
+)
+async def test_bedrock_messages_raise_a_400_when_bedrock_answers_200_with_an_unknown_operation_body(
+    stream: bool,
+    raised: type[litellm.BadRequestError] | type[BedrockError],
+) -> None:
+    bedrock: Final = ScriptedBedrockInvoke(replies=((200, _UNKNOWN_OPERATION_BODY),))
+
+    async def _call_and_drain() -> None:
+        response: Final = await litellm.anthropic_messages(
+            model="bedrock/invoke/anthropic/us.anthropic.claude-haiku-5-5",
+            messages=[{"role": "user", "content": "Say hi in three words"}],
+            max_tokens=20,
+            stream=stream,
+            aws_access_key_id="test-access-key",
+            aws_secret_access_key="test-secret-key",
+            aws_region_name="us-east-1",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock)),
+        )
+        if isinstance(response, AsyncIterator):
+            _ = [chunk async for chunk in response]
+
+    with pytest.raises(raised) as error:
+        await _call_and_drain()
+
+    assert error.value.status_code == 400
+    assert "UnknownOperationException" in str(error.value)

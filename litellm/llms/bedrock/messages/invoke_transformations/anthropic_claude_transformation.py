@@ -39,6 +39,8 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 from litellm.llms.bedrock.common_utils import (
     BedrockError,
     apply_bedrock_invoke_structured_output,
+    bedrock_error_in_success_body,
+    bedrock_event_stream_bytes,
     bedrock_supports_tool_search,
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
@@ -62,6 +64,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
 )
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.llms.bedrock import BedrockInvokeAnthropicMessagesRequest
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
@@ -868,6 +871,17 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         return anthropic_messages_request
 
+    def transform_anthropic_messages_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> AnthropicMessagesResponse:
+        success_body_error: Final = bedrock_error_in_success_body(raw_response)
+        if success_body_error is not None:
+            raise success_body_error
+        return super().transform_anthropic_messages_response(model, raw_response, logging_obj)
+
     def get_async_streaming_response_iterator(
         self,
         model: str,
@@ -879,7 +893,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             model=model,
         )
         completion_stream: Final = aws_decoder.aiter_bytes(
-            httpx_response.aiter_bytes(), response_headers=httpx_response.headers
+            bedrock_event_stream_bytes(httpx_response), response_headers=httpx_response.headers
         )
         # Convert decoded Bedrock events to Server-Sent Events expected by Anthropic clients.
         return self.bedrock_sse_wrapper(

@@ -10,7 +10,7 @@ import json
 import os
 import re
 import warnings
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
@@ -145,6 +145,22 @@ def bedrock_error_in_success_body(response: httpx.Response) -> BedrockError | No
         ),
         headers=response.headers,
     )
+
+
+def bedrock_answered_json(response: httpx.Response) -> bool:
+    return "application/json" in (response.headers.get("content-type") or "")
+
+
+async def _json_body_or_bedrock_error(response: httpx.Response) -> AsyncIterator[bytes]:
+    body: Final = await response.aread()
+    error: Final = bedrock_error_in_success_body(response)
+    if error is not None:
+        raise error
+    yield body
+
+
+def bedrock_event_stream_bytes(response: httpx.Response) -> AsyncIterator[bytes]:
+    return _json_body_or_bedrock_error(response) if bedrock_answered_json(response) else response.aiter_bytes()
 
 
 _BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (*AWS_AUTH_PARAM_KEYS, "aws_region_name")
