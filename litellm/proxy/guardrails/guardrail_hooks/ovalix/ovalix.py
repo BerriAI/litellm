@@ -523,36 +523,48 @@ class OvalixGuardrail(CustomGuardrail):
         target: CheckpointTarget,
         skip_indices: frozenset[int],
     ) -> list[str] | None:
-        original: Final = tuple(texts)
-        output: Final = list(texts)
-        count: Final = len(texts)
-        for reversed_index in range(count):
-            original_index = count - 1 - reversed_index
-            if original_index in skip_indices:
-                continue
-            is_newest = reversed_index == 0
-            content = texts[original_index]
-            try:
-                resp = await self._call_checkpoint(
-                    "TEXT", {"content": content}, checkpoint_id, actor, session_id, target
+        newest_first: Final = tuple(index for index in reversed(range(len(texts))) if index not in skip_indices)
+        checked: Final = MappingProxyType(
+            {
+                index: await self._check_text(
+                    texts[index], checkpoint_id, actor, session_id, target, is_newest=index == len(texts) - 1
                 )
-            except Exception as e:
-                verbose_proxy_logger.exception("Ovalix checkpoint call failed: %s", e)
-                raise GuardrailRaisedException(
-                    guardrail_name=self.guardrail_name,
-                    message=f"Ovalix guardrail error: {e}",
-                    should_wrap_with_default_message=False,
-                ) from e
-            action, corrected = self._verdict(resp)
-            if action == BLOCKED_ACTION_TYPE:
-                block_message = corrected or BLOCKED_BY_OVALIX_FALLBACK_MESSAGE
-                if is_newest:
-                    self._block_current_message(block_message)
-                output[original_index] = block_message
-                continue
-            if action in _MODIFY_ACTION_TYPES and corrected is not None and corrected != content:
-                output[original_index] = corrected
-        return output if tuple(output) != original else None
+                for index in newest_first
+            }
+        )
+        output: Final = [checked.get(index, text) for index, text in enumerate(texts)]
+        return output if output != list(texts) else None
+
+    async def _check_text(
+        self,
+        content: str,
+        checkpoint_id: str,
+        actor: str,
+        session_id: str,
+        target: CheckpointTarget,
+        is_newest: bool,
+    ) -> str:
+        """Return the text that replaces `content` after Ovalix checks it; a blocked newest text raises."""
+        try:
+            resp: Final = await self._call_checkpoint(
+                "TEXT", {"content": content}, checkpoint_id, actor, session_id, target
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception("Ovalix checkpoint call failed: %s", e)
+            raise GuardrailRaisedException(
+                guardrail_name=self.guardrail_name,
+                message=f"Ovalix guardrail error: {e}",
+                should_wrap_with_default_message=False,
+            ) from e
+        action, corrected = self._verdict(resp)
+        if action == BLOCKED_ACTION_TYPE:
+            block_message: Final = corrected or BLOCKED_BY_OVALIX_FALLBACK_MESSAGE
+            if is_newest:
+                self._block_current_message(block_message)
+            return block_message
+        if action in _MODIFY_ACTION_TYPES and corrected is not None:
+            return corrected
+        return content
 
     def _get_session_id_for_application(self, data: Mapping[str, object], application_id: str | None) -> str:
         actor_hash: Final = self._get_tracker_actor_id(data)

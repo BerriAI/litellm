@@ -6,8 +6,10 @@ it. The provider is a second owned peer. The proxy, Postgres and Redis run for r
 """
 
 import json
+import threading
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -34,6 +36,37 @@ REPLY: Final = "synthetic provider reply"
 PINNED: Final = "ovalix-pinned"
 DISCOVERY: Final = "ovalix-discovery"
 ENDPOINTS: Final = ("/v1/chat/completions", "/v1/messages", "/v1/responses")
+CHECKPOINT: Final = "/tracking/beta/checkpoint"
+OUTAGE_AFTER: Final = 6
+
+
+class _Outage:
+    """Takes the tracker double down once it has answered a set number of checkpoint calls."""
+
+    def __init__(self) -> None:
+        self._lock: Final = threading.Lock()
+        self._remaining: int | None = None
+
+    def arm(self, answered: int) -> None:
+        with self._lock:
+            self._remaining = answered
+
+    def clear(self) -> None:
+        with self._lock:
+            self._remaining = None
+
+    def admits(self, path: str) -> bool:
+        with self._lock:
+            if self._remaining is None:
+                return True
+            if self._remaining == 0:
+                return False
+            if path == CHECKPOINT:
+                self._remaining -= 1
+            return True
+
+
+OUTAGE: Final = _Outage()
 
 
 def _checkpoint_verdict(body: dict[str, object]) -> dict[str, object]:
@@ -52,6 +85,8 @@ def _tracker(request: Request) -> Reply:
     if request.headers.get("x-api-key") != API_KEY:
         return Reply(status=401, body=b'{"detail": "missing api key"}')
     path: Final = urlsplit(request.target).path
+    if not OUTAGE.admits(path):
+        return Reply(status=503, body=b'{"detail": "tracker unavailable"}')
     if path == "/tracking/beta/app_name_regex":
         return Reply(body=json.dumps({"regex": r"^\s*\[([^\]]+)\]"}).encode())
     body: Final = json.loads(request.body)
@@ -181,11 +216,9 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
             yield Rig(owned.gateway, tracker, provider, model, keys)
 
 
-def _send(
+def _post(
     rig: Rig, endpoint: str, guardrail: str, key: str, text: str, extra: dict[str, JsonValue] | None = None
 ) -> httpx.Response:
-    rig.tracker.drain()
-    rig.provider.drain()
     prompt: Final[dict[str, JsonValue]] = (
         {"input": text}
         if endpoint == "/v1/responses"
@@ -198,18 +231,29 @@ def _send(
     )
 
 
+def _send(
+    rig: Rig, endpoint: str, guardrail: str, key: str, text: str, extra: dict[str, JsonValue] | None = None
+) -> httpx.Response:
+    rig.tracker.drain()
+    rig.provider.drain()
+    return _post(rig, endpoint, guardrail, key, text, extra)
+
+
 def _checkpoint_actors(rig: Rig) -> list[object]:
     return [
         json.loads(request.body)["actor"]
         for request in rig.tracker.drain()
-        if urlsplit(request.target).path == "/tracking/beta/checkpoint"
+        if urlsplit(request.target).path == CHECKPOINT
     ]
 
 
+@pytest.mark.parametrize("stream", (False, True))
 @pytest.mark.parametrize("guardrail", (PINNED, DISCOVERY))
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
-def test_a_prompt_from_a_key_with_no_user_is_inspected(rig: Rig, endpoint: str, guardrail: str) -> None:
-    response: Final = _send(rig, endpoint, guardrail, rig.keys.no_user, f"Tell me about {KEYWORD} {uuid.uuid4()}")
+def test_a_prompt_from_a_key_with_no_user_is_inspected(rig: Rig, endpoint: str, guardrail: str, stream: bool) -> None:
+    response: Final = _send(
+        rig, endpoint, guardrail, rig.keys.no_user, f"Tell me about {KEYWORD} {uuid.uuid4()}", {"stream": stream}
+    )
 
     assert response.status_code == 400 and DENIAL in response.text, response.text
     assert rig.provider.drain() == ()
@@ -257,3 +301,53 @@ def test_the_actor_is_the_key_users_email_then_their_id(rig: Rig, guardrail: str
     by_email: Final = _send(rig, "/v1/chat/completions", guardrail, rig.keys.with_email, f"hello {uuid.uuid4()}")
     assert by_email.status_code == 200, by_email.text
     assert _checkpoint_actors(rig) == [rig.keys.email]
+
+
+def _burst(rig: Rig) -> tuple[httpx.Response, ...]:
+    plan: Final = [
+        (endpoint, guardrail, stream)
+        for endpoint in ENDPOINTS
+        for guardrail in (PINNED, DISCOVERY)
+        for stream in (False, True)
+        for _ in range(2)
+    ]
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        return tuple(
+            pool.map(
+                lambda cell: _post(
+                    rig,
+                    cell[0],
+                    cell[1],
+                    rig.keys.no_user,
+                    f"Tell me about {KEYWORD} {uuid.uuid4()}",
+                    {"stream": cell[2]},
+                ),
+                plan,
+            )
+        )
+
+
+def test_a_tracker_outage_mid_burst_fails_closed_and_recovers(rig: Rig) -> None:
+    rig.tracker.drain()
+    rig.provider.drain()
+    OUTAGE.arm(OUTAGE_AFTER)
+    try:
+        during: Final = _burst(rig)
+    finally:
+        OUTAGE.clear()
+
+    denied: Final = [response for response in during if response.status_code == 400 and DENIAL in response.text]
+    failed: Final = [response for response in during if response.status_code >= 400 and DENIAL not in response.text]
+    assert len(denied) == OUTAGE_AFTER, [response.text for response in during]
+    assert len(failed) == len(during) - OUTAGE_AFTER, [response.text for response in during]
+    assert all("Ovalix guardrail error" in response.text for response in failed), [response.text for response in failed]
+    assert rig.provider.drain() == ()
+    assert set(_checkpoint_actors(rig)) == {"unknown"}
+
+    after: Final = _burst(rig)
+
+    assert all(response.status_code == 400 and DENIAL in response.text for response in after), [
+        response.text for response in after
+    ]
+    assert rig.provider.drain() == ()
+    assert _checkpoint_actors(rig) == ["unknown"] * len(after)

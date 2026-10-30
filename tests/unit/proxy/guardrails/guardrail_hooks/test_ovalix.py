@@ -89,7 +89,8 @@ def _guardrail_kwargs():
     }
 
 
-def test_discovery_mode_initializes_without_application_id():
+@pytest.mark.asyncio
+async def test_discovery_mode_initializes_without_application_id():
     guardrail = OvalixGuardrail(
         tracker_api_base="https://tracker.test",
         tracker_api_key="key",
@@ -97,40 +98,31 @@ def test_discovery_mode_initializes_without_application_id():
         event_hook="pre_call",
         default_on=True,
     )
-    assert guardrail._application_id is None
-    assert guardrail._enable_routing_cache is True
+    _, post = _mock_handler(guardrail)
+
+    await guardrail.apply_guardrail(GenericGuardrailAPIInputs(texts=["hi"]), _alias_request_data(), "request")
+
+    resolves = [c.kwargs["json"] for c in post.call_args_list if _route_of(c.args[0]) == "resolve_application"]
+    assert resolves == [{"application_name": "Weather App"}]
 
 
-def test_routing_cache_defaults_true_and_can_disable():
-    on = OvalixGuardrail(
-        tracker_api_base="https://t", tracker_api_key="k", guardrail_name="o", event_hook="pre_call", default_on=True
-    )
-    assert on._enable_routing_cache is True
-    off = OvalixGuardrail(
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("cache_kwargs", "expected_resolves"), [({}, 1), ({"enable_routing_cache": False}, 2)])
+async def test_routing_cache_defaults_true_and_can_disable(cache_kwargs, expected_resolves):
+    guardrail = OvalixGuardrail(
         tracker_api_base="https://t",
         tracker_api_key="k",
-        enable_routing_cache=False,
         guardrail_name="o",
         event_hook="pre_call",
         default_on=True,
+        **cache_kwargs,
     )
-    assert off._enable_routing_cache is False
+    _, post = _mock_handler(guardrail)
 
+    await guardrail.apply_guardrail(GenericGuardrailAPIInputs(texts=["hi"]), _alias_request_data(), "request")
+    await guardrail.apply_guardrail(GenericGuardrailAPIInputs(texts=["hi"]), _alias_request_data(), "request")
 
-def test_new_config_fields_from_params():
-    guardrail = OvalixGuardrail(
-        tracker_api_base="https://tracker.test",
-        tracker_api_key="key",
-        application_id="app-1",
-        pre_checkpoint_id="pre-1",
-        file_checkpoint_id="file-1",
-        enable_routing_cache=True,
-        guardrail_name="ovalix-test",
-        event_hook="pre_call",
-        default_on=True,
-    )
-    assert guardrail._file_checkpoint_id == "file-1"
-    assert guardrail._enable_routing_cache is True
+    assert sum(_route_of(c.args[0]) == "resolve_application" for c in post.call_args_list) == expected_resolves
 
 
 def test_static_mode_requires_a_checkpoint():
@@ -1079,6 +1071,23 @@ async def test_newest_text_block_raises_older_anonymized():
 
 
 @pytest.mark.asyncio
+async def test_texts_are_checked_newest_first_and_a_blocked_newest_stops_the_scan():
+    g = _static_guardrail()
+    post, calls = _recording_post(lambda body: _BLOCK if body["data"].get("content") == "new" else _ALLOW)
+
+    with patch.object(g._async_handler, "post", new=post):
+        with pytest.raises(OvalixGuardrailBlockedException):
+            await g.apply_guardrail(
+                inputs=GenericGuardrailAPIInputs(texts=["old", "middle", "new"]),
+                request_data={},
+                input_type="request",
+                logging_obj=None,
+            )
+
+    assert [content for data_type, content in calls if data_type == "TEXT"] == ["new"]
+
+
+@pytest.mark.asyncio
 async def test_older_text_anonymized_returns_modified_texts():
     g = _static_guardrail()
     inputs = GenericGuardrailAPIInputs(texts=["make me anon", "safe newest"])
@@ -1799,8 +1808,9 @@ async def test_checkpoint_routing_name_is_none_when_application_is_pinned():
 @pytest.mark.asyncio
 async def test_checkpoint_routing_name_extracted_from_key_alias():
     g = _alias_guardrail()
-    with patch.object(g, "_get_app_name_regex", new=AsyncMock(return_value=re.compile(r"^\s*\[([^\]]+)\]"))):
-        name = await g._checkpoint_routing_name({"metadata": {"user_api_key_alias": "[Weather App] free text"}})
+    _mock_handler(g)
+
+    name = await g._checkpoint_routing_name({"metadata": {"user_api_key_alias": "[Weather App] free text"}})
 
     assert name == "Weather App"
 
@@ -1820,25 +1830,19 @@ async def test_apply_guardrail_resolved_by_alias_routes_checkpoints_by_name():
     application the tracker's process-wide config has not picked up yet
     """
     g = _alias_guardrail()
-    seen, post = _capturing_post()
+    _, post = _mock_handler(g, routing=_routing_body("pre-9", "post-9", None, None))
 
-    with (
-        patch.object(
-            g, "_resolve_routing", new=AsyncMock(return_value=ResolvedRouting("app-9", "pre-9", "post-9", None, None))
-        ),
-        patch.object(g, "_get_app_name_regex", new=AsyncMock(return_value=re.compile(r"^\s*\[([^\]]+)\]"))),
-        patch.object(g._async_handler, "post", new=post),
-    ):
-        await g.apply_guardrail(
-            GenericGuardrailAPIInputs(texts=["hello"]),
-            {"metadata": {"user_api_key_alias": "[Weather App] k", "user_api_key_user_email": "u@e.com"}},
-            "request",
-        )
+    await g.apply_guardrail(
+        GenericGuardrailAPIInputs(texts=["hello"]),
+        {"metadata": {"user_api_key_alias": "[Weather App] k", "user_api_key_user_email": "u@e.com"}},
+        "request",
+    )
 
-    assert seen["url"] == "https://t/tracking/beta/checkpoint"
-    assert seen["body"]["application_name"] == "Weather App"
-    assert seen["body"]["input_type"] == "request"
-    assert "application_id" not in seen["body"]
+    [(body, url)] = _checkpoint_calls(post)
+    assert url == "https://t/tracking/beta/checkpoint"
+    assert body["application_name"] == "Weather App"
+    assert body["input_type"] == "request"
+    assert "application_id" not in body
 
 
 @pytest.mark.asyncio
