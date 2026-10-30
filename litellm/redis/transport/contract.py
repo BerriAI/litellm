@@ -1,8 +1,8 @@
 import math
 from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Final, Literal, Protocol, TypeAlias, TypeVar
+from typing import Final, Literal, NoReturn, Protocol, TypeAlias, TypeVar
 
 Arg: TypeAlias = str | bytes | int | float
 EvalReply: TypeAlias = int | bytes | None | tuple["EvalReply", ...]
@@ -23,6 +23,13 @@ class RedisFailure:
     kind: Literal["transport", "server", "decode", "breaker_open"]
     message: str
     timeout: bool = False
+    exception: Exception | None = field(default=None, compare=False, repr=False)
+
+
+def raise_redis_failure(failure: RedisFailure) -> NoReturn:
+    if failure.exception is not None:
+        raise failure.exception
+    raise RuntimeError(failure.message)
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,7 +128,9 @@ class RedisTransport(Protocol):
 
     async def eval(self, script: str, keys: Sequence[str], args: Sequence[Arg]) -> EvalReply | RedisFailure: ...
 
-    def batch(self, *, transaction: bool = False) -> RedisCommandBatch: ...
+    def batch(
+        self, *, transaction: bool = False, raise_on_error: bool = False, name: str = "redis_batch"
+    ) -> RedisCommandBatch: ...
 
     def request_batch(self) -> RedisCommandBatch | None: ...
 
