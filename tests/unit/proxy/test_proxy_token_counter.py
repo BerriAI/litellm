@@ -2829,7 +2829,8 @@ def _get_weather_copies(count: int) -> tuple[dict[str, object], ...]:
 
 # usage.input_tokens plus cache_read_input_tokens that POST /v1/messages billed for these requests with the user turn
 # "What is the weather in Paris?" through Azure AI Foundry grok-4-1-fast-reasoning, Fireworks deepseek-v4p1-flash and
-# xAI grok-4.3 on 2026-10-29
+# xAI grok-4.3 on 2026-10-29, and usage.prompt_tokens that POST /v1/chat/completions billed through DeepSeek's API on
+# 2026-10-30
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "system", "tools", "billed_prompt_tokens"),
@@ -2849,6 +2850,14 @@ def _get_weather_copies(count: int) -> tuple[dict[str, object], ...]:
         (_XAI_GROK_4_3, None, _THREE_TOOLS, 402),
         (_XAI_GROK_4_3, None, (_FILL_FORM,), 530),
         (_XAI_GROK_4_3, _WEATHER_SYSTEM, (_GET_WEATHER,), 297),
+        ("deepseek/deepseek-v4-flash", None, (), 37),
+        ("deepseek/deepseek-v4-flash", None, (_GET_WEATHER,), 304),
+        ("deepseek/deepseek-v4-flash", None, _THREE_TOOLS, 430),
+        ("deepseek/deepseek-v4-flash", _WEATHER_SYSTEM, (_GET_WEATHER,), 315),
+        ("deepseek/deepseek-v4-pro", None, (), 90),
+        ("deepseek/deepseek-v4-pro", None, (_GET_WEATHER,), 367),
+        ("deepseek/deepseek-v4-pro", None, _THREE_TOOLS, 493),
+        ("deepseek/deepseek-v4-pro", _WEATHER_SYSTEM, (_GET_WEATHER,), 378),
     ],
 )
 async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing(
@@ -3022,13 +3031,14 @@ async def test_azure_responses_estimate_stays_at_or_just_over_the_billed_prompt_
 
 
 # POST /v1/responses billed the same usage.input_tokens with strict unset and false on 2026-10-29, 283 for one tool
-# through xAI grok-4.3 and 304 through Fireworks deepseek-v4p1-flash
+# through xAI grok-4.3
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", [_XAI_GROK_4_3, _FIREWORKS_DEEPSEEK_V4_1])
 async def test_a_responses_host_that_bills_an_unset_strict_like_false_counts_them_alike(
-    monkeypatch: pytest.MonkeyPatch, model: str
+    monkeypatch: pytest.MonkeyPatch,
 ):
-    router: Final = _single_deployment_router({"model": model, "api_base": _NATIVE_RESPONSES_BASE[model]}, {})
+    router: Final = _single_deployment_router(
+        {"model": _XAI_GROK_4_3, "api_base": _NATIVE_RESPONSES_BASE[_XAI_GROK_4_3]}, {}
+    )
 
     unset: Final = await _count_with_router(monkeypatch, router, (_responses_function(_GET_WEATHER),), responses=True)
 
@@ -3106,6 +3116,46 @@ async def test_a_responses_count_that_asks_for_the_chat_completions_bridge_frame
     )
 
     assert counted.total_tokens == chat_count
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_chat_completions_api", ["maybe", {"a": 1}])
+async def test_a_responses_count_with_a_malformed_bridge_flag_reads_it_the_way_the_responses_route_does(
+    monkeypatch: pytest.MonkeyPatch, use_chat_completions_api: object
+):
+    router: Final = _single_deployment_router(
+        {"model": _AZURE_GROK_4_1, "api_base": _NATIVE_RESPONSES_BASE[_AZURE_GROK_4_1]}, {}
+    )
+    chat_count: Final = await _count_with_router(monkeypatch, router, (_GET_WEATHER,), responses=False)
+
+    counted: Final = await count_request_tokens(
+        request=TokenCountRequest(
+            model="counted",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=[_GET_WEATHER],
+        ),
+        responses_request={
+            "model": "counted",
+            "input": "What is the weather in Paris?",
+            "use_chat_completions_api": use_chat_completions_api,
+        },
+    )
+
+    assert counted.total_tokens == chat_count
+
+
+@pytest.mark.asyncio
+async def test_an_azure_responses_count_leaves_strict_unset_for_templates_not_measured_there(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    router: Final = _single_deployment_router(
+        {"model": "azure_ai/deepseek-v4.1-flash", "api_base": "https://unused.services.ai.azure.com/models"}, {}
+    )
+
+    async def counted(**strict: bool) -> int:
+        return await _count_with_router(monkeypatch, router, (_responses_function(_GET_WEATHER, **strict),), True)
+
+    assert await counted() < await counted(strict=True)
 
 
 _KIMI_WEATHER: Final = {

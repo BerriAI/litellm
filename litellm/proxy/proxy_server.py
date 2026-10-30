@@ -100,6 +100,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     initialize_sentry,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER, LoggingWorker
+from litellm.litellm_core_utils.prompt_templates.chat_template_tools import chat_template_tool_section
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.token_counter import (
@@ -15381,8 +15382,8 @@ def _serves_native_responses(
             _non_empty_str(params.get("model")) or request_model,
             _non_empty_str(params.get("custom_llm_provider")),
             {
-                "use_chat_completions_api": _inference_params(params, responses_request).get(
-                    "use_chat_completions_api"
+                "use_chat_completions_api": bool(
+                    _inference_params(params, responses_request).get("use_chat_completions_api")
                 ),
                 "model_info": dict(deployment.get("model_info", {})),
                 "api_base": _deployment_api_base(deployment),
@@ -15652,11 +15653,16 @@ async def _count_request_tokens(
     sent_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
         list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
     )
+    openai_model: Final = deployment_openai_model(deployment_view)
+    template_model: Final = openai_model or _deployment_base_model(deployment_view) or model_to_use
+    tool_section: Final = chat_template_tool_section(template_model)
     counted_tools: Final = (
         cast(list[ChatCompletionToolParam], list(_with_strict_by_default(sent_tools)))  # cast-ok: strict added
         if sent_tools is not None
         and native_responses
         and _deployment_provider(deployment_view, request.model) in _AZURE_PROVIDERS
+        and tool_section is not None
+        and tool_section.renders_strict_only_when_true
         else sent_tools
     )
     framing: Final = (
@@ -15680,10 +15686,9 @@ async def _count_request_tokens(
             tokenizer_type="huggingface_tokenizer",
             count_source="local_estimate",
         )
-    openai_model: Final = deployment_openai_model(deployment_view)
     estimate: Final = await _local_token_estimate(
         model=openai_model or model_to_use,
-        template_model=openai_model or _deployment_base_model(deployment_view) or model_to_use,
+        template_model=template_model,
         prompt=prompt if counted_messages is None else None,
         messages=counted_messages,
         tools=counted_tools,

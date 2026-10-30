@@ -681,18 +681,34 @@ def test_token_counter_counts_a_named_tool_choice_for_grok(model: str):
     ) > token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
 
 
-# A one-function tool billed the same prompt tokens with strict unset and false on 2026-10-29: 357 through Azure AI
-# Foundry grok-4-1-fast-reasoning chat, 283 through xAI grok-4.3 and 304 through Fireworks deepseek-v4p1-flash
-@pytest.mark.parametrize(
-    "model", ["grok-4-1-fast-reasoning", "grok-4.3", "accounts/fireworks/models/deepseek-v4p1-flash"]
-)
-def test_token_counter_renders_a_false_strict_like_an_unset_one_for_chat_template_tools(model: str):
-    def counted(**strict: bool) -> int:
-        return token_counter_new(
-            model=model, messages=list(_USER_MESSAGES), tools=[_openai_tool({**_WEATHER_FUNCTION, **strict})]
-        )
+def _counted_with_strict(model: str, **strict: bool) -> int:
+    return token_counter_new(
+        model=model, messages=list(_USER_MESSAGES), tools=[_openai_tool({**_WEATHER_FUNCTION, **strict})]
+    )
 
-    assert counted(strict=False) == counted() < counted(strict=True)
+
+# A one-function tool billed the same prompt tokens with strict unset and false on 2026-10-29: 357 through Azure AI
+# Foundry grok-4-1-fast-reasoning chat and 283 through xAI grok-4.3
+@pytest.mark.parametrize("model", ["grok-4-1-fast-reasoning", "grok-4.3"])
+def test_token_counter_renders_a_false_strict_like_an_unset_one_for_grok(model: str):
+    assert (
+        _counted_with_strict(model, strict=False)
+        == _counted_with_strict(model)
+        < _counted_with_strict(model, strict=True)
+    )
+
+
+# A one-function tool billed 5 prompt tokens more with strict false than unset, the same as with strict true, on
+# 2026-10-30: 310 against 305 through Baseten DeepSeek-V4.1-Flash and 309 against 304 through Together
+@pytest.mark.parametrize(
+    "model", ["accounts/fireworks/models/deepseek-v4p1-flash", "deepseek-v4-flash", "qwen3.5-plus"]
+)
+def test_token_counter_renders_a_false_strict_like_a_true_one_for_other_chat_templates(model: str):
+    assert (
+        _counted_with_strict(model, strict=False)
+        == _counted_with_strict(model, strict=True)
+        > _counted_with_strict(model)
+    )
 
 
 @pytest.mark.parametrize(

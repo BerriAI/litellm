@@ -934,7 +934,12 @@ def _count_chat_template_tools(
     includes_system_message: bool,
     tool_section: ChatTemplateToolSection,
 ) -> int:
-    functions: Final = tuple(map(_without_false_strict, _named_function_definitions(tools)))
+    named_functions: Final = tuple(_named_function_definitions(tools))
+    functions: Final = (
+        tuple(map(_without_false_strict, named_functions))
+        if tool_section.renders_strict_only_when_true
+        else named_functions
+    )
     if not functions:
         return 0
     system_turn_tokens: Final = 0 if includes_system_message else tool_section.implicit_system_turn_tokens

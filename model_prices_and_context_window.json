@@ -62208,7 +62208,9 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "token_count_framing": 23,
+        "token_count_tool_framing": 12
     },
     "deepseek/deepseek-v4-flash-vision-exp": {
         "cache_creation_input_token_cost": 0.0,
@@ -62314,7 +62316,9 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "token_count_framing": 76,
+        "token_count_tool_framing": 75
     },
     "tencent/deepseek-v4-pro": {
         "cache_creation_input_token_cost": 0.0,

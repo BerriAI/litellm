@@ -11,6 +11,7 @@ class ChatTemplateToolSection:
     implicit_system_turn_tokens: int
     render_tool_schemas: Callable[[Sequence[Mapping[str, object]]], str]
     counts_tool_choice: bool = False
+    renders_strict_only_when_true: bool = False
 
 
 def _json_line_tool_schemas(functions: Sequence[Mapping[str, object]]) -> str:
@@ -41,11 +42,15 @@ _TOOL_SECTIONS: Final = (
     (re.compile(r"qwen3[._]?5(?!\d)", re.IGNORECASE), ChatTemplateToolSection(196, 5, _qwen3_5_tool_schemas)),
     (
         re.compile(r"grok-4[-.]1(?![.\d])", re.IGNORECASE),
-        ChatTemplateToolSection(0, 0, _compact_json_line_tool_schemas, counts_tool_choice=True),
+        ChatTemplateToolSection(
+            0, 0, _compact_json_line_tool_schemas, counts_tool_choice=True, renders_strict_only_when_true=True
+        ),
     ),
     (
         re.compile(r"grok-4[-.]3(?![.\d])", re.IGNORECASE),
-        ChatTemplateToolSection(0, 0, _json_line_tool_schemas, counts_tool_choice=True),
+        ChatTemplateToolSection(
+            0, 0, _json_line_tool_schemas, counts_tool_choice=True, renders_strict_only_when_true=True
+        ),
     ),
 )
 
