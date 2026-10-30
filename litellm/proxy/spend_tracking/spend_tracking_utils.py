@@ -87,6 +87,7 @@ from litellm.types.utils import (
     AzureSpillover,
     CallTypes,
     CostBreakdown,
+    LiteLLMBatch,
     LlmProviders,
     StandardLoggingGuardrailInformation,
     StandardLoggingKubernetesPodRouting,
@@ -96,6 +97,7 @@ from litellm.types.utils import (
     StandardLoggingPayloadErrorInformation,
     StandardLoggingVectorStoreRequest,
     VectorStoreSearchResponse,
+    batch_chat_usage,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
 
@@ -464,7 +466,11 @@ def _sl_attribution_fallback(
 ) -> str:
     if standard_logging_payload is None:
         return ""
-    return standard_logging_payload.get(field) or ""
+    return _string_or_empty(standard_logging_payload.get(field))
+
+
+def _string_or_empty(value: object) -> str:
+    return value if isinstance(value, str) else ""
 
 
 def _deployment_provider(deployment: DeploymentTypedDict) -> str | None:
@@ -493,7 +499,7 @@ def _model_group_provider(model_group: str, llm_router: "Router | None") -> str 
         return None
     providers: Final = frozenset(
         provider
-        for deployment in llm_router.get_model_list(model_name=model_group) or ()
+        for deployment in llm_router.registry().deployments(model_group) or ()
         if (provider := _deployment_provider(deployment)) is not None
     )
     return next(iter(providers)) if len(providers) == 1 else None
@@ -502,7 +508,8 @@ def _model_group_provider(model_group: str, llm_router: "Router | None") -> str 
 def _is_configured_model_group(model_group: str, llm_router: "Router | None") -> bool:
     if llm_router is None or not model_group:
         return False
-    return llm_router.is_recognized_model(model_group) or model_group in llm_router.team_public_model_names
+    registry: Final = llm_router.registry()
+    return registry.resolve(model_group, kind="recognized") or model_group in registry.names(kind="team_public")
 
 
 def _looks_like_model_name(model: str) -> bool:
@@ -621,7 +628,12 @@ def get_logging_payload(
         usage = _extract_usage_for_ocr_call(response_obj, response_obj_dict)
     elif not is_unbilled_non_inference_call(call_type, metadata, response_obj_dict):
         # Use response_obj_dict instead of response_obj to avoid calling .get() on Pydantic models
-        _usage: Final = response_obj_dict.get("usage", None) or {}
+        chat_usage_of_batch: Final = batch_chat_usage(response_obj) if isinstance(response_obj, LiteLLMBatch) else None
+        _usage: Final = (
+            chat_usage_of_batch.model_dump()
+            if chat_usage_of_batch is not None
+            else response_obj_dict.get("usage", None) or {}
+        )
         if isinstance(_usage, litellm.Usage):
             usage = dict(_usage)
         elif isinstance(_usage, dict):
@@ -682,7 +694,7 @@ def get_logging_payload(
     _model_id: Final = metadata.get("model_info", {}).get("id", "") or _sl_attribution_fallback(
         standard_logging_payload, "model_id"
     )
-    _model_group: Final = metadata.get("model_group", "") or _sl_attribution_fallback(
+    _model_group: Final = _string_or_empty(metadata.get("model_group")) or _sl_attribution_fallback(
         standard_logging_payload, "model_group"
     )
     _api_base: Final = litellm_params.get("api_base", "") or _sl_attribution_fallback(
