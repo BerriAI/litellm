@@ -699,8 +699,8 @@ export interface paths {
          * @description Update an access group's model names.
          *
          *     This will:
-         *     1. Remove the access group from all current deployments
-         *     2. Add the access group to all deployments for the new model_names list
+         *     1. Add the access group to all deployments for the new model_names list
+         *     2. Remove the access group from every other deployment
          *
          *     Example:
          *     ```bash
@@ -722,6 +722,7 @@ export interface paths {
          *     Raises:
          *     - HTTPException 400: If any model names don't exist
          *     - HTTPException 404: If access group not found
+         *     - HTTPException 409: If another edit holds the group or one of its models for 30 s
          */
         put: operations["update_access_group_access_group__access_group__update_put"];
         post?: never;
@@ -25710,6 +25711,13 @@ export interface components {
              */
             source: "admin";
         };
+        /** AdminMCPPermissions */
+        AdminMCPPermissions: {
+            /** Action Allowed */
+            action_allowed?: boolean | null;
+            /** Tools */
+            tools: string[];
+        };
         /**
          * AgentCapabilities
          * @description Defines optional capabilities supported by an agent.
@@ -49920,6 +49928,7 @@ export interface components {
         };
         /** UserInfoResponse */
         UserInfoResponse: {
+            admin_mcp_permissions?: components["schemas"]["AdminMCPPermissions"] | null;
             /** Keys */
             keys: unknown[];
             /** Teams */
@@ -76732,6 +76741,12 @@ export interface operations {
             query?: {
                 /** @description User ID in the request parameters */
                 user_id?: string | null;
+                /** @description Include the caller's current admin MCP route permissions */
+                admin_mcp?: boolean;
+                /** @description Admin MCP tool to authorize for this caller */
+                mcp_tool?: string | null;
+                /** @description URL-encoded concrete management path used by the MCP tool, before query-string encoding */
+                mcp_path?: string | null;
             };
             header?: never;
             path?: never;

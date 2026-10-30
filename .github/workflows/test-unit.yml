@@ -245,6 +245,7 @@ jobs:
               tests/unit/llms/chatgpt
               tests/unit/llms/clarifai
               tests/unit/llms/claude_code
+              tests/unit/llms/clf_ai_gateway
               tests/unit/llms/cloudflare
               tests/unit/llms/codestral
               tests/unit/llms/codex
@@ -1150,18 +1151,20 @@ jobs:
         env:
           CI: "true"
           GH_TOKEN: ${{ github.token }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           full_suite() { npm run test -- --run --pool forks --maxWorkers=14; }
 
-          if [ -z "$BASE_SHA" ]; then
+          if [ -z "$PR_NUMBER" ]; then
             echo "Push to $GITHUB_REF_NAME: running the full suite"
             full_suite
             exit 0
           fi
 
-          merge_base=$(gh api "repos/${{ github.repository }}/compare/${BASE_SHA}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
+          base_ref=$(gh api "repos/${GITHUB_REPOSITORY}/branches/${EVENT_BASE_REF}" --jq .name) || base_ref=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .base.ref)
+          merge_base=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${base_ref}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
           test -n "$merge_base"
           git fetch --no-tags --depth=1 origin "$merge_base" "$HEAD_SHA"
           changed_files=()

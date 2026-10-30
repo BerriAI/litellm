@@ -1311,6 +1311,33 @@ async def test_auth_rejects_wrong_or_empty_present_custom_header(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("api_key", [None, ""], ids=["no_key", "no_bearer_prefix"])
+async def test_auth_rejection_without_a_usable_key_has_a_json_null_param(
+    api_key: str | None, monkeypatch: pytest.MonkeyPatch
+):
+    from fastapi import Request
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    monkeypatch.setattr(proxy_server, "master_key", "sk-test-master")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    request = Request(
+        scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []},
+        receive=AsyncMock(return_value={"type": "http.request", "body": b"", "more_body": False}),
+    )
+    request._url = URL(url="/chat/completions")
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_api_key_auth(request=request, api_key=api_key)
+
+    body = json.loads(json.dumps({"error": exc_info.value.to_dict()}))
+    assert body["error"]["code"] == "401"
+    assert body["error"]["type"] == ProxyErrorTypes.auth_error.value
+    assert body["error"]["param"] is None
+
+
+@pytest.mark.asyncio
 async def test_user_api_key_from_query_param():
     """Ensure user_api_key_auth reads API key from `key` query parameter."""
     from fastapi import Request

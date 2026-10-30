@@ -111,14 +111,7 @@ _TOKEN_COUNTING_ACTION: Final = "countTokens"
 
 class RouteChecks:
     @staticmethod
-    def should_call_route(
-        route: str,
-        valid_token: UserAPIKeyAuth,
-        request: Request | None = None,
-    ):
-        """
-        Check if management route is disabled and raise exception
-        """
+    def check_route_enabled(route: str) -> None:
         try:
             from litellm_enterprise.proxy.auth.route_checks import EnterpriseRouteChecks
 
@@ -128,6 +121,16 @@ class RouteChecks:
         except Exception:
             pass
 
+    @staticmethod
+    def should_call_route(
+        route: str,
+        valid_token: UserAPIKeyAuth,
+        request: Request | None = None,
+    ):
+        """
+        Check if management route is disabled and raise exception
+        """
+        RouteChecks.check_route_enabled(route)
         # Check if Virtual Key is allowed to call the route - Applies to all Roles
         RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token, request=request)
         return True
@@ -302,7 +305,7 @@ class RouteChecks:
                 f"keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
             ),
             type=ProxyErrorTypes.auth_error,
-            param="None",
+            param=None,
             code=status.HTTP_401_UNAUTHORIZED,
         )
 

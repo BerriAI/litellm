@@ -529,9 +529,12 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
+    attribute_of,
     headers_with_litellm_call_id,
     litellm_call_id_headers,
+    openai_error_param,
     proxy_exception_for,
+    route_failure_proxy_exception,
     with_litellm_call_id,
 )
 from litellm.proxy.common_utils.periodic_reload_schedule import (
@@ -546,6 +549,7 @@ from litellm.proxy.common_utils.periodic_reload_schedule import (
     write_reload_interval,
 )
 from litellm.proxy.common_utils.proxy_state import ProxyState
+from litellm.proxy.common_utils.registry_read_through import resync_model_deployments_by_ids
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.responses_stream_errors import ResponsesStreamErrorState
 from litellm.proxy.common_utils.scheduled_job_stagger import (
@@ -8747,6 +8751,7 @@ class ProxyConfig:
         subscriber: Final = ConfigSyncSubscriber(
             redis_cache=redis_cache,
             resync_callbacks=(_resync_config_from_db,),
+            apply_model_ids=resync_model_deployments_by_ids,
         )
         self.config_sync_subscriber = subscriber
         subscriber.start()
@@ -9898,11 +9903,8 @@ async def async_assistants_data_generator(response, user_api_key_dict: UserAPIKe
             # Including it in the SSE response leaks internal details to clients.
             error_msg: Final = str(e)
 
-        proxy_exception: Final = ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
+        proxy_exception: Final = route_failure_proxy_exception(
+            e, str(attribute_of(e, "message", error_msg)), status.HTTP_500_INTERNAL_SERVER_ERROR
         )
         error_returned: Final = json.dumps({"error": proxy_exception.to_dict()})
         yield f"data: {error_returned}\n\n"
@@ -10712,11 +10714,10 @@ async def async_data_generator(
             {
                 "error": sse_error_payload(client_error)[1]
                 if isinstance(client_error, HTTPException)
-                else ProxyException(
-                    message=getattr(client_error, "message", str(client_error)),
-                    type=getattr(client_error, "type", "None"),
-                    param=getattr(client_error, "param", "None"),
-                    code=getattr(client_error, "status_code", 500),
+                else route_failure_proxy_exception(
+                    client_error,
+                    str(attribute_of(client_error, "message", client_error)),
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
                 ).to_dict()
             },
             default=str,
@@ -13096,14 +13097,12 @@ async def completion(
         log_llm_api_exception(e, litellm_call_id)
         if isinstance(e, ProxyException):
             raise with_litellm_call_id(e, litellm_call_id)
-        error_msg: Final = f"{e}"
-        raise ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
+        raise route_failure_proxy_exception(
+            e,
+            str(attribute_of(e, "message", e)),
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
             headers=litellm_call_id_headers(litellm_call_id),
             openai_code=getattr(e, "code", None),
-            code=getattr(e, "status_code", 500),
         )
 
 
@@ -13324,22 +13323,18 @@ async def moderations(
         if isinstance(e, ProxyException):
             raise with_litellm_call_id(e, litellm_call_id)
         if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "message", str(e)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+            raise route_failure_proxy_exception(
+                e,
+                str(attribute_of(e, "message", e)),
+                status.HTTP_400_BAD_REQUEST,
                 headers=litellm_call_id_headers(litellm_call_id),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
-        else:
-            error_msg: Final = f"{e}"
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                headers=litellm_call_id_headers(litellm_call_id),
-                code=getattr(e, "status_code", 500),
-            )
+        raise route_failure_proxy_exception(
+            e,
+            str(attribute_of(e, "message", e)),
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            headers=litellm_call_id_headers(litellm_call_id),
+        )
 
 
 async def _audio_speech_chunk_generator(
@@ -13477,13 +13472,12 @@ async def audio_speech(
                 detail=e.detail,
                 headers=headers_with_litellm_call_id(e.headers, litellm_call_id),
             )
-        raise ProxyException(
-            message=getattr(e, "message", f"{e}"),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
+        raise route_failure_proxy_exception(
+            e,
+            str(attribute_of(e, "message", e)),
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
             headers=litellm_call_id_headers(litellm_call_id),
             openai_code=getattr(e, "code", None),
-            code=getattr(e, "status_code", 500),
         )
 
 
@@ -13623,23 +13617,19 @@ async def audio_transcriptions(
         )
         log_llm_api_exception(e, litellm_call_id)
         if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+            raise route_failure_proxy_exception(
+                e,
+                str(attribute_of(e, "message", e.detail)),
+                status.HTTP_400_BAD_REQUEST,
                 headers=litellm_call_id_headers(litellm_call_id),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
-        else:
-            error_msg: Final = f"{e}"
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                headers=litellm_call_id_headers(litellm_call_id),
-                openai_code=getattr(e, "code", None),
-                code=getattr(e, "status_code", 500),
-            )
+        raise route_failure_proxy_exception(
+            e,
+            str(attribute_of(e, "message", e)),
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            headers=litellm_call_id_headers(litellm_call_id),
+            openai_code=getattr(e, "code", None),
+        )
 
 
 ######################################################################
@@ -17239,7 +17229,7 @@ async def model_streaming_metrics(
         raise ProxyException(
             message=CommonProxyErrors.db_not_connected_error.value,
             type="internal_error",
-            param="None",
+            param=None,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -17373,7 +17363,7 @@ async def model_metrics(
         raise ProxyException(
             message="Prisma Client is not initialized",
             type="internal_error",
-            param="None",
+            param=None,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     startTime = startTime or datetime.now() - timedelta(days=DAYS_IN_A_MONTH)
@@ -17488,7 +17478,7 @@ async def model_metrics_slow_responses(
         raise ProxyException(
             message="Prisma Client is not initialized",
             type="internal_error",
-            param="None",
+            param=None,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     if api_key is None or api_key == "undefined":
@@ -17577,7 +17567,7 @@ async def model_metrics_exceptions(
         raise ProxyException(
             message="Prisma Client is not initialized",
             type="internal_error",
-            param="None",
+            param=None,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -18791,7 +18781,7 @@ async def login_v2(request: Request):
             raise ProxyException(
                 message=getattr(e, "detail", str(e)),
                 type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         else:
@@ -18799,7 +18789,7 @@ async def login_v2(request: Request):
             raise ProxyException(
                 message=error_msg,
                 type=ProxyErrorTypes.auth_error,
-                param="None",
+                param=None,
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -18867,7 +18857,7 @@ async def login_v3(request: Request):
             raise ProxyException(
                 message=getattr(e, "detail", str(e)),
                 type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         else:
@@ -18875,7 +18865,7 @@ async def login_v3(request: Request):
             raise ProxyException(
                 message=error_msg,
                 type=ProxyErrorTypes.auth_error,
-                param="None",
+                param=None,
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -18940,7 +18930,7 @@ async def login_v3_exchange(request: Request):
         raise ProxyException(
             message=str(e),
             type=ProxyErrorTypes.auth_error,
-            param="None",
+            param=None,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
