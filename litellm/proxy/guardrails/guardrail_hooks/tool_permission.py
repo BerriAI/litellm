@@ -36,6 +36,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
 )
 from litellm.types.utils import (
     CallTypesLiteral,
+    ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
     Choices,
     Function,
@@ -744,6 +745,14 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         return ToolResult(tool_use_id=tool_call.id, content=error_message, is_error=True)
 
+    @staticmethod
+    def _judged_tool_call(
+        tool_call: ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall,
+    ) -> tuple[str | None, ...]:
+        if isinstance(tool_call, ChatCompletionMessageCustomToolCall):
+            return (tool_call.id, tool_call.type, tool_call.custom.name, tool_call.custom.input)
+        return (tool_call.id, tool_call.type, tool_call.function.name, tool_call.function.arguments)
+
     def _modify_response_with_permission_errors(
         self,
         response: ModelResponse,
@@ -761,11 +770,10 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         verbose_proxy_logger.info("Blocking %s unauthorized tool uses", len(denied_tools))
 
-        # Create a mapping of tool_use_id to error result
-        error_results: Final = {}
-        for tool_use, error in denied_tools:
-            error_result = self._create_permission_error_result(tool_use, error)
-            error_results[tool_use.id] = error_result
+        error_results: Final = {
+            self._judged_tool_call(tool_use): self._create_permission_error_result(tool_use, error)
+            for tool_use, error in denied_tools
+        }
 
         # Modify the response content
         for choice_index, choice in enumerate(response.choices):
@@ -775,9 +783,8 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
                 # Rewrite tool_calls
                 for tool_call in choice.message.tool_calls or []:
-                    tool_call_id = tool_call.id
-                    if tool_call_id in error_results:
-                        error_result = error_results[tool_call_id]
+                    error_result = error_results.get(self._judged_tool_call(tool_call))
+                    if error_result is not None:
                         error_messages.append(error_result.content)
                     else:
                         filtered_tool_calls.append(tool_call)
@@ -788,7 +795,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
                     getattr(choice.message, "function_call", None), choice_index
                 )
                 if legacy_tool_call is not None:
-                    legacy_error_result = error_results.get(legacy_tool_call.id)
+                    legacy_error_result = error_results.get(self._judged_tool_call(legacy_tool_call))
                     if legacy_error_result is not None:
                         choice.message.function_call = None
                         error_messages.append(legacy_error_result.content)

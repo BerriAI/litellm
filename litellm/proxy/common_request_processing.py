@@ -114,6 +114,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
     openai_error_param,
     openai_error_type,
+    relayed_provider_specific_fields,
 )
 from litellm.proxy.common_utils.sse_keepalive import (
     SSE_COMMENT_PING_BYTES,
@@ -4462,7 +4463,8 @@ class ProxyBaseLLMRequestProcessing:
             param=openai_error_param(e),
             openai_code=getattr(e, "code", None),
             code=_code,
-            provider_specific_fields=getattr(e, "provider_specific_fields", None),
+            provider_specific_fields=getattr(e, "provider_specific_fields", None)
+            or relayed_provider_specific_fields(e),
             headers=safe_headers,
         )
 
