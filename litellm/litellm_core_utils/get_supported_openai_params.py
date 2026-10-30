@@ -40,6 +40,9 @@ def get_supported_openai_params(
         except BadRequestError:
             return None
 
+    if custom_llm_provider == "scaleway" and request_type == "chat_completion":
+        return litellm.OpenAIConfig().get_supported_openai_params(model=model)
+
     if custom_llm_provider in LlmProvidersSet:
         provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
             model=model,
