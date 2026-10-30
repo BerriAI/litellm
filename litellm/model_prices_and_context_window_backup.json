@@ -48618,13 +48618,13 @@
         "supports_reasoning": true
     },
     "together_ai/Qwen/Qwen3.7-Max": {
-        "cache_read_input_token_cost": 5e-07,
-        "input_cost_per_token": 2.5e-06,
+        "cache_read_input_token_cost": 3e-07,
+        "input_cost_per_token": 1.5e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1000000,
         "max_output_tokens": 1000000,
         "mode": "chat",
-        "output_cost_per_token": 7.5e-06,
+        "output_cost_per_token": 4.5e-06,
         "source": "https://www.together.ai/pricing",
         "supports_prompt_caching": true
     },
