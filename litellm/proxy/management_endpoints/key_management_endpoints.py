@@ -77,7 +77,7 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
 )
 from litellm.proxy.common_utils.openai_error_payload import openai_error_param, proxy_exception_for
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, get_budget_window_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
@@ -6653,21 +6653,8 @@ def _budget_limit_windows(budget_limits: Sequence[object] | str | None) -> tuple
 def _window_with_reset_at(
     window: Mapping[str, object], stored_windows: Sequence[BudgetLimitEntry]
 ) -> Mapping[str, object]:
-    """A resubmitted window keeps its running period, so editing one window never restarts the others."""
-    duration: Final = str(window["budget_duration"])
-    now: Final = datetime.now(timezone.utc)
-    open_reset_at: Final = next(
-        (w.reset_at for w in stored_windows if w.budget_duration == duration and _is_open_reset_at(w.reset_at, now)),
-        None,
-    )
-    reset_at: Final = open_reset_at if open_reset_at is not None else get_budget_reset_time(budget_duration=duration)
+    reset_at: Final = get_budget_window_reset_time(str(window["budget_duration"]), stored_windows)
     return {**window, "reset_at": reset_at.isoformat()}
-
-
-def _is_open_reset_at(reset_at: datetime | None, now: datetime) -> bool:
-    if reset_at is None:
-        return False
-    return (reset_at if reset_at.tzinfo is not None else reset_at.replace(tzinfo=timezone.utc)) > now
 
 
 def _advance_one_key_budget_window(window: Mapping[str, object]) -> Mapping[str, object]:
