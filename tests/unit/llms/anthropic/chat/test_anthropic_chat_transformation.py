@@ -1,5 +1,6 @@
 import copy
 import json
+import logging
 from itertools import chain
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -3187,6 +3188,47 @@ def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(
     assert "output_config" not in result, (
         f"output_config should not be set for non-adaptive model (reasoning_effort={reasoning_effort_value!r})"
     )
+
+
+def _reasoning_effort_drop_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(
+        record.getMessage() for record in caplog.records if "Dropping reasoning_effort=" in record.getMessage()
+    )
+
+
+@pytest.mark.parametrize("reasoning_effort_value", [5, {"effort": 5, "summary": "concise"}])
+def test_reasoning_effort_that_is_not_a_level_name_is_dropped_with_one_warning(
+    reasoning_effort_value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result: Final = AnthropicConfig().map_openai_params(
+            non_default_params={"reasoning_effort": reasoning_effort_value},
+            optional_params={},
+            model="claude-sonnet-4-6-20260219",
+            drop_params=False,
+        )
+
+    warnings: Final = _reasoning_effort_drop_warnings(caplog)
+    assert "thinking" not in result
+    assert "output_config" not in result
+    assert len(warnings) == 1
+    assert f"reasoning_effort={reasoning_effort_value!r}" in warnings[0]
+    assert "claude-sonnet-4-6-20260219" in warnings[0]
+
+
+@pytest.mark.parametrize("reasoning_effort_value", [{"summary": "concise"}, {"effort": "low", "summary": "concise"}])
+def test_reasoning_effort_with_a_level_name_or_no_level_logs_no_drop(
+    reasoning_effort_value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        AnthropicConfig().map_openai_params(
+            non_default_params={"reasoning_effort": reasoning_effort_value},
+            optional_params={},
+            model="claude-sonnet-4-6-20260219",
+            drop_params=False,
+        )
+
+    assert _reasoning_effort_drop_warnings(caplog) == ()
 
 
 @pytest.mark.parametrize(

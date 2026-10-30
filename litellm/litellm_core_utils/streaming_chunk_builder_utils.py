@@ -15,6 +15,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import (
     PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS,
     chunk_usage,
+    finite_cost,
     provider_reported_usage_cost,
     stamp_litellm_bill_on_usage,
 )
@@ -1014,7 +1015,9 @@ class ChunkProcessor:
                     prompt_tokens_details, cache_creation_token_details
                 )
 
-                if usage_chunk_dict["cost"] is not None:
+                if Usage.dropped_non_finite_cost(usage_chunk):
+                    cost = None
+                elif usage_chunk_dict["cost"] is not None:
                     cost = usage_chunk_dict["cost"]
 
         prompt_tokens_details = attach_cache_creation_token_details(prompt_tokens_details, cache_creation_token_details)
@@ -1444,8 +1447,8 @@ def _set_stream_builder_response_cost(
 def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
     if logging_obj is None:
         return
-    if _logged_provider(logging_obj) in PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS and isinstance(
-        getattr(usage, "cost", None), (int, float)
+    if _logged_provider(logging_obj) in PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS and (
+        finite_cost(getattr(usage, "cost", None)) is not None
     ):
         return
     computed_cost: Final = logging_obj.response_cost_calculator(result=response)
