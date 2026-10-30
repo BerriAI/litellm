@@ -1439,21 +1439,40 @@ class OpenAIResponsesHandler(BaseTranslation):
             rewrites_by_position=MappingProxyType(dict(zip(placeable_positions, chain((rewritten_text,), repeat(""))))),
         )
 
-    async def deliver_text_rewrite(
+    def message_part_texts(self, response: "ResponsesAPIResponse") -> Mapping[tuple[int, int], str]:
+        """Text of every message content part, keyed by ``(output_index, content_index)``."""
+        texts: Final[list[str]] = []  # mutable-ok: the shared extractor below appends into caller-owned lists
+        positions: Final[list[tuple[int, int]]] = []  # mutable-ok: the same extractor's position sink
+        for output_idx, output_item in enumerate(response.output or ()):
+            self._extract_output_text_and_images(
+                output_item=output_item,
+                output_idx=output_idx,
+                texts_to_check=texts,
+                images_to_check=[],
+                task_mappings=positions,
+            )
+        return MappingProxyType(
+            {position: text for position, text in zip(positions, texts) if position[1] != _COMPACTION_SUMMARY_POSITION}
+        )
+
+    async def spread_text_rewrite(
         self,
         response: "ResponsesAPIResponse",
-        position: tuple[int, int],
         rewritten_text: str,
         stream_events: Sequence[object] = (),
     ) -> None:
-        """Write one rewritten text into the response at ``position`` and into any buffered events
-        that spell out the same text, so a client reading deltas sees what the body says."""
+        """Replace all message text in ``response`` with one rewrite, for a guardrail that answers
+        one string for everything it scanned: the whole rewrite goes on the first part and every
+        later part is blanked, in the body and in any buffered events spelling out the same text."""
+        rewrites_by_position: Final = MappingProxyType(
+            dict(zip(self.message_part_texts(response), chain((rewritten_text,), repeat(""))))
+        )
         await self._apply_guardrail_responses_to_output(
-            response=response, responses=[rewritten_text], task_mappings=[position]
+            response=response,
+            responses=list(rewrites_by_position.values()),
+            task_mappings=list(rewrites_by_position),
         )
-        self._sync_stream_events_with_rewrites(
-            stream_events=stream_events, rewrites_by_position=MappingProxyType({position: rewritten_text})
-        )
+        self._sync_stream_events_with_rewrites(stream_events=stream_events, rewrites_by_position=rewrites_by_position)
 
     @staticmethod
     def _write_event_field(event: object, field: str, value: object) -> None:

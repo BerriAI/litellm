@@ -3892,9 +3892,17 @@ async def _anthropic_sse_stream():
 
 
 _SECOND_TEXT_PART: Final = {"type": "output_text", "text": " and more"}
+_TOOL_CALL_ITEM: Final = {
+    "type": "function_call",
+    "id": "fc_1",
+    "call_id": "call_1",
+    "name": "save_card",
+    "arguments": '{"card": "4111-1111-1111-1111"}',
+    "status": "completed",
+}
 
 
-def _responses_api_events(*extra_parts: dict):
+def _responses_api_events(extra_parts: tuple[dict, ...] = (), extra_items: tuple[dict, ...] = ()):
     from litellm.types.llms.openai import (
         OutputTextDeltaEvent,
         ResponseCompletedEvent,
@@ -3914,7 +3922,8 @@ def _responses_api_events(*extra_parts: dict):
                 "status": "completed",
                 "role": "assistant",
                 "content": [{"type": "output_text", "text": "my card is 4111-1111-1111-1111"}, *extra_parts],
-            }
+            },
+            *extra_items,
         ],
         parallel_tool_calls=False,
         tool_choice="auto",
@@ -4050,9 +4059,9 @@ async def test_streaming_masking_re_emits_anthropic_sse_with_sanitized_text():
 
 
 @pytest.mark.asyncio
-async def test_streaming_masking_blocks_a_responses_stream_with_no_single_part_to_rewrite():
-    """One sanitized string cannot be split back over several parts, so releasing the stream would
-    ship the content the guardrail just rewrote. It is blocked instead."""
+async def test_streaming_masking_blocks_a_responses_stream_whose_scan_includes_a_tool_call():
+    """Tool-call arguments are scanned on a stream but one sanitized string has no way back into
+    them, so releasing the stream would ship the content the guardrail just rewrote."""
     from litellm.types.llms.openai import ErrorEvent
 
     guardrail = _surface_guardrail(mask_response_content=True)
@@ -4060,7 +4069,7 @@ async def test_streaming_masking_blocks_a_responses_stream_with_no_single_part_t
     with patch.object(
         guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_SANITIZED)
     ):
-        delivered = await _drain_surface_hook(guardrail, _responses_api_events(_SECOND_TEXT_PART))
+        delivered = await _drain_surface_hook(guardrail, _responses_api_events(extra_items=(_TOOL_CALL_ITEM,)))
 
     assert len(delivered) == 1
     assert isinstance(delivered[0], ErrorEvent)
@@ -4538,9 +4547,9 @@ async def test_streaming_deidentify_match_without_a_rewrite_fails_closed(chunks,
 
 @pytest.mark.asyncio
 async def test_streaming_status_records_a_surface_that_cannot_carry_the_rewrite_as_blocked():
-    """A multi-part Responses body has no single part to rewrite, so a de-identify match ends as a
-    refusal. The status stamped on metadata feeds the spend log and has to say so rather than
-    reporting the success the block check alone would have implied."""
+    """A Responses stream that scanned a tool call has nowhere to put the rewrite, so a de-identify
+    match ends as a refusal. The status stamped on metadata feeds the spend log and has to say so
+    rather than reporting the success the block check alone would have implied."""
     guardrail = _surface_guardrail(mask_response_content=True)
     request_data = {
         "model": "gpt-4o-mini",
@@ -4550,7 +4559,7 @@ async def test_streaming_status_records_a_surface_that_cannot_carry_the_rewrite_
 
     with patch.object(guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_DEIDENTIFIED)):
         delivered = await _drain_surface_hook(
-            guardrail, _responses_api_events(_SECOND_TEXT_PART), request_data=request_data
+            guardrail, _responses_api_events(extra_items=(_TOOL_CALL_ITEM,)), request_data=request_data
         )
 
     body = _delivered_bytes(delivered)
@@ -5477,7 +5486,7 @@ async def test_post_call_masks_plain_text_in_a_responses_body():
 
 
 @pytest.mark.asyncio
-async def test_post_call_blocks_a_responses_body_whose_parts_one_redaction_cannot_split_across():
+async def test_post_call_masks_every_part_of_a_responses_body_through_the_first():
     guardrail = _model_armor_post_call_guardrail(mask_response_content=True)
     post = AsyncMock(return_value=_armor_http_response(_armor_redaction("card [REDACTED] and more")))
     response = _responses_body(
@@ -5485,10 +5494,37 @@ async def test_post_call_blocks_a_responses_body_whose_parts_one_redaction_canno
         {"type": "output_text", "text": " and more", "annotations": []},
     )
 
-    with patch.object(guardrail.async_handler, "post", post), pytest.raises(HTTPException):
+    with patch.object(guardrail.async_handler, "post", post):
         await guardrail.async_post_call_success_hook(
             data=dict(_POST_CALL_REQUEST), user_api_key_dict=UserAPIKeyAuth(), response=response
         )
+
+    assert [part.text for part in response.output[0].content] == ["card [REDACTED] and more", ""]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mask_response_content", "flagged"),
+    [(True, _armor_redaction("saving [REDACTED]")), (False, _armor_block())],
+)
+async def test_post_call_answers_a_tool_call_beside_responses_text_unchanged(mask_response_content, flagged):
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    async def flag_the_card(**kwargs):
+        verdict = flagged if "4111" in str(kwargs["json"]) else {"filterMatchState": "NO_MATCH_FOUND"}
+        return _armor_http_response(verdict)
+
+    guardrail = _model_armor_post_call_guardrail(mask_response_content=mask_response_content)
+    body = _responses_body({"type": "output_text", "text": "saving it", "annotations": []}).model_dump()
+    response = ResponsesAPIResponse.model_validate({**body, "output": [*body["output"], _TOOL_CALL_ITEM]})
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock(side_effect=flag_the_card)):
+        await guardrail.async_post_call_success_hook(
+            data=dict(_POST_CALL_REQUEST), user_api_key_dict=UserAPIKeyAuth(), response=response
+        )
+
+    assert response.output[0].content[0].text == "saving it"
+    assert response.output[1].arguments == _TOOL_CALL_ITEM["arguments"]
 
 
 @pytest.mark.asyncio
@@ -5540,3 +5576,25 @@ async def test_streaming_masks_every_event_that_spells_out_a_responses_part(part
     assert "4111" not in str(released)
     assert "".join(event.delta for event in released[:2]) == "I cannot help card [REDACTED]"
     assert getattr(released[2], field) == "I cannot help card [REDACTED]"
+
+
+@pytest.mark.asyncio
+async def test_streaming_masks_a_responses_body_with_several_parts():
+    from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
+
+    guardrail = _surface_guardrail(mask_response_content=True)
+    first_delta, terminal = _responses_api_events(extra_parts=(_SECOND_TEXT_PART,))
+    second_delta = OutputTextDeltaEvent(
+        type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+        item_id="msg_1",
+        output_index=0,
+        content_index=1,
+        delta=_SECOND_TEXT_PART["text"],
+    )
+
+    with patch.object(guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_DEIDENTIFIED)):
+        delivered = await _drain_surface_hook(guardrail, (first_delta, second_delta, terminal))
+
+    assert b"4111-1111-1111-1111" not in _delivered_bytes(delivered)
+    assert [delivered[0].delta, delivered[1].delta] == ["my card is [REDACTED]", ""]
+    assert [part["text"] for part in delivered[-1].response.output[0]["content"]] == ["my card is [REDACTED]", ""]

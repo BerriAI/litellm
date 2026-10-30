@@ -4967,6 +4967,34 @@ class TestCompactionOutputSummaryReachesOutputGuardrails:
         assert self._summary(result.output[0]) == "The user lives at 1 [MASKED]."
 
     @pytest.mark.asyncio
+    async def test_spreading_one_rewrite_over_message_text_leaves_the_summary_alone(self) -> None:
+        response: Final = ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            model="claude-sonnet-5-5",
+            object="response",
+            status="completed",
+            output=[
+                self._compaction_item(),
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "first", "annotations": []},
+                        {"type": "refusal", "refusal": "second"},
+                    ],
+                },
+            ],
+        )
+
+        await OpenAIResponsesHandler().spread_text_rewrite(response, "rewritten")
+
+        assert self._summary(response.output[0]) == self.SUMMARY
+        assert [response.output[1].content[0].text, response.output[1].content[1].refusal] == ["rewritten", ""]
+
+    @pytest.mark.asyncio
     async def test_ended_stream_summary_is_masked_in_the_done_item_and_the_envelope(self) -> None:
         events: Final = [
             {
