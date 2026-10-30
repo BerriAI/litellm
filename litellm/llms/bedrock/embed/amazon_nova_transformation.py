@@ -32,6 +32,8 @@ class AmazonNovaEmbeddingConfig:
     - Multiple embedding purposes and dimensions
     """
 
+    servable_encoding_formats: Final = frozenset(("float", "base64"))
+
     def __init__(self) -> None:
         pass
 

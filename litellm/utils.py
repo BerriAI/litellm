@@ -4741,6 +4741,11 @@ def get_optional_params_embeddings(
             object = litellm.TwelveLabsMarengoEmbeddingConfig(model=model)
         elif "nova" in model.lower():
             object = litellm.AmazonNovaEmbeddingConfig()
+            if (
+                "encoding_format" in non_default_params
+                and non_default_params["encoding_format"] in object.servable_encoding_formats
+            ):
+                del non_default_params["encoding_format"]
         else:  # unmapped model
             supported_params = []
             _check_valid_arg(supported_params=supported_params)

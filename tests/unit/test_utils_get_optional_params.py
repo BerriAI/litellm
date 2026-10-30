@@ -15,6 +15,7 @@ from litellm.utils import (
     get_requester_metadata,
     validate_openai_optional_params,
 )
+from litellm.exceptions import UnsupportedParamsError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.factory import map_system_message_pt
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -267,6 +268,46 @@ def test_bedrock_optional_params_embeddings_dimension(model, expected_dimensions
 
     if dimensions_kwarg is not None:
         assert dimensions_kwarg in optional_params
+
+
+NOVA_EMBEDDING_MODELS: Final = (
+    "amazon.nova-2-multimodal-embeddings-v1:0",
+    "async_invoke/amazon.nova-2-multimodal-embeddings-v1:0",
+)
+
+
+@pytest.mark.parametrize("model", NOVA_EMBEDDING_MODELS)
+@pytest.mark.parametrize("encoding_format", ["float", "base64"])
+def test_bedrock_nova_embeddings_accept_a_float_encoding_format_without_forwarding_it(
+    model: str, encoding_format: str
+) -> None:
+    optional_params: Final = get_optional_params_embeddings(
+        model=model,
+        encoding_format=encoding_format,
+        dimensions=256,
+        custom_llm_provider="bedrock",
+    )
+
+    assert optional_params == {"embedding_dimension": 256}
+
+
+@pytest.mark.parametrize("model", NOVA_EMBEDDING_MODELS)
+def test_bedrock_nova_embeddings_reject_an_encoding_format_nova_cannot_produce(model: str) -> None:
+    with pytest.raises(UnsupportedParamsError, match="encoding_format"):
+        get_optional_params_embeddings(model=model, encoding_format="int8", custom_llm_provider="bedrock")
+
+
+@pytest.mark.parametrize("model", NOVA_EMBEDDING_MODELS)
+def test_bedrock_nova_embeddings_drop_an_encoding_format_nova_cannot_produce_under_drop_params(model: str) -> None:
+    optional_params: Final = get_optional_params_embeddings(
+        model=model,
+        encoding_format="int8",
+        dimensions=256,
+        custom_llm_provider="bedrock",
+        drop_params=True,
+    )
+
+    assert optional_params == {"embedding_dimension": 256}
 
 
 def test_google_ai_studio_optional_params_embeddings():

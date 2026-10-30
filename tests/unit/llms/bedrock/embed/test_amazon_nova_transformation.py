@@ -1,5 +1,11 @@
+import json
+
+import httpx
 import pytest
+import respx
 from typing import Final
+
+import litellm
 from litellm.llms.bedrock.embed.amazon_nova_transformation import AmazonNovaEmbeddingConfig
 
 
@@ -554,3 +560,37 @@ def test_async_invoke_requires_output_s3_uri():
             model_id="amazon.nova-2-multimodal-embeddings-v1:0",
             output_s3_uri=None,
         )
+
+
+@pytest.mark.parametrize("encoding_format", ["float", "base64"])
+def test_nova_embedding_with_a_float_encoding_format_sends_no_encoding_format_and_returns_floats(
+    respx_mock: respx.MockRouter, encoding_format: str
+) -> None:
+    route: Final = respx_mock.post(
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.nova-2-multimodal-embeddings-v1:0/invoke"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"embeddings": [{"embeddingType": "TEXT", "embedding": [0.3, 0.2, 0.1]}]},
+        )
+    )
+
+    response: Final = litellm.embedding(
+        model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
+        input=["hello"],
+        encoding_format=encoding_format,
+        dimensions=256,
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+    )
+
+    assert json.loads(route.calls.last.request.read()) == {
+        "schemaVersion": "nova-multimodal-embed-v1",
+        "taskType": "SINGLE_EMBEDDING",
+        "singleEmbeddingParams": {
+            "embeddingDimension": 256,
+            "embeddingPurpose": "GENERIC_INDEX",
+            "text": {"value": "hello", "truncationMode": "END"},
+        },
+    }
+    assert [item.embedding for item in response.data] == [[0.3, 0.2, 0.1]]
