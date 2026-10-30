@@ -3,9 +3,11 @@ async_management_endpoint_{success,failure}_hook integration points."""
 
 import asyncio
 from datetime import datetime
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import Request
 
 from litellm.proxy._types import (
     ManagementEndpointLoggingPayload,
@@ -342,60 +344,74 @@ def test_management_wrapper_swallows_post_success_errors(server_span_factory, ot
     assert result == {"ok": True}
 
 
-def test_span_wrapper_omits_payload(server_span_factory, otel_with_exporter, monkeypatch):
-    """The span-only wrapper keeps the endpoint span but drops the response
-    attributes — the models listing would otherwise serialize every model onto
-    the span."""
+TEAM_NEW_PATH: Final = "/team/new"
+
+
+def _json_post(path: str, body: bytes) -> Request:
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "root_path": "",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive,
+    )
+
+
+@pytest.mark.parametrize(
+    ("wrapper_name", "exports_payload"),
+    [("management_endpoint_wrapper", True), ("management_endpoint_span_wrapper", False)],
+)
+def test_span_wrapper_omits_payload(server_span_factory, otel_with_exporter, monkeypatch, wrapper_name, exports_payload):
     import litellm.proxy.proxy_server as proxy_server
     from litellm.proxy.management_helpers import utils as mgmt_utils
 
     otel, exporter = otel_with_exporter
     monkeypatch.setattr(proxy_server, "open_telemetry_logger", otel, raising=False)
-    monkeypatch.setattr(mgmt_utils, "send_management_endpoint_alert", _noop_alert)
 
-    server_span = server_span_factory(KEY_GENERATE_PATH)
+    server_span: Final = server_span_factory(TEAM_NEW_PATH)
+    wrap: Final = getattr(mgmt_utils, wrapper_name)
 
-    @mgmt_utils.management_endpoint_span_wrapper
-    async def fake_fn(data=None, user_api_key_dict=None):
+    @wrap
+    async def fake_fn(http_request: Request, user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:
         return {"data": [{"id": "gpt-4o"}]}
 
-    asyncio.run(fake_fn(data={}, user_api_key_dict=_real_user_api_key_dict(server_span)))
+    asyncio.run(
+        fake_fn(
+            http_request=_json_post(TEAM_NEW_PATH, b'{"team_alias": "t"}'),
+            user_api_key_dict=_real_user_api_key_dict(server_span),
+        )
+    )
 
-    spans = [s for s in exporter.get_finished_spans() if s.name == "fake_fn"]
+    spans: Final = [s for s in exporter.get_finished_spans() if s.name == TEAM_NEW_PATH]
     assert len(spans) == 1
-    assert not any(key.startswith("response.") for key in spans[0].attributes)
+    attribute_keys: Final = tuple(spans[0].attributes)
+    assert any(key.startswith("request.") for key in attribute_keys) is exports_payload
+    assert any(key.startswith("response.") for key in attribute_keys) is exports_payload
 
 
-MODEL_LIST_PATH = "/v1/models"
-INBOUND_TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+MODEL_LIST_PATH: Final = "/v1/models"
+INBOUND_TRACEPARENT: Final = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 
 
 def test_model_list_ends_server_span_in_inbound_trace(otel_with_exporter, monkeypatch):
-    """Regression: ``/v1/models`` created the OTEL SERVER span at the auth
-    boundary but never ended it, so the span was never exported and a caller
-    passing ``traceparent`` saw nothing for the models list.
-
-    Drives the real endpoint and asserts the SERVER span reaches the exporter
-    under the caller's trace id."""
     import litellm.proxy.proxy_server as proxy_server
-    import litellm.proxy.utils as proxy_utils
-    from litellm.proxy.management_helpers import utils as mgmt_utils
 
     otel, exporter = otel_with_exporter
     monkeypatch.setattr(proxy_server, "open_telemetry_logger", otel, raising=False)
-    monkeypatch.setattr(mgmt_utils, "send_management_endpoint_alert", _noop_alert)
 
-    async def _no_models_for_user(**kwargs):
-        return []
-
-    monkeypatch.setattr(proxy_utils, "get_available_models_for_user", _no_models_for_user)
-
-    server_span = otel.create_litellm_proxy_request_started_span(
+    server_span: Final = otel.create_litellm_proxy_request_started_span(
         start_time=datetime.now(), headers={"traceparent": INBOUND_TRACEPARENT}
     )
     otel.set_proxy_request_route_attributes(server_span, url_path=MODEL_LIST_PATH, http_route=MODEL_LIST_PATH)
 
-    result = asyncio.run(
+    result: Final = asyncio.run(
         proxy_server.model_list(
             user_api_key_dict=_real_user_api_key_dict(server_span),
         )
@@ -408,11 +424,11 @@ def test_model_list_ends_server_span_in_inbound_trace(otel_with_exporter, monkey
         expected_url_path=MODEL_LIST_PATH,
         where="model list success",
     )
-    exported = get_server_span(exporter)
+    exported: Final = get_server_span(exporter)
     assert exported is not None
     assert exported.context.trace_id == int(INBOUND_TRACEPARENT.split("-")[1], 16)
 
-    endpoint_spans = [s for s in exporter.get_finished_spans() if s.name == "model_list"]
+    endpoint_spans: Final = [s for s in exporter.get_finished_spans() if s.name == "model_list"]
     assert len(endpoint_spans) == 1
     assert endpoint_spans[0].parent is not None
     assert endpoint_spans[0].parent.span_id == exported.context.span_id

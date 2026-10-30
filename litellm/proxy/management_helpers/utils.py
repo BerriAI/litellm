@@ -687,6 +687,7 @@ async def _emit_management_endpoint_otel_span(
     end_time: datetime,
     result: Any = None,
     exception: Exception | None = None,
+    log_payload: bool = True,
 ) -> None:
     """Stamp + end the parent OTEL SERVER span for a management endpoint.
 
@@ -716,8 +717,8 @@ async def _emit_management_endpoint_otel_span(
         )
 
         route = get_request_route(http_request)
-        request_body: dict = await read_request_body(  # rebind-ok: pre-existing rebinding on a rename-only line
-            request=http_request
+        request_body: dict = (  # rebind-ok: pre-existing rebinding on a rename-only line
+            await read_request_body(request=http_request) if log_payload else {}
         )
     else:
         route = func.__name__
@@ -738,7 +739,7 @@ async def _emit_management_endpoint_otel_span(
     )
 
     _response: dict[str, object] | None = None
-    if exception is None and result is not None:
+    if log_payload and exception is None and result is not None:
         try:
             raw: Final[Mapping[str, object]] = dict(result)
             _response = {k: v for k, v in raw.items() if k not in _CREDENTIAL_FIELDS}
@@ -782,9 +783,12 @@ def management_endpoint_wrapper(func: Callable[_P, Awaitable[_R]]) -> Callable[_
 
 
 def management_endpoint_span_wrapper(func: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
-    """``management_endpoint_wrapper`` without request/response payloads on the span, for
-    endpoints that serialize large or high-frequency responses (e.g. the model list)."""
     return _wrap_management_endpoint(func, log_payload=False)
+
+
+def _caller_auth(endpoint_kwargs: Mapping[str, object]) -> UserAPIKeyAuth:
+    caller: Final = endpoint_kwargs.get("user_api_key_dict")
+    return caller if isinstance(caller, UserAPIKeyAuth) else UserAPIKeyAuth()
 
 
 def _wrap_management_endpoint(
@@ -792,16 +796,15 @@ def _wrap_management_endpoint(
 ) -> Callable[_P, Awaitable[_R]]:
     @wraps(endpoint)
     async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
-        request_kwargs: Final[dict[str, Any]] = dict(kwargs)  # mutable-ok: passed to dict-typed helpers
         start_time: Final = datetime.now()
         try:
             result: Final = await endpoint(*args, **kwargs)
             end_time = datetime.now()
             try:
-                user_api_key_dict: UserAPIKeyAuth = request_kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
+                user_api_key_dict: UserAPIKeyAuth = _caller_auth(kwargs)
 
                 await send_management_endpoint_alert(
-                    request_kwargs=request_kwargs,
+                    request_kwargs=kwargs,
                     user_api_key_dict=user_api_key_dict,
                     function_name=endpoint.__name__,
                 )
@@ -809,18 +812,19 @@ def _wrap_management_endpoint(
                 if parent_otel_span is not None:
                     await _emit_management_endpoint_otel_span(
                         func=endpoint,
-                        kwargs=request_kwargs,
+                        kwargs=kwargs,
                         parent_otel_span=parent_otel_span,
                         start_time=start_time,
                         end_time=end_time,
-                        result=result if log_payload else None,
+                        result=result,
+                        log_payload=log_payload,
                     )
 
                 # Delete updated/deleted info from cache
-                _delete_api_key_from_cache(kwargs=request_kwargs)
-                _delete_user_id_from_cache(kwargs=request_kwargs)
-                _delete_team_id_from_cache(kwargs=request_kwargs)
-                _delete_customer_id_from_cache(kwargs=request_kwargs)
+                _delete_api_key_from_cache(kwargs=kwargs)
+                _delete_user_id_from_cache(kwargs=kwargs)
+                _delete_team_id_from_cache(kwargs=kwargs)
+                _delete_customer_id_from_cache(kwargs=kwargs)
             except Exception as e:
                 # Non-Blocking Exception
                 verbose_logger.debug("Error in management endpoint wrapper: %s", str(e))
@@ -829,17 +833,18 @@ def _wrap_management_endpoint(
         except Exception as e:
             end_time = datetime.now()
 
-            user_api_key_dict: UserAPIKeyAuth = request_kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
+            user_api_key_dict: UserAPIKeyAuth = _caller_auth(kwargs)
             parent_otel_span = getattr(user_api_key_dict, "parent_otel_span", None)
             if parent_otel_span is not None:
                 try:
                     await _emit_management_endpoint_otel_span(
                         func=endpoint,
-                        kwargs=request_kwargs,
+                        kwargs=kwargs,
                         parent_otel_span=parent_otel_span,
                         start_time=start_time,
                         end_time=end_time,
                         exception=e,
+                        log_payload=log_payload,
                     )
                 except Exception as otel_exc:
                     # Non-Blocking Exception - never let OTEL failures swallow
