@@ -13,6 +13,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     openai_prompt_cache_breakpoint_support,
+    routed_model_info,
     targets_openai_api,
 )
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params, process_response_headers
@@ -713,8 +714,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def _keeps_prompt_cache_breakpoints(self, model: str, litellm_params: GenericLiteLLMParams) -> bool:
         provider: Final = _provider_name(self.custom_llm_provider)
         base_model: Final = self._declared_base_model(model=model, litellm_params=litellm_params)
+        model_info: Final = routed_model_info(_DeclaredModel.model_validate(litellm_params).model_info)
         known_support: Final = (
-            openai_prompt_cache_breakpoint_support(name, provider) for name in dict.fromkeys((base_model, model))
+            openai_prompt_cache_breakpoint_support(name, provider, model_info)
+            for name in dict.fromkeys((base_model, model))
         )
         return next((support for support in known_support if support is not None), None) is not False
 
@@ -747,6 +750,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             custom_llm_provider=_provider_name(self.custom_llm_provider),
             api_base=host.api_base or host.base_url,
             prompt_cache_options=prompt_cache_options,
+            model_info=routed_model_info(_DeclaredModel.model_validate(litellm_params).model_info),
         )
 
     @staticmethod

@@ -27,6 +27,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     CARRY_UNMATCHED_MESSAGE_POINTS,
     AnthropicCacheControlHook,
     configured_injection_points,
+    routed_model_info,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
@@ -880,6 +881,7 @@ def _stamp_injection_points_for_the_hook(
         custom_llm_provider,
         kwargs.get("api_base") or kwargs.get("base_url"),
         kwargs.get("prompt_cache_options"),
+        routed_model_info(kwargs.get("model_info")),
     )
 
 

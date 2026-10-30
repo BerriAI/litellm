@@ -8,14 +8,18 @@ import subprocess
 import sys
 import textwrap
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final, List, Optional, Tuple, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+import respx
+from httpx import Response
 from openai.types.chat import ChatCompletionMessage
 from pydantic import BaseModel, ConfigDict
 
 import litellm
+from litellm import Router
 from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (
     CARRY_UNMATCHED_MESSAGE_POINTS,
@@ -5034,3 +5038,239 @@ def test_cache_control_hook_injects_next_to_a_malformed_message_instead_of_raisi
         {"type": "ephemeral"},
         {"type": "ephemeral"},
     ]
+
+
+_SHARED_FOUNDRY_MODEL: Final = "azure_ai/qa-shared-gpt-deployment"
+_SIBLING_BREAKPOINT_FLAGS: Final = MappingProxyType(
+    {
+        "opted-in": MappingProxyType({"supports_prompt_cache_breakpoint": True}),
+        "opted-out": MappingProxyType({"supports_prompt_cache_breakpoint": False}),
+    }
+)
+_FOUNDRY_CHAT_ROUTE: Final = (
+    "/models/chat/completions",
+    MappingProxyType(
+        {
+            "id": "chatcmpl-azure-ai",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "qa-shared-gpt-deployment",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+        }
+    ),
+)
+_FOUNDRY_RESPONSES_ROUTE: Final = (
+    "/openai/v1/responses",
+    MappingProxyType(
+        {
+            "id": "resp_azure_ai",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "qa-shared-gpt-deployment",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_azure_ai",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+                }
+            ],
+        }
+    ),
+)
+
+
+def _foundry_siblings_sharing_one_model_string(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    registration_order: tuple[str, ...],
+    upstream: tuple[str, Mapping[str, object]],
+) -> tuple[Router, Mapping[str, respx.Route]]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    path, reply = upstream
+    routes: Final = MappingProxyType(
+        {
+            host: respx_mock.post(host=f"{host}.services.ai.azure.com", path=path).mock(
+                return_value=Response(200, json=dict(reply))
+            )
+            for host in registration_order
+        }
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": host,
+                "litellm_params": {
+                    "model": _SHARED_FOUNDRY_MODEL,
+                    "api_base": f"https://{host}.services.ai.azure.com/models",
+                    "api_key": "azure-ai-test-key",
+                    "cache_control_injection_points": [{"location": "message", "role": "system"}],
+                },
+                "model_info": {"id": f"{host}-id", **_SIBLING_BREAKPOINT_FLAGS.get(host, {})},
+            }
+            for host in registration_order
+        ],
+        num_retries=0,
+    )
+    return router, routes
+
+
+async def _send_unmarked_system_prompt(router: Router, host: str, entrypoint: str) -> None:
+    chat_messages: Final = [{"role": "system", "content": "stable"}, {"role": "user", "content": "hi"}]
+    match entrypoint:
+        case "completion":
+            router.completion(model=host, messages=chat_messages)
+        case "acompletion":
+            await router.acompletion(model=host, messages=chat_messages)
+        case "aanthropic_messages":
+            await router.aanthropic_messages(
+                model=host, system="stable", messages=[{"role": "user", "content": "hi"}], max_tokens=16
+            )
+        case "aresponses":
+            await router.aresponses(model=host, input=chat_messages)
+
+
+@pytest.mark.parametrize(
+    ("entrypoint", "upstream"),
+    [
+        ("completion", _FOUNDRY_CHAT_ROUTE),
+        ("acompletion", _FOUNDRY_CHAT_ROUTE),
+        ("aanthropic_messages", _FOUNDRY_CHAT_ROUTE),
+        ("aresponses", _FOUNDRY_RESPONSES_ROUTE),
+    ],
+    ids=["completion", "acompletion", "aanthropic_messages", "aresponses"],
+)
+@pytest.mark.parametrize(
+    "registration_order", [("opted-in", "opted-out", "unflagged"), ("unflagged", "opted-out", "opted-in")]
+)
+async def test_foundry_deployment_reads_only_its_own_prompt_cache_flag_not_a_siblings_sharing_its_model_string(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    registration_order: tuple[str, ...],
+    entrypoint: str,
+    upstream: tuple[str, Mapping[str, object]],
+) -> None:
+    router, routes = _foundry_siblings_sharing_one_model_string(respx_mock, monkeypatch, registration_order, upstream)
+
+    for host in registration_order:
+        await _send_unmarked_system_prompt(router, host, entrypoint)
+
+    def sent_prompt_caching(host: str) -> tuple[object, bool]:
+        body: Final = routes[host].calls.last.request.content
+        return json.loads(body).get("prompt_cache_options"), b"prompt_cache_breakpoint" in body
+
+    assert {host: sent_prompt_caching(host) for host in registration_order} == {
+        "opted-in": ({"mode": "implicit"}, True),
+        "opted-out": (None, False),
+        "unflagged": (None, False),
+    }
+
+
+@pytest.mark.parametrize(
+    ("model", "sibling_flag", "expected"),
+    [("qa-openai-shared", True, False), ("gpt-99.0-qa-shared", False, True)],
+    ids=["sibling-opt-in-does-not-turn-it-on", "sibling-opt-out-does-not-turn-it-off"],
+)
+def test_openai_deployment_reads_the_catalog_not_a_siblings_flag_on_the_shared_key(
+    monkeypatch: pytest.MonkeyPatch, model: str, sibling_flag: bool, expected: bool
+) -> None:
+    sibling_entry: Final = {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_prompt_cache_breakpoint": sibling_flag,
+    }
+    monkeypatch.setitem(litellm.model_cost, model, sibling_entry)
+
+    assert (
+        AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
+            model, "openai", "https://api.openai.com/v1", model_info={"id": "flagless-deployment"}
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "declared", "api_base", "expected"),
+    [
+        ("qa-openai-shared", True, "https://api.openai.com/v1", True),
+        ("qa-openai-shared", True, "https://compatible-host.example.com/v1", False),
+        ("gpt-99.0-qa-shared", False, "https://api.openai.com/v1", False),
+    ],
+    ids=["opt-in-on-openai", "opt-in-on-a-compatible-host-stays-off", "opt-out-beats-the-version-rule"],
+)
+def test_openai_deployment_declared_flag_answers_support_while_the_host_still_decides(
+    model: str, declared: bool, api_base: str, expected: bool
+) -> None:
+    assert (
+        AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
+            model, "openai", api_base, model_info={"supports_prompt_cache_breakpoint": declared}
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    "registration_order", [("opted-in", "opted-out", "unflagged"), ("unflagged", "opted-out", "opted-in")]
+)
+async def test_foundry_responses_drop_params_keeps_a_client_breakpoint_by_the_deployments_own_flag(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, registration_order: tuple[str, ...]
+) -> None:
+    router, routes = _foundry_siblings_sharing_one_model_string(
+        respx_mock, monkeypatch, registration_order, _FOUNDRY_RESPONSES_ROUTE
+    )
+    client_marked_system_prompt: Final = {
+        "role": "system",
+        "content": [{"type": "input_text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+    }
+
+    for host in registration_order:
+        await router.aresponses(
+            model=host, input=[client_marked_system_prompt, {"role": "user", "content": "hi"}], drop_params=True
+        )
+
+    assert {
+        host: b"prompt_cache_breakpoint" in routes[host].calls.last.request.content for host in registration_order
+    } == {
+        "opted-in": True,
+        "opted-out": False,
+        "unflagged": True,
+    }
+
+
+@pytest.mark.parametrize("registration_order", [("opted-in", "unflagged"), ("unflagged", "opted-in")])
+async def test_openai_messages_bridge_sends_a_breakpoint_by_the_deployments_own_flag_not_a_siblings(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, registration_order: tuple[str, ...]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _, reply = _FOUNDRY_RESPONSES_ROUTE
+    responses_route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=Response(200, json=dict(reply))
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": "openai/qa-shared-gpt-deployment", "api_key": "openai-test-key"},
+                "model_info": {"id": f"{name}-id", **_SIBLING_BREAKPOINT_FLAGS.get(name, {})},
+            }
+            for name in registration_order
+        ],
+        num_retries=0,
+    )
+
+    async def sends_a_breakpoint(name: str) -> bool:
+        await router.aanthropic_messages(
+            model=name,
+            system=[{"type": "text", "text": "stable", "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=16,
+        )
+        return b"prompt_cache_breakpoint" in responses_route.calls.last.request.content
+
+    assert {name: await sends_a_breakpoint(name) for name in registration_order} == {
+        "opted-in": True,
+        "unflagged": False,
+    }

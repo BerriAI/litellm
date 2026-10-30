@@ -13,6 +13,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
+    routed_model_info,
     supports_openai_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.asyncify import (
@@ -186,6 +187,7 @@ def _reads_prompt_cache_breakpoint(model: str, forwarded_kwargs: Mapping[str, ob
         provider if isinstance(provider, str) else None,
         forwarded_kwargs.get("api_base") or forwarded_kwargs.get("base_url"),
         forwarded_kwargs.get("prompt_cache_options"),
+        routed_model_info(forwarded_kwargs.get("model_info")),
     )
 
 
@@ -193,10 +195,11 @@ def _model_takes_prompt_cache_breakpoint(model: str, forwarded_kwargs: Mapping[s
     provider: Final = forwarded_kwargs.get("custom_llm_provider")
     provider_name: Final = provider if isinstance(provider, str) else None
     base_model: Final = forwarded_kwargs.get("base_model")
-    return supports_openai_prompt_cache_breakpoint(model, provider_name) or (
+    model_info: Final = routed_model_info(forwarded_kwargs.get("model_info"))
+    return supports_openai_prompt_cache_breakpoint(model, provider_name, model_info) or (
         isinstance(base_model, str)
         and bool(base_model)
-        and supports_openai_prompt_cache_breakpoint(base_model, provider_name)
+        and supports_openai_prompt_cache_breakpoint(base_model, provider_name, model_info)
     )
 
 
