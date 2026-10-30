@@ -2687,3 +2687,33 @@ async def test_azure_v1_deployment_keyed_only_by_the_openai_api_key_env_sends_th
 
     assert response.choices[0].message.content == "hi"
     assert route.calls.last.request.headers["authorization"] == "Bearer azure-key-in-openai-env"
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_azure_v1_deployment_with_no_credential_is_an_authentication_error(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, is_async: bool
+) -> None:
+    for name in (
+        "AZURE_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_AD_TOKEN",
+        "AZURE_OPENAI_AD_TOKEN",
+        "AZURE_CLIENT_ID",
+        "OPENAI_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    api_base: Final = f"https://nokey-{is_async}.openai.azure.com"
+    route: Final = respx_mock.post(f"{api_base}/openai/v1/embeddings").respond(200, json={})
+    request: Final = {
+        "model": "azure/text-embedding-3-small",
+        "input": ["hi"],
+        "api_base": api_base,
+        "api_version": "v1",
+    }
+
+    with pytest.raises(litellm.AuthenticationError):
+        await litellm.aembedding(**request) if is_async else litellm.embedding(**request)
+
+    assert not route.called

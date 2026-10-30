@@ -5345,6 +5345,77 @@ async def test_one_chunk_finishing_both_requested_choices_then_dropped_before_do
     assert "".join(chunk.choices[0].delta.content or "" for chunk in collected if chunk.choices) == "HiHel"
 
 
+def _two_choices_requested_but_only_choice_0_streamed() -> tuple[ModelResponseStream, ...]:
+    return (_reset_test_chunk(content="Hi", index=0), _reset_test_chunk(finish_reason="stop", index=0))
+
+
+def _two_text_choices_requested_but_only_choice_0_streamed() -> tuple[Completion, ...]:
+    return (_text_completion_chunk(0, "Hi"), _text_completion_chunk(0, finish_reason="stop"))
+
+
+def _choice_1_finishing_beside_choice_0_content() -> tuple[ModelResponseStream, ...]:
+    return (
+        _reset_test_chunk(content="Hel", index=1),
+        ModelResponseStream(
+            id="chatcmpl-reset-test",
+            created=1783458104,
+            model="stub-model",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(index=0, delta=Delta(content="Hi"), finish_reason=None),
+                StreamingChoices(index=1, delta=Delta(content=None), finish_reason="stop"),
+            ],
+        ),
+        _reset_test_chunk(finish_reason="stop", index=0),
+    )
+
+
+@pytest.mark.asyncio
+@_SYNC_AND_ASYNC
+@pytest.mark.parametrize(
+    ("provider", "chunks", "content"),
+    (
+        ("openai", _two_choices_requested_but_only_choice_0_streamed, "Hi"),
+        ("text-completion-openai", _two_text_choices_requested_but_only_choice_0_streamed, "Hi"),
+        ("openai", _choice_1_finishing_beside_choice_0_content, "HelHi"),
+    ),
+    ids=("provider_streams_fewer_choices", "text_provider_streams_fewer_choices", "choice_1_finishes_mid_chunk"),
+)
+async def test_dropped_before_done_after_every_streamed_choice_finished_ends_cleanly(
+    logging_obj: Logging,
+    sync_mode: bool,
+    provider: str,
+    chunks: Callable[[], Sequence[ModelResponseStream | Completion]],
+    content: str,
+):
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={"n": 2})
+    stream: Final = _chunks_then_failure(chunks(), _httpx2_read_error())
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=stream if sync_mode else _as_async(stream),
+        model="stub-model",
+        custom_llm_provider=provider,
+        logging_obj=logging_obj,
+    )
+
+    collected: Final = await _collect(wrapper, sync_mode)
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in collected if chunk.choices) == content
+
+
+@pytest.mark.asyncio
+@_SYNC_AND_ASYNC
+async def test_dropped_before_done_while_choice_0_streams_beside_a_finished_choice_1_raises(
+    logging_obj: Logging, sync_mode: bool
+):
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={"n": 2})
+    wrapper: Final = _openai_stream_over(
+        _choice_1_finishing_beside_choice_0_content()[:2], _httpx2_read_error(), sync_mode, logging_obj
+    )
+
+    with pytest.raises(MidStreamFallbackError):
+        await _collect(wrapper, sync_mode)
+
+
 @pytest.mark.asyncio
 @_SYNC_AND_ASYNC
 @_SDK3_DROPPED_CONNECTIONS

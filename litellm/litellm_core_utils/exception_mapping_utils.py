@@ -2120,7 +2120,7 @@ def _map_azure_exception(
             response=getattr(original_exception, "response", None),
             body=getattr(original_exception, "body", None),
         )
-    elif "The api_key client option must be set either by passing api_key to the client or by setting" in error_str:
+    elif any(marker in error_str for marker in _OPENAI_CLIENT_MISSING_CREDENTIALS_MESSAGES):
         raise AuthenticationError(
             message=f"{exception_provider} AuthenticationError - {message}",
             llm_provider=custom_llm_provider,
