@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets
     from litellm.types.caching import DynamicCacheControl
     from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionUserMessage
+    from litellm.types.proxy.guardrails.guardrail_hooks.headroom import HeadroomRequestContext
     from litellm.types.proxy.litellm_pre_call_utils import SecretFields
     from litellm.types.router import ConfigurableClientsideParamsCustomAuth, DeploymentTypedDict, RetryPolicy
     from litellm.types.router_weights import RouterWeights
@@ -54,6 +55,7 @@ RoutingStrategyName: TypeAlias = Literal[
 
 TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
 ADDRESSED_RESPONSE_ID_FIELD: Final = "_litellm_addressed_response_id"
+COMPARISON_RESPONSE_ID_FIELD: Final = "_litellm_comparison_response_id"
 STREAM_USAGE_INJECTED_FIELD: Final = "_litellm_stream_usage_injected"
 
 WIRE_NAME: Final = "wire_name"
@@ -352,6 +354,7 @@ class CallState:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AgenticLoopState:
+    headroom_context: "HeadroomRequestContext | None" = field(default=None, metadata=wire("_headroom_request_context"))
     depth: int | None = field(default=None, metadata=wire("_agentic_loop_depth"))
     fingerprints: Sequence[str] | None = field(default=None, metadata=wire("_agentic_loop_fingerprints"))
     api_surface: Literal["chat_completions", "responses"] | None = field(
@@ -404,6 +407,7 @@ class ProxyRequestState:
     secret_fields: "SecretFields | None" = None
     trusted_callback_vars: Mapping[str, str] | None = field(default=None, metadata=wire(TRUSTED_CALLBACK_VARS_FIELD))
     addressed_response_id: str | None = field(default=None, metadata=wire(ADDRESSED_RESPONSE_ID_FIELD))
+    comparison_response_id: str | None = field(default=None, metadata=wire(COMPARISON_RESPONSE_ID_FIELD))
     strip_stream_usage: bool | None = field(default=None, metadata=wire("_litellm_strip_stream_usage"))
     stream_usage_injected: bool | None = field(default=None, metadata=wire(STREAM_USAGE_INJECTED_FIELD))
     client_side_timeout: bool | None = None

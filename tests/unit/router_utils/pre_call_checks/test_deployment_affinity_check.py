@@ -9,7 +9,11 @@ import pytest
 
 import litellm
 from litellm.caching.dual_cache import DualCache
-from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.responses.utils import (
+    COMPARISON_RESPONSE_ID_ROUTING_HINT,
+    ComparisonRoutingHint,
+    ResponsesAPIRequestUtils,
+)
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
@@ -1299,3 +1303,114 @@ async def test_previous_response_id_pin_holds_even_after_its_deployment_failed()
         },
         parent_otel_span=None,
     ) == [healthy_deployments[0]]
+
+
+def _response_id_from(model_id: str) -> str:
+    return ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="openai", model_id=model_id, response_id=f"resp_upstream_{model_id}"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_kwargs", "pinned_model_ids"),
+    [
+        pytest.param(
+            {"prompt_cache_options": {"comparison_response_id": _response_id_from("B")}},
+            ("B",),
+            id="top-level-comparison",
+        ),
+        pytest.param(
+            {
+                "prompt_cache_options": {"comparison_response_id": _response_id_from("A")},
+                "extra_body": {"prompt_cache_options": {"comparison_response_id": _response_id_from("B")}},
+            },
+            ("B",),
+            id="extra-body-comparison-wins",
+        ),
+        pytest.param(
+            {
+                "previous_response_id": _response_id_from("A"),
+                "prompt_cache_options": {"comparison_response_id": _response_id_from("B")},
+            },
+            ("A",),
+            id="previous-response-wins",
+        ),
+        pytest.param(
+            {COMPARISON_RESPONSE_ID_ROUTING_HINT: ComparisonRoutingHint(_response_id_from("C"))},
+            ("C",),
+            id="websocket-first-frame-routing-hint",
+        ),
+        pytest.param(
+            {"prompt_cache_options": {"comparison_response_id": f"resp_{_response_id_from('B')}"}},
+            ("A", "B", "C"),
+            id="comparison-with-an-extra-resp-prefix-pins-nothing",
+        ),
+        pytest.param(
+            {COMPARISON_RESPONSE_ID_ROUTING_HINT: ComparisonRoutingHint(f"resp_{_response_id_from('C')}")},
+            ("A", "B", "C"),
+            id="websocket-routing-hint-with-an-extra-resp-prefix-pins-nothing",
+        ),
+        pytest.param(
+            {COMPARISON_RESPONSE_ID_ROUTING_HINT: _response_id_from("C")},
+            ("A", "B", "C"),
+            id="request-body-key-named-like-the-routing-hint",
+        ),
+    ],
+)
+async def test_comparison_response_id_pins_its_deployment_unless_a_previous_response_id_does(
+    request_kwargs: dict[str, object], pinned_model_ids: tuple[str, ...]
+) -> None:
+    callback: Final = DeploymentAffinityCheck(
+        cache=DualCache(),
+        ttl_seconds=60,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=True,
+    )
+    healthy_deployments: Final = [
+        {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}, "model_info": {"id": model_id}}
+        for model_id in ("A", "B", "C")
+    ]
+
+    pinned: Final = await callback.async_filter_deployments(
+        model="gpt-4o",
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs=request_kwargs,
+        parent_otel_span=None,
+    )
+
+    assert tuple(deployment["model_info"]["id"] for deployment in pinned) == pinned_model_ids
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failed_ids",
+    [
+        pytest.param({"_excluded_deployment_ids": ["A"]}, id="excluded-by-failover"),
+        pytest.param({"_retry_skipped_deployment_ids": ("A",)}, id="skipped-by-retry"),
+    ],
+)
+async def test_comparison_response_id_pin_steps_aside_once_its_deployment_failed(
+    failed_ids: dict[str, object],
+) -> None:
+    callback: Final = DeploymentAffinityCheck(
+        cache=DualCache(),
+        ttl_seconds=60,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=True,
+    )
+    healthy_deployments: Final = [
+        {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}, "model_info": {"id": model_id}}
+        for model_id in ("A", "B")
+    ]
+
+    candidates: Final = await callback.async_filter_deployments(
+        model="gpt-4o",
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs={"prompt_cache_options": {"comparison_response_id": _response_id_from("A")}, **failed_ids},
+        parent_otel_span=None,
+    )
+
+    assert [deployment["model_info"]["id"] for deployment in candidates] == ["A", "B"]

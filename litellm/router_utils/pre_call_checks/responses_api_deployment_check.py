@@ -11,10 +11,12 @@ If previous_response_id is provided, route to the deployment that returned the p
 """
 
 import warnings
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router_utils.common_utils import deployment_ids_failed_in_request
 from litellm.types.llms.openai import AllMessageValues
 
 
@@ -35,18 +37,13 @@ class ResponsesApiDeploymentCheck(CustomLogger):
         model: str,
         healthy_deployments: list,
         messages: list[AllMessageValues] | None,
-        request_kwargs: dict | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
         parent_otel_span: Span | None = None,
     ) -> list[dict]:
-        request_kwargs = request_kwargs or {}
-        previous_response_id: Final = request_kwargs.get("previous_response_id", None)
-        if previous_response_id is None:
-            return healthy_deployments
-
-        decoded_response: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(
-            response_id=previous_response_id,
+        request: Final = request_kwargs or {}
+        model_id: Final = ResponsesAPIRequestUtils.pinned_response_model_id(
+            request, deployment_ids_failed_in_request(request)
         )
-        model_id: Final = decoded_response.get("model_id")
         if model_id is None:
             return healthy_deployments
 
