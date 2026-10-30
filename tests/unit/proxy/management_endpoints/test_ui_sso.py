@@ -1174,6 +1174,40 @@ def test_generic_response_convertor_normalizes_email():
     assert result.display_name == "Test User"
 
 
+@pytest.mark.parametrize(
+    "email",
+    ["Dan@Corp.local", "dan@corp.test", "dan@corp.com"],
+)
+def test_generic_response_convertor_accepts_special_use_email_domains(email: str) -> None:
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+    jwt_handler: Final = MagicMock(spec=JWTHandler)
+    jwt_handler.get_team_ids_from_jwt.return_value = []
+
+    result: Final = generic_response_convertor(
+        response={"email": email},
+        jwt_handler=jwt_handler,
+        sso_jwt_handler=None,
+        role_mappings=None,
+    )
+
+    assert isinstance(result, CustomOpenID)
+    assert result.email == email.lower()
+
+
+def test_microsoft_sso_handler_accepts_special_use_email_domain() -> None:
+    from litellm.proxy.management_endpoints.ui_sso import MICROSOFT_USER_EMAIL_ATTRIBUTE
+
+    result: Final = MicrosoftSSOHandler.openid_from_response(
+        response={MICROSOFT_USER_EMAIL_ATTRIBUTE: "dan@corp.local"},
+        team_ids=[],
+        user_role=None,
+    )
+
+    assert isinstance(result, CustomOpenID)
+    assert result.email == "dan@corp.local"
+
+
 @pytest.mark.asyncio
 async def test_upsert_sso_user_updates_role_for_existing_user():
     """
@@ -1543,6 +1577,11 @@ def test_get_user_email_and_id_extracts_microsoft_role():
             id="id",
         ),
         pytest.param(CustomOpenID(email="a@example.com", provider="generic", team_ids=[]), "a@example.com", id="email"),
+        pytest.param(
+            CustomOpenID(email="dan@corp.local", provider="generic", team_ids=[]),
+            "dan@corp.local",
+            id="special-use-email",
+        ),
         pytest.param(
             CustomOpenID(id="   ", email="a@example.com", provider="generic", team_ids=[]),
             "a@example.com",
