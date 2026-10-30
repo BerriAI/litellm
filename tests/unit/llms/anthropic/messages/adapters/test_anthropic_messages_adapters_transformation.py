@@ -1,6 +1,7 @@
 import base64
 import functools
 import json
+import logging
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, Final, cast
@@ -2871,14 +2872,21 @@ def test_translate_completion_input_params_rejects_a_non_numeric_budget_without_
 
 @pytest.mark.parametrize("budget", ["2048", True])
 def test_translate_completion_input_params_drops_a_non_numeric_budget_under_drop_params(
-    budget: object, monkeypatch: pytest.MonkeyPatch
+    budget: object, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ):
     monkeypatch.setattr(litellm, "drop_params", False)
-    translated: Final = AnthropicAdapter().translate_completion_input_params(
-        _gemini_request_with_budget(budget, drop_params=True)
-    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        translated: Final = AnthropicAdapter().translate_completion_input_params(
+            _gemini_request_with_budget(budget, drop_params=True)
+        )
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
     assert translated is not None
     assert not {"reasoning_effort", "thinking"} & translated.keys()
+    assert len(drop_warnings) == 1
+    assert all(
+        fragment in drop_warnings[0]
+        for fragment in (f"thinking.budget_tokens={budget!r}", "gemini-2.5-flash", "(drop_params=True)")
+    )
 
 
 def test_translate_openai_content_to_anthropic_reasoning_content_without_thinking_blocks():

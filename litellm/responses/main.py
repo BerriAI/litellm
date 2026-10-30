@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 import json
-from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable, Mapping, Sequence
+from collections.abc import Coroutine, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
@@ -31,7 +31,10 @@ from litellm.integrations.anthropic_cache_control_hook import (
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
-from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
+from litellm.litellm_core_utils.get_llm_provider_logic import (
+    declared_authenticating_provider,
+    get_provider_affinity_header,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -78,7 +81,7 @@ from litellm.types.llms.openai import (
 
 # Handle ResponseText import with fallback
 if TYPE_CHECKING:
-    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard
+    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard, ResponsesWsTurnAdmission
     from litellm.types.llms.openai import ResponseText
 else:
     ResponseText = str  # Fallback for ResponseText import
@@ -805,6 +808,7 @@ def provider_stores_the_conversation(model: str, custom_llm_provider: str | None
     return not _will_bridge_to_chat_completions(
         model,
         custom_llm_provider
+        or declared_authenticating_provider(model)
         or litellm.get_llm_provider(model=model, api_base=api_base, litellm_params=litellm_params)[1],
         bool(kwargs.get("use_chat_completions_api")),
         kwargs.get("model_info"),
@@ -2863,7 +2867,7 @@ async def _aresponses_websocket(
     api_base: str | None = None,
     api_key: str | None = None,
     timeout: float | None = None,
-    turn_admission: Callable[[], Awaitable[None]] | None = None,
+    turn_admission: "ResponsesWsTurnAdmission | None" = None,
     responses_ws_frame_guard: "ResponsesWsFrameGuard | None" = None,
     **kwargs,
 ) -> Exception | None:

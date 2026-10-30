@@ -1160,6 +1160,34 @@ describe("EntityUsage", () => {
     expect(screen.getByTestId("provider-spend-total")).toHaveTextContent("$100.50");
   });
 
+  it("lists a subscription-covered provider on the team view as included in the subscription at zero spend", async () => {
+    const day = mockSpendData.results[0];
+    mockTeamDailyActivityCall.mockResolvedValue({
+      ...mockSpendData,
+      results: [
+        {
+          ...day,
+          breakdown: {
+            ...day.breakdown,
+            providers: {
+              ...day.breakdown.providers,
+              chatgpt: {
+                metrics: { ...day.breakdown.providers.openai.metrics, spend: 0, api_requests: 4 },
+                metadata: { subscription_covered: true },
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    render(<StatefulEntityUsage {...defaultProps} entityType="team" />);
+
+    expect(await screen.findByText("Included in subscription")).toBeInTheDocument();
+    expect(screen.getByText("chatgpt")).toBeInTheDocument();
+    expect(screen.getAllByTestId("provider-share-segment")).toHaveLength(1);
+  });
+
   it("should label the chart with user_email metadata instead of the raw UUID (LIT-3889)", async () => {
     const userUuid = "c0e68be8-057e-4e2f-9d3a-000000000000";
     const spendDataForUser = {

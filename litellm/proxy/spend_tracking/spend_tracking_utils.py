@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checkable
 
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -194,6 +195,7 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "autorouter_savings_estimate",
         "autorouter_baseline_observation",
         "used_client_oauth_token",
+        "upstream_provider",
         KUBERNETES_POD_ROUTING_KEY,
         "litellm_roi_estimator",
         "is_silent_experiment",
@@ -201,6 +203,10 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "user_api_key_user_email",
     )
 )
+
+
+class _UpstreamProviderMetadata(TypedDict, total=False):
+    upstream_provider: ReadOnly[str]
 
 
 def _stored_user_email(metadata: Mapping[str, object]) -> str | None:
@@ -221,6 +227,7 @@ def _get_spend_logs_metadata(
     model_map_information: StandardLoggingModelInformation | None = None,
     cold_storage_object_key: str | None = None,
     litellm_overhead_time_ms: float | None = None,
+    upstream_provider: str | None = None,
     cost_breakdown: CostBreakdown | None = None,
     litellm_call_id: str | None = None,
     autorouter_savings: float | None = None,
@@ -232,6 +239,9 @@ def _get_spend_logs_metadata(
     kubernetes_pod_routing: StandardLoggingKubernetesPodRouting | None = None,
     is_silent_experiment: bool = False,
 ) -> SpendLogsMetadata:
+    upstream_provider_metadata: Final[_UpstreamProviderMetadata] = (
+        {"upstream_provider": upstream_provider} if upstream_provider is not None else {}
+    )
     if metadata is None:
         return SpendLogsMetadata(
             user_api_key=None,
@@ -265,6 +275,7 @@ def _get_spend_logs_metadata(
             eval_information=None,
             cold_storage_object_key=cold_storage_object_key,
             litellm_overhead_time_ms=None,
+            **upstream_provider_metadata,
             attempted_retries=None,
             max_retries=None,
             attempted_fallbacks=None,
@@ -290,6 +301,7 @@ def _get_spend_logs_metadata(
         **MappingProxyType(
             {key: metadata.get(key) for key in SpendLogsMetadata.__annotations__ if key not in _STAMPED_METADATA_KEYS}
         ),
+        **upstream_provider_metadata,
         autorouter_savings=autorouter_savings,
         autorouter_savings_estimate=autorouter_savings_estimate,
         autorouter_baseline_observation=autorouter_baseline_observation,
@@ -706,6 +718,14 @@ def get_logging_payload(
     if standard_logging_payload is not None:
         hidden_params: Final = standard_logging_payload.get("hidden_params", {})
         litellm_overhead_time_ms = hidden_params.get("litellm_overhead_time_ms")
+    upstream_provider_value: Final[object] = (
+        standard_logging_payload["hidden_params"]["upstream_provider"]
+        if standard_logging_payload is not None
+        and "hidden_params" in standard_logging_payload
+        and "upstream_provider" in standard_logging_payload["hidden_params"]
+        else None
+    )
+    upstream_provider: Final = upstream_provider_value if isinstance(upstream_provider_value, str) else None
 
     logged_provider: Final = (
         kwargs.get("custom_llm_provider")
@@ -807,6 +827,7 @@ def get_logging_payload(
             else None
         ),
         litellm_overhead_time_ms=litellm_overhead_time_ms,
+        upstream_provider=upstream_provider,
         cost_breakdown=(
             standard_logging_payload.get("cost_breakdown", None) if standard_logging_payload is not None else None
         ),
@@ -912,7 +933,7 @@ def get_logging_payload(
             user=metadata.get("user_api_key_user_id", "") or "",
             team_id=metadata.get("user_api_key_team_id", "") or "",
             organization_id=metadata.get("user_api_key_org_id") or "",
-            metadata=safe_dumps(clean_metadata),
+            metadata=safe_dumps(clean_metadata, non_finite_as_null=True),
             cache_key=cache_key,
             spend=kwargs.get("response_cost", 0),
             total_tokens=usage.get("total_tokens", standard_logging_total_tokens),
@@ -1224,7 +1245,7 @@ def _get_messages_for_spend_logs_payload(
                 messages: Final = standard_logging_payload.get("messages")
                 if messages is not None:
                     try:
-                        return safe_dumps(messages)
+                        return safe_dumps(messages, non_finite_as_null=True)
                     except Exception:
                         return "{}"
     return "{}"
@@ -1919,7 +1940,8 @@ def _get_proxy_server_request_for_spend_logs_payload(
             _request_body_json_str: Final = safe_dumps(
                 _stored_request_without_requester_ip_address(stored_request_body)
                 if drop_requester_ip_address
-                else stored_request_body
+                else stored_request_body,
+                non_finite_as_null=True,
             )
             if LITELLM_TRUNCATED_PAYLOAD_FIELD in _request_body_json_str:
                 verbose_proxy_logger.info(
@@ -2000,7 +2022,7 @@ def _get_response_for_spend_logs_payload(
         if isinstance(sanitized_response, str):
             result_str = strip_null_bytes(sanitized_response)
         else:
-            result_str = safe_dumps(sanitized_response)
+            result_str = safe_dumps(sanitized_response, non_finite_as_null=True)
         if LITELLM_TRUNCATED_PAYLOAD_FIELD in result_str:
             verbose_proxy_logger.info(
                 "Spend Log: response was truncated before storing in DB. %s",
@@ -2071,7 +2093,7 @@ def spend_log_row_with_retained_metadata(
         return row
     metadata: Final = _SPEND_LOGS_METADATA_ADAPTER.validate_json(metadata_json)
     retained: Final = {name: value for name, value in metadata.items() if fields.keeps(name)}
-    return {**row, "metadata": safe_dumps(retained)}
+    return {**row, "metadata": safe_dumps(retained, non_finite_as_null=True)}
 
 
 def _get_status_for_spend_log(

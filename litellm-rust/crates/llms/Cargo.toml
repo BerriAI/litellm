@@ -9,6 +9,7 @@ repository.workspace = true
 test-support = ["litellm-http/test-support"]
 
 [dependencies]
+litellm-secret-value.workspace = true
 litellm-llms-types.workspace = true
 litellm-core-utils.workspace = true
 litellm-error.workspace = true
