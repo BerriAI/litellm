@@ -3523,7 +3523,9 @@ class ProxyLogging:
         if not caps.has_guardrail and not caps.has_moderation_override:
             return data
         # Step 1: Collect all guardrail tasks to run in parallel
-        guardrail_tasks: Final[list[Awaitable[object]]] = []  # mutable-ok: gathers conditional hook coroutines
+        guardrail_tasks: Final[
+            list[tuple[CustomLogger, Awaitable[object]]]
+        ] = []  # mutable-ok: selected hook coroutines
 
         for callback in litellm.callbacks:
             if (
@@ -3533,10 +3535,13 @@ class ProxyLogging:
                 and user_api_key_dict is not None
             ):
                 guardrail_tasks.append(
-                    callback.async_moderation_hook(
-                        data=data,
-                        user_api_key_dict=user_api_key_dict,
-                        call_type=call_type,
+                    (
+                        callback,
+                        callback.async_moderation_hook(
+                            data=data,
+                            user_api_key_dict=user_api_key_dict,
+                            call_type=call_type,
+                        ),
                     )
                 )
             elif isinstance(callback, CustomGuardrail):
@@ -3564,27 +3569,31 @@ class ProxyLogging:
                 else:
                     user_api_key_auth_dict = user_api_key_dict
                 guardrail_tasks.append(
-                    self._run_during_call_guardrail(
-                        callback=callback,
-                        data=data,
-                        user_api_key_dict=user_api_key_dict,
-                        user_api_key_auth_dict=user_api_key_auth_dict,
-                        call_type=call_type,
+                    (
+                        callback,
+                        self._run_during_call_guardrail(
+                            callback=callback,
+                            data=data,
+                            user_api_key_dict=user_api_key_dict,
+                            user_api_key_auth_dict=user_api_key_auth_dict,
+                            call_type=call_type,
+                        ),
                     )
                 )
 
         if guardrail_tasks:
+            tasks: Final = tuple(task for _, task in guardrail_tasks)
             if call_type == CallTypes.call_mcp_tool.value and any(
                 isinstance(callback, CustomGuardrail) and callback.on_mcp_block == "raise"
-                for callback in litellm.callbacks
+                for callback, _ in guardrail_tasks
             ):
-                results: Final = await asyncio.gather(*guardrail_tasks, return_exceptions=True)
+                results: Final = await asyncio.gather(*tasks, return_exceptions=True)
                 raised: Final = tuple(result for result in results if isinstance(result, BaseException))
                 selected: Final = first_mcp_raise_block(raised) or next(iter(raised), None)
                 if selected is not None:
                     raise selected
             else:
-                await asyncio.gather(*guardrail_tasks)
+                await asyncio.gather(*tasks)
 
         return data
 

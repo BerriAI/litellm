@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+import asyncio
+from collections.abc import Awaitable, Callable
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -10,8 +12,10 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import CallTypesLiteral
 
 
 @pytest.fixture(autouse=True)
@@ -102,3 +106,76 @@ async def test_during_call_block_names_the_blocking_guardrail_in_applied_guardra
             call_type="completion",
         )
     assert "blocker" in data["metadata"]["applied_guardrails"]
+
+
+class _ControlledModerationGuardrail(CustomGuardrail):
+    def __init__(
+        self,
+        name: str,
+        event_hook: GuardrailEventHooks,
+        scan: Callable[[], Awaitable[None]],
+    ) -> None:
+        super().__init__(guardrail_name=name, event_hook=event_hook, default_on=True)
+        self.scan = scan
+
+    async def async_moderation_hook(
+        self,
+        data: dict[str, object],
+        user_api_key_dict: UserAPIKeyAuth | dict[str, object] | None,
+        call_type: CallTypesLiteral,
+    ) -> None:
+        await self.scan()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["call_mcp_tool", "acompletion"])
+async def test_unselected_raise_policy_preserves_during_call_failure_without_waiting_for_other_scans(
+    proxy_logging: ProxyLogging,
+    monkeypatch: pytest.MonkeyPatch,
+    call_type: CallTypesLiteral,
+) -> None:
+    slow_started: Final = asyncio.Event()
+    release_slow: Final = asyncio.Event()
+    slow_finished: Final = asyncio.Event()
+    failure: Final = RuntimeError("scanner unavailable")
+
+    async def slow_scan() -> None:
+        slow_started.set()
+        try:
+            await release_slow.wait()
+        finally:
+            slow_finished.set()
+
+    async def failing_scan() -> None:
+        await slow_started.wait()
+        raise failure
+
+    mode: Final = (
+        GuardrailEventHooks.during_mcp_call if call_type == "call_mcp_tool" else GuardrailEventHooks.during_call
+    )
+    unrelated: Final = CustomGuardrail(guardrail_name="unselected", event_hook=mode, default_on=False)
+    unrelated.apply_mcp_block_policy("raise")
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            _ControlledModerationGuardrail("slow", mode, slow_scan),
+            _ControlledModerationGuardrail("failing", mode, failing_scan),
+            unrelated,
+        ],
+    )
+    request: Final = asyncio.create_task(
+        proxy_logging.during_call_hook(
+            data={"model": "mcp-tool-call", "mcp_tool_name": "search", "mcp_arguments": {"query": "hello"}},
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=call_type,
+        )
+    )
+    try:
+        with pytest.raises(RuntimeError, match="scanner unavailable") as raised:
+            await asyncio.wait_for(request, timeout=5)
+        assert raised.value is failure
+        assert not slow_finished.is_set()
+    finally:
+        release_slow.set()
+        await slow_finished.wait()
