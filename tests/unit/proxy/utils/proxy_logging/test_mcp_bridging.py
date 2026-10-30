@@ -13,14 +13,22 @@ Covers:
 
 from __future__ import annotations
 
-import pytest
+from typing import Final, Literal
 
+import pytest
+from fastapi import HTTPException
+
+import litellm
+from litellm.exceptions import ModifyResponseException
+from litellm.proxy.guardrails.exception_utils import MCPGuardrailBlock, get_mcp_guardrail_block
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeGuardrail
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.mcp import (
     MCPDuringCallResponseObject,
     MCPPreCallRequestObject,
     MCPPreCallResponseObject,
 )
-
+from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
 
 # ---------------------------------------------------------------------------
 # _convert_mcp_to_llm_format
@@ -503,3 +511,170 @@ def test_convert_mcp_to_llm_format_has_no_description_keys_at_call_time(proxy_lo
     assert "mcp_tool_description" not in out
     assert "mcp_input_schema" not in out
     assert "Description:" not in out["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["pre_call", "during_call", "pipeline"])
+@pytest.mark.parametrize("action", ["raise", "tool_error"])
+async def test_mcp_refusal_carries_policy_through_dispatch(
+    proxy_logging,
+    make_user_api_key_auth,
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+    action: Literal["raise", "tool_error"],
+) -> None:
+    guardrail: Final = CustomCodeGuardrail(
+        guardrail_name="mcp-blocker",
+        custom_code='def apply_guardrail(inputs, request_data, input_type):\n    return block("private argument")\n',
+        event_hook=GuardrailEventHooks.during_mcp_call if phase == "during_call" else GuardrailEventHooks.pre_mcp_call,
+        default_on=True,
+    )
+    guardrail.apply_mcp_block_policy(action)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    pipeline: Final = GuardrailPipeline(
+        mode="pre_call",
+        steps=[PipelineStep(guardrail="mcp-blocker", on_fail="block")],
+    )
+    data: Final = {
+        "model": "mcp-tool-call",
+        "mcp_tool_name": "search",
+        "mcp_arguments": {"query": "private"},
+        "metadata": {"_guardrail_pipelines": [("mcp-policy", pipeline)]} if phase == "pipeline" else {},
+    }
+    hook: Final = proxy_logging.during_call_hook if phase == "during_call" else proxy_logging.pre_call_hook
+    expected_error: Final = HTTPException if phase == "pipeline" else ModifyResponseException
+    with pytest.raises(expected_error) as raised:
+        await hook(data=data, user_api_key_dict=make_user_api_key_auth(), call_type="call_mcp_tool")
+    assert get_mcp_guardrail_block(raised.value) == MCPGuardrailBlock("mcp-blocker", action)
+    if phase == "pipeline":
+        assert raised.value.status_code == 400
+        assert raised.value.detail["error"]["type"] == "guardrail_pipeline_error"
+    else:
+        assert "private argument" in str(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["pre_call", "during_call"])
+@pytest.mark.parametrize("reverse_order", [False, True])
+async def test_parallel_mcp_refusals_prefer_raise_policy(
+    proxy_logging,
+    make_user_api_key_auth,
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+    reverse_order: bool,
+) -> None:
+    guardrails: Final = tuple(
+        CustomCodeGuardrail(
+            guardrail_name=action,
+            custom_code=f'def apply_guardrail(inputs, request_data, input_type):\n    return block("{action}")\n',
+            event_hook=GuardrailEventHooks.pre_mcp_call if phase == "pre_call" else GuardrailEventHooks.during_mcp_call,
+            default_on=True,
+            run_in_parallel=True,
+        )
+        for action in ("tool_error", "raise")
+    )
+    guardrails[1].apply_mcp_block_policy("raise")
+    monkeypatch.setattr(litellm, "callbacks", list(reversed(guardrails)) if reverse_order else list(guardrails))
+    hook: Final = proxy_logging.pre_call_hook if phase == "pre_call" else proxy_logging.during_call_hook
+    with pytest.raises(ModifyResponseException, match="raise") as raised:
+        await hook(
+            data={"model": "mcp-tool-call", "mcp_tool_name": "search", "mcp_arguments": {"query": "private"}},
+            user_api_key_dict=make_user_api_key_auth(),
+            call_type="call_mcp_tool",
+        )
+    assert get_mcp_guardrail_block(raised.value) == MCPGuardrailBlock("raise", "raise")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("on_fail", ["allow", "next"])
+async def test_pipeline_allow_does_not_turn_mcp_detection_into_rejection(
+    proxy_logging,
+    make_user_api_key_auth,
+    monkeypatch: pytest.MonkeyPatch,
+    on_fail: Literal["allow", "next"],
+) -> None:
+    guardrail: Final = CustomCodeGuardrail(
+        guardrail_name="detect-only",
+        custom_code='def apply_guardrail(inputs, request_data, input_type):\n    return block("private argument")\n',
+        event_hook=GuardrailEventHooks.pre_mcp_call,
+        default_on=True,
+    )
+    guardrail.apply_mcp_block_policy("raise")
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    pipeline: Final = GuardrailPipeline(
+        mode="pre_call",
+        steps=[PipelineStep(guardrail="detect-only", on_fail=on_fail)],
+    )
+    data: Final = {
+        "model": "mcp-tool-call",
+        "mcp_tool_name": "search",
+        "mcp_arguments": {"query": "private"},
+        "metadata": {"_guardrail_pipelines": [("mcp-policy", pipeline)]},
+    }
+    result: Final = await proxy_logging.pre_call_hook(
+        data=data,
+        user_api_key_dict=make_user_api_key_auth(),
+        call_type="call_mcp_tool",
+    )
+    assert result["mcp_arguments"] == {"query": "private"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_status", [200, 403])
+async def test_native_during_mcp_hook_distinguishes_bedrock_verdict_from_failure(
+    proxy_logging,
+    make_user_api_key_auth,
+    monkeypatch: pytest.MonkeyPatch,
+    provider_status: int,
+) -> None:
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            provider_status,
+            json={
+                "action": "GUARDRAIL_INTERVENED",
+                "outputs": [{"text": "denied"}],
+                "assessments": [
+                    {"contentPolicy": {"filters": [{"type": "VIOLENCE", "confidence": "HIGH", "action": "BLOCKED"}]}}
+                ],
+            }
+            if provider_status == 200
+            else {"message": "access denied"},
+            request=request,
+        )
+
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "test-token")
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+    guardrail: Final = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        aws_region_name="us-east-1",
+        guardrail_name="bedrock-native",
+        event_hook=GuardrailEventHooks.during_mcp_call,
+        default_on=True,
+        async_handler=handler,
+    )
+    guardrail.apply_mcp_block_policy("raise")
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    try:
+        with pytest.raises(HTTPException) as raised:
+            await proxy_logging.during_call_hook(
+                data={
+                    "model": "mcp-tool-call",
+                    "mcp_tool_name": "search",
+                    "mcp_arguments": {"query": "private"},
+                    "messages": [{"role": "user", "content": "private"}],
+                },
+                user_api_key_dict=make_user_api_key_auth(),
+                call_type="call_mcp_tool",
+            )
+        assert get_mcp_guardrail_block(raised.value) == (
+            MCPGuardrailBlock("bedrock-native", "raise") if provider_status == 200 else None
+        )
+        assert raised.value.status_code == (400 if provider_status == 200 else provider_status)
+    finally:
+        await handler.close()

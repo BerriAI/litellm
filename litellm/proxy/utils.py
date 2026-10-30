@@ -228,7 +228,12 @@ from litellm.proxy.db.token_auth import (
     mint_database_token,
     resolve_database_token_auth,
 )
-from litellm.proxy.guardrails.exception_utils import enrich_http_exception_with_guardrail_context
+from litellm.proxy.guardrails.exception_utils import (
+    enrich_http_exception_with_guardrail_context,
+    first_mcp_raise_block,
+    get_mcp_guardrail_block,
+    mcp_guardrail_block_context,
+)
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
     resolve_endpoint_translation,
@@ -2386,27 +2391,28 @@ class ProxyLogging:
 
         target: Final = unified_guardrail if use_unified else callback
 
-        if hook_type == "pre_call":
-            return await target.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict,
-                cache=self.call_details["user_api_key_cache"],
-                data=data,
-                call_type=call_type,
-            )
-        elif hook_type == "during_call":
-            return await target.async_moderation_hook(
-                data=data,
-                user_api_key_dict=user_api_key_dict,
-                call_type=call_type,
-            )
-        elif hook_type == "post_call":
-            return await target.async_post_call_success_hook(
-                user_api_key_dict=user_api_key_dict,
-                data=data,
-                response=response,
-            )
-        else:
-            raise ValueError(f"Unknown hook_type: {hook_type}")
+        with mcp_guardrail_block_context(callback.guardrail_name, callback.on_mcp_block, call_type, hook_type):
+            if hook_type == "pre_call":
+                return await target.async_pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    cache=self.call_details["user_api_key_cache"],
+                    data=data,
+                    call_type=call_type,
+                )
+            elif hook_type == "during_call":
+                return await target.async_moderation_hook(
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=call_type,
+                )
+            elif hook_type == "post_call":
+                return await target.async_post_call_success_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    response=response,
+                )
+            else:
+                raise ValueError(f"Unknown hook_type: {hook_type}")
 
     async def _execute_guardrail_with_load_balancing(
         self,
@@ -2854,7 +2860,12 @@ class ProxyLogging:
                     },
                 }
             }
-            raise HTTPException(status_code=400, detail=error_detail)
+            pipeline_error: Final = HTTPException(status_code=400, detail=error_detail)
+            if original_exception is not None:
+                mcp_block: Final = get_mcp_guardrail_block(original_exception)
+                if mcp_block is not None:
+                    pipeline_error.__dict__["_mcp_guardrail_block"] = mcp_block
+            raise pipeline_error
 
         if result.terminal_action == "modify_response":
             model: Final = data.get("model")
@@ -3195,6 +3206,9 @@ class ProxyLogging:
             if isinstance(result, BaseException) and not isinstance(result, SensitiveDataRouteException):
                 _record_raising_guardrail(data, callback)
         raised: Final = tuple(result for result in results if isinstance(result, BaseException))
+        mcp_raise_block: Final = first_mcp_raise_block(raised)
+        if mcp_raise_block is not None:
+            raise mcp_raise_block
         blocking: Final = next((exc for exc in raised if not _exception_changes_request_flow(exc)), None)
         if blocking is not None:
             raise blocking
@@ -3504,7 +3518,7 @@ class ProxyLogging:
         if not caps.has_guardrail and not caps.has_moderation_override:
             return data
         # Step 1: Collect all guardrail tasks to run in parallel
-        guardrail_tasks: Final = []
+        guardrail_tasks: Final[list[Awaitable[object]]] = []  # mutable-ok: gathers conditional hook coroutines
 
         for callback in litellm.callbacks:
             if (
@@ -3554,13 +3568,18 @@ class ProxyLogging:
                     )
                 )
 
-        # Step 2: Run all guardrail tasks in parallel
         if guardrail_tasks:
-            try:
+            if call_type == CallTypes.call_mcp_tool.value and any(
+                isinstance(callback, CustomGuardrail) and callback.on_mcp_block == "raise"
+                for callback in litellm.callbacks
+            ):
+                results: Final = await asyncio.gather(*guardrail_tasks, return_exceptions=True)
+                raised: Final = tuple(result for result in results if isinstance(result, BaseException))
+                selected: Final = first_mcp_raise_block(raised) or next(iter(raised), None)
+                if selected is not None:
+                    raise selected
+            else:
                 await asyncio.gather(*guardrail_tasks)
-            except Exception as e:
-                # If any guardrail raises an exception, it will propagate here
-                raise e
 
         return data
 
@@ -3572,34 +3591,35 @@ class ProxyLogging:
         user_api_key_auth_dict: UserAPIKeyAuth | dict[str, object] | None,
         call_type: CallTypesLiteral,
     ) -> None:
-        if (
-            "apply_guardrail" in type(callback).__dict__
-            and not callback.use_native_lifecycle_hooks
-            and user_api_key_dict is not None
-            and not callback.use_native_during_call_hook
-        ):
-            data["guardrail_to_apply"] = callback
+        with mcp_guardrail_block_context(callback.guardrail_name, callback.on_mcp_block, call_type, "during_call"):
+            if (
+                "apply_guardrail" in type(callback).__dict__
+                and not callback.use_native_lifecycle_hooks
+                and user_api_key_dict is not None
+                and not callback.use_native_during_call_hook
+            ):
+                data["guardrail_to_apply"] = callback
+                await self._run_guardrail_with_metrics(
+                    callback,
+                    unified_guardrail.async_moderation_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        call_type=call_type,
+                    ),
+                    "during_call",
+                    request_data=data,
+                )
+                return
             await self._run_guardrail_with_metrics(
                 callback,
-                unified_guardrail.async_moderation_hook(
-                    user_api_key_dict=user_api_key_dict,
+                callback.async_moderation_hook(
                     data=data,
+                    user_api_key_dict=user_api_key_auth_dict,
                     call_type=call_type,
                 ),
                 "during_call",
                 request_data=data,
             )
-            return
-        await self._run_guardrail_with_metrics(
-            callback,
-            callback.async_moderation_hook(
-                data=data,
-                user_api_key_dict=user_api_key_auth_dict,
-                call_type=call_type,
-            ),
-            "during_call",
-            request_data=data,
-        )
 
     async def failed_tracking_alert(
         self,

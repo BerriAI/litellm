@@ -18,6 +18,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy.guardrails.exception_utils import guardrail_provider_error
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -363,7 +364,7 @@ class ZscalerAIGuard(CustomGuardrail):
         else:
             verbose_proxy_logger.error("Zscaler AI Guard status_code - %s", response.status_code)
             user_facing_error = self._create_user_facing_error(f"Response status code: {response.status_code}")
-            raise HTTPException(status_code=response.status_code, detail=user_facing_error)
+            raise guardrail_provider_error(HTTPException(status_code=response.status_code, detail=user_facing_error))
 
     async def make_zscaler_ai_guard_api_call(
         self,

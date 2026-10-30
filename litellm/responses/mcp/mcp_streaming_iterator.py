@@ -895,6 +895,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
             # Execute the tools
             tool_results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+                stream=True,
                 tool_server_map=self.tool_server_map,
                 served_tools=self.served_tools,
                 tool_calls=tool_calls,

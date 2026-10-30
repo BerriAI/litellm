@@ -448,6 +448,7 @@ async def acompletion_with_mcp(
                     if self.tool_calls:
                         # Execute tool calls
                         self.tool_results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+                            stream=True,
                             tool_server_map=self.tool_server_map,
                             served_tools=deduplicated_mcp_tools,
                             tool_calls=self.tool_calls,

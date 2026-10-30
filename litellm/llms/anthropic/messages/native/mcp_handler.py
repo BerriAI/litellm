@@ -164,6 +164,7 @@ async def anthropic_messages_with_mcp(
         billed_rounds = accumulate_completed_round(logging_obj, response, billed_rounds) if not stream else None
         with completed_rounds_billed_on_failure(logging_obj, billed_rounds):
             tool_results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+                stream=stream,
                 tool_server_map=tool_server_map,
                 served_tools=deduplicated_mcp_tools,
                 tool_calls=list(tool_use_blocks),

@@ -714,12 +714,14 @@ class LiteLLM_Proxy_MCP_Handler:
         guardrail_context: Mapping[str, object] | None = None,
         served_tools: Sequence[MCPTool] | None = None,
         request_trace_id: str | None = None,
+        stream: bool = False,
     ) -> list[MCPToolResult]:
         """Execute tool calls and return results."""
         from fastapi import HTTPException
 
         from litellm._uuid import uuid
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+        from litellm.proxy.guardrails.exception_utils import raise_mcp_guardrail_block
         from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
@@ -937,6 +939,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     request_data=logging_request_data,
                     error=e,
                 )
+                raise_mcp_guardrail_block(e, stream=stream)
                 verbose_logger.error("BlockedPiiEntityError in MCP tool call: %s", e)
                 error_message = f"Tool call blocked: PII entity '{getattr(e, 'entity_type', 'unknown')}' detected by guardrail '{getattr(e, 'guardrail_name', 'unknown')}'. {e}"
                 tool_results.append(
@@ -953,6 +956,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     request_data=logging_request_data,
                     error=e,
                 )
+                raise_mcp_guardrail_block(e, stream=stream)
                 verbose_logger.error("GuardrailRaisedException in MCP tool call: %s", e)
                 error_message = (
                     f"Tool call blocked: Guardrail '{getattr(e, 'guardrail_name', 'unknown')}' violation. {e}"
@@ -971,6 +975,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     request_data=logging_request_data,
                     error=e,
                 )
+                raise_mcp_guardrail_block(e, stream=stream)
                 verbose_logger.error("HTTPException in MCP tool call: %s", e)
                 error_message = f"Tool call failed: {str(e.detail) if hasattr(e, 'detail') else str(e)}"
                 tool_results.append(
@@ -987,6 +992,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     request_data=logging_request_data,
                     error=e,
                 )
+                raise_mcp_guardrail_block(e, stream=stream)
                 verbose_logger.exception("Error executing MCP tool call: %s", e)
                 tool_results.append(
                     {

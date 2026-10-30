@@ -63,6 +63,7 @@ from litellm.proxy.guardrails.anthropic_sse import (
     is_raw_sse_stream,
     model_response_text,
 )
+from litellm.proxy.guardrails.exception_utils import guardrail_provider_error
 from litellm.types.guardrails import (
     BedrockChecksConfigModel,
     BedrockGuardrailStreamingParams,
@@ -1342,7 +1343,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             httpx_response.status_code,
             httpx_response.text,
         )
-        raise HTTPException(status_code=status_code, detail=detail_message)
+        raise guardrail_provider_error(HTTPException(status_code=status_code, detail=detail_message))
 
     def _log_apply_guardrail_attempt(
         self,
@@ -2007,7 +2008,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 duration=(datetime.now(timezone.utc) - start_time).total_seconds(),
                 event_type=event_type,
             )
-            raise HTTPException(status_code=status_code, detail=detail_message)
+            raise guardrail_provider_error(HTTPException(status_code=status_code, detail=detail_message))
 
         try:
             json_response: Final = TypeAdapter(BedrockGuardrailChecksResponse).validate_python(httpx_response.json())

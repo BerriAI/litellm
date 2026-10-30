@@ -553,9 +553,10 @@ def _rig(
     prices: Mapping[str, JsonValue] | None = None,
     parallel: int = 1,
     slow_tool_seconds: float | None = None,
+    turn_plan: Callable[[Mapping[str, JsonValue]], Turn] | None = None,
 ) -> Iterator[Rig]:
     alias: Final = "llm" + uuid.uuid4().hex[:8]
-    plan: Final = (
+    plan: Final = turn_plan or (
         _fixed_turn(f"{alias}-add") if slow_tool_seconds is None else _slow_turn(f"{alias}-slow", slow_tool_seconds)
     )
     with (
@@ -1840,3 +1841,166 @@ def test_messages_bridge_hook_sees_the_definition_the_request_served(hooked: Hoo
         assert _echoed(JSON_VALUE.validate_json(blocked.content)) == _served(LOOKUP), blocked.text
         assert rig.peer_calls() == (("lookup", {"query": marker}),)
         assert rig.hook_messages(marker) == (f"Tool: lookup\nArguments: {dict(query=marker)}",)
+
+
+@contextmanager
+def _mcp_block_policy(
+    gateway: Gateway,
+    mode: str,
+    action: str | None,
+    custom_code: str = 'def apply_guardrail(inputs, request_data, input_type):\n    return block("MCP argument denied")\n',
+) -> Iterator[str]:
+    name: Final = "mcpblock" + uuid.uuid4().hex[:8]
+    created: Final = gateway.client.post(
+        "/guardrails",
+        headers={"Authorization": f"Bearer {gateway.key}"},
+        json={
+            "guardrail": {
+                "guardrail_name": name,
+                "litellm_params": {
+                    "guardrail": "custom_code",
+                    "mode": mode,
+                    "default_on": False,
+                    "custom_code": custom_code,
+                    **({"on_mcp_block": action} if action is not None else {}),
+                },
+            }
+        },
+    )
+    assert created.status_code == 200, created.text
+    identity: Final = created.json()["guardrail_id"]
+    try:
+        yield name
+    finally:
+        deleted: Final = gateway.client.delete(
+            f"/guardrails/{identity}", headers={"Authorization": f"Bearer {gateway.key}"}
+        )
+        assert deleted.status_code == 200, deleted.text
+
+
+@pytest.mark.parametrize(
+    ("surface", "call_type"), [("chat", "acompletion"), ("responses", "aresponses"), ("messages", "anthropic_messages")]
+)
+@pytest.mark.parametrize("mode", ["pre_mcp_call", "during_mcp_call"])
+@pytest.mark.parametrize("action", [None, "tool_error", "raise"], ids=["default", "tool_error", "raise"])
+def test_managed_mcp_block_policy_and_paid_round(
+    gateway: Gateway,
+    surface: Surface,
+    call_type: str,
+    mode: str,
+    action: str | None,
+) -> None:
+    with (
+        _mcp_block_policy(gateway, mode, action) as guardrail,
+        _rig(
+            gateway,
+            surface,
+            billing=Billing(FIRST_ROUND, FOLLOW_UP_ROUND),
+            prices=PRICES,
+            parallel=2,
+        ) as rig,
+    ):
+        key: Final = _granted_key(rig)
+        response: Final = rig.send(key, [AUTO], guardrails=[guardrail], cache=NO_CACHE)
+        assert response.status_code == (400 if action == "raise" else 200), response.text
+        requests: Final = tuple(
+            JSON_OBJECT.validate_json(request.body) for request in rig.wire.drain() if request.method == "POST"
+        )
+        assert len(requests) == (1 if action == "raise" else 2), requests
+        executed: Final = tool_calls(rig.peer.drain())
+        assert len(executed) == 0 if mode == "pre_mcp_call" else len(executed) <= (1 if action == "raise" else 2)
+        if action == "raise":
+            assert "MCP argument denied" in response.text and guardrail in response.text, response.text
+            rows: Final = _spend_rows(response.headers["x-litellm-call-id"], call_type, "failure")
+            assert len(rows) == 1, rows
+            assert (rows[0]["prompt_tokens"], rows[0]["completion_tokens"]) == FIRST_ROUND, rows
+            assert float(str(rows[0]["spend"])) == pytest.approx(_price(FIRST_ROUND)), rows
+        else:
+            assert "MCP argument denied" in json.dumps(requests[-1]), requests[-1]
+            assert rig.final_text(response.json()) == ANSWER, response.text
+        clean: Final = rig.send(key, [AUTO], cache=NO_CACHE)
+        assert clean.status_code == 200, clean.text
+        after_clean: Final = tool_calls(rig.peer.drain())
+        if mode == "pre_mcp_call":
+            assert len(after_clean) == 2
+        else:
+            assert len(after_clean) >= 2
+            assert len(executed) + len(after_clean) <= (3 if action == "raise" else 4)
+
+
+@contextmanager
+def _mcp_block_pipeline(gateway: Gateway, guardrail: str, model: str, on_fail: str) -> Iterator[None]:
+    name: Final = "mcppipeline" + uuid.uuid4().hex[:8]
+    created: Final = gateway.request(
+        "POST",
+        "/policies",
+        {
+            "policy_name": name,
+            "pipeline": {"mode": "pre_call", "steps": [{"guardrail": guardrail, "on_fail": on_fail}]},
+        },
+    )
+    assert created.status_code == 200, created.text
+    identity: Final = created.json()["policy_id"]
+    try:
+        attached: Final = gateway.request("POST", "/policies/attachments", {"policy_name": name, "models": [model]})
+        assert attached.status_code == 200, attached.text
+        attachment: Final = attached.json()["attachment_id"]
+        try:
+            yield
+        finally:
+            deleted_attachment: Final = gateway.request("DELETE", f"/policies/attachments/{attachment}")
+            assert deleted_attachment.status_code == 200, deleted_attachment.text
+    finally:
+        deleted: Final = gateway.request("DELETE", f"/policies/{identity}")
+        assert deleted.status_code == 200, deleted.text
+
+
+@pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+@pytest.mark.parametrize("on_fail", ["block", "allow"])
+def test_managed_mcp_block_policy_respects_pipeline_decision(gateway: Gateway, surface: Surface, on_fail: str) -> None:
+    with _mcp_block_policy(gateway, "pre_mcp_call", "raise") as guardrail, _rig(gateway, surface) as rig:
+        with _mcp_block_pipeline(gateway, guardrail, rig.model, on_fail):
+            response: Final = rig.send(_granted_key(rig), [AUTO], cache=NO_CACHE)
+            assert response.status_code == (400 if on_fail == "block" else 200), response.text
+            assert _upstream_rounds(rig) == ((1, 0) if on_fail == "block" else (1, 1))
+            assert len(tool_calls(rig.peer.drain())) == (0 if on_fail == "block" else 1)
+
+
+@pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+def test_managed_mcp_block_policy_keeps_streaming_tool_error_behavior(gateway: Gateway, surface: Surface) -> None:
+    with _mcp_block_policy(gateway, "pre_mcp_call", "raise") as guardrail, _rig(gateway, surface) as rig:
+        response: Final = rig.send(_granted_key(rig), [AUTO], guardrails=[guardrail], stream=True, cache=NO_CACHE)
+        assert response.status_code == 200, response.text
+        assert ANSWER in response.text, response.text
+        assert _upstream_rounds(rig) == (1, 1)
+        assert tool_calls(rig.peer.drain()) == ()
+
+
+def test_managed_mcp_block_policy_messages_bills_every_completed_round(gateway: Gateway) -> None:
+    def plan(body: Mapping[str, JsonValue]) -> Turn:
+        return Turn(_tool_names(body)[0], json.dumps({"a": 2, "b": "private-marker" if _has_tool_result(body) else 3}), ANSWER)
+
+    code: Final = (
+        "def apply_guardrail(inputs, request_data, input_type):\n"
+        '    if "private-marker" in inputs.get("texts", []):\n'
+        '        return block("MCP argument denied")\n'
+        "    return allow()\n"
+    )
+    with (
+        _mcp_block_policy(gateway, "pre_mcp_call", "raise", code) as guardrail,
+        _rig(
+            gateway,
+            "messages",
+            billing=Billing(FIRST_ROUND, FOLLOW_UP_ROUND, tool_rounds=2),
+            prices=PRICES,
+            turn_plan=plan,
+        ) as rig,
+    ):
+        response: Final = rig.send(_granted_key(rig), [AUTO], guardrails=[guardrail], cache=NO_CACHE)
+        assert response.status_code == 400, response.text
+        assert _upstream_rounds(rig) == (1, 1)
+        assert len(tool_calls(rig.peer.drain())) == 1
+        rows: Final = _spend_rows(response.headers["x-litellm-call-id"], "anthropic_messages", "failure")
+        assert len(rows) == 1, rows
+        assert (rows[0]["prompt_tokens"], rows[0]["completion_tokens"]) == (28, 10), rows
+        assert float(str(rows[0]["spend"])) == pytest.approx(_price(FIRST_ROUND, FOLLOW_UP_ROUND)), rows

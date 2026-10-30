@@ -609,3 +609,20 @@ async def test_apply_guardrail_sends_request_user_in_execute_policy_body(
         "policyId": 1,
         **({"user": expected_body_user} if expected_body_user is not None else {}),
     }
+
+
+@pytest.mark.parametrize("status_code", [400, 403, 422])
+def test_upstream_http_error_does_not_become_mcp_content_block(status_code: int) -> None:
+    from typing import Final
+
+    import httpx
+
+    from litellm.proxy.guardrails.exception_utils import get_mcp_guardrail_block, mcp_guardrail_block_context
+
+    guardrail: Final = ZscalerAIGuard(api_key="test-key", policy_id=1)
+    response: Final = httpx.Response(status_code, json={"error": "upstream rejected credentials or request"})
+    with pytest.raises(HTTPException) as raised:
+        with mcp_guardrail_block_context("zscaler", "raise", "call_mcp_tool", "pre_call"):
+            guardrail._handle_response(response, "IN")
+    assert raised.value.status_code == status_code
+    assert get_mcp_guardrail_block(raised.value) is None
