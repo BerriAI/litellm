@@ -1,44 +1,61 @@
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final
 
+import fakeredis
 import pytest
+import pytest_asyncio
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 import litellm
+from litellm.caching.redis_cache import RedisCache
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.spend_tracking.cost_finalization import finalize_response_cost
+from litellm.redis.stores.search_free_tier import TransportSearchFreeTierStore
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+from tests._support.fake_redis import (
+    fake_redis_cache,
+    set_reply_callback,
+)
 
 NOW: Final = datetime(2026, 10, 20, 12, 30, tzinfo=timezone.utc)
 MODEL: Final = "gemini-finalization-test"
 
 
-class Counter:
-    def __init__(self, total: float = 0.0, fail: bool = False) -> None:
-        self.total = total
-        self.calls = 0
-        self.fail = fail
-
-    async def async_increment(self, key: str, value: float, ttl: int | None = None) -> float:
-        self.calls += 1
-        if self.fail:
-            raise ConnectionError("counter unavailable")
-        self.total += value
-        return self.total
+_ALLOCATION_KEY: Final = "ns:litellm:search_free_tier:vertex_ai:finalization-test:2026-10"
 
 
-class BlockingCounter(Counter):
-    def __init__(self) -> None:
-        super().__init__()
-        self.started = asyncio.Event()
-        self.release = asyncio.Event()
+@dataclass(frozen=True, slots=True)
+class AllocationRedis:
+    server: fakeredis.FakeServer
+    raw: fakeredis.FakeAsyncRedis
+    cache: RedisCache
+    store: TransportSearchFreeTierStore
 
-    async def async_increment(self, key: str, value: float, ttl: int | None = None) -> float:
-        self.started.set()
-        await self.release.wait()
-        return await super().async_increment(key, value, ttl)
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def allocation_redis() -> AllocationRedis:
+    server: Final = fakeredis.FakeServer()
+    cache: Final = fake_redis_cache(server, namespace="ns")
+    return AllocationRedis(
+        server, fakeredis.FakeAsyncRedis(server=server), cache, TransportSearchFreeTierStore(cache.transport())
+    )
+
+
+def block_increment(cache: RedisCache) -> tuple[asyncio.Event, asyncio.Event]:
+    started: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+
+    async def receive(value: bytes) -> float:
+        started.set()
+        await release.wait()
+        return float(value)
+
+    set_reply_callback(cache, "INCRBYFLOAT", receive)
+    return started, release
 
 
 @pytest.fixture
@@ -89,15 +106,16 @@ def response(cost: float = 0.5) -> ModelResponse:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("used", "expected"), [(0, 0.48), (1, 0.49), (2, 0.5)])
 async def test_header_and_logging_share_one_allowance_allocation(
-    logging_obj: Logging, used: int, expected: float
+    logging_obj: Logging, allocation_redis: AllocationRedis, used: int, expected: float
 ) -> None:
-    counter: Final = Counter(used)
+    await allocation_redis.raw.set(_ALLOCATION_KEY, used)
+    counter: Final = allocation_redis.store
     result: Final = response()
     costs: Final = await asyncio.gather(*(finalize_response_cost(logging_obj, result, counter, NOW) for _ in range(3)))
     assert costs[0] is costs[1] is costs[2]
     assert costs[0] is not None
     assert costs[0].amount == pytest.approx(expected)
-    assert counter.calls == 1
+    assert await allocation_redis.raw.get(_ALLOCATION_KEY) == str(used + 3).encode()
     logging_obj._success_handler_helper_fn(result=result, start_time=NOW, end_time=NOW)
     payload: Final = logging_obj.model_call_details["standard_logging_object"]
     headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -109,19 +127,47 @@ async def test_header_and_logging_share_one_allowance_allocation(
 
 
 @pytest.mark.asyncio
-async def test_failed_counter_freezes_full_price_without_a_retry(logging_obj: Logging) -> None:
-    counter: Final = Counter(fail=True)
+async def test_failed_counter_freezes_full_price_without_a_retry(
+    logging_obj: Logging, allocation_redis: AllocationRedis
+) -> None:
+    allocation_redis.server.connected = False
+    counter: Final = allocation_redis.store
     result: Final = response()
     finalized: Final = await finalize_response_cost(logging_obj, result, counter, NOW)
     assert finalized is not None and finalized.amount == 0.5
+    allocation_redis.server.connected = True
     assert await finalize_response_cost(logging_obj, result, counter, NOW) is finalized
-    assert counter.calls == 1
+    assert await allocation_redis.raw.get(_ALLOCATION_KEY) is None
+    assert logging_obj.cost_allowance_discount == 0.0
 
 
 @pytest.mark.asyncio
-async def test_guardrail_cost_is_added_once_after_allowance(logging_obj: Logging) -> None:
+async def test_lost_allocation_reply_freezes_full_price_after_allowance_was_consumed(
+    logging_obj: Logging, allocation_redis: AllocationRedis
+) -> None:
+    def lost_reply(_: object) -> None:
+        raise RedisConnectionError("allocation response lost")
+
+    set_reply_callback(allocation_redis.cache, "INCRBYFLOAT", lost_reply)
     result: Final = response()
-    finalized: Final = await finalize_response_cost(logging_obj, result, Counter(), NOW, guardrail_cost=0.2)
+    finalized: Final = await finalize_response_cost(logging_obj, result, allocation_redis.store, NOW)
+    assert finalized is not None and finalized.amount == 0.5
+    assert logging_obj.cost_allowance_discount == 0.0
+    assert await allocation_redis.raw.get(_ALLOCATION_KEY) == b"3"
+
+    set_reply_callback(allocation_redis.cache, "INCRBYFLOAT", float)
+    assert await finalize_response_cost(logging_obj, result, allocation_redis.store, NOW) is finalized
+    assert await allocation_redis.raw.get(_ALLOCATION_KEY) == b"3"
+
+
+@pytest.mark.asyncio
+async def test_guardrail_cost_is_added_once_after_allowance(
+    logging_obj: Logging, allocation_redis: AllocationRedis
+) -> None:
+    result: Final = response()
+    finalized: Final = await finalize_response_cost(
+        logging_obj, result, allocation_redis.store, NOW, guardrail_cost=0.2
+    )
     assert finalized is not None and finalized.amount == pytest.approx(0.68)
     logging_obj._success_handler_helper_fn(result=result, start_time=NOW, end_time=NOW)
     payload: Final = logging_obj.model_call_details["standard_logging_object"]
@@ -130,18 +176,22 @@ async def test_guardrail_cost_is_added_once_after_allowance(logging_obj: Logging
 
 
 @pytest.mark.asyncio
-async def test_cache_hit_finalizes_zero_without_allocating(logging_obj: Logging) -> None:
+async def test_cache_hit_finalizes_zero_without_allocating(
+    logging_obj: Logging, allocation_redis: AllocationRedis
+) -> None:
     result: Final = response()
     result._hidden_params["cache_hit"] = True
     result._hidden_params["response_cost"] = 0.0
-    counter: Final = Counter()
+    counter: Final = allocation_redis.store
     finalized: Final = await finalize_response_cost(logging_obj, result, counter, NOW)
     assert finalized is not None and finalized.amount == 0.0
-    assert counter.calls == 0
+    assert await allocation_redis.raw.get(_ALLOCATION_KEY) is None
 
 
 @pytest.mark.asyncio
-async def test_both_callback_paths_wait_for_finalization(logging_obj: Logging) -> None:
+async def test_both_callback_paths_wait_for_finalization(
+    logging_obj: Logging, allocation_redis: AllocationRedis
+) -> None:
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
     from litellm.utils import dispatch_success_logging
@@ -169,18 +219,19 @@ async def test_both_callback_paths_wait_for_finalization(logging_obj: Logging) -
     assert not logging_obj._async_success_enqueued
     assert logging_obj.deferred_success_result is not None
     assert logging_obj.deferred_success_result[0] is inner
-    counter: Final = BlockingCounter()
+    counter: Final = allocation_redis.store
+    started, release = block_increment(allocation_redis.cache)
     pending: Final = asyncio.create_task(finalize_response_cost(logging_obj, outer, counter, NOW))
-    await counter.started.wait()
+    await started.wait()
     dispatch_success_logging(logging_obj, outer, NOW, NOW, False, False)
     assert not logging_obj._sync_success_scheduled
     assert not logging_obj._async_success_enqueued
     concurrent: Final = asyncio.create_task(finalize_response_cost(logging_obj, outer, counter, NOW))
-    counter.release.set()
+    release.set()
     finalized: Final = await pending
     assert finalized is not None
     assert await concurrent is finalized
-    assert counter.calls == 1
+    assert await allocation_redis.raw.get(_ALLOCATION_KEY) == b"3"
     ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logging_obj, exception_raised=False)
     observed: Final = await asyncio.wait_for(asyncio.gather(sync_cost, async_cost), timeout=10)
     await GLOBAL_LOGGING_WORKER.flush()
@@ -201,12 +252,14 @@ async def test_rejected_response_does_not_release_success_callbacks(logging_obj:
 
 
 @pytest.mark.asyncio
-async def test_prebuilt_payload_is_reconciled_with_final_cost(logging_obj: Logging) -> None:
+async def test_prebuilt_payload_is_reconciled_with_final_cost(
+    logging_obj: Logging, allocation_redis: AllocationRedis
+) -> None:
     result: Final = response()
     prepared: Final = logging_obj.prepare_success_logging(result, NOW, NOW, None, None, True, False)
     original: Final = prepared[3]
     assert original is not None and original["response_cost"] == 0.5
-    finalized: Final = await finalize_response_cost(logging_obj, result, Counter(), NOW)
+    finalized: Final = await finalize_response_cost(logging_obj, result, allocation_redis.store, NOW)
     assert finalized is not None
     logging_obj._success_handler_helper_fn(result, NOW, NOW, standard_logging_object=original)
     payload: Final = logging_obj.model_call_details["standard_logging_object"]
@@ -215,7 +268,9 @@ async def test_prebuilt_payload_is_reconciled_with_final_cost(logging_obj: Loggi
 
 
 @pytest.mark.asyncio
-async def test_cached_response_waits_for_guardrail_cost(logging_obj: Logging) -> None:
+async def test_cached_response_waits_for_guardrail_cost(
+    logging_obj: Logging, allocation_redis: AllocationRedis
+) -> None:
     from litellm.caching.caching_handler import LLMCachingHandler
 
     result: Final = response(0.0)
@@ -225,17 +280,19 @@ async def test_cached_response_waits_for_guardrail_cost(logging_obj: Logging) ->
     handler._async_log_cache_hit_on_callbacks(logging_obj, result, NOW, NOW, True)
     assert not logging_obj._sync_success_scheduled
     assert not logging_obj._async_success_enqueued
-    counter: Final = Counter()
+    counter: Final = allocation_redis.store
     finalized: Final = await finalize_response_cost(logging_obj, result, counter, NOW, guardrail_cost=0.2)
     assert finalized is not None and finalized.amount == 0.2
-    assert counter.calls == 0
+    assert await allocation_redis.raw.get(_ALLOCATION_KEY) is None
     logging_obj._success_handler_helper_fn(result, NOW, NOW)
     assert logging_obj.model_call_details["standard_logging_object"]["response_cost"] == 0.2
     ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logging_obj, exception_raised=True)
 
 
 @pytest.mark.asyncio
-async def test_collector_event_preserves_finalized_cost(logging_obj: Logging) -> None:
+async def test_collector_event_preserves_finalized_cost(
+    logging_obj: Logging, allocation_redis: AllocationRedis
+) -> None:
     from litellm.proxy.spend_tracking.spend_event import (
         SpendEvent,
         build_spend_event,
@@ -244,7 +301,7 @@ async def test_collector_event_preserves_finalized_cost(logging_obj: Logging) ->
     )
 
     result: Final = response()
-    await finalize_response_cost(logging_obj, result, Counter(), NOW)
+    await finalize_response_cost(logging_obj, result, allocation_redis.store, NOW)
     logging_obj._success_handler_helper_fn(result, NOW, NOW)
     event: Final = build_spend_event(logging_obj.model_call_details, result, NOW, NOW, store_bodies=False)
     assert isinstance(event, bytes)
@@ -259,30 +316,33 @@ async def test_collector_event_preserves_finalized_cost(logging_obj: Logging) ->
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel_count", [1, 2])
 async def test_cancellation_finishes_an_inflight_allocation_before_releasing_callbacks(
-    logging_obj: Logging, cancel_count: int
+    logging_obj: Logging, allocation_redis: AllocationRedis, cancel_count: int
 ) -> None:
-    counter: Final = BlockingCounter()
+    counter: Final = allocation_redis.store
+    started, release = block_increment(allocation_redis.cache)
     result: Final = response()
     pending: Final = asyncio.create_task(finalize_response_cost(logging_obj, result, counter, NOW))
-    await counter.started.wait()
+    await started.wait()
     for _ in range(cancel_count):
         pending.cancel()
         await asyncio.sleep(0)
     assert not pending.done()
-    counter.release.set()
+    release.set()
     with pytest.raises(asyncio.CancelledError):
         await pending
     assert logging_obj.finalized_cost is not None
     assert logging_obj.finalized_cost.amount == pytest.approx(0.48)
     assert await finalize_response_cost(logging_obj, result, counter, NOW) is logging_obj.finalized_cost
-    assert counter.calls == 1
+    assert await allocation_redis.raw.get(_ALLOCATION_KEY) == b"3"
 
 
 @pytest.mark.asyncio
-async def test_existing_calculator_prices_usage_before_finalizing(logging_obj: Logging) -> None:
+async def test_existing_calculator_prices_usage_before_finalizing(
+    logging_obj: Logging, allocation_redis: AllocationRedis
+) -> None:
     result: Final = response()
     result._hidden_params.pop("response_cost")
-    finalized: Final = await finalize_response_cost(logging_obj, result, Counter(), NOW)
+    finalized: Final = await finalize_response_cost(logging_obj, result, allocation_redis.store, NOW)
     assert finalized is not None and finalized.amount == pytest.approx(0.21)
     logging_obj._success_handler_helper_fn(result, NOW, NOW)
     assert logging_obj.model_call_details["standard_logging_object"]["response_cost"] == pytest.approx(0.21)
@@ -371,20 +431,22 @@ async def test_malformed_passthrough_logging_preserves_response_dispatch_contrac
 
 @pytest.mark.asyncio
 async def test_finalization_failure_leaves_the_request_and_callback_billing_intact(
-    logging_obj: Logging, monkeypatch: pytest.MonkeyPatch
+    logging_obj: Logging, allocation_redis: AllocationRedis, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def explode(**kwargs: object) -> object:
         raise RuntimeError("payload build failed")
 
     monkeypatch.setattr(logging_obj, "prepare_success_logging", explode)
-    counter: Final = Counter()
+    counter: Final = allocation_redis.store
     assert await finalize_response_cost(logging_obj, response(), counter, NOW) is None
     assert logging_obj.finalized_cost is None
-    assert counter.calls == 0
+    assert await allocation_redis.raw.get(_ALLOCATION_KEY) is None
 
 
 @pytest.mark.asyncio
-async def test_deferred_cache_hit_finalizes_zero_for_results_without_hidden_params(logging_obj: Logging) -> None:
+async def test_deferred_cache_hit_finalizes_zero_for_results_without_hidden_params(
+    logging_obj: Logging, allocation_redis: AllocationRedis
+) -> None:
     from litellm import completion
     from litellm.caching.caching_handler import LLMCachingHandler
 
@@ -395,10 +457,10 @@ async def test_deferred_cache_hit_finalizes_zero_for_results_without_hidden_para
     )._async_log_cache_hit_on_callbacks(
         logging_obj=logging_obj, cached_result=cached_result, start_time=NOW, end_time=NOW, cache_hit=True
     )
-    counter: Final = Counter()
+    counter: Final = allocation_redis.store
     finalized: Final = await finalize_response_cost(logging_obj, cached_result, counter, NOW)
     assert finalized is not None and finalized.amount == 0.0
-    assert counter.calls == 0
+    assert await allocation_redis.raw.get(_ALLOCATION_KEY) is None
     logging_obj._success_handler_helper_fn(cached_result, NOW, NOW)
     payload: Final = logging_obj.model_call_details["standard_logging_object"]
     assert payload["cache_hit"] is True
@@ -423,18 +485,17 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
     disable_spend_updates: bool,
 ) -> None:
     from unittest.mock import create_autospec
+
     import anyio
-
     from fastapi import Request, Response
-
-    from litellm.proxy._types import ProxyException
 
     from litellm.caching.caching import DualCache
     from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyException
     from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
     from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
     from litellm.proxy.proxy_server import ProxyConfig
-    from litellm.proxy import proxy_server
     from litellm.proxy.utils import ProxyLogging
 
     scope: Final = anyio.CancelScope()
@@ -545,7 +606,7 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
 
 @pytest.mark.asyncio
 async def test_redacted_completed_call_preserves_usage_and_search_allowance(
-    logging_obj: Logging, monkeypatch: pytest.MonkeyPatch
+    logging_obj: Logging, allocation_redis: AllocationRedis, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from litellm.proxy.spend_tracking.cost_finalization import prepare_response_cost
 
@@ -554,11 +615,11 @@ async def test_redacted_completed_call_preserves_usage_and_search_allowance(
     prepared: Final = prepare_response_cost(logging_obj, result, NOW)
     assert prepared is not None
     result.usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
-    counter: Final = Counter()
+    counter: Final = allocation_redis.store
     finalized: Final = await finalize_response_cost(logging_obj, result, counter, NOW)
     assert finalized is not None
     assert finalized.amount == pytest.approx(0.48)
-    assert counter.total == 3
+    assert await allocation_redis.raw.get(_ALLOCATION_KEY) == b"3"
     logging_obj._failure_handler_helper_fn(RuntimeError("post-call failed"), "", NOW, NOW)
     payload: Final = logging_obj.model_call_details["standard_logging_object"]
     assert (payload["prompt_tokens"], payload["completion_tokens"]) == (10, 5)
@@ -568,9 +629,10 @@ async def test_redacted_completed_call_preserves_usage_and_search_allowance(
 
 @pytest.mark.asyncio
 async def test_guardrail_json_rejection_retains_completed_provider_usage(
-    logging_obj: Logging, monkeypatch: pytest.MonkeyPatch
+    logging_obj: Logging, allocation_redis: AllocationRedis, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import httpx
+
     from litellm.caching.dual_cache import DualCache
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.proxy.utils import ProxyLogging
@@ -599,7 +661,7 @@ async def test_guardrail_json_rejection_retains_completed_provider_usage(
         )
     assert logging_obj.prepared_cost is not None
     normalized.usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
-    finalized: Final = await finalize_response_cost(logging_obj, upstream, Counter(), NOW)
+    finalized: Final = await finalize_response_cost(logging_obj, upstream, allocation_redis.store, NOW)
     assert finalized is not None and finalized.amount == 0.5
     logging_obj._failure_handler_helper_fn(RuntimeError("blocked JSON response"), "", NOW, NOW)
     payload: Final = logging_obj.model_call_details["standard_logging_object"]

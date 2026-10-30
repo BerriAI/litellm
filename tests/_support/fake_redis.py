@@ -1,7 +1,8 @@
 from collections.abc import Awaitable, Callable
-from typing import TypeVar
+from typing import Final, TypeVar
 
 import fakeredis
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._service_logger import ServiceLogging
@@ -55,3 +56,30 @@ def fake_redis_transport(
         request_engine=lambda: None,
         post_call_engine=lambda: None,
     )
+
+
+_FLOAT: Final = TypeAdapter(float)
+_INT: Final = TypeAdapter(int)
+_KEYS: Final = TypeAdapter(list[bytes])
+
+
+def set_reply_callback(cache: RedisCache, command: str, callback: Callable[..., object]) -> None:
+    cache.init_async_client().set_response_callback(command, callback)  # pyright: ignore[reportUnknownMemberType, reportArgumentType]  # redis-py types the callback for decoding only, tests also raise or await in it
+
+
+async def legacy_increment(cache: RedisCache, key: str, value: float, *, ttl: int | None) -> float:
+    return _FLOAT.validate_python(await cache.async_increment(key, value, ttl=ttl))  # pyright: ignore[reportUnknownMemberType]  # legacy RedisCache API is untyped
+
+
+def legacy_default_ttl(cache: RedisCache) -> int:
+    return _INT.validate_python(cache.get_ttl(ttl=None))  # pyright: ignore[reportUnknownMemberType]  # legacy RedisCache API is untyped
+
+
+async def keys_matching(client: fakeredis.FakeAsyncRedis, pattern: str) -> tuple[bytes, ...]:
+    return tuple(_KEYS.validate_python(await client.keys(pattern)))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # fakeredis is untyped
+
+
+def trip_breaker(cache: RedisCache, failures: int | None = None) -> None:
+    breaker: Final = cache._circuit_breaker  # pyright: ignore[reportPrivateUsage]  # tests open the breaker the way RedisCache does after hard failures
+    for _ in range(breaker.failure_threshold if failures is None else failures):
+        breaker.record_failure()

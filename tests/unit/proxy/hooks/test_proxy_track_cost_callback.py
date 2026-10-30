@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
+import fakeredis
 import httpx
 import pytest
 from fastapi import HTTPException
@@ -40,6 +41,10 @@ from litellm.proxy.utils import (
 )
 from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
+from tests._support.fake_redis import (
+    fake_redis_cache,
+    keys_matching,
+)
 
 
 @pytest.mark.asyncio
@@ -536,7 +541,10 @@ async def test_async_post_call_failure_hook_carries_used_client_oauth_token_from
 @pytest.mark.parametrize(
     "metadata_buckets, expected",
     [
-        ({"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"used_client_oauth_token": False}}, False),
+        (
+            {"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"used_client_oauth_token": False}},
+            False,
+        ),
         ({"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"user_id": "caller"}}, None),
         ({"metadata": {"used_client_oauth_token": "yes"}}, None),
     ],
@@ -621,7 +629,6 @@ async def test_async_post_call_failure_hook_reads_used_client_oauth_token_from_t
         end_time=datetime.now(),
     )
     assert json.loads(payload["metadata"])["used_client_oauth_token"] is expected
-
 
 
 @pytest.mark.asyncio
@@ -743,7 +750,10 @@ async def test_async_post_call_failure_hook_adds_guardrail_cost_to_recovered_str
     [
         (None, ["detect-only-scanner"]),
         ([], ["detect-only-scanner"]),
-        ([{"guardrail_name": "logged-before-the-failure", "guardrail_status": "success"}], ["logged-before-the-failure"]),
+        (
+            [{"guardrail_name": "logged-before-the-failure", "guardrail_status": "success"}],
+            ["logged-before-the-failure"],
+        ),
     ],
 )
 async def test_async_post_call_failure_hook_keeps_a_guardrail_verdict_recorded_after_the_failure_was_logged(
@@ -3368,7 +3378,9 @@ async def test_track_cost_callback_failure_alert_never_carries_request_metadata_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("identity_field", ["agent_id", "billing_agent_id"])
-async def test_autonomous_llm_callback_persists_without_human_or_key(identity_field: str) -> None:  # test-quality-ok: verifies anonymous-agent charges reach the persistence boundary; no injection seam
+async def test_autonomous_llm_callback_persists_without_human_or_key(  # test-quality-ok: verifies anonymous-agent charges reach the persistence boundary; no injection seam
+    identity_field: str,
+) -> None:
     kwargs: Final = {
         "call_type": "acompletion",
         "model": "test-model",
@@ -3392,9 +3404,12 @@ async def test_autonomous_llm_callback_persists_without_human_or_key(identity_fi
 
 @pytest.mark.parametrize("agent_id,expected", [(None, False), ("autonomous-agent", True)])
 def test_autonomous_agent_cost_tracking_needs_no_human_or_virtual_key(agent_id: str | None, expected: bool) -> None:
-    assert _should_track_cost_callback(
-        user_api_key=None, user_id=None, team_id=None, end_user_id=None, call_type="acompletion", agent_id=agent_id
-    ) is expected
+    assert (
+        _should_track_cost_callback(
+            user_api_key=None, user_id=None, team_id=None, end_user_id=None, call_type="acompletion", agent_id=agent_id
+        )
+        is expected
+    )
 
 
 _CALL_START: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -3435,14 +3450,6 @@ async def test_track_cost_callback_enqueue_emits_no_service_span():  # test-qual
     assert update_database.await_count == 1, "the spend enqueue itself must still run"
     assert success_hook.await_count == 0, [call.kwargs for call in success_hook.await_args_list]
 
-class _SharedCounter:
-    def __init__(self) -> None:
-        self.totals: dict[str, float] = {}
-
-    async def async_increment(self, key: str, value: float, ttl: int | None = None) -> float:
-        self.totals[key] = self.totals.get(key, 0) + value
-        return self.totals[key]
-
 
 def _grounded_gemini_kwargs(response_cost: float) -> dict:
     return {
@@ -3478,9 +3485,13 @@ def _grounded_gemini_kwargs(response_cost: float) -> dict:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("opted_in", "finalized"), [(True, False), (False, False), (True, True)])
-async def test_track_cost_callback_frees_grounding_under_the_allowance_only_when_opted_in(monkeypatch, opted_in, finalized):
+async def test_track_cost_callback_frees_grounding_under_the_allowance_only_when_opted_in(
+    monkeypatch, opted_in, finalized
+):
     monkeypatch.setattr(litellm, "apply_search_free_tier", opted_in, raising=False)
-    counter = _SharedCounter()
+    server: Final = fakeredis.FakeServer()
+    counter: Final = fake_redis_cache(server, namespace="search-callback")
+    raw: Final = fakeredis.FakeAsyncRedis(server=server)
     kwargs = _grounded_gemini_kwargs(response_cost=1.0)
     kwargs["standard_logging_object"]["cost_finalized"] = finalized
     response = ModelResponse(
@@ -3520,10 +3531,12 @@ async def test_track_cost_callback_frees_grounding_under_the_allowance_only_when
     if opted_in and not finalized:
         assert kwargs["response_cost"] == pytest.approx(1.0 - 5 * 0.1)
         assert breakdown["original_cost"] == 1.0 and breakdown["discount_amount"] == pytest.approx(5 * 0.1)
-        assert sum(counter.totals.values()) == 5
+        keys: Final = await keys_matching(raw, "search-callback:litellm:search_free_tier:*")
+        assert len(keys) == 1
+        assert await raw.get(keys[0]) == b"5"
     else:
         assert kwargs["response_cost"] == 1.0 and "discount_amount" not in breakdown
-        assert counter.totals == {}
+        assert await keys_matching(raw, "*") == ()
 
     written_cost = mock_proxy_logging.db_spend_update_writer.update_database.await_args.kwargs["response_cost"]
     assert written_cost == pytest.approx(kwargs["standard_logging_object"]["response_cost"])
@@ -3603,7 +3616,9 @@ async def test_batch_accounting_does_not_retry_after_a_search_allowance_update(m
     from litellm.proxy.hooks.proxy_track_cost_callback import track_batch_accounting
 
     monkeypatch.setattr(litellm, "apply_search_free_tier", True)
-    counter: Final = _SharedCounter()
+    server: Final = fakeredis.FakeServer()
+    counter: Final = fake_redis_cache(server, namespace="search-callback")
+    raw: Final = fakeredis.FakeAsyncRedis(server=server)
     dependency: Final = SimpleNamespace(
         failed_tracking_alert=AsyncMock(),
         internal_usage_cache=SimpleNamespace(dual_cache=SimpleNamespace(redis_cache=counter)),
@@ -3621,7 +3636,9 @@ async def test_batch_accounting_does_not_retry_after_a_search_allowance_update(m
         with track_batch_accounting("grounded-batch") as outcome:
             await ProxyDBLogger().async_log_success_event(kwargs, response, _CALL_START, _CALL_START)
 
-    assert sum(counter.totals.values()) == 5
+    keys: Final = await keys_matching(raw, "search-callback:litellm:search_free_tier:*")
+    assert len(keys) == 1
+    assert await raw.get(keys[0]) == b"5"
     assert outcome.failed is True
     assert outcome.retryable_failure is False
 
