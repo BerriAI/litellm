@@ -7,6 +7,7 @@ mod argument;
 mod binding;
 mod caller;
 mod conversion_cache;
+mod depythonize;
 mod driver;
 mod error;
 mod file_reader;
