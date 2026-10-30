@@ -292,5 +292,14 @@
       "preserve_cache_control": true
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "uberllm": {
+    "base_url": "https://api.uberllm.dev/v1",
+    "api_key_env": "UBERLLM_API_KEY",
+    "api_base_env": "UBERLLM_API_BASE",
+    "provider_info": {
+      "supports_function_calling": true
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/messages"]
   }
 }

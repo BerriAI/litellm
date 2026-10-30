@@ -4624,6 +4624,7 @@ class LlmProviders(str, Enum):
     BEDROCK_MANTLE = "bedrock_mantle"
     GDC = "gdc"
     KYMA = "kyma"
+    UBERLLM = "uberllm"
 
 
 # Create a set of all provider values for quick lookup
