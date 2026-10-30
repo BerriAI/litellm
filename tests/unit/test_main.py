@@ -9249,34 +9249,6 @@ def test_completion_ensure_alternating_roles_sends_continue_messages(respx_mock:
 
 
 @pytest.mark.asyncio
-async def test_atext_completion_maps_a_provider_error_with_that_providers_mapper() -> None:
-    sent: Final[list[httpx.Request]] = []
-
-    def respond(request: httpx.Request) -> httpx.Response:
-        sent.append(request)
-        return httpx.Response(400, json={"message": "The provided model identifier is invalid."})
-
-    with pytest.raises(litellm.NotFoundError) as exc_info:
-        await litellm.atext_completion(
-            model="bedrock/us.newvendor.typo-1",
-            prompt="hi",
-            client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)),
-            aws_access_key_id="testing",
-            aws_secret_access_key="testing",
-            aws_region_name="us-west-2",
-        )
-
-    assert exc_info.value.llm_provider == "bedrock"
-    assert [request.url.raw_path for request in sent] == [b"/model/us.newvendor.typo-1/converse"]
-
-
-@pytest.mark.asyncio
-async def test_atext_completion_without_a_model_answers_a_bad_request() -> None:
-    with pytest.raises(litellm.BadRequestError, match="model parameter is required"):
-        await litellm.atext_completion(model=None, prompt="hi")
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False])
 async def test_text_completion_stream_include_usage_returns_usage_on_final_chunk(
     sync_mode: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch

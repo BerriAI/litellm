@@ -7937,7 +7937,7 @@ async def atext_completion(*args, **kwargs) -> TextCompletionResponse | TextComp
     Implemented to handle async streaming for the text completion endpoint
     """
     loop: Final = asyncio.get_event_loop()
-    model: Final = args[0] if args else kwargs["model"]
+    model: Final = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO COMPLETION ###
     kwargs["acompletion"] = True
     custom_llm_provider = None
@@ -7991,26 +7991,14 @@ async def atext_completion(*args, **kwargs) -> TextCompletionResponse | TextComp
             )
             return text_completion_response
     except Exception as e:
+        custom_llm_provider = custom_llm_provider or "openai"
         raise exception_type(
             model=model,
-            custom_llm_provider=_text_completion_error_provider(kwargs),
+            custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=args,
             extra_kwargs=kwargs,
         )
-
-
-def _text_completion_error_provider(kwargs: Mapping[str, object]) -> str:
-    model: Final = kwargs.get("model")
-    custom_llm_provider: Final = kwargs.get("custom_llm_provider")
-    api_base: Final = kwargs.get("api_base")
-    if not isinstance(model, str):
-        return "openai"
-    return get_llm_provider(
-        model=model,
-        custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
-        api_base=api_base if isinstance(api_base, str) else None,
-    )[1]
 
 
 @client
