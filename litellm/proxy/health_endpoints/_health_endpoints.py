@@ -1233,18 +1233,32 @@ def _ids_serving_group(
     named: Final = ids_by_name.get(group)
     if llm_router is None:
         return named or frozenset()
-    if named is None:
-        return _ids_of(llm_router.registry().deployments(group, source="wildcard", team_id=user_api_key_dict.team_id))
+    if named is not None:
+        return named & _ids_routed_to(group, user_api_key_dict, llm_router) if narrow_by_access_group else named
+    wildcard_served: Final = llm_router.registry().deployments(
+        group, source="wildcard", team_id=user_api_key_dict.team_id
+    )
     if not narrow_by_access_group:
-        return named
+        return _ids_of(wildcard_served)
+    patterns: Final = frozenset(
+        pattern
+        for pattern in (deployment.get("model_name") for deployment in wildcard_served)
+        if isinstance(pattern, str)
+    )
+    return _ids_of(wildcard_served) & frozenset[str]().union(
+        *(_ids_routed_to(pattern, user_api_key_dict, llm_router) for pattern in patterns)
+    )
+
+
+def _ids_routed_to(model_name: str, user_api_key_dict: UserAPIKeyAuth, llm_router: Router) -> frozenset[str]:
     routed: Final = llm_router.registry().deployments(
-        group,
+        model_name,
         source="routable",
         request={
             "metadata": {"user_api_key_team_id": user_api_key_dict.team_id, "user_api_key_auth": user_api_key_dict}
         },
     )
-    return named & _ids_of(routed)
+    return _ids_of(routed)
 
 
 async def _names_key_may_request(

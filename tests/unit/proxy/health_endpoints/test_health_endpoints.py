@@ -927,7 +927,11 @@ async def test_test_model_connection_stored_audio_base_model_follows_the_stored_
     deployment: Final = MappingProxyType(
         {
             "model_name": "custom-name-audio",
-            "litellm_params": {**deployment_params, "api_key": "fake-azure-key", "api_base": "https://x.openai.azure.com"},
+            "litellm_params": {
+                **deployment_params,
+                "api_key": "fake-azure-key",
+                "api_base": "https://x.openai.azure.com",
+            },
             "model_info": deployment_model_info,
         }
     )
@@ -1948,7 +1952,6 @@ def test_health_liveness_endpoint(proxy_client):
 
     # Verify response is fast (should be < 100ms for a simple endpoint)
     assert duration_ms < 100, f"Health check took {duration_ms:.2f}ms, expected < 100ms for a simple endpoint"
-
 
 
 def test_proxy_client_serves_full_proxy_routes_after_gateway_import(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4543,7 +4546,10 @@ async def test_health_endpoint_targets_the_deployment_an_alias_name_sends_the_ke
 
 @pytest.mark.asyncio
 async def test_health_endpoint_never_probes_a_deployment_without_a_model_name_for_a_restricted_key():
-    nameless_deployment: Final = {"litellm_params": {"model": "openai/gpt-5.4-mini"}, "model_info": {"id": "id-nameless"}}
+    nameless_deployment: Final = {
+        "litellm_params": {"model": "openai/gpt-5.4-mini"},
+        "model_info": {"id": "id-nameless"},
+    }
 
     probed: Final = await _live_probed_model_ids(
         [*_PROVIDER_PREFIXED_MODEL_LIST, nameless_deployment],
@@ -4567,7 +4573,11 @@ async def test_health_endpoint_never_probes_the_deployment_a_keys_router_alias_s
     assert probed == {"id-prefixed-nano"}
 
 
-_WILDCARD_DEPLOYMENT: Final = {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}, "model_info": {"id": "id-wild"}}
+_WILDCARD_DEPLOYMENT: Final = {
+    "model_name": "openai/*",
+    "litellm_params": {"model": "openai/*"},
+    "model_info": {"id": "id-wild"},
+}
 _CATCH_ALL_DEPLOYMENT: Final = {"model_name": "*", "litellm_params": {"model": "*"}, "model_info": {"id": "id-star"}}
 _TEAM_WILDCARD_DEPLOYMENT: Final = {
     "model_name": "openai-wild_team-a_7c1e",
@@ -4879,6 +4889,31 @@ async def test_health_endpoint_probes_only_the_access_groups_deployments_of_a_sh
     probed: Final = await _live_probed_model_ids(_ACCESS_GROUP_SPLIT_MODEL_LIST, caller)
 
     assert probed == {"id-mini-premium"}
+
+
+_ACCESS_GROUP_SPLIT_WILDCARD_MODEL_LIST: Final = [
+    {
+        "model_name": "openai/*",
+        "litellm_params": {"model": "openai/*"},
+        "model_info": {"id": "id-wild-premium", "access_groups": ["premium"]},
+    },
+    {
+        "model_name": "openai/*",
+        "litellm_params": {"model": "openai/*"},
+        "model_info": {"id": "id-wild-standard", "access_groups": ["standard"]},
+    },
+]
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_probes_only_the_access_groups_wildcard_deployments_serving_a_name() -> None:
+    caller: Final = _personal_key_whose_owner_may_call(["openai/gpt-5.4-nano"]).model_copy(
+        update={"models": ["premium"]}
+    )
+
+    probed: Final = await _live_probed_model_ids(_ACCESS_GROUP_SPLIT_WILDCARD_MODEL_LIST, caller)
+
+    assert probed == {"id-wild-premium"}
 
 
 def test_resolve_targeted_model_ids_lets_model_id_win_over_model():
