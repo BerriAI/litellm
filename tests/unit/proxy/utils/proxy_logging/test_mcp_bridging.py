@@ -19,9 +19,17 @@ import pytest
 from fastapi import HTTPException
 
 import litellm
+from litellm.caching.caching import DualCache
 from litellm.exceptions import ModifyResponseException
-from litellm.proxy.guardrails.exception_utils import MCPGuardrailBlock, get_mcp_guardrail_block
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.exception_utils import (
+    MCPGuardrailBlock,
+    get_mcp_guardrail_block,
+    raise_mcp_guardrail_block,
+)
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeGuardrail
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.mcp import (
     MCPDuringCallResponseObject,
@@ -29,6 +37,7 @@ from litellm.types.mcp import (
     MCPPreCallResponseObject,
 )
 from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
+from litellm.types.utils import CallTypesLiteral
 
 # ---------------------------------------------------------------------------
 # _convert_mcp_to_llm_format
@@ -678,3 +687,68 @@ async def test_native_during_mcp_hook_distinguishes_bedrock_verdict_from_failure
         assert raised.value.status_code == (400 if provider_status == 200 else provider_status)
     finally:
         await handler.close()
+
+
+class _ReturningRefusalGuardrail(CustomGuardrail):
+    def __init__(self, refusal: Exception | str, mode: GuardrailEventHooks) -> None:
+        super().__init__(guardrail_name="returned-refusal", event_hook=mode, default_on=True)
+        self.refusal = refusal
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: CallTypesLiteral,
+    ) -> Exception | str:
+        return self.refusal
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("returned_exception", [False, True])
+@pytest.mark.parametrize("action", ["raise", "tool_error"])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_returned_mcp_refusals_follow_policy_without_changing_streams(
+    proxy_logging: ProxyLogging,
+    returned_exception: bool,
+    action: Literal["raise", "tool_error"],
+    stream: bool,
+) -> None:
+    refusal: Final = HTTPException(400, "content denied") if returned_exception else "content denied"
+    guardrail: Final = _ReturningRefusalGuardrail(refusal, GuardrailEventHooks.pre_mcp_call)
+    guardrail.apply_mcp_block_policy(action)
+    with pytest.raises(HTTPException) as raised:
+        await proxy_logging._process_guardrail_callback(
+            callback=guardrail,
+            data={"model": "mcp-tool-call", "mcp_tool_name": "echo", "mcp_arguments": {"text": "denied"}},
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="call_mcp_tool",
+            event_type=GuardrailEventHooks.pre_call,
+        )
+    if action == "raise" and not stream:
+        with pytest.raises(HTTPException) as managed:
+            raise_mcp_guardrail_block(raised.value, stream=stream)
+        assert managed.value.status_code == 400
+        assert managed.value.detail["guardrail_name"] == "returned-refusal"
+        assert "content denied" in str(managed.value.detail["error"])
+    else:
+        assert raise_mcp_guardrail_block(raised.value, stream=stream) is None
+        assert "content denied" in str(raised.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_returned_non_mcp_refusal_keeps_original_exception(proxy_logging: ProxyLogging) -> None:
+    refusal: Final = HTTPException(403, {"error": "content denied"})
+    guardrail: Final = _ReturningRefusalGuardrail(refusal, GuardrailEventHooks.pre_call)
+    guardrail.apply_mcp_block_policy("raise")
+    with pytest.raises(HTTPException) as raised:
+        await proxy_logging._process_guardrail_callback(
+            callback=guardrail,
+            data={"model": "test-model", "input": "denied"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="embedding",
+            event_type=GuardrailEventHooks.pre_call,
+        )
+    assert raised.value is refusal
+    assert raised.value.status_code == 403
+    assert get_mcp_guardrail_block(raised.value) is None

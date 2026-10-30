@@ -34,6 +34,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy.guardrails.exception_utils import guardrail_provider_error
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
@@ -327,7 +328,7 @@ class Agent365Guardrail(CustomGuardrail):
                 else f"the Agent 365 evaluation request failed with HTTP {response.status_code}",
                 "tool": tool_name,
             }
-            raise HTTPException(status_code=400, detail=rejected_detail)
+            raise guardrail_provider_error(HTTPException(status_code=400, detail=rejected_detail))
         if response.status_code != 200:
             return self._handle_unavailable(
                 data=data,

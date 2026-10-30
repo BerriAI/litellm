@@ -15,6 +15,8 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.guardrails.exception_utils import raise_mcp_guardrail_block
 from litellm.proxy.guardrails.guardrail_hooks.agent_365 import (
     Agent365Guardrail,
     guardrail_class_registry,
@@ -1117,3 +1119,31 @@ class TestFinalArgumentsEvaluated:
                 )
         assert result["modified_arguments"] == {"turn": "please [REWRITE_ME_REDACTED] now"}
         assert handler.calls[1].json["arguments"] == {"turn": "please [REWRITE_ME_REDACTED] now"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upstream_status", [400, 401, 403, 200])
+async def test_mcp_raise_policy_only_terminates_agent365_content_verdicts(upstream_status: int) -> None:
+    evaluation: Final = (
+        _block_response() if upstream_status == 200 else _response(upstream_status, text="evaluation rejected")
+    )
+    guardrail: Final = _make_guardrail(FakeHandler([_token_response(), evaluation]))
+    guardrail.apply_mcp_block_policy("raise")
+    proxy: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    with pytest.raises(HTTPException) as refusal:
+        await proxy._process_guardrail_callback(
+            callback=guardrail,
+            data=_mcp_data(),
+            user_api_key_dict=_user(),
+            call_type="call_mcp_tool",
+            event_type=GuardrailEventHooks.pre_call,
+        )
+    assert refusal.value.status_code == 400
+    if upstream_status == 200:
+        with pytest.raises(HTTPException) as managed:
+            raise_mcp_guardrail_block(refusal.value, stream=False)
+        assert managed.value.detail["guardrail_name"] == guardrail.guardrail_name
+        assert managed.value.detail["error"]["message"] == "Blocked by policy"
+    else:
+        assert refusal.value.detail["error"] == "Agent 365 rejected the tool evaluation request"
+        assert raise_mcp_guardrail_block(refusal.value, stream=False) is None
