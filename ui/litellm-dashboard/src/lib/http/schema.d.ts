@@ -25710,6 +25710,13 @@ export interface components {
              */
             source: "admin";
         };
+        /** AdminMCPPermissions */
+        AdminMCPPermissions: {
+            /** Action Allowed */
+            action_allowed?: boolean | null;
+            /** Tools */
+            tools: string[];
+        };
         /**
          * AgentCapabilities
          * @description Defines optional capabilities supported by an agent.
@@ -49920,6 +49927,7 @@ export interface components {
         };
         /** UserInfoResponse */
         UserInfoResponse: {
+            admin_mcp_permissions?: components["schemas"]["AdminMCPPermissions"] | null;
             /** Keys */
             keys: unknown[];
             /** Teams */
@@ -76732,6 +76740,12 @@ export interface operations {
             query?: {
                 /** @description User ID in the request parameters */
                 user_id?: string | null;
+                /** @description Include the caller's current admin MCP route permissions */
+                admin_mcp?: boolean;
+                /** @description Admin MCP tool to authorize for this caller */
+                mcp_tool?: string | null;
+                /** @description URL-encoded concrete management path used by the MCP tool, before query-string encoding */
+                mcp_path?: string | null;
             };
             header?: never;
             path?: never;
