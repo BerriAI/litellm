@@ -1581,6 +1581,7 @@ def bridge_reasoning(
     model: str,
     base_model: str | None,
     custom_llm_provider: str,
+    api_base: str | None,
     deployment_model_info: Mapping[str, object] | None,
     drop_params: bool,
     additional_drop_params: object,
@@ -1598,7 +1599,9 @@ def bridge_reasoning(
         )
         or {}
     )
-    responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(custom_llm_provider, model)
+    responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(
+        custom_llm_provider, model, api_base
+    )
     values_by_field: Final = _reasoning_field_values(
         model, base_model, custom_llm_provider, responses_config, deployment_model_info
     )
