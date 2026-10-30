@@ -9,11 +9,12 @@ import contextlib
 import importlib.metadata
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, MutableMapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Final, NoReturn, Protocol, runtime_checkable
 
 from pydantic import JsonValue, TypeAdapter
+from typing_extensions import TypeIs  # noqa: TID251  # narrows request metadata without copying it
 
 import litellm
 from litellm._logging import redact_string, verbose_proxy_logger
@@ -34,6 +35,7 @@ from litellm.litellm_core_utils.realtime_streaming import DefaultLoggedRealTimeE
 from litellm.types.llms.bedrock import AwsAuthParams
 from litellm.types.llms.openai import OpenAIRealtimeEvents
 from litellm.types.realtime import RealtimeResponseTransformInput
+from litellm.types.utils import StandardLoggingPayloadErrorInformation
 
 from ..base_aws_llm import BaseAWSLLM, run_aws_signing
 from ..common_utils import BedrockError
@@ -165,6 +167,12 @@ class _BridgeOutcome:
     client_disconnected: bool
 
 
+@dataclass(frozen=True, slots=True)
+class SessionEndSignals:
+    input_closing: asyncio.Event = field(default_factory=asyncio.Event)
+    output_failed: asyncio.Event = field(default_factory=asyncio.Event)
+
+
 async def _client_messages(client_ws: RealtimeClientWebSocket, initial_message: str | None) -> AsyncIterator[str]:
     if initial_message is not None:
         yield initial_message
@@ -184,14 +192,18 @@ def raise_if_session_committed(scope: Mapping[str, object] | None) -> None:
     """A fallback attempt on a websocket whose Bedrock stream already took input would silently start over."""
     if scope is None or not _is_session_committed(scope):
         return
+    from litellm.router_utils.cooldown_handlers import mark_deployment_selection_failure
+
     committed_failure: Final = scope.get(BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY)
-    raise BedrockError(
+    refusal: Final = BedrockError(
         status_code=400,
         message=(
-            "Bedrock realtime session already committed to a provider stream; it cannot be replayed"
-            + (f". The committed stream failed with: {committed_failure}" if committed_failure else "")
+            (f"{committed_failure}. " if committed_failure else "")
+            + "Bedrock realtime session already committed to a provider stream; it cannot be replayed"
         ),
     )
+    mark_deployment_selection_failure(refusal)
+    raise refusal
 
 
 def _pending_opening_message(scope: Mapping[str, object]) -> str | None:
@@ -199,6 +211,36 @@ def _pending_opening_message(scope: Mapping[str, object]) -> str | None:
     raise_if_session_committed(scope)
     pending: Final = scope.get(BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY)
     return pending if isinstance(pending, str) else None
+
+
+def _is_str_keyed_dict(
+    value: object,
+) -> TypeIs[dict[str, object]]:  # guard-ok: request kwargs have str keys  # mutable-ok: the spend row reads it
+    return isinstance(value, dict)
+
+
+def _record_failure_on_spend_log(logging_obj: LiteLLMLogging, error: BaseException) -> None:
+    """The spend row of a session the provider ended reads failure while it still bills the forwarded events."""
+    litellm_params: Final[object] = logging_obj.model_call_details.get("litellm_params")
+    metadata_candidates: Final = (
+        (litellm_params.get("litellm_metadata"), litellm_params.get("metadata"))
+        if _is_str_keyed_dict(litellm_params)
+        else ()
+    )
+    spend_log_metadata: Final = next(
+        (metadata for metadata in metadata_candidates if _is_str_keyed_dict(metadata) and metadata), None
+    )
+    if spend_log_metadata is None:
+        return
+    status_code: Final[object] = getattr(error, "status_code", None)
+    error_information: Final[StandardLoggingPayloadErrorInformation] = {
+        "error_code": "" if status_code is None else str(status_code),
+        "error_class": type(error).__name__,
+        "error_message": redact_string(str(error)),
+        "llm_provider": "bedrock",
+    }
+    spend_log_metadata["status"] = "failure"
+    spend_log_metadata["error_information"] = error_information
 
 
 def _raise_provider_failure(scope: MutableMapping[str, object], failure: BaseException) -> NoReturn:
@@ -277,6 +319,25 @@ async def _reject_session_update(
         verbose_proxy_logger.debug("Client to Bedrock forwarding ended: %s", e, exc_info=True)
         return False
     return True
+
+
+async def _close_bedrock_input(
+    bedrock_stream: BedrockBidirectionalStream,
+    close_messages: Sequence[str],
+    send_to_bedrock: Callable[[str], Awaitable[None]],
+    timeout: float,
+) -> None:
+    async def flush_and_close() -> None:
+        for close_message in close_messages:
+            with contextlib.suppress(Exception):
+                await send_to_bedrock(close_message)
+        with contextlib.suppress(Exception):
+            await bedrock_stream.input_stream.close()
+
+    try:
+        await asyncio.wait_for(flush_and_close(), timeout)
+    except (asyncio.TimeoutError, TimeoutError):
+        verbose_proxy_logger.debug("Bedrock Realtime: timed out closing Bedrock input stream after %.1fs", timeout)
 
 
 class BedrockRealtime(BaseAWSLLM):
@@ -445,7 +506,14 @@ class BedrockRealtime(BaseAWSLLM):
                 if _should_log_event(leftover_event)
             ),
         )
+        if outcome.provider_failure is not None and outcome.client_disconnected:
+            verbose_proxy_logger.debug(
+                "Bedrock Realtime: stream failed after the client disconnected: %s", outcome.provider_failure
+            )
+        provider_failure: Final = None if outcome.client_disconnected else outcome.provider_failure
         if logged_events:
+            if provider_failure is not None:
+                _record_failure_on_spend_log(logging_obj, _as_bedrock_error(provider_failure))
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
                 logging_obj.dispatch_success_handlers(
                     list(logged_events),
@@ -454,14 +522,9 @@ class BedrockRealtime(BaseAWSLLM):
             )
             logging_obj.model_call_details[REALTIME_SESSION_SUCCESS_LOGGED_KEY] = True
 
-        if outcome.provider_failure is None:
+        if provider_failure is None:
             return
-        if outcome.client_disconnected:
-            verbose_proxy_logger.debug(
-                "Bedrock Realtime: stream failed after the client disconnected: %s", outcome.provider_failure
-            )
-            return
-        _raise_provider_failure(websocket.scope, outcome.provider_failure)
+        _raise_provider_failure(websocket.scope, provider_failure)
 
     async def _bridge(
         self,
@@ -475,19 +538,23 @@ class BedrockRealtime(BaseAWSLLM):
     ) -> _BridgeOutcome:
         """Run both forwarding directions until the client leaves or either side fails."""
         logged: Final[list[OpenAIRealtimeEvents]] = []  # mutable-ok: events forwarded before a failure are still spend
-        input_closing: Final = asyncio.Event()
+        signals: Final = SessionEndSignals()
 
         async def collect_logged_events() -> None:
-            async for event in self._forward_bedrock_to_client(
-                bedrock_stream,
-                websocket,
-                transformation_config,
-                model,
-                logging_obj,
-                session_state,
-                input_closing=input_closing,
-            ):
-                logged.append(event)
+            try:
+                async for event in self._forward_bedrock_to_client(
+                    bedrock_stream,
+                    websocket,
+                    transformation_config,
+                    model,
+                    logging_obj,
+                    session_state,
+                    signals=signals,
+                ):
+                    logged.append(event)
+            except Exception:
+                signals.output_failed.set()
+                raise
 
         client_task: Final = asyncio.create_task(
             self._forward_client_to_bedrock(
@@ -498,7 +565,7 @@ class BedrockRealtime(BaseAWSLLM):
                 session_state,
                 logging_obj,
                 initial_message,
-                input_closing=input_closing,
+                signals=signals,
             )
         )
         bedrock_task: Final = asyncio.create_task(collect_logged_events())
@@ -533,7 +600,7 @@ class BedrockRealtime(BaseAWSLLM):
         logging_obj: LiteLLMLogging | None = None,
         initial_message: str | None = None,
         *,
-        input_closing: asyncio.Event,
+        signals: SessionEndSignals,
     ) -> None:
         """Forward messages from client WebSocket to Bedrock stream.
 
@@ -581,21 +648,11 @@ class BedrockRealtime(BaseAWSLLM):
                     client_ws, transformation_config, model, logging_obj, parsed_client_message
                 ):
                     break
-            input_closing.set()
+            signals.input_closing.set()
         finally:
-
-            async def close_bedrock_input() -> None:
-                for close_message in transformation_config.session_close_messages():
-                    with contextlib.suppress(Exception):
-                        await send_to_bedrock(close_message)
-                with contextlib.suppress(Exception):
-                    await bedrock_stream.input_stream.close()
-
-            try:
-                await asyncio.wait_for(close_bedrock_input(), self._close_timeout)
-            except (asyncio.TimeoutError, TimeoutError):
-                verbose_proxy_logger.debug(
-                    "Bedrock Realtime: timed out closing Bedrock input stream after %.1fs", self._close_timeout
+            if not signals.output_failed.is_set():
+                await _close_bedrock_input(
+                    bedrock_stream, transformation_config.session_close_messages(), send_to_bedrock, self._close_timeout
                 )
 
     async def _forward_bedrock_to_client(
@@ -607,7 +664,7 @@ class BedrockRealtime(BaseAWSLLM):
         logging_obj: LiteLLMLogging,
         session_state: RealtimeResponseTransformInput,
         *,
-        input_closing: asyncio.Event,
+        signals: SessionEndSignals,
     ) -> AsyncIterator[OpenAIRealtimeEvents]:
         """Forward messages from Bedrock to the client, yielding the ones to record for spend logging.
 
@@ -628,7 +685,7 @@ class BedrockRealtime(BaseAWSLLM):
             result = await output[1].receive()
 
             if result is None:
-                if not input_closing.is_set():
+                if not signals.input_closing.is_set():
                     raise BedrockError(
                         status_code=503,
                         message="Bedrock realtime stream ended before the session closed",

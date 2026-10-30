@@ -6478,6 +6478,15 @@ class Router:
                 raise safeguard_refusal_error(model=model, stop_details=refusal_details)
 
             self.success_calls[model_name] += 1
+            realtime_session_deployment_id: Final = (
+                _MODEL_INFO_ADAPTER.validate_python(kwargs["model_info"]).get("id")
+                if generic_function_name == "_arealtime"
+                else None
+            )
+            if realtime_session_deployment_id is not None:
+                increment_deployment_successes_for_current_minute(
+                    litellm_router_instance=self, deployment_id=str(realtime_session_deployment_id)
+                )
             verbose_router_logger.info("ageneric_api_call_with_fallbacks(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
             return response

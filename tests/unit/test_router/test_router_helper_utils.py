@@ -538,6 +538,68 @@ async def test_deployment_callback_on_success_counts_a_responses_websocket_turn(
     assert await router.cache.async_get_cache(key=tpm_key) == 17
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("clean_sessions", "cooled_down"), [(10, False), (3, True)])
+async def test_realtime_cooldown_reads_the_failure_rate_of_the_sessions_a_deployment_served(
+    clean_sessions: int, cooled_down: bool
+) -> None:
+    import time
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "nova-sonic",
+                "litellm_params": {"model": "bedrock/amazon.nova-sonic-v1:0", "order": order},
+                "model_info": {"id": deployment_id},
+            }
+            for order, deployment_id in ((1, "sonic-a"), (2, "sonic-b"))
+        ],
+        num_retries=0,
+    )
+    drop: Final = litellm.ServiceUnavailableError(
+        message="Bedrock realtime stream ended before the session closed",
+        llm_provider="bedrock",
+        model="amazon.nova-sonic-v1:0",
+    )
+
+    def realtime_session(failure: Exception | None):
+        async def _arealtime(**kwargs: object) -> None:
+            await router.deployment_callback_on_success(
+                kwargs={
+                    "call_type": "_arealtime",
+                    "litellm_params": {"metadata": {"model_group": "nova-sonic"}, "model_info": kwargs["model_info"]},
+                    "standard_logging_object": create_standard_logging_payload(),
+                },
+                completion_response=None,
+                start_time=time.time(),
+                end_time=time.time(),
+            )
+            if failure is not None:
+                raise failure
+
+        return _arealtime
+
+    for _ in range(clean_sessions):
+        await router._ageneric_api_call_with_fallbacks(model="nova-sonic", original_function=realtime_session(None))
+
+    async def drop_session() -> bool:
+        with pytest.raises(litellm.ServiceUnavailableError):
+            await router._ageneric_api_call_with_fallbacks(model="nova-sonic", original_function=realtime_session(drop))
+        return router.deployment_callback_on_failure(
+            kwargs={
+                "exception": drop,
+                "litellm_params": {"metadata": {"model_group": "nova-sonic"}, "model_info": {"id": "sonic-a"}},
+            },
+            completion_response=None,
+            start_time=time.time(),
+            end_time=time.time(),
+        )
+
+    drop_cooldowns: Final = [await drop_session() for _ in range(5)]
+
+    assert any(drop_cooldowns) is cooled_down
+
+
 async def _kwargs_routed_to(router: Router, model: str, function_name: str) -> dict[str, object]:
     routed: Final[dict[str, object]] = {}
 
