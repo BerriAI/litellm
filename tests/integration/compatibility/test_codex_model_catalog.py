@@ -43,7 +43,7 @@ RELOAD_MARGIN_SECONDS: Final = 5.0
 PROXY_WORKERS: Final = int(os.environ.get("INTEGRATION_PROXY_WORKERS", "1"))
 WORKER_SYNC_SECONDS: Final = 0.0 if PROXY_WORKERS == 1 else PROXY_CONFIG_RELOAD_INTERVAL_SECONDS + RELOAD_MARGIN_SECONDS
 ROOT: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
-BUNDLED_STOCK_PATH: Final = ROOT / "litellm" / "proxy" / "common_utils" / "codex_bundled_models_0.159.3.json"
+BUNDLED_STOCK_PATH: Final = ROOT / "litellm" / "proxy" / "common_utils" / "codex_bundled_models_0.166.0.json"
 BASE_INSTRUCTIONS_PATH: Final = ROOT / "litellm" / "proxy" / "common_utils" / "codex_base_instructions.md"
 FRESH_CONNECTION: Final = {"Connection": "close"}
 ANTHROPIC_HEADERS: Final = {"anthropic-version": "2023-06-01"}
@@ -503,6 +503,33 @@ def test_a_tiered_model_listed_last_survives_the_byte_cut(gateway: Gateway) -> N
         assert slugs[-1] == tiered and _tier_ids(entries[-1]) == ("ultrafast",), entries[-1]
         assert slugs[:-1] == list(plain[: len(slugs) - 1]), slugs
         assert [entry["priority"] for entry in entries] == [listing.index(slug) for slug in slugs], slugs
+
+
+def test_modern_client_receives_the_complete_authorized_large_catalog(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        plain: Final = tuple(scenario.model() for _ in range(52))
+        tiered: Final = scenario.model(model_info={"service_tiers": ["ultrafast"], "max_input_tokens": 65536})
+        key: Final = scenario.key(models=[*plain, tiered])
+        listing: Final = eventually(
+            lambda: _plain_ids(gateway, key=key),
+            lambda ids: set(ids) == {*plain, tiered},
+            seconds=CONVERGENCE_SECONDS,
+        )
+        response: Final = eventually(
+            lambda: _catalog_response(gateway, key=key, params={"client_version": "0.166.0"}),
+            lambda value: value.status_code == 200 and [entry["slug"] for entry in _entries(value)] == listing,
+            seconds=CONVERGENCE_SECONDS,
+        )
+        entries: Final = _entries(response)
+
+        assert len(response.content) > 1024 * 1024, len(response.content)
+        assert [entry["slug"] for entry in entries] == listing, response.text
+        assert [entry["priority"] for entry in entries] == list(range(len(listing))), response.text
+        assert all(
+            entry["base_instructions"] == BASE_INSTRUCTIONS_PATH.read_text(encoding="utf-8") for entry in entries
+        )
+        assert entries[-1]["slug"] == tiered and _tier_ids(entries[-1]) == ("ultrafast",), entries[-1]
+        assert entries[-1]["context_window"] == 65536, entries[-1]
 
 
 def test_an_oversized_tiered_model_is_left_out_alone(gateway: Gateway) -> None:

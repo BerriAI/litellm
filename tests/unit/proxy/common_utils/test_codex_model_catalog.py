@@ -1,5 +1,6 @@
 import json
 from types import MappingProxyType
+from typing import Final
 
 import pytest
 
@@ -11,11 +12,13 @@ from litellm.proxy.common_utils.codex_model_catalog import (
     CodexStockModel,
     CodexStockUpgrade,
     bundled_codex_models,
+    codex_base_instructions,
     codex_catalog_rows,
     codex_model_list_body,
     codex_models_response_json,
     configured_service_tiers,
 )
+from litellm.types.proxy.model_listing import ModelInfoResponse
 
 _PROMPT = "base prompt"
 _FAST = {"id": "priority", "name": "Fast", "description": "2x speed, increased usage"}
@@ -533,6 +536,45 @@ def test_unlimited_body_keeps_every_entry():
 
     assert (body.listed, body.left_out) == (tuple(row.id for row in rows), ())
     assert CODEX_CATALOG_BYTE_LIMIT == 1024 * 1024
+
+
+@pytest.mark.parametrize("client_version", ["0.166.0", "0.167.0", "1.0.0"])
+def test_modern_client_receives_every_large_catalog_entry(client_version: str) -> None:
+    listing: Final[tuple[ModelInfoResponse, ...]] = tuple(
+        {
+            "id": f"model-{index}",
+            "object": "model",
+            "created": 0,
+            "owned_by": "test",
+            "mode": "chat",
+            "max_input_tokens": 65536,
+        }
+        for index in range(60)
+    )
+    identities: Final = tuple((row["id"], row["id"]) for row in listing)
+    body: Final = codex_model_list_body(listing, identities, None, client_version=client_version)
+    models: Final = json.loads(body)["models"]
+
+    assert len(body.encode()) > CODEX_CATALOG_BYTE_LIMIT
+    assert [model["slug"] for model in models] == [row["id"] for row in listing]
+    assert [model["priority"] for model in models] == list(range(len(listing)))
+    assert all(model["context_window"] == row["max_input_tokens"] for model, row in zip(models, listing, strict=True))
+    assert all(model["base_instructions"] == codex_base_instructions() for model in models)
+
+
+@pytest.mark.parametrize("client_version", [None, "", "invalid", "0.159.3", "0.165.0", "0.166.0rc1", "0.167.0.dev1"])
+def test_older_or_unverified_client_retains_bounded_catalog(client_version: str | None) -> None:
+    listing: Final[tuple[ModelInfoResponse, ...]] = tuple(
+        {"id": f"model-{index}", "object": "model", "created": 0, "owned_by": "test", "mode": "chat"}
+        for index in range(60)
+    )
+    identities: Final = tuple((row["id"], row["id"]) for row in listing)
+    body: Final = codex_model_list_body(listing, identities, None, client_version=client_version)
+    models: Final = json.loads(body)["models"]
+
+    assert len(body.encode()) <= CODEX_CATALOG_BYTE_LIMIT
+    assert 0 < len(models) < len(listing)
+    assert [model["slug"] for model in models] == [row["id"] for row in listing[: len(models)]]
 
 
 def test_vendored_codex_catalog_entries_decode_on_codex():

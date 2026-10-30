@@ -10,11 +10,12 @@ Codex itself uses for an unknown slug, and ``model_info.service_tiers`` becomes 
 upstream. A fallback entry offers the model group's ``supported_reasoning_efforts`` as its reasoning
 levels, trimmed to the ones the requesting Codex release can parse.
 
-The stock entries are Codex 0.159.3's bundled catalog, vendored unchanged from
-https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/models-manager/models.json (Apache-2.0)
-as ``codex_bundled_models_0.159.3.json``, and ``codex_base_instructions.md`` is
-``codex-rs/models-manager/prompt.md`` at the same tag. Refresh both by downloading those two paths at
-a newer tag.
+The stock entries are Codex 0.166.0's bundled catalog, vendored unchanged from
+https://github.com/openai/codex/blob/6ff1e1ca3b30fc8b914720681fcf5fe62e95f856/codex-rs/models-manager/models.json (Apache-2.0)
+as ``codex_bundled_models_0.166.0.json``, and ``codex_base_instructions.md`` is
+``codex-rs/models-manager/prompt.md`` at the same revision. Codex 0.166.0's
+``codex-rs/model-provider/src/models_endpoint.rs`` requests catalogs without a response-body limit.
+Older and unverified clients retain the legacy 1 MiB budget.
 """
 
 from __future__ import annotations
@@ -40,8 +41,9 @@ if TYPE_CHECKING:
     from litellm.types.proxy.model_listing import ModelInfoResponse
 
 CODEX_BASE_INSTRUCTIONS_PATH: Final = Path(__file__).with_name("codex_base_instructions.md")
-CODEX_BUNDLED_MODELS_PATH: Final = Path(__file__).with_name("codex_bundled_models_0.159.3.json")
+CODEX_BUNDLED_MODELS_PATH: Final = Path(__file__).with_name("codex_bundled_models_0.166.0.json")
 CODEX_CATALOG_BYTE_LIMIT: Final = 1024 * 1024
+_FIRST_CODEX_WITH_UNLIMITED_CATALOG: Final = Version("0.166.0")
 CODEX_CHAT_MODES: Final = frozenset({"chat", "responses"})
 
 _TierId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -466,15 +468,15 @@ def codex_models_response_json(
     alias_defaults: CodexAliasDefaults = "codex",
     client_version: str | None = None,
 ) -> CodexCatalogBody:
-    """Codex's `ModelsResponse` body for `rows`, in listing order, cut to Codex's byte limit.
+    """Codex's `ModelsResponse` body for `rows`, in listing order, with an optional byte budget.
 
     Only chat-capable rows are listed (Codex cannot drive an embedding or image model, and a
-    wildcard id is no model), their order is their `priority`. Codex drops a catalog over its
-    byte limit silently and keeps its bundled one, so the body holds only the entries that fit,
-    the ones offering a service tier taken first and the rest in listing order, an entry too large
-    for the bytes left passed over, every kept entry at its listing position; `byte_limit=None`
-    keeps every entry. A row listed under another name than the Codex model its `upstream_model`
-    names (an alias) takes that model's entry; `alias_defaults="deployment"` drops the defaults
+    wildcard id is no model), their order is their `priority`. When `byte_limit` is set, entries
+    offering a service tier are taken first, followed by the rest in listing order. An entry too
+    large for the bytes left is passed over, and every kept entry retains its listing position.
+    `byte_limit=None` keeps every entry; the HTTP entrypoint chooses the budget for the client.
+    A row listed under another name than the Codex model its `upstream_model` names (an alias)
+    takes that model's entry; `alias_defaults="deployment"` drops the defaults
     Codex picks for that model in favor of what the alias's deployments pin, while `"codex"` keeps
     them, as Codex would use them for the model's own name. `client_version` is the requesting Codex's version, which decides the reasoning
     levels a fallback entry may offer; None counts as a version too old for custom levels.
@@ -545,6 +547,21 @@ def codex_catalog_rows(
     )
 
 
+def _catalog_byte_limit(client_version: str | None) -> int | None:
+    try:
+        version: Final = Version(client_version) if client_version else None
+    except ValueError:
+        return CODEX_CATALOG_BYTE_LIMIT
+    if (
+        version is not None
+        and version >= _FIRST_CODEX_WITH_UNLIMITED_CATALOG
+        and not version.is_prerelease
+        and not version.is_devrelease
+    ):
+        return None
+    return CODEX_CATALOG_BYTE_LIMIT
+
+
 def codex_model_list_body(
     rows: Sequence[ModelInfoResponse],
     entries: Sequence[tuple[str, str]],
@@ -554,15 +571,18 @@ def codex_model_list_body(
     *,
     client_version: str | None = None,
 ) -> str:
-    """The `/v1/models?client_version=...` body, logging the models Codex's byte limit left out."""
+    """The Codex catalog, retaining the legacy byte limit only for older or unverified clients."""
+    byte_limit: Final = _catalog_byte_limit(client_version)
     body: Final = codex_models_response_json(
-        codex_catalog_rows(rows, entries, llm_router, team_id, label_entries), client_version=client_version
+        codex_catalog_rows(rows, entries, llm_router, team_id, label_entries),
+        client_version=client_version,
+        byte_limit=byte_limit,
     )
     if body.left_out:
         verbose_proxy_logger.warning(
             "Codex model catalog cut at %d bytes, left out: %s. Models offering a service tier are kept first, "
             "then model_list order; list the models Codex users need first in model_list",
-            CODEX_CATALOG_BYTE_LIMIT,
+            byte_limit,
             ", ".join(body.left_out),
         )
     return body.json
