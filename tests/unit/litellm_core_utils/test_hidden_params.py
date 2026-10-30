@@ -321,6 +321,7 @@ class _ExtraModel(BaseModel):  # frozen-ok: the assignment tests need a model th
 
     declared: str | None = None
     marker: ClassVar[str | None] = None
+    unset_marker: ClassVar[int]
     _secret: str = PrivateAttr(default="hidden")
 
     @property
@@ -384,6 +385,7 @@ def _assignment_outcome(model: BaseModel, assign: Callable[[], None], name: str)
         pytest.param(lambda: _ExtraModel(existing=1, later=3), "_free", 1, id="undeclared-underscore-name"),
         pytest.param(lambda: _ExtraModel(existing=1, later=3), "_secret", "x", id="private-attribute"),
         pytest.param(lambda: _ExtraModel(existing=1, later=3), "marker", 1, id="class-var"),
+        pytest.param(lambda: _ExtraModel(existing=1, later=3), "unset_marker", 1, id="class-var-without-value"),
         pytest.param(lambda: _ExtraModel(existing=1, later=3), "model_config", 1, id="class-attribute"),
         pytest.param(_FrozenExtraModel, "fresh", 1, id="frozen"),
         pytest.param(_ValidatedExtraModel, "fresh", "5", id="validate-assignment"),
