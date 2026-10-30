@@ -27,6 +27,8 @@ LITELLM_PASS_THROUGH_ENDPOINT_MARKER: Final = "__litellm_pass_through_endpoint__
 
 SETTLES_BACKGROUND_RESPONSE_KWARG: Final = "settles_background_response"
 
+WEBSOCKET_CLIENT_TEXT_COUNT_KEY: Final = "litellm_websocket_client_text_count"
+
 
 class BackgroundResponseSettlement(str, Enum):
     SETTLES = "settles"

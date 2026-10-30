@@ -144,6 +144,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    WEBSOCKET_CLIENT_TEXT_COUNT_KEY,
     EndpointType,
     PassthroughStandardLoggingPayload,
 )
@@ -2547,6 +2548,7 @@ async def websocket_passthrough_request(
     cost_per_request: float | None = None,
     accept_websocket: bool = True,
     setup_model_rewriter: Callable[[str], str] | None = None,
+    count_client_text: Callable[[str | bytes], int] | None = None,
 ):
     """
     WebSocket passthrough request handler.
@@ -2560,6 +2562,10 @@ async def websocket_passthrough_request(
         endpoint: The endpoint path (for logging purposes)
         cost_per_request: Optional field - cost per request to the target endpoint
         setup_model_rewriter: Optional rewrite of the setup frame's model before it reaches the upstream
+        count_client_text: Optional read-only count of each client frame, text or binary, after it reaches the
+            upstream, such as billable characters. Only the sum reaches the success handler, under
+            WEBSOCKET_CLIENT_TEXT_COUNT_KEY in logging_obj.model_call_details, so routes whose client text must not be
+            stored can still bill it
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.proxy_server import proxy_config, proxy_logging_obj
@@ -2570,6 +2576,7 @@ async def websocket_passthrough_request(
     # Initialize tracking variables
     start_time: Final = datetime.now()
     websocket_messages: Final[list[dict[str, object]]] = []
+    client_text_count: int = 0  # rebind-ok: forward_client_to_upstream adds each client frame's count
     litellm_call_id: Final = str(uuid.uuid4())
 
     verbose_proxy_logger.info("WebSocket passthrough (%s): Starting WebSocket connection to %s", endpoint, target)
@@ -2686,6 +2693,16 @@ async def websocket_passthrough_request(
                 "WebSocket passthrough (%s): Upstream connection established successfully", endpoint
             )
 
+            async def send_upstream(frame: str | bytes) -> None:
+                nonlocal client_text_count
+                billed: Final = 0 if count_client_text is None else count_client_text(frame)
+                try:
+                    await upstream_ws.send(frame)
+                except asyncio.CancelledError:
+                    client_text_count += billed  # rebind-ok: the frame can already be on the wire when the cancel lands
+                    raise
+                client_text_count += billed  # rebind-ok: the session total grows with each delivered frame
+
             async def forward_client_to_upstream() -> None:
                 """Forward messages from client to upstream WebSocket"""
                 try:
@@ -2756,9 +2773,9 @@ async def websocket_passthrough_request(
                                     )
                                     # Not a JSON message or doesn't contain setup data
 
-                            await upstream_ws.send(_rewrite_vertex_live_setup_model(text_data, setup_model_rewriter))
+                            await send_upstream(_rewrite_vertex_live_setup_model(text_data, setup_model_rewriter))
                         elif bytes_data is not None:
-                            await upstream_ws.send(bytes_data)
+                            await send_upstream(bytes_data)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -2884,6 +2901,8 @@ async def websocket_passthrough_request(
 
             mock_response: Final = MockWebSocketResponse(target)
 
+            if count_client_text is not None:
+                logging_obj.model_call_details[WEBSOCKET_CLIENT_TEXT_COUNT_KEY] = client_text_count
             # Use the same success handler as HTTP passthrough endpoints
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
                 async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(

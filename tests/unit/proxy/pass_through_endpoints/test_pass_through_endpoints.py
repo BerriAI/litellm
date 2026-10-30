@@ -7,7 +7,7 @@ import os
 import sys
 import uuid
 import zlib
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -34,6 +34,7 @@ from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.deepgram.common_utils import deepgram_speak_characters
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
@@ -69,6 +70,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
     PassthroughStandardLoggingPayload,
 )
+from litellm.types.utils import StandardLoggingPayload
 from tests._master_key import MASTER_KEY
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -7766,6 +7768,66 @@ async def test_websocket_passthrough_sends_deepgram_audio_bytes_and_control_text
     upstream_ws.close.assert_awaited_once()
 
 
+class _CapturingSpendLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.payloads: list[StandardLoggingPayload] = []  # mutable-ok: the logger appends each payload it receives
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.payloads.append(kwargs["standard_logging_object"])
+
+
+@dataclass(frozen=True, slots=True)
+class _RelayedSession:
+    spend_logs: tuple[StandardLoggingPayload, ...]
+    failure_hook: AsyncMock
+
+
+async def _relay_and_capture_spend(
+    monkeypatch: pytest.MonkeyPatch,
+    upstream_ws: "FakeUpstreamWebSocket | SpeakingUpstreamWebSocket",
+    websocket: MagicMock,
+    target: str,
+    endpoint: str,
+    count_client_text: Callable[[str | bytes], int] | None = None,
+) -> _RelayedSession:
+    """Runs the relay with the real success handler and returns what a spend logger receives"""
+    capturing_logger: Final = _CapturingSpendLogger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [capturing_logger])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    queued: Final[list[Coroutine[object, object, None]]] = []  # mutable-ok: the fake worker keeps each coroutine
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as proxy_logging,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
+            return_value=FakeUpstreamConnect(upstream_ws),
+        ),
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER") as worker,
+    ):
+        proxy_logging.pre_call_hook = AsyncMock(return_value={})
+        proxy_logging.post_call_success_hook = AsyncMock()
+        proxy_logging.post_call_failure_hook = AsyncMock()
+        worker.ensure_initialized_and_enqueue = MagicMock(
+            side_effect=lambda async_coroutine: queued.append(async_coroutine)
+        )
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target=target,
+            custom_headers={"Authorization": "Token dg-provider-key"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint=endpoint,
+            accept_websocket=False,
+            count_client_text=count_client_text,
+        )
+    for coroutine in queued:
+        await coroutine
+    return _RelayedSession(
+        spend_logs=tuple(capturing_logger.payloads), failure_hook=proxy_logging.post_call_failure_hook
+    )
+
+
 @pytest.mark.asyncio
 async def test_websocket_passthrough_vertex_live_setup_ack_names_the_model_but_is_not_billed_as_usage():
     """Vertex Live keeps its special first frame: the setup acknowledgement is forwarded verbatim, read for the
@@ -7857,6 +7919,174 @@ async def _track_cost_for_passthrough_kwargs(kwargs: dict) -> AsyncMock:
         )
 
     return increment_spend_counters
+
+
+DEEPGRAM_SPEAK_TARGET: Final = "wss://api.deepgram.com/v1/speak?model=aura-2-thalia-en"
+SPEAK_AUDIO_CHUNK: Final = bytes(range(256)) * 8
+SPOKEN_TEXT: Final = "The quick brown fox jumps over the lazy dog."
+SPEAK_FRAME: Final = json.dumps({"type": "Speak", "text": SPOKEN_TEXT})
+FLUSH_FRAME: Final = json.dumps({"type": "Flush"})
+FLUSHED_FRAME: Final = json.dumps({"type": "Flushed", "sequence_id": 0})
+SPEAK_CLOSE_FRAME: Final = json.dumps({"type": "Close"})
+CLIENT_BINARY_FRAME: Final = b"\x00\xffclient-binary"
+SPEAK_SESSION_FRAMES: Final = ({"text": SPEAK_FRAME}, {"bytes": CLIENT_BINARY_FRAME}, {"text": FLUSH_FRAME})
+SPEAK_SESSION_CLIENT_LENGTH: Final = sum(map(len, (SPEAK_FRAME, CLIENT_BINARY_FRAME, FLUSH_FRAME, SPEAK_CLOSE_FRAME)))
+
+
+class SpeakingUpstreamWebSocket:
+    """Answers each Speak with audio as soon as it arrives and ends the session on Close, the way Deepgram speak
+    does, so a relay that held audio back until the end would never see the Close it waits for"""
+
+    def __init__(self, close_code: int = 1000, close_reason: str = "") -> None:
+        self.received: list[str | bytes] = []
+        self.close = AsyncMock()
+        self._close_code = close_code
+        self._close_reason = close_reason
+        self._replies: asyncio.Queue[str | bytes | None] = asyncio.Queue()
+
+    async def send(self, message: str | bytes) -> None:
+        self.received.append(message)
+        match json.loads(message).get("type") if isinstance(message, str) else None:
+            case "Speak":
+                self._replies.put_nowait(SPEAK_AUDIO_CHUNK)
+            case "Flush":
+                self._replies.put_nowait(FLUSHED_FRAME)
+            case "Close":
+                self._replies.put_nowait(None)
+
+    async def recv(self, decode: bool | None = None) -> str | bytes:
+        from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
+        from websockets.frames import Close
+
+        reply: Final = await self._replies.get()
+        if reply is not None:
+            return reply
+        close: Final = Close(self._close_code, self._close_reason)
+        closed: Final = ConnectionClosedOK if self._close_code == 1000 else ConnectionClosedError
+        raise closed(rcvd=close, sent=close, rcvd_then_sent=True)
+
+
+def _speak_client(frames: tuple[dict[str, str | bytes], ...] = SPEAK_SESSION_FRAMES) -> MagicMock:
+    """A client socket that sends ``frames``, then Close once the first audio has reached it"""
+    first_audio: Final = asyncio.Event()
+
+    async def script() -> AsyncIterator[dict[str, str | bytes]]:
+        for frame in frames:
+            yield {"type": "websocket.receive", **frame}
+        await first_audio.wait()
+        yield {"type": "websocket.receive", "text": SPEAK_CLOSE_FRAME}
+        await asyncio.Event().wait()
+
+    steps: Final = script()
+
+    async def receive() -> dict[str, str | bytes]:
+        return await anext(steps)
+
+    websocket: Final = _client_websocket(receive)
+    websocket.send_bytes = AsyncMock(side_effect=lambda data: first_audio.set())
+    return websocket
+
+
+def _aura_2_usd_per_character() -> float:
+    return litellm.model_cost["deepgram/aura-2"]["input_cost_per_character"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_websocket_passthrough_counts_client_text_without_changing_what_is_relayed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Audio reaches the client while the session is open, every client frame reaches the upstream unchanged, and
+    the session is billed for the summed count of the text and binary frames"""
+    upstream_ws: Final = SpeakingUpstreamWebSocket()
+    websocket: Final = _speak_client()
+
+    session: Final = await _relay_and_capture_spend(
+        monkeypatch, upstream_ws, websocket, DEEPGRAM_SPEAK_TARGET, "/deepgram/v1/speak", count_client_text=len
+    )
+
+    assert upstream_ws.received == [SPEAK_FRAME, CLIENT_BINARY_FRAME, FLUSH_FRAME, SPEAK_CLOSE_FRAME]
+    assert [call.args[0] for call in websocket.send_bytes.await_args_list] == [SPEAK_AUDIO_CHUNK]
+    assert [call.args[0] for call in websocket.send_text.await_args_list] == [FLUSHED_FRAME]
+    assert [log["response_cost"] for log in session.spend_logs] == [
+        pytest.approx(SPEAK_SESSION_CLIENT_LENGTH * _aura_2_usd_per_character())
+    ]
+    websocket.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("close_code", "close_reason"),
+    [
+        pytest.param(1008, "DATA-0000: invalid text", id="policy"),
+        pytest.param(1011, "NET-0001: internal", id="internal"),
+    ],
+)
+async def test_websocket_passthrough_counts_client_text_when_the_upstream_ends_with_an_error_close(
+    monkeypatch: pytest.MonkeyPatch, close_code: int, close_reason: str
+) -> None:
+    upstream_ws: Final = SpeakingUpstreamWebSocket(close_code=close_code, close_reason=close_reason)
+    websocket: Final = _speak_client()
+
+    session: Final = await _relay_and_capture_spend(
+        monkeypatch, upstream_ws, websocket, DEEPGRAM_SPEAK_TARGET, "/deepgram/v1/speak", count_client_text=len
+    )
+
+    websocket.close.assert_awaited_once_with(code=close_code, reason=close_reason)
+    assert [log["response_cost"] for log in session.spend_logs] == [
+        pytest.approx(SPEAK_SESSION_CLIENT_LENGTH * _aura_2_usd_per_character())
+    ]
+
+
+class _DrainStallingUpstreamWebSocket(SpeakingUpstreamWebSocket):
+    """Takes the client's Close, then stalls in send the way a full write buffer does, so the session ends while the
+    relay is still inside that send"""
+
+    async def send(self, message: str | bytes) -> None:
+        await super().send(message)
+        if message == SPEAK_CLOSE_FRAME:
+            await asyncio.Event().wait()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_websocket_passthrough_bills_a_client_frame_whose_send_is_cancelled_after_reaching_the_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session: Final = await _relay_and_capture_spend(
+        monkeypatch,
+        _DrainStallingUpstreamWebSocket(),
+        _speak_client(),
+        DEEPGRAM_SPEAK_TARGET,
+        "/deepgram/v1/speak",
+        count_client_text=len,
+    )
+
+    assert [log["response_cost"] for log in session.spend_logs] == [
+        pytest.approx(SPEAK_SESSION_CLIENT_LENGTH * _aura_2_usd_per_character())
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_deepgram_speak_session_logs_character_spend_once_and_never_the_spoken_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session: Final = await _relay_and_capture_spend(
+        monkeypatch,
+        SpeakingUpstreamWebSocket(),
+        _speak_client(),
+        DEEPGRAM_SPEAK_TARGET,
+        "/deepgram/v1/speak",
+        count_client_text=deepgram_speak_characters,
+    )
+
+    assert [(log["model"], log["custom_llm_provider"]) for log in session.spend_logs] == [
+        ("aura-2-thalia-en", "deepgram")
+    ]
+    assert session.spend_logs[0]["response_cost"] == pytest.approx(len(SPOKEN_TEXT) * _aura_2_usd_per_character())
+    assert SPOKEN_TEXT not in json.dumps(session.spend_logs[0], default=str)
 
 
 @pytest.mark.asyncio
