@@ -17,7 +17,10 @@ def _admit_directly(call: Callable[[], Awaitable[_T]]) -> Awaitable[_T]:
 
 
 def fake_redis_cache(
-    server: fakeredis.FakeServer, namespace: str | None = None, service_logger: ServiceLogging | None = None
+    server: fakeredis.FakeServer,
+    namespace: str | None = None,
+    service_logger: ServiceLogging | None = None,
+    client: type[fakeredis.FakeAsyncRedis] = fakeredis.FakeAsyncRedis,
 ) -> RedisCache:
     cache = RedisCache(
         host="127.0.0.1",
@@ -28,7 +31,7 @@ def fake_redis_cache(
     )
     litellm.in_memory_llm_clients_cache.set_cache(
         key=cache._get_async_client_cache_key(),  # pyright: ignore[reportPrivateUsage]  # seeds the per-loop client slot RedisCache reads
-        value=fakeredis.FakeAsyncRedis(server=server),
+        value=client(server=server),
     )
     return cache
 

@@ -1,14 +1,16 @@
 import asyncio
-import json
-import logging
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, TypeAlias
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.caching.redis_cache import RedisCache, log_redis_failure
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
 from litellm.proxy.db.db_transaction_queue.base_update_queue import service_logger_obj
+from litellm.redis.stores import pod_lock
+from litellm.redis.stores.pod_lock import Acquired, HeldBy, PodLockStore, TransportPodLockStore, Vacant
+from litellm.redis.transport.contract import RedisFailure
 from litellm.types.services import ServiceTypes
 
 POD_LOCK_TARGET: Final = "pod_lock"
@@ -28,22 +30,16 @@ class PodLockManager:
     Ensures that only one pod can run a cron job at a time.
     """
 
-    _COMPARE_AND_DELETE_LOCK_SCRIPT = """
-if redis.call("get", KEYS[1]) == ARGV[1] then
-    return redis.call("del", KEYS[1])
-else
-    return 0
-end
-"""
-
     def __init__(self, redis_cache: RedisCache | None = None):
         self.pod_id = str(uuid.uuid4())
         self.redis_cache = redis_cache
-        self._release_lock_script: Any | None = None
 
     @staticmethod
     def get_redis_lock_key(cronjob_id: str) -> str:
-        return f"cronjob_lock:{cronjob_id}"
+        return pod_lock.lock_key(cronjob_id)
+
+    def _store(self) -> PodLockStore | None:
+        return None if self.redis_cache is None else TransportPodLockStore(self.redis_cache.transport())
 
     @with_service_target(POD_LOCK_TARGET)
     async def acquire_lock(
@@ -54,7 +50,6 @@ end
     ) -> bool | None:
         """
         Attempt to acquire the lock for a specific cron job using Redis.
-        Uses the SET command with NX and EX options to ensure atomicity.
 
         Args:
             cronjob_id: The ID of the cron job to lock
@@ -66,135 +61,98 @@ end
                  lock marks work as already done for this window, so not even the holder
                  may redo it before the TTL expires.
         """
-        if self.redis_cache is None:
+        store: Final = self._store()
+        if store is None:
             verbose_proxy_logger.debug("redis_cache is None, skipping acquire_lock")
             return None
-        try:
-            lock_ttl: Final = ttl or DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
-            verbose_proxy_logger.debug(
-                "Pod %s attempting to acquire Redis lock for cronjob_id=%s (ttl=%ds)",
-                self.pod_id,
-                cronjob_id,
-                lock_ttl,
-            )
-            # Try to set the lock key with the pod_id as its value, only if it doesn't exist (NX)
-            # and with an expiration (EX) to avoid deadlocks.
-            lock_key: Final = PodLockManager.get_redis_lock_key(cronjob_id)
-            acquired: Final = await self.redis_cache.async_set_cache(
-                lock_key,
-                self.pod_id,
-                nx=True,
-                ttl=lock_ttl,
-            )
-            if acquired:
+        lock_ttl: Final = ttl or DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
+        verbose_proxy_logger.debug(
+            "Pod %s attempting to acquire Redis lock for cronjob_id=%s (ttl=%ds)",
+            self.pod_id,
+            cronjob_id,
+            lock_ttl,
+        )
+        match await store.acquire(cronjob_id, self.pod_id, ttl=timedelta(seconds=lock_ttl)):
+            case Acquired():
                 verbose_proxy_logger.info(
-                    "Pod %s successfully acquired Redis lock for cronjob_id=%s",
-                    self.pod_id,
-                    cronjob_id,
+                    "Pod %s successfully acquired Redis lock for cronjob_id=%s", self.pod_id, cronjob_id
                 )
-
                 return True
-            else:
-                # Check if the current pod already holds the lock
-                current_value = await self.redis_cache.async_get_cache(lock_key)
-                if current_value is not None:
-                    if isinstance(current_value, bytes):
-                        current_value = current_value.decode("utf-8")
-                    if current_value == self.pod_id and allow_reentrant:
-                        verbose_proxy_logger.info(
-                            "Pod %s already holds the Redis lock for cronjob_id=%s",
-                            self.pod_id,
-                            cronjob_id,
-                        )
-                        self._emit_acquired_lock_event(cronjob_id, self.pod_id)
-                        return True
-                    verbose_proxy_logger.info(
-                        "Pod %s could not acquire lock for cronjob_id=%s, held by pod %s.",
-                        self.pod_id,
-                        cronjob_id,
-                        current_value,
-                    )
-            return False
-        except Exception as e:
-            log_redis_failure(verbose_proxy_logger, logging.ERROR, f"Error acquiring Redis lock for {cronjob_id}", e)
-            return False
+            case HeldBy(owner=owner) if owner == self.pod_id and allow_reentrant:
+                verbose_proxy_logger.info(
+                    "Pod %s already holds the Redis lock for cronjob_id=%s", self.pod_id, cronjob_id
+                )
+                self._emit_acquired_lock_event(cronjob_id, self.pod_id)
+                return True
+            case HeldBy(owner=owner):
+                verbose_proxy_logger.info(
+                    "Pod %s could not acquire lock for cronjob_id=%s, held by pod %s.", self.pod_id, cronjob_id, owner
+                )
+                return False
+            case Vacant() | RedisFailure():
+                return False
 
+    @with_service_target(POD_LOCK_TARGET)
+    async def lock_holder(self, cronjob_id: str) -> HeldBy | None | RedisFailure:
+        store: Final = self._store()
+        return None if store is None else await store.holder(cronjob_id)
+
+    @with_service_target(POD_LOCK_TARGET)
+    async def is_held(self, cronjob_id: str) -> bool:
+        """An unreadable lock reports as unheld, so callers run a job twice rather than skip it."""
+        match await self.lock_holder(cronjob_id):
+            case HeldBy():
+                return True
+            case None:
+                return False
+            case RedisFailure(message=message):
+                verbose_proxy_logger.warning("Could not read the lock for cronjob_id=%s: %s", cronjob_id, message)
+                return False
+
+    @with_service_target(POD_LOCK_TARGET)
     async def release_lock(
         self,
         cronjob_id: str,
-    ):
+    ) -> None:
         """
-        Release the lock if the current pod holds it.
-        Uses an atomic Lua compare-and-delete to prevent TOCTOU races where a
-        stale owner could delete a newly reacquired lock.
-        Falls back to GET + DEL for cache implementations that don't support
-        script registration.
+        Release the lock if the current pod holds it, with an atomic compare-and-delete
+        so a stale owner can never delete a lock another pod has since taken.
         """
-        if self.redis_cache is None:
+        store: Final = self._store()
+        if store is None:
             verbose_proxy_logger.debug("redis_cache is None, skipping release_lock")
             return
-        try:
+        verbose_proxy_logger.debug("Pod %s attempting to release Redis lock for cronjob_id=%s", self.pod_id, cronjob_id)
+        released: Final = await self._release(store, cronjob_id)
+        if isinstance(released, RedisFailure):
+            verbose_proxy_logger.error("Error releasing Redis lock for %s: %s", cronjob_id, released.message)
+        elif released:
+            verbose_proxy_logger.info(
+                "Pod %s successfully released Redis lock for cronjob_id=%s", self.pod_id, cronjob_id
+            )
+            self._emit_released_lock_event(cronjob_id=cronjob_id, pod_id=self.pod_id)
+        else:
             verbose_proxy_logger.debug(
-                "Pod %s attempting to release Redis lock for cronjob_id=%s",
+                "Pod %s failed to release Redis lock for cronjob_id=%s (lock missing or held by another pod)",
                 self.pod_id,
                 cronjob_id,
             )
-            lock_key: Final = PodLockManager.get_redis_lock_key(cronjob_id)
-            result: Final = await self._compare_and_delete_lock(lock_key=lock_key)
-            if result == 1:
-                verbose_proxy_logger.info(
-                    "Pod %s successfully released Redis lock for cronjob_id=%s",
-                    self.pod_id,
-                    cronjob_id,
-                )
-                self._emit_released_lock_event(
-                    cronjob_id=cronjob_id,
-                    pod_id=self.pod_id,
-                )
-            else:
-                verbose_proxy_logger.debug(
-                    "Pod %s failed to release Redis lock for cronjob_id=%s (lock missing or held by another pod)",
-                    self.pod_id,
-                    cronjob_id,
-                )
-        except Exception as e:
-            log_redis_failure(verbose_proxy_logger, logging.ERROR, f"Error releasing Redis lock for {cronjob_id}", e)
 
-    @with_service_target(POD_LOCK_TARGET)
-    async def _compare_and_delete_lock(self, lock_key: str) -> int:
-        """
-        Atomically delete lock key only if current pod owns it.
-
-        Falls back to get/delete for non-RedisCache implementations that do not
-        expose Lua script registration.
-        """
-        script_register: Final = getattr(self.redis_cache, "async_register_script", None)
-        if callable(script_register):
-            try:
-                if self._release_lock_script is None:
-                    self._release_lock_script = script_register(self._COMPARE_AND_DELETE_LOCK_SCRIPT)
-                # acquire_lock stores the pod_id via async_set_cache, which
-                # JSON-encodes the value; compare against the same encoding so
-                # the Lua equality check matches and the lock is released
-                result = await self._release_lock_script(keys=[lock_key], args=[json.dumps(self.pod_id)])
-                return int(result or 0)
-            except Exception:
-                # Lua execution failed (e.g. Redis restart cleared loaded scripts,
-                # or scripting is disabled). Reset cached script handle and fall
-                # through to the GET + DEL fallback so the lock is still released.
-                self._release_lock_script = None
-                verbose_proxy_logger.warning(
-                    "Lua compare-and-delete failed for lock_key=%s, falling back to GET+DEL",
-                    lock_key,
-                )
-
-        current_value = await self.redis_cache.async_get_cache(lock_key)
-        if isinstance(current_value, bytes):
-            current_value = current_value.decode("utf-8")
-        if current_value != self.pod_id:
-            return 0
-        result = await self.redis_cache.async_delete_cache(lock_key)
-        return int(result or 0)
+    async def _release(self, store: PodLockStore, cronjob_id: str) -> bool | RedisFailure:
+        released: Final = await store.release(cronjob_id, self.pod_id)
+        if not isinstance(released, RedisFailure):
+            return released
+        verbose_proxy_logger.warning(
+            "Lua compare-and-delete failed for lock_key=%s, falling back to GET+DEL",
+            self.get_redis_lock_key(cronjob_id),
+        )
+        match await store.holder(cronjob_id):
+            case RedisFailure(kind="breaker_open") as refused:
+                return refused
+            case HeldBy(owner=owner) if owner == self.pod_id:
+                return await store.remove(cronjob_id)
+            case _:
+                return False
 
     @staticmethod
     def _emit_acquired_lock_event(cronjob_id: str, pod_id: str):
