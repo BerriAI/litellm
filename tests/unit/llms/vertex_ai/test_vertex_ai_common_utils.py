@@ -23,6 +23,7 @@ from litellm.llms.vertex_ai.common_utils import (
     get_vertex_location_from_url,
     get_vertex_project_id_from_url,
     get_vertex_url,
+    needs_parameters_json_schema,
     pop_vertex_request_labels,
     set_schema_property_ordering,
     supports_response_json_schema,
@@ -1620,6 +1621,50 @@ def test_map_function_keeps_integer_enum_when_tools_are_reused():
     assert sent[0]["enum"] == ["1", "2", "5"]
     assert sent[1]["enum"] == ["1", "2", "5"]
     assert sent[0] == sent[1]
+
+
+_OBJECT_BRANCH: Final = {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
+
+
+@pytest.mark.parametrize(
+    ("parameters", "expected"),
+    [
+        ({"type": "object", "properties": {"a": {"type": "string"}}}, False),
+        ({"type": "OBJECT", "properties": {"a": {"type": "string"}}}, False),
+        ({"properties": {"a": {"type": "string"}}}, False),
+        ({"type": "object", "properties": {"a": {"anyOf": [{"type": "string"}, {"type": "null"}]}}}, False),
+        ({"$ref": "#/$defs/Lookup", "$defs": {"Lookup": _OBJECT_BRANCH}}, False),
+        ({"$ref": "#/$defs/Missing", "$defs": {"Lookup": {"anyOf": [_OBJECT_BRANCH]}}}, False),
+        ({"$ref": "#/definitions/Lookup", "definitions": {"Lookup": {"anyOf": [_OBJECT_BRANCH]}}}, False),
+        ({"type": "object", "anyOf": [{"required": ["a"]}]}, True),
+        ({"anyOf": [_OBJECT_BRANCH]}, True),
+        ({"oneOf": [_OBJECT_BRANCH]}, True),
+        ({"allOf": [_OBJECT_BRANCH]}, True),
+        ({"type": ["object", "null"], "properties": {"a": {"type": "string"}}}, True),
+        ({"type": "string"}, True),
+        ({"$ref": "#/$defs/Lookup", "$defs": {"Lookup": {"anyOf": [_OBJECT_BRANCH]}}}, True),
+        ({"$ref": "#/$defs/Lookup", "$defs": {"Lookup": {"type": ["object", "null"]}}}, True),
+    ],
+    ids=[
+        "object",
+        "uppercase-object",
+        "untyped-properties",
+        "union-inside-a-property",
+        "root-ref-to-object",
+        "root-ref-to-missing-def",
+        "root-ref-into-definitions",
+        "object-with-any-of",
+        "root-any-of",
+        "root-one-of",
+        "root-all-of",
+        "type-list",
+        "non-object-type",
+        "root-ref-to-union",
+        "root-ref-to-type-list",
+    ],
+)
+def test_needs_parameters_json_schema(parameters: dict[str, JsonValue], expected: bool) -> None:
+    assert needs_parameters_json_schema(parameters) is expected
 
 
 class _Priority(int, Enum):

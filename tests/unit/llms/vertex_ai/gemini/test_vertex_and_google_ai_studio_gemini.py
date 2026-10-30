@@ -2556,6 +2556,114 @@ def test_gemini_reasoning_effort_and_function_tool_share_request() -> None:
     ]
 
 
+_LOOKUP_PROPERTIES: Final = {"a": {"type": "string"}, "b": {"type": "string"}}
+_LOOKUP_BY_A: Final = {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
+_LOOKUP_BY_B: Final = {"type": "object", "properties": {"b": {"type": "string"}}, "required": ["b"]}
+_WEATHER_PARAMETERS: Final = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}},
+    "required": ["city"],
+    "additionalProperties": False,
+}
+_WEATHER_VERTEX_PARAMETERS: Final = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {
+            "type": "object",
+            "properties": _LOOKUP_PROPERTIES,
+            "anyOf": [{"required": ["a"]}, {"required": ["b"]}],
+            "additionalProperties": False,
+        },
+        {
+            "type": ["object", "null"],
+            "properties": _LOOKUP_PROPERTIES,
+            "anyOf": [{"required": ["a"]}, {"required": ["b"]}],
+        },
+        {"anyOf": [{**_LOOKUP_BY_A, "additionalProperties": False}, _LOOKUP_BY_B]},
+        {
+            "type": "object",
+            "properties": {"limit": {"type": "integer"}},
+            "anyOf": [
+                {"properties": {"query": {"type": "string"}}, "required": ["query"]},
+                {"properties": {"url": {"type": "string"}}, "required": ["url"]},
+            ],
+        },
+        {"$ref": "#/$defs/Lookup", "$defs": {"Lookup": {"oneOf": [_LOOKUP_BY_A, _LOOKUP_BY_B]}}},
+        {"allOf": [{"type": "object", "properties": _LOOKUP_PROPERTIES}, {"required": ["b"]}]},
+    ],
+    ids=[
+        "object-with-required-branches",
+        "nullable-object-with-required-branches",
+        "root-object-branches",
+        "object-with-property-branches",
+        "root-ref-to-union",
+        "root-all-of",
+    ],
+)
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_sends_a_union_root_tool_schema_unchanged_as_parameters_json_schema(
+    respx_mock: respx.MockRouter, parameters: dict[str, object]
+) -> None:
+    route: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash:generateContent.*"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": "Ready"}]}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+        )
+    )
+    completion(
+        model="gemini/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Look up the record named Atlas"}],
+        tools=[
+            {"type": "function", "function": {"name": "lookup", "parameters": deepcopy(parameters)}},
+            {"type": "function", "function": {"name": "weather", "parameters": deepcopy(_WEATHER_PARAMETERS)}},
+        ],
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+    request_body: Final = json.loads(route.calls.last.request.content)
+
+    assert request_body["tools"] == [
+        {
+            "function_declarations": [
+                {"name": "lookup", "parametersJsonSchema": parameters},
+                {"name": "weather", "parameters": _WEATHER_VERTEX_PARAMETERS},
+            ]
+        }
+    ]
+
+
+def test_vertex_sends_a_union_root_legacy_function_schema_unchanged_as_parameters_json_schema() -> None:
+    parameters: Final = {"anyOf": [{**_LOOKUP_BY_A, "additionalProperties": False}, _LOOKUP_BY_B]}
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "functions": [
+                {"name": "lookup", "description": "Look up a record", "parameters": deepcopy(parameters)},
+                {"name": "weather", "parameters": deepcopy(_WEATHER_PARAMETERS)},
+            ]
+        },
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+
+    assert request_params["tools"] == [
+        {
+            "function_declarations": [
+                {"name": "lookup", "description": "Look up a record", "parametersJsonSchema": parameters},
+                {"name": "weather", "parameters": _WEATHER_VERTEX_PARAMETERS},
+            ]
+        }
+    ]
+
+
 @pytest.mark.parametrize(
     ("model", "expected_level"),
     [

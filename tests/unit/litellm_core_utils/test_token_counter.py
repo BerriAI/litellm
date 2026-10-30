@@ -693,6 +693,20 @@ def test_token_counter_counts_function_tools_like_chat_completions_tools_for_cha
     ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=[_openai_tool(function)])
 
 
+def test_token_counter_counts_a_gemini_parameters_json_schema_like_parameters():
+    json_schema_function: Final = {
+        "name": _WEATHER_FUNCTION["name"],
+        "description": _WEATHER_FUNCTION["description"],
+        "parametersJsonSchema": _WEATHER_FUNCTION["parameters"],
+    }
+
+    assert token_counter_new(
+        model="gemini-2.5-pro", messages=list(_USER_MESSAGES), tools=[_gemini_tool(json_schema_function)]
+    ) == token_counter_new(
+        model="gemini-2.5-pro", messages=list(_USER_MESSAGES), tools=[_gemini_tool(_WEATHER_FUNCTION)]
+    )
+
+
 # Azure AI Foundry DeepSeek-V4-Flash-0731 billed 295 prompt tokens for the weather tool with each of
 # these tool_choice values on 2026-10-17, the same as without one
 @pytest.mark.parametrize("tool_choice", ["none", "required", {"type": "function", "function": {"name": "get_weather"}}])

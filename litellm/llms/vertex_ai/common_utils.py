@@ -889,6 +889,26 @@ def build_vertex_schema(
 
 _build_vertex_schema = build_vertex_schema
 
+_VERTEX_PARAMETERS_UNSUPPORTED_ROOT_KEYWORDS: Final = ("anyOf", "oneOf", "allOf")
+_ROOT_DEFS_REF_PREFIX: Final = "#/$defs/"
+
+
+def _root_ref_target(parameters: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    match parameters.get("$ref"), parameters.get("$defs"):
+        case str() as ref, dict() as defs if ref.startswith(_ROOT_DEFS_REF_PREFIX):
+            target: Final = defs.get(ref.removeprefix(_ROOT_DEFS_REF_PREFIX))
+            return target if isinstance(target, dict) else parameters
+        case _:
+            return parameters
+
+
+def needs_parameters_json_schema(parameters: Mapping[str, JsonValue]) -> bool:
+    root: Final = _root_ref_target(parameters)
+    schema_type: Final = root.get("type")
+    return any(keyword in root for keyword in _VERTEX_PARAMETERS_UNSUPPORTED_ROOT_KEYWORDS) or (
+        schema_type is not None and not (isinstance(schema_type, str) and schema_type.lower() == "object")
+    )
+
 
 def build_json_schema(parameters: dict) -> dict:
     """

@@ -1830,7 +1830,7 @@ def _format_single_function_definition(function: Mapping[str, object]) -> tuple[
     if not function_name:
         return ()
     function_description: Final = function.get("description")
-    parameters_value: Final = function.get("parameters") or {}
+    parameters_value: Final = function.get("parameters") or function.get("parametersJsonSchema") or {}
     parameters: Final = parameters_value if isinstance(parameters_value, Mapping) else {}
     properties: Final = parameters.get("properties")
     if isinstance(properties, Mapping) and properties:
