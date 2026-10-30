@@ -2,6 +2,7 @@ from typing import Final
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.router_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
@@ -56,12 +57,16 @@ class ClfAiGatewayConfig(OpenAIGPTConfig):
         requested_mapping: Final = as_str_mapping(requested)
         effort: Final = requested_mapping.get("effort") if requested_mapping is not None else requested
         declared: Final = declared_reasoning_efforts_for_model(model, "clf_ai_gateway")
-        drops_effort: Final = (
-            (drop_params or litellm.drop_params is True)
-            and effort is not None
-            and declared is not None
-            and effort not in declared
-        )
+        drop_enabled: Final = drop_params or litellm.drop_params is True
+        if requested_mapping is not None and effort is None and not drop_enabled:
+            raise UnsupportedParamsError(
+                message=f"clf_ai_gateway needs an effort level in reasoning_effort, got {requested!r}. To drop "
+                "unsupported openai params from the call, set `litellm.drop_params = True`",
+                llm_provider="clf_ai_gateway",
+                model=model,
+                status_code=400,
+            )
+        drops_effort: Final = drop_enabled and effort is not None and declared is not None and effort not in declared
         if drops_effort:
             verbose_logger.warning(
                 "Dropping reasoning_effort=%r for model=%r (drop_params=True) because clf_ai_gateway takes only %s for it.",
@@ -70,7 +75,7 @@ class ClfAiGatewayConfig(OpenAIGPTConfig):
                 declared,
             )
         others: Final = {param: value for param, value in non_default_params.items() if param != "reasoning_effort"}
-        normalized: Final = {**others, "reasoning_effort": effort} if effort is not None else non_default_params
+        normalized: Final = {**others, "reasoning_effort": effort} if effort is not None else others
         forwarded: Final = others if drops_effort else normalized
         mapped: Final[dict[str, object]] = super().map_openai_params(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # OpenAIGPTConfig types its params and result as bare dicts  # mutable-ok: parent returns a dict
             non_default_params=forwarded,

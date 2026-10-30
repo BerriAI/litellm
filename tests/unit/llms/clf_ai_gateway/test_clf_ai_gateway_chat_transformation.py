@@ -180,6 +180,29 @@ def test_drop_params_drops_a_reasoning_effort_level_the_model_does_not_declare(
     assert json.loads(route.calls.last.request.content).get("reasoning_effort") == forwarded
 
 
+def test_a_reasoning_effort_dict_without_a_level_is_refused_unless_dropped(local_model_cost_map: None) -> None:
+    with respx.mock() as upstream:
+        route: Final = upstream.post(CHAT_URL).respond(
+            200, json=_chat_response({"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2})
+        )
+        with pytest.raises(litellm.UnsupportedParamsError):
+            litellm.completion(
+                model="clf_ai_gateway/glm-5.3",
+                api_key="fake-test-key",
+                messages=[{"role": "user", "content": "hi"}],
+                reasoning_effort={"summary": "auto"},
+            )
+        litellm.completion(
+            model="clf_ai_gateway/glm-5.3",
+            api_key="fake-test-key",
+            messages=[{"role": "user", "content": "hi"}],
+            reasoning_effort={"summary": "auto"},
+            drop_params=True,
+        )
+    assert route.call_count == 1
+    assert "reasoning_effort" not in json.loads(route.calls.last.request.content)
+
+
 def test_reasoning_effort_is_advertised_only_for_reasoning_models(local_model_cost_map: None) -> None:
     config: Final = ClfAiGatewayConfig()
     assert "reasoning_effort" in config.get_supported_openai_params(model="glm-5.3")
