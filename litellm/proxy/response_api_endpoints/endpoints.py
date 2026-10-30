@@ -2088,6 +2088,10 @@ def _responses_ws_frame_guard(
         if key != _GUARDRAIL_INFORMATION_KEY
     }
     model: Final = admitted.get("model")
+    admitted_request: Final = admitted.get("proxy_server_request")
+    connection_request: Final = (
+        _WS_FRAME.validate_python(admitted_request) if isinstance(admitted_request, dict) else {}
+    )
 
     # a blocked frame is billed as its own failed request; only the first turn settles the admission reservation
     rejected_frame_auth: Final = user_api_key_dict.model_copy(update={"budget_reservation": None})
@@ -2116,18 +2120,26 @@ def _responses_ws_frame_guard(
                 user_api_key_dict=user_api_key_dict, data=frame_data, call_type="aresponses", guardrails_only=True
             )
         except Exception as e:
-            await _bill_rejected_frame(rejected_frame_auth, e, _with_frame_request(frame_data, frame))
+            await _bill_rejected_frame(
+                rejected_frame_auth, e, _with_frame_request(frame_data, frame, connection_request)
+            )
             raise
         if guarded_data.get("model") != model:
             rerouted: Final = ValueError(
                 f"a guardrail rerouted this turn to {guarded_data.get('model')!r}; an open Responses WebSocket"
                 f" is bound to {model!r}, send this turn over HTTP /v1/responses"
             )
-            await _bill_rejected_frame(rejected_frame_auth, rerouted, _with_frame_request(frame_data, frame))
+            await _bill_rejected_frame(
+                rejected_frame_auth, rerouted, _with_frame_request(frame_data, frame, connection_request)
+            )
             raise rerouted
         # a guardrail may delete a field (the Responses translation pops ``instructions``), so start without them
         guarded_fields: Final = {key: guarded_data[key] for key in _GUARDED_FRAME_FIELDS if key in guarded_data}
-        kept: Final = {key: value for key, value in body.items() if key not in _GUARDED_FRAME_FIELDS}
+        kept: Final = {
+            key: _without_untrusted_metadata(key, value)
+            for key, value in body.items()
+            if key not in _GUARDED_FRAME_FIELDS
+        }
         rewritten: Final = (
             {**frame_obj, "response": {**kept, **guarded_fields}}
             if isinstance(nested, dict)
@@ -2149,13 +2161,19 @@ def _responses_ws_frame_guard(
 def _with_frame_request(
     frame_data: dict[str, object],  # mutable-ok: the spend logger stamps the failure row on the request dict
     frame: str,
+    connection_request: Mapping[str, object],
 ) -> dict[str, object]:  # mutable-ok: the spend logger stamps the failure row on the request dict
-    """A rejected frame's failure row stores the frame as its request, without the fields the guardrails read, so
-    text a guardrail refused is never stored unmasked."""
+    """A rejected frame's failure row stores the frame as its request on the connection's, without the fields the
+    guardrails read, so text a guardrail refused is never stored unmasked."""
     stored: Final = {
-        key: value for key, value in responses_ws_turn_request_body(frame).items() if key not in _GUARDED_FRAME_FIELDS
+        key: _without_untrusted_metadata(key, value)
+        for key, value in responses_ws_turn_request_body(frame).items()
+        if key not in _GUARDED_FRAME_FIELDS
     }
-    return {**frame_data, "proxy_server_request": {"body": stored}}
+    return {
+        **frame_data,
+        "proxy_server_request": {**connection_request, "body": with_connection_end_user(connection_request, stored)},
+    }
 
 
 def _without_untrusted_metadata(key: str, value: object) -> object:

@@ -2261,14 +2261,14 @@ async def _reject_guarded_turn(
     request_body: Callable[[], Awaitable[Mapping[str, object]]],
 ) -> None:
     """Answers the refused turn and leaves its guardrail records to the connection's close-time failure row, which
-    runs every failure hook once per socket, like the first refusal it records. The request is built only when that
-    row keeps it."""
+    runs every failure hook once per socket, like the first refusal it records. The request is built after the
+    answer, and only when that row keeps it."""
     if guarded.bill_refusal is not None:
         guarded.bill_refusal(rejection)
-    if guarded.bill_failed_request is not None and guarded.keeps_failed_request(rejection):
-        guarded.bill_failed_request(rejection, await request_body())
     with contextlib.suppress(Exception):
         await websocket.send_text(_turn_rejection_frame(rejection))
+    if guarded.bill_failed_request is not None and guarded.keeps_failed_request(rejection):
+        guarded.bill_failed_request(rejection, await request_body())
 
 
 _RESPONSES_WS_TERMINAL_EVENT_TYPES: Final = _HISTORY_TERMINAL_EVENT_TYPES | _RESPONSES_WS_FAILURE_EVENT_TYPES

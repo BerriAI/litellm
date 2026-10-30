@@ -2169,6 +2169,46 @@ class TestResponsesWSFirstFrameModelAuth:
         assert len(failure["request_data"]["litellm_call_id"]) == 36
 
     @pytest.mark.asyncio
+    async def test_a_blocked_frame_s_row_keeps_the_connection_s_request_and_end_user_without_forged_metadata(self):
+        import litellm
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=ValueError("blocked"))
+        spend_logger = MagicMock(spec=ProxyDBLogger)
+        spend_logger.async_post_call_failure_hook = AsyncMock()
+        connection_request = {
+            "url": "ws://testserver/v1/responses",
+            "headers": {"user-agent": "codex_cli_rs/0.165.0"},
+            "body": {"model": "gpt-4o-mini", "user": "end-user-1"},
+        }
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}, "proxy_server_request": connection_request},
+            MagicMock(),
+            proxy_logging_obj,
+            MagicMock(),
+        )
+
+        with patch.object(litellm, "callbacks", [spend_logger]), pytest.raises(ValueError, match="blocked"):
+            await guard(
+                json.dumps(
+                    {
+                        "type": "response.create",
+                        "input": "hi",
+                        "metadata": {"user_api_key_alias": "forged-admin", "tag": "kept"},
+                    }
+                )
+            )
+
+        failure = spend_logger.async_post_call_failure_hook.await_args.kwargs
+        assert failure["request_data"]["proxy_server_request"] == {
+            "url": "ws://testserver/v1/responses",
+            "headers": {"user-agent": "codex_cli_rs/0.165.0"},
+            "body": {"metadata": {"tag": "kept"}, "user": "end-user-1"},
+        }
+
+    @pytest.mark.asyncio
     async def test_frame_guard_guards_the_nested_response_body_and_copies_back_tools(self):
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
 
@@ -2206,9 +2246,10 @@ class TestResponsesWSFirstFrameModelAuth:
             "tag": "kept",
         }
 
-        await guard(json.dumps({"type": "response.create", "input": "hi", "metadata": metadata}))
+        guarded = await guard(json.dumps({"type": "response.create", "input": "hi", "metadata": metadata}))
 
         assert proxy_logging_obj.pre_call_hook.await_args.kwargs["data"]["metadata"] == {"tag": "kept"}
+        assert json.loads(guarded.frame)["metadata"] == {"tag": "kept"}
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

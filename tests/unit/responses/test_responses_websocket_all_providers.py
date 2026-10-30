@@ -2804,7 +2804,7 @@ class TestNativeWebSocketGuardrailMasking:
 
         await handler.client_to_backend()
 
-        assert answered_and_masked == ["email alice@example.com", 429, 429]
+        assert answered_and_masked == [429, "email alice@example.com", 429]
         bill_failed_request.assert_called_once_with(first_refusal, {"input": "email <EMAIL_ADDRESS_1>"})
 
     @pytest.mark.asyncio
