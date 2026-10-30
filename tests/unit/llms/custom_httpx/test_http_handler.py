@@ -136,6 +136,10 @@ def test_sync_post_streaming_status_error_should_not_wait_forever_for_body(
         litellm_handler.close()
 
 
+def _echo_timeout(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, json=request.extensions["timeout"])
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("timeout", "expected"),
@@ -148,33 +152,34 @@ def test_sync_post_streaming_status_error_should_not_wait_forever_for_body(
 async def test_async_post_numeric_timeout_keeps_bounded_connect_timeout(
     timeout: float | httpx.Timeout, expected: Mapping[str, float]
 ):
-    seen: Final[list[Mapping[str, float]]] = []
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_echo_timeout))
+    try:
+        response: Final = await handler.post("http://upstream.invalid/v1/chat/completions", json={}, timeout=timeout)
+    finally:
+        await handler.close()
 
-    def capture(request: httpx.Request) -> httpx.Response:
-        seen.append(request.extensions["timeout"])
-        return httpx.Response(200, json={})
-
-    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(capture))
-    await handler.post("http://upstream.invalid/v1/chat/completions", json={}, timeout=timeout)
-
-    assert seen == [expected]
+    assert response.json() == expected
 
 
 @pytest.mark.asyncio
 async def test_async_post_replay_after_connect_error_keeps_bounded_connect_timeout():
-    seen: Final[list[Mapping[str, float]]] = []
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
 
-    def refuse_then_capture(request: httpx.Request) -> httpx.Response:
-        if not seen:
-            seen.append({})
-            raise httpx.ConnectError("connection refused", request=request)
-        seen.append(request.extensions["timeout"])
-        return httpx.Response(200, json={})
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_echo_timeout))
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(refuse))
+    try:
+        response: Final = await handler.post("http://upstream.invalid/v1/chat/completions", json={}, timeout=600.0)
+    finally:
+        await handler.client.aclose()
 
-    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(refuse_then_capture))
-    await handler.post("http://upstream.invalid/v1/chat/completions", json={}, timeout=600.0)
-
-    assert seen[1]["connect"] == HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
+    assert response.json() == {
+        "connect": HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
+        "read": 600.0,
+        "write": 600.0,
+        "pool": 600.0,
+    }
 
 
 @pytest.mark.asyncio

@@ -11,10 +11,10 @@ import respx
 
 import litellm
 from litellm.a2a_protocol.providers.pydantic_ai_agents.config import PydanticAIProviderConfig
-from litellm.constants import HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
 from litellm.a2a_protocol.providers.pydantic_ai_agents.transformation import (
     PydanticAITransformation,
 )
+from litellm.constants import HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
 
 
 def _build_mock_client(response_payload):
