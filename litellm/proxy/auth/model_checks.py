@@ -342,11 +342,19 @@ def _resolves_to_catalog_model(model: str, provider: str, provider_model_ids: fr
     )
 
 
+def _routed_catalog_id_has_namespace(model: str, provider: str, routing_prefix: str) -> bool:
+    return "/" in model.removeprefix(f"{provider}/").removeprefix(routing_prefix)
+
+
 def _routes_to_catalog_model(
-    routes_to_model: Callable[[str, str], bool], provider: str, provider_model_ids: frozenset[str]
+    routes_to_model: Callable[[str, str], bool], provider: str, routing_prefix: str, provider_model_ids: frozenset[str]
 ) -> Callable[[str, str], bool]:
     return lambda listed_id, model: (
-        routes_to_model(listed_id, model) and _resolves_to_catalog_model(model, provider, provider_model_ids)
+        routes_to_model(listed_id, model)
+        and (
+            not _routed_catalog_id_has_namespace(model, provider, routing_prefix)
+            or _resolves_to_catalog_model(model, provider, provider_model_ids)
+        )
     )
 
 
@@ -367,10 +375,11 @@ def _ids_routing_to_catalog_models(
     catalog_pattern: Final = _without_routing_segments(
         deployment_model_pattern_without_provider, provider, name_pattern, provider_model_ids
     )
+    routing_prefix: Final = deployment_model_pattern_without_provider.removesuffix(catalog_pattern)
     reaches_catalog_model: Final = (
-        routes_to_model
-        if catalog_pattern == deployment_model_pattern_without_provider
-        else _routes_to_catalog_model(routes_to_model, provider, frozenset(provider_model_ids))
+        _routes_to_catalog_model(routes_to_model, provider, routing_prefix, frozenset(provider_model_ids))
+        if routing_prefix
+        else routes_to_model
     )
     deployment_model_pattern: Final = f"{provider_id_prefix}{catalog_pattern}"
     deployment_regex: Final = re.compile(PatternMatchRouter().pattern_to_regex(deployment_model_pattern))

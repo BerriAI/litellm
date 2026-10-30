@@ -870,7 +870,9 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             if "-to-" not in key and "fireworks-ai-default" not in key:
                 fireworks_ai_models.add(key)
         elif value.get("litellm_provider") == "together_ai":
-            if not key.startswith("together-ai-"):
+            if _is_past_deprecation_date(value):
+                together_ai_models.discard(key)
+            elif not key.startswith("together-ai-"):
                 together_ai_models.add(key)
         elif value.get("litellm_provider") == "baseten":
             if _is_past_deprecation_date(value):

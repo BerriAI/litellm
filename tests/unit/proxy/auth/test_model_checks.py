@@ -1404,6 +1404,20 @@ def test_provider_wildcard_lists_cost_map_models_but_not_pricing_tiers() -> None
     assert [listed_id for listed_id in listed if pricing_tier in listed_id] == []
 
 
+def test_provider_wildcard_stops_listing_a_cost_map_model_once_it_is_retired() -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    model_id: Final = "together_ai/partial-wildcard-org/model-retired"
+    with _registered_chat_models({model_id: "together_ai"}):
+        listed_while_served: Final = get_known_models_from_wildcard("together_ai/*")
+        litellm.add_known_models({model_id: {"litellm_provider": "together_ai", "deprecation_date": "2000-01-01"}})
+        listed_once_retired: Final = get_known_models_from_wildcard("together_ai/*")
+
+    assert model_id in listed_while_served
+    assert model_id not in listed_once_retired
+
+
 _ROUTE_CF_ID: Final = "cloudflare/@cf/partial-route-org/model-a-instruct"
 _ROUTE_CF_SUFFIXED_ID: Final = "cloudflare/@cf/partial-route-org/model-b-instruct-v2"
 _ROUTE_HF_ID: Final = "cloudflare/@hf/partial-route-org/model-c"
@@ -1489,7 +1503,19 @@ _ROUTE_CF_IDS: Final = {_ROUTE_CF_ID, _ROUTE_CF_SUFFIXED_ID}
             set(),
             id="same-name-namespace-the-catalog-lacks",
         ),
-        pytest.param("openai/*", "openai/partial-route-org/*", None, set(), id="alias-over-org-the-catalog-lacks"),
+        pytest.param(
+            "together/*", "together_ai/partial-route-missing-org/*", None, set(), id="alias-over-org-the-catalog-lacks"
+        ),
+        pytest.param(
+            "openai/*",
+            "openai/chat_completions/*",
+            None,
+            {f"openai/chat_completions/{_ROUTE_OPENAI_ID}"},
+            id="chat-completions-bridge-route",
+        ),
+        pytest.param(
+            "bedrock/*", "bedrock/llama/*", None, {f"bedrock/llama/{_ROUTE_BEDROCK_ID}"}, id="invoke-format-route"
+        ),
         pytest.param(
             "together/*",
             "together_ai/partial-route-org/*",
