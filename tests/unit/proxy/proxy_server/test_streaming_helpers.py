@@ -64,6 +64,7 @@ from litellm.types.llms.openai import (
     ResponseFailedEvent,
     ResponseIncompleteEvent,
     ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
 )
 from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
@@ -340,6 +341,11 @@ class _Score(float):
     pass
 
 
+class _MaskedCount(int):
+    def __repr__(self) -> str:
+        return "_MaskedCount([secure])"
+
+
 _WHEN: Final = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
 
 
@@ -348,10 +354,9 @@ _WHEN: Final = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
     [
         (_WHEN, repr(_WHEN), str(_WHEN)),
         (_RigColor.RED, repr(_RigColor.RED), str(_RigColor.RED)),
-        (HTTPStatus.BAD_REQUEST, repr(HTTPStatus.BAD_REQUEST), 400),
-        (_Score(0.5), repr(_Score(0.5)), 0.5),
+        (_MaskedCount(7), repr(_MaskedCount(7)), 7),
     ],
-    ids=["datetime", "enum", "int_enum", "float_subclass"],
+    ids=["datetime", "enum", "number_subclass_with_its_own_repr"],
 )
 def test_responses_stream_frames_print_values_json_cannot_take_as_base_printed_them(
     nested: object, printed: str, dumped: object
@@ -364,6 +369,41 @@ def test_responses_stream_frames_print_values_json_cannot_take_as_base_printed_t
     assert isinstance(chunk_frame, str)
     assert json.loads(chunk_frame.removeprefix("data: "))["nested"] == printed
     assert json.loads(error_frame.split("data: ", 1)[1])["error"]["nested"] == dumped
+
+
+class _RigCode(str, Enum):
+    BLOCKED = "blocked_by_rig"
+
+
+@pytest.mark.parametrize(
+    ("nested", "plain"),
+    [(_RigCode.BLOCKED, "blocked_by_rig"), (HTTPStatus.BAD_REQUEST, 400), (_Score(0.5), 0.5)],
+    ids=["str_enum", "int_enum", "float_subclass"],
+)
+def test_responses_stream_frames_send_string_and_number_subclasses_as_their_plain_value(
+    nested: object, plain: object
+) -> None:
+    assert _responses_frame_payload(nested)["nested"] == plain
+
+
+_DUMPED_DELTA: Final = OutputTextDeltaEvent(
+    type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+    item_id="msg_1",
+    output_index=0,
+    content_index=0,
+    delta="hi",
+    sequence_number=3,
+)
+
+
+@pytest.mark.parametrize("mapping", [dict, MappingProxyType], ids=["dict", "mapping_proxy"])
+def test_responses_sse_chunk_a_hook_dumped_from_an_event_streams_as_that_event(
+    mapping: Callable[[Mapping[str, object]], Mapping[str, object]],
+) -> None:
+    frame: Final = _format_responses_sse_chunk(chunk=mapping(_DUMPED_DELTA.model_dump()))
+
+    assert isinstance(frame, str)
+    assert json.loads(frame.removeprefix("data: ")) == json.loads(_DUMPED_DELTA.model_dump_json())
 
 
 @pytest.mark.parametrize("mapping", [dict, MappingProxyType], ids=["dict", "mapping_proxy"])

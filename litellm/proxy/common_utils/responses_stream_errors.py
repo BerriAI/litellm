@@ -107,14 +107,27 @@ def _str_skips_its_repr(model: BaseModel) -> bool:
     return kind.__str__ is BaseModel.__str__ and kind.__repr__ is not BaseModel.__repr__
 
 
+def _plain_scalar(value: str | float) -> str | float:
+    if isinstance(value, str):
+        return str.__str__(value)
+    if isinstance(value, int):
+        return int.__int__(value)
+    return float.__float__(value)
+
+
+def _repr_shows_its_value(value: str | float) -> bool:
+    plain: Final = _plain_scalar(value)
+    if isinstance(value, Enum):
+        return repr(value) == f"<{type(value).__name__}.{value.name}: {plain!r}>"
+    return repr(value) == repr(plain)
+
+
 def _text(value: object, form: _BaseForm) -> object:
     try:
+        if isinstance(value, (str, int, float)) and (form is _BaseForm.DUMPED or _repr_shows_its_value(value)):
+            return _plain_scalar(value)
         if form is _BaseForm.PRINTED:
             return repr(value)
-        if isinstance(value, int):
-            return int(value)
-        if isinstance(value, float):
-            return float(value)
         if isinstance(value, BaseModel) and _str_skips_its_repr(value):
             return repr(value)
         return str(value)
