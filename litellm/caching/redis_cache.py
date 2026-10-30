@@ -476,6 +476,67 @@ def redis_breaker_state_counts() -> Mapping[str, int]:
     return MappingProxyType(dict(Counter(breaker.state for breaker in _LIVE_BREAKERS)))
 
 
+_REDIS_BREAKER_PROBE_INTERVAL_SECONDS: Final = 5.0
+
+_LIVE_REDIS_CACHES: Final = weakref.WeakSet()
+
+_breaker_prober_lock: Final = threading.Lock()
+_breaker_prober_thread: threading.Thread | None = None
+
+
+def _probe_open_breaker(cache: "RedisCache") -> bool:
+    breaker: Final = cache._circuit_breaker  # pyright: ignore[reportPrivateUsage]  # the prober is RedisCache's own machinery
+    if breaker.state != RedisCircuitBreaker.OPEN:
+        return False
+    ping: Final = getattr(cache.redis_client, "ping", None)
+    if ping is None or coroutine_checker.is_async_callable(cache.redis_client):
+        return False
+    if breaker.is_open():
+        return False
+    try:
+        result: Final = ping()
+    except Exception as e:
+        breaker.record_failure(is_timeout=is_redis_timeout_failure(e))
+        return True
+    if inspect.isawaitable(result):
+        result.close()  # pyright: ignore[reportAttributeAccessIssue]  # an awaitable ping result here is a coroutine
+        breaker.record_failure()
+        return True
+    if not result:
+        breaker.record_failure()
+        return True
+    breaker.record_success()
+    return True
+
+
+def _probe_open_breakers_once() -> None:
+    for cache in tuple(_LIVE_REDIS_CACHES):
+        try:
+            _probe_open_breaker(cache)
+        except Exception:
+            verbose_logger.debug("Redis circuit breaker background probe failed", exc_info=True)
+
+
+def _breaker_prober_loop() -> None:
+    while True:
+        time.sleep(_REDIS_BREAKER_PROBE_INTERVAL_SECONDS)
+        _probe_open_breakers_once()
+
+
+def _register_redis_cache_for_breaker_probing(cache: "RedisCache") -> None:
+    global _breaker_prober_thread
+    _LIVE_REDIS_CACHES.add(cache)
+    if not cache._circuit_breaker.enabled:  # pyright: ignore[reportPrivateUsage]  # same registration helper
+        return
+    with _breaker_prober_lock:
+        if _breaker_prober_thread is not None and _breaker_prober_thread.is_alive():
+            return
+        _breaker_prober_thread = threading.Thread(
+            target=_breaker_prober_loop, name="litellm-redis-breaker-prober", daemon=True
+        )
+        _breaker_prober_thread.start()
+
+
 class RedisCircuitBreakerOpenError(Exception):
     pass
 
@@ -698,6 +759,7 @@ class RedisCache(BaseCache):
             enabled=REDIS_CIRCUIT_BREAKER_ENABLED,
             service_logger=self.service_logger_obj,
         )
+        _register_redis_cache_for_breaker_probing(self)
 
         self._setup_health_pings()
 
