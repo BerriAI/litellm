@@ -2409,7 +2409,7 @@ async def test_stream_auto_execute_routed_through_the_proxy_bills_the_partial_an
     _assert_one_row_bills_round_one_and_the_partial_answer(recorder, respx_mock)
 
 
-_PARTIAL_COUNT_BLOCKS_SECONDS: Final = 0.3
+_LONGEST_WAIT_FOR_THE_LOOP_TO_MOVE_SECONDS: Final = 10
 
 
 class _CountsTheToolResultWhileTheLoopRuns:
@@ -2423,7 +2423,7 @@ class _CountsTheToolResultWhileTheLoopRuns:
     def __call__(self, model: str | None = None, messages: list[object] | None = None, **kwargs: object) -> int:
         if any(isinstance(message, Mapping) and message.get("role") == "tool" for message in messages or ()):
             self._loop.call_soon_threadsafe(self._counting.set)
-            moved: Final = self._loop_moved.wait(timeout=_PARTIAL_COUNT_BLOCKS_SECONDS)
+            moved: Final = self._loop_moved.wait(timeout=_LONGEST_WAIT_FOR_THE_LOOP_TO_MOVE_SECONDS)
             self.loop_moved_while_counting = (*self.loop_moved_while_counting, moved)
         return self._count(model=model, messages=messages, **kwargs)
 
