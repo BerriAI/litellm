@@ -112,3 +112,52 @@ async def test_allm_passthrough_route_hosted_vllm_sends_no_auth_for_a_keyless_de
     assert response.status_code == 200
     assert "authorization" not in route.calls[0].request.headers
     assert "x-api-key" not in route.calls[0].request.headers
+
+
+@pytest.mark.parametrize("hosted_vllm_api_key", ["sk-hosted-env", None])
+@pytest.mark.asyncio
+async def test_allm_passthrough_route_hosted_vllm_without_api_base_sends_the_vllm_api_base_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, hosted_vllm_api_key: str | None
+) -> None:
+    monkeypatch.setenv("VLLM_API_BASE", _API_BASE)
+    monkeypatch.setenv("VLLM_API_KEY", "sk-vllm-env")
+    monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
+    if hosted_vllm_api_key is None:
+        monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("HOSTED_VLLM_API_KEY", hosted_vllm_api_key)
+    route: Final = respx_mock.post(f"{_API_BASE}/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    response: Final = await allm_passthrough_route(
+        method="POST",
+        endpoint="v1/chat/completions",
+        model="hosted_vllm/my-deployment",
+        json={"model": "anything", "messages": [{"role": "user", "content": "Hello"}]},
+        client=AsyncHTTPHandler(),
+    )
+    assert response.status_code == 200
+    assert route.calls[0].request.headers["authorization"] == "Bearer sk-vllm-env"
+
+
+@pytest.mark.asyncio
+async def test_allm_passthrough_route_hosted_vllm_without_api_base_keeps_the_deployment_api_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VLLM_API_BASE", _API_BASE)
+    monkeypatch.setenv("VLLM_API_KEY", "sk-vllm-env")
+    monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
+    monkeypatch.setenv("HOSTED_VLLM_API_KEY", "sk-hosted-env")
+    route: Final = respx_mock.post(f"{_API_BASE}/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    response: Final = await allm_passthrough_route(
+        method="POST",
+        endpoint="v1/chat/completions",
+        model="hosted_vllm/my-deployment",
+        api_key="sk-upstream",
+        json={"model": "anything", "messages": [{"role": "user", "content": "Hello"}]},
+        client=AsyncHTTPHandler(),
+    )
+    assert response.status_code == 200
+    assert route.calls[0].request.headers["authorization"] == "Bearer sk-upstream"

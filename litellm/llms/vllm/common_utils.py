@@ -48,7 +48,11 @@ class VLLMModelInfo(BaseLLMModelInfo):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        return headers if api_key is None else {**headers, **self.upstream_auth_headers(api_key)}
+        upstream_key: Final = self.upstream_api_key(api_key, api_base)
+        return headers if upstream_key is None else {**headers, **self.upstream_auth_headers(upstream_key)}
+
+    def upstream_api_key(self, api_key: str | None, api_base: str | None) -> str | None:
+        return api_key
 
     def upstream_auth_headers(self, api_key: str) -> Mapping[str, str]:
         return {"Authorization": f"Bearer {api_key}", "x-api-key": api_key}
