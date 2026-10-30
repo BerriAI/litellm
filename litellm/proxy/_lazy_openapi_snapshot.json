@@ -3491,6 +3491,7 @@
               "additionalProperties": {
                 "$ref": "#/components/schemas/GuardrailMetric"
               },
+              "description": "Spend by guardrail ID, already included in key and model spend. Populated on user, team and organization aggregated activity only, without a model filter",
               "title": "Guardrails",
               "type": "object"
             },
@@ -3812,10 +3813,12 @@
         "GuardrailKeyMetric": {
           "properties": {
             "metadata": {
-              "$ref": "#/components/schemas/KeyMetadata"
+              "$ref": "#/components/schemas/KeyMetadata",
+              "description": "API key alias and existence information"
             },
             "metrics": {
-              "$ref": "#/components/schemas/GuardrailSpendMetrics"
+              "$ref": "#/components/schemas/GuardrailSpendMetrics",
+              "description": "Guardrail spend and unpriced units for this API key"
             }
           },
           "required": [
@@ -3828,6 +3831,7 @@
         "GuardrailMetadata": {
           "properties": {
             "guardrail_name": {
+              "description": "Guardrail display name, falling back to the guardrail ID",
               "title": "Guardrail Name",
               "type": "string"
             }
@@ -3844,14 +3848,17 @@
               "additionalProperties": {
                 "$ref": "#/components/schemas/GuardrailKeyMetric"
               },
+              "description": "Per-key guardrail spend and unpriced units, limited to keys in the day's API key breakdown",
               "title": "Api Key Breakdown",
               "type": "object"
             },
             "metadata": {
-              "$ref": "#/components/schemas/GuardrailMetadata"
+              "$ref": "#/components/schemas/GuardrailMetadata",
+              "description": "Guardrail name information"
             },
             "metrics": {
-              "$ref": "#/components/schemas/GuardrailSpendMetrics"
+              "$ref": "#/components/schemas/GuardrailSpendMetrics",
+              "description": "Guardrail spend and unpriced units across all matching API keys"
             }
           },
           "required": [
@@ -3865,11 +3872,13 @@
           "properties": {
             "spend": {
               "default": 0.0,
+              "description": "Guardrail spend in USD, already included in key and model spend",
               "title": "Spend",
               "type": "number"
             },
             "untracked_units": {
               "default": 0,
+              "description": "Guardrail units with no known price, excluded from spend",
               "title": "Untracked Units",
               "type": "integer"
             }
