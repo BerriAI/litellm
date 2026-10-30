@@ -1,7 +1,10 @@
 import pytest
 
 from litellm.llms.openai_like import dynamic_config
-from litellm.llms.openai_like.dynamic_config import create_responses_config_class
+from litellm.llms.openai_like.dynamic_config import (
+    create_config_class,
+    create_responses_config_class,
+)
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
 from litellm.types.router import GenericLiteLLMParams
 
@@ -20,7 +23,6 @@ def _isolate_generated_class_cache():
 
 
 class TestClassCaching:
-
     def test_cache_is_keyed_on_slug_not_on_the_provider_instance(self):
         first = create_responses_config_class(_provider("cache_by_slug"))
         second = create_responses_config_class(_provider("cache_by_slug"))
@@ -139,3 +141,67 @@ class TestForceStoreFalse:
             headers={},
         )
         assert params["store"] is True
+
+
+class TestFunctionCallingParams:
+    def test_unmapped_model_preserves_tool_parameters(self) -> None:
+        """State 1: Unmapped model on OpenAI-compatible provider defaults to preserving tool parameters."""
+        config = create_config_class(_provider("unmapped_fc"))()
+        params = config.get_supported_openai_params("unmapped/custom-model")
+        for tool_param in ("tools", "tool_choice", "function_call", "functions", "parallel_tool_calls"):
+            assert tool_param in params
+
+    def test_known_model_missing_capability_field_preserves_tool_parameters(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """State 2: Known model in catalog without explicit supports_function_calling preserves tool parameters."""
+        import litellm
+
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "test_slug/model-without-fc-field",
+            {"litellm_provider": "test_slug", "mode": "chat"},
+        )
+        config = create_config_class(_provider("test_slug"))()
+        params = config.get_supported_openai_params("model-without-fc-field")
+        for tool_param in ("tools", "tool_choice", "function_call", "functions", "parallel_tool_calls"):
+            assert tool_param in params
+
+    def test_model_explicitly_disabled_strips_tool_parameters(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """State 3: When a model row explicitly declares supports_function_calling: False, tool params are stripped."""
+        import litellm
+
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "test_slug/disabled-model",
+            {"supports_function_calling": False},
+        )
+        config = create_config_class(_provider("test_slug"))()
+        params = config.get_supported_openai_params("disabled-model")
+        for tool_param in ("tools", "tool_choice", "function_call", "functions", "parallel_tool_calls"):
+            assert tool_param not in params
+
+    def test_model_explicitly_enabled_overrides_provider_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """State 3 override: Model explicit True overrides provider-wide supports_function_calling: False."""
+        import litellm
+
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "provider_disabled/enabled-model",
+            {"supports_function_calling": True},
+        )
+        config = create_config_class(
+            _provider("provider_disabled", provider_info={"supports_function_calling": False})
+        )()
+        params = config.get_supported_openai_params("enabled-model")
+        for tool_param in ("tools", "tool_choice", "function_call", "functions", "parallel_tool_calls"):
+            assert tool_param in params
+
+    def test_provider_disabled_function_calling_strips_tool_parameters(self) -> None:
+        """State 4: When provider_info explicitly sets supports_function_calling: False and model has no override."""
+        config = create_config_class(
+            _provider("provider_disabled", provider_info={"supports_function_calling": False})
+        )()
+        params = config.get_supported_openai_params("any-model")
+        for tool_param in ("tools", "tool_choice", "function_call", "functions", "parallel_tool_calls"):
+            assert tool_param not in params
