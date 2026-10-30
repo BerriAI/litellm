@@ -43,7 +43,7 @@ _SIGNED_IN_LOGIN_WITHOUT_KEY_ROW: Final = HTTPStatus.NOT_FOUND
 _WAIT_FOR_ANOTHER_SIGN_IN_SECONDS: Final = LOGIN_TIMEOUT_SECONDS + 60
 _PROXY_REASON_CHARS: Final = 500
 _NO_PROXY_REASON: Final = "no printable reason"
-_TERMINAL_CONTROL_CHARACTERS: Final = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+_UNPRINTABLE_CHARACTERS: Final = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\ufffd]")
 
 
 def _runs_in_ci(environ: Mapping[str, str]) -> bool:
@@ -213,13 +213,13 @@ def _attempt_with_newer_stored_key(
 
 def _displayable(text: str) -> str:
     normalized: Final = text.replace("\r\n", "\n").strip()
-    return "" if _TERMINAL_CONTROL_CHARACTERS.search(normalized) else redact_string(normalized)
+    return "" if _UNPRINTABLE_CHARACTERS.search(normalized) else redact_string(normalized)
 
 
 def _proxy_reason(error: UnauthorizedError) -> str:
     original: Final = error.orig_exception
     response: Final = original.response if isinstance(original, requests.HTTPError) else None
-    body: Final = response.text if response is not None else ""
+    body: Final = response.content.decode("utf-8", errors="replace") if response is not None else ""
     reason: Final = _displayable(body) or _displayable(str(error)) or _NO_PROXY_REASON
     return reason if len(reason) <= _PROXY_REASON_CHARS else f"{reason[:_PROXY_REASON_CHARS]}..."
 

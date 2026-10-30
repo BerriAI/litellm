@@ -661,7 +661,7 @@ _ROUTES_THAT_RAISE_EACH_401_ERROR_TYPE: Final = pytest.mark.parametrize(
 
 
 @_ROUTES_THAT_RAISE_EACH_401_ERROR_TYPE
-@pytest.mark.parametrize("character", ["\x00", "\x07", "\x0b", "\r", "\x1b", "\x7f", "\x9b"])
+@pytest.mark.parametrize("character", ["\x00", "\x08", "\x0b", "\r", "\x1b", "\x1f", "\x7f", "\x9b", "\x9f"])
 def test_terminal_control_characters_in_a_401_body_never_reach_the_terminal(
     requests_mock: Mocker,
     secret_vault_factory: type[FakeSecretVault],
@@ -686,27 +686,106 @@ def test_terminal_control_characters_in_a_401_body_never_reach_the_terminal(
 def test_tabs_and_line_breaks_in_a_401_body_stay_readable(
     requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault], command: list[str], method: str, route: str
 ) -> None:
-    requests_mock.register_uri(method, f"{BASE_URL}{route}", status_code=401, text="refused\tcolumn\r\nsecond line\r\n")
+    requests_mock.register_uri(
+        method, f"{BASE_URL}{route}", status_code=401, text="\x0c refused\tcolumn\r\nsecond line \x0c\r\n"
+    )
 
     result: Final = _lite(
         command, secret_vault_factory(), FakeBrowserSignIn(_credential()), ["--api-key", "sk-explicit"]
     )
 
     assert result.exit_code == 1
-    assert "refused\tcolumn\nsecond line" in result.stderr
+    assert "The proxy said: refused\tcolumn\nsecond line" in result.stderr
+
+
+def test_a_utf8_401_body_with_no_charset_prints_as_written(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    reason: Final = "the key\u2019s owner ~ caf\u00e9\u00a0\u65e5\u672c"
+    requests_mock.post(
+        f"{BASE_URL}/key/generate",
+        status_code=401,
+        content=reason.encode("utf-8"),
+        headers={"Content-Type": "text/plain"},
+    )
+
+    result: Final = _lite(
+        ["keys", "generate"], secret_vault_factory(), FakeBrowserSignIn(_credential()), ["--api-key", "sk-explicit"]
+    )
+
+    assert result.exit_code == 1
+    assert reason in result.stderr
+
+
+def test_a_401_body_that_is_not_utf8_is_never_printed(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, content=b"forbidden \xff\xfe")
+
+    result: Final = _lite(
+        ["keys", "generate"], secret_vault_factory(), FakeBrowserSignIn(_credential()), ["--api-key", "sk-explicit"]
+    )
+
+    assert result.exit_code == 1
+    assert "forbidden" not in result.stderr
+    assert "\ufffd" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    "command, method, route",
+    [(["keys", "generate"], "POST", "/key/generate"), (["teams", "list"], "GET", "/team/list")],
+    ids=["http_error", "fixed_text_error"],
+)
+@pytest.mark.parametrize("charset", ["undefined", "idna"])
+def test_a_401_with_an_unusable_charset_still_gives_a_reason(
+    requests_mock: Mocker,
+    secret_vault_factory: type[FakeSecretVault],
+    command: list[str],
+    method: str,
+    route: str,
+    charset: str,
+) -> None:
+    requests_mock.register_uri(
+        method,
+        f"{BASE_URL}{route}",
+        status_code=401,
+        content=b"refused",
+        headers={"Content-Type": f"text/plain; charset={charset}"},
+    )
+
+    result: Final = _lite(
+        command, secret_vault_factory(), FakeBrowserSignIn(_credential()), ["--api-key", "sk-explicit"]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "The proxy said: refused" in result.stderr
+
+
+def test_a_401_body_stays_hidden_when_redaction_would_remove_its_control_character(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, text=f"forbidden Bearer\r{FAKE_SECRET}")
+
+    result: Final = _lite(
+        ["keys", "generate"], secret_vault_factory(), FakeBrowserSignIn(_credential()), ["--api-key", "sk-explicit"]
+    )
+
+    assert result.exit_code == 1
+    assert "forbidden" not in result.stderr
 
 
 @_ROUTES_THAT_RAISE_EACH_401_ERROR_TYPE
 @pytest.mark.parametrize(
     "body",
     [
-        f"refused sk-{FAKE_SECRET[:8]}\x07{FAKE_SECRET[8:]}",
-        f"refused sk-{FAKE_SECRET[:24]}\x07{FAKE_SECRET[24:]}",
-        f"refused Bearer {FAKE_SECRET[:24]}\x00{FAKE_SECRET[24:]}",
-        f"refused Bearer\r{FAKE_SECRET}",
-        f"refused Bearer\x07{FAKE_SECRET}",
-        f"refused client_secret\r{FAKE_SECRET}",
-        f"refused \x1b[31m{FAKE_SECRET}\x1b[0m",
+        f"forbidden sk-{FAKE_SECRET[:8]}\x07{FAKE_SECRET[8:]}",
+        f"forbidden sk-{FAKE_SECRET[:24]}\x07{FAKE_SECRET[24:]}",
+        f"forbidden Bearer {FAKE_SECRET[:24]}\x00{FAKE_SECRET[24:]}",
+        f"forbidden Bearer\r{FAKE_SECRET}",
+        f"forbidden Bearer\x07{FAKE_SECRET}",
+        f"forbidden client_secret\r{FAKE_SECRET}",
+        f"forbidden \x1b[31m{FAKE_SECRET}\x1b[0m",
     ],
     ids=[
         "key_split_near_its_start",
