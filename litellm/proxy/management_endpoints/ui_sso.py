@@ -1626,7 +1626,7 @@ async def get_generic_sso_response(
     # make generic sso provider
     from fastapi_sso.sso.base import DiscoveryDocument
 
-    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy import proxy_server
 
     received_response: dict | None = None
     sso_assertion: SSOIdentityAssertion | None = None
@@ -1679,7 +1679,7 @@ async def get_generic_sso_response(
             sso_jwt_handler=sso_jwt_handler,
             role_mappings=role_mappings,
             team_mappings=team_mappings,
-            jwt_auth_enabled=general_settings.get("enable_jwt_auth", False) is True,
+            jwt_auth_enabled=proxy_server.general_settings.get("enable_jwt_auth", False) is True,
         )
 
     SSOProvider: Final = create_generic_sso_provider(
