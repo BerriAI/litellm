@@ -10,6 +10,7 @@ from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 from mcp import Client
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.shared.exceptions import MCPError
@@ -20,7 +21,7 @@ from pydantic import ConfigDict
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+from litellm.proxy._types import AlertType, LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
 from litellm.proxy.mcp_server.mcp_server_manager import (
     MCPServerManager,
 )
@@ -36,6 +37,7 @@ class SDKRejectionParams(RequestParams):
     model_config = ConfigDict(frozen=True)
     name: int | None = None
     arguments: dict[str, str] | None = None
+    level: int | str | None = None
 
 
 class SDKRejectionLogger(CustomLogger):
@@ -93,6 +95,9 @@ def sdk_rejection_logger() -> Generator[SDKRejectionLogger, None, None]:
         ("tools/call-2", {"arguments": {"secret": "DO_NOT_LOG_THIS"}}, -32601, "Method not found"),
         ("tools/call", {"name": 123, "arguments": {"secret": "DO_NOT_LOG_THIS"}}, -32602, "Invalid request parameters"),
         ("tools/call", {"arguments": {"secret": "DO_NOT_LOG_THIS"}}, -32602, "Invalid request parameters"),
+        ("logging/setLevel", {"level": 123}, -32602, "Invalid request parameters"),
+        ("logging/setLevel", {"level": "info"}, -32601, "Method not found"),
+        ("completion/complete", {}, -32602, "Invalid request parameters"),
     ],
 )
 async def test_sdk_rejection_emits_one_redacted_zero_cost_failure(
@@ -126,6 +131,46 @@ async def test_sdk_rejection_emits_one_redacted_zero_cost_failure(
     assert rejection["stage"] == "sdk_dispatch"
     assert "DO_NOT_LOG_THIS" not in json.dumps(payload, default=str)
     assert "sk-sdk-rejection-unit-test" not in json.dumps(payload, default=str)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method,params,code",
+    [
+        ("tools/call-2", {}, -32601),
+        ("tools/call", {"name": 123}, -32602),
+    ],
+)
+async def test_sdk_caller_errors_do_not_trigger_llm_alerts(
+    sdk_rejection_logger: SDKRejectionLogger, method: str, params: dict[str, object], code: int
+) -> None:
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    with (
+        patch.object(proxy_logging_obj, "alert_types", [AlertType.llm_exceptions]),
+        patch.object(proxy_logging_obj, "alerting_handler", new_callable=AsyncMock) as alerts,
+    ):
+        async with Client(server, mode="legacy") as client:
+            with pytest.raises(MCPError) as rejected:
+                await client.session.send_request(
+                    Request(method=method, params=SDKRejectionParams.model_validate(params)), EmptyResult
+                )
+            assert rejected.value.code == code
+        await asyncio.sleep(0)
+        alerts.assert_not_awaited()
+        assert len(sdk_rejection_logger.failures) == 1
+        assert sdk_rejection_logger.post_failures == 1
+        assert sdk_rejection_logger.pre_calls == 0
+
+        await proxy_logging_obj.post_call_failure_hook(
+            request_data={},
+            original_exception=HTTPException(status_code=500, detail="upstream unavailable"),
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+        await asyncio.sleep(0)
+        alerts.assert_awaited_once()
+        assert alerts.await_args.kwargs["level"] == "High"
+        assert alerts.await_args.kwargs["alert_type"] == AlertType.llm_exceptions
 
 
 @pytest.mark.asyncio

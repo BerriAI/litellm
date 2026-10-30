@@ -652,7 +652,11 @@ if MCP_AVAILABLE:
             return None
         entry: Final = server.get_request_handler(ctx.method)
         if entry is None:
-            if ctx.method != "initialize" and isinstance(error, MCPError) and error.code == METHOD_NOT_FOUND:
+            if ctx.method == "initialize":
+                return None
+            if isinstance(error, ValidationError):
+                return INVALID_PARAMS
+            if error.code == METHOD_NOT_FOUND:
                 return METHOD_NOT_FOUND
             return None
         if not isinstance(error, ValidationError):

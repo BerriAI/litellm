@@ -2845,7 +2845,7 @@ async def log_mcp_sdk_rejection(
         optional_params={},
         user=user_api_key_auth.user_id,
     )
-    safe_error: Final = MCPError(code=error_code, message=message)
+    safe_error: Final = HTTPException(status_code=400, detail=message)
     end_time: Final = datetime.now()  # noqa: DTZ005  # matches the failure logging start time
     logging_obj.failure_handler(safe_error, "", start_time, end_time)
     await logging_obj.async_failure_handler(safe_error, "", start_time, end_time)
