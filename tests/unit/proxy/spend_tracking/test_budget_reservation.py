@@ -357,6 +357,43 @@ def test_an_n_too_large_to_price_holds_one_choice(count: object) -> None:
     assert _chat_hold({**GEMINI_CHAT_BODY, "n": count}) == one_choice_hold
 
 
+def _group_generate_content_hold(router: Router, generation_config: dict[str, object]) -> float | None:
+    return estimate_request_max_cost(
+        request_body={"contents": [GEMINI_TEXT_CONTENT], "generationConfig": generation_config},
+        route="/v1beta/models/assistant:generateContent",
+        llm_router=router,
+        input_token_counts={"assistant": 10},
+    )
+
+
+@pytest.mark.parametrize(
+    ("backend_models", "candidates_are_generated"),
+    (
+        (("vertex_ai/claude-haiku-5-5",), False),
+        (("anthropic/claude-haiku-5-5",), False),
+        (("gemini/gemini-3.8-flash",), True),
+        (("vertex_ai/gemini-3.8-flash",), True),
+        (("vertex_ai/claude-haiku-5-5", "gemini/gemini-3.8-flash"), True),
+    ),
+)
+def test_a_candidate_count_is_held_only_when_a_deployment_generates_the_candidates(
+    backend_models: tuple[str, ...], candidates_are_generated: bool
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {"model_name": "assistant", "litellm_params": {"model": model, "api_key": "sk-test"}}
+            for model in backend_models
+        ]
+    )
+    one_candidate_hold: Final = _group_generate_content_hold(router, {"maxOutputTokens": 100})
+    three_candidate_hold: Final = _group_generate_content_hold(router, {"maxOutputTokens": 100, "candidateCount": 3})
+
+    assert one_candidate_hold is not None
+    assert three_candidate_hold is not None
+    assert (three_candidate_hold > one_candidate_hold) is candidates_are_generated
+    assert three_candidate_hold >= one_candidate_hold
+
+
 HOLDS_FAR_OVER_A_TINY_BUDGET: Final = (
     (GEMINI_ROUTE, {"contents": [GEMINI_TEXT_CONTENT], "generationConfig": {"candidateCount": 1e300}}),
     ("/v1/chat/completions", {**GEMINI_CHAT_BODY, "n": 1e300}),

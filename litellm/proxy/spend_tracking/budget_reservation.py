@@ -51,6 +51,7 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
+from litellm.utils import ProviderConfigManager
 
 
 @dataclass
@@ -1398,12 +1399,16 @@ def _estimate_request_max_cost_for_model(
     llm_router: Router | None,
     input_tokens: int | None = None,
 ) -> float | None:
+    output_multiplier: Final = _get_output_multiplier(
+        _requested_output_counts(request_body=request_body, route=route, model=model, llm_router=llm_router)
+    )
     estimates: Final = [
         _max_cost_for_cost_info(
             request_body=request_body,
             route=route,
             model=model,
             model_info=model_info,
+            output_multiplier=output_multiplier,
             input_tokens=input_tokens,
         )
         for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
@@ -1417,6 +1422,7 @@ def _max_cost_for_cost_info(
     route: str,
     model: str,
     model_info: Mapping[str, object],
+    output_multiplier: int,
     input_tokens: int | None = None,
 ) -> float | None:
     image_cost: Final = _estimate_image_generation_cost(
@@ -1441,7 +1447,6 @@ def _max_cost_for_cost_info(
     if estimated_input_tokens is None or output_tokens is None:
         return None
 
-    output_multiplier: Final = _get_output_multiplier(request_body=request_body, route=route)
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
         tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
@@ -1698,13 +1703,50 @@ def _requested_output_tokens(request_body: Mapping[str, object], route: str) -> 
     return next((tokens for tokens in map(_to_int, candidates) if tokens is not None and tokens >= 0), None)
 
 
-def _get_output_multiplier(request_body: Mapping[str, object], route: str) -> int:
-    candidates: Final = (
-        _gemini_candidate_counts(request_body)
-        if RouteChecks.is_generate_content_route(route)
-        else (request_body.get("n"), request_body.get("best_of"))
+def _requested_output_counts(
+    request_body: Mapping[str, object],
+    route: str,
+    model: str,
+    llm_router: Router | None,
+) -> tuple[object, ...]:
+    if not RouteChecks.is_generate_content_route(route):
+        return (request_body.get("n"), request_body.get("best_of"))
+    candidate_counts: Final = _gemini_candidate_counts(request_body)
+    if all(count is None for count in candidate_counts):
+        return ()
+    return candidate_counts if _takes_candidate_count(model=model, llm_router=llm_router) else ()
+
+
+def _takes_candidate_count(model: str, llm_router: Router | None) -> bool:
+    deployments: Final = (llm_router.get_model_list(model_name=model) if llm_router is not None else None) or ()
+    deployment_params: Final = tuple(
+        params for deployment in deployments if (params := as_str_mapping(_get_value(deployment, "litellm_params")))
     )
-    return max((1, *(count for count in map(_to_int, candidates) if count is not None)))
+    return any(_serves_generate_content_natively(params) for params in deployment_params or ({"model": model},))
+
+
+def _serves_generate_content_natively(litellm_params: Mapping[str, object]) -> bool:
+    model: Final = litellm_params.get("model")
+    custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
+    if not isinstance(model, str):
+        return True
+    try:
+        backend_model, provider, _, _ = litellm.get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+        )
+        native_config: Final = ProviderConfigManager.get_provider_google_genai_generate_content_config(
+            model=backend_model,
+            provider=litellm.LlmProviders(provider),
+            litellm_params={key: litellm_params[key] for key in ("base_model", "api_base") if key in litellm_params},
+        )
+    except (litellm.BadRequestError, ValueError):
+        return True
+    return native_config is not None
+
+
+def _get_output_multiplier(requested_counts: tuple[object, ...]) -> int:
+    return max((1, *(count for count in map(_to_int, requested_counts) if count is not None)))
 
 
 def _output_cost(output_tokens: int, output_multiplier: int, output_rate: float) -> float:
