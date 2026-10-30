@@ -928,11 +928,13 @@ async def get_filtered_server_tools(
         else:
             listing_updates.callback(record)
 
-        if mcp_proxy_mode:
+        from litellm.proxy.mcp_server.code_execution import settings as code_mode_settings
+
+        if mcp_proxy_mode or code_mode_settings().enabled:
             from litellm.proxy.mcp_server.tool_search import with_mcp_proxy_identity
 
             filtered_tools = [with_mcp_proxy_identity(tool, server.server_id) for tool in filtered_tools]
-        else:
+        if not mcp_proxy_mode:
             filtered_tools = apply_display_name_overrides(filtered_tools, server)
 
         verbose_logger.debug(

@@ -132,6 +132,13 @@ class MCPAllowedClient(LiteLLMBaseModel):
     )
 
 
+class MCPCodeModeSettings(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool = False
+    excluded_tools: Mapping[str, str] = Field(default_factory=dict)
+
+
 class MCPToolSearchSettings(LiteLLMBaseModel):
     """`litellm_settings.mcp_tool_search`: how the native `mcp_tool_search` virtual tool ranks the caller's tools."""
 

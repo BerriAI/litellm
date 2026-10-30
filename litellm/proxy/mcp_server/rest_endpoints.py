@@ -233,6 +233,7 @@ if MCP_AVAILABLE:
     )
     from litellm.mcp_client.client import MCPClient, as_mcp_read_timeout
     from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+    from litellm.proxy.mcp_server.code_execution import with_code_tool
     from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: F401  # legacy module exports
         _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
         UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
@@ -819,7 +820,15 @@ if MCP_AVAILABLE:
                 listed_generation,
             )
 
-        return _create_tool_response_objects(served_tools, server)
+        from litellm.proxy.mcp_server.code_execution import settings as code_mode_settings
+        from litellm.proxy.mcp_server.tool_search import with_mcp_proxy_identity
+
+        code_tools: Final = (
+            [with_mcp_proxy_identity(tool, server.server_id) for tool in served_tools]
+            if code_mode_settings().enabled
+            else served_tools
+        )
+        return _create_tool_response_objects(code_tools, server)
 
     async def fetch_pinnable_tool_catalog(
         server: MCPServer, request: Request, user_api_key_dict: UserAPIKeyAuth
@@ -968,7 +977,7 @@ if MCP_AVAILABLE:
                 "message": f"Failed to get tools from server {server.name}: {e}",
             }
         return {
-            "tools": list_tools_result,
+            "tools": with_code_tool(list_tools_result),
             "error": None,
             "message": "Successfully retrieved tools",
         }
@@ -1067,7 +1076,12 @@ if MCP_AVAILABLE:
                 )
 
                 return {
-                    "tools": get_virtual_tool_definitions(),
+                    "tools": tuple(
+                        tool.model_dump(by_alias=True, exclude_none=True)
+                        for tool in with_code_tool(
+                            [MCPTool.model_validate(item) for item in get_virtual_tool_definitions()]
+                        )
+                    ),
                     "error": None,
                     "message": "Successfully retrieved tools",
                 }
@@ -1184,7 +1198,7 @@ if MCP_AVAILABLE:
                     else None
                 )
                 return {
-                    "tools": list_tools_result,
+                    "tools": with_code_tool(list_tools_result),
                     "error": "partial_failure" if error_message else None,
                     "message": (error_message if error_message else "Successfully retrieved tools"),
                     "server_outcomes": {key: outcome_wire_value(outcome) for key, outcome in server_outcomes.items()},
@@ -1343,6 +1357,32 @@ if MCP_AVAILABLE:
 
             tool_name: Final[str | None] = data.get("name")
             tool_arguments: Final[dict[str, object]] = data.get("arguments") or {}
+
+            from litellm.proxy.mcp_server.code_execution import CODE_TOOL_NAME, run_code_tool
+            from litellm.proxy.mcp_server.code_execution import settings as code_mode_settings
+            from litellm.proxy.mcp_server.contracts import OperationContext
+
+            if tool_name == CODE_TOOL_NAME and code_mode_settings().enabled:
+                code_data: Final = TypeAdapter(dict[str, object]).validate_python(data)
+                code_toolset: Final = TypeAdapter(str | None).validate_python(code_data.get("toolset_name"))
+                code_auth: Final = await _resolve_acting_auth(code_toolset, user_api_key_dict)
+                code_header, code_server_headers, code_raw_headers, code_oauth = _extract_mcp_headers_from_request(
+                    request, code_auth
+                )
+                code_server: Final = TypeAdapter(str | None).validate_python(code_data.get("server_id"))
+                return await run_code_tool(
+                    tool_arguments,
+                    OperationContext(
+                        _caller=code_auth,
+                        mcp_auth_header=code_header,
+                        mcp_servers=(code_server,) if code_server is not None else None,
+                        mcp_server_auth_headers=code_server_headers,
+                        raw_headers=code_raw_headers,
+                        oauth2_headers=code_oauth,
+                        incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(request.headers, code_auth),
+                        client_ip=IPAddressUtils.get_mcp_client_ip(request),
+                    ),
+                )
 
             from litellm.proxy.mcp_server.tool_search import VIRTUAL_TOOL_NAMES
 

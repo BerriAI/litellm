@@ -313,14 +313,15 @@ async def _mcp_server_rate_limit_rejection(
     return admission.rejected_servers[0][1] if admission.rejected_servers else None
 
 
-async def _build_virtual_call_logging_obj(
+async def prepare_virtual_mcp_call(
     name: str,
     arguments: dict[str, object],
     user_api_key_auth: UserAPIKeyAuth,
     logging_auth: UserAPIKeyAuth | None = None,
     raw_headers: Mapping[str, str] | None = None,
     client_ip: str | None = None,
-) -> LiteLLMLoggingObj | None:
+    guardrails_only: bool = False,
+) -> tuple[Mapping[str, object], LiteLLMLoggingObj | None]:
     """Run the pre-call pipeline (guardrails + logging setup) for a virtual
     mcp_tool_call so the SSE path spend-logs like the REST path."""
     from litellm.proxy.common_request_processing import (
@@ -347,13 +348,28 @@ async def _build_virtual_call_logging_obj(
         proxy_logging_obj=proxy_logging_obj,
         general_settings=general_settings,
         logging_auth=logging_auth,
+        guardrails_only=guardrails_only,
     )
-    _, logging_candidate = TypeAdapter(tuple[dict[str, object], object]).validate_python(pre_call_result)
+    processed_data, logging_candidate = TypeAdapter(tuple[dict[str, object], object]).validate_python(pre_call_result)
     if not isinstance(logging_candidate, LiteLLMLoggingObj):
         verbose_logger.warning("MCP request processing did not return a logging object")
-        return None
+        return processed_data, None
     virtual_logging_obj: Final = logging_candidate
-    return virtual_logging_obj
+    return processed_data, virtual_logging_obj
+
+
+async def _build_virtual_call_logging_obj(
+    name: str,
+    arguments: Mapping[str, object],
+    user_api_key_auth: UserAPIKeyAuth,
+    logging_auth: UserAPIKeyAuth | None = None,
+    raw_headers: Mapping[str, str] | None = None,
+    client_ip: str | None = None,
+) -> LiteLLMLoggingObj | None:
+    _, logging_obj = await prepare_virtual_mcp_call(
+        name, dict(arguments), user_api_key_auth, logging_auth, raw_headers, client_ip
+    )
+    return logging_obj
 
 
 async def _log_virtual_mcp_tool_failure(
@@ -426,6 +442,8 @@ async def _dispatch_virtual_mcp_tool(
     the caller falls through to normal tool routing.
     """
     from litellm.llms.litellm_proxy.skills.skill_search import DEFAULT_SKILL_SEARCH_TOP_K
+    from litellm.proxy.mcp_server.code_execution import CODE_TOOL_NAME, run_code_tool
+    from litellm.proxy.mcp_server.code_execution import settings as code_mode_settings
     from litellm.proxy.mcp_server.tool_search import (
         AGENT_SEARCH_TOOL_NAME,
         DEFAULT_AGENT_SEARCH_TOP_K,
@@ -441,6 +459,22 @@ async def _dispatch_virtual_mcp_tool(
         handle_mcp_tool_search,
         handle_skill_search,
     )
+
+    if name == CODE_TOOL_NAME and code_mode_settings().enabled:
+        return await run_code_tool(
+            arguments,
+            OperationContext(
+                _caller=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_servers=tuple(mcp_servers) if mcp_servers is not None else None,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                client_ip=client_ip,
+                mcp_proxy_mode=mcp_proxy_mode,
+                incoming_bearer_token=incoming_bearer_token,
+            ),
+        )
 
     if mcp_proxy_mode and name not in MCP_PROXY_TOOL_NAMES:
         return CallToolResult(
@@ -3259,6 +3293,7 @@ async def _execute_handle_list_tools(
         )
         from mcp.types import Tool
 
+        from litellm.proxy.mcp_server.code_execution import with_code_tool
         from litellm.proxy.mcp_server.tool_search import (
             get_mcp_proxy_tool_definitions,
             get_virtual_tool_definitions,
@@ -3267,7 +3302,9 @@ async def _execute_handle_list_tools(
         if context.mcp_proxy_mode:
             if params.cursor is not None:
                 raise MCPError(code=INVALID_PARAMS, message="Invalid pagination cursor; start a fresh listing")
-            return ListToolsResult(tools=[Tool.model_validate(d) for d in get_mcp_proxy_tool_definitions()])
+            return ListToolsResult(
+                tools=with_code_tool([Tool.model_validate(d) for d in get_mcp_proxy_tool_definitions()])
+            )
         if getattr(
             getattr(user_api_key_auth, "object_permission", None),
             "mcp_tool_search_enabled",
@@ -3275,7 +3312,9 @@ async def _execute_handle_list_tools(
         ):
             if params.cursor is not None:
                 raise MCPError(code=INVALID_PARAMS, message="Invalid pagination cursor; start a fresh listing")
-            return ListToolsResult(tools=[Tool.model_validate(d) for d in get_virtual_tool_definitions()])
+            return ListToolsResult(
+                tools=with_code_tool([Tool.model_validate(d) for d in get_virtual_tool_definitions()])
+            )
 
         from litellm.proxy.mcp_server.catalog import list_gateway_catalog
         from litellm.proxy.mcp_server.server_resolution import MCPServerTargetCatalog
@@ -3286,7 +3325,7 @@ async def _execute_handle_list_tools(
         )
         result: Final = await catalog.list(context, ListToolsRequest(params=params))
         assert isinstance(result, ListToolsResult)
-        return result
+        return result.model_copy(update={"tools": with_code_tool(result.tools, first_page=params.cursor is None)})
     except MCPError:
         raise
     except HTTPException as e:

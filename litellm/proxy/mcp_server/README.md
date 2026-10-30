@@ -1,3 +1,56 @@
+# MCP code mode
+
+Code mode lets an MCP client run JavaScript that combines tool calls and returns only the output it needs. Enable it in the gateway configuration and restart the proxy. The QuickJS-NG runtime is included in the proxy installation on platforms with supported wheels; no separate sandbox service or client integration is required.
+
+```yaml
+litellm_settings:
+  mcp_code_mode: true
+```
+
+Reconnect the MCP client or refresh its tool list. It should discover `litellm_execute_code` alongside its existing tools. The setting is off by default. Turning it off also rejects calls from clients that cached the code tool.
+
+Intel macOS and Windows ARM installations need a manual source installation of `quickjs-ng` before enabling code mode. A missing runtime produces a startup error. The original `quickjs` package conflicts with `quickjs-ng`; use an environment without that package. These requirements do not affect the gateway when code mode is disabled.
+
+The code tool accepts a `code` string. Discover a tool and its argument schema normally, then use its exact catalog name or the opaque ID returned by `search_tools` in `tools.call_tool`. Calls return the full MCP result, including `content`, `structuredContent` when provided, and `isError`. Use `text(value)` to return a JSON value to the model. For example, after discovering a tool named `example-add` that accepts `a` and `b`:
+
+```javascript
+const result = await tools.call_tool({
+  tool_id: "example-add",
+  arguments: { a: 2, b: 3 }
+});
+if (result.isError) {
+  text({ error: result.content });
+} else {
+  text(result.structuredContent ?? result.content);
+}
+```
+
+Use `await` for every call, including calls grouped with `Promise.all`. Scripts run in fresh local worker processes. They have no persistent state, general network, filesystem, package imports, or shell API. The parent gateway performs tool calls using the original caller's permissions, upstream authentication, guardrails, and accounting. A worker process isolates normal runtime failures; it is not an operating-system sandbox against an exploit of the embedded JavaScript engine.
+
+## Tool compatibility
+
+When code mode is enabled, tool listings include `_meta["litellm.ai/code_mode"]`; search and schema results include `code_mode`. `available` means the tool can be attempted through the JSON call bridge, not that the gateway has tested every behavior of that upstream. `unsupported` includes a reason. Existing tools remain callable directly.
+
+Task-only tools and nested orchestration are unsupported. Interactive continuations cannot be resumed inside a script. An unexpected interaction requirement returns an error instead of bypassing approval or replaying the script. Approving the outer code tool in an MCP client is not per-call approval of every nested action.
+
+An administrator can exclude tools known to need direct interaction. Use the exact tool name from the gateway catalog:
+
+```yaml
+litellm_settings:
+  mcp_code_mode:
+    enabled: true
+    excluded_tools:
+      example-approve: "Requires interactive approval. Call this tool directly."
+```
+
+Keep large identifiers as strings. Values crossing the JavaScript bridge must be JSON-compatible, and integer values must fit JavaScript's safe integer range. Tool errors and unsupported data are not silently treated as successful results.
+
+## Failures and cancellation
+
+Each script has a 120-second deadline, a 64 MiB JavaScript heap limit, and a maximum of 100 tool calls with eight in flight. Each proxy process admits four scripts at once; additional requests receive a busy error. Code is limited to 128 KiB, individual bridge messages to 2 MiB, and returned output to 256 KiB. Use direct calls for tools whose results or duration exceed these limits.
+
+A script that exceeds a limit fails explicitly. The result includes `output`, `error`, and `calls_started`; the count records attempted tool calls, not confirmed upstream actions. Cancellation stops further dispatch and terminates the worker, but cannot undo a request already sent upstream. A failed script can therefore have partial effects. Check the upstream state before retrying a write; the gateway does not automatically retry whole scripts.
+
 # Gateway catalog pagination
 
 Tools, prompts, resources, and resource templates retain upstream page boundaries. Follow the gateway's opaque `nextCursor` until it is absent. Each request checks the caller's current access and tool permissions. A cursor can be replayed and can be sent to another replica serving the same configuration
