@@ -1053,7 +1053,9 @@ def test_azure_ai_non_claude_web_search_keeps_generic_fallback() -> None:
     assert get_cost_for_web_search_request(custom_llm_provider="azure_ai", usage=usage, model_info=model_info) is None
 
 
-def _register_priced_vertex_deployment(model: str, search_cost_per_query: float | None) -> str:
+def _register_priced_vertex_deployment(
+    model: str, search_cost_per_query: float | None, deployment_id: str | None = None
+) -> str:
     from litellm import Router
 
     token_rates: Final = {"input_cost_per_token": 3e-6, "output_cost_per_token": 1.5e-5}
@@ -1073,29 +1075,33 @@ def _register_priced_vertex_deployment(model: str, search_cost_per_query: float 
             {
                 "model_name": "priced-vertex-deployment",
                 "litellm_params": {"model": model, "vertex_project": "p", "vertex_location": "global"},
-                "model_info": {**token_rates, **search_rates},
+                "model_info": {**token_rates, **search_rates, **({} if deployment_id is None else {"id": deployment_id})},
             }
         ]
     )
     return router.model_list[0]["model_info"]["id"]
 
 
-def _vertex_claude_chat_response(web_search_requests: int) -> tuple[object, Usage | None]:
+def _vertex_claude_chat_response(
+    web_search_requests: int, model: str = "claude-sonnet-5-5"
+) -> tuple[object, Usage | None]:
     usage: Final = Usage(
         prompt_tokens=1840,
         completion_tokens=412,
         total_tokens=2252,
         server_tool_use=ServerToolUse(web_search_requests=web_search_requests),
     )
-    return ModelResponse(model="claude-sonnet-5-5", usage=usage), usage
+    return ModelResponse(model=model, usage=usage), usage
 
 
-def _vertex_claude_messages_response(web_search_requests: int) -> tuple[object, Usage | None]:
+def _vertex_claude_messages_response(
+    web_search_requests: int, model: str = "claude-sonnet-5-5"
+) -> tuple[object, Usage | None]:
     return {
         "id": "msg_vertex_claude_web_search",
         "type": "message",
         "role": "assistant",
-        "model": "claude-sonnet-5-5",
+        "model": model,
         "content": [{"type": "text", "text": "scripted answer"}],
         "usage": {
             "input_tokens": 1840,
@@ -1128,19 +1134,33 @@ def test_vertex_claude_deployment_priced_web_search_billed_per_request(
 
 
 @pytest.mark.parametrize("build_response", [_vertex_claude_chat_response, _vertex_claude_messages_response])
+@pytest.mark.parametrize(
+    ("deployment_model", "served_model"),
+    # Google bills Claude web search on Sonnet 4.5 and Haiku 4.5 too:
+    # https://cloud.google.com/model-garden/partner-models/pricing (read 2026-10-30)
+    [
+        ("vertex_ai/claude-sonnet-5-5", "claude-sonnet-5-5"),
+        ("vertex_ai/claude-sonnet-4-5@20250929", "claude-sonnet-4-5-20250929"),
+        ("vertex_ai/claude-haiku-4-5@20251001", "claude-haiku-4-5-20251001"),
+    ],
+)
+@pytest.mark.parametrize("deployment_id", [None, "vertex-claude-token-priced"], ids=["hashed_id", "claude_in_id"])
 def test_vertex_claude_deployment_with_token_rates_only_bills_served_model_search_price(
     local_model_cost_map: None,
-    build_response: Callable[[int], tuple[object, Usage | None]],
+    build_response: Callable[[int, str], tuple[object, Usage | None]],
+    deployment_model: str,
+    served_model: str,
+    deployment_id: str | None,
 ) -> None:
     served_search_pricing: Final = (
-        litellm.get_model_info(model="vertex_ai/claude-sonnet-5-5").get("search_context_cost_per_query") or {}
+        litellm.get_model_info(model=deployment_model).get("search_context_cost_per_query") or {}
     )
     served_search_price: Final = served_search_pricing.get("search_context_size_medium") or 0.0
-    deployment_id: Final = _register_priced_vertex_deployment("vertex_ai/claude-sonnet-5-5", None)
-    response_object, usage = build_response(2)
+    registered_id: Final = _register_priced_vertex_deployment(deployment_model, None, deployment_id)
+    response_object, usage = build_response(2, served_model)
 
     cost: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
-        model=deployment_id,
+        model=registered_id,
         response_object=response_object,
         usage=usage,
         custom_llm_provider="vertex_ai",
