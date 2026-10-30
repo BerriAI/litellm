@@ -122,13 +122,14 @@ async fn missing_value_is_an_error() {
 }
 
 #[rstest]
-#[case::missing(None, true)]
-#[case::http(Some("http://vault.example"), false)]
-#[case::relative(Some("vault.example"), false)]
-#[case::malformed(Some("://"), false)]
+#[case::missing(None, true, false)]
+#[case::http(Some("http://vault.example"), false, false)]
+#[case::relative(Some("vault.example"), false, true)]
+#[case::malformed(Some("://"), false, true)]
 fn new_validates_vault_environment(
     #[case] uri: Option<&'static str>,
     #[case] missing_environment: bool,
+    #[case] unparsable: bool,
 ) {
     let result = AzureKeyVault::new(
         litellm_http::Client::for_test(),
@@ -145,7 +146,14 @@ fn new_validates_vault_environment(
             Err(Error::MissingEnvironment("AZURE_KEY_VAULT_URI"))
         ));
     } else {
-        assert!(matches!(result, Err(Error::VaultUri)));
+        let error = result.err().expect("invalid vault URI");
+        assert!(matches!(error, Error::VaultUri(_)));
+        assert_eq!(
+            std::error::Error::source(&error)
+                .and_then(|cause| cause.downcast_ref::<url::ParseError>())
+                .is_some(),
+            unparsable
+        );
     }
 }
 

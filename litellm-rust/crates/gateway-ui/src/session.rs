@@ -4,14 +4,18 @@ use serde::Serialize;
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
 
-use axum::{Json, extract::State as ExtractState, response::IntoResponse};
+use axum::{
+    Json,
+    extract::{FromRequest, Request, State as ExtractState},
+    response::IntoResponse,
+};
 use governor::DefaultDirectRateLimiter;
 use tower_cookies::{Cookie, Cookies};
 use tower_sessions::{Expiry, Session, cookie::SameSite};
 
 use crate::Error;
 use litellm_gateway_auth::{
-    AccessRequest, UI_CSRF_KEY, UiAction, UiAuthError, UiAuthSession, UiCredentials, UiSession,
+    AccessRequest, UI_CSRF_KEY, UiAction, UiAuthSession, UiCredentials, UiSession,
 };
 
 pub struct State {
@@ -60,12 +64,25 @@ struct Discovery {
     is_control_plane: bool,
 }
 
+pub struct Credentials(UiCredentials);
+
+impl<S: Send + Sync> FromRequest<S> for Credentials {
+    type Rejection = Error;
+
+    async fn from_request(request: Request, state: &S) -> Result<Self, Self::Rejection> {
+        Json::<UiCredentials>::from_request(request, state)
+            .await
+            .map(|Json(credentials)| Self(credentials))
+            .map_err(Error::Body)
+    }
+}
+
 pub async fn login(
     ExtractState(state): ExtractState<Arc<State>>,
     mut auth: UiAuthSession,
     session: Session,
     cookies: Cookies,
-    Json(credentials): Json<UiCredentials>,
+    Credentials(credentials): Credentials,
 ) -> Result<impl IntoResponse, Error> {
     state.login_limit.check().map_err(|_| Error::RateLimited)?;
     let user = auth
@@ -107,13 +124,14 @@ pub async fn login(
     }))
 }
 
-pub async fn info(session: Result<UiSession, UiAuthError>) -> Result<impl IntoResponse, Error> {
+pub async fn info(
+    session: Result<UiSession, litellm_gateway_auth::Error>,
+) -> Result<impl IntoResponse, Error> {
     let session = session?;
     session
         .identity
         .authorize(AccessRequest::Ui(UiAction::SessionInfo))
-        .await
-        .map_err(|_| UiAuthError::Unauthorized)?;
+        .await?;
     Ok(Json(SessionInfo {
         user_id: session.user.username,
         user_role: "proxy_admin",
@@ -121,7 +139,7 @@ pub async fn info(session: Result<UiSession, UiAuthError>) -> Result<impl IntoRe
 }
 
 pub async fn logout(
-    validated: Result<UiSession, UiAuthError>,
+    validated: Result<UiSession, litellm_gateway_auth::Error>,
     mut auth: UiAuthSession,
     cookies: Cookies,
 ) -> Result<impl IntoResponse, Error> {
@@ -129,8 +147,7 @@ pub async fn logout(
     validated
         .identity
         .authorize(AccessRequest::Ui(UiAction::Logout))
-        .await
-        .map_err(|_| UiAuthError::Unauthorized)?;
+        .await?;
     auth.logout().await?;
     cookies.add(
         Cookie::build(("token", ""))

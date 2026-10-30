@@ -108,7 +108,7 @@ async fn google_handler_requires_canonical_base64_and_preserves_plaintext_whites
             STANDARD.encode("encrypted")
         )))
         .await,
-        Err(Error::InvalidCiphertext)
+        Err(Error::InvalidCiphertext(_))
     ));
     assert!(matches!(
         get_secret_from_manager(&manager, "KEY", &settings, &|_: &str| None).await,

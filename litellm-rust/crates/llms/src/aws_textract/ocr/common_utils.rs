@@ -17,6 +17,7 @@ const AWS_JSON_CONTENT_TYPE: &str = "application/x-amz-json-1.1";
 const TARGET_HEADER: &str = "X-Amz-Target";
 const CONTENT_TYPE_HEADER: &str = "Content-Type";
 const UNSUPPORTED_DOCUMENT: &str = "UnsupportedDocumentException";
+const SYNC_API_GUIDANCE: &str = "aws_textract uses Textract's synchronous API, which reads a JPEG, PNG, or a single-page PDF or TIFF; other formats and multi-page documents are not supported";
 const SYNC_DOCUMENT_MAX_BYTES: usize = 10 * 1024 * 1024;
 
 const HEALTH_CHECK_IMAGE_DATA_URI: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC";
@@ -321,20 +322,18 @@ struct AwsError {
 /// Textract answers both an unsupported format and a multi-page PDF or TIFF
 /// with a bare "unsupported document format", which reads like a corrupt file.
 /// Say what the synchronous API accepts.
-pub(super) fn error_class(body: String, status: u16, headers: Vec<(String, String)>) -> Error {
-    let unsupported = serde_json::from_str::<AwsError>(&body)
-        .ok()
-        .filter(|error| error.kind.ends_with(UNSUPPORTED_DOCUMENT));
-    Error::Provider {
-        status,
-        body: match unsupported {
-            Some(error) => format!(
-                "{UNSUPPORTED_DOCUMENT}: {}. aws_textract uses Textract's synchronous API, which reads a JPEG, PNG, or a single-page PDF or TIFF; other formats and multi-page documents are not supported",
-                error.message
-            ),
-            None => body,
+pub(super) fn error_class(body: String, status: u16, headers: reqwest::header::HeaderMap) -> Error {
+    match serde_json::from_str::<AwsError>(&body) {
+        Ok(error) if error.kind.ends_with(UNSUPPORTED_DOCUMENT) => Error::RejectedDocument {
+            provider: "AWS Textract",
+            message: error.message,
+            guidance: SYNC_API_GUIDANCE,
         },
-        headers,
+        Ok(_) | Err(_) => Error::Provider {
+            status,
+            body,
+            headers: Box::new(headers),
+        },
     }
 }
 
@@ -408,11 +407,11 @@ mod tests {
     fn a_model_outside_the_operations_is_refused_with_the_supported_names(#[case] model: &str) {
         let error = TextractOperation::from_model(model).unwrap_err();
 
-        assert_eq!(
-            error.to_string(),
-            format!(
-                "invalid model: aws_textract has no model {model:?} - use one of: detect-document-text, analyze-document"
-            )
+        let message = error.to_string();
+        assert!(message.contains(&format!("{model:?}")), "{message}");
+        assert!(
+            message.contains("detect-document-text, analyze-document"),
+            "{message}"
         );
         assert_eq!(error.http_status_code(), Some(400));
     }
@@ -542,43 +541,46 @@ mod tests {
     #[rstest]
     #[case::bare_type(
         r#"{"__type":"UnsupportedDocumentException","Message":"Request has unsupported document format"}"#,
-        Some("Request has unsupported document format")
+        "Request has unsupported document format"
     )]
     #[case::namespaced_type(
         r#"{"__type":"com.amazonaws.textract#UnsupportedDocumentException","Message":"bad"}"#,
-        Some("bad")
+        "bad"
     )]
     #[case::lowercase_message(
         r#"{"__type":"UnsupportedDocumentException","message":"bad"}"#,
-        Some("bad")
+        "bad"
     )]
-    #[case::other_exception(r#"{"__type":"AccessDeniedException","Message":"no"}"#, None)]
-    #[case::json_without_a_type(r#"{"Message":"no"}"#, None)]
-    #[case::not_json("<html>bad gateway</html>", None)]
-    fn only_an_unsupported_document_gains_the_sync_api_hint(
+    fn an_unsupported_document_is_the_callers_fault_with_the_sync_api_hint(
         #[case] body: &str,
-        #[case] hinted_message: Option<&str>,
+        #[case] provider_message: &str,
     ) {
-        let response_headers = vec![("x-amzn-requestid".to_string(), "abc".to_string())];
+        let error = error_class(body.into(), 400, reqwest::header::HeaderMap::new());
 
-        let Error::Provider {
-            status,
-            body: reported,
-            headers,
-        } = error_class(body.into(), 400, response_headers.clone())
-        else {
-            panic!("expected a provider error");
-        };
+        let message = error.to_string();
+        assert!(error.is_request());
+        assert_eq!(error.http_status_code(), Some(400));
+        assert!(error.upstream_response().is_none());
+        assert!(message.contains(provider_message), "{message}");
+        assert!(message.contains(HINT), "{message}");
+    }
 
-        assert_eq!(status, 400);
-        assert_eq!(headers, response_headers);
-        match hinted_message {
-            Some(message) => {
-                assert!(reported.contains(message), "{reported}");
-                assert!(reported.contains(HINT), "{reported}");
-            }
-            None => assert_eq!(reported, body),
-        }
+    #[rstest]
+    #[case::other_exception(r#"{"__type":"AccessDeniedException","Message":"no"}"#)]
+    #[case::json_without_a_type(r#"{"Message":"no"}"#)]
+    #[case::not_json("<html>bad gateway</html>")]
+    fn any_other_rejection_passes_through_untouched(#[case] body: &str) {
+        let response_headers = reqwest::header::HeaderMap::from_iter([(
+            reqwest::header::HeaderName::from_static("x-amzn-requestid"),
+            reqwest::header::HeaderValue::from_static("abc"),
+        )]);
+
+        let error = error_class(body.into(), 403, response_headers.clone());
+
+        assert_eq!(
+            error.upstream_response(),
+            Some((403, body, &response_headers))
+        );
     }
 
     #[rstest]
