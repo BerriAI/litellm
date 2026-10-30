@@ -7,11 +7,14 @@ Unit tests for per-user MCP OAuth token storage:
 """
 
 import sys
+import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from litellm.caching.dual_cache import DualCache
 
 # Stub out modules that aren't available in the unit-test environment
 # so we can import the targets without a full proxy stack.
@@ -22,7 +25,6 @@ for _mod in ("orjson",):
 from litellm.proxy.mcp_server.oauth2_token_cache import (  # noqa: E402
     MCPPerUserTokenCache,
     compute_per_user_token_ttl,
-    mcp_per_user_token_cache,
 )
 from litellm.types.mcp import MCPAuth, MCPTransport  # noqa: E402
 from litellm.types.mcp_server.mcp_server_manager import MCPServer  # noqa: E402
@@ -41,7 +43,7 @@ def _import_validate():
 
 
 def _make_server(**kwargs) -> MCPServer:
-    defaults: Dict[str, Any] = {
+    defaults: dict[str, Any] = {
         "server_id": "slack-test",
         "name": "Slack",
         "server_name": "slack",
@@ -262,9 +264,7 @@ class TestMCPPerUserTokenCache:
     @pytest.mark.asyncio
     async def test_get_returns_none_on_miss(self, cache, mock_dual_cache):
         with (
-            patch(
-                "litellm.proxy.mcp_server.oauth2_token_cache.decrypt_value_helper"
-            ) as mock_decrypt,
+            patch("litellm.proxy.mcp_server.oauth2_token_cache.decrypt_value_helper") as mock_decrypt,
             patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache),
         ):
             mock_dual_cache.async_get_cache.return_value = None
@@ -273,66 +273,46 @@ class TestMCPPerUserTokenCache:
         mock_decrypt.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_get_decrypts_cached_value(self, cache, mock_dual_cache):
-        fake_encrypted = "encrypted_blob_abc123"
-        fake_plaintext = "xoxb-slack-token"
+    async def test_get_decrypts_cached_value(self, cache: MCPPerUserTokenCache) -> None:
+        dual: Final = DualCache()
+        await dual.async_set_cache("mcp:per_user_token:alice:slack-test", "encrypted_blob_xyz", ttl=60)
         with (
             patch(
                 "litellm.proxy.mcp_server.oauth2_token_cache.decrypt_value_helper",
-                return_value=fake_plaintext,
+                return_value="xoxb-slack-token",
             ) as mock_decrypt,
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", dual),
         ):
-            mock_dual_cache.async_get_cache.return_value = fake_encrypted
             result = await cache.get("alice", "slack-test")
 
-        assert result == fake_plaintext
-        mock_decrypt.assert_called_once_with(
-            fake_encrypted,
-            key="mcp_per_user_token",
-            exception_type="debug",
-        )
+        assert result == "xoxb-slack-token"
+        mock_decrypt.assert_called_once_with("encrypted_blob_xyz", key="mcp_per_user_token", exception_type="debug")
 
     @pytest.mark.asyncio
-    async def test_set_encrypts_before_storing(self, cache, mock_dual_cache):
-        fake_encrypted = "encrypted_blob_xyz"
+    async def test_set_encrypts_before_storing_under_the_exact_key(self, cache: MCPPerUserTokenCache) -> None:
+        dual: Final = DualCache()
         with (
             patch(
                 "litellm.proxy.mcp_server.oauth2_token_cache.encrypt_value_helper",
-                return_value=fake_encrypted,
+                return_value="encrypted_blob_xyz",
             ) as mock_encrypt,
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", dual),
         ):
             await cache.set("alice", "slack-test", "xoxb-token", ttl=3540)
 
         mock_encrypt.assert_called_once_with("xoxb-token")
-        mock_dual_cache.async_set_cache.assert_called_once()
-        call_kwargs = mock_dual_cache.async_set_cache.call_args
-        assert call_kwargs[0][1] == fake_encrypted  # encrypted value stored
-        assert call_kwargs[1]["ttl"] == 3540
+        assert dual.in_memory_cache.get_cache("mcp:per_user_token:alice:slack-test") == "encrypted_blob_xyz"
+        assert dual.in_memory_cache.get_cache("xoxb-token") is None
+        assert 0 < dual.in_memory_cache.ttl_dict["mcp:per_user_token:alice:slack-test"] - time.time() <= 3540
 
     @pytest.mark.asyncio
-    async def test_set_uses_correct_cache_key(self, cache, mock_dual_cache):
-        with (
-            patch(
-                "litellm.proxy.mcp_server.oauth2_token_cache.encrypt_value_helper",
-                return_value="enc",
-            ),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache),
-        ):
-            await cache.set("bob", "github-server", "ghp_token", ttl=3600)
-
-        key_used = mock_dual_cache.async_set_cache.call_args[0][0]
-        assert key_used == "mcp:per_user_token:bob:github-server"
-
-    @pytest.mark.asyncio
-    async def test_delete_calls_async_delete_cache(self, cache, mock_dual_cache):
-        mock_dual_cache.async_delete_cache = AsyncMock()
-        with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache):
+    async def test_delete_removes_the_cached_token(self, cache: MCPPerUserTokenCache) -> None:
+        dual: Final = DualCache()
+        await dual.async_set_cache("mcp:per_user_token:alice:slack-test", "encrypted_blob_xyz", ttl=60)
+        with patch("litellm.proxy.proxy_server.user_api_key_cache", dual):
             await cache.delete("alice", "slack-test")
 
-        mock_dual_cache.async_delete_cache.assert_called_once_with(key="mcp:per_user_token:alice:slack-test")
-        mock_dual_cache.async_set_cache.assert_not_called()
+        assert dual.in_memory_cache.get_cache("mcp:per_user_token:alice:slack-test") is None
 
     @pytest.mark.asyncio
     async def test_get_returns_none_on_decrypt_failure(self, cache, mock_dual_cache):
