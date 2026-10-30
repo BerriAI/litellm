@@ -2242,6 +2242,21 @@ _MCP_TOOL_RESULT: Final = {
     "is_error": False,
     "content": [{"type": "text", "text": "Issue 42 is still open."}],
 }
+_MCP_TOOL_LISTING: Final = {
+    "type": "mcp_tool_listing",
+    "mcp_server_name": "tracker",
+    "tools": [
+        {
+            "name": "search_issues",
+            "description": "Search the issue tracker.",
+            "input_schema": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "Words to search for."}},
+                "required": ["query"],
+            },
+        }
+    ],
+}
 _ADVISOR_TOOL_RESULT: Final = {
     "type": "advisor_tool_result",
     "tool_use_id": "srvtoolu_01Wq8GYYv1dHrKzZx4k8Aa2m",
@@ -2325,6 +2340,11 @@ _CONNECTOR_TEXT: Final = {
         ),
         pytest.param(_tool_search_tool_result(), ("get_weather",), id="tool_search_tool_result"),
         pytest.param(_MCP_TOOL_RESULT, ("Issue 42 is still open.",), id="mcp_tool_result"),
+        pytest.param(
+            _MCP_TOOL_LISTING,
+            ("tracker", "search_issues", "Search the issue tracker.", "Words to search for.", "query"),
+            id="mcp_tool_listing",
+        ),
         pytest.param(_ADVISOR_TOOL_RESULT, ("Check the encrypted fields first.",), id="advisor_tool_result"),
         pytest.param(_CONTAINER_UPLOAD, (), id="container_upload"),
         pytest.param(_CONNECTOR_TEXT, ("Ticket 42 was closed on Monday.",), id="connector_text"),

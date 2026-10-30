@@ -1686,6 +1686,7 @@ _SERVER_TOOL_BLOCK_TYPES: Final = frozenset(
         "text_editor_code_execution_tool_result",
         "tool_search_tool_result",
         "mcp_tool_result",
+        "mcp_tool_listing",
         "advisor_tool_result",
         "container_upload",
         "connector_text",
