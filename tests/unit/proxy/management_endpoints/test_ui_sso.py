@@ -4049,8 +4049,8 @@ class TestCLIKeyRegenerationFlow:
         assert (
             '<select id="team_id" name="team_id" required>'
             '<option value="" disabled selected>Choose a team</option>'
-            '<option value="team-ops">Ops &lt;eu&gt; (team-ops)</option>'
             '<option value="team-claude">team-claude</option>'
+            '<option value="team-ops">Ops &lt;eu&gt; (team-ops)</option>'
             '<option value="team-ops-us">Ops &lt;eu&gt; (team-ops-us)</option>'
             "</select>"
         ) in page
@@ -4529,6 +4529,39 @@ class TestCLIKeyRegenerationFlow:
             )
             == ()
         )
+
+    @pytest.mark.asyncio
+    async def test_fetch_cli_sso_team_details_follows_the_user_record_order(self):
+        """The CLI login binds to the first detail, so it must be the first team on the user record.
+
+        Postgres returns the rows in whatever order the table holds them, which every write to a
+        team row changes, so the bound team used to flip between sign-ins.
+        """
+        from litellm.proxy.management_endpoints.ui_sso import (
+            fetch_cli_sso_team_details,
+        )
+
+        def team_row(team_id: str) -> MagicMock:
+            row: Final = MagicMock()
+            row.model_dump.return_value = {
+                "team_id": team_id,
+                "team_alias": None,
+                "models": [],
+                "litellm_model_table": None,
+            }
+            return row
+
+        prisma_client: Final = MagicMock()
+        prisma_client.db.litellm_teamtable.find_many = AsyncMock(
+            return_value=[team_row("team-alpha"), team_row("team-zeta")]
+        )
+
+        details: Final = await fetch_cli_sso_team_details(
+            prisma_client=prisma_client,
+            teams=["team-zeta", "team-gone", "team-alpha", "team-zeta"],
+        )
+
+        assert [detail.team_id for detail in details] == ["team-zeta", "team-alpha"]
 
     @pytest.mark.asyncio
     async def test_cli_poll_key_mints_jwt_with_selected_team_grants(self):
@@ -6692,72 +6725,57 @@ class TestPKCEFunctionality:
 class TestAddMissingTeamMember:
     """Tests for the add_missing_team_member function"""
 
+    @staticmethod
+    def _recording_add() -> tuple[
+        list[tuple[str, str | None]],
+        Callable[[str, NewUserResponse | LiteLLM_UserTable], Awaitable[None]],
+    ]:
+        added: Final[list[tuple[str, str | None]]] = []
+
+        async def add(team_id: str, user_info: NewUserResponse | LiteLLM_UserTable) -> None:
+            added.append((team_id, user_info.user_id))
+
+        return added, add
+
     @pytest.mark.asyncio
     async def test_add_missing_team_member_with_new_user_response_teams_none(self):
-        """
-        Bug reproduction: When a NewUserResponse has teams=None (new SSO user),
-        add_missing_team_member() should still add the user to the SSO teams.
-
-        Currently FAILS: The function returns early when teams is None.
-        """
+        """A new SSO user's NewUserResponse has teams=None, and the user must still be added to the SSO teams."""
         from litellm.proxy._types import NewUserResponse
         from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
 
-        # Simulate a new SSO user - NewUserResponse has teams=None by default
-        new_user = NewUserResponse(
-            user_id="new-sso-user-123",
-            key="sk-xxxxx",
-            teams=None,  # This is the default for NewUserResponse
+        new_user = NewUserResponse(user_id="new-sso-user-123", key="sk-xxxxx", teams=None)
+        added, add = self._recording_add()
+
+        await add_missing_team_member(
+            user_info=new_user,
+            sso_teams=["team-from-entra-1", "team-from-entra-2"],
+            add_team_member=add,
         )
 
-        sso_teams = ["team-from-entra-1", "team-from-entra-2"]
-
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.create_team_member_add_task"
-        ) as mock_add_task:
-            mock_add_task.return_value = AsyncMock()
-
-            await add_missing_team_member(user_info=new_user, sso_teams=sso_teams)
-
-            # Bug: This assertion currently FAILS - no teams are added
-            # because function returns early when teams is None
-            assert (
-                mock_add_task.call_count == 2
-            ), f"Expected 2 calls to add user to teams, but got {mock_add_task.call_count}"
-            called_team_ids = [call.args[0] for call in mock_add_task.call_args_list]
-            assert set(called_team_ids) == {
-                "team-from-entra-1",
-                "team-from-entra-2",
-            }
+        assert added == [
+            ("team-from-entra-1", "new-sso-user-123"),
+            ("team-from-entra-2", "new-sso-user-123"),
+        ]
 
     @pytest.mark.asyncio
     async def test_add_missing_team_member_with_litellm_user_table_empty_teams(self):
-        """
-        Control test: When a LiteLLM_UserTable has teams=[] (existing user, no teams),
-        add_missing_team_member() should add the user to SSO teams.
-
-        This test PASSES because LiteLLM_UserTable defaults teams to [] not None.
-        """
+        """An existing user with teams=[] is added to every SSO team."""
         from litellm.proxy._types import LiteLLM_UserTable
         from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
 
-        # Existing user has teams=[] by default (not None)
-        existing_user = LiteLLM_UserTable(
-            user_id="existing-user-456",
-            teams=[],  # Empty list, not None
+        existing_user = LiteLLM_UserTable(user_id="existing-user-456", teams=[])
+        added, add = self._recording_add()
+
+        await add_missing_team_member(
+            user_info=existing_user,
+            sso_teams=["team-from-entra-1", "team-from-entra-2"],
+            add_team_member=add,
         )
 
-        sso_teams = ["team-from-entra-1", "team-from-entra-2"]
-
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.create_team_member_add_task"
-        ) as mock_add_task:
-            mock_add_task.return_value = AsyncMock()
-
-            await add_missing_team_member(user_info=existing_user, sso_teams=sso_teams)
-
-            # This PASSES - teams are added because teams=[] not None
-            assert mock_add_task.call_count == 2
+        assert added == [
+            ("team-from-entra-1", "existing-user-456"),
+            ("team-from-entra-2", "existing-user-456"),
+        ]
 
     @pytest.mark.asyncio
     async def test_add_user_to_teams_from_sso_response_new_user(self):
@@ -6800,96 +6818,160 @@ class TestAddMissingTeamMember:
 
     @pytest.mark.asyncio
     async def test_sso_first_login_full_flow_adds_user_to_teams(self):
-        """
-        End-to-end test: Simulates complete first-time SSO login with Entra groups.
-        Verifies teams are created AND user is added as a member.
-        """
+        """A first-time SSO login with Entra groups adds the new user as a member of every group's team."""
         from litellm.proxy._types import NewUserResponse
         from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
 
-        team_member_calls = []
+        new_user = NewUserResponse(user_id="first-time-sso-user", key="sk-xxxxx", teams=None)
+        added, add = self._recording_add()
 
-        async def track_team_member_add(team_id, user_info):
-            team_member_calls.append({"team_id": team_id, "user_id": user_info.user_id})
-
-        # New SSO user with Entra groups
-        new_user = NewUserResponse(
-            user_id="first-time-sso-user",
-            key="sk-xxxxx",
-            teams=None,  # The problematic default
+        await add_missing_team_member(
+            user_info=new_user,
+            sso_teams=["entra-team-alpha", "entra-team-beta"],
+            add_team_member=add,
         )
 
-        sso_teams = ["entra-team-alpha", "entra-team-beta"]
-
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.create_team_member_add_task",
-            side_effect=track_team_member_add,
-        ):
-            await add_missing_team_member(user_info=new_user, sso_teams=sso_teams)
-
-        # Bug: With current code, team_member_calls will be empty
-        # After fix: Should have 2 entries
-        assert (
-            len(team_member_calls) == 2
-        ), f"Expected 2 teams to be added, but got {len(team_member_calls)}"
-        assert {c["team_id"] for c in team_member_calls} == {
-            "entra-team-alpha",
-            "entra-team-beta",
-        }
-        assert all(c["user_id"] == "first-time-sso-user" for c in team_member_calls)
+        assert added == [
+            ("entra-team-alpha", "first-time-sso-user"),
+            ("entra-team-beta", "first-time-sso-user"),
+        ]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "user_info_factory,teams_value,expected_teams_added",
+        "user_info_factory,expected_teams_added",
         [
-            # Bug case: NewUserResponse with teams=None
             pytest.param(
                 lambda uid: NewUserResponse(user_id=uid, key="sk-xxx", teams=None),
-                None,
-                ["team-1", "team-2"],  # Should still add teams
+                ["team-1", "team-2"],
                 id="new_user_teams_none",
             ),
-            # Working case: LiteLLM_UserTable with teams=[]
             pytest.param(
                 lambda uid: LiteLLM_UserTable(user_id=uid, teams=[]),
-                [],
                 ["team-1", "team-2"],
                 id="existing_user_empty_teams",
             ),
-            # Existing user with some teams already
             pytest.param(
                 lambda uid: LiteLLM_UserTable(user_id=uid, teams=["team-1"]),
-                ["team-1"],
-                ["team-2"],  # Only missing team should be added
+                ["team-2"],
                 id="existing_user_partial_teams",
+            ),
+            pytest.param(
+                lambda uid: LiteLLM_UserTable(user_id=uid, teams=["team-2", "team-1"]),
+                [],
+                id="existing_user_all_teams",
             ),
         ],
     )
     async def test_add_missing_team_member_handles_all_user_types(
-        self, user_info_factory, teams_value, expected_teams_added
+        self, user_info_factory, expected_teams_added
     ):
-        """
-        Parametrized test ensuring add_missing_team_member works for all user types.
-        """
+        """Only the SSO teams the user is not already on are added."""
         from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
 
-        user_info = user_info_factory("test-user-id")
-        sso_teams = ["team-1", "team-2"]
+        added, add = self._recording_add()
 
-        added_teams = []
+        await add_missing_team_member(
+            user_info=user_info_factory("test-user-id"),
+            sso_teams=["team-1", "team-2"],
+            add_team_member=add,
+        )
 
-        async def mock_create_task(team_id, user):
-            added_teams.append(team_id)
+        assert added == [(team_id, "test-user-id") for team_id in expected_teams_added]
 
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.create_team_member_add_task",
-            side_effect=mock_create_task,
-        ):
-            await add_missing_team_member(user_info=user_info, sso_teams=sso_teams)
+    @pytest.mark.asyncio
+    async def test_add_missing_team_member_lands_teams_in_claim_order(self):
+        """user.teams is appended to as each add finishes, and the first team on it is the one a CLI
+        login binds to, so the adds must finish in the claim's order even when an earlier add is slower.
 
-        assert set(added_teams) == set(
-            expected_teams_added
-        ), f"Expected teams {expected_teams_added}, but got {added_teams}"
+        The adds used to run concurrently from a set, so they finished in an arbitrary order.
+        """
+        from litellm.proxy._types import LiteLLM_UserTable
+        from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+        claim: Final = ["team-zeta", "team-alpha", "team-held", "team-zeta", "team-mu"]
+        yields_before_finishing: Final = {"team-zeta": 3, "team-alpha": 2, "team-mu": 1}
+        finished: Final[list[str]] = []
+
+        async def slower_when_earlier(team_id: str, user_info: NewUserResponse | LiteLLM_UserTable) -> None:
+            for _ in range(yields_before_finishing[team_id]):
+                await asyncio.sleep(0)
+            finished.append(team_id)
+
+        await add_missing_team_member(
+            user_info=LiteLLM_UserTable(user_id="group-sync-user", teams=["team-held"]),
+            sso_teams=claim,
+            add_team_member=slower_when_earlier,
+        )
+
+        assert finished == ["team-zeta", "team-alpha", "team-mu"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "existing,expected_teams_added",
+        [
+            pytest.param(frozenset({"team-zeta", "team-alpha"}), ["team-zeta", "team-alpha"], id="only_teams"),
+            pytest.param(None, ["grp-everyone", "team-zeta", "grp-vpn", "team-alpha"], id="lookup_failed"),
+        ],
+    )
+    async def test_add_missing_team_member_looks_up_missing_groups_once_and_adds_only_teams(
+        self, existing: frozenset[str] | None, expected_teams_added: list[str]
+    ):
+        from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+        added, add = self._recording_add()
+        lookups: Final[list[tuple[str, ...]]] = []
+
+        async def existing_team_ids(team_ids: Sequence[str]) -> frozenset[str] | None:
+            lookups.append(tuple(team_ids))
+            return existing
+
+        await add_missing_team_member(
+            user_info=LiteLLM_UserTable(user_id="group-sync-user", teams=["team-held"]),
+            sso_teams=["grp-everyone", "team-zeta", "team-held", "grp-vpn", "team-alpha"],
+            add_team_member=add,
+            existing_team_ids=existing_team_ids,
+        )
+
+        assert lookups == [("grp-everyone", "team-zeta", "grp-vpn", "team-alpha")]
+        assert added == [(team_id, "group-sync-user") for team_id in expected_teams_added]
+
+    @pytest.mark.asyncio
+    async def test_add_missing_team_member_skips_the_lookup_when_every_group_is_held(self):
+        from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+        added, add = self._recording_add()
+        lookup: Final = AsyncMock(return_value=frozenset())
+
+        await add_missing_team_member(
+            user_info=LiteLLM_UserTable(user_id="group-sync-user", teams=["team-alpha", "team-zeta"]),
+            sso_teams=["team-zeta", "team-alpha"],
+            add_team_member=add,
+            existing_team_ids=lookup,
+        )
+
+        lookup.assert_not_awaited()
+        assert added == []
+
+    @pytest.mark.asyncio
+    async def test_find_existing_team_ids_reads_the_writer_and_returns_none_when_the_db_cannot_answer(self):
+        from litellm.proxy.management_endpoints.ui_sso import find_existing_team_ids
+
+        stored_on_writer: Final = ("team-zeta", "team-alpha")
+
+        async def find_many(*, where: Mapping[str, Mapping[str, Sequence[str]]]) -> list[SimpleNamespace]:
+            return [
+                SimpleNamespace(team_id=team_id) for team_id in stored_on_writer if team_id in where["team_id"]["in"]
+            ]
+
+        prisma: Final = MagicMock()
+        prisma.writer_db.litellm_teamtable.find_many = AsyncMock(side_effect=find_many)
+        prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+        with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+            assert await find_existing_team_ids(("grp-vpn", "team-alpha")) == frozenset({"team-alpha"})
+            prisma.writer_db.litellm_teamtable.find_many.side_effect = RuntimeError("db unavailable")
+            assert await find_existing_team_ids(("team-alpha",)) is None
+        with patch("litellm.proxy.proxy_server.prisma_client", None):
+            assert await find_existing_team_ids(("team-alpha",)) is None
 
 
 @pytest.mark.asyncio
