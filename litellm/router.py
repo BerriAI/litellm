@@ -378,6 +378,7 @@ from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check impor
     EncryptedContentAffinityCheck,
 )
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
+    async_admit_io_token_turn,
     async_io_token_refund_failure,
     build_io_token_rate_limit_headers,
     deployment_has_io_token_limits,
@@ -5113,6 +5114,7 @@ class Router(DeprecatedRouterMembers):
         kwargs: dict,
         function_name: str | None = None,
         splits_stream_timeout: bool = False,
+        opens_responses_socket: bool = False,
     ) -> None:
         """
         5 jobs:
@@ -5202,7 +5204,12 @@ class Router(DeprecatedRouterMembers):
         # here before it's wiped below, instead of relying on that attempt's
         # (possibly still-pending) failure event to do it.
         refund_stale_reservation_before_retry(self._core_cache, kwargs)
-        set_io_token_rate_limit_request_kwargs(kwargs, store_in_context=deployment_has_io_token_limits(deployment))
+        set_io_token_rate_limit_request_kwargs(
+            kwargs,
+            store_in_context=deployment_has_io_token_limits(deployment),
+            opens_responses_socket=opens_responses_socket,
+            metadata_channel=metadata_variable_name,
+        )
 
         kwargs[metadata_variable_name].setdefault(
             ROUTING_REQUEST_TAGS_METADATA_KEY,
@@ -6615,6 +6622,7 @@ class Router(DeprecatedRouterMembers):
                 kwargs=kwargs,
                 function_name=function_name,
                 splits_stream_timeout=handler_name in _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
+                opens_responses_socket=handler_name == "_aresponses_websocket",
             )
 
             data: Final = deployment["litellm_params"].copy()
@@ -10465,9 +10473,20 @@ class Router(DeprecatedRouterMembers):
         return deployment if current is None else current.model_dump(exclude_none=True)
 
     async def async_admit_deployment_turn(
-        self, model_group: str, opened_on: Mapping[str, object], request_kwargs: Mapping[str, object]
-    ) -> None:
+        self,
+        model_group: str,
+        opened_on: Mapping[str, object],
+        request_kwargs: Mapping[str, object],
+    ) -> Mapping[str, object]:
         deployment: Final = self._deployment_as_configured_now(opened_on)
+        rate_limit_check: Final = next(
+            (callback for callback in self._routing_callbacks() if isinstance(callback, ModelRateLimitingCheck)), None
+        )
+        io_token_admission: Final[Mapping[str, object]] = (
+            MappingProxyType({})
+            if rate_limit_check is None
+            else await async_admit_io_token_turn(rate_limit_check.dual_cache, deployment, get_utc_datetime())
+        )
         budget_limiter: Final = self._core_get_router_deployment_budget_limiter()
         if budget_limiter is not None:
             try:
@@ -10488,6 +10507,7 @@ class Router(DeprecatedRouterMembers):
         await self.async_routing_strategy_pre_call_checks(  # pyright: ignore[reportUnknownMemberType]  # legacy signature takes an untyped deployment dict
             deployment=dict(without_io_token_limits(deployment)), parent_otel_span=None
         )
+        return io_token_admission
 
     async def _admit_turn_through_routing_strategy(
         self, model_group: str, deployment: Mapping[str, object], request_kwargs: Mapping[str, object]

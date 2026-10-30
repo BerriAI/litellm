@@ -2200,7 +2200,11 @@ async def test_ageneric_api_call_deployment_model_overrides_alias():
     )
 
     def inject_alias_into_kwargs(
-        deployment: dict, kwargs: dict, function_name: str | None = None, splits_stream_timeout: bool = False
+        deployment: dict,
+        kwargs: dict,
+        function_name: str | None = None,
+        splits_stream_timeout: bool = False,
+        opens_responses_socket: bool = False,
     ) -> None:
         # Simulate the alias leaking into kwargs (as happens when
         # _ageneric_api_call_with_fallbacks sets kwargs["model"] = alias before
