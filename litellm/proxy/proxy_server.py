@@ -8159,6 +8159,7 @@ class ProxyConfig:
             if db_router_settings is not None and db_router_settings.param_value is not None
             else _EMPTY_SETTINGS_MAPPING
         )
+        previous_content_policy_rules: Final = self.router_settings.resolved().get("content_policy_fallbacks")
         self.router_settings.apply_db_row("router_settings", db_values)
         combined_router_settings: Final = self.router_settings.resolved()
         if combined_router_settings:
@@ -8166,11 +8167,18 @@ class ProxyConfig:
                 llm_router,
                 combined_router_settings,
                 content_policy_owned_by_config=self.router_settings.owned_by_config("content_policy_fallbacks"),
+                content_policy_rules_changed=(
+                    combined_router_settings.get("content_policy_fallbacks") != previous_content_policy_rules
+                ),
             )
 
     @staticmethod
     def _apply_router_settings(
-        llm_router: Router, router_settings: Mapping[str, object], *, content_policy_owned_by_config: bool
+        llm_router: Router,
+        router_settings: Mapping[str, object],
+        *,
+        content_policy_owned_by_config: bool,
+        content_policy_rules_changed: bool,
     ) -> None:
         llm_router.apply(
             ChangeSet(
@@ -8180,7 +8188,9 @@ class ProxyConfig:
             )
         )
         if "content_policy_fallbacks" in router_settings and not content_policy_owned_by_config:
-            apply_content_policy_fallbacks(llm_router, router_settings["content_policy_fallbacks"])
+            apply_content_policy_fallbacks(
+                llm_router, router_settings["content_policy_fallbacks"], log_skipped_rules=content_policy_rules_changed
+            )
         if "routing_groups" not in router_settings:
             return
         try:

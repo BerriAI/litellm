@@ -104,7 +104,7 @@ def _checked_content_policy_rules(
     return tuple((candidate, _checked_content_policy_rule(candidate)) for candidate in candidates)
 
 
-def apply_content_policy_fallbacks(llm_router: "Router", rules: object) -> None:
+def apply_content_policy_fallbacks(llm_router: "Router", rules: object, *, log_skipped_rules: bool) -> None:
     checked_rules: Final = _checked_content_policy_rules(rules)
     runtime_rules: Final = tuple(result for _, result in checked_rules if not isinstance(result, ValidationError))
     layered_rules: Final = _layered_over_config_rules(
@@ -113,17 +113,17 @@ def apply_content_policy_fallbacks(llm_router: "Router", rules: object) -> None:
             litellm.content_policy_fallbacks  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped module list
         ),
     )
+    for rule, result in checked_rules:
+        if log_skipped_rules and isinstance(result, ValidationError):
+            _log_ignored_content_policy_rules(rule, result)
     if layered_rules == llm_router.settings().content_policy_fallbacks:  # pyright: ignore[reportUnknownMemberType]  # untyped RouterSettings list
         return
-    for rule, result in checked_rules:
-        if isinstance(result, ValidationError):
-            _log_ignored_content_policy_rules(rule, result)
     llm_router.apply(ChangeSet(settings={"content_policy_fallbacks": layered_rules}))
 
 
 def _apply_fallback_rules(llm_router: "Router", fallback_key: str, rules: Sequence[StoredFallback]) -> None:
     if fallback_key == "content_policy_fallbacks":
-        apply_content_policy_fallbacks(llm_router, rules)
+        apply_content_policy_fallbacks(llm_router, rules, log_skipped_rules=True)
         return
     llm_router.apply(ChangeSet(assign={fallback_key: rules}))
 

@@ -5734,6 +5734,31 @@ async def test_an_invalid_db_content_policy_rule_is_logged_once_per_change_of_th
 
 
 @pytest.mark.asyncio
+async def test_a_db_sync_logs_a_new_invalid_content_policy_rule_when_no_valid_rule_changes(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    monkeypatch.setattr(litellm, "content_policy_fallbacks", [])
+    router: Final = _content_policy_router()
+    proxy_config: Final = proxy_server_module.ProxyConfig()
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        await proxy_config._add_router_settings_from_db_config(
+            llm_router=router, prisma_client=_router_settings_row([{"secondary": "backup"}])
+        )
+        await proxy_config._add_router_settings_from_db_config(
+            llm_router=router, prisma_client=_router_settings_row([{"secondary": "backup"}, {"primary": "backup"}])
+        )
+
+    notices: Final = [
+        record.getMessage()
+        for record in caplog.records
+        if "Ignoring invalid content_policy_fallbacks" in record.getMessage()
+    ]
+    assert len(notices) == 3
+    assert "{'primary': 'backup'}" in notices[-1]
+
+
+@pytest.mark.asyncio
 async def test_config_file_content_policy_fallbacks_stay_the_only_rules_after_a_db_sync(
     monkeypatch: pytest.MonkeyPatch,
 ):
