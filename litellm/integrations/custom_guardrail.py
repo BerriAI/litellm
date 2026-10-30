@@ -9,6 +9,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, cast, get_args
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
@@ -216,6 +217,15 @@ def _request_is_streaming(data: object, event_type: GuardrailEventHooks | None =
         data.get("stream") is True
         or data.get(SERVER_STREAMING_CLASSIFICATION_KEY) is SERVER_STREAMING_CLASSIFICATION_MARKER
     )
+
+
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _guardrails_listed_in(metadata: object) -> list[str | dict[str, DynamicGuardrailParams]]:
+    if not isinstance(metadata, dict):
+        return []
+    return metadata.get("guardrails") or []
 
 
 class CustomGuardrail(CustomLogger):
@@ -791,28 +801,22 @@ class CustomGuardrail(CustomLogger):
                 return True
             raise
 
-    def get_guardrail_from_metadata(self, data: dict) -> list[str] | list[dict[str, DynamicGuardrailParams]]:
+    def get_guardrail_from_metadata(self, data: dict) -> list[str | dict[str, DynamicGuardrailParams]]:
         """
-        Returns the guardrail(s) to be run from the metadata or root
+        Returns the guardrail(s) to be run from the root, else from both metadata fields together
         """
 
         if "guardrails" in data:
             return data["guardrails"]
-        # Check both metadata locations. For regular endpoints move_guardrails_to_metadata
-        # writes to "metadata"; for thread/assistant endpoints it writes to
-        # "litellm_metadata". We check the one that actually contains the "guardrails"
-        # key so that a non-empty litellm_metadata without guardrails does not shadow
-        # the merged list stored in metadata (which would cause team guardrails to be
-        # silently skipped while default_on=True policy guardrails still fire).
-        for meta_key in ("metadata", "litellm_metadata"):
-            meta = data.get(meta_key) or {}
-            if isinstance(meta, dict) and "guardrails" in meta:
-                return meta.get("guardrails") or []
-        return []
+        request_fields: Final = _REQUEST_FIELDS.validate_python(data)
+        return [
+            *_guardrails_listed_in(request_fields.get("metadata")),
+            *_guardrails_listed_in(request_fields.get("litellm_metadata")),
+        ]
 
     def _guardrail_is_in_requested_guardrails(
         self,
-        requested_guardrails: list[str] | list[dict[str, DynamicGuardrailParams]],
+        requested_guardrails: Sequence[str | dict[str, DynamicGuardrailParams]],
     ) -> bool:
         for _guardrail in requested_guardrails:
             if isinstance(_guardrail, dict):
