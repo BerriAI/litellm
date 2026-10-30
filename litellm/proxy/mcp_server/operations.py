@@ -55,6 +55,7 @@ from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
     MCP_TOOL_LISTING_TIMEOUT,
 )
+from litellm.integrations.custom_guardrail import MCP_SERVER_GUARDRAILS_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import (
     UserAPIKeyAuth,
@@ -2447,6 +2448,7 @@ async def _execute_mcp_tool(
                 original_auth=user_api_key_auth,
                 guardrail_auth=effective_guardrail_auth,
                 request_data=kwargs,
+                server_guardrails=tuple(mcp_server.guardrails or ()),
             ),
             wire_compat=wire_compat,
             input_responses=input_responses,
@@ -2545,6 +2547,7 @@ async def _execute_mcp_tool(
         original_auth=user_api_key_auth,
         guardrail_auth=effective_guardrail_auth,
         request_data=kwargs,
+        server_guardrails=tuple(mcp_server.guardrails or ()) if mcp_server is not None else (),
     )
 
 
@@ -2554,6 +2557,7 @@ def _guarded_progress_callback(
     original_auth: UserAPIKeyAuth | None,
     guardrail_auth: UserAPIKeyAuth | None,
     request_data: Mapping[str, object],
+    server_guardrails: tuple[str, ...] = (),
 ) -> ProgressCallback | None:
     if callback is None:
         return None
@@ -2569,6 +2573,7 @@ def _guarded_progress_callback(
                 original_auth=original_auth,
                 guardrail_auth=guardrail_auth,
                 request_data=request_data,
+                server_guardrails=server_guardrails,
             )
             filtered: Final = TextContent.model_validate(checked.content[0]).text
         except Exception:  # noqa: BLE001  # any guardrail failure must withhold unverified progress text
@@ -2586,6 +2591,7 @@ async def _run_post_mcp_call_guardrails(
     original_auth: UserAPIKeyAuth | None,
     guardrail_auth: UserAPIKeyAuth | None,
     request_data: Mapping[str, object],
+    server_guardrails: tuple[str, ...] = (),
 ) -> CallToolResult:
     """Run ``post_mcp_call`` guardrails over an executed tool result.
 
@@ -2604,6 +2610,7 @@ async def _run_post_mcp_call_guardrails(
         request_data_for_hook: Final = (
             litellm_logging_obj.model_call_details if litellm_logging_obj is not None else dict(request_data)
         )
+        request_data_for_hook[MCP_SERVER_GUARDRAILS_KEY] = list(server_guardrails)
         return await proxy_logging_obj.post_mcp_call_hook(
             response=result,
             request_data=request_data_for_hook,
@@ -2674,6 +2681,7 @@ async def _run_post_mcp_call_guardrails(
             **resolved_auth_metadata,
             "guardrails": list(merged_guardrails),
         },
+        MCP_SERVER_GUARDRAILS_KEY: list(server_guardrails),
     }
     return await proxy_logging_obj.post_mcp_call_hook(
         response=result,

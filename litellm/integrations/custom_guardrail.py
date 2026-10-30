@@ -65,6 +65,10 @@ from litellm.exceptions import (
 
 GUARDRAIL_SESSIONS_TARGET: Final = "guardrail_sessions"
 
+MCP_SERVER_GUARDRAILS_KEY: Final = "mcp_server_guardrails"
+
+_MCP_SERVER_SCOPED_HOOKS: Final = frozenset({GuardrailEventHooks.pre_mcp_call, GuardrailEventHooks.post_mcp_call})
+
 # Per-process secret tagging each recorded marker. The deployment hook only
 # honors markers carrying this token, so a caller cannot forge the metadata
 # field to suppress a guardrail on the direct-SDK path that never reaches the
@@ -1199,6 +1203,9 @@ class CustomGuardrail(CustomLogger):
         if self._suppressed_by_auto_router_compression():
             return False
 
+        if self._attached_to_mcp_server(cast(object, data), event_type):  # cast-ok: untyped data param
+            return self._event_hook_is_event_type(event_type)
+
         requested_guardrails: Final = self.get_guardrail_from_metadata(data)
         disable_global_guardrail: Final = self.get_disable_global_guardrail(data)
         opted_out_global_guardrails: Final = self.get_opted_out_global_guardrails_from_metadata(data)
@@ -1261,6 +1268,12 @@ class CustomGuardrail(CustomLogger):
                 mode_tag_result: Final[bool] = bool(cast(object, result))  # cast-ok: helper return
                 return mode_tag_result and self.stream_scope_allows(cast(object, data), event_type)  # cast-ok: data
         return self.stream_scope_allows(cast(object, data), event_type)  # cast-ok: data param
+
+    def _attached_to_mcp_server(self, data: object, event_type: GuardrailEventHooks) -> bool:
+        if event_type not in _MCP_SERVER_SCOPED_HOOKS or not isinstance(data, Mapping):
+            return False
+        server_guardrails: Final = cast(Mapping[str, object], data).get(MCP_SERVER_GUARDRAILS_KEY)  # cast-ok: data
+        return isinstance(server_guardrails, list) and self.guardrail_name in server_guardrails
 
     def _event_hook_is_event_type(self, event_type: GuardrailEventHooks) -> bool:
         """

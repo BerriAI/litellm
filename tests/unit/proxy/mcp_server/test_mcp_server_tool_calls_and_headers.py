@@ -33,6 +33,7 @@ from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_HANDSHAKE_VERS
 from pydantic import JsonValue, TypeAdapter
 from starlette.types import Message, Receive, Scope, Send
 
+from litellm.integrations.custom_guardrail import MCP_SERVER_GUARDRAILS_KEY
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPTransport,
@@ -11090,6 +11091,35 @@ class TestOboPreflightScopedToAllowedServers:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("listed", "expected"), [(["scoped-guardrail"], ["scoped-guardrail"]), (None, [])])
+async def test_call_mcp_tool_hands_server_guardrails_to_post_mcp_call_hook(listed, expected):
+    from litellm.proxy.mcp_server.server import call_mcp_tool
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="tickets-id",
+        name="tickets",
+        alias="tickets",
+        server_name="tickets",
+        url="https://example.com/mcp",
+        transport=MCPTransport.http,
+        mcp_info={"server_name": "tickets"},
+        guardrails=listed,
+    )
+    proxy_logging_mock = _mock_mcp_proxy_logging()
+
+    with _managed_tool_returning(server, _call_tool_result(False, "ok"), proxy_logging_mock):
+        await call_mcp_tool(
+            name="tickets-get_ticket",
+            arguments={},
+            user_api_key_auth=UserAPIKeyAuth(api_key="test-key", user_id="test-user"),
+            litellm_logging_obj=_mock_mcp_logging_obj(),
+        )
+
+    assert proxy_logging_mock.post_mcp_call_hook.await_args.kwargs["request_data"][MCP_SERVER_GUARDRAILS_KEY] == expected
+
+
+@pytest.mark.asyncio
 async def test_post_mcp_call_guardrails_return_the_rewritten_result():
     """The result a post_mcp_call guardrail rewrote must be what the caller sends back."""
     from litellm.proxy.mcp_server.server import (
@@ -11147,7 +11177,10 @@ async def test_post_mcp_call_guardrails_run_without_a_logging_object():
 
     assert returned is masked_result
     proxy_logging_mock.post_mcp_call_hook.assert_awaited_once()
-    assert proxy_logging_mock.post_mcp_call_hook.await_args.kwargs["request_data"] == {"name": "fetch_record"}
+    assert proxy_logging_mock.post_mcp_call_hook.await_args.kwargs["request_data"] == {
+        "name": "fetch_record",
+        MCP_SERVER_GUARDRAILS_KEY: [],
+    }
 
 
 @pytest.mark.asyncio
