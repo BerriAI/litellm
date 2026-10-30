@@ -25,6 +25,7 @@ litellm-tracing.workspace = true
 litellm-spend-clickhouse.workspace = true
 litellm-storage-clickhouse.workspace = true
 litellm-host.workspace = true
+async-trait.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
 litellm-cache.workspace = true
@@ -49,6 +50,7 @@ litellm-secrets = { workspace = true, features = ["aws", "azure", "google", "has
 litellm-secrets-types.workspace = true
 litellm-llms-types.workspace = true
 litellm-router-types.workspace = true
+litellm-router-core.workspace = true
 litellm-host-python.workspace = true
 litellm-model-catalog.workspace = true
 litellm-token-counter = { path = "../token-counter", default-features = false }

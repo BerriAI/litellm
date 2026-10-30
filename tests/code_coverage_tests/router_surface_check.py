@@ -42,6 +42,7 @@ ROUTER_FILES = {
     "litellm/router_core.py",
     "litellm/router_python_core.py",
     "litellm/router_python_host.py",
+    "litellm/router_rust_core.py",
     "litellm/router_deprecated.py",
     "litellm/router_host.py",
 }
