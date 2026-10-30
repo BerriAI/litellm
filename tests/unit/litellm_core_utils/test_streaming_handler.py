@@ -577,11 +577,6 @@ _GET_WEATHER_CALL: Final = {
             0,
         ),
         (
-            (_stream_chunk({"reasoning_content": "Still thinking"}),),
-            "<think>Still thinking</think>",
-            0,
-        ),
-        (
             (_stream_chunk({"content": "hi"}), _stream_chunk({}, "stop")),
             "hi",
             0,
@@ -592,7 +587,6 @@ _GET_WEATHER_CALL: Final = {
         "reasoning_then_function_call",
         "reasoning_cut_by_length",
         "reasoning_after_answer",
-        "stream_ends_mid_reasoning",
         "answer_without_reasoning",
     ],
 )
@@ -624,6 +618,26 @@ async def test_merged_reasoning_stream_keeps_think_tags_balanced(
     assert any(chunk.choices[0].finish_reason for chunk in response.chunks if chunk.choices) == any(
         chunk.choices[0].finish_reason for chunk in chunks
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_merged_reasoning_stream_cut_mid_reasoning_fails_instead_of_closing_the_think_block(
+    logging_obj: Logging, sync_mode: bool
+) -> None:
+    response: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(
+            model_responses=[_stream_chunk({"reasoning_content": "Still thinking"})]
+        ),
+        model="deepseek-reasoner",
+        logging_obj=logging_obj,
+    )
+    response.merge_reasoning_content_in_choices = True
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await _collect(response, sync_mode)
+
+    assert excinfo.value.generated_content == "<think>Still thinking"
 
 
 def test_strip_sse_data_from_chunk():
