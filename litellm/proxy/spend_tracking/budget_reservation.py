@@ -1451,6 +1451,9 @@ def _max_cost_for_cost_info(
     )
     if estimated_input_tokens is None or output_tokens is None:
         return None
+    held_output_tokens: Final = _held_output_tokens(
+        route=route, model_info=model_info, output_tokens=output_tokens, output_multiplier=output_multiplier
+    )
 
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
@@ -1461,7 +1464,7 @@ def _max_cost_for_cost_info(
                 tier_rate(tier, "output_cost_per_reasoning_token"),
             )
             return (estimated_input_tokens * tier_rate(tier, "input_cost_per_token")) + _output_cost(
-                output_tokens, output_multiplier, output_rate
+                held_output_tokens, output_tokens, output_rate
             )
 
     input_cost_per_token: Final = _to_float(model_info.get("input_cost_per_token"))
@@ -1478,7 +1481,7 @@ def _max_cost_for_cost_info(
     # under-reserving reasoning-heavy requests.
     output_rate = max(output_cost_per_token or 0.0, output_cost_per_reasoning_token or 0.0)
     if output_cost_per_token is not None or output_cost_per_reasoning_token is not None:
-        cost += _output_cost(output_tokens, output_multiplier, output_rate)
+        cost += _output_cost(held_output_tokens, output_tokens, output_rate)
     elif output_tokens > 0:
         return None
 
@@ -1692,7 +1695,7 @@ def _estimate_output_tokens(
     #     the reservation up to remaining team headroom and pin the counter
     #     at the cap — the model can only physically emit max_output_tokens
     #     anyway, so reserving more is both wasteful and a DoS surface.
-    model_ceiling: Final = _to_int(model_info.get("max_output_tokens")) or DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
+    model_ceiling: Final = _model_output_ceiling(model_info)
     return min(DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK if requested is None else requested, model_ceiling)
 
 
@@ -1769,11 +1772,24 @@ def _get_output_multiplier(requested_counts: tuple[object, ...]) -> int:
     return max((1, *(count for count in map(_to_int, requested_counts) if count is not None)))
 
 
-def _output_cost(output_tokens: int, output_multiplier: int, output_rate: float) -> float:
+def _held_output_tokens(
+    route: str, model_info: Mapping[str, object], output_tokens: int, output_multiplier: int
+) -> int:
+    if not RouteChecks.is_generate_content_route(route):
+        return output_tokens * output_multiplier
+    default_output_tokens: Final = min(DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK, _model_output_ceiling(model_info))
+    return max(output_tokens, min(output_tokens * output_multiplier, default_output_tokens))
+
+
+def _output_cost(held_output_tokens: int, output_tokens: int, output_rate: float) -> float:
     try:
-        return output_tokens * output_multiplier * output_rate
+        return held_output_tokens * output_rate
     except OverflowError:
         return output_tokens * output_rate
+
+
+def _model_output_ceiling(model_info: Mapping[str, object]) -> int:
+    return _to_int(model_info.get("max_output_tokens")) or DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
 
 
 def _is_input_only_route(route: str) -> bool:

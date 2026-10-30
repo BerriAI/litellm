@@ -196,8 +196,8 @@ GEMINI_SYSTEM_PARTS: Final = ("Answer tersely", "Use British spelling")
     (
         ({"generationConfig": {"maxOutputTokens": 5}}, {"max_tokens": 5}),
         ({"generationConfig": {"maxOutputTokens": 5, "candidateCount": 3}}, {"max_tokens": 5, "n": 3}),
-        ({"generation_config": {"max_output_tokens": 5, "candidate_count": 3}}, {"n": 3}),
-        ({"generationConfig": {"candidate_count": 3}}, {"n": 3}),
+        ({"generation_config": {"max_output_tokens": 5, "candidate_count": 3}}, {}),
+        ({"generationConfig": {"maxOutputTokens": 5, "candidate_count": 3}}, {"max_tokens": 5, "n": 3}),
         ({}, {}),
     ),
 )
@@ -340,14 +340,20 @@ def test_a_gemini_output_cap_of_zero_or_below_holds_the_default_output(cap: int)
 UNPRICEABLE_COUNTS: Final = (10**400, "9" * 400, 1e308, math.inf)
 
 
-@pytest.mark.parametrize("count", UNPRICEABLE_COUNTS)
-def test_a_candidate_count_too_large_to_price_holds_one_candidate(count: object) -> None:
-    one_candidate_hold: Final = _gemini_hold({"contents": [GEMINI_TEXT_CONTENT]})
-    assert one_candidate_hold is not None
-    assert (
-        _gemini_hold({"contents": [GEMINI_TEXT_CONTENT], "generationConfig": {"candidateCount": count}})
-        == one_candidate_hold
-    )
+@pytest.mark.parametrize(
+    ("generation_config", "same_hold_config"),
+    (
+        *(({"candidateCount": count}, {}) for count in (*UNPRICEABLE_COUNTS, 8)),
+        ({"maxOutputTokens": 8000, "candidateCount": 4}, {}),
+        ({"maxOutputTokens": 20000, "candidateCount": 2}, {"maxOutputTokens": 20000}),
+    ),
+)
+def test_candidates_hold_at_most_one_candidate_at_the_default_or_requested_output(
+    generation_config: dict[str, object], same_hold_config: dict[str, object]
+) -> None:
+    expected_hold: Final = _gemini_hold({"contents": [GEMINI_TEXT_CONTENT], "generationConfig": same_hold_config})
+    assert expected_hold is not None
+    assert _gemini_hold({"contents": [GEMINI_TEXT_CONTENT], "generationConfig": generation_config}) == expected_hold
 
 
 @pytest.mark.parametrize("count", UNPRICEABLE_COUNTS)
@@ -463,7 +469,6 @@ def test_an_n_is_held_when_a_fallback_or_an_allowlist_can_still_send_it(router: 
 
 
 HOLDS_FAR_OVER_A_TINY_BUDGET: Final = (
-    (GEMINI_ROUTE, {"contents": [GEMINI_TEXT_CONTENT], "generationConfig": {"candidateCount": 1e300}}),
     ("/v1/chat/completions", {**GEMINI_CHAT_BODY, "n": 1e300}),
 )
 
