@@ -5821,6 +5821,84 @@ def test_get_file_content_reports_a_missing_managed_file_as_a_404(
     assert response.json() == _missing_managed_file_error(file_id)
 
 
+@pytest.mark.parametrize(
+    ("method", "suffix", "expected_body"),
+    [
+        ("GET", "", {"id": _unified_managed_file_id(), "filename": "hello.txt"}),
+        ("GET", "/content", {"content": "hello from the managed file"}),
+        ("DELETE", "", {"id": _unified_managed_file_id(), "deleted": True}),
+    ],
+    ids=["retrieve", "content", "delete"],
+)
+@pytest.mark.parametrize(
+    ("routing_headers", "routing_query"),
+    [({"x-litellm-model": "gpt-3.5-turbo"}, ""), ({}, "?model=gpt-3.5-turbo")],
+    ids=["x-litellm-model header", "model query param"],
+)
+def test_managed_file_routes_ignore_a_model_routing_hint(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    llm_router: Router,
+    method: str,
+    suffix: str,
+    expected_body: dict[str, object],
+    routing_headers: dict[str, str],
+    routing_query: str,
+):
+    """A model named by the x-litellm-model header or ?model= routes a raw provider file id, so a managed
+    id sent with one still resolves through the managed files hook instead of reaching the provider as is."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+    from openai.types.file_deleted import FileDeleted
+
+    file_id: Final = _unified_managed_file_id()
+
+    async def _provider_without_the_managed_id(file_id: str, **kwargs: object) -> None:
+        raise litellm.NotFoundError(
+            message=f"No such File object: {file_id}", model="gpt-3.5-turbo", llm_provider="openai"
+        )
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
+    managed_files = mocker.MagicMock(spec=BaseFileEndpoints)
+    managed_files.afile_retrieve = mocker.AsyncMock(
+        return_value=OpenAIFileObject(
+            id=file_id,
+            object="file",
+            bytes=27,
+            created_at=1234567890,
+            filename="hello.txt",
+            purpose="user_data",
+            status="processed",
+        )
+    )
+    managed_files.afile_content = mocker.AsyncMock(
+        return_value=HttpxBinaryResponseContent(
+            response=httpx.Response(status_code=200, content=b"hello from the managed file")
+        )
+    )
+    managed_files.afile_delete = mocker.AsyncMock(return_value=FileDeleted(id=file_id, object="file", deleted=True))
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
+    for provider_call in ("afile_retrieve", "afile_content", "afile_delete"):
+        monkeypatch.setattr(litellm, provider_call, _provider_without_the_managed_id)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+
+    try:
+        response = client.request(
+            method,
+            f"/v1/files/{file_id}{suffix}{routing_query}",
+            headers={"Authorization": "Bearer test-key", **routing_headers},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    body: Final = {"content": response.text} if suffix == "/content" else response.json()
+    assert {key: body[key] for key in expected_body} == expected_body
+
+
 def _setup_managed_file_stored_in_an_unknown_storage_backend(
     mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
 ) -> None:

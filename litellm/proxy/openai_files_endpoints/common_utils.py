@@ -816,6 +816,9 @@ async def handle_model_based_routing(
     param or body field), so it is authorized against the caller's key, team, org and
     project grants before any deployment credentials are resolved.
 
+    A LiteLLM managed file id is never model-routed, since the managed files hook resolves
+    it to the provider file id of each deployment it lives on.
+
     Args:
         file_id: File ID (may contain embedded model info)
         request: FastAPI request object
@@ -835,6 +838,9 @@ async def handle_model_based_routing(
         HTTPException: If router unavailable or model not found
         ProxyException: If the caller is not allowed to use the model
     """
+    if is_base64_encoded_unified_file_id(file_id):
+        return False, None, None, None
+
     model_from_id, model_from_param = extract_model_from_sources(
         file_id=file_id,
         request=request,
