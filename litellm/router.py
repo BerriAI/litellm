@@ -1387,6 +1387,7 @@ class Router(DeprecatedRouterMembers):
                 messages=messages,
                 input=input,
                 specific_deployment=specific_deployment,
+                reserve=False,
             )
         if kind == "healthy":
             return await self._core_async_get_healthy_deployments(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selection cores return untyped deployment dicts
@@ -8063,6 +8064,7 @@ class Router(DeprecatedRouterMembers):
                 messages=[{"role": "user", "content": "batch-api-fake-text"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
+                reserve=False,
             )
 
             selected_deployment_id: Final = (deployment.get("model_info") or {}).get("id")
@@ -15695,6 +15697,7 @@ class Router(DeprecatedRouterMembers):
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
+        reserve: bool = True,
     ):
         """
         Async implementation of 'get_available_deployments'.
@@ -15708,6 +15711,7 @@ class Router(DeprecatedRouterMembers):
                 messages=messages,
                 input=input,
                 specific_deployment=specific_deployment,
+                reserve=reserve,
             )
 
     async def _async_get_available_deployment(
@@ -15717,6 +15721,7 @@ class Router(DeprecatedRouterMembers):
         messages: list[dict[str, str]] | None,
         input: str | list | None,
         specific_deployment: bool | None,
+        reserve: bool,
     ):
         if (
             self._core_routing_strategy != "usage-based-routing-v2"
@@ -15813,7 +15818,7 @@ class Router(DeprecatedRouterMembers):
                     messages=messages,
                     input=input,
                     request_kwargs=request_kwargs,
-                    reserve=request_kwargs not in (None, {}),
+                    reserve=reserve and request_kwargs not in (None, {}),
                 )
             if deployment is None:
                 exception: Final = await async_raise_no_deployment_exception(

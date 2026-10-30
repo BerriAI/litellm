@@ -12,6 +12,7 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import log_redis_failure
+from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
 
@@ -94,6 +95,12 @@ def _deployment_ref(kwargs: Mapping[str, object]) -> tuple[str, str] | None:
     if model_group is None or deployment_id is None:
         return None
     return model_group, str(deployment_id)
+
+
+def _counted_in_flight(kwargs: Mapping[str, object]) -> bool:
+    return kwargs.get("cache_hit") is not True and (
+        kwargs.get("api_call_start_time") is not None or LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL in kwargs
+    )
 
 
 def _reservation_key(request_count_key: str) -> str:
@@ -218,10 +225,7 @@ class LeastBusyLoggingHandler(CustomLogger):
     def log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
-        if kwargs.get("cache_hit") is True:
-            self._release_reservation(kwargs)
-        else:
-            self._increment(kwargs, -1)
+        self._settle(kwargs)
         if self.test_flag:
             self.logged_success += 1
 
@@ -229,7 +233,7 @@ class LeastBusyLoggingHandler(CustomLogger):
     def log_failure_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
-        self._increment(kwargs, -1)
+        self._settle(kwargs)
         if self.test_flag:
             self.logged_failure += 1
 
@@ -237,10 +241,7 @@ class LeastBusyLoggingHandler(CustomLogger):
     async def async_log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
-        if kwargs.get("cache_hit") is True:
-            self._release_reservation(kwargs)
-        else:
-            await self._async_increment(kwargs, -1)
+        await self._async_settle(kwargs)
         if self.test_flag:
             self.logged_success += 1
 
@@ -248,7 +249,7 @@ class LeastBusyLoggingHandler(CustomLogger):
     async def async_log_failure_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
-        await self._async_increment(kwargs, -1)
+        await self._async_settle(kwargs)
         if self.test_flag:
             self.logged_failure += 1
 
@@ -281,6 +282,18 @@ class LeastBusyLoggingHandler(CustomLogger):
             else:
                 return self._select(healthy_deployments, keys, self._at_least_this_workers(keys, shared), reserve)
         return self._select(healthy_deployments, keys, self._this_workers_counts(keys), reserve)
+
+    def _settle(self, kwargs: Mapping[str, object]) -> None:
+        if not _counted_in_flight(kwargs):
+            self._release_reservation(kwargs)
+            return
+        self._increment(kwargs, -1)
+
+    async def _async_settle(self, kwargs: Mapping[str, object]) -> None:
+        if not _counted_in_flight(kwargs):
+            self._release_reservation(kwargs)
+            return
+        await self._async_increment(kwargs, -1)
 
     def _this_workers_counts(self, keys: tuple[str, ...]) -> tuple[int, ...]:
         return _local_counts(self.router_cache.batch_get_cache(list(keys), local_only=True), keys)

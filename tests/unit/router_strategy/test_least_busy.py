@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import datetime
 import json
 import logging
 import threading
@@ -8,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 
 import httpx
+import openai
 import pytest
 import respx
 
@@ -17,6 +19,7 @@ from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY, InMemoryCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.router_strategy.least_busy import (
     IN_FLIGHT_COUNT_TTL_SECONDS,
@@ -31,8 +34,12 @@ DEPLOYMENT_B: Final[dict[str, object]] = {"model_info": {"id": "dep-b"}}
 HEALTHY: Final = [DEPLOYMENT_A, DEPLOYMENT_B]
 
 
-def _call_kwargs(deployment_id: str) -> dict[str, object]:
+def _routed_call_kwargs(deployment_id: str) -> dict[str, object]:
     return {"litellm_params": {"metadata": {"model_group": GROUP}, "model_info": {"id": deployment_id}}}
+
+
+def _call_kwargs(deployment_id: str) -> dict[str, object]:
+    return {**_routed_call_kwargs(deployment_id), "api_call_start_time": datetime.datetime.now()}
 
 
 class SharedRedisCounters:
@@ -136,7 +143,8 @@ def _routed_through_litellm_metadata(deployment_id: str) -> dict[str, object]:
             "metadata": {"tags": ["caller-tag"]},
             "litellm_metadata": {"model_group": GROUP},
             "model_info": {"id": deployment_id},
-        }
+        },
+        "api_call_start_time": datetime.datetime.now(),
     }
 
 
@@ -632,3 +640,89 @@ def test_a_cache_hit_leaves_requests_in_flight_on_its_deployment_counted() -> No
     worker.log_success_event({**_call_kwargs("dep-a"), "cache_hit": True}, None, None, None)
 
     assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+
+
+@pytest.mark.parametrize("outcome", [LeastBusyLoggingHandler.log_success_event, LeastBusyLoggingHandler.log_failure_event])
+def test_a_call_that_ends_before_reaching_the_provider_frees_its_pick(
+    outcome: Callable[[LeastBusyLoggingHandler, dict[str, object], None, None, None], None],
+) -> None:
+    worker: Final = _worker(None)
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+
+    outcome(worker, _routed_call_kwargs("dep-a"), None, None, None)
+
+    assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
+def test_a_call_the_proxy_rejected_after_logging_its_start_leaves_no_count_behind() -> None:
+    worker: Final = _worker(None)
+    rejected: Final = {**_routed_call_kwargs("dep-a"), LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL: True}
+
+    worker.log_pre_api_call(model="m", messages=[], kwargs=rejected)
+    worker.log_failure_event(rejected, None, None, None)
+
+    assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
+async def _drain_logging() -> None:
+    for _ in range(10):
+        await asyncio.sleep(0)
+        await GLOBAL_LOGGING_WORKER.flush()
+
+
+def _batch_deployment(route: respx.Route) -> str:
+    return route.calls.last.request.headers["authorization"].removeprefix("Bearer key-")
+
+
+_BATCH: Final = {
+    "id": "batch_least_busy",
+    "object": "batch",
+    "endpoint": "/v1/chat/completions",
+    "input_file_id": "file-least-busy",
+    "completion_window": "24h",
+    "status": "validating",
+    "created_at": 1,
+}
+_REJECTED_BATCH: Final = {"error": {"message": "Invalid input file", "type": "invalid_request_error"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_response", [httpx.Response(200, json=_BATCH), httpx.Response(400, json=_REJECTED_BATCH)])
+async def test_a_batch_create_does_not_keep_its_deployment_busy(
+    provider_response: httpx.Response, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/batches").mock(return_value=provider_response)
+    router: Final = _least_busy_router()
+
+    with contextlib.suppress(openai.BadRequestError):
+        await router.acreate_batch(
+            model=ROUTER_GROUP, completion_window="24h", endpoint="/v1/chat/completions", input_file_id="file-least-busy"
+        )
+    await _drain_logging()
+
+    assert _router_pick(router) == _batch_deployment(route)
+
+
+@pytest.mark.asyncio
+async def test_a_batch_cancel_does_not_keep_its_deployment_busy(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/batches/batch_least_busy/cancel").mock(
+        return_value=httpx.Response(200, json={**_BATCH, "status": "cancelling"})
+    )
+    router: Final = _least_busy_router()
+
+    await router.acancel_batch(model=ROUTER_GROUP, batch_id="batch_least_busy")
+
+    assert _router_pick(router) == _batch_deployment(route)
+
+
+@pytest.mark.asyncio
+async def test_picking_a_deployment_without_calling_it_does_not_keep_it_busy() -> None:
+    router: Final = _least_busy_router()
+
+    picked: Final = await router.select(ROUTER_GROUP, {"metadata": {}})
+
+    assert _router_pick(router) == picked["model_info"]["id"]
