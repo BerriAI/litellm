@@ -139,7 +139,13 @@ describe("key ownership", () => {
   });
 
   it("leaves the form's user_id alone for another_user", () => {
-    const expected = { key_alias: "my-key", user_id: "someone-else", duration: null, metadata: "{}" };
+    const expected = {
+      key_alias: "my-key",
+      user_id: "someone-else",
+      send_invite_email: true,
+      duration: null,
+      metadata: "{}",
+    };
     expect(
       payloadOf(build({ key_alias: "my-key", user_id: "someone-else" }, { keyOwner: "another_user" })),
     ).toStrictEqual(expected);
