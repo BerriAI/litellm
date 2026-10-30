@@ -38,6 +38,14 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.redis.stores.alert_daily_metrics import (
+    AlertDailyMetricsStore,
+    DeploymentMetric,
+    TransportAlertDailyMetricsStore,
+    metric_key,
+    metric_number,
+)
+from litellm.redis.transport.contract import RedisFailure
 from litellm.repositories.table_repositories import InvitationLinkRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
@@ -67,6 +75,8 @@ from .ms_teams import (
     get_ms_teams_webhook_url,
 )
 from .utils import process_slack_alerting_variables
+
+_CACHED_ALERT_VALUE: Final = TypeAdapter(object)
 
 if TYPE_CHECKING:
     from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
@@ -327,20 +337,14 @@ class SlackAlerting(CustomBatchLogger):
         try:
             ## FAILED REQUESTS ##
             if deployment_metrics.failed_request:
-                await self.internal_usage_cache.async_increment_cache(
-                    key=f"{deployment_metrics.id}:{SlackAlertingCacheKeys.failed_requests_key.value}",
-                    value=1,
-                    parent_otel_span=None,  # no attached request, this is a background operation
-                )
+                await self._add_daily_metric(DeploymentMetric(deployment_metrics.id, "failed_requests"), 1)
 
                 return_val += 1
 
             ## LATENCY ##
             if deployment_metrics.latency_per_output_token is not None:
-                await self.internal_usage_cache.async_increment_cache(
-                    key=f"{deployment_metrics.id}:{SlackAlertingCacheKeys.latency_key.value}",
-                    value=deployment_metrics.latency_per_output_token,
-                    parent_otel_span=None,  # no attached request, this is a background operation
+                await self._add_daily_metric(
+                    DeploymentMetric(deployment_metrics.id, "latency"), deployment_metrics.latency_per_output_token
                 )
 
                 return_val += 1
@@ -348,6 +352,56 @@ class SlackAlerting(CustomBatchLogger):
             return return_val
         except Exception:
             return 0
+
+    def _alert_cache_ttl(self, ttl: float | None = None, *, increment: bool = False) -> timedelta | None:
+        cache: Final = self.internal_usage_cache
+        redis: Final = cache.redis_cache
+        chosen: Final = ttl if ttl is not None or increment else cache.default_in_memory_ttl
+        seconds: Final = int(chosen) if chosen is not None else redis.default_ttl if redis is not None else None
+        return None if seconds is None else timedelta(seconds=seconds)
+
+    def _daily_metrics_store(self) -> AlertDailyMetricsStore | None:
+        redis: Final = self.internal_usage_cache.redis_cache
+        return None if redis is None else TransportAlertDailyMetricsStore(redis.transport())
+
+    async def _add_daily_metric(self, metric: DeploymentMetric, amount: float) -> None:
+        await self.internal_usage_cache.async_increment_cache(metric_key(metric), amount, local_only=True)
+        store: Final = self._daily_metrics_store()
+        if store is not None:
+            await store.add_deployment_metrics(metric, amount, ttl=self._alert_cache_ttl(increment=True))
+
+    async def _read_daily_metrics(self, metrics: tuple[DeploymentMetric, ...]) -> tuple[int | float | None, ...]:
+        cache: Final = self.internal_usage_cache
+        keys: Final = tuple(metric_key(metric) for metric in metrics)
+        local: Final = tuple(
+            [
+                metric_number(_CACHED_ALERT_VALUE.validate_python(await cache.async_get_cache(key, local_only=True)))
+                for key in keys
+            ]
+        )
+        store: Final = self._daily_metrics_store()
+        if store is None:
+            return local
+        reserved, previous = cache.reserve_redis_batch_reads(keys)
+        requested: Final = tuple(metric for metric in metrics if metric_key(metric) in reserved)
+        reply: Final = await store.read_deployment_metrics(requested)
+        if isinstance(reply, RedisFailure):
+            if reply.kind == "breaker_open":
+                cache.rollback_redis_batch_reads(previous)
+            return local
+        values: Final = dict(zip(reserved, reply))
+        for key, value in values.items():
+            if value is not None:
+                await cache.async_set_cache(key, value, local_only=True)
+        return tuple(metric_number(values.get(key, value)) for key, value in zip(keys, local))
+
+    async def _reset_daily_metrics(self, metrics: tuple[DeploymentMetric, ...]) -> None:
+        await self.internal_usage_cache.async_set_cache_pipeline(
+            tuple((metric_key(metric), 0) for metric in metrics), local_only=True
+        )
+        store: Final = self._daily_metrics_store()
+        if store is not None:
+            await store.reset_deployment_metrics(metrics, ttl=self._alert_cache_ttl())
 
     async def send_daily_reports(self, router: Router) -> bool:
         """
@@ -367,22 +421,9 @@ class SlackAlerting(CustomBatchLogger):
 
         ids: Final = router.registry().names(kind="ids")
 
-        # get keys
-        failed_request_keys: Final = [f"{id}:{SlackAlertingCacheKeys.failed_requests_key.value}" for id in ids]
-        latency_keys: Final = [f"{id}:{SlackAlertingCacheKeys.latency_key.value}" for id in ids]
-
-        combined_metrics_keys: Final = failed_request_keys + latency_keys  # reduce cache calls
-
-        combined_metrics_values: Final = await self.internal_usage_cache.async_batch_get_cache(
-            keys=combined_metrics_keys
-        )  # [1, 2, None, ..]
-
-        if combined_metrics_values is None:
-            return False
-
-        metric_values: Final[list[float | None]] = [
-            val if isinstance(val, (int, float)) else None for val in combined_metrics_values
-        ]
+        failed_metrics: Final = tuple(DeploymentMetric(id, "failed_requests") for id in ids)
+        latency_metrics: Final = tuple(DeploymentMetric(id, "latency") for id in ids)
+        metric_values: Final = await self._read_daily_metrics(failed_metrics + latency_metrics)
 
         all_none = True
         for val in metric_values:
@@ -393,8 +434,8 @@ class SlackAlerting(CustomBatchLogger):
         if all_none:
             return False
 
-        failed_request_values: Final = metric_values[: len(failed_request_keys)]  # # [1, 2, None, ..]
-        latency_values: Final = metric_values[len(failed_request_keys) :]
+        failed_request_values: Final = metric_values[: len(ids)]
+        latency_values: Final = metric_values[len(ids) :]
 
         # find top 5 failed
         ## Replace None values with a placeholder value (-1 in this case)
@@ -429,7 +470,7 @@ class SlackAlerting(CustomBatchLogger):
         if not top_5_failed:
             message += "\tNone\n"
         for i in range(len(top_5_failed)):
-            key = failed_request_keys[top_5_failed[i]].split(":")[0]
+            key = ids[top_5_failed[i]].split(":")[0]
             _deployment = router.registry().deployment_dict(key)
             if isinstance(_deployment, dict):
                 deployment_name = _deployment["litellm_params"].get("model", "")
@@ -451,7 +492,7 @@ class SlackAlerting(CustomBatchLogger):
         if not top_5_slowest:
             message += "\tNone\n"
         for i in range(len(top_5_slowest)):
-            key = latency_keys[top_5_slowest[i]].split(":")[0]
+            key = ids[top_5_slowest[i]].split(":")[0]
             _deployment = router.registry().deployment_dict(key)
             if _deployment is not None:
                 deployment_name = _deployment["litellm_params"].get("model", "")
@@ -465,10 +506,7 @@ class SlackAlerting(CustomBatchLogger):
             message += f"\t{i + 1}. Deployment: `{deployment_name}`, Latency per output token: `{value}s/token`,  API Base: `{api_base}`\n\n"
 
         # cache cleanup -> reset values to 0
-        latency_cache_keys: Final = [(key, 0) for key in latency_keys]
-        failed_request_cache_keys: Final = [(key, 0) for key in failed_request_keys]
-        combined_metrics_cache_keys: Final = latency_cache_keys + failed_request_cache_keys
-        await self.internal_usage_cache.async_set_cache_pipeline(cache_list=combined_metrics_cache_keys)
+        await self._reset_daily_metrics(latency_metrics + failed_metrics)
 
         message += f"\n\nNext Run is at: `{time.time() + self.alerting_args.daily_report_frequency}`s"
 

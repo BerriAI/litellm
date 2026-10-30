@@ -328,13 +328,16 @@ class DualCache(BaseCache):
         result: Final = in_memory_result if in_memory_result is not None else tuple(None for _ in key_list)
         return self._reserve_redis_batch_keys(time.time(), key_list, result)
 
-    def _rollback_redis_batch_key_reservations(self, previous_access_times: dict[str, float | None]) -> None:
+    def _rollback_redis_batch_key_reservations(self, previous_access_times: Mapping[str, float | None]) -> None:
         with self._last_redis_batch_access_time_lock:
             for key, previous_time in previous_access_times.items():
                 if previous_time is None:
                     self.last_redis_batch_access_time.pop(key, None)
                 else:
                     self.last_redis_batch_access_time[key] = previous_time
+
+    def rollback_redis_batch_reads(self, previous_access_times: Mapping[str, float | None]) -> None:
+        self._rollback_redis_batch_key_reservations(previous_access_times)
 
     async def _prepare_batch_get(
         self, keys: list[str], local_only: bool, throttle_redis: bool = True, **kwargs: object

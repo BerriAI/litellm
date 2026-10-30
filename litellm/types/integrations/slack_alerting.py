@@ -9,6 +9,7 @@ from typing import Any, Final, Literal, Optional, Union
 from pydantic import Field
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.redis.stores.alert_daily_metrics import FAILED_REQUESTS_SUFFIX, LATENCY_SUFFIX
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
@@ -155,8 +156,8 @@ class SlackAlertingCacheKeys(Enum):
     Enum for deployment daily metrics keys - {deployment_id}:{enum}
     """
 
-    failed_requests_key = "failed_requests_daily_metrics"
-    latency_key = "latency_daily_metrics"
+    failed_requests_key = FAILED_REQUESTS_SUFFIX
+    latency_key = LATENCY_SUFFIX
     report_sent_key = "daily_metrics_report_sent"
     deprecation_alert_sent_key = "model_deprecation_alert_sent"
 

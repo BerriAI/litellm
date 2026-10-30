@@ -9,6 +9,8 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import fakeredis
+import respx
 import pytest
 from openai import APIError
 from pydantic import TypeAdapter
@@ -27,6 +29,7 @@ from litellm.utils import get_api_base
 from datetime import timedelta
 from typing import Optional
 from litellm.proxy._types import WebhookEvent
+from tests._support.fake_redis import fake_redis_cache
 
 
 class TestSlackAlerting(unittest.TestCase):
@@ -801,50 +804,69 @@ async def test_daily_reports_unit_test(slack_alerting):
         mock_send_alert.assert_awaited_once()
 
 @pytest.mark.asyncio
-async def test_send_daily_reports_ignores_zero_values():
-    router = MagicMock()
-    router.registry.return_value.names.return_value = ["model1", "model2", "model3"]
-
-    slack_alerting = SlackAlerting(internal_usage_cache=MagicMock())
-    # model1:failed=None, model2:failed=0, model3:failed=10, model1:latency=0; model2:latency=0; model3:latency=None
-    slack_alerting.internal_usage_cache.async_batch_get_cache = AsyncMock(
-        return_value=[None, 0, 10, 0, 0, None]
+async def test_send_daily_reports_ignores_zero_values(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://slack.example/daily").respond(200, text="ok")
+    redis: Final = fake_redis_cache(fakeredis.FakeServer(), "daily")
+    await redis.async_set_cache_pipeline(
+        (
+            ("model2:failed_requests_daily_metrics", 0),
+            ("model3:failed_requests_daily_metrics", 10),
+            ("model1:latency_daily_metrics", 0),
+            ("model2:latency_daily_metrics", 0),
+        )
     )
-    slack_alerting.internal_usage_cache.async_set_cache_pipeline = AsyncMock()
+    slack_alerting: Final = SlackAlerting(
+        internal_usage_cache=DualCache(redis_cache=redis),
+        alerting=["slack"],
+        alert_types=[AlertType.daily_reports],
+        default_webhook_url="https://slack.example/daily",
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {"model": f"openai/{model}", "api_key": "unused"},
+                "model_info": {"id": model},
+            }
+            for model in ("model1", "model2", "model3")
+        ]
+    )
+    assert await slack_alerting.send_daily_reports(router) is True
+    await slack_alerting.flush_queue()
+    assert len(route.calls) == 1
+    message: Final = route.calls[0].request.content.decode()
+    assert "model3" in message
+    assert "model2" not in message
+    assert "model1" not in message
 
-    router.registry.return_value.deployment_dict.side_effect = lambda x: {"litellm_params": {"model": x}}
-
-    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
-        result = await slack_alerting.send_daily_reports(router)
-
-        # Check that the send_alert method was called
-        mock_send_alert.assert_called_once()
-        message = mock_send_alert.call_args[1]["message"]
-
-        # Ensure the message includes only the non-zero, non-None metrics
-        assert "model3" in message
-        assert "model2" not in message
-        assert "model1" not in message
-
-    assert result == True
 
 @pytest.mark.asyncio
-async def test_send_daily_reports_all_zero_or_none():
-    router = MagicMock()
-    router.registry.return_value.names.return_value = ["model1", "model2", "model3"]
-
-    slack_alerting = SlackAlerting(internal_usage_cache=MagicMock())
-    slack_alerting.internal_usage_cache.async_batch_get_cache = AsyncMock(
-        return_value=[None, 0, None, 0, None, 0]
+async def test_send_daily_reports_all_zero_or_none() -> None:
+    redis: Final = fake_redis_cache(fakeredis.FakeServer(), "daily")
+    await redis.async_set_cache_pipeline(
+        (
+            ("model2:failed_requests_daily_metrics", 0),
+            ("model1:latency_daily_metrics", 0),
+            ("model3:latency_daily_metrics", 0),
+        )
     )
+    slack_alerting: Final = SlackAlerting(internal_usage_cache=DualCache(redis_cache=redis), alerting=[])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {"model": f"openai/{model}", "api_key": "unused"},
+                "model_info": {"id": model},
+            }
+            for model in ("model1", "model2", "model3")
+        ]
+    )
+    assert await slack_alerting.send_daily_reports(router) is False
+    assert await redis.async_get_cache("model1:failed_requests_daily_metrics") is None
 
-    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
-        result = await slack_alerting.send_daily_reports(router)
-
-        # Check that the send_alert method was not called
-        mock_send_alert.assert_not_called()
-
-    assert result == False
 
 @pytest.mark.parametrize(
     "alerting_type",
