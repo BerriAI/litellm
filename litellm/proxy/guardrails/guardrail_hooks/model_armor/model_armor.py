@@ -1,7 +1,7 @@
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapping, Sequence
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Protocol, runtime_checkable
 
 import httpx
 from fastapi import HTTPException
@@ -172,6 +172,12 @@ def _redact_scanned_content(payload: object, depth: int = 0) -> object:
     if isinstance(payload, list):
         return [_redact_scanned_content(item, depth + 1) for item in payload]
     return payload
+
+
+class _ResponsesBodyScan(NamedTuple):
+    texts: tuple[str, ...]
+    positions: tuple[tuple[int, int], ...]
+    tool_calls: tuple[ChatCompletionToolCallChunk, ...]
 
 
 class ModelArmorGuardrail(CustomGuardrail, VertexBase):
@@ -540,13 +546,16 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             return self._has_deidentify_match(armor_response), None
         if sanitized_content == content:
             return False, None
-        if not isinstance(assembled_response, ModelResponse):
-            verbose_proxy_logger.warning(
-                "Model Armor: sanitized content cannot be re-emitted on this streaming endpoint, "
-                "blocking the response instead"
-            )
-            return True, None
-        return False, sanitized_content
+        if isinstance(assembled_response, ModelResponse) or (
+            isinstance(assembled_response, ResponsesAPIResponse)
+            and self._sole_text_position(assembled_response, content) is not None
+        ):
+            return False, sanitized_content
+        verbose_proxy_logger.warning(
+            "Model Armor: sanitized content cannot be re-emitted on this streaming endpoint, "
+            "blocking the response instead"
+        )
+        return True, None
 
     @staticmethod
     def _append_armor_response(existing: object, armor_response: object) -> object:
@@ -964,7 +973,9 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             if self.mask_response_content:
                 sanitized_content: Final = self._get_sanitized_content(armor_response)
                 if sanitized_content and sanitized_content != content:
-                    if isinstance(response, ResponsesAPIResponse):
+                    if isinstance(response, ResponsesAPIResponse) and not await self._apply_sanitized_responses_content(
+                        response, content, sanitized_content
+                    ):
                         raise HTTPException(
                             status_code=400,
                             detail=self._build_block_error_detail("Response blocked by Model Armor", armor_response),
@@ -1028,17 +1039,14 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         )
 
     @staticmethod
-    def _responses_api_response_text(response: ResponsesAPIResponse) -> str:
-        """Text to scan in a Responses API response, tool-call arguments included.
-
-        Tool calls are folded in because ``get_content_from_model_response`` folds them into what
-        the chat surface scans, and a Responses turn can carry its whole payload in them.
-        """
+    def _scan_responses_api_response(response: ResponsesAPIResponse) -> _ResponsesBodyScan:
+        """Texts of a Responses API response, where each one sits, and its tool calls."""
         from litellm.llms.openai.responses.guardrail_translation.handler import (
             OpenAIResponsesHandler,
         )
 
         texts: Final[list[str]] = []  # mutable-ok: the shared extractor below appends into caller-owned lists
+        positions: Final[list[tuple[int, int]]] = []  # mutable-ok: the same extractor's position sink
         tool_calls: Final[list[ChatCompletionToolCallChunk]] = []  # mutable-ok: the same extractor's tool-call sink
         handler: Final = OpenAIResponsesHandler()
         for output_idx, output_item in enumerate(response.output or ()):
@@ -1047,10 +1055,53 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 output_idx=output_idx,
                 texts_to_check=texts,
                 images_to_check=[],
-                task_mappings=[],
+                task_mappings=positions,
                 tool_calls_to_check=tool_calls,
             )
-        return "".join((*texts, *(json.dumps(tool_call) for tool_call in tool_calls)))
+        return _ResponsesBodyScan(texts=tuple(texts), positions=tuple(positions), tool_calls=tuple(tool_calls))
+
+    @staticmethod
+    def _responses_api_response_text(response: ResponsesAPIResponse) -> str:
+        """Text to scan in a Responses API response, tool-call arguments included.
+
+        Tool calls are folded in because ``get_content_from_model_response`` folds them into what
+        the chat surface scans, and a Responses turn can carry its whole payload in them.
+        """
+        scan: Final = ModelArmorGuardrail._scan_responses_api_response(response)
+        return "".join((*scan.texts, *(json.dumps(tool_call) for tool_call in scan.tool_calls)))
+
+    @staticmethod
+    def _sole_text_position(response: ResponsesAPIResponse, content: str) -> tuple[int, int] | None:
+        """Where one sanitized string can land: the part ``content`` came from, when that is one part.
+
+        A scan that also joined a second part, tool-call arguments or reasoning deltas comes back as
+        one string with no boundaries, so it has no single place to go.
+        """
+        scan: Final = ModelArmorGuardrail._scan_responses_api_response(response)
+        return scan.positions[0] if scan.texts == (content,) else None
+
+    async def _apply_sanitized_responses_content(
+        self,
+        response: ResponsesAPIResponse,
+        content: str,
+        sanitized_content: str,
+        stream_events: Sequence[object] = (),
+    ) -> bool:
+        """Write the sanitized text into the response and its buffered events, if it has one place to go."""
+        from litellm.llms.openai.responses.guardrail_translation.handler import (
+            OpenAIResponsesHandler,
+        )
+
+        position: Final = self._sole_text_position(response, content)
+        if position is None:
+            return False
+        await OpenAIResponsesHandler().deliver_text_rewrite(
+            response=response,
+            position=position,
+            rewritten_text=sanitized_content,
+            stream_events=stream_events,
+        )
+        return True
 
     def _extract_scannable_content(self, response: object) -> str:
         """Text to scan from a response, for every endpoint shape this hook serves."""
@@ -1262,6 +1313,11 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                         "Streaming response blocked by Model Armor",
                         armor_response,
                     ),
+                )
+
+            if sanitized_content is not None and isinstance(assembled_response, ResponsesAPIResponse):
+                await self._apply_sanitized_responses_content(
+                    assembled_response, content, sanitized_content, stream_events=all_chunks
                 )
 
             if sanitized_content is not None and isinstance(assembled_response, ModelResponse):

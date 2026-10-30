@@ -1439,6 +1439,22 @@ class OpenAIResponsesHandler(BaseTranslation):
             rewrites_by_position=MappingProxyType(dict(zip(placeable_positions, chain((rewritten_text,), repeat(""))))),
         )
 
+    async def deliver_text_rewrite(
+        self,
+        response: "ResponsesAPIResponse",
+        position: tuple[int, int],
+        rewritten_text: str,
+        stream_events: Sequence[object] = (),
+    ) -> None:
+        """Write one rewritten text into the response at ``position`` and into any buffered events
+        that spell out the same text, so a client reading deltas sees what the body says."""
+        await self._apply_guardrail_responses_to_output(
+            response=response, responses=[rewritten_text], task_mappings=[position]
+        )
+        self._sync_stream_events_with_rewrites(
+            stream_events=stream_events, rewrites_by_position=MappingProxyType({position: rewritten_text})
+        )
+
     @staticmethod
     def _write_event_field(event: object, field: str, value: object) -> None:
         if isinstance(event, dict):
