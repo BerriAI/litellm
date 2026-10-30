@@ -1,0 +1,166 @@
+suite: lens connection
+templates:
+  - gateway/deployment.yaml
+  - backend/deployment.yaml
+  - gateway/configmap.yaml
+  - ingress.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: connects the gateway to an external Lens
+    template: gateway/deployment.yaml
+    set:
+      lens.enabled: true
+      lens.url: http://lens.lens.svc:4318
+      lens.publicUrl: https://lens.example.com/lens-ingest
+      lens.gatewaySecret.name: lens-gateway
+      lens.serviceTokenSecret.name: lens-service
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_URL
+            value: http://lens.lens.svc:4318
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_PUBLIC_URL
+            value: https://lens.example.com/lens-ingest
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LENS_GATEWAY_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: lens-gateway
+                key: gateway-secret
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_SERVICE_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: lens-service
+                key: service-token
+
+  - it: connects the backend to an external Lens
+    template: backend/deployment.yaml
+    set:
+      lens.enabled: true
+      lens.url: http://lens.lens.svc:4318
+      lens.publicUrl: https://lens.example.com/lens-ingest
+      lens.gatewaySecret.name: lens-gateway
+      lens.serviceTokenSecret.name: lens-service
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_URL
+            value: http://lens.lens.svc:4318
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_PUBLIC_URL
+            value: https://lens.example.com/lens-ingest
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LENS_GATEWAY_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: lens-gateway
+                key: gateway-secret
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_SERVICE_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: lens-service
+                key: service-token
+
+  - it: requires lens.url when Lens is enabled
+    template: gateway/deployment.yaml
+    set:
+      lens.enabled: true
+      lens.publicUrl: https://lens.example.com/lens-ingest
+      lens.gatewaySecret.name: lens-gateway
+      lens.serviceTokenSecret.name: lens-service
+    asserts:
+      - failedTemplate:
+          errorMessage: lens.url is required when lens.enabled is true
+
+  - it: requires lens.publicUrl when Lens is enabled
+    template: gateway/deployment.yaml
+    set:
+      lens.enabled: true
+      lens.url: http://lens.lens.svc:4318
+      lens.gatewaySecret.name: lens-gateway
+      lens.serviceTokenSecret.name: lens-service
+    asserts:
+      - failedTemplate:
+          errorMessage: lens.publicUrl is required when lens.enabled is true
+
+  - it: requires lens.gatewaySecret.name when Lens is enabled
+    template: gateway/deployment.yaml
+    set:
+      lens.enabled: true
+      lens.url: http://lens.lens.svc:4318
+      lens.publicUrl: https://lens.example.com/lens-ingest
+      lens.serviceTokenSecret.name: lens-service
+    asserts:
+      - failedTemplate:
+          errorMessage: lens.gatewaySecret.name is required when lens.enabled is true
+
+  - it: requires lens.serviceTokenSecret.name when Lens is enabled
+    template: gateway/deployment.yaml
+    set:
+      lens.enabled: true
+      lens.url: http://lens.lens.svc:4318
+      lens.publicUrl: https://lens.example.com/lens-ingest
+      lens.gatewaySecret.name: lens-gateway
+    asserts:
+      - failedTemplate:
+          errorMessage: lens.serviceTokenSecret.name is required when lens.enabled is true
+
+  - it: routes /lens-ingest to the named Lens service on the single ingress host
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: litellm.example.com
+      lens.enabled: true
+      lens.url: http://lens.lens.svc:4318
+      lens.publicUrl: https://lens.example.com/lens-ingest
+      lens.gatewaySecret.name: lens-gateway
+      lens.serviceTokenSecret.name: lens-service
+      lens.service.name: existing-lens
+    asserts:
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /lens-ingest
+            pathType: Prefix
+            backend:
+              service:
+                name: existing-lens
+                port:
+                  number: 4318
+
+  - it: leaves /lens-ingest off the ingress without a Lens service name
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: litellm.example.com
+      lens.enabled: true
+      lens.url: http://lens.lens.svc:4318
+      lens.publicUrl: https://lens.example.com/lens-ingest
+      lens.gatewaySecret.name: lens-gateway
+      lens.serviceTokenSecret.name: lens-service
+    asserts:
+      - exists:
+          path: spec.rules[0].http.paths
+      - notContains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /lens-ingest
+          any: true
