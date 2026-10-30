@@ -1,9 +1,10 @@
 import asyncio
 import json
-from collections.abc import AsyncGenerator
-from typing import Final
+from collections.abc import AsyncGenerator, AsyncIterable, Mapping
+from typing import Final, cast
 
 import pytest
+from pydantic import TypeAdapter
 
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -11,6 +12,9 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.guardrails.native_mcp_stream import validate_native_mcp_stream
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.llms.openai import OutputItemAddedEvent
+
+_OBJECT: Final = TypeAdapter(dict[str, object])
+_BYTES: Final = TypeAdapter(tuple[bytes, ...])
 
 URL: Final = "https://mcp.example.com/github"
 
@@ -66,7 +70,7 @@ async def test_stream_reassembles_sse_without_changing_allowed_payload(newline: 
     wire: Final = first + arguments
     source: Final = chunks(wire[:3], wire[3:37], wire[37:-1], wire[-1:])
     result: Final = [item async for item in validate_native_mcp_stream(source, caller(), body())]
-    assert b"".join(result) == wire
+    assert b"".join(_BYTES.validate_python(tuple(result), strict=True)) == wire
 
 
 @pytest.mark.asyncio
@@ -92,7 +96,7 @@ async def test_text_is_released_before_upstream_finishes_and_denial_closes_upstr
 
 @pytest.mark.asyncio
 async def test_anthropic_stream_checks_server_and_tool_before_content_block() -> None:
-    event: Final = {
+    event: Final[dict[str, object]] = {
         "type": "content_block_start",
         "index": 0,
         "content_block": {
@@ -170,7 +174,7 @@ async def test_messages_pipeline_emits_endpoint_error_instead_of_denied_tool_eve
     from openai._streaming import SSEDecoder
 
     logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
-    event: Final = {
+    event: Final[dict[str, object]] = {
         "type": "content_block_start",
         "index": 0,
         "content_block": {
@@ -181,23 +185,26 @@ async def test_messages_pipeline_emits_endpoint_error_instead_of_denied_tool_eve
             "input": {},
         },
     }
-    stream: Final = ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+    stream: Final = ProxyBaseLLMRequestProcessing.async_sse_data_generator(  # pyright: ignore[reportUnknownMemberType]  # legacy endpoint declares an unparameterized request dict
         response=chunks(sse(event)), user_api_key_dict=caller(), request_data=body(), proxy_logging_obj=logging
     )
     wire: Final = "".join([item async for item in stream]).encode()
     events: Final = tuple(SSEDecoder().iter_bytes(iter((wire,))))
     assert len(events) == 1
-    payload: Final = json.loads(events[0].data)
+    payload: Final = _OBJECT.validate_json(events[0].data)
     assert payload["type"] == "error"
-    assert payload["error"]["type"] == "invalid_request_error"
-    assert "delete_repo" in payload["error"]["message"]
+    error: Final = _OBJECT.validate_python(payload["error"])
+    assert error["type"] == "invalid_request_error"
+    assert "delete_repo" in str(error["message"])
 
 
 @pytest.mark.asyncio
 async def test_responses_pipeline_emits_failed_response_instead_of_denied_tool() -> None:
     from openai._streaming import SSEDecoder
 
-    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.proxy_server import (
+        async_data_generator,  # pyright: ignore[reportUnknownVariableType]  # legacy endpoint declares untyped response parameters
+    )
 
     stream: Final = async_data_generator(
         response=chunks(call_event("delete_repo")),
@@ -205,17 +212,18 @@ async def test_responses_pipeline_emits_failed_response_instead_of_denied_tool()
         request_data=body(),
         responses_stream_errors=True,
     )
-    wire: Final = "".join([item async for item in stream]).encode()
+    wire: Final = b"".join([item.encode() if isinstance(item, str) else item async for item in stream])
     events: Final = tuple(SSEDecoder().iter_bytes(iter((wire,))))
     assert len(events) == 2
-    payload: Final = json.loads(events[0].data)
+    payload: Final = _OBJECT.validate_json(events[0].data)
     assert payload["type"] == "response.failed"
-    assert payload["response"]["output"] == []
-    assert "delete_repo" in payload["response"]["error"]["message"]
+    failed_response: Final = _OBJECT.validate_python(payload["response"])
+    assert failed_response["output"] == []
+    assert "delete_repo" in str(_OBJECT.validate_python(failed_response["error"])["message"])
     assert events[1].data == "[DONE]"
 
 
-def translated_chunk(*calls: dict[str, object], results: tuple[dict[str, object], ...] = ()) -> dict[str, object]:
+def translated_chunk(*calls: Mapping[str, object], results: tuple[Mapping[str, object], ...] = ()) -> dict[str, object]:
     return {"choices": [{"delta": {"provider_specific_fields": {"mcp_tool_uses": calls, "tool_results": results}}}]}
 
 
@@ -244,3 +252,98 @@ async def test_translated_result_without_call_identity_is_never_released() -> No
     stream: Final = validate_native_mcp_stream(chunks(translated_chunk(results=(result,))), caller(), body())
     with pytest.raises(ProxyException, match="unvalidated tool calls"):
         await anext(stream)
+
+
+@pytest.mark.asyncio
+async def test_configured_attachment_context_is_used_for_streamed_response() -> None:
+    from litellm.proxy.auth.native_mcp_policy import native_mcp_deployment_validator
+
+    validate: Final = native_mcp_deployment_validator(caller())
+    assert validate is not None
+    source: Final = validate(body())(chunks(call_event("search_code")))
+    assert isinstance(source, AsyncIterable)
+    assert [event async for event in validate_native_mcp_stream(cast(AsyncIterable[object], source), caller(), {})] == [
+        call_event("search_code")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fallback_cannot_reuse_previous_attempt_call_identity() -> None:
+    from litellm.proxy.auth.native_mcp_policy import native_mcp_deployment_validator
+
+    validate: Final = native_mcp_deployment_validator(caller())
+    assert validate is not None
+    first_binding: Final = validate(body())
+    second_binding: Final = validate(body())
+    first: Final = first_binding(call_event("search_code"))
+    orphan: Final = second_binding({"type": "response.mcp_call_arguments.delta", "item_id": "call-1", "delta": "{}"})
+    stream: Final = validate_native_mcp_stream(chunks(first, orphan), caller(), body())
+    assert await anext(stream) is first
+    with pytest.raises(ProxyException, match="unvalidated tool calls"):
+        await anext(stream)
+
+
+@pytest.mark.asyncio
+async def test_unresolved_stream_identity_has_a_bounded_pending_queue() -> None:
+    pending: Final = {"type": "response.mcp_call.in_progress", "item_id": "unknown"}
+    with pytest.raises(ProxyException, match="buffer limit"):
+        await anext(validate_native_mcp_stream(chunks(*(pending for _ in range(1025))), caller(), body()))
+
+
+@pytest.mark.asyncio
+async def test_validation_precedes_buffering_callback_across_raw_stream_fallback() -> None:
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy.auth.native_mcp_policy import native_mcp_deployment_validator
+
+    class BufferingCallback(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(  # pyright: ignore[reportIncompatibleMethodOverride]  # legacy base return type only describes Chat chunks, this hook also handles native SSE
+            self, user_api_key_dict: UserAPIKeyAuth, response: AsyncIterable[object], request_data: dict[str, object]
+        ) -> AsyncGenerator[object, None]:
+            buffered: Final = tuple([chunk async for chunk in response])
+            for chunk in buffered:
+                yield chunk
+
+    identity: Final = UserAPIKeyAuth(
+        metadata={
+            "native_mcp_policy": {
+                "mcp_servers": [
+                    {"name": "github", "url": URL, "tools": ["search_code"]},
+                    {"name": "github", "url": URL + "/fallback", "tools": ["get_file"]},
+                ]
+            }
+        }
+    )
+    validate: Final = native_mcp_deployment_validator(identity)
+    assert validate is not None
+    first: Final = validate(body())
+    fallback: Final = validate(
+        {
+            "tools": [
+                {
+                    "type": "mcp",
+                    "server_label": "github",
+                    "server_url": URL + "/fallback",
+                    "allowed_tools": ["get_file"],
+                }
+            ]
+        }
+    )
+    events: Final = (sse(call_event("search_code")), sse(call_event("get_file")))
+
+    async def switching_source() -> AsyncGenerator[object, None]:
+        yield events[0]
+        fallback(source)
+        yield events[1]
+
+    source: Final = first(switching_source())
+    assert isinstance(source, AsyncIterable)
+    litellm.callbacks = [BufferingCallback()]
+    logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    result: Final = [
+        chunk
+        async for chunk in logging.async_post_call_streaming_iterator_hook(
+            response=cast(AsyncIterable[object], source), user_api_key_dict=identity, request_data={}
+        )
+    ]
+    assert result == list(events)

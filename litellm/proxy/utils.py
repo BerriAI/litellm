@@ -4569,6 +4569,10 @@ class ProxyLogging:
         from litellm.proxy.guardrails.native_mcp_stream import validate_native_mcp_stream
 
         native_mcp_active: Final = resolve_native_mcp_policy(user_api_key_dict) is not None
+        native_stream: Final = (
+            validate_native_mcp_stream(response, user_api_key_dict, request_data) if native_mcp_active else None
+        )
+        checked_response: Final = native_stream if native_stream is not None else response
         caps: Final = ProxyLogging.callback_capabilities()
         post_call_pipelines: Final = _streamable_post_call_pipelines(request_data, user_api_key_dict)
         # Fast path: no real overrides. Internal proxy CustomLogger callbacks
@@ -4577,9 +4581,6 @@ class ProxyLogging:
         # through each of them adds N pass-through trampolines per chunk for
         # zero behavior change. Skip the chain entirely and stream through.
         if not caps.iterator_overrides and not post_call_pipelines:
-            checked_response: Final = (
-                validate_native_mcp_stream(response, user_api_key_dict, request_data) if native_mcp_active else response
-            )
             try:
                 async for chunk in checked_response:
                     yield chunk
@@ -4602,11 +4603,11 @@ class ProxyLogging:
         # Merge model-level guardrails before checking which guardrails to run
         request_data = check_and_merge_model_level_guardrails(data=request_data, llm_router=llm_router)
 
-        current_response = response
+        current_response = checked_response
         stream_needs_translation: Final = ProxyLogging._stream_requires_guardrail_translation(user_api_key_dict)
 
         pipeline_gated_names: Final = _pipeline_step_guardrail_names(post_call_pipelines)
-        guarded_layers: Final[list[AsyncGenerator[object, None]]] = []  # mutable-ok: closed on disconnect
+        guarded_layers: Final[list[AsyncGenerator[object, None]]] = [native_stream] if native_stream is not None else []  # mutable-ok: closed on disconnect
         for resolved_callback, kind in caps.iterator_overrides:
             if isinstance(resolved_callback, CustomGuardrail):
                 if resolved_callback.guardrail_name in pipeline_gated_names:
@@ -4669,16 +4670,9 @@ class ProxyLogging:
             )
             guarded_layers.append(current_response)
 
-        native_stream: Final = (
-            validate_native_mcp_stream(current_response, user_api_key_dict, request_data) if native_mcp_active else None
-        )
-        validated_response: Final = native_stream if native_stream is not None else current_response
-        if native_stream is not None:
-            guarded_layers.append(native_stream)
-
         served_chunks: Final[list[object]] = []  # mutable-ok: accumulates while yielding to the client
         try:
-            async for chunk in validated_response:
+            async for chunk in current_response:
                 served_chunks.append(chunk)
                 yield chunk
         except (GeneratorExit, asyncio.CancelledError):

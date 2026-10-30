@@ -1,11 +1,14 @@
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from itertools import count
+from threading import Event
 from typing import Final, Literal
 
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value
 from integration._support.wire import Reply, Request, wire_server
+from openai._streaming import SSEDecoder
 from pydantic import JsonValue
 
 Surface = Literal["responses", "messages", "chat/completions"]
@@ -13,23 +16,11 @@ URL: Final = "https://mcp.example.com/github"
 
 
 def _policy(tools: JsonValue = None, url: str = URL) -> dict[str, JsonValue]:
-    return {
-        "mcp_servers": [
-            {
-                "name": "github",
-                "url": url,
-                "tools": ["search_code"] if tools is None else tools,
-            }
-        ]
-    }
+    return {"mcp_servers": [{"name": "github", "url": url, "tools": ["search_code"] if tools is None else tools}]}
 
 
 def _request(
-    surface: Surface,
-    model: str,
-    names: JsonValue = None,
-    url: str = URL,
-    bounded: bool = True,
+    surface: Surface, model: str, names: JsonValue = None, url: str = URL, bounded: bool = True
 ) -> dict[str, JsonValue]:
     scope: Final[JsonValue] = ["search_code"] if names is None else names
     if surface == "messages":
@@ -93,13 +84,7 @@ def _response(surface: Surface, tool: str | None = None) -> dict[str, JsonValue]
         }
     if surface == "messages":
         block: Final[JsonValue] = (
-            {
-                "type": "mcp_tool_use",
-                "id": "mcp_call_1",
-                "server_name": "github",
-                "name": tool,
-                "input": {},
-            }
+            {"type": "mcp_tool_use", "id": "mcp_call_1", "server_name": "github", "name": tool, "input": {}}
             if tool is not None
             else {"type": "text", "text": "found"}
         )
@@ -118,13 +103,7 @@ def _response(surface: Surface, tool: str | None = None) -> dict[str, JsonValue]
         "object": "chat.completion",
         "created": 1,
         "model": "gpt-4o-mini",
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": "found"},
-                "finish_reason": "stop",
-            }
-        ],
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "found"}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
     }
 
@@ -139,15 +118,8 @@ def _reply(surface: Surface, request: Request, tool: str | None = None) -> Reply
         output: Final = payload["output"]
         assert isinstance(output, list)
         events: Final[tuple[Mapping[str, JsonValue], ...]] = (
-            {
-                "type": "response.created",
-                "response": {**payload, "status": "in_progress", "output": []},
-            },
-            {
-                "type": "response.output_item.added",
-                "output_index": 0,
-                "item": output[0],
-            },
+            {"type": "response.created", "response": {**payload, "status": "in_progress", "output": []}},
+            {"type": "response.output_item.added", "output_index": 0, "item": output[0]},
             {"type": "response.output_item.done", "output_index": 0, "item": output[0]},
             {"type": "response.completed", "response": payload},
         )
@@ -161,10 +133,7 @@ def _reply(surface: Surface, request: Request, tool: str | None = None) -> Reply
     content: Final = payload["content"]
     assert isinstance(content, list)
     frames: Final[tuple[Mapping[str, JsonValue], ...]] = (
-        {
-            "type": "message_start",
-            "message": {**payload, "content": [], "stop_reason": None},
-        },
+        {"type": "message_start", "message": {**payload, "content": [], "stop_reason": None}},
         {"type": "content_block_start", "index": 0, "content_block": content[0]},
         {"type": "content_block_stop", "index": 0},
         {
@@ -187,19 +156,12 @@ def _provider(surface: Surface) -> str:
 @pytest.mark.parametrize("surface", ("responses", "messages", "chat/completions"))
 @pytest.mark.parametrize("case", ("tool", "url", "unbounded", "empty"))
 def test_native_mcp_request_denial_never_reaches_provider(gateway: Gateway, surface: Surface, case: str) -> None:
-    with (
-        wire_server(lambda request: _reply(surface, request)) as wire,
-        gateway.scenario() as scenario,
-    ):
+    with wire_server(lambda request: _reply(surface, request)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=_provider(surface), api_base=wire.url)
         key: Final = scenario.key(native_mcp_policy={} if case == "empty" else _policy())
         offered: Final[JsonValue] = ["delete_repo"] if case == "tool" else ["search_code"]
         body: Final = _request(
-            surface,
-            model,
-            offered,
-            URL + "/spoofed" if case == "url" else URL,
-            bounded=case != "unbounded",
+            surface, model, offered, URL + "/spoofed" if case == "url" else URL, bounded=case != "unbounded"
         )
         denied: Final = gateway.request("POST", f"/v1/{surface}", body, key=key)
         assert denied.status_code == 400, denied.text
@@ -211,26 +173,17 @@ def test_native_mcp_request_denial_never_reaches_provider(gateway: Gateway, surf
 def test_native_mcp_union_allows_both_grants_and_absent_policy_preserves_behavior(
     gateway: Gateway, surface: Surface
 ) -> None:
-    with (
-        wire_server(lambda request: _reply(surface, request)) as wire,
-        gateway.scenario() as scenario,
-    ):
+    with wire_server(lambda request: _reply(surface, request)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=_provider(surface), api_base=wire.url)
         team: Final = scenario.team(native_mcp_policy=_policy())
         key: Final = scenario.key(team_id=team, native_mcp_policy=_policy(["get_file"]))
         allowed: Final = gateway.request(
-            "POST",
-            f"/v1/{surface}",
-            _request(surface, model, ["search_code", "get_file"]),
-            key=key,
+            "POST", f"/v1/{surface}", _request(surface, model, ["search_code", "get_file"]), key=key
         )
         assert allowed.status_code == 200, allowed.text
         unrestricted: Final = scenario.key()
         unchanged: Final = gateway.request(
-            "POST",
-            f"/v1/{surface}",
-            _request(surface, model, ["delete_repo"]),
-            key=unrestricted,
+            "POST", f"/v1/{surface}", _request(surface, model, ["delete_repo"]), key=unrestricted
         )
         assert unchanged.status_code == 200, unchanged.text
         sent: Final = wire.drain()
@@ -239,56 +192,33 @@ def test_native_mcp_union_allows_both_grants_and_absent_policy_preserves_behavio
         assert "delete_repo" in sent[1].body.decode()
 
 
-def test_native_mcp_empty_policy_rejects_tools_supplied_by_model_configuration(
-    gateway: Gateway,
-) -> None:
-    with (
-        wire_server(lambda request: _reply("responses", request)) as wire,
-        gateway.scenario() as scenario,
-    ):
+def test_native_mcp_empty_policy_rejects_tools_supplied_by_model_configuration(gateway: Gateway) -> None:
+    with wire_server(lambda request: _reply("responses", request)) as wire, gateway.scenario() as scenario:
         attachment: Final = _request("responses", "unused", ["delete_repo"])["tools"]
         model: Final = scenario.model(model=_provider("responses"), api_base=wire.url, tools=attachment)
         key: Final = scenario.key(native_mcp_policy={})
         response: Final = gateway.request(
-            "POST",
-            "/v1/responses",
-            {"model": model, "input": "Use the configured tools"},
-            key=key,
+            "POST", "/v1/responses", {"model": model, "input": "Use the configured tools"}, key=key
         )
         sent: Final = wire.drain()
-        assert response.status_code == 400, (
-            response.text,
-            tuple(request.body.decode() for request in sent),
-        )
+        assert response.status_code == 400, (response.text, tuple(request.body.decode() for request in sent))
         assert sent == ()
 
 
-def test_native_mcp_empty_policy_preserves_ordinary_function_tools(
-    gateway: Gateway,
-) -> None:
-    with (
-        wire_server(lambda request: _reply("chat/completions", request)) as wire,
-        gateway.scenario() as scenario,
-    ):
+def test_native_mcp_empty_policy_preserves_ordinary_function_tools(gateway: Gateway) -> None:
+    with wire_server(lambda request: _reply("chat/completions", request)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(api_base=wire.url)
         key: Final = scenario.key(native_mcp_policy={})
         tools: Final[JsonValue] = [
             {
                 "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "parameters": {"type": "object", "properties": {}},
-                },
+                "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
             }
         ]
         response: Final = gateway.request(
             "POST",
             "/v1/chat/completions",
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": "Check the weather"}],
-                "tools": tools,
-            },
+            {"model": model, "messages": [{"role": "user", "content": "Check the weather"}], "tools": tools},
             key=key,
         )
         assert response.status_code == 200, response.text
@@ -299,10 +229,7 @@ def test_native_mcp_empty_policy_preserves_ordinary_function_tools(
 
 @pytest.mark.parametrize("surface", ("responses", "messages", "chat/completions"))
 def test_native_mcp_whole_server_grant_allows_unbounded_attachment(gateway: Gateway, surface: Surface) -> None:
-    with (
-        wire_server(lambda request: _reply(surface, request)) as wire,
-        gateway.scenario() as scenario,
-    ):
+    with wire_server(lambda request: _reply(surface, request)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=_provider(surface), api_base=wire.url)
         key: Final = scenario.key(native_mcp_policy=_policy("*"))
         response: Final = gateway.request("POST", f"/v1/{surface}", _request(surface, model, bounded=False), key=key)
@@ -311,10 +238,7 @@ def test_native_mcp_whole_server_grant_allows_unbounded_attachment(gateway: Gate
 
 
 def test_native_mcp_policy_revocation_reaches_a_warmed_peer(gateway: Gateway, peer: Gateway) -> None:
-    with (
-        wire_server(lambda request: _reply("responses", request)) as wire,
-        gateway.scenario() as scenario,
-    ):
+    with wire_server(lambda request: _reply("responses", request)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(api_base=wire.url)
         key: Final = scenario.key(native_mcp_policy=_policy())
         body: Final = _request("responses", model)
@@ -327,8 +251,7 @@ def test_native_mcp_policy_revocation_reaches_a_warmed_peer(gateway: Gateway, pe
         assert warmed.status_code == 200, warmed.text
         gateway.post("/key/update", {"key": key, "native_mcp_policy": {}})
         refused: Final = eventually(
-            lambda: peer.request("POST", "/v1/responses", body, key=key),
-            lambda response: response.status_code == 400,
+            lambda: peer.request("POST", "/v1/responses", body, key=key), lambda response: response.status_code == 400
         )
         assert "tool_access_denied" in refused.text
         wire.drain()
@@ -336,13 +259,8 @@ def test_native_mcp_policy_revocation_reaches_a_warmed_peer(gateway: Gateway, pe
         assert wire.drain() == ()
 
 
-def test_native_mcp_modern_toolset_honors_default_off_and_explicit_grants(
-    gateway: Gateway,
-) -> None:
-    with (
-        wire_server(lambda request: _reply("messages", request)) as wire,
-        gateway.scenario() as scenario,
-    ):
+def test_native_mcp_modern_toolset_honors_default_off_and_explicit_grants(gateway: Gateway) -> None:
+    with wire_server(lambda request: _reply("messages", request)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=_provider("messages"), api_base=wire.url)
         key: Final = scenario.key(native_mcp_policy=_policy())
         body: Final[dict[str, JsonValue]] = {
@@ -352,10 +270,7 @@ def test_native_mcp_modern_toolset_honors_default_off_and_explicit_grants(
                     "type": "mcp_toolset",
                     "mcp_server_name": "github",
                     "default_config": {"enabled": False},
-                    "configs": {
-                        "search_code": {"enabled": True},
-                        "delete_repo": {"enabled": False},
-                    },
+                    "configs": {"search_code": {"enabled": True}, "delete_repo": {"enabled": False}},
                 }
             ],
         }
@@ -366,9 +281,7 @@ def test_native_mcp_modern_toolset_honors_default_off_and_explicit_grants(
         assert JSON_OBJECT.validate_json(sent[0].body)["tools"] == body["tools"]
 
 
-def test_native_mcp_response_checks_anthropic_tool_through_chat_translation(
-    gateway: Gateway,
-) -> None:
+def test_native_mcp_response_checks_anthropic_tool_through_chat_translation(gateway: Gateway) -> None:
     with (
         wire_server(lambda request: _reply("messages", request, "delete_repo")) as wire,
         gateway.scenario() as scenario,
@@ -385,10 +298,7 @@ def test_native_mcp_response_checks_anthropic_tool_through_chat_translation(
 @pytest.mark.parametrize("surface", ("responses", "messages"))
 @pytest.mark.parametrize("tool", ("search_code", "delete_repo"))
 def test_native_mcp_response_checks_returned_tool(gateway: Gateway, surface: Surface, tool: str) -> None:
-    with (
-        wire_server(lambda request: _reply(surface, request, tool)) as wire,
-        gateway.scenario() as scenario,
-    ):
+    with wire_server(lambda request: _reply(surface, request, tool)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=_provider(surface), api_base=wire.url)
         key: Final = scenario.key(native_mcp_policy=_policy())
         response: Final = gateway.request("POST", f"/v1/{surface}", _request(surface, model), key=key)
@@ -418,14 +328,80 @@ def test_native_mcp_allowed_response_remains_retrievable(gateway: Gateway) -> No
 
 
 @pytest.mark.parametrize("surface", ("responses", "messages"))
-@pytest.mark.parametrize("stream", (False,), ids=("json",))
+@pytest.mark.parametrize("tool", ("search_code", "delete_repo"))
+def test_native_mcp_stream_withholds_ungranted_tool_event(gateway: Gateway, surface: Surface, tool: str) -> None:
+    with wire_server(lambda request: _reply(surface, request, tool)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_provider(surface), api_base=wire.url)
+        key: Final = scenario.key(native_mcp_policy=_policy())
+        response: Final = gateway.request(
+            "POST", f"/v1/{surface}", {**_request(surface, model), "stream": True}, key=key
+        )
+        assert len(wire.drain()) == 1
+        if surface == "messages" and tool == "delete_repo" and response.status_code == 400:
+            error: Final = object_value(JSON_OBJECT.validate_json(response.content)["error"])
+            assert error["type"] == "invalid_request_error"
+            assert tool in str(error["message"])
+            return
+        assert response.status_code == 200, response.text
+        events: Final = tuple(
+            JSON_OBJECT.validate_json(event.data)
+            for event in SSEDecoder().iter_bytes(iter((response.content,)))
+            if event.data and event.data != "[DONE]"
+        )
+        tool_events: Final = tuple(
+            event for event in events if event.get("type") in ("response.output_item.added", "content_block_start")
+        )
+        if tool == "search_code":
+            assert any(tool in json.dumps(event) for event in tool_events), events
+            assert events[-1]["type"] == ("response.completed" if surface == "responses" else "message_stop")
+        else:
+            assert tool_events == (), events
+            assert events[-1]["type"] == ("response.failed" if surface == "responses" else "error"), events
+            assert "blocks tool(s): delete_repo" in json.dumps(events[-1]), events
+
+
+@pytest.mark.parametrize("surface", ("responses", "messages"))
+def test_native_mcp_stream_releases_valid_prefix_before_upstream_completes(gateway: Gateway, surface: Surface) -> None:
+    release: Final = Event()
+
+    def upstream(request: Request) -> Reply:
+        reply: Final = _reply(surface, request, "search_code")
+        assert reply.chunks is not None
+        return replace(reply, chunks=(b"".join(reply.chunks[:-1]), reply.chunks[-1]), gate_after_first=release)
+
+    with (
+        wire_server(upstream) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model=_provider(surface), api_base=wire.url)
+        key: Final = scenario.key(native_mcp_policy=_policy())
+        try:
+            with gateway.client.stream(
+                "POST",
+                f"/v1/{surface}",
+                json={**_request(surface, model), "stream": True},
+                headers={"Authorization": f"Bearer {key}"},
+                timeout=5,
+            ) as response:
+                assert response.status_code == 200
+                lines: Final = response.iter_lines()
+                first: Final = next(lines)
+                assert first.startswith("event:") or first.startswith("data:"), first
+                assert not release.is_set()
+                release.set()
+                remaining: Final = "\n".join(lines)
+                assert "search_code" in remaining
+                assert "response.completed" in remaining if surface == "responses" else "message_stop" in remaining
+        finally:
+            release.set()
+
+
+@pytest.mark.parametrize("surface", ("responses", "messages"))
+@pytest.mark.parametrize("stream", (False, True), ids=("json", "stream"))
 def test_native_mcp_configured_grant_binds_returned_tools(gateway: Gateway, surface: Surface, stream: bool) -> None:
     field: Final = "mcp_servers" if surface == "messages" else "tools"
     configured: Final = _request(surface, "unused")[field]
-    with (
-        wire_server(lambda request: _reply(surface, request, "search_code")) as wire,
-        gateway.scenario() as scenario,
-    ):
+    with wire_server(lambda request: _reply(surface, request, "search_code")) as wire, gateway.scenario() as scenario:
         model: Final = (
             scenario.model(model=_provider(surface), api_base=wire.url, mcp_servers=configured)
             if surface == "messages"
@@ -449,10 +425,7 @@ def test_native_mcp_retry_preserves_request_binding(gateway: Gateway) -> None:
 
     def upstream(request: Request) -> Reply:
         if next(attempts) == 0:
-            return Reply(
-                status=429,
-                body=b'{"error":{"message":"retry control","type":"rate_limit_error"}}',
-            )
+            return Reply(status=429, body=b'{"error":{"message":"retry control","type":"rate_limit_error"}}')
         return _reply("responses", request, "search_code")
 
     with wire_server(upstream) as wire, gateway.scenario() as scenario:
@@ -471,10 +444,7 @@ def test_native_mcp_retry_preserves_request_binding(gateway: Gateway) -> None:
 def test_native_mcp_fallback_checks_its_configured_tools(gateway: Gateway, granted: bool) -> None:
     def upstream(request: Request) -> Reply:
         if request.target.startswith("/primary/"):
-            return Reply(
-                status=503,
-                body=b'{"error":{"message":"fallback control","type":"server_error"}}',
-            )
+            return Reply(status=503, body=b'{"error":{"message":"fallback control","type":"server_error"}}')
         return _reply("responses", request, "search_code")
 
     with wire_server(upstream) as wire, gateway.scenario() as scenario:
@@ -485,11 +455,7 @@ def test_native_mcp_fallback_checks_its_configured_tools(gateway: Gateway, grant
         response: Final = gateway.request(
             "POST",
             "/v1/responses",
-            {
-                "model": primary,
-                "input": "Use configured tools",
-                "fallbacks": [fallback],
-            },
+            {"model": primary, "input": "Use configured tools", "fallbacks": [fallback]},
             key=key,
         )
         sent: Final = wire.drain()
@@ -506,6 +472,86 @@ def test_native_mcp_fallback_checks_its_configured_tools(gateway: Gateway, grant
         else:
             assert fallback_requests == ()
             assert "tool_access_denied" in response.text
+
+
+def _anthropic_multiple_call_stream(second_tool: str) -> Reply:
+    message: Final = _response("messages")
+    frames: Final[tuple[Mapping[str, JsonValue], ...]] = (
+        {"type": "message_start", "message": {**message, "content": [], "stop_reason": None}},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "before-tools"}},
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "mcp_tool_use",
+                "id": "call_1",
+                "server_name": "github",
+                "name": "search_code",
+                "input": {},
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "content_block_start",
+            "index": 2,
+            "content_block": {
+                "type": "mcp_tool_use",
+                "id": "call_2",
+                "server_name": "github",
+                "name": second_tool,
+                "input": {},
+            },
+        },
+        {"type": "content_block_stop", "index": 2},
+        {"type": "content_block_start", "index": 3, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 3, "delta": {"type": "text_delta", "text": "after-tools"}},
+        {"type": "content_block_stop", "index": 3},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 8},
+        },
+        {"type": "message_stop"},
+    )
+    return Reply(
+        content_type="text/event-stream",
+        chunks=tuple(f"event: {frame['type']}\ndata: {json.dumps(frame)}\n\n".encode() for frame in frames),
+    )
+
+
+@pytest.mark.parametrize("surface", ("chat/completions", "responses"))
+@pytest.mark.parametrize("second_tool", ("search_code", "delete_repo"), ids=("allowed", "denied-second-call"))
+def test_native_mcp_translated_stream_checks_each_call_before_later_output(
+    gateway: Gateway, second_tool: str, surface: Surface
+) -> None:
+    with wire_server(lambda _: _anthropic_multiple_call_stream(second_tool)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_provider("messages"), api_base=wire.url)
+        key: Final = scenario.key(native_mcp_policy=_policy())
+        response: Final = gateway.request(
+            "POST",
+            f"/v1/{surface}",
+            {**_request("responses" if surface == "responses" else "messages", model), "stream": True},
+            key=key,
+        )
+        assert response.status_code == 200, response.text
+        events: Final = tuple(
+            JSON_OBJECT.validate_json(event.data)
+            for event in SSEDecoder().iter_bytes(iter((response.content,)))
+            if event.data and event.data != "[DONE]"
+        )
+        failures: Final = tuple(event for event in events if "error" in event or event.get("type") == "response.failed")
+        client_output: Final = json.dumps(tuple(event for event in events if event not in failures))
+        assert "before-tools" in client_output
+        assert len(wire.drain()) == 1
+        if second_tool == "search_code":
+            assert "after-tools" in client_output
+            assert failures == (), events
+        else:
+            assert "after-tools" not in client_output, events
+            assert "delete_repo" not in client_output, events
+            assert any("blocks tool(s): delete_repo" in json.dumps(event) for event in failures), events
 
 
 def test_native_mcp_retrieval_applies_current_policy_after_revocation(
@@ -529,9 +575,7 @@ def test_native_mcp_retrieval_applies_current_policy_after_revocation(
         assert len(wire.drain()) in (2, 3)
 
 
-def test_native_mcp_empty_policy_preserves_ordinary_response_retrieval(
-    gateway: Gateway,
-) -> None:
+def test_native_mcp_empty_policy_preserves_ordinary_response_retrieval(gateway: Gateway) -> None:
     reply: Final = Reply(body=json.dumps(_response("responses")).encode())
     with wire_server(lambda _: reply) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(api_base=wire.url)
