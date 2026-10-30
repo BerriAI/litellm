@@ -330,6 +330,20 @@ class ChunkProcessor:
         )
 
     @staticmethod
+    def _get_upstream_provider(chunks: Sequence[object]) -> str | None:
+        def _provider_from_chunk(chunk: object) -> str | None:
+            hidden_params: Final = get_hidden_params(chunk)
+            if hidden_params is None:
+                return None
+            provider: Final[object] = hidden_params.get("upstream_provider")
+            return provider if isinstance(provider, str) and provider else None
+
+        return next(
+            (provider for chunk in chunks if (provider := _provider_from_chunk(chunk)) is not None),
+            None,
+        )
+
+    @staticmethod
     def apply_provider_assembled_streaming_metadata(
         response: ModelResponse,
         chunks: list[object],
@@ -506,10 +520,22 @@ class ChunkProcessor:
             chunks,
             first_chunk_model,
         )
-        if provider_response_model is not None:
-            response._hidden_params = dict(  # pyright: ignore[reportPrivateUsage]  # ModelResponse exposes no public hidden-params setter
-                response._hidden_params,  # pyright: ignore[reportPrivateUsage]  # ModelResponse exposes no public hidden-params getter
-                provider_response_model=provider_response_model,
+        upstream_provider: Final = self._get_upstream_provider(chunks)
+        provider_hidden_params: Final[Mapping[str, str]] = MappingProxyType(
+            {
+                key: value
+                for key, value in (
+                    ("provider_response_model", provider_response_model),
+                    ("upstream_provider", upstream_provider),
+                )
+                if value is not None
+            }
+        )
+        if provider_hidden_params:
+            response_hidden_params: Final[Mapping[str, builtins.object]] = get_hidden_params(response) or {}
+            set_hidden_params(
+                response,
+                dict(response_hidden_params, **provider_hidden_params),
             )
         return response
 

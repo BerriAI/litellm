@@ -12574,9 +12574,10 @@ def test_get_hidden_params():
     assert result["api_base"] is None
     assert result["response_cost"] is None
     assert result["additional_headers"] is None
+    assert result.get("upstream_provider") is None
 
     # assert all fields in StandardLoggingHiddenParams are present
-    assert all(field in result for field in StandardLoggingHiddenParams.__annotations__)
+    assert all(field in result for field in StandardLoggingHiddenParams.__annotations__ if field != "upstream_provider")
 
     # Test with valid params
     hidden_params = {
@@ -12584,6 +12585,7 @@ def test_get_hidden_params():
         "cache_key": "test-cache",
         "api_base": "https://api.test.com",
         "response_cost": 0.001,
+        "upstream_provider": "serving-site-a",
         "additional_headers": {
             "x-ratelimit-limit-requests": "2000",
             "x-ratelimit-remaining-requests": "1999",
@@ -12596,8 +12598,9 @@ def test_get_hidden_params():
     assert result["response_cost"] == 0.001
     assert result["additional_headers"] is not None
     assert result["additional_headers"]["x_ratelimit_limit_requests"] == 2000
+    assert result.get("upstream_provider") == "serving-site-a"
     # assert all fields in StandardLoggingHiddenParams are present
-    assert all(field in result for field in StandardLoggingHiddenParams.__annotations__)
+    assert all(field in result for field in StandardLoggingHiddenParams.__annotations__ if field != "upstream_provider")
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
