@@ -11,7 +11,7 @@ from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfi
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
-from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils, openai_bridge_reasoning
+from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils, bridge_reasoning
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map
@@ -1027,11 +1027,15 @@ def test_the_chat_bridge_drops_a_reasoning_value_no_openai_row_declares_under_dr
     requested: Final = {"effort": "high", "summary": "auto", field: "not-a-declared-value"}
 
     def bridged(drop_params: bool) -> object:
-        return openai_bridge_reasoning(
+        return bridge_reasoning(
             requested=requested,
             effort_kept=True,
             summary_alias=None,
             model=undeclared_model,
+            base_model=None,
+            custom_llm_provider="openai",
+            api_base=None,
+            deployment_model_info=None,
             drop_params=drop_params,
             additional_drop_params=None,
         )
@@ -1046,17 +1050,46 @@ def test_the_chat_bridge_outside_the_openai_catalog_drops_undeclared_values_and_
     requested: Final = {"effort": "high", "mode": declared_mode, "context": "forever", "max_tokens": 2000}
 
     def bridged(drop_params: bool) -> object:
-        return openai_bridge_reasoning(
+        return bridge_reasoning(
             requested=requested,
             effort_kept=True,
             summary_alias=None,
             model="my-fine-tuned-model",
+            base_model=None,
+            custom_llm_provider="openai",
+            api_base=None,
+            deployment_model_info=None,
             drop_params=drop_params,
             additional_drop_params=None,
         )
 
     assert bridged(True) == {"effort": "high", "mode": declared_mode, "max_tokens": 2000}
     assert bridged(False) == requested
+
+
+def test_the_chat_bridge_keeps_other_keys_for_an_openai_prefixed_name_it_resolves_to_a_catalog_row(
+    local_model_cost_map,
+):
+    declared_mode: Final = litellm.model_cost["gpt-6.1-sol"]["reasoning_modes"][-1]
+    requested: Final = {"effort": "high", "mode": "not-a-declared-value", "max_tokens": 2000}
+
+    def bridged(model: str, drop_params: bool) -> object:
+        return bridge_reasoning(
+            requested={**requested, "mode": declared_mode} if model == "gpt-6.1-sol" else requested,
+            effort_kept=True,
+            summary_alias=None,
+            model=model,
+            base_model=None,
+            custom_llm_provider="openai",
+            api_base=None,
+            deployment_model_info=None,
+            drop_params=drop_params,
+            additional_drop_params=None,
+        )
+
+    assert bridged("openai/gpt-6.1-sol", True) == {"effort": "high", "max_tokens": 2000}
+    assert bridged("openai/gpt-6.1-sol", False) == requested
+    assert bridged("gpt-6.1-sol", True) == {"effort": "high", "mode": declared_mode}
 
 
 def test_the_chat_bridge_keeps_only_effort_for_a_catalog_model_that_does_not_reason(local_model_cost_map):
@@ -1069,11 +1102,15 @@ def test_the_chat_bridge_keeps_only_effort_for_a_catalog_model_that_does_not_rea
         and OpenAIGPTConfig.is_openai_catalog_model(name)
     )
 
-    bridged: Final = openai_bridge_reasoning(
+    bridged: Final = bridge_reasoning(
         requested={"effort": "low", "summary": "auto", "mode": "standard"},
         effort_kept=True,
         summary_alias=None,
         model=non_reasoning_model,
+        base_model=None,
+        custom_llm_provider="openai",
+        api_base=None,
+        deployment_model_info=None,
         drop_params=True,
         additional_drop_params=None,
     )

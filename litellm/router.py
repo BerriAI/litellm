@@ -255,6 +255,7 @@ from litellm.router_utils.clientside_credential_handler import (
 from litellm.router_utils.common_utils import (
     MID_STREAM_CONTINUATION_KWARG,
     as_retry_skipped_deployment_ids,
+    deployment_model_id_pin,
     deployments_the_caller_may_use,
     filter_team_based_models,
     filter_web_search_deployments,
@@ -377,6 +378,7 @@ from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check impor
     EncryptedContentAffinityCheck,
 )
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
+    async_io_token_refund_failure,
     build_io_token_rate_limit_headers,
     deployment_has_io_token_limits,
     refund_stale_reservation_before_retry,
@@ -5315,6 +5317,9 @@ class Router(DeprecatedRouterMembers):
         ):
             kwargs[STREAM_USAGE_INJECTED_FIELD] = True
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
+        pinned_model_id: Final = deployment_model_id_pin(deployment_context)
+        if pinned_model_id is not None:
+            kwargs["model_id"] = pinned_model_id  # rebind-ok: this method's contract is filling the caller's kwargs
         hop_kwargs: Final = _FALLBACK_HOP_ADAPTER.validate_python(kwargs)
         if _is_fallback_hop(hop_kwargs):
             EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
@@ -6241,6 +6246,9 @@ class Router(DeprecatedRouterMembers):
                     kwargs[k] = v
                 elif k == "metadata":
                     kwargs[k].update(v)
+            pinned_model_id: Final = deployment_model_id_pin(_LITELLM_PARAMS_ADAPTER.validate_python(data))
+            if pinned_model_id is not None:
+                kwargs["model_id"] = pinned_model_id  # rebind-ok: this call's own kwargs, filled like the defaults
 
             # call via litellm.completion()
             return litellm.text_completion(
@@ -9500,7 +9508,7 @@ class Router(DeprecatedRouterMembers):
 
             raise original_exception
 
-    async def make_call(self, original_function: Any, *args, **kwargs):
+    async def make_call(self, original_function: Any, *args: object, **kwargs: object):
         """
         Handler for making a call to the .completion()/.embeddings()/etc. functions.
         """
@@ -9509,17 +9517,26 @@ class Router(DeprecatedRouterMembers):
         endpoint_function: Final = (
             generic_function if callable(generic_function) else _OPAQUE_VALUE_ADAPTER.validate_python(original_function)
         )
-        with endpoint_selection(
-            getattr(endpoint_function, "__name__", None),
-            getattr(endpoint_function, "__module__", None),
-            model=_OPAQUE_VALUE_ADAPTER.validate_python(model_group),
-        ):
-            response = original_function(*args, **kwargs)
-            if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
-                response = await response
+        try:
+            with endpoint_selection(
+                getattr(endpoint_function, "__name__", None),
+                getattr(endpoint_function, "__module__", None),
+                model=_OPAQUE_VALUE_ADAPTER.validate_python(model_group),
+            ):
+                response = original_function(*args, **kwargs)
+                if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
+                    response = await response
+        except Exception:
+            with contextlib.suppress(Exception):
+                await async_io_token_refund_failure(
+                    self.cache, kwargs, parent_otel_span=get_parent_otel_span_from_kwargs(kwargs)
+                )
+            raise
         await self.increment_deployment_usage_for_response(response=response, request_kwargs=kwargs)
         ## PROCESS RESPONSE HEADERS
-        response = await self.set_response_headers(response=response, model_group=model_group, request_kwargs=kwargs)
+        response = await self.set_response_headers(
+            response=response, model_group=model_group if isinstance(model_group, str) else None, request_kwargs=kwargs
+        )
 
         return response
 
