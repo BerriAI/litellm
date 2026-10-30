@@ -1785,7 +1785,7 @@ class Choices(SafeAttributeModel, OpenAIObject):
                 params["message"] = Message(**dump)
         if logprobs is not None:
             if isinstance(logprobs, dict):
-                params["logprobs"] = ChoiceLogprobs(**logprobs)
+                params["logprobs"] = CHOICE_LOGPROBS_OR_JSON.validate_python(logprobs)
             else:
                 params["logprobs"] = logprobs
         else:
