@@ -28,8 +28,16 @@ from litellm.caching.affinity_cache import (
     set_local_affinity_pin,
 )
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.redis_batch import active_request_redis_batch
 from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger, Span
+from litellm.redis.stores.deployment_user_affinity import (
+    DeploymentUserAffinityStore,
+    TransportDeploymentUserAffinityStore,
+    UnconfirmedUserPin,
+    UserPin,
+    affinity_key,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.common_utils import deployment_ids_failed_in_request
 from litellm.types.llms.openai import AllMessageValues
@@ -263,7 +271,7 @@ class DeploymentAffinityCheck(CustomLogger):
     @classmethod
     def get_affinity_cache_key(cls, model_group: str, user_key: str) -> str:
         hashed_user_key: Final = cls._hash_user_key(user_key=user_key)
-        return f"{cls.CACHE_KEY_PREFIX}:{model_group}:{hashed_user_key}"
+        return affinity_key(model_group, hashed_user_key)
 
     @classmethod
     def get_session_affinity_cache_key(cls, model_group: str, session_id: str, user_key: str | None) -> str:
@@ -346,7 +354,7 @@ class DeploymentAffinityCheck(CustomLogger):
         """Deployment id held by a stored pin, for both the dict shape this writes and the
         bare string older writers left behind. None when the value is neither."""
         if isinstance(stored, dict):
-            model_id: Final = stored.get("model_id")
+            model_id: Final = TypeAdapter(Mapping[object, object]).validate_python(stored).get("model_id")
             return str(model_id) if model_id is not None else None
         if isinstance(stored, str):
             return stored
@@ -354,6 +362,42 @@ class DeploymentAffinityCheck(CustomLogger):
 
     def _set_local_pin(self, cache_key: str, value: object, ttl_seconds: int) -> None:
         set_local_affinity_pin(self.cache, cache_key, value, ttl_seconds)
+
+    async def _read_user_pin(self, model_group: str, user_key: str) -> object:
+        cache_key: Final = self.get_affinity_cache_key(model_group, user_key)
+        local: Final = TypeAdapter(object).validate_python(
+            await self.cache.async_get_cache(key=cache_key, local_only=True)
+        )
+        redis_cache: Final = self.cache.redis_cache
+        if local is not None or redis_cache is None:
+            return local
+        batch: Final = active_request_redis_batch(redis_cache)
+        if batch is not None and batch.read_as_missing(cache_key):
+            return None
+        store: Final[DeploymentUserAffinityStore] = TransportDeploymentUserAffinityStore(redis_cache.transport())
+        result: Final = await store.read(model_group, self._hash_user_key(user_key))
+        if not isinstance(result, UserPin):
+            return None
+        if result.value is not None:
+            await self.cache.async_set_cache(
+                cache_key, result.value, local_only=True, ttl=self.cache.default_in_memory_ttl
+            )
+        return result.value
+
+    async def _claim_user_pin(self, model_group: str, user_key: str, model_id: str) -> str | None:
+        cache_key: Final = self.get_affinity_cache_key(model_group, user_key)
+        redis_cache: Final = self.cache.redis_cache
+        if redis_cache is not None:
+            store: Final[DeploymentUserAffinityStore] = TransportDeploymentUserAffinityStore(redis_cache.transport())
+            result: Final = await store.claim(
+                model_group, self._hash_user_key(user_key), model_id, ttl_seconds=self.ttl_seconds
+            )
+            if isinstance(result, UnconfirmedUserPin):
+                return model_id
+            if isinstance(result, UserPin):
+                self._set_local_pin(cache_key, result.value, self.ttl_seconds)
+                return self._pinned_model_id(result.value)
+        return self._claim_pin_in_memory(cache_key, DeploymentAffinityCacheValue(model_id=model_id), self.ttl_seconds)
 
     async def _claim_pin(self, cache_key: str, pin_value: DeploymentAffinityCacheValue, ttl_seconds: int) -> str | None:
         winner: Final = await claim_affinity_pin(self.cache, cache_key, pin_value, ttl_seconds)
@@ -487,8 +531,7 @@ class DeploymentAffinityCheck(CustomLogger):
         if user_key is None:
             return typed_healthy_deployments
 
-        cache_key: Final = self.get_affinity_cache_key(model_group=stable_model_map_key, user_key=user_key)
-        cache_result: Final = await self.cache.async_get_cache(key=cache_key)
+        cache_result: Final = await self._read_user_pin(stable_model_map_key, user_key)
 
         model_id: str | None = None
         if isinstance(cache_result, dict):
@@ -660,11 +703,8 @@ class DeploymentAffinityCheck(CustomLogger):
 
         if enable_user_key and user_key is not None:
             try:
-                cache_key: Final = self.get_affinity_cache_key(model_group=deployment_model_name, user_key=user_key)
-                claimed_user_pin: Final = await self._claim_pin(
-                    cache_key=cache_key,
-                    pin_value=pin_value,
-                    ttl_seconds=self.ttl_seconds,
+                claimed_user_pin: Final = await self._claim_user_pin(
+                    deployment_model_name, user_key, pin_value["model_id"]
                 )
                 if claimed_user_pin == pin_value["model_id"]:
                     verbose_router_logger.debug(
