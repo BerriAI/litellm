@@ -5,7 +5,11 @@ from pydantic import TypeAdapter
 
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo, requires_native_compaction_beta
+from litellm.llms.anthropic.common_utils import (
+    AnthropicModelInfo,
+    context_management_betas,
+    requires_native_compaction_beta,
+)
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
     messages_carry_output_config,
@@ -176,28 +180,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         if existing_beta:
             beta_values.update(b.strip() for b in existing_beta.split(","))
 
-        # Check for context management
-        context_management_param: Final = optional_params.get("context_management")
-        if context_management_param is not None:
-            # Check edits array for compact_20260112 type
-            edits: Final = context_management_param.get("edits", [])
-            has_compact = False
-            has_other = False
-
-            for edit in edits:
-                edit_type = edit.get("type", "")
-                if edit_type == "compact_20260112":
-                    has_compact = True
-                else:
-                    has_other = True
-
-            # Add compact header if any compact edits exist
-            if has_compact:
-                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value)
-
-            # Add context management header if any other edits exist
-            if has_other:
-                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value)
+        beta_values.update(context_management_betas(optional_params.get("context_management")))
 
         # Check for web search tool
         for tool in tools:

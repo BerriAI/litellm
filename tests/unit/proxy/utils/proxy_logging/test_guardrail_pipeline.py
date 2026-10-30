@@ -17,6 +17,8 @@ import logging
 from typing import Any, Callable, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 import pytest
 from fastapi import HTTPException
 
@@ -58,7 +60,7 @@ def _clear_caps_cache():
 
 def test_should_use_guardrail_load_balancing_truth_table(proxy_logging):
     snapshot = {}
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.guardrail_list = [{"guardrail_name": "g1"}, {"guardrail_name": "g1"}]
     with patch("litellm.proxy.proxy_server.llm_router", router):
         snapshot["multiple_deployments"] = proxy_logging._should_use_guardrail_load_balancing("g1")
@@ -79,7 +81,7 @@ def test_should_use_guardrail_load_balancing_truth_table(proxy_logging):
 
 
 def test_should_use_guardrail_load_balancing_error_on_bad_guardrail_list(proxy_logging):
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.guardrail_list = "not a list"
     with patch("litellm.proxy.proxy_server.llm_router", router):
         with pytest.raises((TypeError, AttributeError)):
@@ -164,7 +166,7 @@ async def test_execute_guardrail_hook_unknown_hook_type_raises(proxy_logging, ma
 @pytest.mark.asyncio
 async def test_execute_guardrail_with_load_balancing_routes_through_router(proxy_logging, make_user_api_key_auth):
     cb = _make_guardrail()
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_available_guardrail = MagicMock(return_value={"callback": cb})
     with patch("litellm.proxy.proxy_server.llm_router", router):
         out = await proxy_logging._execute_guardrail_with_load_balancing(
@@ -192,7 +194,7 @@ async def test_execute_guardrail_with_load_balancing_router_none_raises(proxy_lo
 
 @pytest.mark.asyncio
 async def test_execute_guardrail_with_load_balancing_no_callback_raises(proxy_logging, make_user_api_key_auth):
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_available_guardrail = MagicMock(return_value={"callback": None})
     with patch("litellm.proxy.proxy_server.llm_router", router):
         with pytest.raises(ValueError, match="No callback found"):

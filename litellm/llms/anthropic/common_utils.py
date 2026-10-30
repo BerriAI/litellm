@@ -6,13 +6,15 @@ import copy
 import json
 import re
 from collections.abc import Container, Mapping, MutableMapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from itertools import chain
 from types import MappingProxyType
 from typing import Annotated, Any, ClassVar, Final, Literal, TypeVar
 from urllib.parse import quote, urlparse
 
 import httpx
-from pydantic import BeforeValidator, ConfigDict, Field, StrictBool, TypeAdapter, ValidationError
+from pydantic import BeforeValidator, ConfigDict, Field, JsonValue, StrictBool, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -23,6 +25,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
 from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
     is_encrypted_reasoning_block,
@@ -119,6 +122,7 @@ _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
 OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _DECODED_JSON: Final = TypeAdapter(object)
+_JSON_VALUE: Final = TypeAdapter(JsonValue)
 
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
@@ -180,24 +184,68 @@ def is_anthropic_messages_url(url: str) -> bool:
     return parsed_url.hostname == "api.anthropic.com" or parsed_url.path.removesuffix("/").endswith("/v1/messages")
 
 
+def _message_blocks(message: object) -> Sequence[object]:
+    fields: Final = as_str_mapping(message)
+    blocks: Final = validated_object_list(fields.get("content")) if fields is not None else None
+    return blocks or ()
+
+
+def _is_signed_compaction_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    if fields is None or fields.get("type") != "compaction":
+        return False
+    signature: Final = fields.get("signature")
+    return isinstance(signature, str) and bool(signature)
+
+
+def carries_signed_compaction_block(messages: Sequence[object]) -> bool:
+    return any(map(_is_signed_compaction_block, chain.from_iterable(map(_message_blocks, messages))))
+
+
 def requires_native_compaction_beta(
     custom_llm_provider: str,
     optional_params: Mapping[str, object],
     messages: Sequence[object],
 ) -> bool:
     return custom_llm_provider in NATIVE_COMPACTION_PROVIDERS and (
-        optional_params.get("compaction") is not None
-        or any(
-            isinstance(block, Mapping)
-            and block.get("type") == "compaction"
-            and isinstance(block.get("signature"), str)
-            and bool(block.get("signature"))
-            for message in messages
-            if isinstance(message, Mapping)
-            for content in (message.get("content"),)
-            if isinstance(content, (list, tuple))
-            for block in content
+        optional_params.get("compaction") is not None or carries_signed_compaction_block(messages)
+    )
+
+
+def anthropic_context_management(context_management: JsonValue) -> JsonValue:
+    if not isinstance(context_management, list):
+        return context_management
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    edits: Final = AnthropicConfig.map_openai_context_management_to_anthropic(
+        [entry for entry in context_management if isinstance(entry, dict)]
+    )
+    return context_management if edits is None else _JSON_VALUE.validate_python(edits)
+
+
+def _context_management_edits(spec: JsonValue) -> Sequence[object]:
+    mapping: Final = as_str_mapping(spec)
+    return (validated_object_list(mapping.get("edits")) if mapping is not None else None) or ()
+
+
+def context_management_with_edits(context_management: JsonValue) -> JsonValue:
+    spec: Final = anthropic_context_management(context_management)
+    return spec if _context_management_edits(spec) else None
+
+
+def context_management_betas(context_management: JsonValue) -> tuple[str, ...]:
+    edits: Final = _context_management_edits(anthropic_context_management(context_management))
+    edit_types: Final = tuple(edit.get("type") for edit in map(as_str_mapping, edits) if edit is not None)
+    return tuple(
+        beta
+        for beta, used in (
+            (ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value, "compact_20260112" in edit_types),
+            (
+                ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
+                any(edit_type != "compact_20260112" for edit_type in edit_types),
+            ),
         )
+        if used
     )
 
 
@@ -1800,6 +1848,48 @@ def anthropic_request_errors_on_thinking_binding_mismatch(request_body: object) 
     thinking: Final = validated_object_mapping(body.get("thinking")) if body is not None else None
     binding: Final = validated_object_mapping(thinking.get("block_binding")) if thinking is not None else None
     return binding is not None and binding.get("prefix_mismatch_behavior") == "error"
+
+
+_CLAUDE_STRICT_TOOLS_REJECTION: Final = re.compile(
+    r"Too many strict tools \(\d+\)"
+    r"|Schemas contains too many (?:optional parameters|parameters with union types)"
+    r"|[Cc]ompiled grammar (?:is too large|size)"
+    r"|tools\.\d+\.custom(?:\.strict)?: "
+    r"|Grammar compilation timed out"
+)
+_CLAUDE_TOOLS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def is_claude_strict_tools_rejection(status_code: int, error_text: str) -> bool:
+    return status_code == 400 and _CLAUDE_STRICT_TOOLS_REJECTION.search(error_text) is not None
+
+
+@dataclass(frozen=True, slots=True)
+class ToolsWithoutStrict:
+    tools: tuple[Mapping[str, object], ...]
+    dropped_count: int
+
+
+def tools_without_strict(tools: object) -> ToolsWithoutStrict | None:
+    try:
+        validated: Final = _CLAUDE_TOOLS_ADAPTER.validate_python(tools)
+    except ValidationError:
+        return None
+    dropped_count: Final = sum(tool.get("strict") is True for tool in validated)
+    if dropped_count == 0:
+        return None
+    return ToolsWithoutStrict(
+        tools=tuple({key: value for key, value in tool.items() if key != "strict"} for tool in validated),
+        dropped_count=dropped_count,
+    )
+
+
+def warn_claude_strict_tools_dropped(dropped_count: int) -> None:
+    litellm.verbose_logger.warning(
+        "Claude rejected the request's strict schemas, so litellm removed `strict` from every tool (%d had "
+        "strict true) and sent the request again because drop_params is set.",
+        dropped_count,
+    )
 
 
 def strip_thinking_blocks_from_anthropic_messages(messages: Sequence[object]) -> list[object]:

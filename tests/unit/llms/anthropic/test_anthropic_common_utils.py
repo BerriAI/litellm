@@ -25,7 +25,7 @@ import pytest
 import respx
 
 import litellm
-from litellm.llms.anthropic.common_utils import is_claude_tool_target
+from litellm.llms.anthropic.common_utils import ToolsWithoutStrict, is_claude_tool_target, tools_without_strict
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
@@ -4602,3 +4602,27 @@ def test_requires_native_compaction_beta_is_false_without_a_signal(
 )
 def test_is_claude_tool_target(custom_llm_provider: str, model: str, expected: bool):
     assert is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model) is expected
+
+
+@pytest.mark.parametrize(
+    "tools",
+    [
+        None,
+        "lookup_record",
+        [],
+        [{"name": "a"}],
+        [{"name": "a", "strict": False}],
+        [{"name": "a", "strict": True}, "b"],
+    ],
+    ids=["absent", "not_a_list", "empty", "no_strict_key", "strict_false_only", "malformed_tool"],
+)
+def test_tools_without_strict_is_none_unless_every_tool_is_an_object_and_one_is_strict(tools: object) -> None:
+    assert tools_without_strict(tools) is None
+
+
+def test_tools_without_strict_drops_only_the_strict_key_and_counts_the_strict_tools() -> None:
+    tools: Final = [{"name": "a", "strict": True}, {"name": "b"}, {"name": "c", "strict": False}]
+
+    assert tools_without_strict(tools) == ToolsWithoutStrict(
+        tools=({"name": "a"}, {"name": "b"}, {"name": "c"}), dropped_count=1
+    )
