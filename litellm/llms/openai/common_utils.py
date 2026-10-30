@@ -275,6 +275,10 @@ def build_output_token_limit_response(
     return e.response.headers, (_aiter_once(chunk) if is_async else _iter_once(chunk))
 
 
+def _is_loop_bound(client_initialization_params: Mapping[str, object]) -> bool:
+    return client_initialization_params.get("is_async") is not False
+
+
 class BaseOpenAILLM:
     """
     Base class for OpenAI LLMs for getting their httpx clients and SSL verification settings
@@ -289,7 +293,9 @@ class BaseOpenAILLM:
             client_initialization_params=client_initialization_params,
             client_type=client_type,
         )
-        _cached_client: Final = litellm.in_memory_llm_clients_cache.get_cache(_cache_key)
+        _cached_client: Final = litellm.in_memory_llm_clients_cache.get_cache(
+            _cache_key, loop_bound=_is_loop_bound(client_initialization_params)
+        )
         return _cached_client
 
     @staticmethod
@@ -330,6 +336,7 @@ class BaseOpenAILLM:
             value=openai_client,
             ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
             litellm_owned_client=litellm_owned_client,
+            loop_bound=_is_loop_bound(client_initialization_params),
         )
 
     @staticmethod

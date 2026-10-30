@@ -590,6 +590,7 @@ def model_deployments_support_stream_options(
 
 
 _STREAM_USAGE_FLAGS: Final = ("_litellm_strip_stream_usage", STREAM_USAGE_INJECTED_FIELD)
+_STREAM_USAGE_TRACKED_ROUTES: Final = frozenset({"acompletion", "atext_completion"})
 
 
 def stream_usage_tracking_updates(
@@ -615,7 +616,7 @@ def stream_usage_tracking_updates(
         return scrub
     if always_include is False and route_type == "agenerate_content_stream" and "stream_options" not in data:
         return {**scrub, "stream_options": {"include_usage": False}}
-    if always_include is False or route_type != "acompletion":
+    if always_include is False or route_type not in _STREAM_USAGE_TRACKED_ROUTES:
         return scrub
     if isinstance(stream_options, dict) and stream_options.get("include_usage") is True:
         return scrub

@@ -8,8 +8,32 @@ endpoint behind a breach.
 import subprocess
 from pathlib import Path
 from typing import Final
+from unittest.mock import patch
 
 import openapi_docs_gate as gate
+import pytest
+
+
+def test_base_counts_stops_when_the_native_build_fails(tmp_path: Path) -> None:
+    parent: Final = tmp_path / "oa_base"
+    parent.mkdir()
+    checker: Final = tmp_path / "check_openapi_docs.py"
+    checker.write_text("print('POST /v1/test OA001')\n")
+    with (
+        patch("openapi_docs_gate.tempfile.mkdtemp", return_value=str(parent)),
+        patch(
+            "subprocess.run",
+            side_effect=(
+                subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+                subprocess.CompletedProcess([], 1, stdout="", stderr="build failed"),
+                subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            ),
+        ) as run,
+        patch("signal.signal"),
+    ):
+        with pytest.raises(SystemExit, match="uv exited 1"):
+            gate.base_counts("HEAD", repo_root=tmp_path, checker=checker)
+        assert run.call_count == 3
 
 
 def test_editing_the_checker_rekeys_the_base_counts(tmp_path: Path) -> None:
@@ -59,26 +83,3 @@ def test_introduced_keeps_only_routes_registered_on_added_lines() -> None:
 def test_introduced_does_not_match_a_path_that_is_only_a_prefix_of_an_added_one() -> None:
     added: Final = gate.added_text('+@router.post("/v1/decisions/batch")\n')
     assert gate.introduced((gate.Violation("POST", "/v1/decisions", "OA002"),), added) == ()
-
-
-def _git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", "-c", "user.name=test", "-c", "user.email=test@example.com", *args], cwd=repo, check=True)
-
-
-def test_base_counts_runs_the_base_tree_with_the_git_ignored_native_extension(tmp_path: Path) -> None:
-    repo: Final = tmp_path / "repo"
-    bridge: Final = repo / "litellm" / "rust_bridge"
-    bridge.mkdir(parents=True)
-    (repo / ".gitignore").write_text("litellm/rust_bridge/_native*.so\n")
-    (bridge / "__init__.py").write_text("")
-    _git(repo, "init", "-q")
-    _git(repo, "add", ".")
-    _git(repo, "commit", "-q", "-m", "base")
-    (bridge / "_native.abi3.so").write_text("built")
-    checker: Final = tmp_path / "check.py"
-    checker.write_text(
-        "import pathlib, sys\n"
-        "sys.exit('no native extension') if not pathlib.Path('litellm/rust_bridge/_native.abi3.so').exists() else None\n"
-        "print('POST /v1/realtime/translations/calls OA001')\n"
-    )
-    assert dict(gate.base_counts("HEAD", repo_root=repo, checker=checker)) == {"OA001": 1}

@@ -2467,8 +2467,7 @@ class BaseLLMHTTPHandler:
                         )
                 else:
                     verbose_logger.debug(
-                        "Anthropic /v1/messages: invalid thinking signature; "
-                        "stripping thinking blocks and retrying (attempt %s/%s).",
+                        "Anthropic /v1/messages: retrying after a recoverable HTTP error (attempt %s/%s).",
                         len(recovered_errors) + 2,
                         max_attempts,
                     )
