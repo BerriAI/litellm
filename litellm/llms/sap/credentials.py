@@ -6,6 +6,7 @@ import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 from threading import Lock
 from typing import Final, Protocol
@@ -468,6 +469,32 @@ def get_token_creator(
         key_file_path,
     )
 
+    token_getter: Final = _cached_token_getter(
+        auth_url,
+        client_id,
+        client_secret,
+        cert_str,
+        key_str,
+        cert_file_path,
+        key_file_path,
+        timeout,
+        expiry_buffer_minutes,
+    )
+    return token_getter, credentials["base_url"], credentials["resource_group"]
+
+
+@lru_cache(maxsize=64)
+def _cached_token_getter(
+    auth_url: str | None,
+    client_id: str | None,
+    client_secret: str | None,
+    cert_str: str | None,
+    key_str: str | None,
+    cert_file_path: str | None,
+    key_file_path: str | None,
+    timeout: float,
+    expiry_buffer_minutes: int,
+) -> Callable[[], str]:
     lock: Final = Lock()
     token: str | None = None
     token_expiry: datetime | None = None
@@ -517,4 +544,4 @@ def get_token_creator(
                 token, token_expiry = _fetch_token()
             return token
 
-    return get_token, credentials["base_url"], credentials["resource_group"]
+    return get_token
