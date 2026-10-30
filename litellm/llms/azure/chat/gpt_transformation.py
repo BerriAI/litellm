@@ -5,7 +5,10 @@ from typing import TYPE_CHECKING, Any, Final
 from httpx._models import Headers, Response
 
 import litellm
+from litellm.integrations.anthropic_cache_control_hook import supports_openai_prompt_cache_breakpoint
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    chat_completion_prompt_cache_breakpoints_for_wire,
     drop_tool_reference_parts_from_tool_messages,
     flatten_combinators_and_drop_non_python_regex_patterns,
     hoist_images_from_tool_messages,
@@ -27,7 +30,7 @@ from litellm.types.utils import ModelResponse
 from ....exceptions import UnsupportedParamsError
 from ....types.llms.openai import AllMessageValues
 from ...base_llm.chat.transformation import BaseConfig
-from ..common_utils import AzureOpenAIError
+from ..common_utils import LITELLM_PARAM_FIELDS, AzureOpenAIError, declared_base_models
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -294,7 +297,19 @@ class AzureOpenAIConfig(BaseConfig):
         headers: dict,
     ) -> dict:
         ordered_messages: Final = system_messages_first(messages) if litellm.openai_system_messages_first else messages
-        stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(ordered_messages)
+        params: Final = LITELLM_PARAM_FIELDS.validate_python(litellm_params)
+        trims_breakpoints: Final = drops_unsupported_params(params.get("drop_params")) and any(
+            supports_openai_prompt_cache_breakpoint(name, "azure") for name in (model, *declared_base_models(params))
+        )
+        wire_messages: Final = (
+            [
+                chat_completion_prompt_cache_breakpoints_for_wire(message, drop_params=True)
+                for message in ordered_messages
+            ]
+            if trims_breakpoints
+            else ordered_messages
+        )
+        stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(wire_messages)
         azure_messages: Final = convert_to_azure_openai_messages(hoist_images_from_tool_messages(stripped_messages))
         request_params: Final = MappingProxyType(
             {

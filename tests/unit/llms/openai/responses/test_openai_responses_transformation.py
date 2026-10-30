@@ -4448,6 +4448,29 @@ def test_an_unsupported_ttl_is_dropped_and_the_explicit_mode_kept_under_drop_par
     assert _transformed_input(config, input, GenericLiteLLMParams(drop_params=False)) == input
 
 
+@pytest.mark.parametrize(
+    "config, marker, wire_marker",
+    [
+        (OpenAIResponsesAPIConfig(), {"mode": "explicit", "ttl": "12h"}, {"mode": "explicit", "ttl": "12h"}),
+        (AzureOpenAIResponsesAPIConfig(), {"mode": "explicit", "ttl": "30m"}, {"mode": "explicit", "ttl": "30m"}),
+        (AzureOpenAIResponsesAPIConfig(), {"mode": "explicit", "ttl": "12h"}, {"mode": "explicit"}),
+    ],
+    ids=("openai-keeps-12h", "azure-keeps-30m", "azure-drops-12h"),
+)
+def test_drop_params_keeps_only_a_ttl_the_target_responses_api_accepts(
+    monkeypatch: pytest.MonkeyPatch,
+    config: BaseResponsesAPIConfig,
+    marker: Mapping[str, str],
+    wire_marker: Mapping[str, str],
+) -> None:
+    """Azure OpenAI Responses answered 400 for a 12h breakpoint ttl and 200 for 30m on 2026-10-29."""
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", marker)
+    trimmed: Final = _transformed_input(config, input, GenericLiteLLMParams(drop_params=True))
+    assert _single_part(trimmed) == {**_PARTS["input_text"], "prompt_cache_breakpoint": wire_marker}
+    assert _transformed_input(config, input, GenericLiteLLMParams(drop_params=False)) == input
+
+
 def test_prompt_cache_breakpoint_unknown_key_is_trimmed_under_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     input: Final = _marked_message("input_text", {"mode": "explicit", "note": "kept"})

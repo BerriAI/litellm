@@ -20,7 +20,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     filter_value_from_dict,
     is_pdf_file_part,
 )
-from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.azure.common_utils import BaseAzureLLM, declared_base_models
 from litellm.llms.azure_ai.common_utils import (
     api_key_header_for_base,
     is_foundry_model_inference_base,
@@ -334,9 +334,11 @@ class AzureAIStudioConfig(OpenAIConfig):
         if extra_body and isinstance(extra_body, dict):
             optional_params.update(extra_body)
         optional_params.pop("max_retries", None)
-        trims_breakpoints: Final = drops_unsupported_params(
-            _LITELLM_PARAMS.validate_python(litellm_params).get("drop_params")
-        ) and AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(model, "azure_ai")
+        params: Final = _LITELLM_PARAMS.validate_python(litellm_params)
+        trims_breakpoints: Final = drops_unsupported_params(params.get("drop_params")) and any(
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(name, "azure_ai")
+            for name in (model, *declared_base_models(params))
+        )
         wire_messages: Final = (
             [chat_completion_prompt_cache_breakpoints_for_wire(message, drop_params=True) for message in messages]
             if trims_breakpoints

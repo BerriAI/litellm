@@ -2191,7 +2191,7 @@ def _accepted_prompt_cache_breakpoint(
         return None
 
 
-def _prompt_cache_breakpoint_within(
+def prompt_cache_breakpoint_within(
     accepted: TypeAdapter[_AcceptedBreakpointT], marker: object
 ) -> _AcceptedBreakpointT | None:
     """The client's marker cut down to the ``accepted`` shape: an unsupported ttl is dropped and the mode kept,
@@ -2205,15 +2205,25 @@ def _prompt_cache_breakpoint_within(
         if fields is None
         else _accepted_prompt_cache_breakpoint(accepted, {key: item for key, item in fields.items() if key != "ttl"})
     )
-    if without_ttl is None:
-        verbose_logger.debug("Dropping malformed prompt_cache_breakpoint %r under drop_params", marker)
+    verbose_logger.debug(
+        "Dropping malformed prompt_cache_breakpoint %r under drop_params"
+        if without_ttl is None
+        else "Dropping the unsupported ttl of prompt_cache_breakpoint %r under drop_params",
+        marker,
+    )
     return without_ttl
 
 
 def prompt_cache_breakpoint_for_wire(marker: object, drop_params: bool) -> object:
     if marker is None or not drop_params:
         return marker
-    return _prompt_cache_breakpoint_within(_PROMPT_CACHE_BREAKPOINT, marker)
+    return prompt_cache_breakpoint_within(_PROMPT_CACHE_BREAKPOINT, marker)
+
+
+def chat_completion_prompt_cache_breakpoint_for_wire(marker: object, drop_params: bool) -> object:
+    if marker is None or not drop_params:
+        return marker
+    return prompt_cache_breakpoint_within(_CHAT_COMPLETION_PROMPT_CACHE_BREAKPOINT, marker)
 
 
 def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
@@ -2268,9 +2278,7 @@ def _part_with_chat_completion_prompt_cache_breakpoint(part: object) -> object:
     if marker is None:
         return fields
     unmarked: Final = {key: item for key, item in fields.items() if key != "prompt_cache_breakpoint"}
-    return with_prompt_cache_breakpoint(
-        unmarked, _prompt_cache_breakpoint_within(_CHAT_COMPLETION_PROMPT_CACHE_BREAKPOINT, marker)
-    )
+    return with_prompt_cache_breakpoint(unmarked, chat_completion_prompt_cache_breakpoint_for_wire(marker, True))
 
 
 def chat_completion_prompt_cache_breakpoints_for_wire(message: _MarkedT, drop_params: bool) -> _MarkedT:

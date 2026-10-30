@@ -961,6 +961,25 @@ def test_azure_ai_sends_part_breakpoints_as_written_without_drop_params_or_a_bre
 
 
 @pytest.mark.parametrize(
+    "litellm_params",
+    [
+        {"drop_params": True, "base_model": "azure_ai/unit-breakpoint-reader"},
+        {"drop_params": True, "model_info": {"base_model": "azure_ai/unit-breakpoint-reader"}},
+    ],
+    ids=("litellm-params-base-model", "model-info-base-model"),
+)
+def test_azure_ai_trims_part_breakpoints_on_a_custom_deployment_name_by_its_base_model(
+    registered_foundry_breakpoint_models: None, litellm_params: dict[str, object]
+) -> None:
+    assert _foundry_request_parts("my-foundry-alias", litellm_params) == [
+        {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": {"mode": "explicit"}},
+        {"type": "text", "text": "Implicit"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/chart.png"}},
+    ]
+    assert _foundry_request_parts("my-foundry-alias", {"drop_params": True}) == list(_MARKED_FOUNDRY_PARTS)
+
+
+@pytest.mark.parametrize(
     "api_base, expected_url",
     [
         (

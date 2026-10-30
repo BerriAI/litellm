@@ -11,6 +11,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
+from litellm.litellm_core_utils.prompt_templates.common_utils import prompt_cache_breakpoint_within
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.common_utils import BaseAzureLLM
@@ -28,6 +29,7 @@ else:
     LiteLLMLoggingObj = Any
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_AZURE_RESPONSES_PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(AzureResponsesPromptCacheBreakpoint)
 
 
 _DATED_GA_API_VERSION: Final = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -79,6 +81,9 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     @staticmethod
     def _is_gpt_5_model(model: str) -> bool:
         return AzureOpenAIGPT5Config.is_model_gpt_5_model(model)
+
+    def _wire_prompt_cache_breakpoint(self, marker: object) -> object:
+        return prompt_cache_breakpoint_within(_AZURE_RESPONSES_PROMPT_CACHE_BREAKPOINT, marker)
 
     @staticmethod
     def _supports_reasoning_effort_none(model: str) -> bool:
