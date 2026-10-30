@@ -9,7 +9,6 @@
 
 import asyncio
 import copy
-import functools
 import inspect
 import itertools
 import json
@@ -450,9 +449,9 @@ _REQUEST_TEXT_KEYS: Final = ("messages", "input", "prompt", "system", "instructi
 _STRUCTURAL_KEYS: Final = frozenset({"role", "type", "id", "tool_call_id", "name"})
 _MIN_UNQUOTED_TEXT_LENGTH: Final = 4
 # pydantic shows a long input value as its repr's first 25 and last 24 characters around "...", quotes and
-# container keys included, so each side of the cut shows at most 24 characters of the text
-_MIN_CUT_ECHO_LENGTH: Final = 12
-_MAX_CUT_ECHO_LENGTH: Final = 24
+# container keys included, so each side of the cut shows at most 24 characters of a quoted text
+_CUT_ECHO_HEAD: Final = re.compile(r"(?<=['\"])[^'\"]{1,24}(?=\.\.\.)")
+_CUT_ECHO_TAIL: Final = re.compile(r"(?<=\.\.\.)[^'\"]{1,24}(?=['\"])")
 _MAX_SCRUB_COMPARISONS: Final = 10_000_000
 
 
@@ -494,18 +493,25 @@ def _echo_forms(text: str) -> frozenset[str]:
     return frozenset({text, json.dumps(text)[1:-1], json.dumps(text, ensure_ascii=False)[1:-1], repr(text)[1:-1]})
 
 
-def _cut_head_pattern(form: str) -> str:
-    """The start of ``form`` where an error cuts it short with ``...``, as pydantic shows a long input value."""
-    rest: Final = form[_MIN_CUT_ECHO_LENGTH:_MAX_CUT_ECHO_LENGTH]
-    optional_rest: Final = functools.reduce(lambda inner, char: f"(?:{re.escape(char)}{inner})?", reversed(rest), "")
-    return f"{re.escape(form[:_MIN_CUT_ECHO_LENGTH])}{optional_rest}(?=\\.\\.\\.)"
-
-
-def _cut_tail_pattern(form: str) -> str:
-    """The end of ``form`` where an error picks it up again after ``...``."""
-    rest: Final = form[-_MAX_CUT_ECHO_LENGTH:-_MIN_CUT_ECHO_LENGTH]
-    optional_rest: Final = functools.reduce(lambda inner, char: f"(?:{inner}{re.escape(char)})?", rest, "")
-    return f"(?<=\\.\\.\\.){optional_rest}{re.escape(form[-_MIN_CUT_ECHO_LENGTH:])}"
+def _cut_echoes(text: str, forms: Collection[str]) -> tuple[tuple[str, str], ...]:
+    """
+    Each side of a quoted value ``text`` cuts short with ``...`` that starts or ends one of ``forms``, as
+    pydantic shows a long input value, with its pattern anchored to the quote and the cut.
+    """
+    heads: Final = frozenset(match.group() for match in _CUT_ECHO_HEAD.finditer(text))
+    tails: Final = frozenset(match.group() for match in _CUT_ECHO_TAIL.finditer(text))
+    return (
+        *(
+            (head, f"(?<=['\"]){re.escape(head)}(?=\\.\\.\\.)")
+            for head in heads
+            if any(form.startswith(head) for form in forms)
+        ),
+        *(
+            (tail, f"(?<=\\.\\.\\.){re.escape(tail)}(?=['\"])")
+            for tail in tails
+            if any(form.endswith(tail) for form in forms)
+        ),
+    )
 
 
 def scrub_request_text(text: str, texts: Collection[str]) -> str:
@@ -519,15 +525,14 @@ def scrub_request_text(text: str, texts: Collection[str]) -> str:
     if len(text) * len(texts) > _MAX_SCRUB_COMPARISONS:
         return REDACTED_BY_LITELLM
     forms: Final = frozenset(itertools.chain.from_iterable(map(_echo_forms, texts)))
-    quoted: Final = sorted((form for form in forms if form in text), key=len, reverse=True)
-    cut_forms: Final = tuple(form for form in forms if len(form) > _MIN_CUT_ECHO_LENGTH) if "..." in text else ()
-    cut: Final = (
-        *(_cut_head_pattern(form) for form in cut_forms if form[:_MIN_CUT_ECHO_LENGTH] in text),
-        *(_cut_tail_pattern(form) for form in cut_forms if form[-_MIN_CUT_ECHO_LENGTH:] in text),
+    echoes: Final = sorted(
+        (*((form, _echo_pattern(form)) for form in forms if form in text), *_cut_echoes(text, forms)),
+        key=lambda echo: len(echo[0]),
+        reverse=True,
     )
-    if not quoted and not cut:
+    if not echoes:
         return text
-    return re.sub("|".join((*map(_echo_pattern, quoted), *cut)), REDACTED_BY_LITELLM, text)
+    return re.sub("|".join(pattern for _, pattern in echoes), REDACTED_BY_LITELLM, text)
 
 
 def _echo_pattern(form: str) -> str:

@@ -3971,11 +3971,10 @@ class ProxyLogging:
                 **_proxy_only_error_log_fields(  # pyright: ignore[reportArgumentType]  # the allowlist never carries is_async_call
                     request_fields, logged_metadata_keys
                 ),
+                # The allowlist leaves out the request's redaction opt-in, so carry the decision over
+                **({"turn_off_message_logging": True} if should_redact_failed_request(request_fields) else {}),
             )
             request_data["litellm_logging_obj"] = litellm_logging_obj  # rebind-ok: lifted then popped by the caller
-            if should_redact_failed_request(request_fields):
-                # The allowlist leaves out the request's redaction opt-in, so carry the decision over
-                litellm_logging_obj.standard_callback_dynamic_params["turn_off_message_logging"] = True
             request_data.update({REJECTED_BEFORE_REQUEST_SETUP_KEY: REJECTED_BEFORE_REQUEST_SETUP})
             if "metadata" not in request_data:
                 request_data["metadata"] = {}

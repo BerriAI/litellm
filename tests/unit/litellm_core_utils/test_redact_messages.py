@@ -2088,8 +2088,8 @@ PROMPT: Final = "my ssn is 123-45-6789\nand my pin is 4321, keep both safe"
 
 @pytest.mark.parametrize(
     "quoted",
-    [PROMPT, json.dumps(PROMPT)[1:-1], repr(PROMPT)[1:-1], PROMPT[:24] + "...", "..." + PROMPT[-24:]],
-    ids=["verbatim", "json", "repr", "head", "tail"],
+    [PROMPT, json.dumps(PROMPT)[1:-1], repr(PROMPT)[1:-1]],
+    ids=["verbatim", "json", "repr"],
 )
 def test_scrub_request_text_replaces_each_way_an_error_quotes_the_prompt(quoted: str) -> None:
     scrubbed: Final = scrub_request_text(f"Invalid content: <{quoted}> rejected", request_texts(PROMPT))
@@ -2099,7 +2099,11 @@ def test_scrub_request_text_replaces_each_way_an_error_quotes_the_prompt(quoted:
     assert scrubbed.startswith("Invalid content: <") and scrubbed.endswith("> rejected")
 
 
-@pytest.mark.parametrize("value", [PROMPT, [PROMPT], {"content": PROMPT}], ids=["str", "list", "dict"])
+@pytest.mark.parametrize(
+    "value",
+    [PROMPT, [PROMPT], {"content": PROMPT}, [{"content": PROMPT}]],
+    ids=["str", "list", "dict", "nested_under_12_characters"],
+)
 def test_scrub_request_text_replaces_both_sides_of_a_pydantic_cut_input_value(value: object) -> None:
     with pytest.raises(ValidationError, match="input_value=") as raised:
         TypeAdapter(int).validate_python(value)
