@@ -604,6 +604,32 @@ def test_native_cohere_embed_relay_prices_an_image_at_the_input_tokens_foundry_a
 
 
 
+@pytest.mark.parametrize("model", ["Cohere-Embed-V5-Pro", "Cohere-Embed-V5-Fast"])
+@pytest.mark.parametrize(
+    ("input_tokens", "text_tokens", "image_tokens"),
+    [(1017, 6, 258), (24, 0, 6)],
+    ids=["text_and_image", "image_only"],
+)
+def test_native_cohere_embed_relay_prices_itemized_text_and_image_tokens_at_their_own_rates(
+    model: str, input_tokens: int, text_tokens: int, image_tokens: int
+) -> None:
+    body: Final = {
+        **COHERE_EMBED_BODY,
+        "meta": {
+            "api_version": {"version": "2"},
+            "billed_units": {"input_tokens": input_tokens, "image_tokens": image_tokens, "text_tokens": text_tokens},
+        },
+    }
+    result, logging_obj = _relay_logging_result(AzureAIPassthroughConfig(), model, "providers/cohere/v2/embed", body)
+    model_info: Final = litellm.get_model_info(f"azure_ai/{model}")
+
+    assert isinstance(result, EmbeddingResponse)
+    assert result.usage.prompt_tokens == text_tokens + image_tokens
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(
+        text_tokens * model_info["input_cost_per_token"] + image_tokens * model_info["input_cost_per_image_token"]
+    )
+
+
 def test_native_cohere_embed_relay_rows_keep_their_embedding_type() -> None:
     result, _ = _cohere_embed_relay_result({**COHERE_EMBED_BODY, "embeddings": {"float": TWO_VECTORS, "int8": [[1, 2]]}})
 

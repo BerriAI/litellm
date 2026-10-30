@@ -57,6 +57,7 @@ class _CohereBilledUnits(BaseModel):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
     input_tokens: int | None = None
+    text_tokens: int | None = None
     image_tokens: int | None = None
     images: int | None = None
 
@@ -114,6 +115,14 @@ def _billed_usage(billed_units: _CohereBilledUnits, image_billing: CohereImageTo
                     text_tokens=billed_units.input_tokens,
                     image_tokens=image_units or None,
                     image_count=billed_units.images,
+                ),
+            )
+        case CohereImageTokenBilling.FOLDED_INTO_INPUT_TOKENS if billed_units.text_tokens is not None:
+            return _prompt_usage(
+                billed_units.text_tokens + (billed_units.image_tokens or 0),
+                PromptTokensDetailsWrapper(
+                    text_tokens=billed_units.text_tokens,
+                    image_tokens=billed_units.image_tokens or None,
                 ),
             )
         case CohereImageTokenBilling.FOLDED_INTO_INPUT_TOKENS:
