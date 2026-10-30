@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import datetime
 import inspect
 import json
 import socket
@@ -4046,6 +4047,66 @@ class TestUpdateDBModelBlocked:
             updated_patch=updateDeployment(),
         )
         assert "blocked" not in result
+
+
+@pytest.mark.parametrize(
+    "patch_info",
+    [
+        pytest.param(None, id="preserve"),
+        pytest.param(ModelInfo.model_validate({
+            "id": "dep-window",
+            "access_windows": [{
+                "start": "22:00:00.123456", "end": "06:00:00.654321",
+                "timezone": "UTC", "team_ids": ["team-2"],
+            }],
+        }), id="replace"),
+        pytest.param(ModelInfo(id="dep-window", access_windows=()), id="clear"),
+    ],
+)
+def test_update_db_model_preserves_access_window_patch_semantics(patch_info: ModelInfo | None) -> None:
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+    db_model: Final = Deployment(
+        model_name="window-model",
+        litellm_params=LiteLLM_Params(model="openai/test-model", max_parallel_requests=2),
+        model_info=ModelInfo.model_validate({
+            "id": "dep-window",
+            "access_windows": [{
+                "start": "13:00:00", "end": "17:00:00",
+                "timezone": "Asia/Almaty", "team_ids": ["team-1", "team-2"],
+            }],
+        }),
+    )
+    result: Final = update_db_model(
+        db_model=db_model,
+        updated_patch=updateDeployment(
+            litellm_params=updateLiteLLMParams(max_parallel_requests=7), model_info=patch_info,
+        ),
+    )
+    expected: Final = db_model.model_info.access_windows if patch_info is None else patch_info.access_windows
+    assert ModelInfo.model_validate_json(result["model_info"]).access_windows == expected
+    assert LiteLLM_Params.model_validate_json(result["litellm_params"]).max_parallel_requests == 7
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (datetime.time(9, 30), "09:30:00"),
+        (datetime.date(2026, 1, 2), "2026-01-02"),
+        (datetime.datetime(2026, 1, 2, 9, 30), "2026-01-02T09:30:00"),
+    ],
+)
+def test_json_temporal_default_preserves_iso_format(value: datetime.date | datetime.time, expected: str) -> None:
+    from litellm.proxy.management_endpoints.model_management_endpoints import _json_temporal_default
+
+    assert _json_temporal_default(value) == expected
+
+
+def test_json_temporal_default_rejects_unsupported_values() -> None:
+    from litellm.proxy.management_endpoints.model_management_endpoints import _json_temporal_default
+
+    with pytest.raises(TypeError, match="not JSON serializable"):
+        _json_temporal_default(object())
 
 
 class TestUpdateDBModelKeepsLegacyDropParams:
