@@ -9228,14 +9228,19 @@ def convert_list_message_to_dict(
     return [dict(cleanup_none_field_in_message(message=_as_message_value(message))) for message in messages]
 
 
+_ASSISTANT_ONLY_MESSAGE_KEYS: Final = frozenset(
+    {"tool_calls", "function_call", "reasoning_content", "reasoning_items", "thinking_blocks", "refusal", "audio"}
+)
+
+
 def validate_and_fix_openai_messages(
     messages: list, model: str = "", request_kwargs: Mapping[str, object] | None = None
 ):
     """
     Ensures all messages are valid OpenAI chat completion messages.
 
-    Only an assistant turn carries tool_calls or function_call, so one sent without a role gets "assistant"
-    (issue #8661).
+    Only an assistant turn carries the keys in _ASSISTANT_ONLY_MESSAGE_KEYS, so one sent without a role but with
+    any of them, even set to null, gets "assistant" (issue #8661).
     """
     new_messages: Final = []
     for message in messages:
@@ -9249,7 +9254,7 @@ def validate_and_fix_openai_messages(
             ),
         )
         cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
-        if not cleaned_message.get("role") and ("tool_calls" in cleaned_message or "function_call" in cleaned_message):
+        if not cleaned_message.get("role") and not _ASSISTANT_ONLY_MESSAGE_KEYS.isdisjoint(convert_msg_to_dict):
             cleaned_message["role"] = "assistant"
         new_messages.append(cleaned_message)
     return validate_chat_completion_user_messages(messages=new_messages, model=model, request_kwargs=request_kwargs)

@@ -8674,10 +8674,17 @@ def test_completion_message_without_role_is_a_400(messages: list[dict[str, str |
         },
         {"content": None, "function_call": {"name": "get_weather", "arguments": "{}"}},
         {"content": "ok", "tool_calls": []},
+        {"content": "ok", "tool_calls": None},
+        {"content": "ok", "function_call": None},
+        {"content": "Sunny.", "reasoning_content": "The user wants the weather."},
+        {"content": "Sunny.", "reasoning_items": []},
+        {"content": "Sunny.", "thinking_blocks": [{"type": "thinking", "thinking": "Weather.", "signature": "sig"}]},
+        {"content": None, "refusal": "I can't help with that."},
+        {"content": None, "audio": {"id": "audio_1"}},
     ],
 )
-def test_completion_role_less_tool_call_turn_is_sent_as_assistant(call_turn: dict[str, object]):
-    """Only an assistant turn carries tool calls, so one replayed without a role still goes upstream as assistant."""
+def test_completion_role_less_assistant_turn_is_sent_as_assistant(call_turn: dict[str, object]):
+    """Only an assistant turn carries these keys, so one replayed without a role still goes upstream as assistant."""
     messages: Final = [{"role": "user", "content": "Weather in Paris?"}, call_turn]
 
     assert validate_and_fix_openai_messages(messages)[1]["role"] == "assistant"
