@@ -1,11 +1,8 @@
 import asyncio
-import json
 import time
 from collections.abc import Mapping, Sequence
+from datetime import timedelta
 from typing import TYPE_CHECKING, Final
-
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -14,23 +11,21 @@ from litellm.constants import (
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
 )
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.health_check import perform_health_check
+from litellm.redis.stores.shared_health import (
+    CachedHealthCheckResults,
+    SharedHealthStore,
+    TransportSharedHealthStore,
+    lock_key,
+    model_lock_key,
+    model_results_key,
+    results_key,
+)
+from litellm.redis.transport.contract import RedisFailure
 from litellm.router_utils.health_state_cache import HEALTH_CHECKS_TARGET
 
 if TYPE_CHECKING:
     from litellm.router import Router
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _CachedHealthCheckResults(TypedDict):
-    healthy_endpoints: NotRequired[ReadOnly[list[Mapping[str, object]]]]
-    unhealthy_endpoints: NotRequired[ReadOnly[list[Mapping[str, object]]]]
-    timestamp: NotRequired[ReadOnly[int | float]]
-    checked_by: NotRequired[ReadOnly[object]]
-
-
-_CACHED_HEALTH_CHECK_RESULTS: Final = TypeAdapter(_CachedHealthCheckResults)
 
 
 class SharedHealthCheckManager:
@@ -51,6 +46,9 @@ class SharedHealthCheckManager:
         lock_ttl: int = DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     ):
         self.redis_cache = redis_cache
+        self._store: SharedHealthStore | None = (
+            TransportSharedHealthStore(redis_cache.transport()) if redis_cache is not None else None
+        )
         self.health_check_ttl = health_check_ttl
         self.lock_ttl = lock_ttl
         self.pod_id = f"pod_{int(time.time() * 1000)}"
@@ -58,22 +56,22 @@ class SharedHealthCheckManager:
     @staticmethod
     def get_health_check_lock_key() -> str:
         """Get the Redis key for health check lock."""
-        return "health_check_lock"
+        return lock_key()
 
     @staticmethod
     def get_health_check_cache_key() -> str:
         """Get the Redis key for health check results cache."""
-        return "health_check_results"
+        return results_key()
 
     @staticmethod
     def get_model_health_check_lock_key(model_name: str) -> str:
         """Get the Redis key for model-specific health check lock."""
-        return f"health_check_lock:{model_name}"
+        return model_lock_key(model_name)
 
     @staticmethod
     def get_model_health_check_cache_key(model_name: str) -> str:
         """Get the Redis key for model-specific health check results cache."""
-        return f"health_check_results:{model_name}"
+        return model_results_key(model_name)
 
     @with_service_target(HEALTH_CHECKS_TARGET)
     async def acquire_health_check_lock(self) -> bool:
@@ -83,18 +81,14 @@ class SharedHealthCheckManager:
         Returns:
             bool: True if lock was acquired, False otherwise
         """
-        if self.redis_cache is None:
+        if self._store is None:
             verbose_proxy_logger.debug("redis_cache is None, skipping lock acquisition")
             return False
 
         try:
-            lock_key: Final = self.get_health_check_lock_key()
-            acquired: Final = await self.redis_cache.async_set_cache(
-                lock_key,
-                self.pod_id,
-                nx=True,  # Only set if key doesn't exist
-                ttl=self.lock_ttl,
-            )
+            acquired: Final = await self._store.acquire(self.pod_id, ttl=timedelta(seconds=self.lock_ttl))
+            if isinstance(acquired, RedisFailure):
+                return False
 
             if acquired:
                 verbose_proxy_logger.info("Pod %s acquired health check lock", self.pod_id)
@@ -102,48 +96,37 @@ class SharedHealthCheckManager:
                 verbose_proxy_logger.debug("Pod %s failed to acquire health check lock", self.pod_id)
 
             return bool(acquired)
-        except Exception as e:
-            verbose_proxy_logger.error("Error acquiring health check lock: %s", str(e))
+        except Exception:
             return False
 
     @with_service_target(HEALTH_CHECKS_TARGET)
     async def release_health_check_lock(self) -> None:
         """Release the global health check lock."""
-        if self.redis_cache is None:
+        if self._store is None:
             return
 
         try:
-            lock_key: Final = self.get_health_check_lock_key()
-            # Only release if we own the lock
-            current_owner: Final = await self.redis_cache.async_get_cache(lock_key)
-            if current_owner == self.pod_id:
-                await self.redis_cache.async_delete_cache(lock_key)
+            released: Final = await self._store.release(self.pod_id)
+            if released is True:
                 verbose_proxy_logger.info("Pod %s released health check lock", self.pod_id)
-        except Exception as e:
-            verbose_proxy_logger.error("Error releasing health check lock: %s", str(e))
+        except Exception:
+            return
 
     @with_service_target(HEALTH_CHECKS_TARGET)
-    async def get_cached_health_check_results(self) -> _CachedHealthCheckResults | None:
+    async def get_cached_health_check_results(self) -> CachedHealthCheckResults | None:
         """
         Get cached health check results from Redis.
 
         Returns:
             Optional[Dict]: Cached health check results or None if not found/expired
         """
-        if self.redis_cache is None:
+        if self._store is None:
             return None
 
         try:
-            cache_key: Final = self.get_health_check_cache_key()
-            cached_data: Final = await self.redis_cache.async_get_cache(cache_key)
-
-            if cached_data is None:
+            cached_results: Final = await self._store.get()
+            if cached_results is None or isinstance(cached_results, RedisFailure):
                 return None
-
-            # Parse the cached data
-            cached_results: Final = _CACHED_HEALTH_CHECK_RESULTS.validate_python(
-                json.loads(cached_data) if isinstance(cached_data, str) else cached_data
-            )
 
             # Check if the cache is still valid
             cache_timestamp: Final = cached_results.get("timestamp", 0)
@@ -156,8 +139,7 @@ class SharedHealthCheckManager:
             verbose_proxy_logger.debug("Using cached health check results")
             return cached_results
 
-        except Exception as e:
-            verbose_proxy_logger.error("Error getting cached health check results: %s", str(e))
+        except Exception:
             return None
 
     @with_service_target(HEALTH_CHECKS_TARGET)
@@ -173,7 +155,7 @@ class SharedHealthCheckManager:
             healthy_endpoints: List of healthy endpoints
             unhealthy_endpoints: List of unhealthy endpoints
         """
-        if self.redis_cache is None:
+        if self._store is None:
             return
 
         try:
@@ -186,12 +168,9 @@ class SharedHealthCheckManager:
                 "checked_by": self.pod_id,
             }
 
-            cache_key: Final = self.get_health_check_cache_key()
-            await self.redis_cache.async_set_cache(
-                cache_key,
-                safe_dumps(cache_data),
-                ttl=self.health_check_ttl,
-            )
+            written: Final = await self._store.put(cache_data, ttl=timedelta(seconds=self.health_check_ttl))
+            if isinstance(written, RedisFailure):
+                return
 
             verbose_proxy_logger.info(
                 "Cached health check results for %d healthy and %d unhealthy endpoints",
@@ -199,8 +178,8 @@ class SharedHealthCheckManager:
                 len(unhealthy_endpoints),
             )
 
-        except Exception as e:
-            verbose_proxy_logger.error("Error caching health check results: %s", str(e))
+        except Exception:
+            return
 
     @with_service_target(HEALTH_CHECKS_TARGET)
     async def perform_shared_health_check(
@@ -274,7 +253,7 @@ class SharedHealthCheckManager:
         else:
             # If Redis is not configured, skip polling — there is no cache
             # to wait for.
-            if self.redis_cache is None:
+            if self._store is None:
                 return await perform_health_check(
                     model_list=model_list,
                     details=details,
@@ -312,9 +291,12 @@ class SharedHealthCheckManager:
                 # Check if the lock is still held — if it was released without
                 # caching (e.g. the holder crashed), stop waiting early.
                 try:
-                    lock_key = self.get_health_check_lock_key()
-                    current_owner = await self.redis_cache.async_get_cache(lock_key)
-                    if current_owner is None:
+                    if (
+                        isinstance(current_owner := await self._store.owner(), RedisFailure)
+                        and current_owner.kind == "breaker_open"
+                    ):
+                        continue
+                    if current_owner is None or isinstance(current_owner, RedisFailure):
                         verbose_proxy_logger.debug(
                             "Pod %s detected lock released without cache, stopping wait",
                             self.pod_id,
@@ -347,15 +329,15 @@ class SharedHealthCheckManager:
         Returns:
             bool: True if health check is in progress, False otherwise
         """
-        if self.redis_cache is None:
+        if self._store is None:
             return False
 
         try:
-            lock_key: Final = self.get_health_check_lock_key()
-            current_owner: Final = await self.redis_cache.async_get_cache(lock_key)
-            return current_owner is not None and current_owner != self.pod_id
-        except Exception as e:
-            verbose_proxy_logger.error("Error checking health check lock status: %s", str(e))
+            current_owner: Final = await self._store.owner()
+            if isinstance(current_owner, RedisFailure):
+                return False
+            return current_owner is not None and current_owner.value != self.pod_id
+        except Exception:
             return False
 
     @with_service_target(HEALTH_CHECKS_TARGET)
@@ -373,11 +355,12 @@ class SharedHealthCheckManager:
             "cache_ttl": self.health_check_ttl,
         }
 
-        if self.redis_cache is not None:
+        if self._store is not None:
             try:
-                # Check if there's a current lock
-                lock_key: Final = self.get_health_check_lock_key()
-                current_owner: Final = await self.redis_cache.async_get_cache(lock_key)
+                owner: Final = await self._store.owner()
+                if isinstance(owner, RedisFailure) and owner.kind == "breaker_open":
+                    return {**status, "error": owner.message}
+                current_owner: Final = None if owner is None or isinstance(owner, RedisFailure) else owner.value
                 status["lock_owner"] = current_owner
                 status["lock_in_progress"] = current_owner is not None
 
