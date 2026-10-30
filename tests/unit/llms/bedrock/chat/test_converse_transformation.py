@@ -9292,8 +9292,17 @@ def _invalid_model_identifier_reply(sent: list[httpx.Request]):
     return respond
 
 
-@pytest.mark.parametrize("model", ["bedrock/bad_model", "bedrock/us-east-1/bad_model"])
-def test_not_found_error(model):
+@pytest.mark.parametrize(
+    "model, path",
+    [
+        ("bedrock/bad_model", b"/model/bad_model/converse"),
+        ("bedrock/us-east-1/bad_model", b"/model/bad_model/converse"),
+        ("bedrock/newvendor.listed-v1:0", b"/model/newvendor.listed-v1%3A0/converse"),
+        ("bedrock/us-east-1/newvendor.listed-v1:0", b"/model/newvendor.listed-v1%3A0/converse"),
+    ],
+)
+def test_not_found_error(model, path, monkeypatch):
+    monkeypatch.setitem(litellm.model_cost, "newvendor.listed-v1:0", {"litellm_provider": "bedrock", "mode": "chat"})
     sent: Final[list[httpx.Request]] = []
 
     with pytest.raises(litellm.NotFoundError) as exc_info:
@@ -9311,7 +9320,25 @@ def test_not_found_error(model):
     assert exc_info.value.status_code == 404
     assert exc_info.value.response.status_code == 404
     assert exc_info.value.response.headers["x-amzn-requestid"] == "req-123"
-    assert [request.url.raw_path for request in sent] == [b"/model/bad_model/converse"]
+    assert [request.url.raw_path for request in sent] == [path]
+
+
+def test_an_empty_model_id_fails_locally_without_calling_aws():
+    sent: Final[list[httpx.Request]] = []
+
+    with pytest.raises(litellm.NotFoundError):
+        completion(
+            model="bedrock/",
+            messages=[{"role": "user", "content": "What is the meaning of life"}],
+            client=HTTPHandler(
+                client=httpx.Client(transport=httpx.MockTransport(_invalid_model_identifier_reply(sent)))
+            ),
+            aws_access_key_id="testing",
+            aws_secret_access_key="testing",
+            aws_region_name="us-west-2",
+        )
+
+    assert sent == []
 
 
 @pytest.mark.parametrize(

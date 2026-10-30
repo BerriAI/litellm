@@ -1614,6 +1614,16 @@ def bedrock_model_is_unknown(model: str) -> bool:
     return BaseAWSLLM.get_bedrock_invoke_provider(model_id) is None
 
 
+def _names_no_invoke_provider(model: str) -> bool:
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    return bool(model.removeprefix("bedrock/")) and BaseAWSLLM.get_bedrock_invoke_provider(model) is None
+
+
+def bedrock_model_reaches_converse_by_default(model: str) -> bool:
+    return BedrockModelInfo.named_bedrock_route(model, None) is None and _names_no_invoke_provider(model)
+
+
 _BedrockConverseModelFlag: TypeAlias = Literal[
     "bedrock_converse_supports_strict_tools",
     "supports_regex_lookaround",
@@ -1807,6 +1817,16 @@ class BedrockModelInfo(BaseLLMModelInfo):
         model stays on Converse without the prefix. A model the cost map does not list as Converse goes to
         Invoke only when its id names an Invoke provider, and to Converse otherwise.
         """
+        named_route: Final = BedrockModelInfo.named_bedrock_route(model, request_params)
+        if named_route is not None:
+            return named_route
+        return "converse" if _names_no_invoke_provider(model) else "invoke"
+
+    @staticmethod
+    def named_bedrock_route(
+        model: str,
+        request_params: Mapping[str, object] | None,
+    ) -> BedrockRoute | None:
         route_mappings: dict[
             str,
             Literal[
@@ -1861,11 +1881,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
             return "converse"
         if _OPENAI_FAMILY_MODEL_RE.search(base_model):
             return "converse"
-        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-
-        if BaseAWSLLM.get_bedrock_invoke_provider(model) is None:
-            return "converse"
-        return "invoke"
+        return None
 
     @staticmethod
     def _explicit_converse_route(model: str) -> bool:

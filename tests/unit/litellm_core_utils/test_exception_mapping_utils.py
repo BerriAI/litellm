@@ -1618,6 +1618,17 @@ def test_bedrock_invalid_model_identifier_without_a_provider_response_still_answ
     assert excinfo.value.response.status_code == 404
 
 
+def test_bedrock_invalid_model_identifier_without_a_model_stays_a_bad_request():
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model=None,
+            original_exception=_ErrorWithoutResponse("The provided model identifier is invalid.", 400),
+            custom_llm_provider="bedrock",
+        )
+
+    assert excinfo.value.status_code == 400
+
+
 def test_bedrock_mantle_context_overflow_maps_to_context_window_exceeded():
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
