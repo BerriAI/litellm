@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 from litellm import Router
 from litellm.proxy import proxy_server
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
+from litellm.proxy.common_utils.http_parsing_utils import get_form_data
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import RouterErrors
 from litellm.types.utils import TranscriptionResponse
@@ -154,12 +155,15 @@ def patched_transcription(monkeypatch):
 
 
 @pytest.fixture
-def patched_transcription_error(monkeypatch, patched_transcription):
+def patched_transcription_error(monkeypatch: pytest.MonkeyPatch, patched_transcription: None) -> AsyncMock:
+    monkeypatch.setattr(proxy_server, "get_form_data", get_form_data)
+
     async def _raise(*args, **kwargs):
         raise ValueError("transcription boom")
 
-    monkeypatch.setattr(proxy_server, "route_request", _raise)
-    yield
+    route_request: Final[AsyncMock] = AsyncMock(side_effect=_raise)
+    monkeypatch.setattr(proxy_server, "route_request", route_request)
+    return route_request
 
 
 @pytest.fixture
@@ -408,7 +412,7 @@ def test_audio_transcription_keeps_the_status_of_a_proxy_rejection(
 def test_audio_transcription_error(
     client: TestClient,
     auth_as: Callable[..., AbstractContextManager[None]],
-    patched_transcription_error: None,
+    patched_transcription_error: AsyncMock,
     path: str,
     response_format: str | None,
 ) -> None:
@@ -435,6 +439,9 @@ def test_audio_transcription_error(
             "code": "500",
         }
     }
+    route_request_call: Final = patched_transcription_error.await_args
+    assert route_request_call is not None
+    assert route_request_call.kwargs["data"].get("response_format") == response_format
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"], ids=["v1", "alias"])
