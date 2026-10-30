@@ -916,13 +916,24 @@ class TestACappedTurnEndsWithTheModelAnswer:
         )
 
     @staticmethod
-    async def _ask(**request) -> dict:
+    async def _ask(max_tokens: int = 1024, **request) -> dict:
         return await litellm.anthropic_interface.messages.acreate(
             model="anthropic/claude-sonnet-5-5",
             messages=[{"role": "user", "content": "What's the latest AI news?"}],
-            max_tokens=1024,
+            max_tokens=max_tokens,
             **request,
         )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stream", [False, True])
+    async def test_every_call_of_the_turn_keeps_the_max_tokens_the_client_sent(
+        self, anthropic_model, perplexity_search, stream
+    ):
+        response = await self._ask(max_tokens=2048, stream=stream, tools=[get_litellm_web_search_tool()])
+        if stream:
+            _ = [chunk async for chunk in response]
+
+        assert [body["max_tokens"] for body in request_bodies(anthropic_model)] == [2048] * 4
 
     @pytest.mark.asyncio
     async def test_capped_turn_ends_with_the_model_answer(self, anthropic_model, perplexity_search):
