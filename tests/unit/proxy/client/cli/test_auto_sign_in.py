@@ -653,6 +653,37 @@ def test_a_long_401_body_is_cut_before_it_reaches_the_terminal(
     assert sign_in.calls == []
 
 
+@pytest.mark.parametrize(
+    "body, printed",
+    [("a " * 249 + "xy", "a " * 249 + "xy\n"), ("a " * 249 + "xyz", "a " * 249 + "xy...\n")],
+    ids=["at_the_limit", "one_past_the_limit"],
+)
+def test_a_401_reason_is_cut_only_past_the_limit_and_says_so(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault], body: str, printed: str
+) -> None:
+    requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, text=body)
+
+    result: Final = _lite(
+        ["keys", "generate"], secret_vault_factory(), FakeBrowserSignIn(_credential()), ["--api-key", "sk-explicit"]
+    )
+
+    assert result.exit_code == 1
+    assert f"The proxy said: {printed}" in result.stderr
+
+
+def test_a_control_character_past_the_cut_still_hides_a_401_body(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, text="forbidden " * 60 + "\x1b[2J")
+
+    result: Final = _lite(
+        ["keys", "generate"], secret_vault_factory(), FakeBrowserSignIn(_credential()), ["--api-key", "sk-explicit"]
+    )
+
+    assert result.exit_code == 1
+    assert "forbidden" not in result.stderr
+
+
 _ROUTES_THAT_RAISE_EACH_401_ERROR_TYPE: Final = pytest.mark.parametrize(
     "command, method, route",
     [(["keys", "generate"], "POST", "/key/generate"), (["users", "list"], "GET", "/user/list")],
@@ -717,16 +748,51 @@ def test_a_utf8_401_body_with_no_charset_prints_as_written(
     assert reason in result.stderr
 
 
-def test_a_401_body_that_is_not_utf8_is_never_printed(
-    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+@pytest.mark.parametrize(
+    "reason, charset",
+    [
+        ("caf\u00e9", "iso-8859-1"),
+        ("the key\u2019s owner", "windows-1252"),
+        ("\u65e5\u672c", "shift_jis"),
+        ("refused", "utf-16"),
+    ],
+)
+def test_a_401_body_in_a_declared_charset_prints_as_written(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault], reason: str, charset: str
 ) -> None:
-    requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, content=b"forbidden \xff\xfe")
+    requests_mock.post(
+        f"{BASE_URL}/key/generate",
+        status_code=401,
+        content=reason.encode(charset),
+        headers={"Content-Type": f"text/plain; charset={charset}"},
+    )
 
     result: Final = _lite(
         ["keys", "generate"], secret_vault_factory(), FakeBrowserSignIn(_credential()), ["--api-key", "sk-explicit"]
     )
 
     assert result.exit_code == 1
+    assert f"The proxy said: {reason}" in result.stderr
+
+
+@pytest.mark.parametrize("charset", ["utf-8", "undefined", "idna"])
+def test_a_401_body_its_charset_cannot_read_is_never_printed(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault], charset: str
+) -> None:
+    requests_mock.post(
+        f"{BASE_URL}/key/generate",
+        status_code=401,
+        content=b"forbidden \xff\xfe",
+        headers={"Content-Type": f"text/plain; charset={charset}"},
+    )
+
+    result: Final = _lite(
+        ["keys", "generate"], secret_vault_factory(), FakeBrowserSignIn(_credential()), ["--api-key", "sk-explicit"]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "The proxy said: " in result.stderr
     assert "forbidden" not in result.stderr
     assert "\ufffd" not in result.stderr
 

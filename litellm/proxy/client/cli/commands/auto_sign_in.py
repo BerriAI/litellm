@@ -216,10 +216,24 @@ def _displayable(text: str) -> str:
     return "" if _UNPRINTABLE_CHARACTERS.search(normalized) else redact_string(normalized)
 
 
+def _text_in_declared_charset(response: requests.Response) -> str:
+    try:
+        return response.text
+    except UnicodeError:
+        return ""
+
+
+def _response_text(response: requests.Response) -> str:
+    try:
+        return response.content.decode("utf-8")
+    except UnicodeDecodeError:
+        return _text_in_declared_charset(response)
+
+
 def _proxy_reason(error: UnauthorizedError) -> str:
     original: Final = error.orig_exception
     response: Final = original.response if isinstance(original, requests.HTTPError) else None
-    body: Final = response.content.decode("utf-8", errors="replace") if response is not None else ""
+    body: Final = _response_text(response) if response is not None else ""
     reason: Final = _displayable(body) or _displayable(str(error)) or _NO_PROXY_REASON
     return reason if len(reason) <= _PROXY_REASON_CHARS else f"{reason[:_PROXY_REASON_CHARS]}..."
 
