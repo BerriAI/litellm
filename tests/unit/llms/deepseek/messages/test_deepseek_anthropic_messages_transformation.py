@@ -1,3 +1,5 @@
+import pytest
+
 import litellm
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
@@ -187,3 +189,35 @@ def test_deepseek_anthropic_messages_preserves_thinking_and_sanitizes_custom_too
         "input_schema": {"type": "object"},
     }
     assert request["tools"][1]["type"] == "web_search_20260209"
+
+
+def _deepseek_messages_request(optional_params: dict) -> dict:
+    return DeepSeekAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="deepseek-v4-pro",
+        messages=[{"role": "user", "content": "Hi"}],
+        anthropic_messages_optional_request_params={"max_tokens": 32000, **optional_params},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+
+@pytest.mark.parametrize("effort", ["max", "low", "none", "ultra"])
+def test_deepseek_anthropic_messages_forwards_effort_as_sent(effort):
+    request = _deepseek_messages_request({"output_config": {"effort": effort}})
+
+    assert request["output_config"] == {"effort": effort}
+    assert "thinking" not in request
+
+
+def test_deepseek_anthropic_messages_forwards_adaptive_thinking_with_effort():
+    request = _deepseek_messages_request({"thinking": {"type": "adaptive"}, "output_config": {"effort": "max"}})
+
+    assert request["thinking"] == {"type": "adaptive"}
+    assert request["output_config"] == {"effort": "max"}
+
+
+def test_deepseek_anthropic_messages_keeps_temperature_with_effort_none():
+    request = _deepseek_messages_request({"output_config": {"effort": "none"}, "temperature": 0})
+
+    assert request["output_config"] == {"effort": "none"}
+    assert request["temperature"] == 0
