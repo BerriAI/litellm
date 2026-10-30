@@ -567,6 +567,35 @@ def test_vertex_ai_response_json_schema_preserves_refs_for_gemini_2():
     assert "$defs" in result_schema, "responseJsonSchema should preserve $defs for Gemini 2.0+"
 
 
+def test_vertex_ai_response_json_schema_declares_required_names_from_branches():
+    item = {
+        "type": ["object", "null"],
+        "anyOf": [{"properties": {"name": {"const": "People"}}}, {"properties": {"name": {"const": "Email"}}}],
+        "required": ["name"],
+    }
+
+    transformed_request = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "messages": [{"role": "user", "content": "Hello, world!"}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "pick",
+                    "schema": {"type": "object", "properties": {"item": item}, "required": ["item"]},
+                },
+            },
+        },
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+
+    assert transformed_request["response_json_schema"]["properties"]["item"] == {
+        **item,
+        "properties": {"name": {"anyOf": [{"enum": ["People"]}, {"enum": ["Email"]}]}},
+    }
+
+
 def test_vertex_ai_get_json_schema_preserves_refs_for_nested_pydantic():
     """
     Test that get_json_schema_from_pydantic_object uses model_json_schema()

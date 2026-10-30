@@ -300,3 +300,31 @@ def test_normalize_response_schema_drops_integer_enums_past_the_enum_budget(
         if integer_enum_sent
         else {"type": "integer"}
     )
+
+
+_REQUIRED_NAME_IN_BRANCHES: Final = {
+    "type": "object",
+    "anyOf": [{"properties": {"name": {"const": "People"}}}, {"properties": {"name": {"const": "Email"}}}],
+    "required": ["name"],
+}
+
+
+def test_normalize_response_schema_declares_required_names_from_branches() -> None:
+    config_dict: Final = {"responseSchema": _REQUIRED_NAME_IN_BRANCHES}
+
+    GoogleGenAIConfig._normalize_response_schema(config_dict, "gemini-2.5-flash")
+
+    assert config_dict == {
+        "responseJsonSchema": {
+            **_REQUIRED_NAME_IN_BRANCHES,
+            "properties": {"name": {"anyOf": [{"enum": ["People"]}, {"enum": ["Email"]}]}},
+        }
+    }
+
+
+def test_normalize_response_schema_sends_a_callers_response_json_schema_as_is() -> None:
+    config_dict: Final = {"responseJsonSchema": _REQUIRED_NAME_IN_BRANCHES}
+
+    GoogleGenAIConfig._normalize_response_schema(config_dict, "gemini-2.5-flash")
+
+    assert config_dict == {"responseJsonSchema": _REQUIRED_NAME_IN_BRANCHES}

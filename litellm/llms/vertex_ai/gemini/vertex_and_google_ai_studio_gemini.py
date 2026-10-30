@@ -1275,7 +1275,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 # - Standard JSON Schema format (lowercase types)
                 # - Supports additionalProperties
                 # - No propertyOrdering needed
-                optional_params["response_json_schema"] = build_json_schema(deepcopy(schema))
+                optional_params["response_json_schema"] = build_json_schema(
+                    cast(Mapping[str, JsonValue], schema)  # cast-ok: response_format is a JSON request body
+                )
             else:
                 # Use responseSchema (default, backwards compatible)
                 # - OpenAPI-style format (uppercase types)

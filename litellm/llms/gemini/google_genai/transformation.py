@@ -2,10 +2,12 @@
 Transformation for Calling Google models in their native format.
 """
 
+from collections.abc import Mapping
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
 import httpx
+from pydantic import JsonValue
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -13,6 +15,7 @@ from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.vertex_ai.common_utils import (
+    build_json_schema,
     build_vertex_schema,
     supports_response_json_schema,
     with_integer_enums_that_fit,
@@ -332,7 +335,9 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
                 return
             generate_content_config_dict.pop(schema_key)
             new_json_schema_key = "response_json_schema" if schema_key == "response_schema" else "responseJsonSchema"
-            generate_content_config_dict[new_json_schema_key] = value
+            generate_content_config_dict[new_json_schema_key] = build_json_schema(
+                cast(Mapping[str, JsonValue], value)  # cast-ok: a generateContent config is a JSON request body
+            )
         else:
             if json_schema_key is not None:
                 generate_content_config_dict.pop(json_schema_key)

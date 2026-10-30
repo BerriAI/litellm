@@ -1,11 +1,13 @@
+import json
 import math
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections import deque
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
 from functools import lru_cache
-from itertools import accumulate, chain, repeat, takewhile
+from itertools import accumulate, chain, groupby, repeat, takewhile
 from types import MappingProxyType
 from typing import Any, Final, Literal, TypeVar, cast, get_type_hints
 
@@ -890,7 +892,119 @@ def build_vertex_schema(
 _build_vertex_schema = build_vertex_schema
 
 
-def build_json_schema(parameters: dict) -> dict:
+_MAX_JSON_SCHEMA_HOISTS_PER_PATH: Final = 6
+
+
+def _json_schema_branches(schema: Mapping[str, JsonValue]) -> Iterator[Mapping[str, JsonValue]]:
+    branch_lists: Final = (schema.get(keyword) for keyword in ("anyOf", "oneOf", "allOf"))
+    branches: Final = chain.from_iterable(branches for branches in branch_lists if isinstance(branches, list))
+    return (branch for branch in branches if isinstance(branch, dict))
+
+
+def _local_ref_target(ref: str, root: Mapping[str, JsonValue]) -> Mapping[str, JsonValue] | None:
+    match ref.split("/"):
+        case ["#", "$defs" | "definitions" as defs_keyword, name]:
+            definitions: Final = root.get(defs_keyword)
+            target: Final = definitions.get(name) if isinstance(definitions, dict) else None
+            return target if isinstance(target, dict) else None
+        case _:
+            return None
+
+
+def _reachable_json_schema_branches(
+    schema: Mapping[str, JsonValue], root: Mapping[str, JsonValue]
+) -> Iterator[Mapping[str, JsonValue]]:
+    pending: Final = deque(_json_schema_branches(schema))
+    seen_refs: Final = set[str]()
+    while pending:
+        yield (branch := pending.popleft())
+        pending.extend(_json_schema_branches(branch))
+        if not isinstance(ref := branch.get("$ref"), str) or ref in seen_refs:
+            continue
+        seen_refs.add(ref)
+        if (target := _local_ref_target(ref, root)) is not None:
+            pending.append(target)
+
+
+def _branch_property_definitions(
+    schema: Mapping[str, JsonValue], root: Mapping[str, JsonValue]
+) -> Iterator[tuple[str, JsonValue]]:
+    for branch in _reachable_json_schema_branches(schema, root):
+        if isinstance(properties := branch.get("properties"), dict):
+            yield from ((name, definition) for name, definition in properties.items() if isinstance(definition, dict))
+
+
+def _const_as_enum(definition: JsonValue) -> JsonValue:
+    if not isinstance(definition, dict) or "const" not in definition:
+        return definition
+    other_keywords: Final = {keyword: value for keyword, value in definition.items() if keyword != "const"}
+    return {**other_keywords, "enum": [definition["const"]]}
+
+
+def _merged_definition(definitions: Iterable[JsonValue]) -> JsonValue:
+    by_content: Final = {
+        json.dumps(definition, sort_keys=True, default=str): definition
+        for definition in map(_const_as_enum, definitions)
+    }
+    unique: Final = tuple(by_content.values())
+    return unique[0] if len(unique) == 1 else {"anyOf": list(unique)}
+
+
+def _hoisted_properties(schema: Mapping[str, JsonValue], root: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    required: Final = schema.get("required")
+    if "$ref" in schema or not isinstance(required, list):
+        return {}
+    declared: Final = schema.get("properties")
+    missing: Final = frozenset(name for name in required if isinstance(name, str)) - frozenset(
+        declared if isinstance(declared, dict) else ()
+    )
+    if not missing:
+        return {}
+    found: Final = sorted(
+        (item for item in _branch_property_definitions(schema, root) if item[0] in missing),
+        key=lambda item: item[0],
+    )
+    return {
+        name: _merged_definition(definition for _, definition in group)
+        for name, group in groupby(found, key=lambda item: item[0])
+    }
+
+
+def _with_subschemas_declared(
+    keyword: str, value: JsonValue, root: Mapping[str, JsonValue], hoists_left: int, depth: int
+) -> JsonValue:
+    def declared(subschema: JsonValue) -> JsonValue:
+        return _with_branch_required_names_declared(subschema, root, hoists_left, depth)
+
+    match keyword, value:
+        case ("properties" | "$defs" | "definitions", dict()):
+            return {name: declared(subschema) for name, subschema in value.items()}
+        case ("anyOf" | "oneOf" | "allOf" | "prefixItems" | "items", list()):
+            return [declared(subschema) for subschema in value]
+        case ("items" | "additionalProperties", dict()):
+            return declared(value)
+        case _:
+            return value
+
+
+def _with_branch_required_names_declared(
+    schema: JsonValue, root: Mapping[str, JsonValue], hoists_left: int, depth: int
+) -> JsonValue:
+    if not isinstance(schema, dict) or depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return schema
+    hoisted: Final[Mapping[str, JsonValue]] = _hoisted_properties(schema, root) if hoists_left > 0 else {}
+    declared: Final = schema.get("properties")
+    with_hoisted: Final = (
+        {**schema, "properties": {**(declared if isinstance(declared, dict) else {}), **hoisted}} if hoisted else schema
+    )
+    subschema_hoists_left: Final = hoists_left - 1 if hoisted else hoists_left
+    return {
+        keyword: _with_subschemas_declared(keyword, value, root, subschema_hoists_left, depth + 1)
+        for keyword, value in with_hoisted.items()
+    }
+
+
+def build_json_schema(parameters: Mapping[str, JsonValue]) -> JsonValue:
     """
     Build a JSON Schema for use with Gemini's responseJsonSchema parameter.
 
@@ -900,20 +1014,21 @@ def build_json_schema(parameters: dict) -> dict:
     - Does NOT filter fields (allows additionalProperties)
     - Preserves $defs/$ref (Gemini 2.0+ supports JSON Schema references natively)
 
+    Gemini answers 400 on a node whose `required` names are defined only in its
+    anyOf, oneOf or allOf branches, and it fills a required name only from the
+    node's own `properties`. So those definitions are copied up to the node, with
+    `const` as a one-value `enum` because Gemini enforces `enum` and ignores
+    `const`. The branches stay as sent. A name no branch defines stays undeclared,
+    and a path stops hoisting after _MAX_JSON_SCHEMA_HOISTS_PER_PATH nodes because
+    each hoist copies a subtree.
+
     Parameters:
-        parameters: dict - the JSON schema to process
+        parameters: the JSON schema to process
 
     Returns:
-        dict - the processed schema in standard JSON Schema format
+        a new schema in standard JSON Schema format
     """
-    # Gemini 2.0+ with responseJsonSchema accepts standard JSON Schema as-is,
-    # including $ref, $defs, anyOf, etc. No transformations needed — the
-    # OpenAPI-specific fixes (unpack_defs, add_object_type, convert_anyof, etc.)
-    # are only required for responseSchema (Gemini 1.5) and can break valid
-    # JSON Schema by adding conflicting fields to $ref nodes.
-    # See: https://blog.google/technology/developers/gemini-api-structured-outputs/
-
-    return parameters
+    return _with_branch_required_names_declared(dict(parameters), parameters, _MAX_JSON_SCHEMA_HOISTS_PER_PATH, 0)
 
 
 _build_json_schema = build_json_schema

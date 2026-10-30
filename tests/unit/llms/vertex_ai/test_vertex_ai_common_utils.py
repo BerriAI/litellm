@@ -1,8 +1,11 @@
 import copy
+import json
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from enum import Enum
+from functools import reduce
+from operator import getitem
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -15,8 +18,9 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.vertex_ai.common_utils import (
-    VertexAITokenCounter,
+    _MAX_JSON_SCHEMA_HOISTS_PER_PATH,
     _fix_enum_types,
+    build_json_schema,
     build_vertex_schema,
     convert_anyof_null_to_nullable,
     convert_vertex_datetime_to_openai_datetime,
@@ -28,6 +32,7 @@ from litellm.llms.vertex_ai.common_utils import (
     supports_response_json_schema,
     validate_vertex_location,
     vertex_request_labels_from_litellm_params,
+    VertexAITokenCounter,
 )
 from litellm.llms.vertex_ai.count_tokens import handler as vertex_count_tokens_handler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
@@ -2631,3 +2636,259 @@ async def test_vertex_ai_token_counter_routes_like_generate_content(
         )
 
     assert (None if result is None else result.total_tokens) == vertex_counted_tokens
+
+
+_NAME_BRANCHES: Final = ({"properties": {"name": {"const": "People"}}}, {"properties": {"name": {"const": "Email"}}})
+_NAME_AS_ENUMS: Final = {"anyOf": [{"enum": ["People"]}, {"enum": ["Email"]}]}
+_UNION: Final = {"type": ["object", "null"], "anyOf": list(_NAME_BRANCHES), "required": ["name"]}
+
+
+@pytest.mark.parametrize("keyword", ["anyOf", "oneOf", "allOf"])
+def test_build_json_schema_declares_a_required_name_from_every_branch_keyword(keyword: str) -> None:
+    schema: Final = {"type": "object", keyword: list(_NAME_BRANCHES), "required": ["name"]}
+
+    assert build_json_schema(schema) == {**schema, "properties": {"name": _NAME_AS_ENUMS}}
+
+
+@pytest.mark.parametrize(
+    ("schema", "path"),
+    [
+        (_UNION, ()),
+        ({"properties": {"item": _UNION}}, ("properties", "item")),
+        ({"items": _UNION}, ("items",)),
+        ({"items": [_UNION]}, ("items", 0)),
+        ({"prefixItems": [_UNION]}, ("prefixItems", 0)),
+        ({"additionalProperties": _UNION}, ("additionalProperties",)),
+        ({"$defs": {"Item": _UNION}}, ("$defs", "Item")),
+        ({"definitions": {"Item": _UNION}}, ("definitions", "Item")),
+        ({"anyOf": [_UNION]}, ("anyOf", 0)),
+        ({"oneOf": [_UNION]}, ("oneOf", 0)),
+        ({"allOf": [_UNION]}, ("allOf", 0)),
+        ({"properties": {"a": {"items": {"properties": {"b": _UNION}}}}}, ("properties", "a", "items", "properties", "b")),
+    ],
+)
+def test_build_json_schema_reaches_every_schema_position(schema: dict, path: tuple[str | int, ...]) -> None:
+    assert reduce(getitem, path, build_json_schema(schema))["properties"] == {"name": _NAME_AS_ENUMS}
+
+
+def test_build_json_schema_keeps_declared_properties_and_their_definitions() -> None:
+    schema: Final = {
+        "properties": {"other": {"type": "integer"}, "name": {"type": "string"}, "extra": {"type": "boolean"}},
+        "anyOf": [{"properties": {"name": {"const": "People"}, "extra": {"const": True}, "unasked": {"const": 1}}}],
+        "required": ["name", "other"],
+    }
+
+    assert build_json_schema(schema) == schema
+
+
+def test_build_json_schema_merges_hoisted_names_into_declared_properties() -> None:
+    schema: Final = {
+        "properties": {"other": {"type": "integer"}},
+        "anyOf": [{"properties": {"name": {"const": "People"}, "unasked": {"const": 1}}}],
+        "required": ["name", "other"],
+    }
+
+    assert build_json_schema(schema)["properties"] == {"other": {"type": "integer"}, "name": {"enum": ["People"]}}
+
+
+def test_build_json_schema_finds_names_through_nested_branches() -> None:
+    schema: Final = {
+        "anyOf": [{"oneOf": [{"allOf": [{"properties": {"name": {"type": "string"}}}]}]}],
+        "required": ["name"],
+    }
+
+    assert build_json_schema(schema)["properties"] == {"name": {"type": "string"}}
+
+
+@pytest.mark.parametrize("defs_keyword", ["$defs", "definitions"])
+def test_build_json_schema_follows_local_refs_into_branches(defs_keyword: str) -> None:
+    schema: Final = {
+        defs_keyword: {"People": _NAME_BRANCHES[0], "Email": _NAME_BRANCHES[1]},
+        "anyOf": [{"$ref": f"#/{defs_keyword}/People"}, {"$ref": f"#/{defs_keyword}/Email"}],
+        "required": ["name"],
+    }
+
+    assert build_json_schema(schema)["properties"] == {"name": _NAME_AS_ENUMS}
+
+
+def test_build_json_schema_stops_at_a_ref_cycle() -> None:
+    schema: Final = {
+        "$defs": {
+            "A": {"anyOf": [{"$ref": "#/$defs/B"}, {"$ref": "#/$defs/A"}]},
+            "B": {"anyOf": [{"$ref": "#/$defs/A"}, {"properties": {"name": {"type": "string"}}}]},
+        },
+        "anyOf": [{"$ref": "#/$defs/A"}],
+        "required": ["name"],
+    }
+
+    assert build_json_schema(schema)["properties"] == {"name": {"type": "string"}}
+
+
+def test_build_json_schema_merges_a_ref_two_branches_share_into_one_definition() -> None:
+    schema: Final = {
+        "$defs": {"Named": {"properties": {"name": {"type": "string"}}}},
+        "anyOf": [{"allOf": [{"$ref": "#/$defs/Named"}]}, {"allOf": [{"$ref": "#/$defs/Named"}]}],
+        "required": ["name"],
+    }
+
+    assert build_json_schema(schema)["properties"] == {"name": {"type": "string"}}
+
+
+def test_build_json_schema_keeps_values_python_equality_would_merge() -> None:
+    schema: Final = {
+        "anyOf": [{"properties": {"name": {"const": 1}}}, {"properties": {"name": {"const": True}}}],
+        "required": ["name"],
+    }
+
+    assert build_json_schema(schema)["properties"]["name"]["anyOf"] == [{"enum": [1]}, {"enum": [True]}]
+
+
+def test_build_json_schema_treats_definitions_with_reordered_keys_as_one() -> None:
+    schema: Final = {
+        "anyOf": [
+            {"properties": {"name": {"type": "string", "description": "the kind"}}},
+            {"properties": {"name": {"description": "the kind", "type": "string"}}},
+        ],
+        "required": ["name"],
+    }
+
+    assert build_json_schema(schema)["properties"] == {"name": {"type": "string", "description": "the kind"}}
+
+
+def test_build_json_schema_keeps_every_definition_of_every_name_across_branches() -> None:
+    schema: Final = {
+        "anyOf": [
+            {"properties": {"b": {"const": 1}, "a": {"const": 2}}},
+            {"properties": {"a": {"const": 3}, "b": {"const": 4}}},
+        ],
+        "required": ["a", "b"],
+    }
+
+    assert build_json_schema(schema)["properties"] == {
+        "a": {"anyOf": [{"enum": [2]}, {"enum": [3]}]},
+        "b": {"anyOf": [{"enum": [1]}, {"enum": [4]}]},
+    }
+
+
+def test_build_json_schema_hoists_a_name_only_one_branch_defines() -> None:
+    schema: Final = {"anyOf": [_NAME_BRANCHES[0], {"properties": {"other": {"type": "string"}}}], "required": ["name"]}
+
+    assert build_json_schema(schema)["properties"] == {"name": {"enum": ["People"]}}
+
+
+def test_build_json_schema_keeps_a_const_definitions_other_keywords() -> None:
+    definition: Final = {"type": "string", "description": "the kind", "const": "People"}
+    schema: Final = {"anyOf": [{"properties": {"name": definition}}], "required": ["name"]}
+
+    assert build_json_schema(schema)["properties"]["name"] == {
+        "type": "string",
+        "description": "the kind",
+        "enum": ["People"],
+    }
+
+
+def test_build_json_schema_declares_names_inside_the_hoisted_copy() -> None:
+    schema: Final = {"anyOf": [{"properties": {"item": _UNION}}], "required": ["item"]}
+
+    built: Final = build_json_schema(schema)
+
+    assert built["properties"]["item"]["properties"] == {"name": _NAME_AS_ENUMS}
+    assert built["anyOf"][0]["properties"]["item"]["properties"] == {"name": _NAME_AS_ENUMS}
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        pytest.param({"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}, id="plain"),
+        pytest.param(
+            {
+                "properties": {"name": {"type": "string"}},
+                "anyOf": [{"required": ["name"]}, {"required": ["other"]}],
+            },
+            id="required-only-branches",
+        ),
+        pytest.param(
+            {"$defs": {"N": _NAME_BRANCHES[0]}, "properties": {"item": {"$ref": "#/$defs/N", "required": ["name"]}}},
+            id="ref-with-sibling-required",
+        ),
+        pytest.param({"$ref": "#/$defs/N", "anyOf": list(_NAME_BRANCHES), "required": ["name"]}, id="ref-node"),
+        pytest.param({"type": "object", "required": ["name"]}, id="declared-nowhere"),
+        pytest.param({"anyOf": list(_NAME_BRANCHES), "required": ["unknown"]}, id="not-in-any-branch"),
+        pytest.param({"anyOf": [{"properties": {"name": True}}], "required": ["name"]}, id="boolean-definition"),
+        pytest.param({"anyOf": list(_NAME_BRANCHES), "required": [{"name": 1}]}, id="non-string-name"),
+        pytest.param({"anyOf": list(_NAME_BRANCHES), "required": True}, id="required-not-a-list"),
+        pytest.param({"anyOf": 1, "required": ["name"]}, id="anyof-not-a-list"),
+        pytest.param({"anyOf": ["name"], "required": ["name"]}, id="branch-not-a-schema"),
+        pytest.param({"anyOf": [{"properties": "name"}], "required": ["name"]}, id="properties-not-a-map"),
+        pytest.param({"anyOf": [{"$ref": "#/$defs/Missing"}], "required": ["name"]}, id="missing-def"),
+        pytest.param({"anyOf": [{"$ref": "#"}], "required": ["name"]}, id="root-ref"),
+        pytest.param({"anyOf": [{"$ref": {}}], "required": ["name"]}, id="ref-not-a-string"),
+        pytest.param({"anyOf": [{"$ref": "https://example.com/s.json"}], "required": ["name"]}, id="remote-ref"),
+        pytest.param({"$defs": [], "anyOf": [{"$ref": "#/$defs/N"}], "required": ["name"]}, id="defs-not-a-map"),
+        pytest.param(
+            {"$defs": {"N": True}, "anyOf": [{"$ref": "#/$defs/N"}], "required": ["name"]}, id="def-not-a-schema"
+        ),
+        pytest.param(
+            {
+                "properties": {
+                    "required": {"type": "array", "items": {"type": "string"}},
+                    "anyOf": {"type": "string"},
+                },
+                "required": ["required", "anyOf"],
+            },
+            id="properties-named-like-keywords",
+        ),
+        pytest.param(
+            {
+                "properties": {"item": {"type": "object"}},
+                "default": {"anyOf": list(_NAME_BRANCHES), "required": ["name"]},
+                "enum": [{"anyOf": list(_NAME_BRANCHES), "required": ["name"]}],
+            },
+            id="values-shaped-like-schemas",
+        ),
+    ],
+)
+def test_build_json_schema_leaves_schemas_with_nothing_to_hoist_as_sent(schema: dict) -> None:
+    assert build_json_schema(schema) == schema
+
+
+def test_build_json_schema_does_not_change_its_input() -> None:
+    schema: Final = {"properties": {"item": copy.deepcopy(_UNION)}}
+    sent: Final = copy.deepcopy(schema)
+
+    build_json_schema(schema)
+
+    assert schema == sent
+
+
+@pytest.mark.parametrize(
+    ("levels", "declared"), [(DEFAULT_MAX_RECURSE_DEPTH, True), (DEFAULT_MAX_RECURSE_DEPTH + 1, False)]
+)
+def test_build_json_schema_stops_descending_at_the_recursion_limit(levels: int, declared: bool) -> None:
+    nested: Final = reduce(lambda inner, _: {"properties": {"item": inner}}, range(levels), _UNION)
+
+    built: Final = build_json_schema(nested)
+
+    assert ("properties" in reduce(getitem, ("properties", "item") * levels, built)) is declared
+
+
+def _nested_hoists(levels: int) -> dict:
+    innermost: Final = {"anyOf": [{"properties": {"x": {"type": "string"}}}], "required": ["x"]}
+    return reduce(
+        lambda inner, _: {"anyOf": [{"properties": {"x": inner}}], "required": ["x"]}, range(levels - 1), innermost
+    )
+
+
+def test_build_json_schema_output_stays_near_its_input_size_on_nested_hoists() -> None:
+    nested: Final = _nested_hoists(20)
+
+    assert len(json.dumps(build_json_schema(nested))) < 200 * len(json.dumps(nested))
+
+
+@pytest.mark.parametrize(
+    ("levels", "declared"), [(_MAX_JSON_SCHEMA_HOISTS_PER_PATH, True), (_MAX_JSON_SCHEMA_HOISTS_PER_PATH + 1, False)]
+)
+def test_build_json_schema_hoists_up_to_the_limit_on_one_path(levels: int, declared: bool) -> None:
+    built: Final = build_json_schema(_nested_hoists(levels))
+
+    assert ("properties" in reduce(getitem, ("properties", "x") * (levels - 1), built)) is declared

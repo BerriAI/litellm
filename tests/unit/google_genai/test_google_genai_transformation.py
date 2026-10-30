@@ -511,6 +511,14 @@ def test_response_schema_normalization_parity_across_chat_and_native_paths():
                 "items": {"$ref": "#/$defs/Highlight"},
             },
             "rating": {"anyOf": [{"type": "number"}, {"type": "null"}]},
+            "pick": {
+                "type": "object",
+                "anyOf": [
+                    {"properties": {"name": {"const": "People"}}},
+                    {"properties": {"name": {"const": "Email"}}},
+                ],
+                "required": ["name"],
+            },
         },
         "required": ["park_name", "highlights"],
     }
