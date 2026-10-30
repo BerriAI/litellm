@@ -99,14 +99,14 @@ def _assistant_tool_calls(messages: Sequence[Mapping[str, object]]) -> Iterable[
 def _responses_tool_call_item(tool_call: _FieldReader) -> Mapping[str, object]:
     call_id: Final = tool_call.get("id", "")
     if _is_custom_tool_call(tool_call):
-        custom: Final = _field_reader(tool_call.get("custom"))
+        custom: Final = _field_reader(tool_call.get("custom") or {})
         return {
             "type": "custom_tool_call",
             "call_id": call_id,
             "name": custom.get("name", ""),
             "input": custom.get("input", ""),
         }
-    function: Final = _field_reader(tool_call.get("function", {}))
+    function: Final = _field_reader(tool_call.get("function") or {})
     return {
         "type": "function_call",
         "call_id": call_id,
@@ -283,8 +283,6 @@ class OpenAICountTokensConfig:
                 if "strict" in func:
                     item["strict"] = func["strict"]
                 transformed.append(item)
-            elif tool.get("type") == "custom" and (custom := as_str_mapping(tool.get("custom"))) is not None:
-                transformed.append(dict(_responses_custom_tool(custom)))
             elif "input_schema" in tool and "name" in tool and tool.get("type") in (None, "custom"):
                 transformed.append(
                     {
@@ -295,6 +293,8 @@ class OpenAICountTokensConfig:
                         "strict": bool(tool.get("strict")),
                     }
                 )
+            elif tool.get("type") == "custom" and (custom := as_str_mapping(tool.get("custom"))) is not None:
+                transformed.append(dict(_responses_custom_tool(custom)))
             else:
                 # Pass through non-function tools (e.g., web_search, file_search)
                 transformed.append(tool)

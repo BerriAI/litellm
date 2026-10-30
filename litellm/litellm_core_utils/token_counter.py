@@ -47,7 +47,7 @@ from litellm.constants import (
     TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, has_attributes
 from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
     ChatTemplateToolSection,
     chat_template_tool_section,
@@ -893,7 +893,9 @@ def _count_function_call_tokens(
             raise ValueError(f"Unsupported type {type(value)} for key tool_calls in message {message}")
         total = 0
         for tool_call in value:
-            if (fields := as_str_mapping(tool_call)) is None or ("function" not in fields and "custom" not in fields):
+            if (fields := _tool_call_fields(tool_call)) is None or (
+                "function" not in fields and "custom" not in fields
+            ):
                 raise ValueError(f"Unsupported tool call {tool_call} must contain a function or custom key")
             total += count_function(_tool_call_text(fields))
         return total
@@ -904,9 +906,19 @@ def _count_function_call_tokens(
     raise ValueError(f"Unexpected key {key!r}; expected 'tool_calls' or 'function_call'")
 
 
-def _tool_call_text(tool_call: Mapping[str, object]) -> str:
-    is_custom: Final = is_custom_tool_call_dict(tool_call)
-    payload: Final = as_str_mapping(tool_call.get("custom" if is_custom else "function"))
+class _ToolCallFields(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+    def __contains__(self, key: object, /) -> bool: ...
+
+
+def _tool_call_fields(value: object) -> _ToolCallFields | None:
+    return value if has_attributes(value, _ToolCallFields, "get", "__contains__") else None
+
+
+def _tool_call_text(tool_call: _ToolCallFields) -> str:
+    is_custom: Final = is_custom_tool_call_dict({"type": tool_call.get("type"), "custom": tool_call.get("custom")})
+    payload: Final = _tool_call_fields(tool_call.get("custom" if is_custom else "function"))
     if payload is None:
         return ""
     return str(payload.get("input" if is_custom else "arguments", ""))
@@ -1812,8 +1824,8 @@ def _function_definitions_for_tool(tool: Mapping[str, object]) -> Iterable[Mappi
         yield function
         return
     custom: Final = as_str_mapping(tool.get("custom"))
-    if custom is not None:
-        yield _custom_tool_definition(custom)
+    if "input_schema" not in tool and (custom is not None or tool.get("type") == "custom"):
+        yield _custom_tool_definition(custom if custom is not None else tool)
         return
     declarations: Final = tool.get("function_declarations") or tool.get("functionDeclarations")
     if isinstance(declarations, list):
