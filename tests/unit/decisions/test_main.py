@@ -2491,6 +2491,7 @@ _DROPPED_OVERSIZED_IMAGES: Final[tuple[tuple[Sequence[object], Sequence[object]]
     *((images, images[:kept]) for (images, _), kept in zip(_OVERSIZED_IMAGES, (0, 0, 2), strict=True)),
     ((_png_data_url(4 * _MIB + 1), _SMALL_PNG), (_SMALL_PNG,)),
     ((*(_png_data_url(4 * _MIB + 1),) * 4, _SMALL_PNG), (_SMALL_PNG,)),
+    ((*(_png_data_url(3 * _MIB),) * 3, _SMALL_PNG), (*(_png_data_url(3 * _MIB),) * 2, _SMALL_PNG)),
 )
 
 
@@ -2498,7 +2499,7 @@ _DROPPED_OVERSIZED_IMAGES: Final[tuple[tuple[Sequence[object], Sequence[object]]
 @pytest.mark.parametrize(
     ("images", "kept"),
     _DROPPED_OVERSIZED_IMAGES,
-    ids=(*_OVERSIZED_IMAGE_IDS, "oversized_then_small", "four_oversized_then_small"),
+    ids=(*_OVERSIZED_IMAGE_IDS, "oversized_then_small", "four_oversized_then_small", "over_the_total_then_small"),
 )
 def test_images_over_cloudflares_size_limits_are_dropped_under_drop_params(
     images: Sequence[object], kept: Sequence[object], respx_mock: respx.MockRouter
@@ -4674,6 +4675,100 @@ async def test_image_bytes_that_are_not_an_image_are_refused_before_http_when_no
         )
 
     assert route.call_count == 0
+
+
+_UNDECODABLE_PNG_DATA_URL: Final = f"data:image/png;base64,{base64.b64encode(_PNG_SIGNATURE + b'IHDR').decode()}"
+_UNDECODABLE_PNG_REQUEST: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "state": _SCREEN_TEXT,
+        "questions": _SYSTEMONE_PREDICATE,
+        "images": [_UNDECODABLE_PNG_DATA_URL, _PNG_DATA_URL],
+        "api_key": "k",
+        "drop_params": True,
+    }
+)
+
+
+def _refused_then_answered(status: int) -> tuple[httpx.Response, httpx.Response]:
+    return httpx.Response(status, json={"error": {"message": "refused"}}), httpx.Response(200, json=_RESPONSE)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
+@pytest.mark.parametrize("status", (400, 413, 422))
+@pytest.mark.parametrize(("model", "url"), _PERPLEXITY_IMAGE_TYPE_MODELS, ids=_PERPLEXITY_IMAGE_TYPE_MODEL_IDS)
+async def test_a_request_whose_images_the_model_refuses_is_sent_again_without_them_under_drop_params(
+    sync: bool, status: int, model: str, url: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(url).mock(side_effect=_refused_then_answered(status))
+
+    if sync:
+        litellm.systemone(model=model, **_UNDECODABLE_PNG_REQUEST)
+    else:
+        await litellm.asystemone(model=model, **_UNDECODABLE_PNG_REQUEST)
+
+    assert [json.loads(call.request.content)["state"] for call in route.calls] == [
+        [
+            _SCREEN_TEXT,
+            {"type": "image_url", "image_url": {"url": _UNDECODABLE_PNG_DATA_URL}},
+            {"type": "image_url", "image_url": {"url": _PNG_DATA_URL}},
+        ],
+        _SCREEN_TEXT,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_logging_callbacks_get_the_request_sent_again_without_images(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).mock(side_effect=_refused_then_answered(400))
+    recording_logger: Final = _InputRecordingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recording_logger])
+
+    await litellm.asystemone(model="perplexity/pplx-decider-v1.2", **_UNDECODABLE_PNG_REQUEST)
+    await _drain_logging_worker()
+
+    assert recording_logger.inputs == [json.loads(route.calls.last.request.content)]
+
+
+_REFUSALS_SENT_ONCE: Final[tuple[tuple[str, Mapping[str, object], int, type[Exception]], ...]] = (
+    ("asystemone", {**_UNDECODABLE_PNG_REQUEST, "drop_params": False}, 400, litellm.BadRequestError),
+    ("asystemone", _UNDECODABLE_PNG_REQUEST, 401, litellm.AuthenticationError),
+    (
+        "adecisions",
+        {
+            "input": [{"role": "user", "content": [{"type": "input_image", "image_url": _UNDECODABLE_PNG_DATA_URL}]}],
+            "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+            "api_key": "k",
+            "drop_params": True,
+        },
+        400,
+        litellm.BadRequestError,
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("api", "request_kwargs", "status", "error_class"),
+    _REFUSALS_SENT_ONCE,
+    ids=("without_drop_params", "not_a_refusal_of_the_content", "no_input_left_without_images"),
+)
+async def test_a_refusal_reaches_the_caller_after_one_call_when_the_images_cannot_be_dropped(
+    api: str,
+    request_kwargs: Mapping[str, object],
+    status: int,
+    error_class: type[Exception],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).mock(side_effect=_refused_then_answered(status))
+
+    with pytest.raises(error_class):
+        await getattr(litellm, api)(model="perplexity/pplx-decider-v1.2", **request_kwargs)
+
+    assert route.call_count == 1
 
 
 @pytest.mark.asyncio

@@ -4,7 +4,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
-from itertools import accumulate
+from itertools import accumulate, islice
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
@@ -726,7 +726,7 @@ def _decoded_image_bytes(image: DecisionsImage) -> int:
 
 
 def _leading_bytes(payload: str) -> bytes:
-    head: Final = standard_base64(payload)[:16]
+    head: Final = standard_base64(payload[:64])[:16]
     try:
         return base64.b64decode(head + "=" * (-len(head) % 4))
     except binascii.Error:
@@ -801,19 +801,32 @@ def _is_usable(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _ImageBudget:
+    spent: int = 0
+    count: int = 0
+    kept: bool = False
+
+
+def _after_image(rules: BaseDecisionsConfig, budget: _ImageBudget, sized_fit: tuple[int, bool]) -> _ImageBudget:
+    size, fit = sized_fit
+    if not fit or not _within(rules.max_total_image_bytes, budget.spent + size):
+        return replace(budget, kept=False)
+    if not _within(rules.max_images, budget.count + 1):
+        return replace(budget, kept=False)
+    return _ImageBudget(spent=budget.spent + size, count=budget.count + 1, kept=True)
+
+
 def _kept_images(call: DecisionsCall) -> tuple[bool, ...]:
     rules: Final = call.provider_config.image_rules_for(call.model)
     images: Final = input_images(call.ir_request.input)
     usable: Final = partial(_is_usable, rules, frozenset(_remote_image_urls(call)), _drops_params(call.litellm_params))
-    fits: Final = tuple(map(usable, images))
-    spent: Final = accumulate(
-        _decoded_image_bytes(image) if fit else 0 for image, fit in zip(images, fits, strict=True)
+    budgets: Final = accumulate(
+        zip(map(_decoded_image_bytes, images), map(usable, images), strict=True),
+        partial(_after_image, rules),
+        initial=_ImageBudget(),
     )
-    counted: Final = accumulate(int(fit) for fit in fits)
-    return tuple(
-        fit and _within(rules.max_total_image_bytes, bytes_so_far) and _within(rules.max_images, images_so_far)
-        for fit, bytes_so_far, images_so_far in zip(fits, spent, counted, strict=True)
-    )
+    return tuple(budget.kept for budget in islice(budgets, 1, None))
 
 
 def _with_images_within_limits(call: DecisionsCall, kept: Sequence[bool]) -> DecisionsCall:
@@ -913,6 +926,85 @@ def _map_upstream_exception(error: Exception, call: DecisionsCall) -> Exception:
             )
 
 
+_CONTENT_REFUSAL_STATUSES: Final = frozenset({400, 413, 422})
+
+
+def _refuses_request_content(error: BaseLLMException) -> bool:
+    return not error.status_code_is_synthesized and error.status_code in _CONTENT_REFUSAL_STATUSES
+
+
+def _without_images_after_refusal(call: DecisionsCall, error: BaseLLMException) -> DecisionsCall | None:
+    images: Final = input_images(call.ir_request.input)
+    if not images or not _drops_params(call.litellm_params) or not _refuses_request_content(error):
+        return None
+    without_images: Final = _with_images_kept(call.ir_request.input, tuple(False for _ in images))
+    if _leaves_no_input(without_images):
+        return None
+    return replace(call, ir_request=replace(call.ir_request, input=without_images))
+
+
+async def _aposted(
+    call: DecisionsCall, body: Mapping[str, object], logged_body: Mapping[str, object]
+) -> DecisionsIRResponse:
+    return await _HANDLER.adecisions(
+        model=call.model,
+        custom_llm_provider=call.custom_llm_provider,
+        logging_obj=call.logging_obj,
+        provider_config=call.provider_config,
+        request=call.ir_request,
+        body=body,
+        logged_body=logged_body,
+        api_base=call.api_base,
+        api_key=call.api_key,
+        headers=call.headers,
+        timeout=call.timeout,
+        litellm_params=call.litellm_params,
+    )
+
+
+def _posted(call: DecisionsCall, body: Mapping[str, object], logged_body: Mapping[str, object]) -> DecisionsIRResponse:
+    return _HANDLER.decisions(
+        model=call.model,
+        custom_llm_provider=call.custom_llm_provider,
+        logging_obj=call.logging_obj,
+        provider_config=call.provider_config,
+        request=call.ir_request,
+        body=body,
+        logged_body=logged_body,
+        api_base=call.api_base,
+        api_key=call.api_key,
+        headers=call.headers,
+        timeout=call.timeout,
+        litellm_params=call.litellm_params,
+    )
+
+
+async def _aposted_without_refused_images(
+    call: DecisionsCall, body: Mapping[str, object], logged_body: Mapping[str, object]
+) -> DecisionsIRResponse:
+    try:
+        return await _aposted(call, body, logged_body)
+    except BaseLLMException as error:
+        retry: Final = _without_images_after_refusal(call, error)
+        if retry is None:
+            raise
+        retry_body: Final = _request_body(retry)
+        return await _aposted(retry, retry_body, retry_body)
+
+
+def _posted_without_refused_images(
+    call: DecisionsCall, body: Mapping[str, object], logged_body: Mapping[str, object]
+) -> DecisionsIRResponse:
+    try:
+        return _posted(call, body, logged_body)
+    except BaseLLMException as error:
+        retry: Final = _without_images_after_refusal(call, error)
+        if retry is None:
+            raise
+        retry_body: Final = _request_body(retry)
+        return _posted(retry, retry_body, retry_body)
+
+
 async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
     supported: Final = _refused_over_count(_checked_image_types(call))
     fetched: Final = await _async_with_remote_images_inlined(supported)
@@ -920,19 +1012,8 @@ async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionRespon
     inlined: Final = _with_images_within_limits(fetched, kept)
     body: Final = _request_body(inlined)
     try:
-        response: Final = await _HANDLER.adecisions(
-            model=inlined.model,
-            custom_llm_provider=inlined.custom_llm_provider,
-            logging_obj=inlined.logging_obj,
-            provider_config=inlined.provider_config,
-            request=inlined.ir_request,
-            body=body,
-            logged_body=_logged_body(supported, fetched, kept, body),
-            api_base=inlined.api_base,
-            api_key=inlined.api_key,
-            headers=inlined.headers,
-            timeout=inlined.timeout,
-            litellm_params=inlined.litellm_params,
+        response: Final = await _aposted_without_refused_images(
+            inlined, body, _logged_body(supported, fetched, kept, body)
         )
     except Exception as error:
         raise _map_upstream_exception(error, inlined) from error
@@ -946,20 +1027,7 @@ def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
     inlined: Final = _with_images_within_limits(fetched, kept)
     body: Final = _request_body(inlined)
     try:
-        response: Final = _HANDLER.decisions(
-            model=inlined.model,
-            custom_llm_provider=inlined.custom_llm_provider,
-            logging_obj=inlined.logging_obj,
-            provider_config=inlined.provider_config,
-            request=inlined.ir_request,
-            body=body,
-            logged_body=_logged_body(supported, fetched, kept, body),
-            api_base=inlined.api_base,
-            api_key=inlined.api_key,
-            headers=inlined.headers,
-            timeout=inlined.timeout,
-            litellm_params=inlined.litellm_params,
-        )
+        response: Final = _posted_without_refused_images(inlined, body, _logged_body(supported, fetched, kept, body))
     except Exception as error:
         raise _map_upstream_exception(error, inlined) from error
     return _format_response(response, inlined)
