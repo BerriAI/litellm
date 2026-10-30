@@ -5,6 +5,7 @@ from typing import Final
 from httpx import Headers
 
 from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
@@ -90,13 +91,26 @@ FIREROUTER: Final = "firerouter"
 ROUTER_SHORT_NAMES: Final = frozenset({FIREROUTER, "auto", "auto-instant"})
 
 
+def _priced_only_as_router(short_name: str) -> bool:
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    return (
+        f"fireworks_ai/accounts/fireworks/routers/{short_name}" in catalog
+        and f"fireworks_ai/accounts/fireworks/models/{short_name}" not in catalog
+    )
+
+
 def resolve_fireworks_resource_name(model: str) -> str:
     stripped: Final = model.removeprefix("fireworks_ai/")
     if stripped.startswith(("accounts/", AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX)) or "#" in stripped:
         return stripped
     if stripped.startswith(("routers/", "models/")):
         return f"accounts/fireworks/{stripped}"
-    if stripped.endswith("-fast") or stripped in ROUTER_SHORT_NAMES or stripped.startswith(f"{FIREROUTER}/"):
+    if (
+        stripped.endswith("-fast")
+        or stripped in ROUTER_SHORT_NAMES
+        or stripped.startswith(f"{FIREROUTER}/")
+        or _priced_only_as_router(stripped)
+    ):
         return f"accounts/fireworks/routers/{stripped}"
     return f"accounts/fireworks/models/{stripped}"
 

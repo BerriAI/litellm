@@ -1,6 +1,9 @@
+from typing import Final
+
 import pytest
 
-from litellm.llms.fireworks_ai.common_utils import resolve_fireworks_resource_name
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.llms.fireworks_ai.common_utils import ROUTER_SHORT_NAMES, resolve_fireworks_resource_name
 
 
 @pytest.mark.parametrize(
@@ -52,3 +55,29 @@ from litellm.llms.fireworks_ai.common_utils import resolve_fireworks_resource_na
 )
 def test_resolve_fireworks_resource_name(model, expected):
     assert resolve_fireworks_resource_name(model) == expected
+
+
+def _priced_fireworks_names(kind: str) -> frozenset[str]:
+    prefix: Final = f"fireworks_ai/accounts/fireworks/{kind}/"
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    return frozenset(key.removeprefix(prefix) for key in catalog if key.startswith(prefix))
+
+
+def test_a_short_name_priced_only_as_a_router_resolves_to_the_router():
+    router_only: Final = _priced_fireworks_names("routers") - _priced_fireworks_names("models")
+    assert router_only
+    assert {name: resolve_fireworks_resource_name(f"fireworks_ai/{name}") for name in router_only} == {
+        name: f"accounts/fireworks/routers/{name}" for name in router_only
+    }
+
+
+def test_a_short_name_priced_as_a_model_keeps_the_model_path():
+    model_names: Final = frozenset(
+        name
+        for name in _priced_fireworks_names("models")
+        if not name.endswith("-fast") and name not in ROUTER_SHORT_NAMES
+    )
+    assert model_names
+    assert {name: resolve_fireworks_resource_name(f"fireworks_ai/{name}") for name in model_names} == {
+        name: f"accounts/fireworks/models/{name}" for name in model_names
+    }

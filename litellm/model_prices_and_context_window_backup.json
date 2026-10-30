@@ -77192,7 +77192,7 @@
             "text"
         ]
     },
-    "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash-1017-us": {
+    "fireworks_ai/accounts/fireworks/routers/deepseek-v4p1-flash-1017-us": {
         "cache_read_input_token_cost": 9e-09,
         "cache_read_input_token_cost_priority": 1.125e-08,
         "input_cost_per_token": 4.5e-07,
