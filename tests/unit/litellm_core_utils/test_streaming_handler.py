@@ -6847,6 +6847,37 @@ def test_the_usage_chunk_carries_the_bill_the_builder_priced_for_the_spend_row()
     assert usage_chunk.usage is not None and usage_chunk.usage.cost == 0.00032, "the client sees what the row bills"
 
 
+@pytest.mark.parametrize("upstream_cost", [None, 0.001])
+def test_rebuilding_a_priced_stream_bills_the_margin_once(monkeypatch: pytest.MonkeyPatch, upstream_cost: float | None) -> None:
+    from litellm.litellm_core_utils.core_helpers import stamp_litellm_bill_on_usage
+    from litellm.litellm_core_utils.streaming_handler import (
+        _stamp_usage_cost,  # pyright: ignore[reportPrivateUsage]  # the helper under test
+    )
+
+    monkeypatch.setattr(litellm, "cost_margin_config", {"global": 0.5})
+    model: Final = "anthropic/claude-sonnet-4-5"
+    shared_usage: Final = Usage(prompt_tokens=9, completion_tokens=16, total_tokens=25)
+    if upstream_cost is not None:
+        setattr(shared_usage, "cost", upstream_cost)
+    reference: Final = ModelResponse(model=model, usage=shared_usage.model_copy())
+    billed_once: Final = litellm.completion_cost(reference, custom_llm_provider="anthropic")
+    complete: Final = ModelResponse(model=model, usage=shared_usage)
+    stamp_litellm_bill_on_usage(complete, shared_usage, billed_once)
+    text_chunk: Final = ModelResponseStream(
+        id="chunk-1", model=model, choices=[StreamingChoices(index=0, delta=Delta(content="hi"), finish_reason="stop")]
+    )
+    usage_chunk: Final = ModelResponseStream(id="chunk-1", model=model, choices=[], usage=shared_usage)
+
+    _stamp_usage_cost(usage_chunk, complete)
+    rebuilt: Final = litellm.stream_chunk_builder([text_chunk, usage_chunk], messages=[{"role": "user", "content": "hi"}])
+
+    assert rebuilt is not None and rebuilt.usage is not None  # pyright: ignore[reportAttributeAccessIssue]  # ModelResponse carries usage at runtime
+    assert usage_chunk.usage is not None and usage_chunk.usage.cost == pytest.approx(billed_once)
+    assert litellm.completion_cost(rebuilt, custom_llm_provider="anthropic") == pytest.approx(billed_once), (
+        "pricing the rebuilt stream must not margin litellm's own bill again"
+    )
+
+
 def test_chunk_creator_keeps_provider_model_private_across_stream():
     from litellm.router_utils.add_retry_fallback_headers import (
         get_hidden_params_dict,

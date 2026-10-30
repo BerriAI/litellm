@@ -24,7 +24,12 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import chunk_usage, provider_reported_usage_cost
+from litellm.litellm_core_utils.core_helpers import (
+    UPSTREAM_USAGE_COST,
+    chunk_usage,
+    provider_reported_usage_cost,
+    stamp_litellm_bill_on_usage,
+)
 from litellm.litellm_core_utils.hidden_params import (
     HIDDEN_PARAMS_ATTR,
     get_hidden_params,
@@ -98,12 +103,17 @@ def _stamp_usage_cost(
     usage_chunk: ModelResponse | TextCompletionResponse | ModelResponseStream,
     complete_response: ModelResponse | TextCompletionResponse | ModelResponseStream,
 ) -> None:
-    bill: Final = (get_hidden_params(complete_response) or {}).get("response_cost")
+    complete_hidden: Final = get_hidden_params(complete_response) or {}
+    bill: Final = complete_hidden.get("response_cost")
     usage: Final[object] = getattr(usage_chunk, "usage", None)
     if usage is None or isinstance(bill, bool) or not isinstance(bill, (int, float)):
         return
-    if bill > 0 or isinstance(getattr(usage, "cost", None), (int, float)):
-        setattr(usage, "cost", float(bill))  # noqa: B010  # cost is an optional extra on the usage model
+    if bill <= 0 and not isinstance(getattr(usage, "cost", None), (int, float)):
+        return
+    chunk_hidden: Final = get_hidden_params(usage_chunk)
+    if chunk_hidden is not None and UPSTREAM_USAGE_COST in complete_hidden:
+        chunk_hidden[UPSTREAM_USAGE_COST] = complete_hidden[UPSTREAM_USAGE_COST]
+    stamp_litellm_bill_on_usage(usage_chunk, usage, float(bill))
 
 
 def _stamp_served_service_tier(response: ModelResponseStream, complete_streaming_response: ModelResponse) -> None:
