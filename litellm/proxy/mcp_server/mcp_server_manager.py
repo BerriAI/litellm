@@ -172,6 +172,15 @@ from litellm.proxy.mcp_server.result_conversion import (
 from litellm.proxy.mcp_server.sampling_handler import (
     MCP_SAMPLING_AVAILABLE,
 )
+from litellm.proxy.mcp_server.server_catalog_cache import (
+    get_submitted_server_ids,
+    get_toolset_by_name,
+    get_toolset_permissions,
+    invalidate_submitted_server_ids,
+    put_submitted_server_ids,
+    put_toolset_by_name,
+    put_toolset_permissions,
+)
 from litellm.proxy.mcp_server.stdio_gate import (
     MCP_STDIO_DISABLED_MESSAGE,
     is_mcp_stdio_blocked,
@@ -223,6 +232,7 @@ from litellm.proxy.middleware.per_request_root_path_middleware import (
     get_request_root_path,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.redis.stores.mcp_server_catalog import TOOLSET_NOT_FOUND, submitted_servers_key
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -3566,7 +3576,7 @@ class MCPServerManager:
 
     @staticmethod
     def get_byom_submitted_servers_cache_key(user_id: str) -> str:
-        return f"byom_submitted_servers:{user_id}"
+        return submitted_servers_key(user_id)
 
     @with_service_target(MCP_SERVERS_TARGET)
     async def invalidate_byom_submitted_servers_cache(self, user_id: str | None) -> None:
@@ -3575,7 +3585,7 @@ class MCPServerManager:
         try:
             from litellm.proxy.proxy_server import user_api_key_cache
 
-            await user_api_key_cache.async_delete_cache(key=self.get_byom_submitted_servers_cache_key(user_id))
+            await invalidate_submitted_server_ids(user_api_key_cache, user_id)
         except Exception as e:  # noqa: BLE001
             verbose_logger.warning("Failed to invalidate BYOM submitted MCP server cache: %s", e)
 
@@ -3596,14 +3606,11 @@ class MCPServerManager:
             verbose_logger.warning("Failed to load BYOM submitted MCP server cache dependencies: %s", e)
             return []
 
-        byom_cache_key: Final = self.get_byom_submitted_servers_cache_key(submitter_user_id)
         submitted_server_ids: list[str] | None = None
         try:
-            cached_submitted_server_ids: Final = _UNTYPED_VALUE.validate_python(
-                await user_api_key_cache.async_get_cache(key=byom_cache_key)
-            )
+            cached_submitted_server_ids: Final = await get_submitted_server_ids(user_api_key_cache, submitter_user_id)
             if cached_submitted_server_ids is not None:
-                submitted_server_ids = cast(list[str], cached_submitted_server_ids)
+                submitted_server_ids = list(cached_submitted_server_ids)
         except Exception as e:  # noqa: BLE001
             verbose_logger.warning("Failed to read BYOM submitted MCP server cache: %s", e)
 
@@ -3619,11 +3626,7 @@ class MCPServerManager:
                     verbose_logger.warning("Failed to read BYOM submitted MCP servers from database: %s", e)
                     submitted_server_ids = []
             try:
-                await user_api_key_cache.async_set_cache(
-                    key=byom_cache_key,
-                    value=submitted_server_ids,
-                    ttl=60,
-                )
+                await put_submitted_server_ids(user_api_key_cache, submitter_user_id, submitted_server_ids, ttl=60)
             except Exception as e:  # noqa: BLE001
                 verbose_logger.warning("Failed to write BYOM submitted MCP server cache: %s", e)
 
@@ -3851,12 +3854,11 @@ class MCPServerManager:
         if not toolset_ids or prisma_client is None:
             return {}
 
-        cache_key: Final = "toolset_perms:" + ",".join(sorted(toolset_ids))
-        cached: Final[dict[str, list[str]] | None] = (
-            None if requires_fresh_policy else await user_api_key_cache.async_get_cache(key=cache_key)
+        cached: Final = (
+            None if requires_fresh_policy else await get_toolset_permissions(user_api_key_cache, toolset_ids)
         )
         if cached is not None:
-            return cached
+            return {server_id: list(tools) for server_id, tools in cached.items()}
 
         try:
             toolsets: Final = await list_mcp_toolsets(
@@ -3868,10 +3870,8 @@ class MCPServerManager:
                     allowed_names = tool_permissions.setdefault(tool["server_id"], [])
                     if tool["tool_name"] not in allowed_names:
                         allowed_names.append(tool["tool_name"])
-            await user_api_key_cache.async_set_cache(
-                key=cache_key,
-                value=tool_permissions,
-                ttl=get_management_object_ttl(user_api_key_cache),
+            await put_toolset_permissions(
+                user_api_key_cache, toolset_ids, tool_permissions, ttl=get_management_object_ttl(user_api_key_cache)
             )
             return tool_permissions
         except Exception as e:
@@ -3929,29 +3929,18 @@ class MCPServerManager:
         so callers can always use attribute access (e.g. ``toolset.toolset_id``).
         """
         from litellm.proxy.proxy_server import user_api_key_cache
-        from litellm.types.mcp_server.mcp_toolset import MCPToolset
 
-        cache_key: Final = f"toolset_name:{toolset_name}"
-        cached: Final = await user_api_key_cache.async_get_cache(key=cache_key)
+        cached: Final = await get_toolset_by_name(user_api_key_cache, toolset_name)
         if cached is not None:
-            # Sentinel value used to cache "not found" so we don't re-query for
-            # names that don't exist.
-            if cached == "__not_found__":
-                return None
-            # Redis deserialises JSON back as a plain dict — reconstruct the model.
-            if isinstance(cached, dict):
-                return MCPToolset(**cached)
-            return cached
+            return None if cached == TOOLSET_NOT_FOUND else cached
 
         from litellm.proxy.mcp_server.toolset_db import (
             get_mcp_toolset_by_name,
         )
 
         toolset: Final = await get_mcp_toolset_by_name(prisma_client, toolset_name)
-        await user_api_key_cache.async_set_cache(
-            key=cache_key,
-            value=(toolset.model_dump(mode="json") if toolset is not None else "__not_found__"),
-            ttl=get_management_object_ttl(user_api_key_cache),
+        await put_toolset_by_name(
+            user_api_key_cache, toolset_name, toolset, ttl=get_management_object_ttl(user_api_key_cache)
         )
         return toolset
 

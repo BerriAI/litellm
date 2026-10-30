@@ -9032,26 +9032,41 @@ class TestMCPServerManager:
 
     @pytest.mark.asyncio
     async def test_invalidate_byom_submitted_servers_cache_deletes_key(self):
-        from litellm.proxy import proxy_server as proxy_server_module
+        import fakeredis
 
-        cache = MagicMock()
-        cache.async_delete_cache = AsyncMock()
+        from litellm.caching.in_memory_cache import InMemoryCache
+        from litellm.proxy import proxy_server as proxy_server_module
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+        from tests._support.fake_redis import fake_redis_cache
+
+        server = fakeredis.FakeServer()
+        raw = fakeredis.FakeAsyncRedis(server=server)
+        cache = UserApiKeyCache(in_memory_cache=InMemoryCache(), redis_cache=fake_redis_cache(server))
+        await raw.set("byom_submitted_servers:user-123", '["a"]')
+        await raw.set("byom_submitted_servers:other", '["b"]')
+        await cache.async_set_cache(key="byom_submitted_servers:user-123", value=["a"], local_only=True)
         manager = MCPServerManager()
 
         with patch.object(proxy_server_module, "user_api_key_cache", cache):
             await manager.invalidate_byom_submitted_servers_cache("user-123")
             await manager.invalidate_byom_submitted_servers_cache(None)
 
-        cache.async_delete_cache.assert_awaited_once_with(key="byom_submitted_servers:user-123")
+        assert cache.in_memory_cache.get_cache("byom_submitted_servers:user-123") is None
+        assert await raw.exists("byom_submitted_servers:user-123") == 0
+        assert await raw.get("byom_submitted_servers:other") == b'["b"]'
 
     @pytest.mark.asyncio
     async def test_get_active_submitted_ids_cache_miss_queries_db_and_caches(self):
+        import fakeredis
+
+        from litellm.caching.in_memory_cache import InMemoryCache
         from litellm.proxy import proxy_server as proxy_server_module
         from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+        from tests._support.fake_redis import fake_redis_cache
 
-        cache = MagicMock()
-        cache.async_get_cache = AsyncMock(return_value=None)
-        cache.async_set_cache = AsyncMock()
+        server = fakeredis.FakeServer()
+        cache = UserApiKeyCache(in_memory_cache=InMemoryCache(), redis_cache=fake_redis_cache(server))
         manager = MCPServerManager()
         manager.registry = {
             "submitted-server": MCPServer(
@@ -9073,24 +9088,25 @@ class TestMCPServerManager:
             result = await manager._get_active_submitted_mcp_server_ids_for_user(user_api_key_auth)
 
         assert result == ["submitted-server"]
-        cache.async_set_cache.assert_awaited_once_with(
-            key="byom_submitted_servers:user-123",
-            value=["submitted-server", "unknown-server"],
-            ttl=60,
-        )
+        raw = fakeredis.FakeAsyncRedis(server=server)
+        assert await raw.get("byom_submitted_servers:user-123") == b'["submitted-server", "unknown-server"]'
+        assert await raw.ttl("byom_submitted_servers:user-123") == 60
+        peer = UserApiKeyCache(in_memory_cache=InMemoryCache(), redis_cache=fake_redis_cache(server))
+        with patch.object(proxy_server_module, "user_api_key_cache", peer):
+            assert await manager._get_active_submitted_mcp_server_ids_for_user(user_api_key_auth) == ["submitted-server"]
 
     @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_fallback_keeps_submitted_byom_servers(self):
+        from litellm.caching.in_memory_cache import InMemoryCache
         from litellm.proxy import proxy_server as proxy_server_module
         from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
         from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
         )
 
-        class _Cache:
-            async def async_get_cache(self, key: str):
-                assert key == "byom_submitted_servers:user-123"
-                return ["submitted-server"]
+        cache = UserApiKeyCache(in_memory_cache=InMemoryCache())
+        await cache.async_set_cache(key="byom_submitted_servers:user-123", value=["submitted-server"])
 
         manager = MCPServerManager()
         manager.registry = {
@@ -9106,7 +9122,7 @@ class TestMCPServerManager:
         )
 
         with (
-            patch.object(proxy_server_module, "user_api_key_cache", _Cache()),
+            patch.object(proxy_server_module, "user_api_key_cache", cache),
             patch.object(proxy_server_module, "prisma_client", None),
             patch.object(manager, "get_allow_all_keys_server_ids", return_value=["global-server"]),
             patch.object(
