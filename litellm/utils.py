@@ -9127,14 +9127,15 @@ def validate_and_fix_openai_messages(
     """
     Ensures all messages are valid OpenAI chat completion messages.
 
-    Only an assistant turn carries tool_calls, so one sent without a role gets "assistant" (issue #8661).
+    Only an assistant turn carries tool_calls or function_call, so one sent without a role gets "assistant"
+    (issue #8661).
     """
     new_messages: Final = []
     for message in messages:
         if message.get("tool_calls"):
             message["tool_calls"] = jsonify_tools(tools=message["tool_calls"])
-            if not message.get("role"):
-                message["role"] = "assistant"
+        if not message.get("role") and (message.get("tool_calls") or message.get("function_call")):
+            message["role"] = "assistant"
 
         convert_msg_to_dict = cast(  # cast-ok: message dicts satisfy the TypedDict shape
             AllMessageValues,

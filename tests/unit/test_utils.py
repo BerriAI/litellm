@@ -8291,10 +8291,21 @@ def test_completion_message_without_role_is_a_400(messages: list[dict[str, str |
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
-def test_completion_role_less_tool_call_turn_is_sent_as_assistant():
+@pytest.mark.parametrize(
+    "call_turn",
+    [
+        {
+            "content": "",
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+            ],
+        },
+        {"content": None, "function_call": {"name": "get_weather", "arguments": "{}"}},
+    ],
+)
+def test_completion_role_less_tool_call_turn_is_sent_as_assistant(call_turn: dict[str, object]):
     """Only an assistant turn carries tool calls, so one replayed without a role still goes upstream as assistant."""
-    tool_call: Final = {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
-    messages: Final = [{"role": "user", "content": "Weather in Paris?"}, {"content": "", "tool_calls": [tool_call]}]
+    messages: Final = [{"role": "user", "content": "Weather in Paris?"}, call_turn]
 
     assert validate_and_fix_openai_messages(messages)[1]["role"] == "assistant"
 
