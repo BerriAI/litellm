@@ -36,6 +36,7 @@ from litellm.completion_extras.litellm_responses_transformation.history import (
 from litellm.integrations.anthropic_cache_control_hook import supports_openai_prompt_cache_breakpoint
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    prompt_cache_breakpoint_for_wire,
     responses_reasoning_items_from_thinking_blocks,
     with_prompt_cache_breakpoint,
 )
@@ -61,7 +62,6 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParamFunctionChunk,
-    PromptCacheBreakpoint,
     Reasoning,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
@@ -629,19 +629,6 @@ def _map_incomplete_reason_to_finish_reason(incomplete_reason: str | None) -> Li
     if incomplete_reason == "content_filter":
         return "content_filter"
     return "length"
-
-
-_PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(PromptCacheBreakpoint)
-
-
-def _prompt_cache_breakpoint_for_wire(marker: object, drop_params: bool) -> object:
-    if marker is None or not drop_params:
-        return marker
-    try:
-        return _PROMPT_CACHE_BREAKPOINT.validate_python(marker)
-    except ValidationError:
-        verbose_logger.debug("Chat provider: dropping malformed prompt_cache_breakpoint %r under drop_params", marker)
-        return None
 
 
 def _input_file_from_file_value(file_value: object) -> dict[str, object]:
@@ -1679,7 +1666,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     if original_type == "text":
                         converted = with_prompt_cache_breakpoint(
                             self._convert_content_str_to_input_text(item.get("text", ""), role),
-                            _prompt_cache_breakpoint_for_wire(item.get("prompt_cache_breakpoint"), drop_params),
+                            prompt_cache_breakpoint_for_wire(item.get("prompt_cache_breakpoint"), drop_params),
                         )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   text -> %s", converted)
@@ -1692,14 +1679,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                                     cast(ChatCompletionImageObject, item), role
                                 ),
                             ),
-                            _prompt_cache_breakpoint_for_wire(item.get("prompt_cache_breakpoint"), drop_params),
+                            prompt_cache_breakpoint_for_wire(item.get("prompt_cache_breakpoint"), drop_params),
                         )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   image_url -> %s", converted)
                     elif original_type == "input_audio":
                         converted = with_prompt_cache_breakpoint(
                             {"type": "input_audio", "input_audio": item.get("input_audio")},
-                            _prompt_cache_breakpoint_for_wire(item.get("prompt_cache_breakpoint"), drop_params),
+                            prompt_cache_breakpoint_for_wire(item.get("prompt_cache_breakpoint"), drop_params),
                         )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   input_audio -> %s", converted)
@@ -1715,7 +1702,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                                 _input_file_from_file_value(
                                     cast("ChatCompletionFileObject", item).get("file"),  # cast-ok: type tag checked
                                 ),
-                                _prompt_cache_breakpoint_for_wire(item.get("prompt_cache_breakpoint"), drop_params),
+                                prompt_cache_breakpoint_for_wire(item.get("prompt_cache_breakpoint"), drop_params),
                             )
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   file -> %s", converted)
@@ -1739,7 +1726,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             # Default to input_text for unknown types
                             converted = with_prompt_cache_breakpoint(
                                 self._convert_content_str_to_input_text(str(item.get("text", item)), role),
-                                _prompt_cache_breakpoint_for_wire(item.get("prompt_cache_breakpoint"), drop_params),
+                                prompt_cache_breakpoint_for_wire(item.get("prompt_cache_breakpoint"), drop_params),
                             )
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   unknown(%s) -> %s", original_type, converted)
@@ -1992,6 +1979,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
         self._structured_output: Final = structured_output
         self._first_message_item_done: bool = False
+        self._reasoning_summary_streamed: bool = False
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -2034,6 +2022,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         tool_call_index_map: dict[int, int] | None = None,  # mutable-ok: per-stream state, remapped in place
         replays_openai_history: bool = False,
         structured_output: bool = False,
+        reasoning_summary_streamed: bool = False,
     ) -> "ModelResponseStream":
         """
         Translate a Responses API streaming chunk to OpenAI chat completion streaming format.
@@ -2043,6 +2032,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             tool_call_index_map: Per-stream output_index -> sequential tool_call index map
             replays_openai_history: Record the completed output's item sequence for the next turn
             structured_output: Only the first message item became content
+            reasoning_summary_streamed: Whether earlier chunks already streamed reasoning summary text
 
         Returns:
             ModelResponseStream: OpenAI-formatted streaming chunk
@@ -2223,13 +2213,15 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 )
             else:
                 raise ValueError(f"Chat provider: Invalid text delta {parsed_chunk}")
+        elif event_type == "response.reasoning_summary_part.added" and reasoning_summary_streamed:
+            return ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(reasoning_content=" "))])
         elif event_type == "response.reasoning_summary_text.delta":
             content_part = parsed_chunk.get("delta", None)
             if content_part:
                 return ModelResponseStream(
                     choices=[
                         StreamingChoices(
-                            index=cast(int, parsed_chunk.get("summary_index")),
+                            index=0,
                             delta=Delta(reasoning_content=content_part),
                         )
                     ]
@@ -2330,10 +2322,13 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 tool_call_index_map=self._tool_call_index_map,
                 replays_openai_history=self._replays_openai_history,
                 structured_output=self._structured_output,
+                reasoning_summary_streamed=self._reasoning_summary_streamed,
             )
         )
         if self._structured_output and _is_message_item_done(chunk):
             self._first_message_item_done = True
+        if _responses_event_type(chunk) == "response.reasoning_summary_text.delta" and chunk.get("delta"):
+            self._reasoning_summary_streamed = True
         return self._with_served_service_tier(self._with_stream_scoped_id(translated))
 
     def _is_text_delta_after_structured_answer(self, chunk: Mapping[str, object]) -> bool:

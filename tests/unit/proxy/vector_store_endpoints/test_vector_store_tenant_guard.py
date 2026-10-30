@@ -13,6 +13,7 @@ from litellm.types.vector_store_files import (
     VectorStoreFileObject,
     VectorStoreFileStatus,
 )
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 def _mock_request() -> MagicMock:
@@ -174,7 +175,7 @@ async def test_vector_store_file_list_resolves_managed_ids_and_cursors():
     request.query_params = {"after": managed_file_id, "limit": "10"}
     request.url.path = f"/v1/vector_stores/{vector_store_id}/files"
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
 
     def get_credentials(model_id):
         return {
