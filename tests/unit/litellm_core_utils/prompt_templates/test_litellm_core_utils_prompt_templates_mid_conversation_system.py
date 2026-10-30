@@ -6,7 +6,8 @@ the pure placement rules on the OpenAI-format message list.
 """
 
 import time
-from itertools import chain
+from collections.abc import Iterator, Mapping
+from itertools import chain, count
 from typing import Final
 
 import pytest
@@ -327,14 +328,34 @@ EMPTY_ASSISTANT = pytest.mark.parametrize(
 )
 
 
-def test_flagged_placement_handles_a_long_run_of_unanswered_tool_search_uses_in_linear_time():
+class _ReadCountingMessage(Mapping[str, object]):
+    def __init__(self, reads: Iterator[int], fields: Mapping[str, object]) -> None:
+        self._reads: Final = reads
+        self._fields: Final = fields
+
+    def __getitem__(self, key: str) -> object:
+        next(self._reads)
+        return self._fields[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._fields)
+
+    def __len__(self) -> int:
+        return len(self._fields)
+
+
+def _message_reads_placing_unanswered_tool_search_uses(search_use_count: int) -> int:
+    reads: Final = count()
     search_uses: Final = tuple(
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [{**_TOOL_SEARCH_USE, "id": f"srvtoolu_{index:06d}"}],
-        }
-        for index in range(3000)
+        _ReadCountingMessage(
+            reads,
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{**_TOOL_SEARCH_USE, "id": f"srvtoolu_{index:06d}"}],
+            },
+        )
+        for index in range(search_use_count)
     )
     reminders: Final = tuple(
         chain.from_iterable(
@@ -349,12 +370,19 @@ def test_flagged_placement_handles_a_long_run_of_unanswered_tool_search_uses_in_
         {"role": "user", "content": "end"},
     ]
 
-    started: Final = time.perf_counter()
     placed: Final = place_mid_conversation_system(messages, supports_mid_conversation_system=True)
-    elapsed: Final = time.perf_counter() - started
+    total_reads: Final = next(reads)
 
-    assert set(_roles(placed)[:21]) == {"user"}
-    assert elapsed < 1.0
+    assert set(_roles(placed[:21])) == {"user"}
+    assert placed[21:-1] == search_uses
+    return total_reads
+
+
+def test_flagged_placement_handles_a_long_run_of_unanswered_tool_search_uses_in_linear_time():
+    reads_for_1500: Final = _message_reads_placing_unanswered_tool_search_uses(1500)
+    reads_for_3000: Final = _message_reads_placing_unanswered_tool_search_uses(3000)
+
+    assert reads_for_3000 < 3 * reads_for_1500
 
 
 def test_flagged_placement_merges_every_system_run_that_shares_a_user_turn():
