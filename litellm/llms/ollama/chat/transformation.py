@@ -251,11 +251,15 @@ class OllamaChatConfig(BaseConfig):
                         arguments = {}
                         if "arguments" in typed_tool["function"]:
                             arguments = json.loads(typed_tool["function"]["arguments"])
-                        ollama_tool_call = OllamaToolCall(
-                            function=OllamaToolCallFunction(
-                                name=typed_tool["function"].get("name") or "",
-                                arguments=arguments,
-                            )
+                        function: Final = OllamaToolCallFunction(
+                            name=typed_tool["function"].get("name") or "",
+                            arguments=arguments,
+                        )
+                        tool_id: Final = typed_tool.get("id")
+                        ollama_tool_call: Final = (
+                            OllamaToolCall(function=function)
+                            if tool_id is None
+                            else OllamaToolCall(id=tool_id, function=function)
                         )
                         new_tools.append(ollama_tool_call)
             reasoning_content, parsed_content = extract_reasoning_content(cast(dict, m))
