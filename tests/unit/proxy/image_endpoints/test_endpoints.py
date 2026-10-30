@@ -3,7 +3,7 @@ import copy
 import logging
 from collections.abc import Iterator, Mapping
 from types import SimpleNamespace
-from typing import Any, Dict
+from typing import Any, Dict, Final, cast
 
 import orjson
 import pytest
@@ -12,10 +12,17 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 from starlette.responses import Response
 
+import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.models.team import LiteLLM_TeamTableCachedObj
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.image_endpoints import endpoints
+from litellm.proxy.proxy_server import PrismaClient, ProxyConfig
+from litellm.proxy.utils import ProxyLogging
+from litellm.types.utils import ImageObject, ImageResponse
+from litellm.utils import custom_llm_setup
 
 
 @pytest.mark.asyncio
@@ -410,3 +417,142 @@ async def test_failure_before_the_provider_call_bills_the_callers_litellm_call_i
 
     assert raised.value.headers["x-litellm-call-id"] == call_id
     assert [data["litellm_call_id"] for data in hook_request_data] == [call_id]
+
+
+class _ImageRouterHandler(litellm.CustomLLM):
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def aimage_generation(
+        self,
+        model: str,
+        prompt: str,
+        model_response: ImageResponse,
+        api_key: str | None,
+        api_base: str | None,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        timeout: object | None = None,
+        client: object | None = None,
+    ) -> ImageResponse:
+        self.calls.append(model)
+        if model.endswith("failing"):
+            raise litellm.RateLimitError(message="primary failed", llm_provider="image-regression", model=model)
+        return ImageResponse(created=1, data=[ImageObject(url="https://images.example/generated.png")])
+
+
+def _image_generation_client(
+    monkeypatch: pytest.MonkeyPatch,
+    user_api_key_dict: UserAPIKeyAuth,
+    team_settings: Mapping[str, object] | None = None,
+) -> tuple[TestClient, _ImageRouterHandler]:
+    from litellm.proxy import proxy_server
+
+    handler: Final = _ImageRouterHandler()
+    cache: Final = UserApiKeyCache()
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers])
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "image-regression", "custom_handler": handler}])
+    custom_llm_setup()
+    if team_settings is not None:
+        team_id: Final = user_api_key_dict.team_id
+        assert team_id is not None
+        cache.set_cache(
+            key=f"team_id:{team_id}",
+            value=LiteLLM_TeamTableCachedObj(team_id=team_id, router_settings=dict(team_settings)),
+            local_only=True,
+            model_type=LiteLLM_TeamTableCachedObj,
+        )
+        monkeypatch.setattr(proxy_server, "prisma_client", cast(PrismaClient, object()))
+
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "A", "litellm_params": {"model": "image-regression/failing"}},
+            {"model_name": "B", "litellm_params": {"model": "image-regression/working"}},
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(litellm, "model_alias_map", {})
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "proxy_config", ProxyConfig())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=cache))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "version", "test-version")
+
+    app: Final = FastAPI()
+    app.include_router(endpoints.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: user_api_key_dict
+    return TestClient(app, raise_server_exceptions=False), handler
+
+
+def test_image_generation_uses_key_router_settings_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, handler = _image_generation_client(
+        monkeypatch,
+        UserAPIKeyAuth(router_settings={"fallbacks": [{"A": ["B"]}]}),
+    )
+
+    response: Final = client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree"})
+
+    assert response.status_code == 200, response.text
+    assert response.json() == ImageResponse(
+        created=1,
+        data=[ImageObject(url="https://images.example/generated.png")],
+    ).model_dump(), response.text
+    assert handler.calls == ["failing", "working"], response.text
+
+
+def test_image_generation_uses_team_router_settings_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+    team_id: Final = "image-regression-team"
+    client, handler = _image_generation_client(
+        monkeypatch,
+        UserAPIKeyAuth(team_id=team_id),
+        {"fallbacks": [{"A": ["B"]}]},
+    )
+
+    response: Final = client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree"})
+
+    assert response.status_code == 200, response.text
+    assert response.json() == ImageResponse(
+        created=1,
+        data=[ImageObject(url="https://images.example/generated.png")],
+    ).model_dump(), response.text
+    assert handler.calls == ["failing", "working"], response.text
+
+
+def test_image_generation_without_router_settings_does_not_use_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, handler = _image_generation_client(monkeypatch, UserAPIKeyAuth())
+
+    response: Final = client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree"})
+
+    assert response.status_code == 500, response.text
+    assert handler.calls == ["failing"], response.text
+
+
+def test_image_generation_uses_key_model_group_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, handler = _image_generation_client(
+        monkeypatch,
+        UserAPIKeyAuth(router_settings={"model_group_alias": {"alias": "B"}}),
+    )
+
+    response: Final = client.post("/v1/images/generations", json={"model": "alias", "prompt": "draw a tree"})
+
+    assert response.status_code == 200, response.text
+    assert response.json() == ImageResponse(
+        created=1,
+        data=[ImageObject(url="https://images.example/generated.png")],
+    ).model_dump(), response.text
+    assert handler.calls == ["working"], response.text
+
+
+def test_image_generation_uses_key_num_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, handler = _image_generation_client(
+        monkeypatch,
+        UserAPIKeyAuth(router_settings={"num_retries": 2}),
+    )
+
+    response: Final = client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree"})
+
+    assert response.status_code == 500, response.text
+    assert handler.calls == ["failing", "failing", "failing"], response.text
