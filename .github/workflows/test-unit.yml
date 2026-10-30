@@ -1382,6 +1382,8 @@ jobs:
             tests/unit/types/test_router.py \
             tests/unit/test_exception_header_preservation.py \
             tests/unit/integrations/otel/test_otel_v2_sources_of_truth.py::test_speech_binary_response_still_streaming_reports_the_bytes_downloaded_so_far \
+            tests/unit/completion_extras/litellm_responses_transformation/test_completion_extras_litellm_responses_transformation_transformation.py::test_non_stream_response_keeps_provider_metadata_and_drops_request_echoes \
+            tests/unit/completion_extras/litellm_responses_transformation/test_completion_extras_litellm_responses_transformation_transformation.py::test_streaming_final_chunk_keeps_provider_metadata_and_drops_request_echoes \
             --tb=short -q
 
       - name: Run workload identity tests with SDK 3

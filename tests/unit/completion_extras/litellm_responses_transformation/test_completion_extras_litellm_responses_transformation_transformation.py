@@ -4992,6 +4992,98 @@ def test_streaming_final_chunk_carries_provider_metadata():
     assert all("service_tier" not in chunk for chunk in chunks[:-1])
 
 
+_RESPONSES_BODY_METADATA: Final = {
+    "access_programs": {"cyber": "daybreak_blue"},
+    "prompt_cache_options": {"mode": "implicit", "ttl": "30m"},
+    "prompt_cache_diagnostics": {"type": "cache_hit"},
+}
+_RESPONSES_REQUEST_ECHOES: Final = {
+    "metadata": {"trace": "abc"},
+    "background": False,
+    "completed_at": 1760144905,
+    "conversation": {"id": "conv_metadata"},
+    "max_tool_calls": 3,
+    "prompt": {"id": "pmpt_metadata"},
+    "prompt_cache_key": "cache-key",
+    "prompt_cache_retention": "24h",
+    "safety_identifier": "user-hash",
+    "top_logprobs": 0,
+}
+
+
+def test_non_stream_response_keeps_provider_metadata_and_drops_request_echoes() -> None:
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import ModelResponse
+
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    output_message: Final = ResponseOutputMessage(
+        id="msg_metadata",
+        content=[ResponseOutputText(annotations=[], text="hi", type="output_text", logprobs=[])],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+    raw_response: Final = ResponsesAPIResponse(
+        id="resp_metadata",
+        created_at=1760144904,
+        model="gpt-5.6-sol",
+        object="response",
+        output=[output_message],
+        status="completed",
+        parallel_tool_calls=True,
+        tool_choice="auto",
+        tools=[],
+        **_RESPONSES_BODY_METADATA,
+        **_RESPONSES_REQUEST_ECHOES,
+    )
+
+    result: Final = handler.transform_response(
+        model="gpt-5.6-sol",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=Mock(),
+        request_data={"model": "gpt-5.6-sol"},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={"acompletion": False, "api_key": None},
+        encoding=Mock(),
+        api_key=None,
+        json_mode=None,
+    )
+
+    dumped: Final = result.model_dump()
+    assert {key: dumped.get(key) for key in _RESPONSES_BODY_METADATA} == _RESPONSES_BODY_METADATA
+    assert not set(_RESPONSES_REQUEST_ECHOES) & set(dumped)
+
+
+def test_streaming_final_chunk_keeps_provider_metadata_and_drops_request_echoes() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    iterator.chunk_parser({"type": "response.created", "response": {"id": "resp_metadata", "output": []}})
+
+    final_chunk: Final = iterator.chunk_parser(
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_metadata",
+                "output": [{"type": "message"}],
+                "usage": {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
+                **_RESPONSES_BODY_METADATA,
+                **_RESPONSES_REQUEST_ECHOES,
+            },
+        }
+    )
+
+    provider_fields: Final = final_chunk.provider_specific_fields or {}
+    assert {key: provider_fields.get(key) for key in _RESPONSES_BODY_METADATA} == _RESPONSES_BODY_METADATA
+    assert not set(_RESPONSES_REQUEST_ECHOES) & set(provider_fields)
+
+
 def _system_input_item(text: str) -> dict[str, object]:
     return {"type": "message", "role": "system", "content": [{"type": "input_text", "text": text}]}
 
