@@ -161,16 +161,14 @@ async def truncate_base64_in_messages_async(
     messages: str | list | dict | None,  # mutable-ok: same contract as truncate_base64_in_messages
 ) -> str | list | dict | None:  # mutable-ok: same contract as truncate_base64_in_messages
     """
-    Same result as truncate_base64_in_messages, but payloads with a data URI whose
-    string content reaches BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS are scanned in a
-    worker thread so the regex pass over multi-MB base64 images does not block the event loop.
+    Same result as truncate_base64_in_messages, but payloads whose string content
+    reaches BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS are scanned in a worker
+    thread so the regex pass over multi-MB base64 images does not block the event loop.
     """
     if messages is None or MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
         return messages
-    leaves: Final = tuple(_iter_string_leaves(messages))
-    if sum(len(leaf) for leaf in leaves) < BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS or not any(
-        _may_contain_base64_data_uri(leaf) for leaf in leaves
-    ):
+    total_chars: Final = sum(len(leaf) for leaf in _iter_string_leaves(messages))
+    if total_chars < BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS:
         return truncate_base64_in_messages(messages)
     return await asyncio.to_thread(truncate_base64_in_messages, messages)
 

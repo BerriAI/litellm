@@ -323,16 +323,11 @@ class TestTruncateBase64InMessagesAsync:
         ],
         ids=["json_rows", "sse_lines", "code_with_semicolons", "sse_lines_with_semicolons", "base64_marker_without_data"],
     )
-    @pytest.mark.parametrize(
-        "truncate",
-        [lambda messages: _run_without_yielding(truncate_base64_in_messages_async(messages)), truncate_base64_in_messages],
-        ids=["async", "sync"],
-    )
-    def test_tool_message_without_data_uri_is_copied_inline_without_a_regex_scan(self, row, truncate):
+    def test_tool_message_without_data_uri_is_copied_without_a_regex_scan(self, row):
         tool_output = (row * (_PLAIN_TOOL_OUTPUT_CHARS // len(row) + 1))[:_PLAIN_TOOL_OUTPUT_CHARS]
         messages = _tool_result_messages(tool_output)
 
-        result, regex_calls = _regex_calls_while(lambda: truncate(messages))
+        result, regex_calls = _regex_calls_while(lambda: truncate_base64_in_messages(messages))
 
         assert result == messages
         assert result is not messages
@@ -351,15 +346,15 @@ class TestTruncateBase64InMessagesAsync:
         assert "base64_data truncated" in result[0]["content"][1]["image_url"]["url"]
 
     @pytest.mark.asyncio
-    async def test_small_data_uri_beside_large_text_is_scanned_off_the_event_loop(self, monkeypatch, scan_threads):
+    async def test_large_plain_text_is_copied_off_the_event_loop(self, monkeypatch, scan_threads):
         monkeypatch.setattr(logging_utils, "BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS", 1_000)
-        payload = "M" * 200
-        messages = _image_messages(payload) + _tool_result_messages("plain tool output\n" * 100)
+        messages = _tool_result_messages("plain tool output\n" * 100)
 
         result = await truncate_base64_in_messages_async(messages)
         offload_threads = tuple(scan_threads)
 
-        assert payload not in result[0]["content"][1]["image_url"]["url"]
+        assert result == messages
+        assert result is not messages
         assert offload_threads
         assert threading.get_ident() not in offload_threads
 
