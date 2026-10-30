@@ -27,6 +27,7 @@ from litellm.constants import (
     LITTELM_CLI_SERVICE_ACCOUNT_NAME,
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     MAX_SPEND_LOG_MODEL_NAME_LENGTH,
+    MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB,
     MCP_SPEND_LOG_MODEL_PREFIX,
     NON_INFERENCE_CALL_TYPES,
     REDACTED_BY_LITELM_STRING,
@@ -70,17 +71,23 @@ from litellm.proxy._types import (
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
+from litellm.responses.litellm_completion_transformation.compaction_items import (
+    compaction_summary,
+    summary_only_compaction_content,
+    with_compaction_summary,
+)
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     SETTLES_BACKGROUND_RESPONSE_KWARG,
     BackgroundResponseSettlement,
 )
-from litellm.types.router import DeploymentTypedDict, LiteLLM_Params
+from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, SilentExperimentFlag
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
     AzureSpillover,
     CallTypes,
     CostBreakdown,
+    LiteLLMBatch,
     LlmProviders,
     StandardLoggingGuardrailInformation,
     StandardLoggingKubernetesPodRouting,
@@ -90,6 +97,7 @@ from litellm.types.utils import (
     StandardLoggingPayloadErrorInformation,
     StandardLoggingVectorStoreRequest,
     VectorStoreSearchResponse,
+    batch_chat_usage,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
 
@@ -188,6 +196,7 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "used_client_oauth_token",
         KUBERNETES_POD_ROUTING_KEY,
         "litellm_roi_estimator",
+        "is_silent_experiment",
         BILLED_RETRY_ATTEMPT_METADATA_KEY,
         "user_api_key_user_email",
     )
@@ -221,6 +230,7 @@ def _get_spend_logs_metadata(
     azure_spillover: AzureSpillover | None = None,
     used_client_oauth_token: bool | None = None,
     kubernetes_pod_routing: StandardLoggingKubernetesPodRouting | None = None,
+    is_silent_experiment: bool = False,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -288,6 +298,7 @@ def _get_spend_logs_metadata(
         used_client_oauth_token=used_client_oauth_token,
         kubernetes_pod_routing=kubernetes_pod_routing,
         litellm_roi_estimator=metadata.get("litellm_roi_estimator") is True,
+        **(SilentExperimentFlag(is_silent_experiment=True) if is_silent_experiment else SilentExperimentFlag()),
         billed_retry_attempt=billed_retry_attempt,
         user_api_key_user_email=_stored_user_email(metadata),
     )
@@ -455,7 +466,11 @@ def _sl_attribution_fallback(
 ) -> str:
     if standard_logging_payload is None:
         return ""
-    return standard_logging_payload.get(field) or ""
+    return _string_or_empty(standard_logging_payload.get(field))
+
+
+def _string_or_empty(value: object) -> str:
+    return value if isinstance(value, str) else ""
 
 
 def _deployment_provider(deployment: DeploymentTypedDict) -> str | None:
@@ -484,7 +499,7 @@ def _model_group_provider(model_group: str, llm_router: "Router | None") -> str 
         return None
     providers: Final = frozenset(
         provider
-        for deployment in llm_router.get_model_list(model_name=model_group) or ()
+        for deployment in llm_router.registry().deployments(model_group) or ()
         if (provider := _deployment_provider(deployment)) is not None
     )
     return next(iter(providers)) if len(providers) == 1 else None
@@ -493,7 +508,8 @@ def _model_group_provider(model_group: str, llm_router: "Router | None") -> str 
 def _is_configured_model_group(model_group: str, llm_router: "Router | None") -> bool:
     if llm_router is None or not model_group:
         return False
-    return llm_router.is_recognized_model(model_group) or model_group in llm_router.team_public_model_names
+    registry: Final = llm_router.registry()
+    return registry.resolve(model_group, kind="recognized") or model_group in registry.names(kind="team_public")
 
 
 def _looks_like_model_name(model: str) -> bool:
@@ -612,7 +628,12 @@ def get_logging_payload(
         usage = _extract_usage_for_ocr_call(response_obj, response_obj_dict)
     elif not is_unbilled_non_inference_call(call_type, metadata, response_obj_dict):
         # Use response_obj_dict instead of response_obj to avoid calling .get() on Pydantic models
-        _usage: Final = response_obj_dict.get("usage", None) or {}
+        chat_usage_of_batch: Final = batch_chat_usage(response_obj) if isinstance(response_obj, LiteLLMBatch) else None
+        _usage: Final = (
+            chat_usage_of_batch.model_dump()
+            if chat_usage_of_batch is not None
+            else response_obj_dict.get("usage", None) or {}
+        )
         if isinstance(_usage, litellm.Usage):
             usage = dict(_usage)
         elif isinstance(_usage, dict):
@@ -673,7 +694,7 @@ def get_logging_payload(
     _model_id: Final = metadata.get("model_info", {}).get("id", "") or _sl_attribution_fallback(
         standard_logging_payload, "model_id"
     )
-    _model_group: Final = metadata.get("model_group", "") or _sl_attribution_fallback(
+    _model_group: Final = _string_or_empty(metadata.get("model_group")) or _sl_attribution_fallback(
         standard_logging_payload, "model_group"
     )
     _api_base: Final = litellm_params.get("api_base", "") or _sl_attribution_fallback(
@@ -732,6 +753,11 @@ def get_logging_payload(
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
         persisted_metadata,
+        is_silent_experiment=(
+            standard_logging_payload is not None
+            and "is_silent_experiment" in standard_logging_payload["metadata"]
+            and standard_logging_payload["metadata"]["is_silent_experiment"]
+        ),
         applied_guardrails=(
             standard_logging_payload["metadata"].get("applied_guardrails", None)
             if standard_logging_payload is not None
@@ -1227,11 +1253,42 @@ def _is_spend_log_content(parent: Mapping[str, object], key: str) -> bool:
     )
 
 
+def _truncated_for_db(value: str, max_length: int) -> str:
+    if len(value) <= max_length:
+        return value
+    start_chars: Final = int(max_length * 0.35)
+    end_chars: Final = int(max_length * 0.65)
+    return (
+        f"{value[:start_chars]}"
+        f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {len(value) - start_chars - end_chars} chars. "
+        f"{LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
+        f"{value[-min(end_chars, max_length - start_chars) :]}"
+    )
+
+
+def _compaction_summary_for_db(summary: str) -> str:
+    return _truncated_for_db(
+        summary, max(_get_max_string_length_prompt_in_db(), MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB)
+    )
+
+
+def _bounded_compaction_summary(
+    parent: Mapping[str, object], key: str, value: object, keep_compaction_blocks: bool
+) -> str | None:
+    if not keep_compaction_blocks or not isinstance(value, str) or parent.get("type") != "compaction":
+        return None
+    if key == "content":
+        return _compaction_summary_for_db(value)
+    summary: Final = compaction_summary(parent) if key == "encrypted_content" else None
+    return None if summary is None else with_compaction_summary(value, _compaction_summary_for_db(summary))
+
+
 def _sanitize_request_body_for_spend_logs_payload(
     request_body: Mapping[str, object],
     visited: set | None = None,
     max_string_length_prompt_in_db: int | None = None,
     mask_credentials: bool = True,
+    keep_compaction_blocks: bool = False,
 ) -> dict:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
@@ -1242,11 +1299,6 @@ def _sanitize_request_body_for_spend_logs_payload(
     SensitiveDataMasker classifies as credentials with REDACTED_BY_LITELM_STRING, except inside tool payloads
     and logprobs.
     """
-    from litellm.constants import (
-        LITELLM_TRUNCATED_PAYLOAD_FIELD,
-        LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
-    )
-
     if visited is None:
         visited = set()
     if max_string_length_prompt_in_db is None:
@@ -1261,51 +1313,23 @@ def _sanitize_request_body_for_spend_logs_payload(
     def _sanitize_value(value: object, mask_credentials: bool) -> object:
         if isinstance(value, Mapping):
             return _sanitize_request_body_for_spend_logs_payload(
-                value, visited, max_string_length_prompt_in_db, mask_credentials
+                value, visited, max_string_length_prompt_in_db, mask_credentials, keep_compaction_blocks
             )
         elif isinstance(value, list):
             return [_sanitize_value(item, mask_credentials) for item in value]
         elif isinstance(value, str):
-            if len(value) > max_string_length_prompt_in_db:
-                # Keep 35% from beginning and 65% from end (end is usually more important)
-                # This split ensures we keep more context from the end of conversations
-                start_ratio: Final = 0.35
-                end_ratio: Final = 0.65
-
-                # Calculate character distribution
-                start_chars: Final = int(max_string_length_prompt_in_db * start_ratio)
-                end_chars = int(max_string_length_prompt_in_db * end_ratio)
-
-                # Ensure we don't exceed the total limit
-                total_keep: Final = start_chars + end_chars
-                if total_keep > max_string_length_prompt_in_db:
-                    end_chars = max_string_length_prompt_in_db - start_chars
-
-                # If the string length is less than what we want to keep, just truncate normally
-                if len(value) <= max_string_length_prompt_in_db:
-                    return value
-
-                # Calculate how many characters are being skipped
-                skipped_chars: Final = len(value) - total_keep
-
-                # Build the truncated string: beginning + truncation marker + end
-                truncated_value: Final = (
-                    f"{value[:start_chars]}"
-                    f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. "
-                    f"{LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
-                    f"{value[-end_chars:]}"
-                )
-                return truncated_value
-            return value
+            return _truncated_for_db(value, max_string_length_prompt_in_db)
         return value
 
-    return {
-        k: REDACTED_BY_LITELM_STRING
-        if mask_credentials and _is_request_body_credential(k, v)
-        else _sanitize_value(v, mask_credentials and not _is_spend_log_content(request_body, k))
-        for k, v in request_body.items()
-        if k not in _SENSITIVE_REQUEST_BODY_KEYS
-    }
+    def _stored_value(key: str, value: object) -> object:
+        if mask_credentials and _is_request_body_credential(key, value):
+            return REDACTED_BY_LITELM_STRING
+        bounded_summary: Final = _bounded_compaction_summary(request_body, key, value, keep_compaction_blocks)
+        if bounded_summary is not None:
+            return bounded_summary
+        return _sanitize_value(value, mask_credentials and not _is_spend_log_content(request_body, key))
+
+    return {k: _stored_value(k, v) for k, v in request_body.items() if k not in _SENSITIVE_REQUEST_BODY_KEYS}
 
 
 # Quoted-key form: ``"input"`` / ``'messages'`` / ``"prompt"`` followed by
@@ -1820,6 +1844,33 @@ def _stored_request_without_requester_ip_address(request_body: Mapping[object, o
     }
 
 
+def _with_bounded_compaction_summary(item: object, stored_item: object) -> object:
+    summary: Final = compaction_summary(item)
+    if summary is None or not isinstance(stored_item, Mapping):
+        return stored_item
+    return {
+        **_OBJECT_MAPPING.validate_python(stored_item),
+        "encrypted_content": summary_only_compaction_content(_compaction_summary_for_db(summary)),
+    }
+
+
+def _sanitize_proxy_server_request_body(request_body: Mapping[str, object]) -> Mapping[object, object]:
+    sanitized: Final = _OBJECT_MAPPING.validate_python(_sanitize_request_body_for_spend_logs_payload(request_body))
+    items: Final = request_body.get("input")
+    stored_items: Final = sanitized.get("input")
+    if not isinstance(items, list) or not isinstance(stored_items, list):
+        return sanitized
+    return {
+        **sanitized,
+        "input": [
+            _with_bounded_compaction_summary(item, stored_item)
+            for item, stored_item in zip(
+                _OBJECT_LIST.validate_python(items), _OBJECT_LIST.validate_python(stored_items)
+            )
+        ],
+    }
+
+
 def _get_proxy_server_request_for_spend_logs_payload(
     metadata: dict,
     litellm_params: Mapping[str, object],
@@ -1864,8 +1915,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
                     _request_body = _convert_mapping_to_json_serializable(without_classifier_audit(_request_body))
                     perform_redaction(model_call_details=_request_body, result=None)
 
-            _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
-            stored_request_body: Final = _OBJECT_MAPPING.validate_python(_request_body)
+            stored_request_body: Final = _sanitize_proxy_server_request_body(_request_body)
             _request_body_json_str: Final = safe_dumps(
                 _stored_request_without_requester_ip_address(stored_request_body)
                 if drop_requester_ip_address
@@ -1939,7 +1989,9 @@ def _get_response_for_spend_logs_payload(
                 response_obj = _convert_to_json_serializable_dict(response_obj)
                 response_obj = perform_redaction(model_call_details={}, result=response_obj)
 
-        sanitized_wrapper: Final = _sanitize_request_body_for_spend_logs_payload({"response": response_obj})
+        sanitized_wrapper: Final = _sanitize_request_body_for_spend_logs_payload(
+            {"response": response_obj}, keep_compaction_blocks=True
+        )
 
         sanitized_response: Final = sanitized_wrapper.get("response", response_obj)
 

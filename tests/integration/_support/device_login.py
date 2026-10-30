@@ -73,6 +73,7 @@ COPILOT_USER_CODE: Final = "COPI-LEAK"
 COPILOT_ACCESS: Final = "device-login-github-access"
 COPILOT_REJECTED_ACCESS: Final = "device-login-github-access-rejected"
 COPILOT_FIRST_LOGIN_ACCESS: Final = "device-login-github-access-first-login"
+COPILOT_UNSAVED_KEY_ACCESS: Final = "device-login-github-access-unsaved-key"
 COPILOT_STORED_KEY: Final = "tid=device-login;stored"
 COPILOT_MINTED_KEY: Final = "tid=device-login;minted"
 COPILOT_REJECTED_KEY: Final = "tid=device-login;rejected"
@@ -132,7 +133,11 @@ def _oauth_token(request: Request, grant: threading.Event) -> Reply:
 
 
 def _copilot_api_key(request: Request, api_url: str) -> Reply:
-    if request.headers.get("authorization") not in (f"token {COPILOT_ACCESS}", f"token {COPILOT_FIRST_LOGIN_ACCESS}"):
+    if request.headers.get("authorization") not in (
+        f"token {COPILOT_ACCESS}",
+        f"token {COPILOT_FIRST_LOGIN_ACCESS}",
+        f"token {COPILOT_UNSAVED_KEY_ACCESS}",
+    ):
         return _json(401, {"message": "Bad credentials"})
     return _json(
         200,
@@ -380,4 +385,7 @@ def write_copilot_access(directory: Path, access_token: str) -> None:
 def clear_tokens(*directories: Path) -> None:
     for directory in directories:
         for path in directory.iterdir():
-            path.unlink()
+            if path.is_dir():
+                path.rmdir()
+            else:
+                path.unlink()

@@ -91,6 +91,7 @@ class ProviderConnection:
     litellm_credential_name: str | None = None
     configurable_clientside_auth_params: "Sequence[str | ConfigurableClientsideParamsCustomAuth] | None" = None
     use_xai_oauth: bool | None = None
+    chatgpt_auth_file: str | None = None
     github_copilot_auth_type: str | None = None
     github_copilot_host: str | None = None
     github_copilot_user_session: object | None = None
@@ -188,6 +189,9 @@ class DeploymentOptions:
     tpm: int | None = None
     itpm: int | None = None
     otpm: int | None = None
+    rpd: int | None = None
+    tpd: int | None = None
+    daily_reset_time: str | None = None
     kubernetes_pod_discovery: bool | None = None
     default_api_key_rpm_limit: int | None = None
     default_api_key_tpm_limit: int | None = None
@@ -386,6 +390,9 @@ class AgenticLoopState:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RouterState:
     weights: "RouterWeights | None" = field(default=None, metadata=wire("_router_weights"))
+    encrypted_content_affinity_pinned: bool | None = field(
+        default=None, metadata=wire("_encrypted_content_affinity_pinned")
+    )
     fallback_depth: int | None = None
     max_fallbacks: int | None = None
     attempted_targets: "AttemptedFallbackTargets | None" = None
