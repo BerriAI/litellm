@@ -91,6 +91,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
+from litellm.responses.mcp.parked_stream_dispatch import held_round_spend
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
 from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, ModelInfo, Usage
@@ -4943,6 +4944,8 @@ class ProxyLogging:
         if not isinstance(error, _PROXY_ONLY_LLM_API_ERRORS):
             return False
         match _args:
+            case (ModelResponse(), *_) if (held := held_round_spend(logging_obj)) is not None:
+                logging_obj.record_billed_rounds_for_failure(held)
             case (ModelResponse() as assembled, *_):
                 logging_obj.record_assembled_response_for_failure(assembled)
             case (BilledRoundsDispatch() as billed,):
