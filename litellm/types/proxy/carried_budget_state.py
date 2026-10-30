@@ -25,7 +25,7 @@ class _BudgetSnapshot(LiteLLMBaseModel):
     @classmethod
     def from_metadata(cls, metadata: Mapping[str, object]) -> Self | None:
         try:
-            return cls.model_validate(metadata)
+            return cls.model_validate(metadata, by_name=False)
         except ValidationError:
             return None
 
@@ -66,30 +66,14 @@ class OrgBudgetSnapshot(_BudgetSnapshot):
     )
 
 
-class LiveBudgetSpend(_BudgetSnapshot):
-    """The cross-replica spend counters the budget check compares, in-flight reservations included, read
-    only by the remaining budget gauges. ``None`` for an entity without a max budget."""
+class CommittedBudgetSpend(LiteLLMBaseModel):
+    """Spend each entity was charged, budget holds excluded, read from the committed spend counters for the
+    remaining budget gauges only. ``None`` when the entity has no committed counter."""
 
-    key: float | None = Field(
-        default=None, validation_alias="user_api_key_live_spend", serialization_alias="user_api_key_live_spend"
-    )
-    team: float | None = Field(
-        default=None,
-        validation_alias="user_api_key_team_live_spend",
-        serialization_alias="user_api_key_team_live_spend",
-    )
-    user: float | None = Field(
-        default=None,
-        validation_alias="user_api_key_user_live_spend",
-        serialization_alias="user_api_key_user_live_spend",
-    )
-    org: float | None = Field(
-        default=None,
-        validation_alias="user_api_key_org_live_spend",
-        serialization_alias="user_api_key_org_live_spend",
-    )
-    end_user: float | None = Field(
-        default=None,
-        validation_alias="user_api_key_end_user_live_spend",
-        serialization_alias="user_api_key_end_user_live_spend",
-    )
+    model_config = ConfigDict(frozen=True)
+
+    key: float | None = None
+    team: float | None = None
+    user: float | None = None
+    org: float | None = None
+    end_user: float | None = None

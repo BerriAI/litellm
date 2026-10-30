@@ -13,6 +13,7 @@ import re
 import secrets
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from functools import partial
 from types import MappingProxyType
 from typing import Final, NamedTuple, Protocol, Union, cast
 
@@ -169,9 +170,10 @@ from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.carried_budget_state import (
-    carry_live_budget_spend,
+    carry_committed_budget_spend,
     carry_team_and_user_budget_state,
 )
+from litellm.proxy.spend_tracking.committed_spend import committed_spend_tracked, read_committed_budget_spend
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     bind_admission_counter_keys,
     release_spend_counter_batch,
@@ -3575,7 +3577,6 @@ async def run_centralized_common_checks(
     """
     from litellm.proxy.proxy_server import (
         general_settings,
-        get_current_spend,
         litellm_proxy_admin_name,
         llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # proxy global has untyped deployment entries
         llm_router,
@@ -3583,6 +3584,7 @@ async def run_centralized_common_checks(
         model_max_budget_limiter,
         prisma_client,
         proxy_logging_obj,
+        spend_counter_cache,
         user_api_key_cache,
         user_custom_auth,
     )
@@ -3968,13 +3970,13 @@ async def run_centralized_common_checks(
                     user_obj=user_object,
                 )
 
-        if not route_skips_budget_checks(route=route):
-            await carry_live_budget_spend(
+        if committed_spend_tracked() and not route_skips_budget_checks(route=route):
+            await carry_committed_budget_spend(
                 valid_token=user_api_key_auth_obj,
                 team_object=typed_team_object,
                 user_object=user_object,
                 end_user_object=end_user_object,
-                read_spend=get_current_spend,
+                read_committed=partial(read_committed_budget_spend, spend_counter_cache),
             )
         await _reserve_budget_after_common_checks(
             user_api_key_auth_obj=user_api_key_auth_obj,

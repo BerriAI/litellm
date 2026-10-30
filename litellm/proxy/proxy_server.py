@@ -908,6 +908,13 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     release_unbound_budget_reservation,
     stamp_budget_reservation_actual_cost,
 )
+from litellm.proxy.spend_tracking.committed_spend import (
+    EntitySpendCounterKeys,
+    committed_spend_key,
+    committed_spend_keys,
+    committed_spend_tracked,
+    seed_committed_spend,
+)
 from litellm.proxy.spend_tracking.spend_capture_rate import (
     run_scheduled_spend_capture_rate_check,
 )
@@ -915,6 +922,7 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
     SPEND_COUNTERS_TARGET,
     PendingSpendIncrement,
     active_spend_counter_batch,
+    bind_spend_counter_keys,
     forget_spend_counter,
     post_call_counter_keys,
     read_batched_spend_counter,
@@ -3527,6 +3535,18 @@ async def _increment_spend_counters_batched(
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET, and
     the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments."""
+    committed_counter_keys: Final = (
+        EntitySpendCounterKeys.of(
+            token=_spend_counter_token(token) if token is not None else None,
+            team_id=team_id,
+            user_id=user_id,
+            org_id=org_id,
+            end_user_id=end_user_id,
+        ).tracked()
+        if response_cost is not None and response_cost > 0 and committed_spend_tracked()
+        else ()
+    )
+    bind_spend_counter_keys(frozenset(committed_spend_keys(committed_counter_keys)))
     reservation_update: Final = await _reconcile_budget_reservation_for_counter_update(
         budget_reservation=budget_reservation,
         response_cost=response_cost,
@@ -3549,9 +3569,7 @@ async def _increment_spend_counters_batched(
         # if a raw key somehow arrives, hash it; otherwise use as-is to
         # avoid double-hashing (budget checks read valid_token.token which
         # is single-hashed).
-        hashed_token: Final = (
-            hash_token(token=key_token) if isinstance(key_token, str) and key_token.startswith("sk-") else key_token
-        )
+        hashed_token: Final = _spend_counter_token(key_token)
         key_counter_key: Final = f"spend:key:{hashed_token}"
         key_pending: Final[tuple[PendingSpendIncrement, ...]] = (
             ()
@@ -3731,6 +3749,9 @@ async def _increment_spend_counters_batched(
             )
             if project_id is not None
             else None,
+            _prepare_committed_spend_increments(counter_keys=committed_counter_keys, increment=cost)
+            if committed_counter_keys
+            else None,
         )
         if coro is not None
     )
@@ -3804,6 +3825,27 @@ async def _reconcile_budget_reservation_for_counter_update(
             )
         return _ReservationCounterUpdate()
     return _ReservationCounterUpdate(reserved_counter_keys=frozenset(reserved_counter_keys), pending=pending)
+
+
+def _spend_counter_token(key_token: str) -> str:
+    return hash_token(token=key_token) if isinstance(key_token, str) and key_token.startswith("sk-") else key_token
+
+
+async def _committed_spend_seeded(counter_key: str) -> bool:
+    return await _is_spend_counter_cache_warm(committed_spend_key(counter_key)) or await seed_committed_spend(
+        spend_counter_cache=spend_counter_cache, prisma_client=prisma_client, counter_key=counter_key
+    )
+
+
+async def _prepare_committed_spend_increments(
+    counter_keys: tuple[str, ...], increment: float
+) -> tuple[PendingSpendIncrement, ...]:
+    seeded: Final = await asyncio.gather(*(_committed_spend_seeded(counter_key) for counter_key in counter_keys))
+    return tuple(
+        PendingSpendIncrement(counter_key=committed_spend_key(counter_key), increment=increment)
+        for counter_key, is_seeded in zip(counter_keys, seeded)
+        if is_seeded
+    )
 
 
 async def _prepare_end_user_and_tag_spend_increments(
@@ -4182,11 +4224,12 @@ _increment_spend_counter_cache: Final = increment_spend_counter_cache
 
 @with_service_target(SPEND_COUNTERS_TARGET)
 async def invalidate_spend_counter(counter_key: str) -> None:
-    forget_spend_counter(counter_key)
-    spend_counter_cache.in_memory_cache.delete_cache(key=counter_key)
-    if spend_counter_cache.redis_cache is not None:
-        with contextlib.suppress(Exception):
-            await spend_counter_cache.redis_cache.async_delete_cache(key=counter_key)
+    for stale_key in (counter_key, *committed_spend_keys((counter_key,))):
+        forget_spend_counter(stale_key)
+        spend_counter_cache.in_memory_cache.delete_cache(key=stale_key)
+        if spend_counter_cache.redis_cache is not None:
+            with contextlib.suppress(Exception):
+                await spend_counter_cache.redis_cache.async_delete_cache(key=stale_key)
 
 
 _invalidate_spend_counter: Final = invalidate_spend_counter

@@ -1066,11 +1066,18 @@ async def test_set_customer_budget_metrics_after_api_request_uses_cached_default
 
 
 @pytest.mark.asyncio
-async def test_customer_gauge_subtracts_the_live_spend_auth_carried(prometheus_logger, customer_metrics_enabled):
+async def test_customer_gauge_subtracts_the_committed_spend_instead_of_the_cached_spend(
+    prometheus_logger, customer_metrics_enabled
+):
+    """Auth saw 1.5 committed, and by emit the counter holds 2.5 with this request's 0.5 and another request's."""
     import sys
 
+    from litellm.caching.dual_cache import DualCache
     from litellm.models.budget import LiteLLM_BudgetTable
     from litellm.models.end_user import LiteLLM_EndUserTable
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
+    from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend
 
     mock_proxy_server = MagicMock()
     mock_proxy_server.user_api_key_cache.async_get_cache = AsyncMock(
@@ -1081,6 +1088,12 @@ async def test_customer_gauge_subtracts_the_live_spend_auth_carried(prometheus_l
             litellm_budget_table=LiteLLM_BudgetTable(budget_id="b", max_budget=3.0),
         )
     )
+    mock_proxy_server.spend_counter_cache = DualCache()
+    mock_proxy_server.spend_counter_cache.in_memory_cache.set_cache(
+        key=committed_spend_key("spend:end_user:cust-live"), value=2.5
+    )
+    token = UserAPIKeyAuth(token="hashed")
+    token.committed_budget_spend = CommittedBudgetSpend(end_user=1.5)
 
     with patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}):
         await prometheus_logger._increment_remaining_budget_metrics(
@@ -1088,12 +1101,12 @@ async def test_customer_gauge_subtracts_the_live_spend_auth_carried(prometheus_l
             user_api_team_alias=None,
             user_api_key=None,
             user_api_key_alias=None,
-            litellm_params={"metadata": {"user_api_key_end_user_live_spend": 1.5}},
+            litellm_params={"metadata": {"user_api_key_auth": token}},
             response_cost=0.5,
             end_user_id="cust-live",
         )
 
-    assert _customer_sample("litellm_remaining_customer_budget_metric", "cust-live") == pytest.approx(1.0)
+    assert _customer_sample("litellm_remaining_customer_budget_metric", "cust-live") == pytest.approx(0.5)
 
 
 @pytest.mark.asyncio

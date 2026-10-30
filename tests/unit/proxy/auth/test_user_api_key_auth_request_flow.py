@@ -5081,52 +5081,38 @@ async def test_centralized_common_checks_carries_team_and_user_budget_state_on_t
         "user_api_key_user_budget_reset_at": None,
         "user_api_key_user_table_max_budget": None,
         "user_api_key_user_alias": "Alice",
-        "user_api_key_live_spend": None,
-        "user_api_key_team_live_spend": 0.0,
-        "user_api_key_user_live_spend": None,
-        "user_api_key_org_live_spend": None,
-        "user_api_key_end_user_live_spend": None,
     }
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model_input_cost", [None, 0.0], ids=["priced_model_reserves_budget", "zero_cost_model"])
-async def test_centralized_common_checks_carry_live_budget_spend_beside_the_stale_cached_spend(
-    model_input_cost: float | None,
+@pytest.mark.parametrize("prometheus_registered", [True, False], ids=["prometheus_logger", "no_prometheus_logger"])
+async def test_centralized_common_checks_carry_the_committed_spend_beside_the_stale_cached_spend(
+    monkeypatch: pytest.MonkeyPatch, prometheus_registered: bool
 ):
+    """The enforcement counters also hold budget holds, the committed twins only charged spend."""
     import litellm.proxy.proxy_server as _proxy_server_mod
     from starlette.datastructures import URL
 
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
     from litellm.proxy.utils import ProxyLogging
+    from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend
 
-    zero_cost_router: Final = (
-        None
-        if model_input_cost is None
-        else litellm.Router(
-            model_list=[
-                {
-                    "model_name": "gpt-4o",
-                    "litellm_params": {
-                        "model": "openai/gpt-4o",
-                        "api_key": "sk-test",
-                        "input_cost_per_token": model_input_cost,
-                        "output_cost_per_token": model_input_cost,
-                    },
-                }
-            ]
-        )
-    )
+    for callback_list in ("success_callback", "failure_callback", "_async_success_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, callback_list, [])
+    monkeypatch.setattr(litellm, "callbacks", [MagicMock(spec=PrometheusLogger)] if prometheus_registered else [])
     token: Final = UserAPIKeyAuth(api_key="sk-live-spend", max_budget=10.0, spend=0.0, team_id="t-live", team_spend=0.0)
     user_api_key_cache: Final = UserApiKeyCache()
     user_api_key_cache.set_cache(
         key="team_id:t-live", value=LiteLLM_TeamTableCachedObj(team_id="t-live", max_budget=20.0, spend=0.0)
     )
     spend_counter_cache: Final = DualCache()
-    spend_counter_cache.in_memory_cache.set_cache(key=f"spend:key:{token.token}", value=0.37)
-    spend_counter_cache.in_memory_cache.set_cache(key="spend:team:t-live", value=1.25)
+    for counter_key, held, committed in ((f"spend:key:{token.token}", 0.67, 0.37), ("spend:team:t-live", 1.55, 1.25)):
+        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=held)
+        spend_counter_cache.in_memory_cache.set_cache(key=committed_spend_key(counter_key), value=committed)
     attrs: Final = {
         **_proxy_attrs_for_centralized_checks(),
-        "llm_router": zero_cost_router,
+        "llm_router": None,
         "prisma_client": MagicMock(),
         "user_api_key_cache": user_api_key_cache,
         "spend_counter_cache": spend_counter_cache,
@@ -5148,8 +5134,9 @@ async def test_centralized_common_checks_carry_live_budget_spend_beside_the_stal
         for attribute, value in originals.items():
             setattr(_proxy_server_mod, attribute, value)
 
-    assert token.live_budget_spend is not None
-    assert (token.live_budget_spend.key, token.live_budget_spend.team) == (0.37, 1.25)
+    assert token.committed_budget_spend == (
+        CommittedBudgetSpend(key=0.37, team=1.25) if prometheus_registered else None
+    )
     assert (token.spend, token.team_spend) == (0.0, 0.0)
 
 

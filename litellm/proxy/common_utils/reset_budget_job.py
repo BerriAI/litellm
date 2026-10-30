@@ -51,6 +51,7 @@ from litellm.proxy.db.budget_window_spend_writer import roll_window_spend_row
 from litellm.proxy.db.db_span import db_span, db_spanned
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARGET, PodLockManager
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
+from litellm.proxy.spend_tracking.committed_spend import committed_spend_keys
 from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.organization_repository import OrganizationRepository
@@ -610,15 +611,17 @@ class ResetBudgetJob:
         try:
             from litellm.proxy.proxy_server import spend_counter_cache
 
-            spend_counter_cache.in_memory_cache.delete_cache(key=counter_key)
-            if spend_counter_cache.redis_cache is not None:
+            for stale_key in (counter_key, *committed_spend_keys((counter_key,))):
+                spend_counter_cache.in_memory_cache.delete_cache(key=stale_key)
+                if spend_counter_cache.redis_cache is None:
+                    continue
                 try:
-                    await spend_counter_cache.redis_cache.async_delete_cache(key=counter_key)
+                    await spend_counter_cache.redis_cache.async_delete_cache(key=stale_key)
                 except Exception as redis_err:
                     verbose_proxy_logger.warning(
                         "Failed to reset spend counter %s in Redis: %s. "
                         "Budget may be over-enforced until counter expires.",
-                        counter_key,
+                        stale_key,
                         redis_err,
                     )
         except Exception as e:
@@ -675,7 +678,7 @@ class ResetBudgetJob:
 
             match cache:
                 case "spend counter":
-                    await spend_counter_cache.async_delete_cache_keys(keys)
+                    await spend_counter_cache.async_delete_cache_keys((*keys, *committed_spend_keys(keys)))
                 case "user_api_key_cache":
                     await user_api_key_cache.async_delete_cache_keys(keys)
                 case _:

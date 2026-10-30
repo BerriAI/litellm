@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from prometheus_client import REGISTRY
 
+from litellm.caching.dual_cache import DualCache
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
@@ -24,9 +25,10 @@ from litellm.proxy.spend_tracking.carried_budget_state import (
     carry_organization_budget_state,
     carry_team_and_user_budget_state,
 )
+from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
 from litellm.types.proxy.carried_budget_state import (
+    CommittedBudgetSpend,
     KeyBudgetSnapshot,
-    LiveBudgetSpend,
     TeamBudgetSnapshot,
     UserBudgetSnapshot,
 )
@@ -54,6 +56,15 @@ def cleanup_prometheus_registry():
 @pytest.fixture
 def prometheus_logger():
     return PrometheusLogger()
+
+
+@pytest.fixture(autouse=True)
+def spend_counter_cache():
+    cache = DualCache()
+    with patch(  # test-quality-ok: prometheus reads the proxy_server spend counters at emit time, no injection seam
+        "litellm.proxy.proxy_server.spend_counter_cache", cache
+    ):
+        yield cache
 
 
 @pytest.fixture
@@ -138,6 +149,7 @@ def _request_metadata(token: UserAPIKeyAuth) -> dict:
     return {
         **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(token),
         **carried_budget_metadata(token),
+        "user_api_key_auth": token,
     }
 
 
@@ -199,26 +211,176 @@ async def test_authed_request_sets_every_gauge_without_any_object_getter(prometh
     prometheus_logger.litellm_user_budget_remaining_hours_metric.labels().set.assert_called_once()
 
 
-@pytest.mark.asyncio
-async def test_gauges_subtract_the_live_spend_auth_carried_instead_of_the_cached_spend(prometheus_logger, getters):
-    _stub_gauges(prometheus_logger)
-    token = _authed_token()
-    token.live_budget_spend = LiveBudgetSpend(key=3.0, team=30.0, user=8.0, org=60.0)
+def _store_counters(spend_counter_cache: DualCache, key: float, team: float, user: float, org: float) -> None:
+    for counter_key, value in (
+        ("spend:key:hashed", key),
+        ("spend:team:t1", team),
+        ("spend:user:u1", user),
+        ("spend:org:o1", org),
+    ):
+        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=value)
 
-    await _emit(prometheus_logger, _request_metadata(token))
 
-    remaining = {
+def _store_committed(spend_counter_cache: DualCache, key: float, team: float, user: float, org: float) -> None:
+    for counter_key, value in (
+        ("spend:key:hashed", key),
+        ("spend:team:t1", team),
+        ("spend:user:u1", user),
+        ("spend:org:o1", org),
+    ):
+        spend_counter_cache.in_memory_cache.set_cache(key=committed_spend_key(counter_key), value=value)
+
+
+def _remaining(prometheus_logger: PrometheusLogger) -> dict[str, float]:
+    return {
         "key": prometheus_logger.litellm_remaining_api_key_budget_metric.labels().set.call_args[0][0],
         "team": prometheus_logger.litellm_remaining_team_budget_metric.labels().set.call_args[0][0],
         "user": prometheus_logger.litellm_remaining_user_budget_metric.labels().set.call_args[0][0],
         "org": prometheus_logger.litellm_remaining_org_budget_metric.labels().set.call_args[0][0],
     }
-    assert remaining == {
+
+
+def _token_committed_at_auth() -> UserAPIKeyAuth:
+    token = _authed_token()
+    token.committed_budget_spend = CommittedBudgetSpend(key=3.0, team=30.0, user=8.0, org=60.0)
+    return token
+
+
+@pytest.mark.asyncio
+async def test_gauges_use_the_committed_spend_at_emit_when_other_requests_finished_after_auth(
+    prometheus_logger, getters, spend_counter_cache
+):
+    """This request's 2.0 plus 1.0 from another request that finished first, so the gauge is never set back."""
+    _stub_gauges(prometheus_logger)
+    _store_committed(spend_counter_cache, key=6.0, team=33.0, user=11.0, org=63.0)
+
+    await _emit(prometheus_logger, _request_metadata(_token_committed_at_auth()))
+
+    assert _remaining(prometheus_logger) == {
+        "key": pytest.approx(4.0),
+        "team": pytest.approx(267.0),
+        "user": pytest.approx(39.0),
+        "org": pytest.approx(437.0),
+    }
+
+
+@pytest.mark.asyncio
+async def test_gauges_add_the_cost_to_the_auth_time_spend_before_the_charge_reaches_the_counters(
+    prometheus_logger, getters, spend_counter_cache
+):
+    _stub_gauges(prometheus_logger)
+    _store_committed(spend_counter_cache, key=3.0, team=30.0, user=8.0, org=60.0)
+
+    await _emit(prometheus_logger, _request_metadata(_token_committed_at_auth()))
+
+    assert _remaining(prometheus_logger) == {
         "key": pytest.approx(5.0),
         "team": pytest.approx(268.0),
         "user": pytest.approx(40.0),
         "org": pytest.approx(438.0),
     }
+
+
+@pytest.mark.asyncio
+async def test_gauges_keep_the_auth_time_spend_when_the_proxy_spend_counters_cannot_be_read(
+    prometheus_logger, getters, monkeypatch
+):
+    _stub_gauges(prometheus_logger)
+    monkeypatch.delattr("litellm.proxy.proxy_server.spend_counter_cache")
+
+    await _emit(prometheus_logger, _request_metadata(_token_committed_at_auth()))
+
+    assert _remaining(prometheus_logger) == {
+        "key": pytest.approx(5.0),
+        "team": pytest.approx(268.0),
+        "user": pytest.approx(40.0),
+        "org": pytest.approx(438.0),
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_budget_hold_on_the_enforcement_counters_never_shows_in_the_gauges(
+    prometheus_logger, getters, spend_counter_cache
+):
+    _stub_gauges(prometheus_logger)
+    _store_committed(spend_counter_cache, key=5.0, team=32.0, user=10.0, org=62.0)
+    _store_counters(spend_counter_cache, key=9.0, team=36.0, user=14.0, org=66.0)
+
+    await _emit(prometheus_logger, _request_metadata(_token_committed_at_auth()))
+
+    assert _remaining(prometheus_logger) == {
+        "key": pytest.approx(5.0),
+        "team": pytest.approx(268.0),
+        "user": pytest.approx(40.0),
+        "org": pytest.approx(438.0),
+    }
+
+
+def _failed_request(metadata: dict) -> dict:
+    return {
+        "model": "openai/gpt-5.4-nano",
+        "litellm_params": {"metadata": metadata},
+        "standard_logging_object": {
+            "model": "openai/gpt-5.4-nano",
+            "model_id": "dep-1",
+            "model_group": "chat",
+            "api_base": "https://api.openai.com",
+            "custom_llm_provider": "openai",
+            "status": "failure",
+            "request_tags": [],
+            "hidden_params": {"litellm_overhead_time_ms": None, "additional_headers": None},
+            "metadata": {
+                "user_api_key_hash": "hashed",
+                "user_api_key_alias": "key-alias",
+                "user_api_key_team_id": "t1",
+                "user_api_key_team_alias": "team-alias",
+                "user_api_key_user_id": "u1",
+                "user_api_key_org_id": "o1",
+                "requester_metadata": None,
+                "user_api_key_end_user_id": None,
+            },
+        },
+        "exception": Exception("upstream failed"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_failed_request_sets_the_org_gauge_from_the_carried_org_and_committed_spend(
+    prometheus_logger, getters, spend_counter_cache
+):
+    _stub_gauges(prometheus_logger)
+    _store_committed(spend_counter_cache, key=3.0, team=30.0, user=8.0, org=65.0)
+    _store_counters(spend_counter_cache, key=9.0, team=36.0, user=14.0, org=90.0)
+
+    await prometheus_logger.async_log_failure_event(
+        _failed_request(_request_metadata(_token_committed_at_auth())), None, KEY_RESET_AT, KEY_RESET_AT
+    )
+
+    assert getters["get_org_object"].await_count == 0
+    prometheus_logger.litellm_remaining_org_budget_metric.labels().set.assert_called_once_with(pytest.approx(435.0))
+
+
+@pytest.mark.asyncio
+async def test_ordinary_metadata_keys_named_like_snapshot_fields_change_no_gauge(prometheus_logger, getters):
+    _stub_gauges(prometheus_logger)
+    metadata = {
+        "user_api_key_team_spend": 20.0,
+        "user_api_key_team_max_budget": 300.0,
+        "spend": 1000.0,
+        "max_budget": 1.0,
+        "budget_reset_at": None,
+        "user_alias": "not-the-user",
+    }
+
+    await _emit(prometheus_logger, metadata)
+
+    assert {name: getter.await_count for name, getter in getters.items()} == {
+        "get_key_object": 1,
+        "get_team_object": 1,
+        "get_user_object": 1,
+        "get_org_object": 1,
+    }
+    prometheus_logger.litellm_remaining_org_budget_metric.labels().set.assert_called_once_with(458.0)
 
 
 @pytest.mark.asyncio

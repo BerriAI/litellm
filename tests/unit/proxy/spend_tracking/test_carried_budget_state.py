@@ -14,13 +14,14 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.spend_tracking.carried_budget_state import (
     carried_budget_metadata,
-    carry_live_budget_spend,
+    carry_committed_budget_spend,
     carry_organization_budget_state,
     carry_team_and_user_budget_state,
 )
+from litellm.proxy.spend_tracking.committed_spend import EntitySpendCounterKeys
 from litellm.types.proxy.carried_budget_state import (
+    CommittedBudgetSpend,
     KeyBudgetSnapshot,
-    LiveBudgetSpend,
     OrgBudgetSnapshot,
     TeamBudgetSnapshot,
     UserBudgetSnapshot,
@@ -128,105 +129,92 @@ def test_snapshots_never_reach_the_serialized_token():
         user_object=LiteLLM_UserTable(user_id="u1", user_alias="Alice"),
     )
     token.org_budget_snapshot = OrgBudgetSnapshot(spend=1.0, max_budget=2.0)
-    token.live_budget_spend = LiveBudgetSpend(key=1.0)
+    metadata_without_committed_spend = dict(carried_budget_metadata(token))
+    token.committed_budget_spend = CommittedBudgetSpend(key=1.0, team=2.0, user=3.0, org=4.0, end_user=5.0)
 
     dumped = token.model_dump()
 
     assert "team_budget_snapshot" not in dumped
     assert "user_budget_snapshot" not in dumped
     assert "org_budget_snapshot" not in dumped
-    assert "live_budget_spend" not in dumped
+    assert "committed_budget_spend" not in dumped
+    assert dict(carried_budget_metadata(token)) == metadata_without_committed_spend
     assert UserAPIKeyAuth(**dumped).team_budget_snapshot is None
 
 
-def _counter_reader(counters: dict[str, float]):
-    reads: list[str] = []
+def _committed_reader(committed: CommittedBudgetSpend):
+    reads: list[EntitySpendCounterKeys] = []
 
-    async def read_spend(counter_key: str, fallback_spend: float) -> float:
-        reads.append(counter_key)
-        return counters.get(counter_key, fallback_spend)
+    async def read_committed(counter_keys: EntitySpendCounterKeys) -> CommittedBudgetSpend:
+        reads.append(counter_keys)
+        return committed
 
-    return read_spend, reads
-
-
-def _budgeted_token() -> UserAPIKeyAuth:
-    token = UserAPIKeyAuth(token="hashed", team_id="t1", user_id="u1", org_id="o1", spend=1.0, max_budget=10.0)
-    token.org_budget_snapshot = OrgBudgetSnapshot(spend=40.0, max_budget=500.0)
-    return token
+    return read_committed, reads
 
 
 @pytest.mark.asyncio
-async def test_live_budget_spend_reads_every_budgeted_counter_and_leaves_the_header_spend_alone():
-    """Each counter holds committed spend plus another request's 0.33 reservation, which only the gauges see."""
-    token = _budgeted_token()
-    read_spend, _ = _counter_reader(
-        {
-            "spend:key:hashed": 1.63,
-            "spend:team:t1": 20.63,
-            "spend:user:u1": 5.63,
-            "spend:org:o1": 40.63,
-            "spend:end_user:cust-1": 0.83,
-        }
-    )
+async def test_committed_spend_is_read_once_for_every_budgeted_entity():
+    token = UserAPIKeyAuth(token="hashed", team_id="t1", user_id="u1", org_id="o1", spend=1.0, max_budget=10.0)
+    token.org_budget_snapshot = OrgBudgetSnapshot(spend=40.0, max_budget=500.0)
+    committed = CommittedBudgetSpend(key=1.3, team=20.3, user=5.3, org=40.3, end_user=0.8)
+    read_committed, reads = _committed_reader(committed)
 
-    await carry_live_budget_spend(
+    await carry_committed_budget_spend(
         valid_token=token,
         team_object=LiteLLM_TeamTable(team_id="t1", max_budget=300.0, spend=20.0),
         user_object=LiteLLM_UserTable(user_id="u1", max_budget=50.0, spend=5.0),
         end_user_object=LiteLLM_EndUserTable(
             user_id="cust-1", blocked=False, spend=0.5, litellm_budget_table=LiteLLM_BudgetTable(max_budget=3.0)
         ),
-        read_spend=read_spend,
+        read_committed=read_committed,
     )
 
-    expected = LiveBudgetSpend(key=1.63, team=20.63, user=5.63, org=40.63, end_user=0.83)
-    assert token.live_budget_spend == expected
-    assert LiveBudgetSpend.from_metadata(carried_budget_metadata(token)) == expected
+    assert reads == [
+        EntitySpendCounterKeys(
+            key="spend:key:hashed",
+            team="spend:team:t1",
+            user="spend:user:u1",
+            org="spend:org:o1",
+            end_user="spend:end_user:cust-1",
+        )
+    ]
+    assert token.committed_budget_spend == committed
     assert (token.spend, token.team_spend) == (1.0, None)
 
 
 @pytest.mark.asyncio
-async def test_live_budget_spend_never_reads_below_the_spend_auth_loaded():
-    token = _budgeted_token()
-    read_spend, _ = _counter_reader({"spend:key:hashed": 0.2, "spend:org:o1": 12.0})
-
-    await carry_live_budget_spend(
-        valid_token=token, team_object=None, user_object=None, end_user_object=None, read_spend=read_spend
-    )
-
-    assert token.live_budget_spend == LiveBudgetSpend(key=1.0, org=40.0)
-
-
-@pytest.mark.asyncio
-async def test_live_budget_spend_skips_entities_without_a_max_budget():
+async def test_committed_spend_skips_entities_without_a_max_budget():
     token = UserAPIKeyAuth(token="hashed", team_id="t1", user_id="u1", org_id="o1", spend=1.0)
     token.org_budget_snapshot = OrgBudgetSnapshot(spend=40.0, max_budget=None)
-    read_spend, reads = _counter_reader({})
+    read_committed, reads = _committed_reader(CommittedBudgetSpend())
 
-    await carry_live_budget_spend(
+    await carry_committed_budget_spend(
         valid_token=token,
         team_object=LiteLLM_TeamTable(team_id="t1", spend=20.0),
         user_object=LiteLLM_UserTable(user_id="u1", spend=5.0),
-        end_user_object=LiteLLM_EndUserTable(user_id="cust-1", blocked=False, spend=0.5),
-        read_spend=read_spend,
+        end_user_object=LiteLLM_EndUserTable(
+            user_id="cust-1", blocked=False, spend=0.5, litellm_budget_table=LiteLLM_BudgetTable(max_budget=None)
+        ),
+        read_committed=read_committed,
     )
 
-    assert reads == []
-    assert token.live_budget_spend == LiveBudgetSpend()
+    assert reads == [EntitySpendCounterKeys()]
+    assert token.committed_budget_spend == CommittedBudgetSpend()
 
 
 @pytest.mark.asyncio
-async def test_live_budget_spend_reads_the_team_org_when_the_key_has_none():
+async def test_committed_spend_reads_the_team_org_when_the_key_has_none():
     token = UserAPIKeyAuth(token="hashed", team_id="t1")
     token.org_budget_snapshot = OrgBudgetSnapshot(spend=40.0, max_budget=500.0)
-    read_spend, _ = _counter_reader({"spend:org:team-org": 41.0})
+    read_committed, reads = _committed_reader(CommittedBudgetSpend(org=41.0))
 
-    await carry_live_budget_spend(
+    await carry_committed_budget_spend(
         valid_token=token,
         team_object=LiteLLM_TeamTable(team_id="t1", organization_id="team-org"),
         user_object=None,
         end_user_object=None,
-        read_spend=read_spend,
+        read_committed=read_committed,
     )
 
-    assert token.live_budget_spend == LiveBudgetSpend(org=41.0)
+    assert reads == [EntitySpendCounterKeys(org="spend:org:team-org")]
+    assert token.committed_budget_spend == CommittedBudgetSpend(org=41.0)
