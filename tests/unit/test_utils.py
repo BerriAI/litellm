@@ -1258,6 +1258,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
                         "/v1/videos",
                         "/vertex_ai/live",
                         "/v1/listen",
+                        "/v1/speak",
                         "/v1/systemone",
                         "/v1/decisions",
                         "/v1beta/interactions",
