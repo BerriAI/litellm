@@ -20,6 +20,7 @@ from psycopg import sql
 from pydantic import JsonValue
 
 from litellm.accounting import (
+    CostCompiler,
     CostEvent,
     DeliveryState,
     DeliveryTarget,
@@ -30,9 +31,11 @@ from litellm.accounting import (
     OutboundUsageEvent,
     Outcome,
     PricingSnapshot,
+    Unpriced,
 )
 from litellm.proxy.db import accounting_ledger
 from litellm.proxy.db.accounting_ledger import AccountingConflictError, AccountingEvent, AccountingLedger, UsageWrite
+from litellm.proxy.spend_tracking.cost_compiler import LoggingCostCompiler
 from litellm.types.utils import CallTypes
 from tests.integration._support.database import scratch_database
 from tests.integration._support.prisma_clients import connected_proxy_prisma
@@ -246,6 +249,181 @@ async def test_event_and_complete_delivery_set_commit_together(writer: _Writer, 
         ledger_database, 'SELECT target::text, state::text, attempts FROM "LiteLLM_AccountingDelivery"'
     )
     assert set(deliveries) == {(target.value, "pending", 0) for target in _TARGETS}
+
+
+@pytest.mark.asyncio
+async def test_compilers_share_one_committed_charge_and_preserve_delivery_receipts(
+    writer: _Writer, ledger_database: str
+) -> None:
+    _, store = writer
+    event: Final = _usage()
+    assert isinstance(event, OutboundUsageEvent)
+    await _insert(store, event, context={"price": "0.125"})
+
+    def price(envelope: str) -> PricingSnapshot:
+        return _cost(amount=json.loads(envelope)["context"]["price"]).snapshot
+
+    compiler: Final[CostCompiler] = LoggingCostCompiler(store, price, _TARGETS)
+    results: Final = await asyncio.gather(*(compiler.compile(event) for _ in range(8)))
+    assert all(result == results[0] for result in results)
+    assert isinstance(results[0], CostEvent)
+    assert results[0].snapshot.total_cost == Decimal("0.125")
+    assert _rows(ledger_database, 'SELECT count(*) FROM "LiteLLM_AccountingEvent" WHERE kind = \'cost\'') == [(1,)]
+    deliveries: Final = _rows(
+        ledger_database,
+        'SELECT target::text, state::text FROM "LiteLLM_AccountingDelivery" WHERE event_id = %s',
+        (results[0].event_id,),
+    )
+    assert set(deliveries) == {(target.value, "pending") for target in _TARGETS}
+    _complete_and_age(ledger_database)
+    before: Final = _rows(ledger_database, 'SELECT * FROM "LiteLLM_AccountingDelivery" ORDER BY event_id, target')
+
+    def unavailable_pricing(envelope: str) -> PricingSnapshot:
+        raise AssertionError("Committed cost replay must not invoke pricing")
+
+    replay: Final = await LoggingCostCompiler(store, unavailable_pricing, _TARGETS).compile(event)
+    assert replay == results[0]
+    assert _rows(ledger_database, 'SELECT * FROM "LiteLLM_AccountingDelivery" ORDER BY event_id, target') == before
+
+
+@pytest.mark.asyncio
+async def test_compilation_rejects_changed_delivery_targets_without_resetting_receipts(
+    writer: _Writer, ledger_database: str
+) -> None:
+    _, store = writer
+    event: Final = _usage()
+    assert isinstance(event, OutboundUsageEvent)
+    await _insert(store, event)
+    original: Final = await LoggingCostCompiler(store, lambda _: _cost().snapshot, _TARGETS[:1]).compile(event)
+    _complete_and_age(ledger_database)
+    before: Final = _rows(ledger_database, 'SELECT * FROM "LiteLLM_AccountingDelivery" ORDER BY event_id, target')
+    with pytest.raises(AccountingConflictError, match="delivery set"):
+        await LoggingCostCompiler(store, lambda _: _cost().snapshot, _TARGETS).compile(event)
+    assert _rows(ledger_database, 'SELECT * FROM "LiteLLM_AccountingDelivery" ORDER BY event_id, target') == before
+    assert await LoggingCostCompiler(store, lambda _: _cost().snapshot, _TARGETS[:1]).compile(event) == original
+
+
+@pytest.mark.asyncio
+async def test_compilation_preserves_unknown_cost_without_creating_a_zero_charge(
+    writer: _Writer, ledger_database: str
+) -> None:
+    _, store = writer
+    event: Final = _usage()
+    assert isinstance(event, OutboundUsageEvent)
+    unresolved: Final = Unpriced(usage_event_id=event.event_id, reason="unknown_usage")
+    compiler: Final = LoggingCostCompiler(store, lambda _: unresolved, _TARGETS)
+    assert await compiler.compile(event) == Unpriced(usage_event_id=event.event_id, reason="usage_not_committed")
+    await _insert(store, event)
+    assert await compiler.compile(event) == unresolved
+    assert _rows(ledger_database, 'SELECT count(*) FROM "LiteLLM_AccountingEvent" WHERE kind = \'cost\'') == [(0,)]
+
+
+@pytest.mark.asyncio
+async def test_compilation_rejects_an_unpriced_result_for_another_source(writer: _Writer, ledger_database: str) -> None:
+    _, store = writer
+    event: Final = _usage()
+    assert isinstance(event, OutboundUsageEvent)
+    await _insert(store, event)
+    compiler: Final = LoggingCostCompiler(
+        store, lambda _: Unpriced(usage_event_id="other", reason="missing_price"), _TARGETS
+    )
+    with pytest.raises(AccountingConflictError, match="Unpriced result"):
+        await compiler.compile(event)
+    assert _rows(ledger_database, 'SELECT count(*) FROM "LiteLLM_AccountingEvent" WHERE kind = \'cost\'') == [(0,)]
+
+
+@pytest.mark.asyncio
+async def test_compilation_rejects_a_cost_identity_collision(writer: _Writer, ledger_database: str) -> None:
+    _, store = writer
+    event: Final = _usage()
+    assert isinstance(event, OutboundUsageEvent)
+    await _insert(store, event)
+    await _insert(store, _usage(f"cost:{event.event_id}", inbound=True))
+    with pytest.raises(AccountingConflictError, match="identity_conflict"):
+        await LoggingCostCompiler(store, lambda _: _cost().snapshot, _TARGETS).compile(event)
+    assert _rows(ledger_database, 'SELECT count(*) FROM "LiteLLM_AccountingEvent" WHERE kind = \'cost\'') == [(0,)]
+
+
+@pytest.mark.asyncio
+async def test_compilation_rejects_changed_source_before_reusing_a_charge(writer: _Writer) -> None:
+    _, store = writer
+    event: Final = _usage()
+    assert isinstance(event, OutboundUsageEvent)
+    await _insert(store, event)
+    compiler: Final = LoggingCostCompiler(store, lambda _: _cost().snapshot, _TARGETS)
+    assert isinstance(await compiler.compile(event), CostEvent)
+    changed: Final = event.model_copy(update={"outcome": Outcome.CANCELLED})
+    with pytest.raises(AccountingConflictError, match="differs from the accepted usage"):
+        await compiler.compile(changed)
+
+
+@pytest.mark.asyncio
+async def test_compilation_failure_rolls_back_and_can_be_retried(writer: _Writer, ledger_database: str) -> None:
+    _, store = writer
+    event: Final = _usage()
+    assert isinstance(event, OutboundUsageEvent)
+    await _insert(store, event)
+
+    def failed_pricing(envelope: str) -> PricingSnapshot:
+        raise ValueError("malformed retained pricing")
+
+    with pytest.raises(ValueError, match="malformed retained pricing"):
+        await LoggingCostCompiler(store, failed_pricing, _TARGETS).compile(event)
+    assert _rows(ledger_database, 'SELECT count(*) FROM "LiteLLM_AccountingEvent" WHERE kind = \'cost\'') == [(0,)]
+    result: Final = await LoggingCostCompiler(store, lambda _: _cost(amount="0").snapshot, _TARGETS).compile(event)
+    assert isinstance(result, CostEvent)
+    assert result.charges[0].value == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["usage", "cost"])
+async def test_compilation_does_not_interpret_unknown_envelope_versions(writer: _Writer, kind: str) -> None:
+    _, store = writer
+    event: Final = _usage()
+    assert isinstance(event, OutboundUsageEvent)
+    await store.insert_event(event, _TARGETS, envelope=_envelope(event), schema_version=2 if kind == "usage" else 1)
+    if kind == "cost":
+        cost: Final = _cost()
+        await store.insert_event(cost, _TARGETS, envelope=_envelope(cost), schema_version=2)
+    result: Final = await LoggingCostCompiler(store, lambda _: _cost().snapshot, _TARGETS).compile(event)
+    assert result == Unpriced(usage_event_id=event.event_id, reason=f"unsupported_{kind}_schema")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["before_commit", "after_commit", "cancellation"])
+async def test_compiler_recovery_preserves_atomic_charge_and_delivery_acceptance(
+    writer: _Writer, ledger_database: str, failure: str
+) -> None:
+    client, store = writer
+    event: Final = _usage()
+    assert isinstance(event, OutboundUsageEvent)
+    await _insert(store, event)
+
+    @asynccontextmanager
+    async def interrupted() -> AsyncGenerator[Prisma]:
+        async with client.writer_db.tx() as tx:
+            yield tx
+            if failure == "before_commit":
+                raise RuntimeError("interrupted cost commit")
+            if failure == "cancellation":
+                raise asyncio.CancelledError
+        raise RuntimeError("lost cost acknowledgement")
+
+    compiler: Final = LoggingCostCompiler(AccountingLedger(interrupted), lambda _: _cost().snapshot, _TARGETS)
+    error: Final = asyncio.CancelledError if failure == "cancellation" else RuntimeError
+    with pytest.raises(error):
+        await compiler.compile(event)
+    count: Final = int(failure == "after_commit")
+    assert _rows(ledger_database, 'SELECT count(*) FROM "LiteLLM_AccountingEvent" WHERE kind = \'cost\'') == [(count,)]
+    assert _rows(
+        ledger_database,
+        'SELECT count(*) FROM "LiteLLM_AccountingDelivery" WHERE event_id = %s',
+        (f"cost:{event.event_id}",),
+    ) == [(count * len(_TARGETS),)]
+    result: Final = await LoggingCostCompiler(store, lambda _: _cost().snapshot, _TARGETS).compile(event)
+    assert isinstance(result, CostEvent)
+    assert result.snapshot == _cost().snapshot
+    assert _rows(ledger_database, 'SELECT count(*) FROM "LiteLLM_AccountingEvent" WHERE kind = \'cost\'') == [(1,)]
 
 
 @pytest.mark.asyncio
