@@ -344,14 +344,14 @@ class TestBourse:
         config_class = create_config_class(provider)
         config = config_class()
 
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
-        assert api_base == "https://api.bourse.run/v1"
+        default_base, _ = config._get_openai_compatible_provider_info(None, None)
+        assert default_base == "https://api.bourse.run/v1"
 
-        api_base, api_key = config._get_openai_compatible_provider_info(
+        custom_base, custom_key = config._get_openai_compatible_provider_info(
             "https://custom.bourse.run/v1", "test-key"
         )
-        assert api_base == "https://custom.bourse.run/v1"
-        assert api_key == "test-key"
+        assert custom_base == "https://custom.bourse.run/v1"
+        assert custom_key == "test-key"
 
     def test_bourse_complete_url_appends_endpoint(self):
         from litellm.llms.openai_like.dynamic_config import create_config_class
@@ -390,3 +390,20 @@ class TestBourse:
         assert result["max_tokens"] == 100
         assert "max_completion_tokens" not in result
         assert result["temperature"] == 0.7
+
+    def test_bourse_registered_as_openai_compatible(self):
+        import litellm
+        from litellm.types.utils import LlmProviders
+
+        assert LlmProviders("bourse") == LlmProviders.BOURSE
+        assert "bourse" in litellm.openai_compatible_providers
+
+    def test_bourse_accepts_tools(self):
+        from litellm.utils import get_optional_params
+
+        tools = [{"type": "function", "function": {"name": "lookup", "parameters": {}}}]
+        params = get_optional_params(
+            model="claude-opus-5", custom_llm_provider="bourse", tools=tools
+        )
+
+        assert params["tools"] == tools
