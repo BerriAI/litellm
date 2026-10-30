@@ -522,8 +522,7 @@ async def test_async_filter_deployments_uses_stable_model_map_key_for_affinity_s
     user_key = "user-key-abc"
     stable_model_map_key = "claude-sonnet-4-5@20250929"
 
-    cache = AsyncMock()
-    cache.async_get_cache = AsyncMock()
+    cache = DualCache()
 
     callback = DeploymentAffinityCheck(
         cache=cache,
@@ -550,12 +549,7 @@ async def test_async_filter_deployments_uses_stable_model_map_key_for_affinity_s
         user_key=user_key,
     )
 
-    async def get_cache_side_effect(*, key: str):
-        if key == expected_cache_key:
-            return {"model_id": "deployment-2"}
-        return None
-
-    cache.async_get_cache.side_effect = get_cache_side_effect
+    await cache.async_set_cache(expected_cache_key, {"model_id": "deployment-2"}, local_only=True)
 
     filtered = await callback.async_filter_deployments(
         model="some-router-model-group",

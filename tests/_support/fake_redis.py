@@ -6,6 +6,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._service_logger import ServiceLogging
+from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCache, RedisCircuitBreaker
 from litellm.redis.transport.events import RedisServiceEvents
 from litellm.redis.transport.redis_py import RedisPyTransport
@@ -61,6 +62,7 @@ def fake_redis_transport(
 _FLOAT: Final = TypeAdapter(float)
 _INT: Final = TypeAdapter(int)
 _KEYS: Final = TypeAdapter(list[bytes])
+_OBJECT: Final = TypeAdapter(object)
 
 
 def set_reply_callback(cache: RedisCache, command: str, callback: Callable[..., object]) -> None:
@@ -86,7 +88,7 @@ def trip_breaker(cache: RedisCache, failures: int | None = None) -> None:
 
 
 def async_client(cache: RedisCache) -> fakeredis.FakeAsyncRedis:
-    client: Final = cache.init_async_client()  # pyright: ignore[reportUnknownMemberType]  # legacy RedisCache API is untyped
+    client: Final = cache.init_async_client()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # legacy RedisCache API is untyped
     assert isinstance(client, fakeredis.FakeAsyncRedis)
     return client
 
@@ -95,7 +97,7 @@ def pin_async_client(cache: RedisCache) -> Callable[[], None]:
     client: Final = async_client(cache)
 
     def pin() -> None:
-        litellm.in_memory_llm_clients_cache.set_cache(
+        litellm.in_memory_llm_clients_cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # legacy cache API is untyped
             key=cache._get_async_client_cache_key(),  # pyright: ignore[reportPrivateUsage]  # re-seeds the per-loop client slot RedisCache reads
             value=client,
         )
@@ -105,3 +107,22 @@ def pin_async_client(cache: RedisCache) -> Callable[[], None]:
 
 async def legacy_set(cache: RedisCache, key: str, value: object, *, ttl: int | None = None) -> None:
     await cache.async_set_cache(key, value, ttl=ttl)  # pyright: ignore[reportUnknownMemberType]  # legacy RedisCache API is untyped
+
+
+def seed_async_client(cache: RedisCache, client: object) -> None:
+    litellm.in_memory_llm_clients_cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # legacy cache API is untyped
+        key=cache._get_async_client_cache_key(),  # pyright: ignore[reportPrivateUsage]  # seeds the per-loop client slot RedisCache reads
+        value=client,
+    )
+
+
+async def legacy_get(cache: RedisCache, key: str) -> object:
+    return _OBJECT.validate_python(await cache.async_get_cache(key))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # legacy RedisCache API is untyped
+
+
+def local_set(cache: DualCache, key: str, value: object, *, ttl: int | None = None) -> None:
+    cache.in_memory_cache.set_cache(key, value, ttl=ttl)  # pyright: ignore[reportUnknownMemberType]  # legacy InMemoryCache API is untyped
+
+
+def local_get(cache: DualCache, key: str) -> object:
+    return _OBJECT.validate_python(cache.in_memory_cache.get_cache(key))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # legacy InMemoryCache API is untyped
