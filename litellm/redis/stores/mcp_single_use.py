@@ -1,6 +1,9 @@
+import hashlib
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Final, Protocol
+from typing import Final, Protocol, TypeAlias
+
+from typing_extensions import assert_never
 
 from litellm.redis.transport.contract import EvalReply, RedisFailure, RedisTransport
 
@@ -13,22 +16,69 @@ return count
 """
 
 
-class McpSingleUseStore(Protocol):
-    async def claim(self, key: str, *, ttl: timedelta) -> int | RedisFailure: ...
+@dataclass(frozen=True, slots=True)
+class ConnectFlowUsed:
+    jti: str
 
-    async def peek(self, key: str) -> bool | RedisFailure: ...
+
+@dataclass(frozen=True, slots=True)
+class AuthCodeUsed:
+    jti: str
+
+
+@dataclass(frozen=True, slots=True)
+class RefreshTokenUsed:
+    jti: str
+
+
+@dataclass(frozen=True, slots=True)
+class RefreshFamilyRevoked:
+    family: str
+
+
+@dataclass(frozen=True, slots=True)
+class AssertionRedeemed:
+    issuer: str
+    jti: str
+
+
+SingleUseMarker: TypeAlias = (
+    ConnectFlowUsed | AuthCodeUsed | RefreshTokenUsed | RefreshFamilyRevoked | AssertionRedeemed
+)
+
+
+def marker_key(marker: SingleUseMarker) -> str:
+    match marker:
+        case ConnectFlowUsed(jti=jti):
+            return f"mcp_gateway_dcr_flow_used:{jti}"
+        case AuthCodeUsed(jti=jti):
+            return f"mcp_gateway_dcr_code_used:{jti}"
+        case RefreshTokenUsed(jti=jti):
+            return f"mcp_gateway_dcr_refresh_used:{jti}"
+        case RefreshFamilyRevoked(family=family):
+            return f"mcp_gateway_dcr_refresh_family_revoked:{family}"
+        case AssertionRedeemed(issuer=issuer, jti=jti):
+            return "mcp_gateway_dcr:id_jag:" + hashlib.sha256(f"{issuer}\n{jti}".encode()).hexdigest()
+        case _:
+            assert_never(marker)
+
+
+class McpSingleUseStore(Protocol):
+    async def claim(self, marker: SingleUseMarker, *, ttl: timedelta) -> int | RedisFailure: ...
+
+    async def peek(self, marker: SingleUseMarker) -> bool | RedisFailure: ...
 
 
 @dataclass(frozen=True, slots=True)
 class TransportMcpSingleUseStore:
     transport: RedisTransport
 
-    async def claim(self, key: str, *, ttl: timedelta) -> int | RedisFailure:
-        reply: Final = await self.transport.eval(_CLAIM, (key,), (1, ttl // timedelta(seconds=1)))
+    async def claim(self, marker: SingleUseMarker, *, ttl: timedelta) -> int | RedisFailure:
+        reply: Final = await self.transport.eval(_CLAIM, (marker_key(marker),), (1, ttl // timedelta(seconds=1)))
         return reply if isinstance(reply, RedisFailure) else _count(reply)
 
-    async def peek(self, key: str) -> bool | RedisFailure:
-        reply: Final = await self.transport.get(key)
+    async def peek(self, marker: SingleUseMarker) -> bool | RedisFailure:
+        reply: Final = await self.transport.get(marker_key(marker))
         return reply if isinstance(reply, RedisFailure) else reply is not None
 
 

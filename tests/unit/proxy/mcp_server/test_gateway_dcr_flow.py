@@ -66,6 +66,13 @@ from litellm.proxy.mcp_server.outbound_credentials.session_token import (
     mint_session_refresh_token,
     mint_session_token,
 )
+from litellm.redis.stores.mcp_single_use import (
+    AssertionRedeemed,
+    AuthCodeUsed,
+    ConnectFlowUsed,
+    RefreshFamilyRevoked,
+    RefreshTokenUsed,
+)
 from tests._support.fake_redis import fake_redis_cache
 
 MASTER_KEY = "sk-gateway-dcr-flow-tests"
@@ -689,8 +696,8 @@ async def test_single_use_guard_in_memory_is_single_use_within_process():
     from litellm.proxy.mcp_server.gateway_dcr_flow import _SingleUseGuard
 
     guard = _SingleUseGuard(DualCache())  # redis_cache is None
-    assert await guard.claim("jti-inmem", 60) == "first"
-    assert await guard.claim("jti-inmem", 60) == "replayed"
+    assert await guard.claim(AuthCodeUsed("jti-inmem"), 60) == "first"
+    assert await guard.claim(AuthCodeUsed("jti-inmem"), 60) == "replayed"
 
 
 @pytest.mark.asyncio
@@ -703,10 +710,11 @@ async def test_single_use_guard_uses_redis_as_sole_authority_when_configured():
     cache = DualCache(redis_cache=fake_redis_cache(server))
     guard = _SingleUseGuard(cache)
 
-    assert await guard.claim("jti-redis", 60) == "first"
-    assert await guard.claim("jti-redis", 60) == "replayed"
-    assert await _SingleUseGuard(DualCache(redis_cache=fake_redis_cache(server))).claim("jti-redis", 60) == "replayed"
-    assert cache.in_memory_cache.get_cache("jti-redis") is None
+    marker = AuthCodeUsed("jti-redis")
+    assert await guard.claim(marker, 60) == "first"
+    assert await guard.claim(marker, 60) == "replayed"
+    assert await _SingleUseGuard(DualCache(redis_cache=fake_redis_cache(server))).claim(marker, 60) == "replayed"
+    assert cache.in_memory_cache.get_cache("mcp_gateway_dcr_code_used:jti-redis") is None
 
 
 @pytest.mark.asyncio
@@ -720,14 +728,14 @@ async def test_single_use_guard_writes_the_marker_the_old_increment_wrote_with_i
     raw = fakeredis.FakeAsyncRedis(server=server)
     guard = _SingleUseGuard(DualCache(redis_cache=redis_cache))
 
-    assert await guard.claim("new-first", 60) == "first"
-    assert await raw.get("ns:new-first") == b"1"
-    assert 59_000 < await raw.pttl("ns:new-first") <= 60_000
-    assert await redis_cache.async_increment("new-first", 1, ttl=60) == 2.0
+    assert await guard.claim(RefreshTokenUsed("new-first"), 60) == "first"
+    assert await raw.get("ns:mcp_gateway_dcr_refresh_used:new-first") == b"1"
+    assert 59_000 < await raw.pttl("ns:mcp_gateway_dcr_refresh_used:new-first") <= 60_000
+    assert await redis_cache.async_increment("mcp_gateway_dcr_refresh_used:new-first", 1, ttl=60) == 2.0
 
-    assert await redis_cache.async_increment("old-first", 1, ttl=60) == 1.0
-    assert await guard.claim("old-first", 60) == "replayed"
-    assert await guard.peek("old-first") == "claimed"
+    assert await redis_cache.async_increment("mcp_gateway_dcr_refresh_used:old-first", 1, ttl=60) == 1.0
+    assert await guard.claim(RefreshTokenUsed("old-first"), 60) == "replayed"
+    assert await guard.peek(RefreshTokenUsed("old-first")) == "claimed"
 
 
 @pytest.mark.asyncio
@@ -738,9 +746,9 @@ async def test_single_use_guard_keeps_the_ttl_a_marker_already_has():
     raw = fakeredis.FakeAsyncRedis(server=server)
     guard = _SingleUseGuard(DualCache(redis_cache=fake_redis_cache(server)))
 
-    assert await guard.claim("jti-ttl", 600) == "first"
-    assert await guard.claim("jti-ttl", 5) == "replayed"
-    assert 590_000 < await raw.pttl("jti-ttl") <= 600_000
+    assert await guard.claim(ConnectFlowUsed("jti-ttl"), 600) == "first"
+    assert await guard.claim(ConnectFlowUsed("jti-ttl"), 5) == "replayed"
+    assert 590_000 < await raw.pttl("mcp_gateway_dcr_flow_used:jti-ttl") <= 600_000
 
 
 @pytest.mark.asyncio
@@ -753,8 +761,8 @@ async def test_single_use_guard_fails_closed_when_redis_errors():
     cache = DualCache(redis_cache=fake_redis_cache(server))
     server.connected = False
 
-    assert await _SingleUseGuard(cache).claim("jti-fault", 60) == "unavailable"
-    assert cache.in_memory_cache.get_cache("jti-fault") is None
+    assert await _SingleUseGuard(cache).claim(AuthCodeUsed("jti-fault"), 60) == "unavailable"
+    assert cache.in_memory_cache.get_cache("mcp_gateway_dcr_code_used:jti-fault") is None
 
 
 @pytest.mark.asyncio
@@ -765,13 +773,13 @@ async def test_single_use_guard_peek_fails_closed_when_redis_errors():
 
     server = fakeredis.FakeServer()
     guard = _SingleUseGuard(DualCache(redis_cache=fake_redis_cache(server)))
-    assert await guard.claim("family-fault", 60) == "first"
+    assert await guard.claim(RefreshFamilyRevoked("family-fault"), 60) == "first"
 
     server.connected = False
-    assert await guard.peek("family-fault") == "unavailable"
+    assert await guard.peek(RefreshFamilyRevoked("family-fault")) == "unavailable"
 
     server.connected = True
-    assert await guard.peek("family-fault") == "claimed"
+    assert await guard.peek(RefreshFamilyRevoked("family-fault")) == "claimed"
 
 
 @pytest.mark.asyncio
@@ -784,10 +792,34 @@ async def test_single_use_guard_peek_reads_the_key_under_the_namespace_claim_wro
     server = fakeredis.FakeServer()
     guard = _SingleUseGuard(DualCache(redis_cache=fake_redis_cache(server, namespace="ns")))
 
-    assert await guard.peek("family-ns") == "unclaimed"
-    assert await guard.claim("family-ns", 60) == "first"
-    assert await fakeredis.FakeAsyncRedis(server=server).keys("*") == [b"ns:family-ns"]
-    assert await guard.peek("family-ns") == "claimed"
+    assert await guard.peek(RefreshFamilyRevoked("family-ns")) == "unclaimed"
+    assert await guard.claim(RefreshFamilyRevoked("family-ns"), 60) == "first"
+    assert await fakeredis.FakeAsyncRedis(server=server).keys("*") == [
+        b"ns:mcp_gateway_dcr_refresh_family_revoked:family-ns"
+    ]
+    assert await guard.peek(RefreshFamilyRevoked("family-ns")) == "claimed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("marker", "key"),
+    [
+        (ConnectFlowUsed("j1"), b"mcp_gateway_dcr_flow_used:j1"),
+        (AuthCodeUsed("j1"), b"mcp_gateway_dcr_code_used:j1"),
+        (RefreshTokenUsed("j1"), b"mcp_gateway_dcr_refresh_used:j1"),
+        (RefreshFamilyRevoked("f1"), b"mcp_gateway_dcr_refresh_family_revoked:f1"),
+        (
+            AssertionRedeemed(issuer="https://idp.example", jti="j1"),
+            b"mcp_gateway_dcr:id_jag:" + hashlib.sha256(b"https://idp.example\nj1").hexdigest().encode(),
+        ),
+    ],
+)
+async def test_single_use_guard_claims_each_marker_under_the_key_old_pods_use(marker, key):
+    from litellm.proxy.mcp_server.gateway_dcr_flow import _SingleUseGuard
+
+    server = fakeredis.FakeServer()
+    assert await _SingleUseGuard(DualCache(redis_cache=fake_redis_cache(server))).claim(marker, 60) == "first"
+    assert await fakeredis.FakeAsyncRedis(server=server).keys("*") == [key]
 
 
 LOOPBACK_REDIRECT_URI = "http://localhost:3118/callback"
@@ -3281,7 +3313,7 @@ REQUESTING_APP = "0oa-requesting-app"
 ASSERTED = AssertionIdentity(
     user_id="u1",
     team_id="team-b",
-    replay_key="mcp_gateway_dcr:id_jag:jti-1",
+    replay=AssertionRedeemed(issuer="https://idp.example", jti="jti-1"),
     replay_ttl_seconds=300,
     scope="litellm:mcp",
     allowed_routes=("mcp_inference_routes",),
@@ -3332,7 +3364,11 @@ async def test_jwt_bearer_grant_mints_the_proxy_credential_for_the_asserted_user
     assert replayed.status_code == 400
     assert json.loads(replayed.body)["error"] == "invalid_grant"
     assert minter.calls == [("u1", "team-b")]
-    fresh = _Redeemer(ASSERTED.model_copy(update={"replay_key": "mcp_gateway_dcr:id_jag:jti-2", "scope": None}))
+    fresh = _Redeemer(
+        ASSERTED.model_copy(
+            update={"replay": AssertionRedeemed(issuer="https://idp.example", jti="jti-2"), "scope": None}
+        )
+    )
     again = await _redeem_assertion_native(minter, fresh, cache=cache)
     assert again.status_code == 200
     assert "scope" not in json.loads(again.body)
