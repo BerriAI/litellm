@@ -109,6 +109,27 @@ def _first_choice_index(chunk: ChatCompletionChunk | ModelResponseStream | Compl
             return 0
 
 
+def _choice_finish_reasons(
+    chunk: ChatCompletionChunk | ModelResponseStream | Completion | None,
+) -> tuple[tuple[int, str | None], ...]:
+    match chunk:
+        case ChatCompletionChunk(choices=choices):
+            return tuple((choice.index, choice.finish_reason) for choice in choices)
+        case ModelResponseStream(choices=choices):
+            return tuple((choice.index, choice.finish_reason) for choice in choices)
+        case Completion(choices=choices):
+            return tuple((choice.index, choice.finish_reason) for choice in choices)
+        case _:
+            return ()
+
+
+def _indices_of_finished_choices(
+    chunk: ChatCompletionChunk | ModelResponseStream | Completion | None,
+) -> frozenset[int]:
+    finished: Final = frozenset(index for index, finish_reason in _choice_finish_reasons(chunk) if finish_reason)
+    return finished or frozenset({_first_choice_index(chunk)})
+
+
 def _stamp_usage_cost(
     usage_chunk: ModelResponse | TextCompletionResponse | ModelResponseStream,
     complete_response: ModelResponse | TextCompletionResponse | ModelResponseStream,
@@ -1526,7 +1547,7 @@ class CustomStreamWrapper:
             print_verbose(f"completion obj content: {completion_obj['content']}")
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
-                self._record_finished_choice(chunk if isinstance(chunk, _CHOICE_CHUNK_TYPES) else None)
+                self._record_finished_choices(chunk if isinstance(chunk, _CHOICE_CHUNK_TYPES) else None)
             if response_obj["usage"] is not None:
                 _text_completion_usage: Final[Usage] = response_obj["usage"]
                 setattr(
@@ -1566,7 +1587,7 @@ class CustomStreamWrapper:
             print_verbose(f"completion obj content: {completion_obj['content']}")
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
-                self._record_finished_choice(chunk if isinstance(chunk, _CHOICE_CHUNK_TYPES) else None)
+                self._record_finished_choices(chunk if isinstance(chunk, _CHOICE_CHUNK_TYPES) else None)
         elif self.custom_llm_provider == "cached_response":
             cached_chunk: Final = cast(ModelResponseStream, chunk)
             cached_choice: Final = cached_chunk.choices[0] if cached_chunk.choices else None
@@ -1617,7 +1638,7 @@ class CustomStreamWrapper:
                         f"{self.custom_llm_provider} raised a streaming error - finish_reason: error, no content string given. Received Chunk={response_obj}"
                     )
                 self.received_finish_reason = response_obj["finish_reason"]
-                self._record_finished_choice(chunk if isinstance(chunk, _CHOICE_CHUNK_TYPES) else None)
+                self._record_finished_choices(chunk if isinstance(chunk, _CHOICE_CHUNK_TYPES) else None)
             if response_obj.get("original_chunk", None) is not None:
                 if hasattr(response_obj["original_chunk"], "id"):
                     model_response = self.set_model_id(response_obj["original_chunk"].id, model_response)
@@ -2276,8 +2297,10 @@ class CustomStreamWrapper:
                 raise
             raise StopIteration from e
 
-    def _record_finished_choice(self, chunk: ChatCompletionChunk | ModelResponseStream | Completion | None) -> None:
-        self._finished_choice_indices = (self._finished_choice_indices or frozenset()) | {_first_choice_index(chunk)}
+    def _record_finished_choices(self, chunk: ChatCompletionChunk | ModelResponseStream | Completion | None) -> None:
+        self._finished_choice_indices = (self._finished_choice_indices or frozenset()) | _indices_of_finished_choices(
+            chunk
+        )
 
     def _every_choice_finished(self) -> bool:
         if self.received_finish_reason is None:

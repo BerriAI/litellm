@@ -5284,6 +5284,67 @@ async def test_two_choice_text_completion_stream_dropped_before_done_ends_cleanl
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "HiHel"
 
 
+def _chat_choices_finishing_in_one_chunk() -> tuple[ModelResponseStream, ...]:
+    return (
+        _reset_test_chunk(content="Hi", index=0),
+        _reset_test_chunk(content="Hel", index=1),
+        ModelResponseStream(
+            id="chatcmpl-reset-test",
+            created=1783458104,
+            model="stub-model",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(index=0, delta=Delta(content=None), finish_reason="stop"),
+                StreamingChoices(index=1, delta=Delta(content=None), finish_reason="stop"),
+            ],
+        ),
+    )
+
+
+def _text_choices_finishing_in_one_chunk() -> tuple[Completion, ...]:
+    return (
+        _text_completion_chunk(0, "Hi"),
+        _text_completion_chunk(1, "Hel"),
+        Completion.model_construct(
+            id="cmpl-two-choices",
+            object="text_completion",
+            created=1,
+            model="gpt-3.5-turbo-instruct",
+            choices=[
+                CompletionChoice.model_construct(index=0, text="", finish_reason="stop", logprobs=None),
+                CompletionChoice.model_construct(index=1, text="", finish_reason="stop", logprobs=None),
+            ],
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@_SYNC_AND_ASYNC
+@pytest.mark.parametrize(
+    ("provider", "chunks"),
+    (("openai", _chat_choices_finishing_in_one_chunk), ("text-completion-openai", _text_choices_finishing_in_one_chunk)),
+    ids=("chat", "text_completion"),
+)
+async def test_one_chunk_finishing_both_requested_choices_then_dropped_before_done_ends_cleanly(
+    logging_obj: Logging,
+    sync_mode: bool,
+    provider: str,
+    chunks: Callable[[], Sequence[ModelResponseStream | Completion]],
+):
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={"n": 2})
+    stream: Final = _chunks_then_failure(chunks(), _httpx2_read_error())
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=stream if sync_mode else _as_async(stream),
+        model="stub-model",
+        custom_llm_provider=provider,
+        logging_obj=logging_obj,
+    )
+
+    collected: Final = await _collect(wrapper, sync_mode)
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in collected if chunk.choices) == "HiHel"
+
+
 @pytest.mark.asyncio
 @_SYNC_AND_ASYNC
 @_SDK3_DROPPED_CONNECTIONS
