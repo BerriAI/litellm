@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-secret-value.workspace = true
 base64.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
@@ -25,6 +26,7 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+litellm-error.workspace = true
 litellm-auth-aws.workspace = true
 litellm-auth-gcp.workspace = true
 litellm-host-native.workspace = true
@@ -34,4 +36,5 @@ litellm-llms = { workspace = true, features = ["test-support"] }
 rand.workspace = true
 rstest.workspace = true
 time.workspace = true
+url.workspace = true
 wiremock.workspace = true

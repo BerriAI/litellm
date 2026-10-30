@@ -121,18 +121,14 @@ mod tests {
     };
 
     fn client() -> OcrClient {
-        OcrClient::for_test(
-            litellm_http::Client::plain_for_test(),
-            litellm_http::Client::no_redirect_for_test(),
-        )
-        .with_secrets(litellm_inference_testing::no_secrets())
+        OcrClient::for_test().with_secrets(litellm_inference_testing::no_secrets())
     }
 
     fn request(model: &str, base: &str, document: Value, options: Value) -> LiteLLMOcrRequest {
         decode_request(OcrWireRequest {
             model: model.into(),
             document,
-            api_key: Some(litellm_auth::SecretValue::new("test-key")),
+            api_key: Some(litellm_secret_value::SecretValue::new("test-key")),
             api_base: Some(base.into()),
             custom_llm_provider: None,
             extra_headers: None,

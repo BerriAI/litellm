@@ -3699,6 +3699,20 @@ def test_get_guardrail_from_metadata() -> None:
     ) == [{"test-guardrail": {"extra_body": {"key": "value"}}}]
 
 
+
+@pytest.mark.parametrize(
+    "caller_metadata",
+    [{"guardrails": []}, {"guardrails": ["not-a-guardrail"]}, {"guardrails": None}],
+)
+def test_caller_metadata_guardrails_never_hide_the_proxy_guardrails_in_litellm_metadata(caller_metadata: dict) -> None:
+    guardrail: Final = CustomGuardrail(
+        guardrail_name="key-guardrail", event_hook=GuardrailEventHooks.pre_call, default_on=False
+    )
+    request_data: Final = {"metadata": caller_metadata, "litellm_metadata": {"guardrails": ["key-guardrail"]}}
+
+    assert guardrail.should_run_guardrail(request_data, GuardrailEventHooks.pre_call) is True
+
+
 def test_guardrail_is_in_requested_guardrails() -> None:
     guardrail: Final = CustomGuardrail(guardrail_name="test-guardrail")
 

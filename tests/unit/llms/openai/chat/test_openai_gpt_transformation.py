@@ -2,7 +2,9 @@
 Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation.py)
 """
 import base64
+import copy
 import json
+from collections.abc import Callable
 from typing import Final
 
 import pytest
@@ -10,7 +12,10 @@ import respx
 from httpx import Response
 
 import litellm
-from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    TOOL_RESULT_IMAGE_BOUNDARY,
+    TOOL_RESULT_MEDIA_BOUNDARY,
+)
 from litellm.litellm_core_utils.prompt_templates.image_handling import in_memory_cache
 from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from litellm.llms.openai.chat.gpt_transformation import (
@@ -1278,15 +1283,17 @@ _OPENAI_CHAT_REPLY: Final = {
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("tool_result", [False, True])
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.asyncio
-async def test_openai_pdf_url_is_downloaded_into_file_data(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, sync_mode: bool
+async def test_openai_media_download_preserves_supported_chat_fields(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, sync_mode: bool, tool_result: bool
 ) -> None:
     monkeypatch.setattr(litellm, "user_url_validation", False)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     pdf_url: Final = "https://files.example.test/pdf-url-download.pdf"
     pdf_content: Final = b"%PDF-1.7\nmock-pdf"
+    image_url: Final = "data:image/png;base64,aW1hZ2U="
     in_memory_cache.delete_cache(pdf_url)
     download: Final = respx_mock.get(pdf_url).mock(
         return_value=Response(200, headers={"content-type": "application/pdf"}, content=pdf_content)
@@ -1295,28 +1302,50 @@ async def test_openai_pdf_url_is_downloaded_into_file_data(
         return_value=Response(200, json=_OPENAI_CHAT_REPLY)
     )
 
-    messages: Final = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "What is the first page of the PDF?"},
-                {"type": "file", "file": {"file_id": pdf_url}},
-            ],
-        }
+    text_part: Final = {"type": "text", "text": "What is the first page of the PDF?"}
+    audio_part: Final = {"type": "input_audio", "input_audio": {"data": "YXVkaW8=", "format": "wav"}}
+    media_parts: Final = [
+        {"type": "file", "file": {
+            "file_id": pdf_url, "format": "application/pdf", "detail": "high", "video_metadata": {"fps": 2},
+        }},
+        {"type": "image_url", "image_url": {
+            "url": image_url, "format": "image/png", "detail": "high", "video_metadata": {"fps": 2},
+        }},
+        audio_part,
     ]
+    tool_call: Final = {
+        "role": "assistant",
+        "tool_calls": [{"id": "call_asset", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
+    }
+    messages: Final = (
+        [tool_call, {"role": "tool", "tool_call_id": "call_asset", "content": [text_part, *media_parts]}]
+        if tool_result else [{"role": "user", "content": [text_part, *media_parts]}]
+    )
     if sync_mode:
         litellm.completion(model="gpt-4o", messages=messages, api_key="sk-openai-test")
     else:
         await litellm.acompletion(model="gpt-4o", messages=messages, api_key="sk-openai-test")
 
     assert download.call_count == 1
-    assert json.loads(chat.calls[0].request.content)["messages"][0]["content"][1] == {
-        "type": "file",
-        "file": {
-            "file_data": f"data:application/pdf;base64,{base64.b64encode(pdf_content).decode('utf-8')}",
-            "filename": "my_file.pdf",
+    expected_content: Final = [
+        {"type": "text", "text": TOOL_RESULT_MEDIA_BOUNDARY} if tool_result else text_part,
+        {
+            "type": "file",
+            "file": {
+                "file_data": f"data:application/pdf;base64,{base64.b64encode(pdf_content).decode('utf-8')}",
+                "filename": "my_file.pdf",
+            },
         },
-    }
+        {"type": "image_url", "image_url": {"url": image_url, "detail": "high"}},
+        audio_part,
+    ]
+    expected_messages: Final = (
+        [tool_call, {"role": "tool", "tool_call_id": "call_asset", "content": [text_part]},
+         {"role": "user", "content": expected_content}]
+        if tool_result else [{"role": "user", "content": expected_content}]
+    )
+    assert json.loads(chat.calls[0].request.content)["messages"] == expected_messages
+
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -1793,3 +1822,97 @@ class TestToolSchemaCombinatorFlatteningForOpenAI:
         )
 
         assert request["tools"][0] is tool
+
+
+def _developer_message_after_a_user_turn() -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "Hi there"},
+        {"role": "assistant", "content": "Hello!"},
+        {"role": "developer", "content": "Answer with exactly one word."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("config", "custom_llm_provider", "api_base", "declared", "expected_roles"),
+    [
+        (OpenAIGPTConfig(), "openai", "https://api.openai.com/v1", False, ["system", "user", "assistant", "system", "user"]),
+        (OpenAIGPT5Config(), "openai", "https://api.openai.com/v1", False, ["system", "user", "assistant", "system", "user"]),
+        (OpenAIGPTConfig(), "openai", "http://vllm.internal:8000/v1", None, ["system", "user", "assistant", "system", "user"]),
+        (OpenAIGPTConfig(), "openai", "http://vllm.internal:8000/v1", False, ["system", "user", "assistant", "user"]),
+        (OpenAIGPTConfig(), "groq", None, None, ["system", "user", "assistant", "system", "user"]),
+        (OpenAIGPTConfig(), "groq", None, False, ["system", "user", "assistant", "user"]),
+    ],
+)
+def test_translate_developer_role_hoists_a_later_developer_message_only_for_a_model_off_openai_that_rejects_it(
+    declare_mid_conversation_system: Callable[[str, bool], None],
+    config: OpenAIGPTConfig,
+    custom_llm_provider: str,
+    api_base: str | None,
+    declared: bool | None,
+    expected_roles: list[str],
+) -> None:
+    if declared is not None:
+        declare_mid_conversation_system(f"{custom_llm_provider}/system-first-model", declared)
+    messages: Final = config.translate_developer_role_to_system_role(
+        messages=_developer_message_after_a_user_turn(),
+        model="system-first-model",
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        model_info=None,
+    )
+    assert [message["role"] for message in messages] == expected_roles
+    assert "Answer with exactly one word." in [message["content"] for message in messages if message["role"] == "system"][-1]
+
+
+@pytest.mark.parametrize("role", [["user"], {"name": "user"}])
+@pytest.mark.parametrize(
+    ("declared", "expected_order"),
+    [(None, ("caller", "instruction")), (False, ("instruction", "caller"))],
+)
+def test_translate_developer_role_places_a_message_with_a_non_string_role_like_any_conversation_turn(
+    declare_mid_conversation_system: Callable[[str, bool], None],
+    role: object,
+    declared: bool | None,
+    expected_order: tuple[str, str],
+) -> None:
+    if declared is not None:
+        declare_mid_conversation_system("groq/system-first-model", declared)
+    caller_turn: Final = {"role": role, "content": "Hi there"}
+    by_name: Final = {"caller": caller_turn, "instruction": {"role": "system", "content": "Answer in one word."}}
+    messages: Final = OpenAIGPTConfig().translate_developer_role_to_system_role(
+        messages=[caller_turn, {"role": "developer", "content": "Answer in one word."}],
+        model="system-first-model",
+        custom_llm_provider="groq",
+        api_base=None,
+        model_info=None,
+    )
+    assert list(messages) == [by_name[name] for name in expected_order]
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_completion_leaves_the_callers_closing_developer_message_unchanged_on_a_system_first_deployment(
+    respx_mock: respx.MockRouter,
+) -> None:
+    chat: Final = respx_mock.post("http://vllm.internal:8000/v1/chat/completions").mock(
+        return_value=Response(200, json=_OPENAI_CHAT_REPLY)
+    )
+    messages: Final = [
+        {"role": "user", "content": "Describe the image."},
+        {"role": "assistant", "content": "Send it."},
+        {
+            "role": "developer",
+            "content": [{"type": "text", "text": "Look at this."}, {"type": "image_url", "image_url": "data:image/png;base64,aW1hZ2U="}],
+        },
+    ]
+    sent: Final = copy.deepcopy(messages)
+    litellm.completion(
+        model="openai/system-first-model",
+        api_base="http://vllm.internal:8000/v1",
+        api_key="sk-test",
+        messages=messages,
+        model_info={"id": "deployment-1", "supports_mid_conversation_system": False},
+    )
+    assert json.loads(chat.calls.last.request.content)["messages"][-1]["role"] == "user"
+    assert messages == sent

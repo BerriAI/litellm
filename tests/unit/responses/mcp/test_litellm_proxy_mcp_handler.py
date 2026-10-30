@@ -131,6 +131,86 @@ def test_extract_tool_calls_from_chat_response_handles_tool_calls():
     assert tool_calls[0]["function"]["name"] == "foo"
 
 
+def test_chat_follow_up_answers_only_tool_calls_in_its_assistant_turn():
+    response = ModelResponse(
+        id="resp-n2",
+        choices=[
+            {
+                "index": index,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": call_id, "type": "function", "function": {"name": "foo", "arguments": "{}"}}
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+            for index, call_id in enumerate(("call-a", "call-b"))
+        ],
+        model="gpt",
+        created=0,
+        object="chat.completion",
+    )
+    tool_results = [
+        {"tool_call_id": tool_call["id"], "name": tool_call["function"]["name"], "result": "done"}
+        for tool_call in LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(response)
+    ]
+
+    follow_up = LiteLLM_Proxy_MCP_Handler.create_follow_up_messages_for_chat(
+        [{"role": "user", "content": "hi"}], response, tool_results
+    )
+
+    assistant_call_ids = [tool_call["id"] for tool_call in follow_up[1]["tool_calls"]]
+    answered_call_ids = [message["tool_call_id"] for message in follow_up if message["role"] == "tool"]
+    assert answered_call_ids == assistant_call_ids == ["call-a"]
+
+
+def test_chat_follow_up_continues_the_choice_that_called_a_tool_when_choice_0_answered():
+    response = ModelResponse(
+        id="resp-n2-second",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "no tool needed"},
+                "finish_reason": "stop",
+            },
+            {
+                "index": 1,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call-b", "type": "function", "function": {"name": "foo", "arguments": "{}"}}
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            },
+        ],
+        model="gpt",
+        created=0,
+        object="chat.completion",
+    )
+    tool_results = [
+        {"tool_call_id": tool_call["id"], "name": tool_call["function"]["name"], "result": "done"}
+        for tool_call in LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(response)
+    ]
+
+    follow_up = LiteLLM_Proxy_MCP_Handler.create_follow_up_messages_for_chat(
+        [{"role": "user", "content": "hi"}], response, tool_results
+    )
+
+    assistant_call_ids = [tool_call["id"] for tool_call in follow_up[1]["tool_calls"]]
+    answered_call_ids = [message["tool_call_id"] for message in follow_up if message["role"] == "tool"]
+    assert answered_call_ids == assistant_call_ids == ["call-b"]
+
+
+def test_extract_tool_calls_from_chat_response_without_choices_finds_none():
+    response = ModelResponse(id="resp-empty", choices=[], model="gpt", created=0, object="chat.completion")
+
+    assert LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(response) == []
+
+
 def test_create_follow_up_messages_for_chat_appends_tool_results():
     original_messages = [{"role": "user", "content": "hi"}]
     response = ModelResponse(
@@ -1484,7 +1564,7 @@ async def test_concurrent_bridge_calls_use_their_own_served_metadata(monkeypatch
             ((tool.description, tool.input_schema) for tool in upstream), key=str
         )
         await manager.call_tool("bridge", "echo", {"probe": "bridge"}, user_api_key_auth=user, proxy_logging_obj=logger)
-        assert guardrail.calls[-1] == (None, None)
+        assert guardrail.calls[-1] == (upstream[0].description, upstream[0].input_schema)
         await manager._get_tools_from_server(
             server, user_api_key_auth=user, proxy_logging_obj=logger, record_listing=True
         )

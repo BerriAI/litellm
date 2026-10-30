@@ -1,6 +1,7 @@
 import { test as base, expect, type Page as PlaywrightPage } from "@playwright/test";
 import { ADMIN_STORAGE_PATH, MOCK_PRESIDIO_URL, PROPAGATION_TIMEOUT_MS } from "../../constants";
 import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
+import { deleteGuardrailFromTable } from "../../helpers/guardrails";
 import { Page } from "../../fixtures/pages";
 import { CHAT_MODEL_A, masterKey, rootPath, uniqueSuffix, waitForSpendLog } from "../../helpers/traffic";
 import { composer, openPlayground, selectModel, sendButton, onlyVisible } from "../../helpers/playground";
@@ -49,19 +50,6 @@ async function createPresidioGuardrail(page: PlaywrightPage, guardrailName: stri
   await expect(page.getByRole("row").filter({ hasText: guardrailName })).toHaveCount(1, { timeout: 15_000 });
 }
 
-async function deleteGuardrail(page: PlaywrightPage, guardrailName: string): Promise<void> {
-  await navigateToPage(page, Page.Guardrails);
-  await dismissFeedbackPopup(page);
-  const row = page.getByRole("row").filter({ hasText: guardrailName });
-  await expect(row).toHaveCount(1, { timeout: 15_000 });
-  await row.getByRole("button", { name: "Open guardrail actions" }).click();
-  await page.getByRole("menuitem", { name: "Delete" }).click();
-  const deleteModal = page.getByRole("dialog", { name: "Delete Guardrail" });
-  await expect(deleteModal).toBeVisible({ timeout: 5_000 });
-  await deleteModal.getByRole("button", { name: "Delete", exact: true }).click();
-  await expect(page.getByText(`Guardrail "${guardrailName}" deleted successfully`)).toBeVisible({ timeout: 10_000 });
-}
-
 const test = base.extend<{ guardrailName: string }>({
   guardrailName: async ({ page }, use) => {
     const name = `e2e-presidio-story-${uniqueSuffix()}`;
@@ -69,7 +57,7 @@ const test = base.extend<{ guardrailName: string }>({
     try {
       await use(name);
     } finally {
-      await deleteGuardrail(page, name);
+      await deleteGuardrailFromTable(page, name);
     }
   },
 });
