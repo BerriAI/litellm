@@ -5,6 +5,7 @@ import logging
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
+import anyio
 from pydantic import TypeAdapter
 from typing_extensions import TypedDict, Unpack
 
@@ -373,7 +374,8 @@ async def acompletion_with_mcp(
                             raise
                         return usage_chunk
                     except asyncio.CancelledError:
-                        round_billing.bill_in_flight_round()
+                        with anyio.CancelScope(shield=True):
+                            await round_billing.bill_in_flight_round()
                         raise
                     except Exception:
                         round_billing.fail()

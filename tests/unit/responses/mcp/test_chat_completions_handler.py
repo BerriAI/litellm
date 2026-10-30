@@ -3,6 +3,7 @@ import gc
 import json
 import queue
 import sys
+import threading
 import types
 import warnings
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
@@ -2139,33 +2140,33 @@ async def test_stream_auto_execute_whose_follow_up_streams_nothing_still_bills_t
     _assert_one_row_bills_round_one(recorder.logged)
 
 
+_ANSWER_WITH_UNREADABLE_AUDIO: Final = MappingProxyType(
+    {
+        **_CHAT_ROUND_TWO,
+        "choices": (
+            MappingProxyType(
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": MappingProxyType(
+                        {
+                            "role": "assistant",
+                            "content": "PING",
+                            "audio": MappingProxyType({"id": "audio_echo", "data": "not base64", "transcript": "PING"}),
+                        }
+                    ),
+                }
+            ),
+        ),
+    }
+)
+
+
 @pytest.mark.asyncio
 async def test_stream_auto_execute_whose_follow_up_cannot_be_assembled_ends_with_the_usage_of_the_round_it_billed(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
-    answer_with_unreadable_audio: Final = MappingProxyType(
-        {
-            **_CHAT_ROUND_TWO,
-            "choices": (
-                MappingProxyType(
-                    {
-                        "index": 0,
-                        "finish_reason": "stop",
-                        "message": MappingProxyType(
-                            {
-                                "role": "assistant",
-                                "content": "PING",
-                                "audio": MappingProxyType(
-                                    {"id": "audio_echo", "data": "not base64", "transcript": "PING"}
-                                ),
-                            }
-                        ),
-                    }
-                ),
-            ),
-        }
-    )
-    _serve_chat_rounds(respx_mock, monkeypatch, (_streamed(_CHAT_ROUND_ONE), _streamed(answer_with_unreadable_audio)))
+    _serve_chat_rounds(respx_mock, monkeypatch, (_streamed(_CHAT_ROUND_ONE), _streamed(_ANSWER_WITH_UNREADABLE_AUDIO)))
     recorder: Final = _ChatRoundRecorder()
     logging_obj: Final = _chat_rounds_logging_obj(recorder, "mcp-chat-stream-follow-up-unassembled", stream=True)
 
@@ -2178,6 +2179,40 @@ async def test_stream_auto_execute_whose_follow_up_cannot_be_assembled_ends_with
     usage: Final = _streamed_usage(chunks)
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (71, 19, 90)
     assert usage.cost == pytest.approx(recorder.logged[0]["response_cost"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deferred_for_a_post_call_guardrail", [False, True])
+@pytest.mark.parametrize("answer", [_CHAT_ROUND_TWO, _ANSWER_WITH_UNREADABLE_AUDIO], ids=("assembled", "unassembled"))
+async def test_stream_auto_execute_sends_its_usage_chunk_under_the_id_of_the_row_it_billed(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    deferred_for_a_post_call_guardrail: bool,
+    answer: Mapping[str, object],
+):
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.proxy.utils import ProxyLogging
+
+    _serve_chat_rounds(respx_mock, monkeypatch, (_streamed(_CHAT_ROUND_ONE), _streamed(answer)))
+    recorder: Final = _ChatRoundRecorder()
+    logging_obj: Final = _chat_rounds_logging_obj(recorder, "mcp-chat-stream-usage-chunk-id", stream=True)
+
+    with _echo_tool_served():
+        stream: Final = await _open_chat_echo_stream(logging_obj)
+        if deferred_for_a_post_call_guardrail:
+            ProxyBaseLLMRequestProcessing(data={})._arm_deferred_stream_dispatch(
+                response=stream, route_type="acompletion", user_api_key_dict=MagicMock(), logging_obj=logging_obj
+            )
+        chunks: Final = await _read_all(stream)
+    ProxyLogging.fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+    await recorder.settled(logged=1)
+
+    usage_chunks: Final = tuple(chunk for chunk in chunks if isinstance(getattr(chunk, "usage", None), Usage))
+    answer_chunks: Final = tuple(chunk for chunk in chunks if chunk.choices and chunk.choices[0].delta.content == "PING")
+    assert len(recorder.logged) == 1
+    assert [chunk.id for chunk in answer_chunks] == [_CHAT_ROUND_TWO["id"]]
+    assert len(usage_chunks) == 1
+    assert usage_chunks[0].id == chunks[0].id == recorder.logged[0]["id"] == _CHAT_ROUND_ONE["id"]
 
 
 def _assert_one_row_bills_round_one_and_the_partial_answer(
@@ -2371,6 +2406,118 @@ async def test_stream_auto_execute_routed_through_the_proxy_bills_the_partial_an
         await served.aclose()
     await recorder.settled(logged=1)
 
+    _assert_one_row_bills_round_one_and_the_partial_answer(recorder, respx_mock)
+
+
+_PARTIAL_COUNT_BLOCKS_SECONDS: Final = 0.3
+
+
+class _CountsTheToolResultWhileTheLoopRuns:
+    def __init__(self, loop: asyncio.AbstractEventLoop, count: Callable[..., int]) -> None:
+        self._loop: Final = loop
+        self._count: Final = count
+        self._counting: Final = asyncio.Event()
+        self._loop_moved: Final = threading.Event()
+        self.loop_moved_while_counting: tuple[bool, ...] = ()
+
+    def __call__(self, model: str | None = None, messages: list[object] | None = None, **kwargs: object) -> int:
+        if any(isinstance(message, Mapping) and message.get("role") == "tool" for message in messages or ()):
+            self._loop.call_soon_threadsafe(self._counting.set)
+            moved: Final = self._loop_moved.wait(timeout=_PARTIAL_COUNT_BLOCKS_SECONDS)
+            self.loop_moved_while_counting = (*self.loop_moved_while_counting, moved)
+        return self._count(model=model, messages=messages, **kwargs)
+
+    async def keep_the_loop_moving(self) -> None:
+        await self._counting.wait()
+        self._loop_moved.set()
+
+
+@contextmanager
+def _partial_count_watched(monkeypatch: pytest.MonkeyPatch) -> Iterator[_CountsTheToolResultWhileTheLoopRuns]:
+    from litellm.litellm_core_utils import streaming_chunk_builder_utils
+
+    counter: Final = _CountsTheToolResultWhileTheLoopRuns(
+        asyncio.get_running_loop(), streaming_chunk_builder_utils.token_counter
+    )
+    monkeypatch.setattr(streaming_chunk_builder_utils, "token_counter", counter)
+    other_task: Final = asyncio.create_task(counter.keep_the_loop_moving())
+    try:
+        yield counter
+    finally:
+        other_task.cancel()
+
+
+class _StallsAfterTheAnswerStarts(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.stalled: Final = asyncio.Event()
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield _sse(_chat_stream_events(_CHAT_ROUND_TWO)[:1])
+        self.stalled.set()
+        await asyncio.Event().wait()
+
+
+@pytest.mark.asyncio
+async def test_stream_auto_execute_cancelled_mid_answer_counts_the_partial_off_the_loop_and_bills_it_once(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"fixed_amount": _FIXED_MARGIN}})
+    answer: Final = _StallsAfterTheAnswerStarts()
+    _serve_chat_rounds(
+        respx_mock,
+        monkeypatch,
+        (_streamed(_CHAT_ROUND_ONE), Response(200, stream=answer, headers={"content-type": "text/event-stream"})),
+    )
+    recorder: Final = _ChatRoundRecorder()
+    logging_obj: Final = _chat_rounds_logging_obj(recorder, "mcp-chat-stream-cancelled-off-the-loop", stream=True)
+
+    with _echo_tool_served(), _partial_count_watched(monkeypatch) as counter:
+        stream: Final = await _open_chat_echo_stream(logging_obj)
+        reading: Final = asyncio.create_task(_read_all(stream))
+        await asyncio.wait_for(answer.stalled.wait(), timeout=10)
+        reading.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await reading
+        await stream.aclose()
+        await recorder.settled(logged=1)
+
+    assert counter.loop_moved_while_counting == (True,)
+    _assert_one_row_bills_round_one_and_the_partial_answer(recorder, respx_mock)
+
+
+@pytest.mark.asyncio
+async def test_stream_auto_execute_routed_through_the_proxy_and_closed_between_reads_counts_the_partial_off_the_loop(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"fixed_amount": _FIXED_MARGIN}})
+    _serve_chat_rounds(respx_mock, monkeypatch, (_streamed(_CHAT_ROUND_ONE), _streamed(_CHAT_ROUND_TWO)))
+    router: Final = _chat_rounds_router()
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    recorder: Final = _ChatRoundRecorder()
+    logging_obj: Final = _chat_rounds_logging_obj(recorder, "mcp-chat-stream-routed-closed-off-the-loop", stream=True)
+
+    with _echo_tool_served(), _partial_count_watched(monkeypatch) as counter:
+        stream: Final = await router.acompletion(
+            model="mcp-chat-rounds",
+            messages=[{"role": "user", "content": "Call echo with PING"}],
+            tools=[{"type": "mcp", "server_url": "litellm_proxy/mcp/demo", "require_approval": "never"}],
+            stream=True,
+            stream_options={"include_usage": True},
+            litellm_logging_obj=logging_obj,
+        )
+        served: Final = proxy_server.async_data_generator(
+            response=stream,
+            user_api_key_dict=UserAPIKeyAuth(),
+            request_data={"litellm_logging_obj": logging_obj, "model": "mcp-chat-rounds", "metadata": {}},
+        )
+        await _stop_reading_once_the_proxy_sent(served, "PING")
+        await served.aclose()
+        await recorder.settled(logged=1)
+
+    assert counter.loop_moved_while_counting == (True,)
     _assert_one_row_bills_round_one_and_the_partial_answer(recorder, respx_mock)
 
 

@@ -9064,7 +9064,7 @@ class TestStreamingClientDisconnectBilling:
         response = await self._start_partial_stream()
         closed: Final = AsyncMock()
 
-        def cannot_price_the_in_flight_round() -> None:
+        async def cannot_price_the_in_flight_round() -> None:
             raise RuntimeError("the in-flight round could not be priced")
 
         setattr(response.logging_obj, IN_FLIGHT_ROUND, cannot_price_the_in_flight_round)

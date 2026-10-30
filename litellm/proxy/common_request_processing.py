@@ -528,12 +528,12 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     return await _dispatch_disconnect_billing_event(logging_obj, partial_response)
 
 
-def _bill_in_flight_round_on_disconnect(request_data: Mapping[str, object]) -> None:
+async def _bill_in_flight_round_on_disconnect(request_data: Mapping[str, object]) -> None:
     bill_in_flight_round: Final = in_flight_round_biller(request_data.get("litellm_logging_obj"))
     if bill_in_flight_round is None:
         return
     try:
-        bill_in_flight_round()
+        await bill_in_flight_round()
     except Exception as e:  # noqa: BLE001  # disconnect billing is best-effort; never break stream teardown
         verbose_proxy_logger.debug("Failed to bill the in-flight round after client disconnect: %s", e)
 
@@ -4442,7 +4442,7 @@ class ProxyBaseLLMRequestProcessing:
                     client_disconnected,
                 )
             if recorded_client_disconnect:
-                _bill_in_flight_round_on_disconnect(_REQUEST_FIELDS.validate_python(request_data))
+                await _bill_in_flight_round_on_disconnect(_REQUEST_FIELDS.validate_python(request_data))
                 deferred_stream_logging_armed: Final = _deferred_stream_logging_is_armed(request_data)
                 ProxyLogging.fire_deferred_stream_logging(request_data)
                 # A disconnect-time success event (the deferred-guardrail flush

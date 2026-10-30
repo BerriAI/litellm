@@ -1,4 +1,4 @@
-from collections.abc import Callable, Coroutine
+from collections.abc import Coroutine
 from dataclasses import dataclass
 from typing import Final, Protocol
 
@@ -26,6 +26,10 @@ class DeferredStreamRelease(Protocol):
     def __call__(self, *parked: object) -> Coroutine[object, object, None]: ...
 
 
+class InFlightRoundBiller(Protocol):
+    def __call__(self) -> Coroutine[object, object, None]: ...
+
+
 def success_dispatcher(logger: LiteLLMLoggingObj) -> DispatchesSuccessHandlers:
     return logger
 
@@ -43,8 +47,8 @@ class ParkedSuccess:
         )
 
 
-def in_flight_round_biller(logging_obj: object) -> Callable[[], object] | None:
-    biller: Final[object] = getattr(logging_obj, IN_FLIGHT_ROUND, None)
+def in_flight_round_biller(logging_obj: object) -> InFlightRoundBiller | None:
+    biller: Final[InFlightRoundBiller | None] = getattr(logging_obj, IN_FLIGHT_ROUND, None)
     return biller if isinstance(logging_obj, LiteLLMLoggingObj) and callable(biller) else None
 
 

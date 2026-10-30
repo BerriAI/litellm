@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
-from litellm.litellm_core_utils.asyncify import is_event_loop_running
+from litellm.litellm_core_utils.asyncify import asyncify, is_event_loop_running
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, served_from_cache, set_hidden_params
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend, UncachedPrice
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -69,7 +69,9 @@ class _FirstRound:
                 update=MappingProxyType({"cost": _cost(billed)})
             )
         )
-        return self.usage_chunk.chunk.model_copy(update=MappingProxyType({"usage": usage}))
+        return self.usage_chunk.chunk.model_copy(
+            update=MappingProxyType({"id": self.priced.response.id, "usage": usage})
+        )
 
 
 def _cost(response: ModelResponse) -> object:
@@ -143,13 +145,13 @@ class ChatStreamRoundBilling:
         self._partial_follow_up = partial_follow_up
         setattr(self._logging_obj, IN_FLIGHT_ROUND, self.bill_in_flight_round)
 
-    def bill_in_flight_round(self) -> None:
-        first: Final = self._first
+    async def bill_in_flight_round(self) -> None:
         partial_follow_up: Final = self._partial_follow_up
-        if first is None or partial_follow_up is None or not self._holds_round_one_alone(first):
+        if partial_follow_up is None or self._first_round_held_alone() is None:
             return
-        final_round: Final = _assembled_round((partial_follow_up(), False))
-        if final_round is None:
+        final_round: Final = _assembled_round((await asyncify(partial_follow_up)(), False))
+        first: Final = self._first_round_held_alone()
+        if final_round is None or first is None:
             return
         self._first = None
         setattr(
@@ -230,6 +232,10 @@ class ChatStreamRoundBilling:
         parked: Final = self._peek_parked()
         setattr(self._logging_obj, PARKED_DISPATCH, None)
         return parked
+
+    def _first_round_held_alone(self) -> _FirstRound | None:
+        first: Final = self._first
+        return first if first is not None and self._holds_round_one_alone(first) else None
 
     def _holds_round_one_alone(self, first: _FirstRound) -> bool:
         parked: Final = self._peek_parked()
