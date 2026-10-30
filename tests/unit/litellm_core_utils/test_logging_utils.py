@@ -5,6 +5,7 @@ Tests for litellm.litellm_core_utils.logging_utils — base64 truncation helpers
 import asyncio, datetime, importlib, litellm, os, pytest_asyncio
 import sys
 import threading
+from types import FrameType
 from unittest.mock import MagicMock
 
 import pytest
@@ -29,6 +30,7 @@ from litellm import(
 )
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.types.llms.openai import AllMessageValues
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from typing import Final
 
@@ -251,24 +253,24 @@ def _run_without_yielding(coroutine: Coroutine[object, object, object]) -> objec
     raise AssertionError("the coroutine yielded to the event loop")
 
 
-def _regex_calls_while(run: Callable[[], object]) -> tuple[object, list[str]]:
-    calls: list[str] = []
-    previous = sys.getprofile()
+def _regex_calls_while(run: Callable[[], object]) -> tuple[object, tuple[str, ...]]:
+    calls: Final[list[str]] = []  # mutable-ok: sys.setprofile reports each call to a callback that has to record it
+    previous: Final = sys.getprofile()
 
-    def record(frame, event: str, arg: object) -> None:
-        name = getattr(arg, "__qualname__", "")
+    def record(frame: FrameType, event: str, arg: object) -> None:
+        name: Final = getattr(arg, "__qualname__", "")
         if event == "c_call" and name.startswith("Pattern."):
             calls.append(name)
 
     sys.setprofile(record)
     try:
-        result = run()
+        result: Final = run()
     finally:
         sys.setprofile(previous)
-    return result, calls
+    return result, tuple(calls)
 
 
-def _tool_result_messages(tool_output: str) -> list:
+def _tool_result_messages(tool_output: str) -> list[AllMessageValues]:  # mutable-ok: the truncator only walks lists
     return [
         {"role": "user", "content": "Summarize the rows the tool returned."},
         {
@@ -282,7 +284,7 @@ def _tool_result_messages(tool_output: str) -> list:
     ]
 
 
-_PLAIN_TOOL_OUTPUT_CHARS = 400 * 1024
+_PLAIN_TOOL_OUTPUT_CHARS: Final = 400 * 1024
 
 
 class TestTruncateBase64InMessagesAsync:
@@ -324,18 +326,18 @@ class TestTruncateBase64InMessagesAsync:
         ids=["json_rows", "sse_lines", "code_with_semicolons", "sse_lines_with_semicolons", "base64_marker_without_data"],
     )
     def test_tool_message_without_data_uri_is_copied_without_a_regex_scan(self, row):
-        tool_output = (row * (_PLAIN_TOOL_OUTPUT_CHARS // len(row) + 1))[:_PLAIN_TOOL_OUTPUT_CHARS]
-        messages = _tool_result_messages(tool_output)
+        tool_output: Final = (row * (_PLAIN_TOOL_OUTPUT_CHARS // len(row) + 1))[:_PLAIN_TOOL_OUTPUT_CHARS]
+        messages: Final = _tool_result_messages(tool_output)
 
         result, regex_calls = _regex_calls_while(lambda: truncate_base64_in_messages(messages))
 
         assert result == messages
         assert result is not messages
-        assert regex_calls == []
+        assert regex_calls == ()
 
     def test_small_data_uri_is_truncated_inline_with_a_regex_scan(self):
-        payload = "L" * 2_000
-        messages = _image_messages(payload)
+        payload: Final = "L" * 2_000
+        messages: Final = _image_messages(payload)
 
         result, regex_calls = _regex_calls_while(
             lambda: _run_without_yielding(truncate_base64_in_messages_async(messages))
@@ -345,13 +347,23 @@ class TestTruncateBase64InMessagesAsync:
         assert payload not in result[0]["content"][1]["image_url"]["url"]
         assert "base64_data truncated" in result[0]["content"][1]["image_url"]["url"]
 
-    @pytest.mark.asyncio
-    async def test_large_plain_text_is_copied_off_the_event_loop(self, monkeypatch, scan_threads):
+    def test_large_plain_text_is_copied_inline_without_a_thread_hop(self, monkeypatch):
         monkeypatch.setattr(logging_utils, "BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS", 1_000)
-        messages = _tool_result_messages("plain tool output\n" * 100)
+        messages: Final = _tool_result_messages("plain tool output\n" * 100)
 
-        result = await truncate_base64_in_messages_async(messages)
-        offload_threads = tuple(scan_threads)
+        result: Final = _run_without_yielding(truncate_base64_in_messages_async(messages))
+
+        assert result == messages
+        assert result is not messages
+
+    @pytest.mark.asyncio
+    async def test_long_plain_text_history_is_copied_off_the_event_loop(self, monkeypatch, scan_threads):
+        monkeypatch.setattr(logging_utils, "BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS", 1_000)
+        monkeypatch.setattr(logging_utils, "BASE64_TRUNCATION_OFFLOAD_THRESHOLD_STRINGS", 10)
+        messages: Final = [message for turn in range(5) for message in _tool_result_messages(f"rows {turn}\n" * 100)]
+
+        result: Final = await truncate_base64_in_messages_async(messages)
+        offload_threads: Final = tuple(scan_threads)
 
         assert result == messages
         assert result is not messages

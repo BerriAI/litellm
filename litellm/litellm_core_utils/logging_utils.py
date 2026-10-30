@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Final, TypeAlias, cast
 from litellm._logging import format_base64_size, verbose_logger
 from litellm.constants import (
     BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS,
+    BASE64_TRUNCATION_OFFLOAD_THRESHOLD_STRINGS,
     MAX_BASE64_LENGTH_FOR_LOGGING,
 )
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
@@ -157,18 +158,26 @@ def _iter_string_leaves(value: _StringTree) -> Iterator[str]:
                 pass
 
 
+def _is_few_plain_strings(leaves: tuple[str, ...]) -> bool:
+    return len(leaves) < BASE64_TRUNCATION_OFFLOAD_THRESHOLD_STRINGS and not any(
+        _may_contain_base64_data_uri(leaf) for leaf in leaves
+    )
+
+
 async def truncate_base64_in_messages_async(
     messages: str | list | dict | None,  # mutable-ok: same contract as truncate_base64_in_messages
 ) -> str | list | dict | None:  # mutable-ok: same contract as truncate_base64_in_messages
     """
     Same result as truncate_base64_in_messages, but payloads whose string content
-    reaches BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS are scanned in a worker
-    thread so the regex pass over multi-MB base64 images does not block the event loop.
+    reaches BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS are copied in a worker thread,
+    so neither the regex pass over multi-MB base64 images nor the copy of a long
+    history blocks the event loop. A few large strings with no data URI are copied
+    inline, since that copy costs less than the thread hop.
     """
     if messages is None or MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
         return messages
-    total_chars: Final = sum(len(leaf) for leaf in _iter_string_leaves(messages))
-    if total_chars < BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS:
+    leaves: Final = tuple(_iter_string_leaves(messages))
+    if sum(len(leaf) for leaf in leaves) < BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS or _is_few_plain_strings(leaves):
         return truncate_base64_in_messages(messages)
     return await asyncio.to_thread(truncate_base64_in_messages, messages)
 
