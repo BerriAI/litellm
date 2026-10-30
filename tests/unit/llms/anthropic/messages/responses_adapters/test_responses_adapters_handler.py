@@ -889,6 +889,56 @@ async def test_drop_params_drops_tool_search_and_its_deferral_on_an_openai_model
     ]
 
 
+UNDEFERRED_WEATHER: Final = {key: value for key, value in DEFERRED_WEATHER.items() if key != "defer_loading"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "weather",
+    [
+        pytest.param(UNDEFERRED_WEATHER, id="no-defer-loading"),
+        pytest.param({**DEFERRED_WEATHER, "defer_loading": "true"}, id="defer-loading-string"),
+    ],
+)
+async def test_tool_search_with_no_deferred_tool_answers_400_naming_drop_params_before_any_openai_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, weather: Mapping[str, object]
+):
+    with pytest.raises(litellm.UnsupportedParamsError) as error:
+        await _openai_request_for(respx_mock, monkeypatch, [TOOL_SEARCH, weather], drop_params=False)
+
+    assert error.value.status_code == 400
+    assert "tool_search_tool_bm25_20251119" in error.value.message
+    assert "drop_params" in error.value.message
+    assert not respx_mock.calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_type", [pytest.param(["bash"], id="list"), pytest.param({"name": "bash"}, id="object")])
+async def test_a_tool_whose_type_is_not_a_string_reaches_openai_as_a_function_beside_tool_search(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tool_type: object
+):
+    upstream: Final = await _openai_request_for(
+        respx_mock, monkeypatch, [TOOL_SEARCH, DEFERRED_WEATHER, {"type": tool_type, "name": "odd_tool"}]
+    )
+
+    assert [(tool["type"], tool.get("name")) for tool in _tools_sent(upstream)] == [
+        ("tool_search", None),
+        ("function", "get_weather"),
+        ("function", "odd_tool"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_additional_drop_params_tools_sends_no_tools_even_beside_one_openai_cannot_run(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    upstream: Final = await _openai_request_for(
+        respx_mock, monkeypatch, [WEB_FETCH, TYPED_BASH], drop_params=False, additional_drop_params=["tools"]
+    )
+
+    assert "tools" not in json.loads(upstream.calls.last.request.content)
+
+
 @pytest.mark.asyncio
 async def test_a_tool_openai_cannot_run_answers_400_before_any_openai_call_without_drop_params(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch

@@ -232,7 +232,21 @@ def _custom_function(name: str, tool: Mapping[str, object]) -> ResponsesTool:
 
 
 def is_tool_search(tool: Mapping[str, object]) -> bool:
-    return tool.get("type") in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+    tool_type: Final = tool.get("type")
+    return isinstance(tool_type, str) and tool_type in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+
+
+def _defers_a_function(tool: Mapping[str, object]) -> bool:
+    translated: Final = _translated_tool(tool, False) if tool.get("defer_loading") is True else None
+    return isinstance(translated, ResponsesTool) and translated.payload.get("type") == "function"
+
+
+def keeps_tool_search(tools: Sequence[Mapping[str, object]], *, maps_tool_search: bool) -> bool:
+    return (
+        maps_tool_search
+        and any(is_tool_search(tool) for tool in tools)
+        and any(_defers_a_function(tool) for tool in tools)
+    )
 
 
 def _with_deferral(translated: TranslatedTool, defer_loading: object) -> TranslatedTool:

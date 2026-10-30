@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     prompt_cache_breakpoint_for_wire,
     with_prompt_cache_breakpoint,
 )
+from litellm.litellm_core_utils.tool_fields import drop_policy
 from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
@@ -316,7 +317,7 @@ def _build_responses_kwargs(
         request_data["thinking"] = thinking
     if tool_choice:
         request_data["tool_choice"] = tool_choice
-    if tools:
+    if tools and "tools" not in drop_policy(forwarded_kwargs).additional_drop_params:
         request_data["tools"] = tools
     if top_p is not None:
         request_data["top_p"] = top_p

@@ -255,10 +255,17 @@ async def test_anthropic_tool_search_is_counted_as_the_openai_tool_search_infere
         pytest.param(UNDEFERRED_TOOL_SEARCH_TOOLS, [("function", "get_weather", None)], id="nothing-is-deferred"),
     ],
 )
-async def test_drop_params_counts_anthropic_tool_search_only_where_inference_keeps_it(
-    monkeypatch: pytest.MonkeyPatch, tools: list[dict[str, object]], expected: list[tuple[object, object, object]]
+@pytest.mark.parametrize(
+    "litellm_params",
+    [pytest.param({}, id="without-drop-params"), pytest.param({"drop_params": True}, id="drop-params")],
+)
+async def test_anthropic_tool_search_is_counted_only_beside_a_deferred_tool(
+    monkeypatch: pytest.MonkeyPatch,
+    tools: list[dict[str, object]],
+    expected: list[tuple[object, object, object]],
+    litellm_params: Mapping[str, object],
 ) -> None:
-    assert await _counted_tools(monkeypatch, "gpt-5.6-luna", {"drop_params": True}, tools) == expected
+    assert await _counted_tools(monkeypatch, "gpt-5.6-luna", litellm_params, tools) == expected
 
 
 @pytest.mark.asyncio

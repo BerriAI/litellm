@@ -30,7 +30,7 @@ from litellm.llms.anthropic.messages.responses_adapters.tool_translation import 
     ResponsesTool,
     TranslatedTool,
     UntranslatableTool,
-    is_tool_search,
+    keeps_tool_search,
     log_dropped_tools,
     responses_tool,
     unforceable_tool_choice_error,
@@ -472,7 +472,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         drop_params: bool = True,
         maps_tool_search: bool = False,
     ) -> tuple[TranslatedTool, ...]:
-        runs_tool_search: Final = maps_tool_search and any(is_tool_search(tool) for tool in tools)
+        runs_tool_search: Final = keeps_tool_search(tools, maps_tool_search=maps_tool_search)
         translated: Final = tuple(responses_tool(tool, runs_tool_search=runs_tool_search) for tool in tools)
         untranslatable: Final = tuple(tool for tool in translated if isinstance(tool, UntranslatableTool))
         if untranslatable and not drop_params:
