@@ -21,7 +21,7 @@ dependencies = [
     "python-dotenv>=1.0.0,<2.0",
     "pyyaml>=6.0.3,<7.0",
     "packaging>=24.0",
-    "importlib-metadata>=8.0.0,<9.0",
+    "importlib-metadata>=8.0.0,<9.0; python_version < '3.10'",
     "tiktoken>=0.8.0,<1.0; python_version < '3.14'",
     "tiktoken>=0.12.0,<1.0; python_version == '3.14'",
     "tiktoken>=0.14.0,<1.0; python_version >= '3.15'",
