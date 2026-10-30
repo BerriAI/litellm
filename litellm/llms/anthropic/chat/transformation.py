@@ -216,15 +216,13 @@ def _non_string_tool_answer_ids(messages: Sequence[object]) -> Iterator[tuple[st
     )
 
 
-def non_string_message_field_error(messages: Sequence[object]) -> AnthropicError | None:
-    malformed_field: Final = next(
-        chain(
-            _non_string_roles(messages),
-            _non_string_assistant_tool_call_ids(messages),
-            _non_string_tool_answer_ids(messages),
-        ),
-        None,
+def non_string_message_field_error(messages: Sequence[object], error: Exception) -> AnthropicError | None:
+    tool_call_ids: Final = (
+        chain(_non_string_assistant_tool_call_ids(messages), _non_string_tool_answer_ids(messages))
+        if isinstance(error, TypeError)
+        else ()
     )
+    malformed_field: Final = next(chain(_non_string_roles(messages), tool_call_ids), None)
     if malformed_field is None:
         return None
     field_path, field_value = malformed_field
@@ -2411,7 +2409,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ),
             )
         except TypeError as error:
-            field_error: Final = non_string_message_field_error(messages)
+            field_error: Final = non_string_message_field_error(messages, error)
             if field_error is None:
                 raise
             raise field_error from error
@@ -2424,9 +2422,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 drop_params=drop_params,
             )
         except Exception as e:
-            conversion_field_error: Final = (
-                non_string_message_field_error(messages) if isinstance(e, TypeError) else None
-            )
+            conversion_field_error: Final = non_string_message_field_error(messages, e)
             raise conversion_field_error or AnthropicError(
                 status_code=400,
                 message=f"{e}\nReceived Messages={messages}",

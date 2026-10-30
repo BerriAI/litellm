@@ -9880,6 +9880,23 @@ def _orphan_answer_with(tool_call_id: object) -> list[dict[str, object]]:
             id="list_role",
         ),
         pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello"},
+                {"role": 123, "content": "Go on"},
+                {"role": "system", "content": "Answer in one sentence."},
+            ],
+            "messages[2].role",
+            "int",
+            id="int_role_before_a_later_system_message",
+        ),
+        pytest.param(
+            [*_orphan_answer_with({"id": "toolu_01"})[:3], {"role": True, "content": "Go on"}],
+            "messages[3].role",
+            "bool",
+            id="bool_role_after_an_orphan_object_tool_call_id",
+        ),
+        pytest.param(
             _search_answered_with({"id": "srvtoolu_01Search"}),
             "messages[2].tool_call_id",
             "dict",
