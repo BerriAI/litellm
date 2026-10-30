@@ -14,12 +14,14 @@ from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import fakeredis
 import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.proxy._types import ProxyException
 from litellm.proxy.anthropic_endpoints import gateway_endpoints
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
@@ -72,55 +74,18 @@ _COMPLETED_SESSION: Final = MappingProxyType(
 )
 
 
-class _SharedRedisFake:
-    """A Redis double with a configured namespace, prefixing every key its wrapper methods touch the
-    way ``RedisCache`` does, while its raw client answers only the exact key it is asked for."""
-
-    namespace: Final = "qa"
-
+class _SharedRedisCache(RedisCache):
     def __init__(self) -> None:
-        self.values: Mapping[str, object] = MappingProxyType({})
-        self.counters: Mapping[str, float] = MappingProxyType({})
+        self._server: Final = fakeredis.FakeServer()
+        super().__init__(host="127.0.0.1", port=1, namespace="qa", socket_timeout=0.1)
+        self.redis_client = fakeredis.FakeRedis(server=self._server)
 
-    def check_and_fix_namespace(self, key: str) -> str:
-        return key if key.startswith(f"{self.namespace}:") else f"{self.namespace}:{key}"
-
-    def set_cache(self, key: str, value: object, **kwargs: object) -> None:
-        self.values = MappingProxyType({**self.values, self.check_and_fix_namespace(key): value})
-
-    def get_cache(self, key: str, **kwargs: object) -> object:
-        return self.values.get(self.check_and_fix_namespace(key))
-
-    def delete_cache(self, key: str) -> None:
-        gone: Final = self.check_and_fix_namespace(key)
-        self.values = MappingProxyType({name: value for name, value in self.values.items() if name != gone})
-
-    async def async_delete_cache(self, key: str) -> None:
-        self.delete_cache(key)
-
-    async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
-        namespaced: Final = self.check_and_fix_namespace(key)
-        incremented: Final = self.counters.get(namespaced, 0) + value
-        self.counters = MappingProxyType({**self.counters, namespaced: incremented})
-        return incremented
-
-    async def async_get_cache(self, key: str, **kwargs: object) -> object:
-        return self.values.get(self.check_and_fix_namespace(key))
-
-    def init_async_client(self) -> "_SharedRedisClientFake":
-        return _SharedRedisClientFake(self)
+    def init_async_client(self) -> fakeredis.FakeAsyncRedis:
+        return fakeredis.FakeAsyncRedis(server=self._server)
 
 
-class _SharedRedisClientFake:
-    def __init__(self, store: _SharedRedisFake) -> None:
-        self._store = store
-
-    async def get(self, key: str) -> object:
-        return self._store.counters.get(key, self._store.values.get(key))
-
-
-def _replica(redis: _SharedRedisFake) -> DualCache:
-    return DualCache(redis_cache=redis, default_in_memory_ttl=600)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+def _replica(redis: RedisCache) -> DualCache:
+    return DualCache(redis_cache=redis, default_in_memory_ttl=600)
 
 
 class _Minter:
@@ -525,7 +490,7 @@ def test_token_unknown_team_grants_is_invalid_grant():
 
 
 def test_token_mints_on_a_replica_that_did_not_start_the_login():
-    redis: Final = _SharedRedisFake()
+    redis: Final = _SharedRedisCache()
     _set_cli_sso_flow(login_id=_SHARED_LOGIN_ID, cache=_replica(redis), flow=_completed_flow())
 
     with _gateway_env(cache=_replica(redis)) as (client, _), patch(_MINT, return_value="sk-session") as mint:
@@ -537,7 +502,7 @@ def test_token_mints_on_a_replica_that_did_not_start_the_login():
 
 
 def test_token_refuses_a_device_code_another_replica_already_claimed():
-    redis: Final = _SharedRedisFake()
+    redis: Final = _SharedRedisCache()
     replica_a: Final = _replica(redis)
     _set_cli_sso_flow(login_id=_SHARED_LOGIN_ID, cache=replica_a, flow=_completed_flow())
     assert asyncio.run(gateway_endpoints._claim_device_code(_SHARED_LOGIN_ID, replica_a)) is True
@@ -616,7 +581,7 @@ def test_refresh_grant_mints_a_new_bearer_and_rotates_the_refresh_token():
 
 
 def test_refresh_grant_replay_is_refused_on_a_replica_that_did_not_serve_the_rotation():
-    redis: Final = _SharedRedisFake()
+    redis: Final = _SharedRedisCache()
     minter: Final = _Minter()
     with _gateway_env(claim_cache=_replica(redis), minter=minter) as (client, cache):
         refresh_token = str(_signed_in(client, cache)["refresh_token"])
@@ -761,7 +726,7 @@ def test_revoke_on_one_replica_ends_the_chain_on_another_through_a_namespaced_re
     with the configured ``redis_namespace``; the replica serving the next renewal must look for the
     marker under that same prefix, or the revoked chain keeps renewing everywhere but where it signed
     out."""
-    redis: Final = _SharedRedisFake()
+    redis: Final = _SharedRedisCache()
     minter: Final = _Minter()
     with _gateway_env(claim_cache=_replica(redis), minter=minter) as (client, cache):
         stored = str(_signed_in(client, cache)["refresh_token"])
