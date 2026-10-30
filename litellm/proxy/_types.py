@@ -1877,6 +1877,7 @@ class OrgMember(MemberBase):
 
 
 from litellm.models.team import TeamBase as TeamBase  # noqa: E402
+from litellm.types.proxy.native_mcp_policy import NativeMCPPolicy, normalize_native_mcp_policy_input
 
 RouterSettingsDict = Annotated[
     dict[str, object],
@@ -1885,6 +1886,9 @@ RouterSettingsDict = Annotated[
 
 
 class NewTeamRequest(TeamBase):
+    native_mcp_policy: NativeMCPPolicy | None = None
+    _normalize_native_mcp_policy = model_validator(mode="before")(normalize_native_mcp_policy_input)
+
     tpm_limit: int | None = Field(default=None, ge=0)
     rpm_limit: int | None = Field(default=None, ge=0)
     router_settings: RouterSettingsDict | None = None
@@ -1961,6 +1965,9 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     guardrails: Optional[List[str]] = None
     policies: Optional[List[str]] = None
     """
+
+    native_mcp_policy: NativeMCPPolicy | None = None
+    _normalize_native_mcp_policy = model_validator(mode="before")(normalize_native_mcp_policy_input)
 
     team_id: str  # required
     team_alias: str | None = None
@@ -4590,6 +4597,7 @@ class PassThroughEndpointLoggingTypedDict(TypedDict):
 
 
 LiteLLM_ManagementEndpoint_MetadataFields: Final = [
+    "native_mcp_policy",
     "model_rpm_limit",
     "model_tpm_limit",
     "model_itpm_limit",

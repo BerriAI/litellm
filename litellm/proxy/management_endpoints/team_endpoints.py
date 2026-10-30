@@ -120,6 +120,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
 )
 from litellm.proxy.auth.auth_utils import (
     enforce_batch_limits_are_admin_only,
+    enforce_native_mcp_policy_is_admin_only,
     enforce_output_token_estimates_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -1775,6 +1776,12 @@ async def new_team(
             user_api_key_dict=user_api_key_dict,
             entity="team",
         )
+        enforce_native_mcp_policy_is_admin_only(
+            data=data,
+            existing_metadata=None,
+            user_api_key_dict=user_api_key_dict,
+            entity="team",
+        )
 
         # Check if license is over limit
         total_teams: Final = await _team_db(prisma_client).count()
@@ -2583,6 +2590,14 @@ async def update_team(
         enforce_batch_limits_are_admin_only(
             data=data,
             existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,
+            user_api_key_dict=user_api_key_dict,
+            entity="team",
+        )
+        enforce_native_mcp_policy_is_admin_only(
+            data=data,
+            existing_metadata=TypeAdapter[Mapping[str, object] | None](Mapping[str, object] | None).validate_python(
+                _existing_team_metadata
+            ),
             user_api_key_dict=user_api_key_dict,
             entity="team",
         )

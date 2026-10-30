@@ -33087,6 +33087,7 @@ export interface components {
              * @default []
              */
             models: unknown[] | null;
+            native_mcp_policy?: components["schemas"]["NativeMCPPolicy"] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Organization Id */
             organization_id?: string | null;
@@ -33258,6 +33259,7 @@ export interface components {
              * @default []
              */
             models: unknown[] | null;
+            native_mcp_policy?: components["schemas"]["NativeMCPPolicy"] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Organization Id */
             organization_id?: string | null;
@@ -39035,6 +39037,23 @@ export interface components {
              */
             type: "namespace";
         };
+        /** NativeMCPPolicy */
+        NativeMCPPolicy: {
+            /**
+             * Mcp Servers
+             * @default []
+             */
+            mcp_servers: components["schemas"]["NativeMCPServerGrant"][];
+        };
+        /** NativeMCPServerGrant */
+        NativeMCPServerGrant: {
+            /** Name */
+            name: string;
+            /** Tools */
+            tools: string[] | "*";
+            /** Url */
+            url: string;
+        };
         /**
          * NewCustomerRequest
          * @description Create a new customer, allocate a budget to them
@@ -39606,6 +39625,7 @@ export interface components {
              * @default []
              */
             models: string[];
+            native_mcp_policy?: components["schemas"]["NativeMCPPolicy"] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Organization Id */
             organization_id?: string | null;
@@ -39908,6 +39928,7 @@ export interface components {
              * @default []
              */
             models: unknown[] | null;
+            native_mcp_policy?: components["schemas"]["NativeMCPPolicy"] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Organization Id */
             organization_id?: string | null;
@@ -40898,6 +40919,7 @@ export interface components {
             } | null;
             /** Models */
             models?: unknown[] | null;
+            native_mcp_policy?: components["schemas"]["NativeMCPPolicy"] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Organization Id */
             organization_id?: string | null;
@@ -42480,6 +42502,7 @@ export interface components {
              * @default []
              */
             models: unknown[] | null;
+            native_mcp_policy?: components["schemas"]["NativeMCPPolicy"] | null;
             /** New Key */
             new_key?: string | null;
             /** New Master Key */
@@ -48675,6 +48698,7 @@ export interface components {
              * @default []
              */
             models: unknown[] | null;
+            native_mcp_policy?: components["schemas"]["NativeMCPPolicy"] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Organization Id */
             organization_id?: string | null;
@@ -49194,6 +49218,7 @@ export interface components {
             } | null;
             /** Models */
             models?: unknown[] | null;
+            native_mcp_policy?: components["schemas"]["NativeMCPPolicy"] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Organization Id */
             organization_id?: string | null;

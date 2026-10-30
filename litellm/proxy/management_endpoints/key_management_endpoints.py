@@ -59,6 +59,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
     enforce_batch_limits_are_admin_only,
+    enforce_native_mcp_policy_is_admin_only,
     enforce_output_token_estimates_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -1498,6 +1499,12 @@ async def _common_key_generation_helper(
         user_api_key_dict=user_api_key_dict,
         entity="key",
     )
+    enforce_native_mcp_policy_is_admin_only(
+        data=data,
+        existing_metadata=None,
+        user_api_key_dict=user_api_key_dict,
+        entity="key",
+    )
 
     if data.metadata is not None and data.metadata.get("service_account_id") is not None and data.team_id is None:
         await validate_team_id_used_in_service_account_request(
@@ -2678,6 +2685,8 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
     if "metadata" not in non_default_values:  # allow user to set metadata to none
         non_default_values["metadata"] = existing_metadata.copy()
 
+    if "native_mcp_policy" in data.model_fields_set and non_default_values["metadata"] is None:
+        non_default_values["metadata"] = {}  # rebind-ok: this helper fills the caller's persistence payload
     casted_metadata: Final = cast(dict, non_default_values["metadata"])
 
     # Reserved metadata fields are immutable once set. Preserve the existing value
@@ -2694,6 +2703,9 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
                 detail=f"{reserved_field} is immutable once set and cannot be changed via update.",
             )
         casted_metadata[reserved_field] = existing_value
+
+    if "native_mcp_policy" in data.model_fields_set and getattr(data, "native_mcp_policy", None) is None:
+        casted_metadata["native_mcp_policy"] = None
 
     data_json: Final = _as_object_dict(data.model_dump(exclude_unset=True, exclude_none=True))
 
@@ -3143,6 +3155,14 @@ async def _process_single_key_update(
     enforce_batch_limits_are_admin_only(
         data=update_key_request,
         existing_metadata=existing_key_row.metadata,
+        user_api_key_dict=user_api_key_dict,
+        entity="key",
+    )
+    enforce_native_mcp_policy_is_admin_only(
+        data=update_key_request,
+        existing_metadata=TypeAdapter[Mapping[str, object] | None](Mapping[str, object] | None).validate_python(
+            existing_key_row.metadata  # pyright: ignore[reportUnknownMemberType]  # legacy metadata validated here
+        ),
         user_api_key_dict=user_api_key_dict,
         entity="key",
     )
@@ -3655,6 +3675,14 @@ async def _validate_update_key_data(
     enforce_batch_limits_are_admin_only(
         data=data,
         existing_metadata=_existing_metadata if isinstance(_existing_metadata, dict) else None,
+        user_api_key_dict=user_api_key_dict,
+        entity="key",
+    )
+    enforce_native_mcp_policy_is_admin_only(
+        data=data,
+        existing_metadata=TypeAdapter[Mapping[str, object] | None](Mapping[str, object] | None).validate_python(
+            _existing_metadata
+        ),
         user_api_key_dict=user_api_key_dict,
         entity="key",
     )
@@ -6094,6 +6122,14 @@ async def _execute_virtual_key_regeneration(
         enforce_batch_limits_are_admin_only(
             data=data,
             existing_metadata=_existing_key_metadata if isinstance(_existing_key_metadata, dict) else None,
+            user_api_key_dict=user_api_key_dict,
+            entity="key",
+        )
+        enforce_native_mcp_policy_is_admin_only(
+            data=data,
+            existing_metadata=TypeAdapter[Mapping[str, object] | None](Mapping[str, object] | None).validate_python(
+                _existing_key_metadata
+            ),
             user_api_key_dict=user_api_key_dict,
             entity="key",
         )

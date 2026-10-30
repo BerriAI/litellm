@@ -8,6 +8,7 @@ from pydantic import Field, PositiveInt, field_validator, model_validator
 from typing_extensions import TypeIs  # noqa: TID251  # narrows the raw payload a before-validator receives
 
 from litellm.types.proxy.management_endpoints.request_base import GenerateRequestBase
+from litellm.types.proxy.native_mcp_policy import NativeMCPPolicy, normalize_native_mcp_policy_input
 from litellm.types.router import ContentPolicyFallbackRules, UpdateRouterConfig
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
@@ -24,6 +25,9 @@ def _fallback_targets(rules: ContentPolicyFallbackRules) -> Iterator[object]:
 
 
 class KeyRequestBase(GenerateRequestBase):
+    native_mcp_policy: NativeMCPPolicy | None = None
+    _normalize_native_mcp_policy = model_validator(mode="before")(normalize_native_mcp_policy_input)
+
     key: str | None = None
     tpd_limit: int | None = None
     default_estimated_output_tokens: PositiveInt | None = None

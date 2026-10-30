@@ -550,7 +550,8 @@ def set_object_metadata_field(
         premium_user_check(field_name)
 
     object_data.metadata = object_data.metadata or {}
-    object_data.metadata[field_name] = value
+    metadata_value: Final = value.model_dump(mode="json") if isinstance(value, BaseModel) else value
+    object_data.metadata[field_name] = metadata_value
 
 
 _set_object_metadata_field: Final = set_object_metadata_field
@@ -794,7 +795,7 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
         if updated_kv.get(field_name):
             premium_user_check()
 
-    if field_name in updated_kv and updated_kv[field_name] is not None:
+    if field_name in updated_kv and (updated_kv[field_name] is not None or field_name == "native_mcp_policy"):
         # remove field from updated_kv
         _value: Final = updated_kv.pop(field_name)
         if "metadata" in updated_kv and updated_kv["metadata"] is not None:
@@ -814,7 +815,7 @@ def _has_non_empty_value(value: object) -> bool:
     return True
 
 
-def update_metadata_fields(updated_kv: dict) -> None:
+def update_metadata_fields(updated_kv: dict[str, object]) -> None:
     """
     Helper function to update all metadata fields (both premium and standard).
 
@@ -826,7 +827,7 @@ def update_metadata_fields(updated_kv: dict) -> None:
             _update_metadata_field(updated_kv=updated_kv, field_name=field)
 
     for field in LiteLLM_ManagementEndpoint_MetadataFields:
-        if field in updated_kv and updated_kv[field] is not None:
+        if field in updated_kv and (updated_kv[field] is not None or field == "native_mcp_policy"):
             _update_metadata_field(updated_kv=updated_kv, field_name=field)
 
 

@@ -38,6 +38,7 @@ from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_me
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
+from litellm.types.proxy.native_mcp_policy import NativeMCPPolicy
 from litellm.types.router import (
     CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
     Deployment,
@@ -1485,6 +1486,35 @@ class BatchLimitRequest(Protocol):
 
     @property
     def model_fields_set(self) -> Collection[str]: ...
+
+
+class NativeMCPPolicyWriteRequest(BatchLimitRequest, Protocol):
+    @property
+    def native_mcp_policy(self) -> "NativeMCPPolicy | None": ...
+
+
+def enforce_native_mcp_policy_is_admin_only(
+    data: NativeMCPPolicyWriteRequest,
+    existing_metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    entity: Literal["key", "team"],
+) -> None:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    stored: Final[Mapping[str, object]] = existing_metadata or {}
+    requested: Final[Mapping[str, object]] = (data.metadata or {}) if "metadata" in data.model_fields_set else stored
+    policy: Final = data.native_mcp_policy
+    effective: Final = (
+        (policy.model_dump(mode="json") if policy is not None else None)
+        if "native_mcp_policy" in data.model_fields_set
+        else requested.get("native_mcp_policy")
+    )
+    if effective == stored.get("native_mcp_policy"):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={"error": f"Only proxy admins can change native_mcp_policy on a {entity}."},
+    )
 
 
 def enforce_batch_limits_are_admin_only(
