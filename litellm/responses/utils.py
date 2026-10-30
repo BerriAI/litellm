@@ -597,8 +597,7 @@ class ResponsesAPIRequestUtils:
                     seen_ids.add(item_id)
             restored_input.append(item)
 
-        request_input[:] = restored_input
-        return request_input
+        return cast(_RequestInputT, restored_input)  # cast-ok: list inputs retain their input type after deduplication
 
     _restore_encrypted_content_item_ids_in_input = restore_encrypted_content_item_ids_in_input
 
