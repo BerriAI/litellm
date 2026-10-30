@@ -36,6 +36,8 @@ from litellm.constants import (
 from litellm.litellm_core_utils.ptu_pricing import ptu_terms
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARGET
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
+from litellm.redis.stores.pod_lock import HeldBy
+from litellm.redis.transport.contract import RedisFailure
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import PrismaTableRepository
@@ -735,12 +737,14 @@ async def _lock_is_held(pod_lock_manager: "PodLockManager") -> bool:
     A Redis that cannot be read is reported as "not held" so the caller runs the day
     rather than skipping it; the cost of being wrong here is a duplicate reconcile.
     """
-    try:
-        lock_key: Final = pod_lock_manager.get_redis_lock_key(PTU_ROLLUP_JOB_ID)
-        return bool(await pod_lock_manager.redis_cache.async_get_cache(lock_key))
-    except Exception as exc:  # noqa: BLE001  # an unreadable lock must not skip the day
-        verbose_proxy_logger.warning("PTU rollup: could not read the rollup lock: %s", exc)
-        return False
+    match await pod_lock_manager.lock_holder(PTU_ROLLUP_JOB_ID):
+        case HeldBy():
+            return True
+        case None:
+            return False
+        case RedisFailure(message=message):
+            verbose_proxy_logger.warning("PTU rollup: could not read the rollup lock: %s", message)
+            return False
 
 
 async def _run_and_alert(

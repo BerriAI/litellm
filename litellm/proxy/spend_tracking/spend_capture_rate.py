@@ -29,6 +29,8 @@ from litellm.llms.openai.organization_costs import (
     provider_billing_get,
 )
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARGET
+from litellm.redis.stores.pod_lock import HeldBy
+from litellm.redis.transport.contract import RedisFailure
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.spend_capture_rate import (
@@ -39,7 +41,6 @@ from litellm.types.proxy.spend_capture_rate import (
 )
 
 if TYPE_CHECKING:
-    from litellm.caching.redis_cache import RedisCache
     from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
     from litellm.proxy.utils import PrismaClient
 
@@ -284,21 +285,21 @@ async def run_scheduled_spend_capture_rate_check(
 
 async def _claims_alert_window(pod_lock_manager: "PodLockManager | None") -> bool:
     """The lock is left to expire, so every replica firing within its TTL of the winner stays quiet."""
-    redis_cache: Final = None if pod_lock_manager is None else pod_lock_manager.redis_cache
-    if pod_lock_manager is None or redis_cache is None:
+    if pod_lock_manager is None or pod_lock_manager.redis_cache is None:
         return True
     acquired: Final = await pod_lock_manager.acquire_lock(
         cronjob_id=SPEND_CAPTURE_RATE_CHECK_JOB_ID, ttl=SPEND_CAPTURE_RATE_CHECK_LOCK_TTL_SECONDS
     )
-    return acquired or not await _lock_is_held(pod_lock_manager, redis_cache)
+    return acquired or not await _lock_is_held(pod_lock_manager)
 
 
 @with_service_target(POD_LOCK_TARGET)
-async def _lock_is_held(pod_lock_manager: "PodLockManager", redis_cache: "RedisCache") -> bool:
-    try:
-        return bool(
-            await redis_cache.async_get_cache(pod_lock_manager.get_redis_lock_key(SPEND_CAPTURE_RATE_CHECK_JOB_ID))
-        )
-    except Exception as exc:  # noqa: BLE001  # an unreadable lock must not silence the alert
-        verbose_proxy_logger.warning("Spend capture-rate check: could not read the lock: %s", exc)
-        return False
+async def _lock_is_held(pod_lock_manager: "PodLockManager") -> bool:
+    match await pod_lock_manager.lock_holder(SPEND_CAPTURE_RATE_CHECK_JOB_ID):
+        case HeldBy():
+            return True
+        case None:
+            return False
+        case RedisFailure(message=message):
+            verbose_proxy_logger.warning("Spend capture-rate check: could not read the lock: %s", message)
+            return False

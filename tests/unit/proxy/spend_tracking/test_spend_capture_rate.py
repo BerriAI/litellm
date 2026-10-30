@@ -22,6 +22,8 @@ from litellm.proxy.spend_tracking.spend_capture_rate import (
     run_scheduled_spend_capture_rate_check,
     run_spend_capture_rate_check,
 )
+from litellm.redis.stores.pod_lock import HeldBy
+from litellm.redis.transport.contract import RedisFailure
 from litellm.types.proxy.spend_capture_rate import CaptureRateReport, SpendCaptureRateCheckSettings
 
 _ADMIN_KEY: Final = "sk-admin-test"
@@ -257,8 +259,7 @@ async def test_check_publishes_no_rate_when_the_provider_billed_nothing(monkeypa
 def _pod_lock(acquired: bool) -> MagicMock:
     lock = MagicMock()
     lock.redis_cache = MagicMock()
-    lock.redis_cache.async_get_cache = AsyncMock(return_value="other-pod")
-    lock.get_redis_lock_key = MagicMock(return_value="lock-key")
+    lock.lock_holder = AsyncMock(return_value=HeldBy("other-pod"))
     lock.acquire_lock = AsyncMock(return_value=acquired)
     lock.release_lock = AsyncMock()
     return lock
@@ -335,7 +336,7 @@ async def test_scheduled_check_alerts_and_keeps_the_lock_until_it_expires_when_i
 @pytest.mark.asyncio
 async def test_scheduled_check_alerts_when_the_lock_cannot_be_acquired_or_read(monkeypatch):
     lock = _pod_lock(acquired=False)
-    lock.redis_cache.async_get_cache = AsyncMock(side_effect=ConnectionError("redis down"))
+    lock.lock_holder = AsyncMock(return_value=RedisFailure(kind="transport", message="redis down"))
 
     alert, publish = await _scheduled_run_under_threshold(lock, monkeypatch)
 
