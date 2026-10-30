@@ -411,14 +411,16 @@ class OpenAILiveSessions(OpenAIRealtime):
         session_start: Mapping[str, object],
         api_base: str | None,
         api_key: str | None,
+        upstream_url: str | None = None,
+        additional_headers: Mapping[str, str] | None = None,
     ) -> None:
         if api_key is None:
-            raise ValueError("api_key is required for OpenAI Live session calls")
+            raise ValueError("api_key is required for Live session calls")
         from websockets.exceptions import InvalidStatus
 
         resolved_api_base: Final = api_base or self._get_default_api_base()
-        url: Final = self._construct_live_url(resolved_api_base)
-        headers: Final = self._get_additional_headers(api_key)
+        url: Final = upstream_url or self._construct_live_url(resolved_api_base)
+        headers: Final = additional_headers or self._get_additional_headers(api_key)
         ssl_config: Final = self._get_ssl_config(url)
         session: Final = as_str_mapping(session_start.get("session"))
         if session is None:
