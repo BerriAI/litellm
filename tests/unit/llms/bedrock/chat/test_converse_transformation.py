@@ -9292,12 +9292,13 @@ def _invalid_model_identifier_reply(sent: list[httpx.Request]):
     return respond
 
 
-def test_not_found_error():
+@pytest.mark.parametrize("model", ["bedrock/bad_model", "bedrock/us-east-1/bad_model"])
+def test_not_found_error(model):
     sent: Final[list[httpx.Request]] = []
 
     with pytest.raises(litellm.NotFoundError) as exc_info:
         completion(
-            model="bedrock/bad_model",
+            model=model,
             messages=[{"role": "user", "content": "What is the meaning of life"}],
             client=HTTPHandler(
                 client=httpx.Client(transport=httpx.MockTransport(_invalid_model_identifier_reply(sent)))
@@ -9371,8 +9372,8 @@ def _converse_tool_call_reply(sent: list[httpx.Request]):
     return respond
 
 
-def test_model_missing_from_cost_map_sends_tools_to_converse():
-    model: Final = "bedrock/us.newvendor.model-1"
+@pytest.mark.parametrize("model", ["bedrock/us.newvendor.model-1", "bedrock/us-east-1/us.newvendor.model-1"])
+def test_model_missing_from_cost_map_sends_tools_to_converse(model):
     assert "us.newvendor.model-1" not in litellm.model_cost
     sent: Final[list[httpx.Request]] = []
 

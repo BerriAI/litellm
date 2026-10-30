@@ -1600,7 +1600,9 @@ def bedrock_model_supports_regex_lookaround(model: str, litellm_params: Mapping[
 
 
 def bedrock_model_is_unknown(model: str) -> bool:
-    model_id: Final = model.removeprefix("bedrock/")
+    routed_id: Final = model.removeprefix("bedrock/")
+    region, separator, regional_id = routed_id.partition("/")
+    model_id: Final = regional_id if separator and region in get_all_bedrock_regions() else routed_id
     if "/" in model_id:
         return False
     base: Final = get_bedrock_base_model(model_id)
