@@ -2,7 +2,8 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
+from functools import partial
+from itertools import accumulate, chain, repeat, takewhile
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
@@ -26,7 +27,13 @@ from litellm.types.llms.openai import (
     GenericChatCompletionMessage,
     ResponseInputParam,
 )
-from litellm.types.utils import CallTypes, ChatCompletionMessageToolCall, Message, ModelResponse
+from litellm.types.utils import (
+    ADDRESSED_RESPONSE_ID_FIELD,
+    CallTypes,
+    ChatCompletionMessageToolCall,
+    Message,
+    ModelResponse,
+)
 
 if TYPE_CHECKING:
     from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
@@ -121,31 +128,55 @@ def _replay_start(
     )
 
 
-def _holds_compaction_point(
-    spend_logs: Sequence["SpendLogsPayload"], proxy_server_requests: Sequence[Mapping[str, object] | None]
-) -> bool:
-    return any(
-        _compaction_point(index, spend_log, proxy_server_request) is not None
-        for index, (spend_log, proxy_server_request) in enumerate(zip(spend_logs, proxy_server_requests, strict=True))
-    )
-
-
 def _referenced_request_ids(previous_response_id: str, client_response_ids: tuple[str, ...]) -> tuple[str, ...]:
     decoded_response_id: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(previous_response_id)
     response_id: Final = decoded_response_id.get("response_id", previous_response_id)
     return tuple(dict.fromkeys((response_id, previous_response_id, *client_response_ids)))
 
 
-def _turns_through_referenced_response(
-    spend_logs: Sequence["SpendLogsPayload"], referenced_request_ids: tuple[str, ...]
-) -> int:
+def _latest_turn_before(spend_logs: Sequence["SpendLogsPayload"], request_ids: tuple[str, ...], end: int) -> int | None:
     return next(
-        (
-            index + 1
-            for index in range(len(spend_logs) - 1, -1, -1)
-            if spend_logs[index].get("request_id") in referenced_request_ids
-        ),
-        len(spend_logs),
+        (index for index in range(end - 1, -1, -1) if spend_logs[index].get("request_id") in request_ids),
+        None,
+    )
+
+
+def _stored_id(proxy_server_request: Mapping[str, object], field: str) -> str | None:
+    stored_id: Final = proxy_server_request.get(field)
+    return stored_id if isinstance(stored_id, str) and stored_id else None
+
+
+def _parent_request_ids(proxy_server_request: Mapping[str, object] | None) -> tuple[str, ...]:
+    if proxy_server_request is None:
+        return ()
+    previous_response_id: Final = _stored_id(proxy_server_request, "previous_response_id")
+    if previous_response_id is None:
+        return ()
+    addressed_response_id: Final = _stored_id(proxy_server_request, ADDRESSED_RESPONSE_ID_FIELD)
+    return _referenced_request_ids(
+        previous_response_id, () if addressed_response_id is None else (addressed_response_id,)
+    )
+
+
+def _parent_turn(turns: StoredTurns, link: tuple[int, ...], _: None) -> tuple[int, ...]:
+    parents: Final = (
+        _latest_turn_before(turns.spend_logs, _parent_request_ids(turns.proxy_server_requests[index]), index)
+        for index in link
+    )
+    return tuple(parent for parent in parents if parent is not None)
+
+
+def _referenced_chain(turns: StoredTurns, referenced_request_ids: tuple[str, ...]) -> StoredTurns:
+    head: Final = _latest_turn_before(turns.spend_logs, referenced_request_ids, len(turns.spend_logs))
+    if head is None:
+        return turns
+    ancestors: Final = tuple(
+        chain.from_iterable(takewhile(bool, accumulate(repeat(None), partial(_parent_turn, turns), initial=(head,))))
+    )
+    indices: Final = (*range(ancestors[-1]), *reversed(ancestors))
+    return StoredTurns(
+        spend_logs=tuple(turns.spend_logs[index] for index in indices),
+        proxy_server_requests=tuple(turns.proxy_server_requests[index] for index in indices),
     )
 
 
@@ -225,25 +256,21 @@ class ResponsesSessionHandler:
         if len(all_spend_logs) > 0:
             litellm_session_id = all_spend_logs[0].get("session_id")
 
-        proxy_server_requests: Final = turns.proxy_server_requests
-        replayable_turns: Final = _turns_through_referenced_response(
-            all_spend_logs, _referenced_request_ids(previous_response_id, client_response_ids)
-        )
-        start: Final = _replay_start(all_spend_logs[:replayable_turns], proxy_server_requests[:replayable_turns])
-        replayed_turns: Final = (
-            replayable_turns if _holds_compaction_point(all_spend_logs, proxy_server_requests) else len(all_spend_logs)
-        )
+        referenced: Final = _referenced_chain(turns, _referenced_request_ids(previous_response_id, client_response_ids))
+        spend_logs: Final = referenced.spend_logs
+        proxy_server_requests: Final = referenced.proxy_server_requests
+        start: Final = _replay_start(spend_logs, proxy_server_requests)
         earlier_instructions: Final = _instruction_items_before(proxy_server_requests, start)
         replayed_history: Final = ResponsesSessionHandler._history_of_turns(
-            all_spend_logs[start.index : replayed_turns],
+            spend_logs[start.index :],
             [
                 _replayed_request(index, proxy_server_requests[index], start, earlier_instructions)
-                for index in range(start.index, replayed_turns)
+                for index in range(start.index, len(spend_logs))
             ],
             item_cache_control,
         )
         history_before_replay: Final = ResponsesSessionHandler._history_of_turns(
-            all_spend_logs[: start.index], proxy_server_requests[: start.index], item_cache_control
+            spend_logs[: start.index], proxy_server_requests[: start.index], item_cache_control
         )
         chat_completion_message_history: Final = (
             list(with_stored_calls_the_input_answers(replayed_history, history_before_replay))
@@ -289,13 +316,13 @@ class ResponsesSessionHandler:
         previous_response_id: str,
         client_response_ids: tuple[str, ...] = (),
     ) -> tuple[Mapping[str, object], ...]:
-        turns: Final = _turns_through_referenced_response(
-            stored_turns.spend_logs, _referenced_request_ids(previous_response_id, client_response_ids)
+        referenced: Final = _referenced_chain(
+            stored_turns, _referenced_request_ids(previous_response_id, client_response_ids)
         )
         return tuple(
             chain.from_iterable(
                 client_tool_search_loaded_tools(request.get("input"))
-                for request in stored_turns.proxy_server_requests[:turns]
+                for request in referenced.proxy_server_requests
                 if request is not None
             )
         )

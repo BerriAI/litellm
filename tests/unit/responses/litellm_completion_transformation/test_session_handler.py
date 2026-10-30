@@ -23,7 +23,7 @@ from litellm.responses.litellm_completion_transformation.transformation import C
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import Message
+from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, Message
 
 
 @pytest.mark.asyncio
@@ -127,7 +127,7 @@ async def test_get_chat_completion_message_history_for_previous_response_id():
         mock_get_spend_logs.return_value = mock_spend_logs
 
         # Test the function
-        previous_response_id = "chatcmpl-935b8dad-fdc2-466e-a8ca-e26e5a8a21bb"
+        previous_response_id = "chatcmpl-370760c9-39fa-4db7-b034-d1f8d933c935"
         result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
             previous_response_id
         )
@@ -1245,3 +1245,208 @@ async def test_session_lookup_follows_the_owner_across_keys_and_keeps_ownerless_
 
     assert await _history_request_ids(sqlite_db, "alice-new-key") == ["alice-old-key", "alice-new-key"]
     assert await _history_request_ids(sqlite_db, "ownerless-2") == ["ownerless-2"]
+
+
+def _litellm_response_id(request_id: str) -> str:
+    return ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="anthropic",
+        model_id="e0f302a1412e78470ebb28cbed01fff5f88c0d331c667e9f2ba4b413c6fbd282",
+        response_id=request_id,
+    )
+
+
+def _forked_turn(
+    request_id: str,
+    parent_request_id: str | None,
+    turn_input: str | list[dict[str, object]],
+    answer: str,
+    **request_fields: object,
+) -> dict[str, object]:
+    pointer: Final = (
+        {} if parent_request_id is None else {"previous_response_id": _litellm_response_id(parent_request_id)}
+    )
+    return {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": "session-forked",
+        "proxy_server_request": {"model": "claude-bridge", "input": turn_input, **pointer, **request_fields},
+        "response": _chat_completion_response(request_id, answer),
+    }
+
+
+_PARIS_TOOL_OUTPUT: Final = {"type": "function_call_output", "call_id": "call_1", "output": "18C and sunny"}
+_WEATHER_CALL: Final = {**_WEATHER_CALL_TURN, "request_id": "chatcmpl-t1", "session_id": "session-forked"}
+_PLANTS_THE_CODEWORD: Final = _forked_turn(
+    "chatcmpl-t2", "chatcmpl-t1", [_PARIS_TOOL_OUTPUT, {"role": "user", "content": "Remember PELICAN."}], "OK"
+)
+_ASKS_FOR_THE_CODEWORD: Final = _forked_turn(
+    "chatcmpl-t2b", "chatcmpl-t1", [_PARIS_TOOL_OUTPUT, {"role": "user", "content": "Which codeword?"}], "NONE"
+)
+_CONTINUES_THE_FORK: Final = _forked_turn("chatcmpl-t3", "chatcmpl-t2b", "And the weather?", "18C and sunny.")
+_WEATHER_CALL_MESSAGES: Final = [("user", "Weather in Paris?"), ("assistant", None)]
+
+
+def _addressing(turn: dict[str, object], client_response_id: str) -> dict[str, object]:
+    request: Final = turn["proxy_server_request"]
+    assert isinstance(request, dict)
+    return {**turn, "proxy_server_request": {**request, ADDRESSED_RESPONSE_ID_FIELD: client_response_id}}
+
+
+_FORK_MESSAGES: Final = [("tool", "18C and sunny"), ("user", "Which codeword?"), ("assistant", "NONE")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("spend_logs", "previous_response_id", "replayed"),
+    [
+        pytest.param(
+            (_WEATHER_CALL, _PLANTS_THE_CODEWORD), "chatcmpl-t1", _WEATHER_CALL_MESSAGES, id="fork_from_an_earlier_turn"
+        ),
+        pytest.param(
+            (_WEATHER_CALL, _PLANTS_THE_CODEWORD, _ASKS_FOR_THE_CODEWORD, _CONTINUES_THE_FORK),
+            "chatcmpl-t3",
+            [
+                *_WEATHER_CALL_MESSAGES,
+                *_FORK_MESSAGES,
+                ("user", "And the weather?"),
+                ("assistant", "18C and sunny."),
+            ],
+            id="continued_fork",
+        ),
+        pytest.param(
+            (_WEATHER_CALL, _PLANTS_THE_CODEWORD, _ASKS_FOR_THE_CODEWORD),
+            "chatcmpl-t2b",
+            [*_WEATHER_CALL_MESSAGES, *_FORK_MESSAGES],
+            id="retried_turn",
+        ),
+        pytest.param(
+            (
+                {**_WEATHER_CALL, "request_id": "resp_proxy-issued-t1"},
+                _addressing(_PLANTS_THE_CODEWORD, "resp_proxy-issued-t1"),
+                _addressing(_ASKS_FOR_THE_CODEWORD, "resp_proxy-issued-t1"),
+                _CONTINUES_THE_FORK,
+            ),
+            "chatcmpl-t3",
+            [
+                *_WEATHER_CALL_MESSAGES,
+                *_FORK_MESSAGES,
+                ("user", "And the weather?"),
+                ("assistant", "18C and sunny."),
+            ],
+            id="parent_stored_under_the_id_the_client_held",
+        ),
+    ],
+)
+async def test_previous_response_history_replays_only_the_referenced_response_and_its_ancestors(
+    spend_logs: tuple[dict[str, object], ...], previous_response_id: str, replayed: list[tuple[object, object]]
+):
+    session: Final = await _history_from_stored_turns(spend_logs, previous_response_id)
+
+    assert [_role_and_content(message) for message in session["messages"]] == replayed
+    assert tuple(chain.from_iterable(map(_tool_call_ids, session["messages"]))) == ("call_1",)
+
+
+_GREETING: Final = _forked_turn("chatcmpl-hi", None, "Hi.", "Hello.")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("unresolvable_turn", "unresolvable_messages"),
+    [
+        pytest.param(
+            _forked_turn("chatcmpl-trip", None, "Plan a Tokyo trip.", "Day one, Asakusa."),
+            [("user", "Plan a Tokyo trip."), ("assistant", "Day one, Asakusa.")],
+            id="no_stored_pointer",
+        ),
+        pytest.param(
+            _forked_turn("chatcmpl-trip", "chatcmpl-not-stored", "Plan a Tokyo trip.", "Day one, Asakusa."),
+            [("user", "Plan a Tokyo trip."), ("assistant", "Day one, Asakusa.")],
+            id="pointer_to_no_stored_turn",
+        ),
+        pytest.param(
+            {**_forked_turn("chatcmpl-trip", None, "", "Day one, Asakusa."), "proxy_server_request": "null"},
+            [("assistant", "Day one, Asakusa.")],
+            id="no_stored_request",
+        ),
+    ],
+)
+async def test_previous_response_history_keeps_every_earlier_turn_when_a_parent_is_unknown(
+    unresolvable_turn: dict[str, object], unresolvable_messages: list[tuple[object, object]]
+):
+    spend_logs: Final = (
+        _GREETING,
+        unresolvable_turn,
+        _forked_turn("chatcmpl-osaka", "chatcmpl-trip", "And Osaka?", "Dotonbori."),
+        _forked_turn("chatcmpl-later-fork", "chatcmpl-hi", "Forget the trip.", "Done."),
+    )
+
+    session: Final = await _history_from_stored_turns(spend_logs, "chatcmpl-osaka")
+
+    assert [_role_and_content(message) for message in session["messages"]] == [
+        ("user", "Hi."),
+        ("assistant", "Hello."),
+        *unresolvable_messages,
+        ("user", "And Osaka?"),
+        ("assistant", "Dotonbori."),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_previous_response_history_carries_the_instructions_of_its_own_branch():
+    spend_logs: Final = (
+        _forked_turn("chatcmpl-t1", None, "Hi.", "Hello.", instructions="Be terse."),
+        _forked_turn("chatcmpl-t2", "chatcmpl-t1", "Bonjour?", "Bonjour.", instructions="Answer in French."),
+        _forked_turn("chatcmpl-t2b", "chatcmpl-t1", "How are you?", "Fine."),
+    )
+
+    session: Final = await _history_from_stored_turns(spend_logs, "chatcmpl-t2b")
+
+    assert session["instructions"] == "Be terse."
+
+
+@pytest.mark.asyncio
+async def test_previous_response_history_ignores_a_compaction_item_a_sibling_branch_sent():
+    spend_logs: Final = (
+        _forked_turn("chatcmpl-t1", None, "Plan a Tokyo trip.", "Day one, Asakusa."),
+        _forked_turn(
+            "chatcmpl-t2",
+            "chatcmpl-t1",
+            [_COMPACTION_ITEM_SENT, {"role": "user", "content": "And Osaka?"}],
+            "Dotonbori.",
+        ),
+        _forked_turn("chatcmpl-t2b", "chatcmpl-t1", "And Kyoto?", "Gion."),
+    )
+
+    session: Final = await _history_from_stored_turns(spend_logs, "chatcmpl-t2b")
+
+    assert [_role_and_content(message) for message in session["messages"]] == [
+        ("user", "Plan a Tokyo trip."),
+        ("assistant", "Day one, Asakusa."),
+        ("user", "And Kyoto?"),
+        ("assistant", "Gion."),
+    ]
+
+
+def _tool_search_output(call_id: str, tool_name: str) -> dict[str, object]:
+    return {
+        "type": "tool_search_output",
+        "call_id": call_id,
+        "status": "completed",
+        "execution": "client",
+        "tools": [{"type": "function", "name": tool_name, "defer_loading": True}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_client_tool_search_tools_loaded_before_ignores_the_tools_a_sibling_branch_loaded():
+    spend_logs: Final = (
+        _forked_turn("chatcmpl-t1", None, "Find my calendar tools.", "Searching."),
+        _forked_turn("chatcmpl-t2", "chatcmpl-t1", [_tool_search_output("search-1", "calendar_create")], "Loaded."),
+        _forked_turn("chatcmpl-t2b", "chatcmpl-t1", [_tool_search_output("search-1", "calendar_delete")], "Loaded."),
+    )
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=_StoredSpendLogs(spend_logs))):
+        stored_turns: Final = await ResponsesSessionHandler.get_stored_turns_for_previous_response_id("chatcmpl-t2b")
+
+    loaded: Final = ResponsesSessionHandler.client_tool_search_tools_loaded_before(stored_turns, "chatcmpl-t2b")
+
+    assert [tool["name"] for tool in loaded] == ["calendar_delete"]

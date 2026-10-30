@@ -647,7 +647,7 @@ def test_bridged_chain_history(rigs: Rigs, correlated: bool, shape: str, replays
     assert _user_markers(replayed[0]) == (markers if replays_turn_1 else markers[1:])
 
 
-def test_bridged_chains_sharing_a_metadata_session_replay_each_others_turns(rigs: Rigs) -> None:
+def test_bridged_chains_sharing_a_metadata_session_replay_only_their_own_turns(rigs: Rigs) -> None:
     shared: Final[dict[str, JsonValue]] = {"metadata": {"session_id": _token("convo")}}
     markers: Final = (_marker(), _marker(), _marker())
     first: Final = _turn(rigs.flag_on, markers[0], fields=shared)
@@ -657,7 +657,21 @@ def test_bridged_chains_sharing_a_metadata_session_replay_each_others_turns(rigs
 
     replayed: Final = rigs.flag_on.upstream_bodies(markers[2])
     assert len(replayed) == 1, replayed
-    assert _user_markers(replayed[0]) == markers
+    assert _user_markers(replayed[0]) == (markers[0], markers[2])
+
+
+def test_bridged_fork_replays_only_the_referenced_responses_ancestors(rigs: Rigs) -> None:
+    rig: Final = rigs.flag_off
+    markers: Final = (_marker(), _marker(), _marker(), _marker())
+    first: Final = _turn(rig, markers[0])
+    _turn(rig, markers[1], first)
+    fork: Final = _turn(rig, markers[2], first)
+    fork_bodies: Final = rig.upstream_bodies(markers[2])
+
+    _turn(rig, markers[3], fork)
+
+    assert [_user_markers(body) for body in fork_bodies] == [(markers[0], markers[2])]
+    assert [_user_markers(body) for body in rig.upstream_bodies(markers[3])] == [(markers[0], markers[2], markers[3])]
 
 
 @dataclass(frozen=True, slots=True)
