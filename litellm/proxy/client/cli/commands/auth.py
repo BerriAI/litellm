@@ -1097,7 +1097,7 @@ def whoami(ctx: click.Context):
         click.echo(
             "Not authenticated. Run the command you need, such as 'lite keys generate', and lite opens your browser "
             f"to sign in and waits up to {LOGIN_TIMEOUT_SECONDS // 60} minutes for you to approve it. "
-            "To sign in first from a terminal, run 'lite login --pkce'."
+            "To sign in first from a terminal, run 'lite login --pkce', or 'lite login' where no browser can open."
         )
         return
 

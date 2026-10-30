@@ -443,6 +443,12 @@ def test_the_browser_launcher_tries_each_listed_browser_in_order_and_never_a_con
         (["teams", "list"], "GET", "/team/list", []),
         (["teams", "available"], "GET", "/team/available", []),
         (["credentials", "list", "--format", "json"], "GET", "/credentials", {"credentials": []}),
+        (
+            ["debug", "claude", "--session-id", "session-1", "--recent-bodies", "0", "--no-save"],
+            "GET",
+            "/spend/logs/session/ui",
+            {"data": [{"request_id": "req-1"}], "total": 1, "total_pages": 1},
+        ),
     ],
 )
 def test_every_proxy_command_group_signs_in_on_a_401_and_reruns_with_the_new_key(
@@ -614,6 +620,23 @@ def test_a_rejected_explicit_key_names_the_reason_the_proxy_gave_without_echoing
     assert "Authentication Error, Invalid API key provided" in result.stderr
     assert "token_not_found_in_db" in result.stderr
     assert passed_key not in result.output
+    assert sign_in.calls == []
+
+
+def test_a_long_401_body_is_cut_before_it_reaches_the_terminal(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    long_reason: Final = "Authentication Error, " + "the key was refused " * 500 + "END-OF-BODY"
+    requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, json={"error": {"message": long_reason}})
+    sign_in: Final = FakeBrowserSignIn(_credential())
+
+    result: Final = _lite(["keys", "generate"], secret_vault_factory(), sign_in, ["--api-key", "sk-explicit"])
+
+    assert result.exit_code == 1
+    assert "The proxy said: " in result.stderr
+    assert "Authentication Error, the key was refused" in result.stderr
+    assert "END-OF-BODY" not in result.stderr
+    assert len(result.stderr) < 2_000
     assert sign_in.calls == []
 
 
@@ -879,7 +902,7 @@ def test_a_login_directory_lite_cannot_write_still_signs_in_and_finishes_the_com
     ],
     ids=["ci", "ssh_without_a_display"],
 )
-def test_a_rejected_stored_login_fails_at_once_without_a_key_check_or_lock_where_no_browser_can_open(
+def test_a_rejected_stored_login_fails_at_once_without_a_lock_where_no_browser_can_open(
     requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault], environ: dict[str, str], reason: str
 ) -> None:
     vault: Final = secret_vault_factory()
@@ -899,7 +922,33 @@ def test_a_rejected_stored_login_fails_at_once_without_a_key_check_or_lock_where
     assert reason in result.stderr
     assert "Run `lite login --pkce` from a terminal on a machine with a browser" in result.stderr
     assert _bearers(route) == ["Bearer sk-stale"]
-    assert key_check.call_count == 0
+    assert _bearers(key_check) == ["Bearer sk-stale"]
+    assert lock.attempts == 0
+
+
+@pytest.mark.parametrize(
+    "environ",
+    [{"CI": "1"}, {"SSH_CONNECTION": "203.0.113.7 52144 10.0.0.5 22"}],
+    ids=["ci", "ssh_without_a_display"],
+)
+def test_a_stored_login_missing_a_role_is_reported_as_a_role_problem_where_no_browser_can_open(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault], environ: dict[str, str]
+) -> None:
+    vault: Final = secret_vault_factory()
+    save_token(_classic_login("sk-member"), vault=vault)
+    _key_check(requests_mock, 200)
+    requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, json=REJECTED)
+    lock: Final = AnotherCommandHoldsTheSignInLock(lambda: None)
+
+    result: Final = CliRunner().invoke(
+        cli,
+        ["--base-url", BASE_URL, "keys", "generate"],
+        obj={"secret_vault": vault, "browser_sign_in": PkceBrowserSignIn(environ=environ), "sign_in_lock": lock},
+    )
+
+    assert result.exit_code == 1
+    assert "accepts your stored login but refused `cli keys generate` with HTTP 401" in result.stderr
+    assert "Run `lite login --pkce`" not in result.stderr
     assert lock.attempts == 0
 
 

@@ -40,6 +40,7 @@ _SSH_SESSION_VARIABLES: Final = ("SSH_CONNECTION", "SSH_TTY")
 _DISPLAY_VARIABLES: Final = ("DISPLAY", "WAYLAND_DISPLAY")
 _SIGNED_IN_LOGIN_WITHOUT_KEY_ROW: Final = HTTPStatus.NOT_FOUND
 _WAIT_FOR_ANOTHER_SIGN_IN_SECONDS: Final = LOGIN_TIMEOUT_SECONDS + 60
+_PROXY_REASON_CHARS: Final = 500
 
 
 def _runs_in_ci(environ: Mapping[str, str]) -> bool:
@@ -211,7 +212,8 @@ def _proxy_reason(error: UnauthorizedError) -> str:
     original: Final = error.orig_exception
     response: Final = original.response if isinstance(original, requests.HTTPError) else None
     body: Final = response.text.strip() if response is not None else ""
-    return redact_string(body) if body else str(error)
+    reason: Final = redact_string(body) if body else str(error)
+    return reason if len(reason) <= _PROXY_REASON_CHARS else f"{reason[:_PROXY_REASON_CHARS]}..."
 
 
 def _sign_in_failure(base_url: str, failure: PkceFailure) -> str:
@@ -320,11 +322,6 @@ def _rerun_after_sign_in(
             "or LITELLM_PROXY_API_KEY. Check that the key is valid and has the role this command needs, "
             f"or unset both to sign in through your browser instead. The proxy said: {_proxy_reason(error)}"
         )
-    sign_in: Final = context.get("browser_sign_in") or PkceBrowserSignIn()
-    unavailable: Final = sign_in.unavailable_because()
-    if unavailable is not None:
-        _echo_to_stderr(f"The proxy at {base_url} needs a sign-in.")
-        raise click.ClickException(_sign_in_failure(base_url, unavailable))
     rejected_key: Final = context.get("api_key")
     if rejected_key is not None and _proxy_accepts(base_url, rejected_key):
         raise click.ClickException(
@@ -332,6 +329,11 @@ def _rerun_after_sign_in(
             "so it likely lacks the role this command needs. Set LITELLM_PROXY_API_KEY to a key that has it. "
             f"The proxy said: {_proxy_reason(error)}"
         )
+    sign_in: Final = context.get("browser_sign_in") or PkceBrowserSignIn()
+    unavailable: Final = sign_in.unavailable_because()
+    if unavailable is not None:
+        _echo_to_stderr(f"The proxy at {base_url} needs a sign-in.")
+        raise click.ClickException(_sign_in_failure(base_url, unavailable))
     with _sign_in_lock_held(context.get("sign_in_lock", _sign_in_lock)()) as waited_for_another_sign_in:
         return _rerun_once_signed_in(run, ctx, base_url, sign_in, rejected_key, waited_for_another_sign_in)
 
