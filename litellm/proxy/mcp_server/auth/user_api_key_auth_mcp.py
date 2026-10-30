@@ -61,8 +61,9 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
     USER_NO_MCP_PERMISSION_SENTINEL,
+    fill_user_permission_link,
     get_management_object_ttl,
-    user_object_permission_id_cache_key,
+    get_user_permission_link,
 )
 from litellm.proxy.mcp_server.catalog import global_manager
 from litellm.proxy.mcp_server.oauth_utils import (
@@ -4149,9 +4150,8 @@ class MCPRequestHandler:
         from litellm.proxy.auth.auth_checks import get_user_object
         from litellm.proxy.proxy_server import user_api_key_cache
 
-        cache_key: Final = user_object_permission_id_cache_key(user_id)
         try:
-            cached: Final[object] = None if check_db_only else await user_api_key_cache.async_get_cache(key=cache_key)
+            cached: Final = None if check_db_only else await get_user_permission_link(user_api_key_cache, user_id)
             if cached == USER_NO_MCP_PERMISSION_SENTINEL:
                 return None
             if isinstance(cached, str) and cached:
@@ -4165,9 +4165,10 @@ class MCPRequestHandler:
             )
             linked: Final[object] = getattr(user_row, "object_permission_id", None) if user_row is not None else None
             object_permission_id: Final = linked if isinstance(linked, str) and linked else None
-            await user_api_key_cache.async_set_cache(
-                key=cache_key,
-                value=object_permission_id or USER_NO_MCP_PERMISSION_SENTINEL,
+            await fill_user_permission_link(
+                user_api_key_cache,
+                user_id,
+                object_permission_id,
                 ttl=get_management_object_ttl(user_api_key_cache),
             )
             return object_permission_id
