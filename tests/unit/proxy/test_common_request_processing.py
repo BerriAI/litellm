@@ -40,7 +40,14 @@ from litellm.types.router import (
     RouterRateLimitError,
     RouterRateLimitErrorBasic,
 )
-from litellm.types.utils import CachingDetails, Delta, ModelResponseStream, StreamingChoices
+from litellm.types.utils import (
+    CachingDetails,
+    CallTypesLiteral,
+    Delta,
+    GenericGuardrailAPIInputs,
+    ModelResponseStream,
+    StreamingChoices,
+)
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_LITELLM_CALL_ID_LENGTH,
@@ -12854,7 +12861,13 @@ class _CustomerTextGuardrail(CustomGuardrail):
         self.run_in_parallel = run_in_parallel
         self.calls = 0
 
-    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
         self.calls += 1
         return inputs
 
@@ -12868,7 +12881,9 @@ class _BuiltInContentCheck(CustomLogger):
         super().__init__()
         self.seen: Final[list[str]] = []
 
-    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: ProxyUserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
+    ) -> dict:
         self.seen.append(json.dumps(data.get("messages")))
         return data
 
@@ -13362,7 +13377,9 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("customer_guardrail", [_CustomerRoutingGuardrail, _InheritedCustomerGuardrail])
-    async def test_customer_guardrail_can_still_rename_a_virtual_model(self, monkeypatch, customer_guardrail):
+    async def test_customer_guardrail_can_still_rename_a_virtual_model(
+        self, monkeypatch: pytest.MonkeyPatch, customer_guardrail: type[_CustomerRoutingGuardrail]
+    ):
         guardrail: Final = _VendorGuardrail()
         customer: Final = customer_guardrail()
 
@@ -13377,7 +13394,10 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
     )
     @pytest.mark.parametrize("run_in_parallel", [False, True])
     async def test_customer_guardrail_still_runs_for_an_unknown_model(
-        self, monkeypatch, customer_guardrail, run_in_parallel
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        customer_guardrail: type[_CustomerRoutingGuardrail] | type[_CustomerTextGuardrail],
+        run_in_parallel: bool,
     ):
         customer: Final = customer_guardrail(run_in_parallel=run_in_parallel)
 
