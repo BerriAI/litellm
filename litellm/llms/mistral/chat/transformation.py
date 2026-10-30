@@ -63,6 +63,23 @@ def _is_json_array(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: a de
     return isinstance(value, list)
 
 
+def _with_mistral_file_id(block: Mapping[str, object]) -> Mapping[str, object]:
+    match block:
+        case {"type": "file", "file": {"file_id": file_id}} if file_id:
+            return {**{key: value for key, value in block.items() if key != "file"}, "file_id": file_id}
+        case _:
+            return block
+
+
+def _with_mistral_file_ids(message: AllMessageValues) -> AllMessageValues:
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return message
+    return cast(  # cast-ok: dict spread keeps message shape
+        AllMessageValues, {**message, "content": [_with_mistral_file_id(block) for block in content]}
+    )
+
+
 class MistralConfig(OpenAIGPTConfig):
     """
     Reference: https://docs.mistral.ai/api/
@@ -363,20 +380,7 @@ class MistralConfig(OpenAIGPTConfig):
         """
         Mistral API supports only 'file_id' in message content with type 'file'.
         """
-        for m in messages:
-            _content_block = m.get("content")
-            if _content_block and isinstance(_content_block, list):
-                if any(c.get("type") == "file" for c in _content_block):
-                    # If file content is present, we get file_id from 'file' attribute of content block
-                    # then replace 'file' with 'file_id' and assign the value of 'file_id' attribute to it.
-                    file_contents = [c for c in _content_block if c.get("type") == "file"]
-                    for file_content in file_contents:
-                        file_id = file_content.get("file", {}).get("file_id")
-                        if file_id:
-                            # Replace 'file' with 'file_id'
-                            file_content["file_id"] = file_id  # pyright: ignore[reportGeneralTypeIssues]  # legacy in-place rewrite of the block shape
-                            file_content.pop("file", None)
-        return messages
+        return [_with_mistral_file_ids(message) for message in messages]
 
     def _add_reasoning_system_prompt_if_needed(
         self, messages: list[AllMessageValues], optional_params: dict

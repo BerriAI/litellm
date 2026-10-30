@@ -24,6 +24,7 @@ from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
+from litellm.types.llms.openai import AllMessageValues
 
 
 class TestOpenAIGPTConfig:
@@ -1376,16 +1377,39 @@ async def test_codestral_file_request_still_works_after_an_openai_config_is_buil
     }
 
 
+_PDF_URL: Final = "https://files.example.test/off-event-loop.pdf"
+_PDF_URL_PART: Final = {"type": "file", "file": {"file_id": _PDF_URL}}
+
+
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param([{"role": "user", "content": [_PDF_URL_PART]}], id="user_message"),
+        pytest.param(
+            [
+                {"role": "user", "content": "read the report"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "fetch_report", "arguments": "{}"}}
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": [_PDF_URL_PART]},
+            ],
+            id="tool_result",
+        ),
+    ],
+)
 async def test_async_transform_request_downloads_pdf_urls_without_blocking_the_event_loop(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, messages: list[AllMessageValues]
 ) -> None:
     monkeypatch.setattr(litellm, "user_url_validation", False)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    pdf_url: Final = "https://files.example.test/off-event-loop.pdf"
     pdf_content: Final = b"%PDF-1.7\nmock-pdf"
-    in_memory_cache.delete_cache(pdf_url)
+    in_memory_cache.delete_cache(_PDF_URL)
     event_loop_thread: Final = threading.current_thread()
     event_loop_ran: Final = threading.Event()
     loop_ran_during_download: Final[list[bool]] = []
@@ -1403,7 +1427,7 @@ async def test_async_transform_request_downloads_pdf_urls_without_blocking_the_e
         loop_ran_during_download.append(event_loop_ran.wait(timeout=5))
         return pdf_response()
 
-    respx_mock.get(pdf_url).mock(side_effect=serve_pdf)
+    respx_mock.get(_PDF_URL).mock(side_effect=serve_pdf)
 
     async def mark_event_loop_ran() -> None:
         event_loop_ran.set()
@@ -1411,7 +1435,7 @@ async def test_async_transform_request_downloads_pdf_urls_without_blocking_the_e
     request, _ = await asyncio.gather(
         OpenAIGPTConfig().async_transform_request(
             model="gpt-4.1",
-            messages=[{"role": "user", "content": [{"type": "file", "file": {"file_id": pdf_url}}]}],
+            messages=copy.deepcopy(messages),
             optional_params={},
             litellm_params={"custom_llm_provider": "openai"},
             headers={},
@@ -1420,7 +1444,7 @@ async def test_async_transform_request_downloads_pdf_urls_without_blocking_the_e
     )
 
     assert loop_ran_during_download == [True]
-    assert request["messages"][0]["content"][0]["file"] == {
+    assert request["messages"][-1]["content"][-1]["file"] == {
         "file_data": f"data:application/pdf;base64,{base64.b64encode(pdf_content).decode('utf-8')}",
         "filename": "my_file.pdf",
     }

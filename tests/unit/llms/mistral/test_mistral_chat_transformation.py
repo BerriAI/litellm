@@ -799,6 +799,34 @@ class TestMistralFileHandling:
         assert result[0]["content"][2]["file_id"] == "file-67890"  # type: ignore
 
 
+@pytest.mark.asyncio
+async def test_mistral_sends_an_uploaded_file_again_when_the_same_messages_are_retried():
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Summarize the attached file."},
+                    {"type": "file", "file": {"file_id": "file-12345"}},
+                ],
+            }
+        ],
+    )
+    config: Final = MistralConfig()
+
+    requests: Final = [
+        await config.async_transform_request(
+            model="codestral-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+        )
+        for _ in range(2)
+    ]
+
+    assert [request["messages"][0]["content"][1] for request in requests] == [
+        {"type": "file", "file_id": "file-12345"}
+    ] * 2
+
+
 class TestMistralStripsOutputOnlyFields:
     """Mistral rejects unknown input fields with a 422 ``extra_forbidden``.
 

@@ -4,8 +4,11 @@ Support for gpt model family
 
 import json
 import os
-from asyncio import to_thread
+from asyncio import get_running_loop
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
+from functools import partial
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
@@ -81,6 +84,7 @@ else:
 
 
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
+_PDF_URL_TRANSFORM_EXECUTOR: Final = ThreadPoolExecutor(thread_name_prefix="litellm-pdf-url-transform")
 
 
 def targets_openai_hosted_endpoint(custom_llm_provider: str | None, api_base: str | None) -> bool:
@@ -140,7 +144,7 @@ def _prompt_cache_options(optional_params: Mapping[str, object]) -> object | Non
 
 def _attached_files(message: AllMessageValues) -> Iterator[ChatCompletionFileObjectFile]:
     match message:
-        case {"role": "user", "content": list() as content}:
+        case {"role": "user" | "tool", "content": list() as content}:
             return (part["file"] for part in content if part.get("type") == "file" and "file" in part)
         case _:
             return iter(())
@@ -653,7 +657,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     ) -> dict:
         if not self._downloads_pdf_url(messages):
             return self.transform_request(model, messages, optional_params, litellm_params, headers)
-        return await to_thread(self.transform_request, model, messages, optional_params, litellm_params, headers)
+        transform: Final = partial(self.transform_request, model, messages, optional_params, litellm_params, headers)
+        return await get_running_loop().run_in_executor(_PDF_URL_TRANSFORM_EXECUTOR, copy_context().run, transform)
 
     def _downloads_pdf_url(self, messages: Sequence[AllMessageValues]) -> bool:
         return any(self.contains_pdf_url(file) for file in chain.from_iterable(map(_attached_files, messages)))
