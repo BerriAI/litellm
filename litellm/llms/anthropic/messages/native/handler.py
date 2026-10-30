@@ -115,8 +115,22 @@ def _resolve_requested_provider(
     requested_provider: Final = model.partition("/")[0]
     if custom_llm_provider in (None, requested_provider) or requested_provider not in LlmProvidersSet:
         return resolved
-    own: Final = litellm.get_llm_provider(model=model, api_base=litellm_params.api_base, api_key=litellm_params.api_key)
-    return own if own[1] == custom_llm_provider else resolved
+    own: Final = _resolve_by_model_prefix(model, litellm_params)
+    return own if own is not None and own[1] == custom_llm_provider else resolved
+
+
+def _resolve_by_model_prefix(
+    model: str, litellm_params: GenericLiteLLMParams
+) -> tuple[str, str, str | None, str | None] | None:
+    try:
+        return litellm.get_llm_provider(
+            model=model,
+            api_base=litellm_params.api_base,
+            api_key=litellm_params.api_key,
+            litellm_params=litellm_params.model_copy(update={"custom_llm_provider": None}),
+        )
+    except litellm.BadRequestError:
+        return None
 
 
 def _bridge_target(requested: _BridgeTarget, resolved: _BridgeTarget, custom_llm_provider: str) -> _BridgeTarget:
@@ -125,7 +139,7 @@ def _bridge_target(requested: _BridgeTarget, resolved: _BridgeTarget, custom_llm
         return requested
     return _BridgeTarget(
         model=f"{custom_llm_provider}/{resolved.model}",
-        api_key=resolved.api_key,
+        api_key=requested.api_key or resolved.api_key,
         api_base=resolved.api_base,
     )
 
@@ -684,6 +698,12 @@ def anthropic_messages_handler(
             mock_response=litellm_params.mock_response,
         )
 
+    bridge: Final = _bridge_target(
+        _BridgeTarget(model=original_model, api_key=api_key, api_base=api_base),
+        _BridgeTarget(model=model, api_key=dynamic_api_key, api_base=dynamic_api_base),
+        custom_llm_provider,
+    )
+
     # Expand litellm_proxy MCP references through the MCP gateway before dispatch, so every
     # downstream path (native passthrough and both bridges) gets real tools rather than a
     # reference the provider cannot resolve. Popped from kwargs so it never reaches the provider.
@@ -710,8 +730,8 @@ def anthropic_messages_handler(
             top_k=top_k,
             top_p=top_p,
             container=container,
-            api_key=api_key,
-            api_base=api_base,
+            api_key=bridge.api_key,
+            api_base=bridge.api_base,
             client=client,
             custom_llm_provider=custom_llm_provider,
             **kwargs,
@@ -721,11 +741,6 @@ def anthropic_messages_handler(
         model, custom_llm_provider, kwargs.get("model_info"), api_base
     )
     if anthropic_messages_provider_config is None:
-        bridge: Final = _bridge_target(
-            _BridgeTarget(model=original_model, api_key=api_key, api_base=api_base),
-            _BridgeTarget(model=model, api_key=dynamic_api_key, api_base=dynamic_api_base),
-            custom_llm_provider,
-        )
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
         if kwargs.get("compaction") is None and _should_route_to_responses_api(
             custom_llm_provider, original_model, model, kwargs.get("model_info"), stop_sequences=stop_sequences

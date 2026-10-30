@@ -1204,7 +1204,8 @@ async def test_bridged_messages_keep_the_region_of_a_regional_bedrock_mantle_mod
 
 
 @pytest.mark.asyncio
-async def test_bridged_messages_keep_the_callers_explicit_provider_over_the_model_prefix(monkeypatch):
+@pytest.mark.parametrize("model", ["anthropic/claude-sonnet-5-5", "ragflow/gpt-4o"])
+async def test_bridged_messages_keep_the_callers_explicit_provider_over_the_model_prefix(model, monkeypatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
 
@@ -1214,14 +1215,56 @@ async def test_bridged_messages_keep_the_callers_explicit_provider_over_the_mode
             await litellm.anthropic.messages.acreate(
                 max_tokens=100,
                 messages=[{"role": "user", "content": "ping"}],
-                model="anthropic/claude-sonnet-5-5",
+                model=model,
                 custom_llm_provider="openai",
                 api_base="https://gateway.example.com/v1",
                 api_key="test-api-key",
             )
 
     assert {call.request.url.host for call in upstream.calls} == {"gateway.example.com"}
-    assert {json.loads(call.request.content)["model"] for call in upstream.calls} == {"anthropic/claude-sonnet-5-5"}
+    assert {json.loads(call.request.content)["model"] for call in upstream.calls} == {model}
+
+
+@pytest.mark.asyncio
+async def test_bridged_messages_send_the_deployments_key_for_azure_models_served_as_openai(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "server-openai-key")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises(openai.APIError):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "ping"}],
+                model="azure/mistral-large-latest",
+                api_base="https://example-resource.services.ai.azure.com/models",
+                api_key="deployment-key",
+            )
+
+    assert {call.request.headers["authorization"] for call in upstream.calls} == {"Bearer deployment-key"}
+
+
+@pytest.mark.asyncio
+async def test_bridged_messages_still_route_through_the_litellm_proxy_when_asked(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://proxy.example.com")
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "proxy-key")
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://example-resource.cognitiveservices.azure.com")
+    monkeypatch.setenv("AZURE_AI_API_KEY", "azure-env-key")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises(openai.APIError):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "ping"}],
+                model="azure_ai/gpt-6-luna",
+                use_litellm_proxy=True,
+            )
+
+    assert {call.request.url.host for call in upstream.calls} == {"proxy.example.com"}
 
 
 @pytest.mark.asyncio
