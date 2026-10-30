@@ -4805,7 +4805,11 @@ _NOT_AN_IMAGE_REQUEST: Final[Mapping[str, object]] = MappingProxyType(
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("cloudflare_account")
-@pytest.mark.parametrize("state", ("", [], {}), ids=("string", "list", "object"))
+@pytest.mark.parametrize(
+    "state",
+    ("", [], {}, "  ", [""], {"a": ""}, {"a": [" "]}),
+    ids=("string", "list", "object", "blank", "list-of-empty", "object-of-empty", "nested-blank"),
+)
 async def test_an_empty_state_with_only_a_dropped_image_is_refused_when_the_model_always_took_images(
     state: object, respx_mock: respx.MockRouter
 ) -> None:
@@ -4815,6 +4819,75 @@ async def test_an_empty_state_with_only_a_dropped_image_is_refused_when_the_mode
         await litellm.asystemone(model="cloudflare/clef", state=state, **_NOT_AN_IMAGE_REQUEST)
 
     assert route.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_account")
+@pytest.mark.parametrize("state", ("a", ["a"], {"a": "b"}, {"a": 0}, [False]), ids=str)
+async def test_a_state_with_something_in_it_still_reaches_the_model_after_its_only_image_is_dropped(
+    state: object, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+
+    await litellm.asystemone(model="cloudflare/clef", state=state, **_NOT_AN_IMAGE_REQUEST)
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["state"] == state
+    assert sent.get("images", []) == []
+
+
+_NOT_AN_IMAGE_DATA_URL: Final = f"data:image/png;base64,{_NOT_AN_IMAGE_BASE64}"
+_DECISIONS_PREDICATE: Final[list[dict[str, str]]] = [{"type": "predicate", "name": "red", "instructions": "Is it red?"}]
+
+
+def _decisions_input_with_text_and_dropped_image(text: str) -> list[dict[str, object]]:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": text},
+                {"type": "input_image", "image_url": _NOT_AN_IMAGE_DATA_URL},
+            ],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_account")
+@pytest.mark.parametrize("text", ("", "  "), ids=("empty", "blank"))
+async def test_decisions_input_with_no_text_and_only_a_dropped_image_is_refused(
+    text: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError):
+        await litellm.adecisions(
+            model="cloudflare/clef",
+            input=_decisions_input_with_text_and_dropped_image(text),
+            questions=_DECISIONS_PREDICATE,
+            drop_params=True,
+        )
+
+    assert route.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_account")
+async def test_decisions_input_with_text_still_reaches_the_model_after_its_only_image_is_dropped(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+
+    await litellm.adecisions(
+        model="cloudflare/clef",
+        input=_decisions_input_with_text_and_dropped_image("Product photo"),
+        questions=_DECISIONS_PREDICATE,
+        drop_params=True,
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["state"] == "Product photo"
+    assert sent.get("images", []) == []
 
 
 @pytest.mark.asyncio

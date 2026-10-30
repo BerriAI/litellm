@@ -29,6 +29,7 @@ from litellm.llms.base_llm.decisions.transformation import (
     DecisionsResponseValidationError,
     image_media_type,
     image_param,
+    input_has_no_text,
     input_images,
     ir_to_systemone_response,
     remote_image_urls,
@@ -607,9 +608,8 @@ def _leaves_nothing_to_decide_on(call: DecisionsCall, kept_input: DecisionsIRSta
         not call.provider_config.images_in_state
         and not call.ir_request.audio
         and not call.ir_request.videos
-        and isinstance(kept_input, DecisionsIRState)
-        and not kept_input.images
-        and not kept_input.state
+        and not input_images(kept_input)
+        and input_has_no_text(kept_input)
     )
 
 

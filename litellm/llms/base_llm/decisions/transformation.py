@@ -9,7 +9,7 @@ from typing import Final, TypeAlias
 import httpx
 from pydantic import TypeAdapter, ValidationError
 from pydantic_core import ErrorDetails
-from typing_extensions import assert_never
+from typing_extensions import TypeIs, assert_never  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 import litellm
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -245,6 +245,28 @@ def _systemone_state(decision_input: DecisionsIRState | DecisionsIRMessages) -> 
             return "\n\n".join(chain.from_iterable(_message_texts(message) for message in decision_input.messages))
         case _:
             assert_never(decision_input)
+
+
+def _is_json_object(value: object) -> TypeIs[Mapping[str, object]]:  # guard-ok: JSON object keys are strings
+    return isinstance(value, Mapping)
+
+
+def _is_json_array(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: only the items are read
+    return isinstance(value, Sequence)
+
+
+def _holds_no_text(value: object) -> bool:
+    if isinstance(value, str):
+        return not value.strip()
+    if _is_json_object(value):
+        return all(map(_holds_no_text, value.values()))
+    if _is_json_array(value):
+        return all(map(_holds_no_text, value))
+    return False
+
+
+def input_has_no_text(decision_input: DecisionsIRState | DecisionsIRMessages) -> bool:
+    return _holds_no_text(_systemone_state(decision_input))
 
 
 def _media_type(content_type: str) -> str:
