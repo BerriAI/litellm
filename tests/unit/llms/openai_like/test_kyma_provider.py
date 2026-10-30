@@ -113,7 +113,11 @@ def test_kyma_chat_completion_request():
                 "created": 1_792_000_000,
                 "model": "qwen3.7-flash",
                 "choices": [
-                    {"index": 0, "message": {"role": "assistant", "content": "Hello from Kyma"}, "finish_reason": "stop"}
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hello from Kyma"},
+                        "finish_reason": "stop",
+                    }
                 ],
                 "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
             },
@@ -182,7 +186,10 @@ def test_kyma_response_is_billed_at_the_cost_kyma_reports(model: str):
     reported_cost: Final = 0.00721
     with respx.mock() as upstream:
         upstream.post(_CHAT_URL).respond(
-            200, json=_kyma_chat_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7, "cost": reported_cost})
+            200,
+            json=_kyma_chat_body(
+                {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7, "cost": reported_cost}
+            ),
         )
         response: Final = litellm.completion(model=model, messages=[{"role": "user", "content": "ping"}], api_key="k")
 
@@ -205,7 +212,6 @@ def test_deployment_pricing_overrides_the_cost_kyma_reports():
     assert response._hidden_params["response_cost"] == pytest.approx(4 * 0.001 + 3 * 0.002)
 
 
-
 def _catalog_price(model: str, prompt_tokens: int, completion_tokens: int) -> float:
     row: Final = _PRIMARY_PRICES[model]
     return prompt_tokens * row["input_cost_per_token"] + completion_tokens * row["output_cost_per_token"]
@@ -221,7 +227,9 @@ def test_unusable_cost_from_kyma_falls_back_to_the_catalog_price(reported_cost: 
             content=json.dumps(_kyma_chat_body(usage)).replace('"REPORTED_COST"', reported_cost),
             headers={"content-type": "application/json"},
         )
-        response: Final = litellm.completion(model="kyma/sonar", messages=[{"role": "user", "content": "ping"}], api_key="k")
+        response: Final = litellm.completion(
+            model="kyma/sonar", messages=[{"role": "user", "content": "ping"}], api_key="k"
+        )
 
     assert response._hidden_params["response_cost"] == pytest.approx(_catalog_price("kyma/sonar", 4, 3))
 
@@ -246,7 +254,10 @@ def test_interaction_on_kyma_is_billed_at_the_cost_kyma_reports():
     reported_cost: Final = 0.00721
     with respx.mock() as upstream:
         upstream.post(_CHAT_URL).respond(
-            200, json=_kyma_chat_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7, "cost": reported_cost})
+            200,
+            json=_kyma_chat_body(
+                {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7, "cost": reported_cost}
+            ),
         )
         interaction: Final = litellm.interactions.create(model="kyma/qwen3.7-flash", input="ping", api_key="k")
 
@@ -285,9 +296,14 @@ def test_sdk_completion_cost_prices_kyma_at_the_cost_kyma_reports():
     reported_cost: Final = 0.00721
     with respx.mock() as upstream:
         upstream.post(_CHAT_URL).respond(
-            200, json=_kyma_chat_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7, "cost": reported_cost})
+            200,
+            json=_kyma_chat_body(
+                {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7, "cost": reported_cost}
+            ),
         )
-        response: Final = litellm.completion(model="kyma/sonar", messages=[{"role": "user", "content": "ping"}], api_key="k")
+        response: Final = litellm.completion(
+            model="kyma/sonar", messages=[{"role": "user", "content": "ping"}], api_key="k"
+        )
 
     assert litellm.completion_cost(completion_response=response) == pytest.approx(reported_cost)
 
@@ -295,7 +311,9 @@ def test_sdk_completion_cost_prices_kyma_at_the_cost_kyma_reports():
 def _kyma_sdk_response(usage: dict[str, float]) -> litellm.ModelResponse:
     with respx.mock() as upstream:
         upstream.post(_CHAT_URL).respond(200, json=_kyma_chat_body(usage))
-        response: Final = litellm.completion(model="kyma/sonar", messages=[{"role": "user", "content": "ping"}], api_key="k")
+        response: Final = litellm.completion(
+            model="kyma/sonar", messages=[{"role": "user", "content": "ping"}], api_key="k"
+        )
     assert isinstance(response, litellm.ModelResponse)
     return response
 
@@ -311,7 +329,9 @@ def test_sdk_completion_cost_uses_the_callers_token_prices_over_the_cost_kyma_re
 
     assert litellm.completion_cost(
         completion_response=with_reported_cost, custom_cost_per_token=caller_prices
-    ) == pytest.approx(litellm.completion_cost(completion_response=without_reported_cost, custom_cost_per_token=caller_prices))
+    ) == pytest.approx(
+        litellm.completion_cost(completion_response=without_reported_cost, custom_cost_per_token=caller_prices)
+    )
     assert litellm.completion_cost(
         completion_response=with_reported_cost, custom_cost_per_token=caller_prices
     ) != pytest.approx(_KYMA_REPORTED_COST)
@@ -337,7 +357,9 @@ def test_cost_kyma_reports_takes_the_configured_discount_and_margin(monkeypatch:
         upstream.post(_CHAT_URL).respond(
             200, json=_kyma_chat_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7, "cost": 0.008})
         )
-        response: Final = litellm.completion(model="kyma/sonar", messages=[{"role": "user", "content": "ping"}], api_key="k")
+        response: Final = litellm.completion(
+            model="kyma/sonar", messages=[{"role": "user", "content": "ping"}], api_key="k"
+        )
 
     assert response._hidden_params["response_cost"] == pytest.approx(0.008 * adjustment)
 
@@ -348,7 +370,9 @@ def _kyma_stream_chunk(content: str, finish_reason: str | None = None) -> ModelR
         created=1_792_000_000,
         model="sonar",
         object="chat.completion.chunk",
-        choices=[StreamingChoices(finish_reason=finish_reason, index=0, delta=Delta(content=content, role="assistant"))],
+        choices=[
+            StreamingChoices(finish_reason=finish_reason, index=0, delta=Delta(content=content, role="assistant"))
+        ],
     )
 
 
@@ -410,8 +434,12 @@ def test_cost_headers_show_the_discount_and_margin_taken_from_the_cost_kyma_repo
     assert float(headers["x-litellm-response-cost-discount-amount"] or "nan") == pytest.approx(0.004)
     assert float(headers["x-litellm-response-cost-margin-amount"] or "nan") == pytest.approx(0.0004)
     assert float(headers["x-litellm-response-cost"] or "nan") == pytest.approx(0.0044)
-    assert float(headers["x-litellm-response-cost-input"] or "nan") == 0.0
-    assert float(headers["x-litellm-response-cost-output"] or "nan") == pytest.approx(0.0044)
+    row: Final = litellm.get_model_info("sonar", custom_llm_provider="kyma")
+    priced_input: Final = 4 * row["input_cost_per_token"]
+    priced_output: Final = 3 * row["output_cost_per_token"]
+    input_share: Final = priced_input / (priced_input + priced_output)
+    assert float(headers["x-litellm-response-cost-input"] or "nan") == pytest.approx(0.0044 * input_share)
+    assert float(headers["x-litellm-response-cost-output"] or "nan") == pytest.approx(0.0044 * (1 - input_share))
 
 
 @pytest.mark.parametrize("thinking", ({"type": "enabled", "budget_tokens": 1024}, {"type": "adaptive"}))
@@ -432,13 +460,16 @@ def test_messages_thinking_on_a_kyma_claude_model_is_sent_as_reasoning_effort(th
     assert "thinking" not in sent
     assert sent["reasoning_effort"] in ("low", "medium", "high")
 
+
 def test_kyma_model_missing_from_the_catalog_keeps_its_tools():
     tools: Final = [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
     with respx.mock() as upstream:
         route: Final = upstream.post(_CHAT_URL).respond(
             200, json=_kyma_chat_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7})
         )
-        litellm.completion(model=_UNLISTED_MODEL, messages=[{"role": "user", "content": "ping"}], api_key="k", tools=tools)
+        litellm.completion(
+            model=_UNLISTED_MODEL, messages=[{"role": "user", "content": "ping"}], api_key="k", tools=tools
+        )
 
     assert json.loads(route.calls.last.request.content)["tools"] == tools
 
