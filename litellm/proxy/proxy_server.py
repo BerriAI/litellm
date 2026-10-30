@@ -12408,6 +12408,7 @@ async def model_list(
     from litellm.proxy.utils import (
         create_model_info_response,
         get_available_models_for_user,
+        resolve_model_provider_and_created_at,
     )
     from litellm.types.proxy.model_listing import ModelInfoResponse
 
@@ -12517,9 +12518,11 @@ async def model_list(
             TeamModelNameTranslator.listing_entries(all_models, llm_router, settings), user_api_key_dict
         )
         for response_id, lookup_id in admin_entries:
+            provider, created = resolve_model_provider_and_created_at(llm_router, lookup_id)
             model_info = create_model_info_response(
                 model_id=lookup_id,
-                provider="openai",
+                provider=provider,
+                created=created,
                 include_metadata=include_metadata or False,
                 fallback_type=fallback_type,
                 llm_router=llm_router,
@@ -12598,9 +12601,11 @@ async def model_list(
     )
     labels: Final = label_entries(listed_entries, entries)
     for response_id, lookup_id in entries:
+        provider, created = resolve_model_provider_and_created_at(llm_router, lookup_id)
         model_info = create_model_info_response(
             model_id=lookup_id,
-            provider="openai",
+            provider=provider,
+            created=created,
             include_metadata=include_metadata or False,
             fallback_type=fallback_type,
             llm_router=llm_router,
@@ -12676,6 +12681,7 @@ async def model_info(
     from litellm.proxy.utils import (
         create_model_info_response,
         get_available_models_for_user,
+        provider_and_created_at_for_deployment,
         validate_model_access,
     )
 
@@ -12762,8 +12768,7 @@ async def model_info(
             detail=f"Model '{model_id}' not found in router configuration",
         )
 
-    # Use the actual litellm model from the deployment to get provider info
-    _, provider, _, _ = litellm.get_llm_provider(model=deployment.litellm_params.model)
+    provider, created = provider_and_created_at_for_deployment(deployment)
 
     response: Final = create_model_info_response(
         model_id=resolved_model_id,
@@ -12771,6 +12776,7 @@ async def model_info(
         include_metadata=False,
         fallback_type=None,
         llm_router=llm_router,
+        created=created,
     )
     response_id: Final = model_id if aliased_model_id else internal_to_public.get(resolved_model_id, model_id)
     return {**response, "id": response_id}

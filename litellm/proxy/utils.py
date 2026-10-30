@@ -313,6 +313,7 @@ if TYPE_CHECKING:
     from litellm.repositories.prisma_protocols import TableActions
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
+    from litellm.types.router import Deployment
 
     Span = _Span | object
 else:
@@ -9786,12 +9787,34 @@ def _group_token_limit(candidate_sets: tuple[tuple[ModelInfo, ...], ...], field:
     return max(limits) if limits else None
 
 
+def provider_and_created_at_for_deployment(deployment: "Deployment") -> tuple[str, int | None]:
+    """
+    The (owned_by, created) pair for a deployment, with ``created`` None when it has no real
+    timestamp (``created_at`` is only populated for DB models on Enterprise). Callers fall
+    back to DEFAULT_MODEL_CREATED_AT_TIME.
+    """
+    _, provider, _, _ = litellm.get_llm_provider(model=deployment.litellm_params.model)
+    created_at: Final = deployment.model_info.created_at
+    return provider, int(created_at.timestamp()) if created_at is not None else None
+
+
+def resolve_model_provider_and_created_at(llm_router: Optional["Router"], model_id: str) -> tuple[str, int | None]:
+    """Like ``provider_and_created_at_for_deployment`` for a listed model group, ("openai", None) when unbacked."""
+    if llm_router is None:
+        return "openai", None
+    deployment: Final = llm_router.get_deployment_by_model_group_name(llm_router.routable_model_group(model_id))
+    if deployment is None:
+        return "openai", None
+    return provider_and_created_at_for_deployment(deployment)
+
+
 def create_model_info_response(
     model_id: str,
     provider: str,
     include_metadata: bool = False,
     fallback_type: str | None = None,
     llm_router: Optional["Router"] = None,
+    created: int | None = None,
     get_model_info: Callable[[str], ModelInfo] = litellm.get_model_info,
 ) -> ModelInfoResponse:
     """
@@ -9806,7 +9829,7 @@ def create_model_info_response(
     base: Final[ModelInfoResponse] = {
         "id": model_id,
         "object": "model",
-        "created": DEFAULT_MODEL_CREATED_AT_TIME,
+        "created": created if created is not None else DEFAULT_MODEL_CREATED_AT_TIME,
         "owned_by": provider,
     }
 

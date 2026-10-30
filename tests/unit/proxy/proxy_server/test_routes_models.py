@@ -742,3 +742,30 @@ async def test_dashboard_lists_not_asking_for_allowlist_names_offer_no_typesafe_
     )
 
     assert {model["id"] for model in response["data"]}.isdisjoint({"typesafe/*", *_priced_jev_models()})
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+def test_get_models_reports_real_provider_per_model(client, auth_as, monkeypatch, path):
+    router: Final = Router(
+        model_list=[
+            {"model_name": "gpt-4", "litellm_params": {"model": "gpt-4", "api_key": "sk-test"}},
+            {
+                "model_name": "claude-sonnet",
+                "litellm_params": {"model": "anthropic/claude-3-5-sonnet-latest", "api_key": "sk-test"},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+
+    async def _fake_get_available_models_for_user(**kwargs):
+        return ["gpt-4", "claude-sonnet"]
+
+    monkeypatch.setattr(proxy_utils, "get_available_models_for_user", _fake_get_available_models_for_user)
+
+    with auth_as():
+        response = client.get(path)
+
+    assert response.status_code == 200
+    owned_by = {m["id"]: m["owned_by"] for m in response.json()["data"]}
+    assert owned_by == {"gpt-4": "openai", "claude-sonnet": "anthropic"}
