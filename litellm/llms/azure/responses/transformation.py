@@ -110,7 +110,8 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params)
 
     def get_stripped_model_name(self, model: str) -> str:
-        return model.replace("responses/", "").replace("o_series/", "").replace("azure_ai/", "")
+        stripped: Final = model.replace("responses/", "").replace("o_series/", "").replace("azure_ai/", "")
+        return stripped.removeprefix(AzureOpenAIGPT5Config.GPT5_SERIES_ROUTE)
 
     def _handle_reasoning_item(self, item: dict[str, Any]) -> Mapping[str, object]:
         """
