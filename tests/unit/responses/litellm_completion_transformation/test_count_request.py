@@ -95,8 +95,8 @@ async def test_claude_count_request_counts_additional_tools_input_items_as_tools
 
 
 @pytest.mark.asyncio
-async def test_claude_count_request_counts_a_tool_list_repeated_on_every_turn_once() -> None:
-    policy: Final = DropPolicy(drop_params=False, additional_drop_params=frozenset())
+async def test_claude_count_request_counts_a_tool_list_repeated_on_every_turn_once_under_drop_params() -> None:
+    policy: Final = DropPolicy(drop_params=True, additional_drop_params=frozenset())
     tool_list: Final[dict[str, JsonValue]] = {"type": "additional_tools", "tools": [_WEATHER_TOOL]}
 
     repeated: Final = await _claude_count(
