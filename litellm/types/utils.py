@@ -20,6 +20,7 @@ from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import (
     FileTypes as FileTypes,
 )
+from openai.types.batch_usage import BatchUsage, InputTokensDetails, OutputTokensDetails
 from openai.types.chat.chat_completion import ChatCompletion as ChatCompletion
 from openai.types.completion_usage import (
     CompletionTokensDetails,
@@ -44,6 +45,7 @@ from pydantic import (
     JsonValue,
     PrivateAttr,
     SkipValidation,
+    ValidationError,
     field_serializer,
     field_validator,
 )
@@ -212,6 +214,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_parallel_function_calling: bool | None
     supports_web_search: bool | None
     supports_reasoning: bool | None
+    supports_sampling_params: ReadOnly[bool | None]
     supports_adaptive_thinking: bool | None
     supports_legacy_thinking: ReadOnly[bool | None]
     thinking_always_on: ReadOnly[bool | None]
@@ -224,6 +227,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_xhigh_reasoning_effort: bool | None
     supports_max_reasoning_effort: bool | None
     reasoning_effort_levels: ReadOnly[Sequence[str] | None]
+    reasoning_modes: ReadOnly[Sequence[str] | None]
+    reasoning_contexts: ReadOnly[Sequence[str] | None]
     default_reasoning_effort: ReadOnly[Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None]
     supports_output_config: bool | None
     supports_image_size: bool | None
@@ -245,6 +250,12 @@ class SearchContextCostPerQuery(TypedDict, total=False):
     search_context_size_high: float
 
 
+class SearchFreeRequests(TypedDict):
+    count: ReadOnly[int]
+    period: ReadOnly[Literal["day", "month"]]
+    shared_group: ReadOnly[str]
+
+
 class AgenticLoopParams(TypedDict, total=False):
     """
     Parameters passed to agentic loop hooks (e.g., WebSearch interception).
@@ -254,10 +265,10 @@ class AgenticLoopParams(TypedDict, total=False):
     """
 
     model: str
-    """The model string with provider prefix (e.g., 'bedrock/invoke/...')"""
+    """The model as the caller requested it, usually with its provider prefix (e.g., 'bedrock/invoke/...')"""
 
     custom_llm_provider: str
-    """The LLM provider name (e.g., 'bedrock', 'anthropic')"""
+    """The LLM provider name (e.g., 'bedrock', 'anthropic'), when the recorder resolved one"""
 
 
 class OffPeakWindow(TypedDict, total=False):
@@ -315,11 +326,23 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_above_272k_tokens_flex: float | None
     cache_creation_input_token_cost_above_272k_tokens_ultrafast: ReadOnly[float | None]
     cache_creation_input_token_cost_above_1hr: float | None
+    cache_creation_input_token_cost_above_12hr: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_flex: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_priority: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_ultrafast: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast: ReadOnly[float | None]
     cache_creation_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_creation_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_creation_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost: float | None
     cache_read_input_audio_token_cost: ReadOnly[float | None]
+    cache_read_input_audio_token_cost_flex: ReadOnly[float | None]
+    cache_read_input_audio_token_cost_priority: ReadOnly[float | None]
     cache_read_input_image_token_cost: ReadOnly[float | None]
     explicit_cache_read_input_token_cost: ReadOnly[float | None]
     cache_read_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
@@ -335,6 +358,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_272k_tokens_ultrafast: ReadOnly[float | None]
     cache_read_input_token_cost_above_512k_tokens: float | None
     cache_read_input_token_cost_batches: ReadOnly[float | None]
+    cache_read_input_audio_token_cost_batches: ReadOnly[float | None]
     cache_read_input_token_cost_above_200k_tokens_batches: ReadOnly[float | None]
     cache_read_input_token_cost_above_100k_tokens_batches: ReadOnly[float | None]
     cache_read_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
@@ -348,6 +372,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     off_peak_pricing: ReadOnly[OffPeakPricing | None]  # time-windowed off-peak rates
     input_cost_per_character: float | None  # only for vertex ai models
     input_cost_per_audio_token: float | None
+    input_cost_per_audio_token_flex: ReadOnly[float | None]
+    input_cost_per_audio_token_priority: ReadOnly[float | None]
     input_cost_per_token_above_128k_tokens: float | None  # only for vertex ai models
     input_cost_per_token_above_200k_tokens: float | None  # only for vertex ai gemini-2.5-pro models
     input_cost_per_token_above_100k_tokens: ReadOnly[float | None]
@@ -436,6 +462,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     web_search_billing_unit: (
         Literal["per_query", "per_prompt"] | None
     )  # "per_query" (Gemini 3.x) or "per_prompt" (Gemini 2.x)
+    search_free_requests: ReadOnly[SearchFreeRequests | None]
     google_maps_grounding_cost_per_query: ReadOnly[float | None]
     citation_cost_per_token: float | None  # Cost per citation token for Perplexity
     tiered_pricing: list[dict[str, Any]] | None  # Tiered pricing structure for models like Dashscope
@@ -451,6 +478,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "responses",
             "decisions",
             "evaluation",
+            "extraction",
             "ocr",
             "realtime",
         ]
@@ -511,6 +539,8 @@ class CallTypes(str, Enum):
     adecisions = "adecisions"
     systemone = "systemone"
     asystemone = "asystemone"
+    extraction = "extraction"
+    aextraction = "aextraction"
     arealtime = "_arealtime"
     aresponses_websocket = "_aresponses_websocket"
     create_batch = "create_batch"
@@ -701,6 +731,8 @@ CallTypesLiteral = Literal[
     "adecisions",
     "systemone",
     "asystemone",
+    "extraction",
+    "aextraction",
     "_arealtime",
     "_aresponses_websocket",
     "create_batch",
@@ -814,6 +846,8 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     "/v1/decisions": [CallTypes.adecisions, CallTypes.decisions],
     "/systemone": [CallTypes.asystemone, CallTypes.systemone],
     "/v1/systemone": [CallTypes.asystemone, CallTypes.systemone],
+    "/extraction": [CallTypes.aextraction, CallTypes.extraction],
+    "/v1/extraction": [CallTypes.aextraction, CallTypes.extraction],
     # Batches
     "/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
     "/v1/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
@@ -1789,7 +1823,9 @@ class CompletionTokensDetailsWrapper(CompletionTokensDetails):  # wrapper for ol
 
 class CacheCreationTokenDetails(LiteLLMBaseModel):
     ephemeral_5m_input_tokens: int | None = None
+    ephemeral_30m_input_tokens: int | None = None
     ephemeral_1h_input_tokens: int | None = None
+    ephemeral_12h_input_tokens: int | None = None
 
 
 class PromptTokensDetailsWrapper(
@@ -2060,6 +2096,10 @@ class Usage(SafeAttributeModel, CompletionUsage):
     def __setitem__(self, key, value) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+
+
+class UnreportedUsage(Usage):
+    pass
 
 
 class StreamingChoices(OpenAIObject):
@@ -2840,7 +2880,7 @@ class TranscriptionUsageTokensObject(LiteLLMBaseModel):
     input_tokens: int
     output_tokens: int
     total_tokens: int
-    input_token_details: TranscriptionUsageInputTokenDetailsObject
+    input_token_details: TranscriptionUsageInputTokenDetailsObject | None = None
 
 
 class TranscriptionResponse(OpenAIObject):
@@ -3336,6 +3376,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     team_alias: str | None
     team_id: str | None
     used_client_oauth_token: ReadOnly[bool | None]
+    is_silent_experiment: ReadOnly[NotRequired[bool]]
 
 
 class AzureSpillover(TypedDict):
@@ -3753,6 +3794,7 @@ class ClassifierAudit(TypedDict, total=False):
 
 
 class StandardLoggingPayload(ClassifierAudit):
+    cost_finalized: NotRequired[ReadOnly[bool]]
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
     session_id: str  # End-user/conversation session id (litellm_session_id), independent of trace_id
@@ -3935,6 +3977,16 @@ class MirroredPricingParams(LiteLLMBaseModel):
     explicit_cache_read_input_token_cost: float | None = None
     cache_creation_input_token_cost: float | None = None
     cache_creation_input_token_cost_above_1hr: float | None = None
+    cache_creation_input_token_cost_above_12hr: float | None = None
+    cache_creation_input_token_cost_above_12hr_flex: float | None = None
+    cache_creation_input_token_cost_above_12hr_priority: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority: float | None = None
+    cache_creation_input_token_cost_above_12hr_batches: float | None = None
+    cache_creation_input_token_cost_above_12hr_ultrafast: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast: float | None = None
     tiered_pricing: list[dict[str, Any]] | None = None
 
 
@@ -3987,14 +4039,19 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_read_input_token_cost_above_100k_tokens_batches: float | None = None
     cache_read_input_token_cost_above_200k_tokens_batches: float | None = None
     cache_read_input_token_cost_above_272k_tokens_batches: float | None = None
+    cache_read_input_audio_token_cost_batches: float | None = None
     cache_creation_input_token_cost_batches: float | None = None
     cache_creation_input_token_cost_above_100k_tokens_batches: float | None = None
     cache_creation_input_token_cost_above_200k_tokens_batches: float | None = None
     cache_creation_input_token_cost_above_272k_tokens_batches: float | None = None
     cache_read_input_audio_token_cost: float | None = None
+    cache_read_input_audio_token_cost_flex: float | None = None
+    cache_read_input_audio_token_cost_priority: float | None = None
     cache_read_input_image_token_cost: float | None = None
     input_cost_per_character_above_128k_tokens: float | None = None
     input_cost_per_audio_token: float | None = None
+    input_cost_per_audio_token_flex: float | None = None
+    input_cost_per_audio_token_priority: float | None = None
     input_cost_per_token_cache_hit: float | None = None
     input_cost_per_token_above_128k_tokens: float | None = None
     input_cost_per_token_above_100k_tokens: float | None = None
@@ -4077,11 +4134,28 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
         """
         return {k: v for k, v in model_info.items() if k not in cls.model_fields}
 
+    def custom_pricing_overrides(self) -> Mapping[str, object]:
+        return MappingProxyType(
+            self.model_dump(include=set(CustomPricingLiteLLMParams.model_fields), exclude_none=True)
+        )
+
+    def per_second_pricing(self) -> Mapping[str, float]:
+        return MappingProxyType(
+            self.model_dump(
+                include={"cost_per_second", "input_cost_per_second", "output_cost_per_second"}, exclude_none=True
+            )
+        )
+
 
 DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing"})
 
 DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
-    {"supports_regex_lookaround", "supports_assistant_prefill", "supports_bedrock_native_structured_output"}
+    {
+        "supports_regex_lookaround",
+        "supports_assistant_prefill",
+        "supports_bedrock_native_structured_output",
+        "supports_pdf_input",
+    }
 )
 
 DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset({"token_count_framing", "token_count_model"})
@@ -4200,7 +4274,7 @@ oauth_token_exchange_litellm_params: Final = (
     "token_exchange_profile",
     "token_exchange_scope",
 )
-github_copilot_oauth_litellm_params: Final = ("github_copilot_auth_type",)
+github_copilot_oauth_litellm_params: Final = ("github_copilot_auth_type", "github_copilot_host")
 OIDC_SECRET_REFERENCE_PREFIX: Final = "oidc/"
 API_KEY_SECRET_REFERENCE_REJECTION: Final = (
     "Rejected Request: api_key holds an oidc/ secret reference, which only a deployment or credential a proxy "
@@ -4309,6 +4383,7 @@ server_owned_wif_litellm_params: Final = (
     + openai_wif_litellm_params
     + oauth_token_exchange_litellm_params
     + github_copilot_oauth_litellm_params
+    + ("chatgpt_auth_file",)
 )
 secret_bearing_wif_litellm_params: Final = tuple(sorted(WIF_SECRET_BEARING_KEYS))
 
@@ -4363,12 +4438,14 @@ GenericBudgetConfigType = dict[str, BudgetConfig]
 
 
 class LlmProviders(str, Enum):
+    REFUSELESS = "refuseless"
     OPENAI = "openai"
     CHATGPT = "chatgpt"
     OPENAI_LIKE = "openai_like"  # embedding only
     JINA_AI = "jina_ai"
     XAI = "xai"
     ZAI = "zai"
+    BIGMODEL = "bigmodel"
     CUSTOM_OPENAI = "custom_openai"
     TEXT_COMPLETION_OPENAI = "text-completion-openai"
     COHERE = "cohere"
@@ -4390,6 +4467,7 @@ class LlmProviders(str, Enum):
     VERTEX_AI = "vertex_ai"
     VERTEX_AI_BETA = "vertex_ai_beta"
     GEMINI = "gemini"
+    ABLITERATION = "abliteration"
     AI21 = "ai21"
     BASETEN = "baseten"
     BLACK_FOREST_LABS = "black_forest_labs"
@@ -4407,12 +4485,14 @@ class LlmProviders(str, Enum):
     OLLAMA = "ollama"
     OLLAMA_CHAT = "ollama_chat"
     DEEPINFRA = "deepinfra"
+    CLF_AI_GATEWAY = "clf_ai_gateway"
     PERPLEXITY = "perplexity"
     TYPESAFE = "typesafe"
     NACE = "nace"
     STRANDS_DECIDER = "strands_decider"
     LAYA = "laya"
     BESPOKE = "bespoke"
+    EU_JEV = "eu_jev"
     MISTRAL = "mistral"
     MILVUS = "milvus"
     GROQ = "groq"
@@ -4435,6 +4515,7 @@ class LlmProviders(str, Enum):
     PUBLICAI = "publicai"
     V0 = "v0"
     MORPH = "morph"
+    OPENCODE_GO = "opencode_go"
     LAMBDA_AI = "lambda_ai"
     INCEPTION = "inception"
     TEXT_COMPLETION_INCEPTION = "text-completion-inception"
@@ -4488,6 +4569,7 @@ class LlmProviders(str, Enum):
     S3_VECTORS = "s3_vectors"
     VALKEY = "valkey"
     MONGODB = "mongodb"
+    OPENSEARCH = "opensearch"
     HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
@@ -4518,6 +4600,7 @@ class LlmProviders(str, Enum):
     POE = "poe"
     CHUTES = "chutes"
     NEOSANTARA = "neosantara"
+    AIAND = "aiand"
     PARASAIL = "parasail"
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
@@ -4530,14 +4613,17 @@ class LlmProviders(str, Enum):
     PRISM = "prism"
     OPENINFER = "openinfer"
     INFERENCEAPIS = "inferenceapis"
+    ZEROGPU = "zerogpu"
     DARKBLOOM = "darkbloom"
     META = "meta"
     SAIL = "sail"
     REKA = "reka"
+    STREAMLAKE = "streamlake"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
     GDC = "gdc"
+    KYMA = "kyma"
 
 
 # Create a set of all provider values for quick lookup
@@ -4588,6 +4674,7 @@ class SearchProviders(str, Enum):
     NIMBLE = "nimble"
     BING_GROUNDING = "bing_grounding"
     DEEPSEEK = "deepseek"
+    XAI = "xai"
 
 
 # Create a set of all search provider values for quick lookup
@@ -4701,6 +4788,112 @@ class LiteLLMFineTuningJob(FineTuningJob):
         self._hidden_params = kwargs.get("_hidden_params", {})
 
 
+class _BatchInputTokensDetails(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    cached_tokens: int | None = None
+
+
+class _BatchOutputTokensDetails(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    reasoning_tokens: int | None = None
+
+
+class _BatchTokenCounts(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int | None = None
+    input_tokens_details: _BatchInputTokensDetails | None = None
+    output_tokens_details: _BatchOutputTokensDetails | None = None
+
+
+def _parse_batch_token_counts(value: object) -> _BatchTokenCounts | None:
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        return _BatchTokenCounts.model_validate(value)
+    except ValidationError:
+        return None
+
+
+def _prompt_details_with_cached_tokens(
+    details: PromptTokensDetailsWrapper | None, cached_tokens: int | None
+) -> PromptTokensDetailsWrapper | None:
+    if not cached_tokens:
+        return details
+    return (details or PromptTokensDetailsWrapper()).model_copy(update={"cached_tokens": cached_tokens})
+
+
+def _completion_details_with_reasoning_tokens(
+    details: CompletionTokensDetailsWrapper | None, reasoning_tokens: int | None
+) -> CompletionTokensDetailsWrapper | None:
+    if not reasoning_tokens:
+        return details
+    return (details or CompletionTokensDetailsWrapper()).model_copy(update={"reasoning_tokens": reasoning_tokens})
+
+
+def _usage_with_batch_token_counts(usage: Usage, counts: _BatchTokenCounts) -> Usage:
+    return usage.model_copy(
+        update={
+            "prompt_tokens": counts.input_tokens,
+            "completion_tokens": counts.output_tokens,
+            "total_tokens": (
+                counts.input_tokens + counts.output_tokens if counts.total_tokens is None else counts.total_tokens
+            ),
+            "prompt_tokens_details": _prompt_details_with_cached_tokens(
+                usage.prompt_tokens_details,
+                counts.input_tokens_details.cached_tokens if counts.input_tokens_details else None,
+            ),
+            "completion_tokens_details": _completion_details_with_reasoning_tokens(
+                usage.completion_tokens_details,
+                counts.output_tokens_details.reasoning_tokens if counts.output_tokens_details else None,
+            ),
+        }
+    )
+
+
+class _ProviderBatchUsageDetails(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    input_tokens_details: Mapping[str, JsonValue] | None = None
+    output_tokens_details: Mapping[str, JsonValue] | None = None
+
+
+def _provider_batch_usage_details(usage: Usage) -> _ProviderBatchUsageDetails:
+    try:
+        return _ProviderBatchUsageDetails.model_validate(usage)
+    except ValidationError:
+        return _ProviderBatchUsageDetails()
+
+
+def _has_unparsed_batch_token_counts(usage: Usage) -> bool:
+    provider_fields: Final = usage.model_extra or {}
+    sent_batch_counts: Final = "input_tokens" in provider_fields or "output_tokens" in provider_fields
+    return sent_batch_counts and _parse_batch_token_counts(provider_fields) is None
+
+
+def _batch_usage_from_chat_usage(usage: Usage) -> BatchUsage:
+    provider_details: Final = _provider_batch_usage_details(usage)
+    cached_tokens: Final = usage.prompt_tokens_details.cached_tokens if usage.prompt_tokens_details else None
+    reasoning_tokens: Final = (
+        usage.completion_tokens_details.reasoning_tokens if usage.completion_tokens_details else None
+    )
+    return BatchUsage(
+        input_tokens=usage.prompt_tokens,
+        input_tokens_details=InputTokensDetails.model_validate(
+            {**(provider_details.input_tokens_details or {}), "cached_tokens": cached_tokens or 0}
+        ),
+        output_tokens=usage.completion_tokens,
+        output_tokens_details=OutputTokensDetails.model_validate(
+            {**(provider_details.output_tokens_details or {}), "reasoning_tokens": reasoning_tokens or 0}
+        ),
+        total_tokens=usage.total_tokens,
+    )
+
+
 class LiteLLMBatch(Batch):
     _hidden_params: dict = {}
 
@@ -4713,6 +4906,40 @@ class LiteLLMBatch(Batch):
         self._hidden_params = hidden_params
 
     usage: Usage | None = None
+
+    @field_validator("usage", mode="before")
+    @classmethod
+    def _usage_from_batch_token_counts(cls, value: object) -> object:
+        counts: Final = _parse_batch_token_counts(value)
+        return value if counts is None else _usage_with_batch_token_counts(Usage.model_validate(value), counts)
+
+    @field_serializer("usage")
+    def _serialize_usage_with_batch_fields(
+        self, usage: Usage | None, info: FieldSerializationInfo
+    ) -> Mapping[str, object] | None:
+        if not isinstance(usage, Usage):
+            return usage
+        chat_fields: Final = usage.model_dump(
+            mode=info.mode,
+            include=info.include,
+            exclude=info.exclude,
+            exclude_unset=info.exclude_unset,
+            exclude_defaults=info.exclude_defaults,
+            exclude_none=info.exclude_none,
+        )
+        if _has_unparsed_batch_token_counts(usage):
+            return chat_fields
+        return {
+            **chat_fields,
+            **_batch_usage_from_chat_usage(usage).model_dump(
+                mode=info.mode,
+                include=info.include,
+                exclude=info.exclude,
+                exclude_unset=info.exclude_unset,
+                exclude_defaults=info.exclude_defaults,
+                exclude_none=info.exclude_none,
+            ),
+        }
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -4732,6 +4959,15 @@ class LiteLLMBatch(Batch):
         except Exception:
             # if using pydantic v1
             return self.dict()
+
+
+_PROVIDER_ONLY_BATCH_USAGE_FIELDS: Final = frozenset(BatchUsage.model_fields) - frozenset(Usage.model_fields)
+
+
+def batch_chat_usage(batch: LiteLLMBatch) -> Usage | None:
+    if batch.usage is None:
+        return None
+    return Usage.model_validate(batch.usage.model_dump(exclude=set(_PROVIDER_ONLY_BATCH_USAGE_FIELDS)))
 
 
 class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):

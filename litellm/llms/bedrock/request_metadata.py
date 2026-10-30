@@ -256,12 +256,11 @@ def merge_bedrock_invoke_headers(
     """
     Merge the ``X-Amzn-*`` headers the Invoke paths derive from params.
 
-    ``caller_owned`` (the guardrail headers) defers to a header the caller already set, which is
-    the long-standing behaviour for those. ``proxy_owned_names`` are dropped from the caller's
-    headers unconditionally and re-supplied only from ``proxy_owned``, because those names carry
-    proxy-authenticated identity into an AWS billing record that the caller must not be able to
-    write. Names are compared case-insensitively so a caller cannot leave a second spelling in
-    the dict and let the transport pick the winner.
+    ``caller_owned`` defers to a header the caller already set. ``proxy_owned_names`` are dropped
+    from the caller's headers unconditionally and re-supplied only from ``proxy_owned``, for names
+    the caller must not be able to write, such as proxy-authenticated identity headed for an AWS
+    billing record or a deployment's guardrail. Names are compared case-insensitively so a caller
+    cannot leave a second spelling in the dict and let the transport pick the winner.
     """
     if not caller_owned and not proxy_owned and not proxy_owned_names:
         return headers

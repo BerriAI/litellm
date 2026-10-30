@@ -19,6 +19,9 @@ UNCOUNTABLE_MODEL: Final = "regional-uncountable-model"
 PINNED_REGION: Final = "eu"
 WEIGHT_BY_REGION: Final = {"eu": 1, "us": 99}
 SILENT_WAV: Final = "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA="
+RPM_CAPPED_MODEL: Final = "regional-rpm-capped-model"
+RPM_CAPPED_DEPLOYMENTS: Final = frozenset(f"{RPM_CAPPED_MODEL}-{region}" for region in UPSTREAM_BY_REGION)
+RPM_CAPPED_CALLS: Final = 3
 
 
 @pytest.fixture(scope="module")
@@ -50,6 +53,19 @@ def candidate(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
                         "weight": WEIGHT_BY_REGION[region],
                     },
                     "model_info": {"id": f"{UNCOUNTABLE_MODEL}-{region}", "max_input_tokens": 128000},
+                }
+                for region, upstream in UPSTREAM_BY_REGION.items()
+            ),
+            *(
+                {
+                    "model_name": RPM_CAPPED_MODEL,
+                    "litellm_params": {
+                        "model": f"openai/{upstream}",
+                        "api_base": f"{base.upstream_url}/v1",
+                        "api_key": "synthetic-region-key",
+                        "rpm": 1,
+                    },
+                    "model_info": {"id": f"{RPM_CAPPED_MODEL}-{region}"},
                 }
                 for region, upstream in UPSTREAM_BY_REGION.items()
             ),
@@ -143,3 +159,16 @@ def test_an_uncountable_prompt_still_pins_an_end_user_to_their_region(
         observed: Final = upstream.get("/__observations").json()["requests"]
         pinned_upstream: Final = UPSTREAM_BY_REGION[PINNED_REGION]
         assert [request["body"]["model"] for request in observed] == [pinned_upstream] * recorded_chat_calls
+
+
+def test_pre_call_checks_keep_serving_deployments_past_their_rpm(candidate: Gateway) -> None:
+    with candidate.scenario() as scenario:
+        key: Final = scenario.key(models=[RPM_CAPPED_MODEL])
+        body: Final = {"model": RPM_CAPPED_MODEL, "messages": [{"role": "user", "content": "integration control"}]}
+        responses: Final = tuple(
+            candidate.request("POST", "/v1/chat/completions", body, key=key) for _ in range(RPM_CAPPED_CALLS)
+        )
+        assert [response.status_code for response in responses] == [200] * RPM_CAPPED_CALLS, [
+            response.text for response in responses
+        ]
+        assert {response.headers.get("x-litellm-model-id") for response in responses} <= RPM_CAPPED_DEPLOYMENTS

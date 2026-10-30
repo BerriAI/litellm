@@ -608,6 +608,23 @@ def test_unmarked_tools_change_the_key_marked_tools_do_not_share():
     assert key_a != key_b
 
 
+def test_a_non_dict_tool_entry_still_derives_a_key_instead_of_raising():
+    """
+    A client can send `tools: ["not-a-tool"]`. The provider rejects that with its own 400, so the
+    routing check has to key on what it was given and let the request through, never raise a 500.
+    """
+    messages = cast(
+        list[AllMessageValues],
+        [{"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]}],
+    )
+    tools: Final = cast(list[ChatCompletionToolParam], ["not-a-tool", _marked_tool("read", {"type": "ephemeral"})])
+
+    positions = PromptCachingCache.prefix_positions(messages, tools)
+
+    assert [position.position for position in positions] == [0, 1]
+    assert PromptCachingCache.get_prompt_caching_cache_key(messages, tools) == positions[-1].cache_key
+
+
 def test_empty_and_missing_tools_seed_the_same_key():
     """`tools=[]` and no tools at all are the same request to the provider, so they must key alike."""
     messages = cast(

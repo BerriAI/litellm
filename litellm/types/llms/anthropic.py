@@ -209,6 +209,13 @@ class AnthropicMessagesTextParam(TypedDict, total=False):
     prompt_cache_breakpoint: ReadOnly[PromptCacheBreakpoint]
 
 
+class AnthropicSearchResultParam(TypedDict, total=False):
+    type: Required[ReadOnly[Literal["search_result"]]]
+    source: Required[ReadOnly[str]]
+    title: Required[ReadOnly[str]]
+    content: Required[ReadOnly[Iterable[AnthropicMessagesTextParam]]]
+
+
 class AnthropicMessagesToolUseParam(TypedDict, total=False):
     type: Required[Literal["tool_use"]]
     id: str
@@ -357,6 +364,7 @@ class AnthropicMessagesToolResultParam(TypedDict, total=False):
             AnthropicMessagesToolResultContent
             | AnthropicMessagesImageParam
             | AnthropicMessagesDocumentParam
+            | AnthropicSearchResultParam
             | ToolReference
         ]
     )
@@ -368,6 +376,7 @@ AnthropicMessagesUserMessageValues = (
     | AnthropicMessagesImageParam
     | AnthropicMessagesToolResultParam
     | AnthropicMessagesDocumentParam
+    | AnthropicSearchResultParam
     | AnthropicMessagesContainerUploadParam
 )
 
@@ -481,6 +490,11 @@ class ContentThinkingSignatureBlockDelta(TypedDict):
     signature: str
 
 
+class ContentCompactionBlockDelta(TypedDict):
+    type: ReadOnly[Literal["compaction_delta"]]
+    content: ReadOnly[str | None]
+
+
 StreamingContentBlockDeltaType = Literal["text_delta", "input_json_delta", "thinking_delta", "signature_delta"]
 
 
@@ -493,6 +507,7 @@ class ContentBlockDelta(TypedDict):
         | ContentCitationsBlockDelta
         | ContentThinkingBlockDelta
         | ContentThinkingSignatureBlockDelta
+        | ContentCompactionBlockDelta
     )
 
 
@@ -817,6 +832,7 @@ ANTHROPIC_EFFORT_BETA_HEADER: Final = "effort-2025-11-24"
 ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER: Final = "mid-conversation-output-config-2026-07-01"
 
 ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER: Final = "thinking-display-updates-2026-08-18"
+ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER: Final = "thinking-binding-controls-2026-08-01"
 ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER: Final = "mid-conversation-tool-changes-2026-07-01"
 
 ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER: Final = "fine-grained-tool-streaming-2025-05-14"

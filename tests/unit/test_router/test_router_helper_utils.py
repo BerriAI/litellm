@@ -1,19 +1,28 @@
+import asyncio
 import functools
+import gc
 import json
 import os
+import weakref
+from collections.abc import Iterator, Mapping
 from datetime import datetime, timezone
-from collections.abc import Mapping
+from types import MethodType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import litellm
 import pytest
+
+import litellm
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS, ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo
+from litellm.router_strategy.adaptive_router.hooks import AdaptiveRouterPostCallHook
+from litellm.types.litellm_params import RoutingStrategyName
+from litellm.types.router import AlertingConfig, Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo
 from litellm.types.utils import (
     CallTypes,
     ModelResponse,
@@ -793,9 +802,10 @@ async def test_deployment_callback_on_failure(model_list):
 
 def test_deployment_callback_respects_cooldown_time(model_list):
     """Ensure per-model cooldown_time is honored even when exception headers are present."""
-    import httpx
     import time
     from unittest.mock import patch
+
+    import httpx
 
     router = Router(model_list=model_list)
 
@@ -837,7 +847,12 @@ def test_log_retry(model_list: list[DeploymentTypedDict], metadata_key: str) -> 
             "model": "gpt-3.5-turbo",
             "api_key": "sk-must-not-be-recorded",
             "messages": [{"role": "user", "content": "hi"}],
-            metadata_key: {"model_info": {"id": "deployment-1"}, "attempted_retries": 2, "user_api_key": "sk-proxy"},
+            metadata_key: {
+                "model_info": {"id": "deployment-1", "base_model": "azure/gpt-3.5-turbo"},
+                "deployment": "azure/my-35-deployment",
+                "attempted_retries": 2,
+                "user_api_key": "sk-proxy",
+            },
         },
         e=rate_limit_error,
     )
@@ -845,6 +860,8 @@ def test_log_retry(model_list: list[DeploymentTypedDict], metadata_key: str) -> 
         {
             "model_group": "gpt-3.5-turbo",
             "deployment_id": "deployment-1",
+            "model": "azure/my-35-deployment",
+            "base_model": "azure/gpt-3.5-turbo",
             "exception_type": "RateLimitError",
             "exception_string": "litellm.RateLimitError: slow down",
             "attempted_retries": 2,
@@ -854,6 +871,38 @@ def test_log_retry(model_list: list[DeploymentTypedDict], metadata_key: str) -> 
     assert router.log_retry(kwargs=new_kwargs, e=rate_limit_error)[metadata_key]["request_retry_count"] == 2
     planted_kwargs = {"model": "gpt-3.5-turbo", metadata_key: {"request_retry_count": -100}}
     assert router.log_retry(kwargs=planted_kwargs, e=rate_limit_error)[metadata_key]["request_retry_count"] == 1
+
+
+def test_log_retry_reads_base_model_from_the_deployments_litellm_params() -> None:
+    """An Azure named deployment declares ``base_model`` under ``litellm_params``, not ``model_info``, and
+    that is the model the failure row is priced at, so the retry record has to carry it too"""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "azure-group",
+                "litellm_params": {
+                    "model": "azure/my-named-deployment",
+                    "api_key": "sk-fake",
+                    "api_base": "https://example.openai.azure.com",
+                    "base_model": "azure/gpt-4o-mini",
+                },
+                "model_info": {"id": "dep-azure-named"},
+            }
+        ]
+    )
+    new_kwargs = router.log_retry(
+        kwargs={
+            "model": "azure-group",
+            "metadata": {
+                "model_info": {"id": "dep-azure-named"},
+                "deployment": "azure/my-named-deployment",
+                "attempted_retries": 0,
+            },
+        },
+        e=litellm.Timeout(message="slow", llm_provider="azure", model="azure/my-named-deployment"),
+    )
+    record = new_kwargs["metadata"]["previous_models"][0]
+    assert (record["model"], record["base_model"]) == ("azure/my-named-deployment", "azure/gpt-4o-mini")
 
 
 @pytest.mark.usefixtures("router_minute_pinned")
@@ -1109,7 +1158,7 @@ async def test_set_response_headers_passes_through_post_increment_counters(model
         _hidden_params: dict = {}
 
     router = Router(model_list=model_list)
-    router.get_remaining_model_group_usage = AsyncMock(
+    router._core_get_remaining_model_group_usage = AsyncMock(
         return_value={
             "x-ratelimit-remaining-tokens": 958,
             "x-ratelimit-limit-tokens": 1000,
@@ -1490,7 +1539,7 @@ async def test_get_remaining_model_group_usage_merges_io_and_tpm_headers(model_l
         )
     )
     router.get_model_group_io_token_usage = AsyncMock(return_value=(100, 40))
-    router.get_model_group_usage = AsyncMock(return_value=(500, 5))
+    router._core_get_model_group_usage = AsyncMock(return_value=(500, 5))
 
     headers = await router.get_remaining_model_group_usage("gpt-3.5-turbo")
 
@@ -1517,7 +1566,7 @@ async def test_set_response_headers_native_input_token_header_does_not_suppress_
         _hidden_params: dict = {}
 
     router = Router(model_list=model_list)
-    router.get_remaining_model_group_usage = AsyncMock(
+    router._core_get_remaining_model_group_usage = AsyncMock(
         return_value={
             "x-ratelimit-remaining-tokens": 1000,
             "x-ratelimit-remaining-requests": 100,
@@ -1547,7 +1596,7 @@ async def test_set_response_headers_native_token_header_does_not_suppress_io_hea
         _hidden_params: dict = {}
 
     router = Router(model_list=model_list)
-    router.get_remaining_model_group_usage = AsyncMock(
+    router._core_get_remaining_model_group_usage = AsyncMock(
         return_value={
             "x-ratelimit-remaining-tokens": 1000,
             "x-ratelimit-remaining-requests": 100,
@@ -1579,7 +1628,7 @@ async def test_set_response_headers_handles_missing_usage(model_list):
         _hidden_params: dict = {}
 
     router = Router(model_list=model_list)
-    router.get_remaining_model_group_usage = AsyncMock(
+    router._core_get_remaining_model_group_usage = AsyncMock(
         return_value={
             "x-ratelimit-remaining-tokens": 1000,
             "x-ratelimit-remaining-requests": 100,
@@ -1599,7 +1648,7 @@ async def test_set_response_headers_handles_missing_usage(model_list):
 async def test_set_response_headers_dict_anthropic_messages_response(model_list):
     """Anthropic /v1/messages returns a dict; IO rate-limit headers must attach."""
     router = Router(model_list=model_list)
-    router.get_remaining_model_group_usage = AsyncMock(
+    router._core_get_remaining_model_group_usage = AsyncMock(
         return_value={
             "x-ratelimit-limit-input-tokens": 25,
             "x-ratelimit-remaining-input-tokens": 20,
@@ -1639,7 +1688,7 @@ async def test_set_response_headers_wraps_bare_async_generator(model_list):
         yield {"type": "message_stop"}
 
     router = Router(model_list=model_list)
-    router.get_remaining_model_group_usage = AsyncMock(
+    router._core_get_remaining_model_group_usage = AsyncMock(
         return_value={
             "x-ratelimit-limit-input-tokens": 25,
             "x-ratelimit-remaining-input-tokens": 20,
@@ -1764,8 +1813,8 @@ def test_get_allowed_fails_from_policy(model_list, exception_type, exception_nam
 
 def test_initialize_alerting(model_list):
     """Test if the 'initialize_alerting' function is working correctly"""
-    from litellm.types.router import AlertingConfig
     from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+    from litellm.types.router import AlertingConfig
 
     router = Router(
         model_list=model_list, alerting_config=AlertingConfig(webhook_url="test")
@@ -1812,6 +1861,315 @@ def test_discard(model_list):
     assert len(litellm.input_callback) == 0
     assert len(litellm.service_callback) == 0
 
+
+_CALLBACK_LIST_NAMES: Final = (
+    "callbacks",
+    "input_callback",
+    "success_callback",
+    "failure_callback",
+    "_async_success_callback",
+    "_async_failure_callback",
+)
+
+
+def _callback_ids(list_name: str) -> list[int]:
+    return [id(callback) for callback in getattr(litellm, list_name)]
+
+
+@pytest.mark.parametrize(
+    "routing_strategy, selector_attr",
+    [
+        ("least-busy", "leastbusy_logger"),
+        ("usage-based-routing", "lowesttpm_logger"),
+        ("usage-based-routing-v2", "lowesttpm_logger_v2"),
+        ("latency-based-routing", "lowestlatency_logger"),
+        ("cost-based-routing", "lowestcost_logger"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_discard_releases_strategy_selector_across_router_lifecycles(
+    routing_strategy: RoutingStrategyName, selector_attr: str
+):
+    def retire() -> weakref.ReferenceType[object]:
+        router: Final = Router(model_list=[], routing_strategy=routing_strategy)
+        selector: Final = getattr(router, selector_attr)
+        assert any(callback is selector for callback in litellm.callbacks)
+        router.discard()
+        return weakref.ref(selector)
+
+    selector_refs: Final = tuple(retire() for _ in range(3))
+    await asyncio.sleep(0)
+    gc.collect()
+
+    assert all(getattr(litellm, list_name) == [] for list_name in _CALLBACK_LIST_NAMES)
+    assert all(selector_ref() is None for selector_ref in selector_refs)
+
+
+@pytest.mark.parametrize(
+    "routing_strategy, selector_attr",
+    [
+        ("least-busy", "leastbusy_logger"),
+        ("usage-based-routing", "lowesttpm_logger"),
+        ("usage-based-routing-v2", "lowesttpm_logger_v2"),
+        ("latency-based-routing", "lowestlatency_logger"),
+        ("cost-based-routing", "lowestcost_logger"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_discard_purges_selector_from_event_lists_after_serving_a_request(
+    routing_strategy: RoutingStrategyName, selector_attr: str
+):
+    router: Final = Router(
+        model_list=[{"model_name": "gpt-5.5", "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-test"}}],
+        routing_strategy=routing_strategy,
+    )
+    selector: Final = getattr(router, selector_attr)
+    await router.acompletion(model="gpt-5.5", messages=[{"role": "user", "content": "hi"}], mock_response="ok")
+    assert any(callback is selector for callback in litellm.success_callback)
+
+    router.discard()
+
+    assert all(getattr(litellm, list_name) == [] for list_name in _CALLBACK_LIST_NAMES)
+
+
+def test_discard_keeps_callbacks_owned_by_other_live_routers():
+    survivor: Final = Router(model_list=[], routing_strategy="latency-based-routing")
+    unrelated: Final = CustomLogger()
+    litellm.logging_callback_manager.add_litellm_callback(unrelated)
+    before_ids: Final = {list_name: _callback_ids(list_name) for list_name in _CALLBACK_LIST_NAMES}
+    retired: Final = Router(model_list=[], routing_strategy="least-busy")
+    assert any(callback is retired.leastbusy_logger for callback in litellm.callbacks)
+
+    retired.discard()
+
+    assert {list_name: _callback_ids(list_name) for list_name in before_ids} == before_ids
+    assert any(callback is survivor.lowestlatency_logger for callback in litellm.callbacks)
+    survivor.discard()
+
+
+@pytest.mark.parametrize(
+    "routing_strategy, selector_attr",
+    [
+        ("usage-based-routing", "lowesttpm_logger"),
+        ("usage-based-routing-v2", "lowesttpm_logger_v2"),
+        ("latency-based-routing", "lowestlatency_logger"),
+        ("cost-based-routing", "lowestcost_logger"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_discard_leaves_same_strategy_survivor_receiving_events(
+    routing_strategy: RoutingStrategyName, selector_attr: str
+):
+    model_list: Final[list[DeploymentTypedDict]] = [
+        {"model_name": "gpt-5.5", "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-test"}}
+    ]
+    retired: Final = Router(model_list=model_list, routing_strategy=routing_strategy)
+    survivor: Final = Router(model_list=model_list, routing_strategy=routing_strategy)
+
+    retired.discard()
+    await survivor.acompletion(model="gpt-5.5", messages=[{"role": "user", "content": "hi"}], mock_response="ok")
+
+    assert any(callback is getattr(survivor, selector_attr) for callback in litellm.success_callback)
+    survivor.discard()
+
+
+def test_discard_drops_routing_group_selectors():
+    router: Final = Router(
+        model_list=[
+            {"model_name": "grouped-model", "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-test"}}
+        ],
+        routing_groups=[
+            {"group_name": "fast", "models": ["grouped-model"], "routing_strategy": "latency-based-routing"}
+        ],
+    )
+    _, group_selector = router._get_routing_context("grouped-model")
+    assert any(callback is group_selector for callback in litellm.callbacks)
+
+    router.discard()
+
+    assert all(getattr(litellm, list_name) == [] for list_name in _CALLBACK_LIST_NAMES)
+
+
+_GROUPED_MODEL_LIST: Final[list[DeploymentTypedDict]] = [
+    {"model_name": "grouped-model", "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-test"}}
+]
+
+
+class _LabelledHook(CustomLogger):
+    def __init__(self, label: str) -> None:
+        super().__init__()
+        self.label = label
+
+
+def _visit_hooks_reloading_routing_groups_mid_loop(
+    router: Router, hooks: tuple[_LabelledHook, ...]
+) -> Iterator[CustomLogger]:
+    for callback in litellm.callbacks:
+        if callback is hooks[0]:
+            router.update_settings(
+                routing_groups=[{"group_name": "fast", "models": ["grouped-model"], "routing_strategy": "least-busy"}]
+            )
+        if callback in hooks:
+            yield callback
+
+
+def test_routing_group_reload_keeps_every_hook_of_an_in_flight_callback_loop():
+    router: Final = Router(
+        model_list=_GROUPED_MODEL_LIST,
+        routing_groups=[{"group_name": "fast", "models": ["grouped-model"], "routing_strategy": "least-busy"}],
+    )
+    hooks: Final = tuple(_LabelledHook(label) for label in ("guardrail_a", "guardrail_b", "guardrail_c"))
+    for hook in hooks:
+        litellm.logging_callback_manager.add_litellm_callback(hook)
+
+    visited: Final = tuple(_visit_hooks_reloading_routing_groups_mid_loop(router, hooks))
+
+    assert visited == hooks
+    router.discard()
+
+
+def _routers_seen_in_success_loop_discarding_first(first: Router, second: Router) -> Iterator[Router]:
+    for callback in litellm.success_callback:
+        if not isinstance(callback, MethodType):
+            continue
+        if callback.__self__ is first:
+            first.discard()
+            yield first
+        if callback.__self__ is second:
+            yield second
+
+
+def test_discard_mid_success_loop_keeps_the_next_router_callback():
+    first: Final = Router(model_list=_GROUPED_MODEL_LIST)
+    second: Final = Router(model_list=_GROUPED_MODEL_LIST)
+
+    seen: Final = tuple(_routers_seen_in_success_loop_discarding_first(first, second))
+
+    assert seen == (first, second)
+    second.discard()
+
+
+@pytest.mark.asyncio
+async def test_discard_purges_optional_pre_call_checks_from_event_lists_after_serving_a_request():
+    router: Final = Router(
+        model_list=_GROUPED_MODEL_LIST,
+        optional_pre_call_checks=["enforce_model_rate_limits", "prompt_caching", "deployment_affinity"],
+    )
+    await router.acompletion(model="grouped-model", messages=[{"role": "user", "content": "hi"}], mock_response="ok")
+
+    router.discard()
+
+    assert all(getattr(litellm, list_name) == [] for list_name in _CALLBACK_LIST_NAMES)
+
+
+def test_discard_registers_same_config_survivor_optional_pre_call_checks():
+    retired: Final = Router(model_list=_GROUPED_MODEL_LIST, optional_pre_call_checks=["enforce_model_rate_limits"])
+    survivor: Final = Router(model_list=_GROUPED_MODEL_LIST, optional_pre_call_checks=["enforce_model_rate_limits"])
+
+    retired.discard()
+
+    assert survivor.optional_callbacks
+    assert all(_is_registered(check) for check in survivor.optional_callbacks)
+    survivor.discard()
+
+
+def _is_registered(callback: object) -> bool:
+    return any(registered is callback for registered in litellm.callbacks)
+
+
+@pytest.mark.asyncio
+async def test_discard_releases_per_request_override_selector():
+    def build_override_then_discard() -> weakref.ReferenceType[object]:
+        router: Final = Router(model_list=_GROUPED_MODEL_LIST)
+        selector: Final = router._get_override_strategy_selector("usage-based-routing-v2")
+        assert selector is not None
+        router.discard()
+        return weakref.ref(selector)
+
+    selector_ref: Final = build_override_then_discard()
+    await asyncio.sleep(0)
+    gc.collect()
+
+    assert selector_ref() is None
+
+
+
+def test_discard_registers_the_selector_of_a_same_strategy_survivor_built_without_a_model_list():
+    retired: Final = Router(model_list=[], routing_strategy="latency-based-routing")
+    survivor: Final = Router(routing_strategy="latency-based-routing")
+    assert not _is_registered(survivor.lowestlatency_logger)
+
+    retired.discard()
+
+    assert _is_registered(survivor.lowestlatency_logger)
+    survivor.discard()
+
+
+def test_discard_drops_its_slack_alerting_callbacks():
+    router: Final = Router(model_list=_GROUPED_MODEL_LIST, alerting_config=AlertingConfig(webhook_url="test"))
+    assert any(isinstance(callback, SlackAlerting) for callback in litellm.callbacks)
+
+    router.discard()
+
+    assert all(getattr(litellm, list_name) == [] for list_name in _CALLBACK_LIST_NAMES)
+
+
+def _adaptive_router_model_list(name: str) -> list[DeploymentTypedDict]:
+    return [
+        {"model_name": "gpt-5.5", "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-test"}},
+        {
+            "model_name": name,
+            "litellm_params": {
+                "model": "auto_router/adaptive_router",
+                "adaptive_router_config": {"available_models": ["gpt-5.5"]},
+            },
+        },
+    ]
+
+
+def _registered_adaptive_router_strategies() -> tuple[object, ...]:
+    return tuple(
+        callback.adaptive_router for callback in litellm.callbacks if isinstance(callback, AdaptiveRouterPostCallHook)
+    )
+
+
+def test_discard_drops_its_adaptive_router_hook():
+    router: Final = Router(model_list=_adaptive_router_model_list("adaptive"), ignore_invalid_deployments=True)
+    assert _registered_adaptive_router_strategies()
+
+    router.discard()
+
+    assert _registered_adaptive_router_strategies() == ()
+
+
+def test_discard_registers_the_adaptive_router_hook_of_a_survivor():
+    survivor: Final = Router(model_list=_adaptive_router_model_list("adaptive"), ignore_invalid_deployments=True)
+    retired: Final = Router(model_list=_adaptive_router_model_list("adaptive"), ignore_invalid_deployments=True)
+
+    retired.discard()
+
+    survivor_strategies: Final = tuple(tagged.strategy for tagged in survivor.adaptive_routers["adaptive"])
+    assert _registered_adaptive_router_strategies() == survivor_strategies
+    survivor.discard()
+
+
+@pytest.mark.asyncio
+async def test_discard_releases_its_router_budget_limiter():
+    def build_budget_limiter_then_discard() -> weakref.ReferenceType[object]:
+        router: Final = Router(
+            model_list=_GROUPED_MODEL_LIST,
+            provider_budget_config={"openai": {"budget_limit": 10.0, "time_period": "1d"}},
+        )
+        budget_limiter: Final = router.get_router_deployment_budget_limiter()
+        assert budget_limiter is not None
+        router.discard()
+        return weakref.ref(budget_limiter)
+
+    budget_limiter_ref: Final = build_budget_limiter_then_discard()
+    await asyncio.sleep(0)
+    gc.collect()
+
+    assert budget_limiter_ref() is None
 
 def test_initialize_assistants_endpoint(model_list):
     """Test if the 'initialize_assistants_endpoint' function is working correctly"""
@@ -1889,6 +2247,7 @@ def test_deployments_by_pattern(model_list):
 )
 def test_pattern_match_deployment_set_model_name(user_request_model, model_name, litellm_model, expected_model):
     from re import Match
+
     from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
 
     pattern_router = PatternMatchRouter()
@@ -2346,7 +2705,7 @@ def test_handle_clientside_credential_metadata_loading(model_list, function_name
 )
 def test_handle_clientside_credential_metadata_variable_name(model_list, function_name, metadata_key):
     """Test that _handle_clientside_credential uses the correct metadata variable name based on function name"""
-    from litellm.router_utils.batch_utils import get_router_metadata_variable_name
+    from litellm.litellm_core_utils.batch_utils import get_router_metadata_variable_name
 
     router = Router(model_list=model_list)
 

@@ -73,13 +73,17 @@ impl VertexAuth {
             .or_else(|| non_empty_env(env_lookup, VERTEXAI_API_KEY_ENV));
         let project_id = get_vertex_ai_project(config, env_lookup);
 
-        if !has_authorization && static_token.is_none() {
-            let access = self.get_access_token(config, env_lookup).await?;
-            return Ok(VertexEnvironment {
-                headers: apply_credential(headers, &access.token, CredentialPlacement::Bearer)?,
-                project_id: project_id.unwrap_or(access.project_id),
-            });
-        }
+        let static_token = match (has_authorization, static_token) {
+            (true, _) => None,
+            (false, Some(token)) => Some(token),
+            (false, None) => {
+                let access = self.get_access_token(config, env_lookup).await?;
+                return Ok(VertexEnvironment {
+                    headers: apply_credential(headers, &access.token, CredentialPlacement::Bearer)?,
+                    project_id: project_id.unwrap_or(access.project_id),
+                });
+            }
+        };
 
         let project_id = match project_id {
             Some(project_id) => project_id,
@@ -90,14 +94,9 @@ impl VertexAuth {
                     .await?
             }
         };
-        let headers = if has_authorization {
-            headers
-        } else {
-            apply_credential(
-                headers,
-                static_token.as_deref().expect("static token was checked"),
-                CredentialPlacement::Bearer,
-            )?
+        let headers = match static_token {
+            Some(token) => apply_credential(headers, &token, CredentialPlacement::Bearer)?,
+            None => headers,
         };
         Ok(VertexEnvironment {
             headers,
@@ -234,14 +233,13 @@ enum CredentialCacheKey {
     Adc,
 }
 
-const BASE64_CREDENTIALS: &str = "The `vertex_credentials` value is base64-encoded JSON, not the JSON itself. \
-    Set it to a readable file path, or to the credentials JSON itself.";
-
 fn load_trusted_service_account(configured: &str) -> Result<CustomServiceAccount, Error> {
     if is_base64_encoded_json(configured) {
-        return Err(Error::InvalidConfiguration(ErrorDetail::Message(
-            BASE64_CREDENTIALS.into(),
-        )));
+        return Err(Error::InvalidConfiguration(
+            ErrorDetail::Base64EncodedJson {
+                field: "vertex_credentials",
+            },
+        ));
     }
     if names_a_credentials_file(configured) {
         CustomServiceAccount::from_file(configured)
@@ -299,7 +297,8 @@ mod tests {
         else {
             panic!("{configured:?} should not load");
         };
-        assert!(error.to_string().contains(expected), "{error}");
+        let report = litellm_error::Report::new(&error).to_string();
+        assert!(report.contains(expected), "{report}");
     }
 
     #[rstest::rstest]
@@ -321,7 +320,7 @@ mod tests {
             .await
         {
             Ok(_) => panic!("{configured:?} should not load"),
-            Err(error) => error.to_string(),
+            Err(error) => litellm_error::Report::new(&error).to_string(),
         }
     }
 

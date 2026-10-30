@@ -11,7 +11,6 @@ from typing import Final, Literal
 import pytest
 import yaml
 from integration._support.client import JSON_OBJECT, eventually, gateway_from_environment, object_value
-from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.vertex import service_account_json
 from integration._support.wire import Wire, wire_server
@@ -201,13 +200,15 @@ def _upstream_calls(wire: Wire, text: str) -> int:
     return sum(1 for request in wire.drain() if received_text(request) == text)
 
 
-def _spend_rows(key: str, count: int) -> list[dict[str, JsonValue]]:
-    return eventually(lambda: read_rows(SPEND_ROWS_SQL, (_hashed(key),)), lambda rows: len(rows) == count, seconds=70)
+def _spend_rows(billing: BillingProxy, key: str, count: int) -> list[dict[str, JsonValue]]:
+    return eventually(
+        lambda: billing.proxy.gateway.rows(SPEND_ROWS_SQL, (_hashed(key),)), lambda rows: len(rows) == count, seconds=70
+    )
 
 
-def _key_spend(key: str, expected: float) -> JsonValue:
+def _key_spend(billing: BillingProxy, key: str, expected: float) -> JsonValue:
     rows: Final = eventually(
-        lambda: read_rows(KEY_SPEND_SQL, (_hashed(key),)),
+        lambda: billing.proxy.gateway.rows(KEY_SPEND_SQL, (_hashed(key),)),
         lambda found: len(found) == 1 and found[0]["spend"] == pytest.approx(expected),
         seconds=70,
         return_last_on_timeout=True,
@@ -224,7 +225,7 @@ def _chat_spend(billing: BillingProxy, model: str, key: str) -> float:
     }
     response: Final = billing.proxy.gateway.request("POST", "/v1/chat/completions", body, key=key)
     assert response.status_code == 200, response.text
-    row: Final = _spend_rows(key, 1)[0]
+    row: Final = _spend_rows(billing, key, 1)[0]
     assert (row["prompt_tokens"], row["completion_tokens"]) == (PROMPT_TOKENS, AUDIO_TOKENS), row
     spend: Final = row["spend"]
     assert isinstance(spend, float) and spend > 0, row
@@ -261,11 +262,11 @@ def test_speech_calls_google_once_and_bills_and_logs_its_token_usage_once(
         assert wav_payload(sent.body) == PCM
         assert _upstream_calls(tts_wire, text) == 1
         chat_spend: Final = _chat_spend(uncached, MODELS[provider], scenario.key())
-        row: Final = _spend_rows(speech_key, 1)[0]
+        row: Final = _spend_rows(uncached, speech_key, 1)[0]
         assert row["call_type"] == "aspeech", row
         assert (row["prompt_tokens"], row["completion_tokens"]) == (PROMPT_TOKENS, AUDIO_TOKENS), row
         assert row["spend"] == pytest.approx(chat_spend), row
-        assert _key_spend(speech_key, chat_spend) == pytest.approx(chat_spend)
+        assert _key_spend(uncached, speech_key, chat_spend) == pytest.approx(chat_spend)
         events: Final = _speech_events(uncached, speech_key, 1)
         assert [_summary(event) for event in events] == [("aspeech", BINARY_RESPONSE, PROMPT_TOKENS, AUDIO_TOKENS)]
         assert events[0]["response_cost"] == pytest.approx(chat_spend), events
@@ -286,11 +287,11 @@ def test_cached_speech_repeat_is_a_free_cache_hit_after_a_billed_first_call(
         assert _upstream_calls(tts_wire, text) == 1
         assert repeat.cache_key, "the cached repeat carried no x-litellm-cache-key header"
         chat_spend: Final = _chat_spend(cached, model, scenario.key())
-        billed, hit = _spend_rows(speech_key, 2)
+        billed, hit = _spend_rows(cached, speech_key, 2)
         assert billed["cache_hit"] != "True" and billed["spend"] == pytest.approx(chat_spend), billed
         assert (billed["prompt_tokens"], billed["completion_tokens"]) == (PROMPT_TOKENS, AUDIO_TOKENS), billed
         assert (hit["cache_hit"], hit["spend"]) == ("True", 0.0), hit
-        assert _key_spend(speech_key, chat_spend) == pytest.approx(chat_spend)
+        assert _key_spend(cached, speech_key, chat_spend) == pytest.approx(chat_spend)
         events: Final = _speech_events(cached, speech_key, 2)
         assert len(events) == 2, events
         hits: Final = tuple(event for event in events if event["cache_hit"] is True)
@@ -325,7 +326,7 @@ def test_a_speech_reply_fills_the_deployment_tpm_limit_so_the_next_request_gets_
         first_text: Final = marker()
         first: Final = _speech(uncached, TPM_MODEL, first_text, key)
         assert first.status == 200, first.body[:300]
-        _spend_rows(key, 1)
+        _spend_rows(uncached, key, 1)
         second_text: Final = marker()
         second: Final = _speech(uncached, TPM_MODEL, second_text, key)
         assert second.status == 429, second.body[:300]
