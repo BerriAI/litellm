@@ -39,6 +39,7 @@ from litellm._logging import (
     turn_on_json,
     log_level,
 )
+from litellm._logging import suppress_startup_output as suppress_startup_output
 import re
 from litellm.constants import (
     DEFAULT_BATCH_SIZE,
@@ -519,7 +520,7 @@ aiohttp_trust_env: bool = False  # set to true to use HTTP_ Proxy settings
 disable_aiohttp_transport: bool = False  # Set this to true to use httpx instead
 disable_aiohttp_trust_env: bool = False  # When False, aiohttp will respect HTTP(S)_PROXY env vars
 force_ipv4: bool = False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
-http2: bool = False
+http2: bool | None = None
 network_mock: bool = False  # When True, use mock transport — no real network calls
 
 ####### STOP SEQUENCE LIMIT #######
@@ -684,6 +685,7 @@ moonshot_models: Set = set()
 publicai_models: Set = set()
 darkbloom_models: Set = set()
 openinfer_models: Final[Set[str]] = set()
+kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 streamlake_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
 v0_models: Set = set()
@@ -980,6 +982,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             darkbloom_models.add(key)
         elif value.get("litellm_provider") == "openinfer":
             openinfer_models.add(key)
+        elif value.get("litellm_provider") == "kyma":
+            kyma_models.add(key)
         elif value.get("litellm_provider") == "streamlake":
             streamlake_models.add(key)
         elif value.get("litellm_provider") == "zerogpu":
@@ -1158,6 +1162,7 @@ model_list = list(
     | publicai_models
     | darkbloom_models
     | openinfer_models
+    | kyma_models
     | streamlake_models
     | zerogpu_models
     | v0_models
@@ -1289,6 +1294,7 @@ def _build_models_by_provider() -> dict:
         "publicai": publicai_models,
         "darkbloom": darkbloom_models,
         "openinfer": openinfer_models,
+        "kyma": kyma_models,
         "streamlake": streamlake_models,
         "zerogpu": zerogpu_models,
         "v0": v0_models,
@@ -1776,6 +1782,9 @@ if TYPE_CHECKING:
     )
     from .llms.bespoke.decisions.transformation import (
         BespokeDecisionsConfig as BespokeDecisionsConfig,
+    )
+    from .llms.eu_jev.decisions.transformation import (
+        EuJevDecisionsConfig as EuJevDecisionsConfig,
     )
     from .llms.openai.decisions.transformation import (
         OpenAIDecisionsConfig as OpenAIDecisionsConfig,
