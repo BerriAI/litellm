@@ -1611,12 +1611,12 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert "thinking" not in data
         assert data["messages"] == []
 
-    def test_strip_thinking_request_dict_drops_clear_thinking_edits(self):
+    def test_strip_thinking_request_dict_drops_clear_thinking_edits(self) -> None:
         from litellm.llms.anthropic.common_utils import (
             strip_thinking_blocks_from_anthropic_messages_request_dict,
         )
 
-        data = {
+        data: Final[dict[str, object]] = {
             "messages": [{"role": "assistant", "content": [{"type": "thinking", "thinking": "unsigned"}]}],
             "thinking": {"type": "adaptive"},
             "context_management": {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]},
@@ -1648,12 +1648,12 @@ class TestAnthropicThinkingSignatureSelfHeal:
             ),
         ],
     )
-    def test_drop_clear_thinking_edits(self, context_management, expected):
+    def test_drop_clear_thinking_edits(self, context_management: object, expected: object) -> None:
         from litellm.llms.anthropic.common_utils import (
             drop_clear_thinking_edits,
         )
 
-        params = {"context_management": context_management}
+        params: Final[dict[str, object]] = {"context_management": context_management}
         drop_clear_thinking_edits(params)
         assert params == ({} if expected is None else {"context_management": expected})
 

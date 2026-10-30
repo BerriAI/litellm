@@ -51,14 +51,18 @@ class BedrockMantleAnthropicMessagesConfig(BedrockMantleAuthMixin, AmazonMantleM
         optional_params: MutableMapping[str, object],  # mutable-ok: edits optional params in place
         model: str,
         custom_llm_provider: str,
+        max_tokens: int | None,
     ) -> None:
-        super()._drop_thinking(optional_params, model, custom_llm_provider)
-        if not self._adds_thinking_back_for_clear_thinking(optional_params, model):
+        super()._drop_thinking(optional_params, model, custom_llm_provider, max_tokens)
+        if not self._adds_thinking_back_for_clear_thinking(optional_params, model, max_tokens):
             drop_clear_thinking_edits_for_model(optional_params, model, custom_llm_provider)
 
-    def _adds_thinking_back_for_clear_thinking(self, optional_params: Mapping[str, object], model: str) -> bool:
+    def _adds_thinking_back_for_clear_thinking(
+        self, optional_params: Mapping[str, object], model: str, max_tokens: int | None
+    ) -> bool:
         trial_request: Final = {
-            key: optional_params[key] for key in ("context_management", "max_tokens") if key in optional_params
+            "context_management": optional_params.get("context_management"),
+            "max_tokens": max_tokens,
         }
         return self._ensure_thinking_for_clear_thinking_context_management(trial_request, model, drop_params=False)
 

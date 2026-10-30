@@ -63584,6 +63584,14 @@
                 }
             },
             {
+                "name": "claude-thinking-on-by-default",
+                "pattern": "claude-[a-z]+-[5-9](?!\\d)(?:[-._]\\d{1,2}(?!\\d))?",
+                "description": "Claude at major version 5 or higher, in any id shape that contains claude-<family>-<major>, so new minors such as claude-sonnet-5-1 and provider-namespaced ids match. Every Claude 5 model thinks when a request carries no thinking param, so a clear_thinking context-management edit stays valid when LiteLLM drops thinking. Two-digit majors are deliberately not matched so ids like claude-opus-41 (4.1) are not read as major 41.",
+                "model_info": {
+                    "thinking_on_by_default": true
+                }
+            },
+            {
                 "name": "claude-mid-conversation-system",
                 "pattern": "claude-[a-z]+-(?:4[-._](?:[89]|[1-9]\\d)(?!\\d)|[5-9](?!\\d)(?:[-._]\\d{1,2}(?!\\d))?)",
                 "fill_missing_for_providers": ["anthropic", "azure_ai", "bedrock", "bedrock_converse", "vertex_ai-anthropic_models"],

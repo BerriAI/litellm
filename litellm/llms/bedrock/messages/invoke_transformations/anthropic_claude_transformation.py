@@ -105,6 +105,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         optional_params: MutableMapping[str, object],  # mutable-ok: edits optional params in place
         model: str,
         custom_llm_provider: str,
+        max_tokens: int | None,
     ) -> None:
         """Keep the clear_thinking edit: it makes
         ``_ensure_thinking_for_clear_thinking_context_management`` add thinking back,

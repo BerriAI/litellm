@@ -368,8 +368,10 @@ CLEAR_TOOL_USES_EDIT: Final = {"type": "clear_tool_uses_20250919"}
         ),
     ],
 )
-def test_clear_thinking_edit_dropped_exactly_when_thinking_is(model, params, keeps_thinking):
-    result = _transform(
+def test_clear_thinking_edit_dropped_exactly_when_thinking_is(
+    model: str, params: dict[str, object], keeps_thinking: bool
+) -> None:
+    result: Final = _transform(
         model,
         {
             "max_tokens": 8192,
@@ -379,13 +381,23 @@ def test_clear_thinking_edit_dropped_exactly_when_thinking_is(model, params, kee
     )
 
     assert ("thinking" in result) is keeps_thinking
-    expected_edits = [CLEAR_THINKING_EDIT, CLEAR_TOOL_USES_EDIT] if keeps_thinking else [CLEAR_TOOL_USES_EDIT]
+    expected_edits: Final = [CLEAR_THINKING_EDIT, CLEAR_TOOL_USES_EDIT] if keeps_thinking else [CLEAR_TOOL_USES_EDIT]
     assert result["context_management"] == {"edits": expected_edits}
 
 
-@pytest.mark.parametrize("model", ["claude-fable-5", "claude-sonnet-5", "claude-opus-5", "claude-haiku-5-5"])
-def test_clear_thinking_edit_kept_when_model_thinks_without_thinking_param(model):
-    result = _transform(
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-fable-5",
+        "claude-sonnet-5",
+        "claude-opus-5",
+        "claude-haiku-5-5",
+        pytest.param("claude-sonnet-5-1", id="unmapped-claude-5-minor"),
+        pytest.param("claude-opus-5-2-20270101", id="unmapped-dated-claude-5-minor"),
+    ],
+)
+def test_clear_thinking_edit_kept_when_model_thinks_without_thinking_param(model: str) -> None:
+    result: Final = _transform(
         model,
         {"max_tokens": 8192, "reasoning_effort": "none", "context_management": {"edits": [CLEAR_THINKING_EDIT]}},
     )
