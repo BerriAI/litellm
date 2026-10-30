@@ -130,13 +130,14 @@ class _BedrockServiceErrorBody(BaseModel):
     Output: _BedrockServiceErrorOutput
 
 
+_UNKNOWN_OPERATION_HINT: Final = ", which usually means the model id in the model string does not name a Bedrock model or profile this route can call"
+
+
 def bedrock_service_error(error_type: str, headers: httpx.Headers) -> BedrockError:
+    hint: Final = _UNKNOWN_OPERATION_HINT if error_type.endswith("#UnknownOperationException") else ""
     return BedrockError(
         status_code=404,
-        message=(
-            f"Bedrock answered HTTP 200 with the error {error_type}, which usually means the model id in the "
-            "model string does not name a Bedrock model or profile this route can call."
-        ),
+        message=f"Bedrock answered HTTP 200 with the error {error_type}{hint}.",
         headers=headers,
     )
 
@@ -1125,9 +1126,12 @@ def bedrock_arn_names_no_model(model: str) -> bool:
 
 def bedrock_capability_model(model: str, base_model: object) -> str:
     """The model id to look capabilities up by: the deployment's ``base_model`` for an
-    ARN whose resource id names no model (an application inference profile, a provisioned
-    or imported model, a custom model deployment), else ``model``."""
-    if isinstance(base_model, str) and base_model and bedrock_arn_names_no_model(model):
+    application inference profile ARN on any route, or for any ARN whose resource id names
+    no model on the invoke route, else ``model``."""
+    names_no_model: Final = is_bedrock_application_inference_profile_arn(model) or (
+        bedrock_arn_names_no_model(model) and BedrockModelInfo.get_bedrock_route(model) == "invoke"
+    )
+    if isinstance(base_model, str) and base_model and names_no_model:
         return strip_bedrock_routing_prefix(base_model)
     return model
 

@@ -623,7 +623,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             model = model.replace("invoke/", "", 1)
 
         spec_provider: Final = BaseAWSLLM._get_provider_from_model_path(model)
-        if spec_provider is not None:
+        if spec_provider is not None and not (spec_provider == "amazon" and "nova" in model.lower()):
             return spec_provider
 
         # Special case: Check for "nova" in model name first (before "amazon")

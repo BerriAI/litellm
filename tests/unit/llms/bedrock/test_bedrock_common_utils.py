@@ -202,6 +202,45 @@ def test_explicit_invoke_prefix_wins_over_application_inference_profile_arn():
     assert BaseAWSLLM.get_bedrock_invoke_provider(model) is None
 
 
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        (
+            "invoke/amazon/arn:aws:bedrock:us-east-1:000000000000:inference-profile/us.amazon.nova-pro-v1:0",
+            "nova",
+        ),
+        (
+            "invoke/amazon/arn:aws:bedrock:us-east-1:000000000000:custom-model/amazon.titan-text-express-v1/abc",
+            "amazon",
+        ),
+        (
+            "invoke/anthropic/arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/nova1meta2ab",
+            "anthropic",
+        ),
+    ],
+    ids=["amazon-spec-before-a-nova-arn", "amazon-spec-before-a-titan-arn", "other-spec-before-a-nova-looking-id"],
+)
+def test_the_provider_written_before_an_arn_picks_the_invoke_provider(model, expected):
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    assert BaseAWSLLM.get_bedrock_invoke_provider(model) == expected
+
+
+def test_only_an_unknown_operation_body_carries_the_model_string_hint():
+    import httpx
+
+    from litellm.llms.bedrock.common_utils import bedrock_service_error
+
+    unknown_operation: Final = bedrock_service_error(
+        "com.amazon.coral.service#UnknownOperationException", httpx.Headers()
+    )
+    other: Final = bedrock_service_error("com.amazon.coral.service#AccessDeniedException", httpx.Headers())
+
+    assert "model string" in unknown_operation.message
+    assert "com.amazon.coral.service#AccessDeniedException" in other.message
+    assert "model string" not in other.message
+
+
 def test_system_defined_inference_profile_arn_still_routes_to_converse():
     """
     A system-defined cross-region inference-profile ARN embeds a known model, so
@@ -2073,6 +2112,16 @@ def test_event_decoder_reports_only_missing_aws_dependency(missing):
             "anthropic.claude-sonnet-4-5",
             "arn:aws:bedrock:us-east-1:000000000000:inference-profile/us.anthropic.claude-opus-4-8",
         ),
+        (
+            "converse/arn:aws:bedrock:us-east-1:000000000000:provisioned-model/abc123",
+            "bedrock/us.anthropic.claude-opus-4-8",
+            "converse/arn:aws:bedrock:us-east-1:000000000000:provisioned-model/abc123",
+        ),
+        (
+            "converse/arn:aws:bedrock:us-east-1:000000000000:custom-model-deployment/abc123",
+            "bedrock/us.anthropic.claude-opus-4-8",
+            "converse/arn:aws:bedrock:us-east-1:000000000000:custom-model-deployment/abc123",
+        ),
     ],
     ids=[
         "profile-arn-with-base-model",
@@ -2080,6 +2129,8 @@ def test_event_decoder_reports_only_missing_aws_dependency(missing):
         "named-model-keeps-its-name",
         "provisioned-arn-with-base-model",
         "system-profile-arn-keeps-the-model-it-names",
+        "provisioned-arn-on-converse-keeps-its-params",
+        "custom-deployment-arn-on-converse-keeps-its-params",
     ],
 )
 def test_bedrock_capability_model_reads_base_model_only_for_arns_that_name_no_model(model, base_model, expected):
