@@ -1667,3 +1667,20 @@ async def test_sap_embedding_required_headers(
                 f"Header '{header_name}' has incorrect value. "
                 f"Expected: '{expected_value}', Got: '{request.headers[header_name]}'"
             )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_sap_embedding_reuses_oauth_token_across_calls(respx_mock, aicore, sap_api_response, sync_mode):
+    import litellm
+
+    aicore.token.respond(json={"access_token": "mock-token", "expires_in": 43200})
+    embeddings = respx_mock.post(f"{aicore.deployment_url}/v2/embeddings").respond(json=sap_api_response)
+
+    for _ in range(3):
+        if sync_mode:
+            litellm.embedding(model="sap/text-embedding-3-small", input="Hi")
+        else:
+            await litellm.aembedding(model="sap/text-embedding-3-small", input="Hi")
+
+    assert (aicore.token.call_count, embeddings.call_count) == (1, 3)
