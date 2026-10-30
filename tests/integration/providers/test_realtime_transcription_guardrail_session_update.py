@@ -355,7 +355,13 @@ def _voice_scenario_created_after_the_first_frame(transcript: str) -> RealtimeRe
 
 
 def _live_scenario() -> RealtimeResponse:
-    return RealtimeResponse(content_type="application/x-realtime", events=())
+    return RealtimeResponse(
+        content_type="application/x-realtime",
+        events=(
+            {"serverContent": {"modelTurn": {"parts": [{"text": "scripted $REQUEST_ID"}]}}},
+            {"serverContent": {"turnComplete": True}},
+        ),
+    )
 
 
 def _realtime_update(turn_detection: JsonValue) -> dict[str, JsonValue]:
@@ -1348,10 +1354,14 @@ def test_gemini_ai_studio_voice_session_with_vad_tuning_connects_under_the_guard
             _ws_base(_owned_url(guardrail_proxy)),
             f"model={model}",
             key,
-            (_step(_update_frame(update), until="session.updated"),),
+            (
+                _step(_update_frame(update), until="session.updated"),
+                _step(_user_text_item(CLEAN_TRANSCRIPT), RESPONSE_CREATE, until=RESPONSE_DONE),
+            ),
         )
         observed: Final = _observed(upstream_url, handle.scenario_id)
-        assert session.types == ("session.created", "session.updated"), session
+        assert session.types[:2] == ("session.created", "session.updated"), session
+        assert session.types[-1] == RESPONSE_DONE, session
         assert _setup_detection(observed) == {"disabled": True}, _sent(observed)
 
 
@@ -1365,10 +1375,14 @@ def test_vertex_live_voice_session_keeps_vad_tuning_under_the_guardrail(guardrai
             _ws_base(_owned_url(guardrail_proxy)),
             f"model={model}",
             key,
-            (_step(_update_frame(_realtime_update(TUNED_SERVER_VAD)), until="session.updated"),),
+            (
+                _step(_update_frame(_realtime_update(TUNED_SERVER_VAD)), until="session.updated"),
+                _step(_user_text_item(CLEAN_TRANSCRIPT), RESPONSE_CREATE, until=RESPONSE_DONE),
+            ),
         )
         observed: Final = _observed(upstream_url, handle.scenario_id)
-        assert session.types == ("session.created", "session.updated"), session
+        assert session.types[:2] == ("session.created", "session.updated"), session
+        assert session.types[-1] == RESPONSE_DONE, session
         assert _setup_detection(observed) == GEMINI_TUNED_DETECTION, _sent(observed)
 
 

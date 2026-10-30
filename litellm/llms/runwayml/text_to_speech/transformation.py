@@ -41,6 +41,11 @@ class _RunwayTtsTaskResponse(TypedDict, total=False):
     failureCode: ReadOnly[str]
 
 
+def _parse_runway_tts_task(response: httpx.Response) -> _RunwayTtsTaskResponse:
+    task: Final[_RunwayTtsTaskResponse] = response.json()
+    return task
+
+
 class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
     """
     Configuration for RunwayML Text-to-Speech
@@ -321,7 +326,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
             response = client.get(url=task_url, headers=headers)
             response.raise_for_status()
 
-            response_data: _RunwayTtsTaskResponse = response.json()
+            response_data: _RunwayTtsTaskResponse = _parse_runway_tts_task(response)
 
             # Check task status
             status = self._check_task_status(response_data=response_data)
@@ -368,7 +373,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
             response = await client.get(url=task_url, headers=headers)
             response.raise_for_status()
 
-            response_data: _RunwayTtsTaskResponse = response.json()
+            response_data: _RunwayTtsTaskResponse = _parse_runway_tts_task(response)
 
             # Check task status
             status = self._check_task_status(response_data=response_data)
@@ -459,7 +464,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         from litellm.types.llms.openai import HttpxBinaryResponseContent
 
         try:
-            response_data: Final[_RunwayTtsTaskResponse] = raw_response.json()
+            response_data: Final[_RunwayTtsTaskResponse] = _parse_runway_tts_task(raw_response)
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing RunwayML TTS response: {e}",
@@ -489,7 +494,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         )
 
         # Get the completed task data
-        task_data: Final[_RunwayTtsTaskResponse] = polled_response.json()
+        task_data: Final[_RunwayTtsTaskResponse] = _parse_runway_tts_task(polled_response)
 
         verbose_logger.debug("RunwayML TTS polling complete, downloading audio")
 
@@ -528,7 +533,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         from litellm.types.llms.openai import HttpxBinaryResponseContent
 
         try:
-            response_data: Final[_RunwayTtsTaskResponse] = raw_response.json()
+            response_data: Final[_RunwayTtsTaskResponse] = _parse_runway_tts_task(raw_response)
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing RunwayML TTS response: {e}",
@@ -558,7 +563,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         )
 
         # Get the completed task data
-        task_data: Final[_RunwayTtsTaskResponse] = polled_response.json()
+        task_data: Final[_RunwayTtsTaskResponse] = _parse_runway_tts_task(polled_response)
 
         verbose_logger.debug("RunwayML TTS polling complete (async), downloading audio")
 

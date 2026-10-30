@@ -49,6 +49,7 @@ from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
 )
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AwsAuthParams, BedrockBatchRecordKind
 from litellm.types.llms.openai import (
@@ -400,7 +401,7 @@ def _batch_input_line(line_number: int, line: str) -> _BatchInputLine:
 
 
 def _non_blank_lines(file_content: str) -> Iterator[tuple[int, str]]:
-    numbered_lines: Final = enumerate(file_content.splitlines(), start=1)
+    numbered_lines: Final = enumerate(split_sse_lines(file_content), start=1)
     return ((line_number, line) for line_number, line in numbered_lines if line.strip())
 
 
@@ -1052,7 +1053,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         # --- Anthropic: use existing AmazonAnthropicClaudeConfig ---
         if provider == LlmProviders.ANTHROPIC:
-            from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+            from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
                 AmazonAnthropicClaudeConfig,
             )
 

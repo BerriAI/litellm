@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { DailyData } from "@/components/UsagePage/types";
-import { bucketSeries, bucketTotals, labelForDate, rollUpBreakdown, seriesBy } from "./overviewData";
+import {
+  bucketSeries,
+  bucketTotals,
+  colorForModel,
+  labelForDate,
+  modelColorMap,
+  OTHER_COLOR,
+  rollUpBreakdown,
+  seriesBy,
+} from "./overviewData";
 
 const metrics = (spend: number) => ({
   spend,
@@ -87,5 +96,88 @@ describe("rollUpBreakdown", () => {
       expect.objectContaining({ key: "a", spend: 5, requests: 2 }),
     ]);
     expect(JSON.stringify(days)).toBe(before);
+  });
+});
+
+describe("model colors", () => {
+  it("should include deployment IDs without replacing the main chart's group colors or guessing aliases", () => {
+    const result = day("2026-10-01", 12, { "claude-sonnet": 10, "gpt-5": 2 });
+    const original = modelColorMap([result]);
+    result.breakdown.models = {
+      "claude-sonnet": result.breakdown.model_groups["claude-sonnet"],
+      "provider-deployment-123": result.breakdown.model_groups["gpt-5"],
+    };
+    const colors = modelColorMap([result]);
+    const deployments = seriesBy([result], "models", "spend", { top: 8, colorByKey: colors });
+
+    expect(colors.get("claude-sonnet")).toBe(original.get("claude-sonnet"));
+    expect(colors.get("gpt-5")).toBe(original.get("gpt-5"));
+    expect(colors.size).toBe(3);
+    expect(colors.get("provider-deployment-123")).not.toBe(colors.get("gpt-5"));
+    expect(deployments.colors).toEqual([colors.get("claude-sonnet"), colors.get("provider-deployment-123")]);
+  });
+
+  it("should preserve the overview's existing spend palette and reuse it when a client ranks models differently", () => {
+    const overview = [day("2026-10-01", 15, { "claude-sonnet": 10, "gpt-5": 4, "gemini-pro": 1 })];
+    const client = [day("2026-10-01", 5, { "gpt-5": 4, "claude-sonnet": 1 })];
+    const colors = modelColorMap(overview);
+    const originalSeries = seriesBy(overview, "model_groups", "spend");
+    const clientSeries = seriesBy(client, "model_groups", "spend", { top: 8, colorByKey: colors });
+
+    expect(originalSeries.colors).toEqual(originalSeries.labels.map((model) => colors.get(model)));
+    expect(clientSeries.labels).toEqual(["gpt-5", "claude-sonnet"]);
+    expect(clientSeries.colors).toEqual([colors.get("gpt-5"), colors.get("claude-sonnet")]);
+    expect(clientSeries.colors[0]).not.toBe(originalSeries.colors[0]);
+    expect(bucketTotals(clientSeries).get("2026-10-01")).toBe(5);
+  });
+
+  it("should retain model colors when token ranking and weekly grouping change the chart", () => {
+    const result = day("2026-10-01", 12, { "claude-sonnet": 10, "gpt-5": 2 });
+    result.breakdown.model_groups["claude-sonnet"].metrics.total_tokens = 20;
+    result.breakdown.model_groups["gpt-5"].metrics.total_tokens = 100;
+    const colors = modelColorMap([result]);
+    const tokens = seriesBy([result], "model_groups", "tokens", { top: 8, colorByKey: colors });
+    const weekly = bucketSeries(tokens, "week");
+
+    expect(tokens.labels).toEqual(["gpt-5", "claude-sonnet"]);
+    expect(tokens.colors).toEqual([colors.get("gpt-5"), colors.get("claude-sonnet")]);
+    expect(weekly.colors).toEqual(tokens.colors);
+    expect(bucketTotals(weekly).get("2026-10-01")).toBe(120);
+  });
+
+  it("should give a client-only model a deterministic color when it changes rank", () => {
+    const colors = modelColorMap([day("2026-10-01", 10, { "claude-sonnet": 10 })]);
+    const first = seriesBy([day("2026-10-01", 10, { "claude-sonnet": 8, "new-model": 2 })], "model_groups", "spend", {
+      top: 8,
+      colorByKey: colors,
+    });
+    const second = seriesBy([day("2026-10-01", 10, { "new-model": 8, "claude-sonnet": 2 })], "model_groups", "spend", {
+      top: 8,
+      colorByKey: colors,
+    });
+
+    expect(first.colors[1]).toBe(second.colors[0]);
+    expect(first.colors[1]).toBe(colorForModel("new-model", colors));
+    expect(colors.has("new-model")).toBe(false);
+  });
+
+  it("should keep a model named Other distinct from the grey remainder and retain colors outside the top eight", () => {
+    const models = { Other: 10, a: 9, b: 8, c: 7, d: 6, e: 5, f: 4, g: 3, h: 2 };
+    const results = [day("2026-10-01", 55, models)];
+    const colors = modelColorMap(results);
+    const series = seriesBy(results, "model_groups", "spend", { top: 8, colorByKey: colors });
+    const client = seriesBy([day("2026-10-01", 2, { h: 2 })], "model_groups", "spend", {
+      top: 8,
+      colorByKey: colors,
+    });
+
+    expect(series.labels[0]).toBe("Other");
+    expect(series.colors[0]).toBe(colors.get("Other"));
+    expect(series.colors[0]).not.toBe(OTHER_COLOR);
+    expect(series.labels.at(-1)).toBe("Other");
+    expect(series.colors.at(-1)).toBe(OTHER_COLOR);
+    expect(series.labels).not.toContain("h");
+    expect(colorForModel("h", colors)).toBe(client.colors[0]);
+    expect(bucketTotals(series).get("2026-10-01")).toBe(55);
   });
 });
