@@ -6953,7 +6953,9 @@ class ProxyConfig:
                 elif key == "mcp_code_mode":
                     from litellm.proxy.mcp_server.code_execution import validate_settings
 
-                    litellm.mcp_code_mode = validate_settings(value).model_dump()
+                    litellm.mcp_code_mode = validate_settings(
+                        cast(object, value)  # cast-ok: the helper validates this dynamic configuration value
+                    ).model_dump()
                 elif key == "upperbound_key_generate_params":
                     if value is not None and isinstance(value, dict):
                         for _k, _v in value.items():

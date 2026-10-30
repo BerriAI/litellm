@@ -27,6 +27,8 @@ if (result.isError) {
 
 Use `await` for every call, including calls grouped with `Promise.all`. Scripts run in fresh local worker processes. They have no persistent state, general network, filesystem, package imports, or shell API. The parent gateway performs tool calls using the original caller's permissions, upstream authentication, guardrails, and accounting. A worker process isolates normal runtime failures; it is not an operating-system sandbox against an exploit of the embedded JavaScript engine.
 
+The script itself and each nested tool call count toward request-rate limits. The script holds its caller's concurrency slot until it finishes; nested calls reuse overlapping concurrency slots and retain their other limits. The wrapper has no tool charge, and each upstream call retains its configured cost.
+
 ## Tool compatibility
 
 When code mode is enabled, tool listings include `_meta["litellm.ai/code_mode"]`; search and schema results include `code_mode`. `available` means the tool can be attempted through the JSON call bridge, not that the gateway has tested every behavior of that upstream. `unsupported` includes a reason. Existing tools remain callable directly.

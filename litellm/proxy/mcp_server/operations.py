@@ -320,7 +320,6 @@ async def prepare_virtual_mcp_call(
     logging_auth: UserAPIKeyAuth | None = None,
     raw_headers: Mapping[str, str] | None = None,
     client_ip: str | None = None,
-    guardrails_only: bool = False,
 ) -> tuple[Mapping[str, object], LiteLLMLoggingObj | None]:
     """Run the pre-call pipeline (guardrails + logging setup) for a virtual
     mcp_tool_call so the SSE path spend-logs like the REST path."""
@@ -348,7 +347,6 @@ async def prepare_virtual_mcp_call(
         proxy_logging_obj=proxy_logging_obj,
         general_settings=general_settings,
         logging_auth=logging_auth,
-        guardrails_only=guardrails_only,
     )
     processed_data, logging_candidate = TypeAdapter(tuple[dict[str, object], object]).validate_python(pre_call_result)
     if not isinstance(logging_candidate, LiteLLMLoggingObj):

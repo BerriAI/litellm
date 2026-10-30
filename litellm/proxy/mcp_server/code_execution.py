@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime
-from typing import Final
+from typing import Final, Protocol
 from uuid import uuid4
 
+import anyio
 from mcp.shared.exceptions import MCPError
 from mcp.types import CallToolResult, TextContent, Tool
 from pydantic import ConfigDict, JsonValue, TypeAdapter
 
 import litellm
+from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.mcp import MCPCodeModeSettings
@@ -20,6 +24,17 @@ from litellm.types.mcp import MCPCodeModeSettings
 CODE_TOOL_NAME: Final = "litellm_execute_code"
 CODE_MODE_META: Final = "litellm.ai/code_mode"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+
+
+class _FailureLogger(Protocol):
+    async def post_call_failure_hook(
+        self,
+        request_data: dict[str, object],  # mutable-ok: existing proxy failure hook mutates the request
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        *,
+        route: str,
+    ) -> object: ...
 
 
 class CodeInput(LiteLLMBaseModel):
@@ -144,6 +159,22 @@ def with_code_trace(context: OperationContext) -> OperationContext:
     return replace(context, raw_headers={**headers, "x-litellm-trace-id": str(uuid4())})
 
 
+async def cleanup_cancelled_call(data: Mapping[str, object], caller: UserAPIKeyAuth, logger: _FailureLogger) -> None:
+    from fastapi import HTTPException
+
+    with anyio.CancelScope(shield=True):
+        try:
+            await logger.post_call_failure_hook(
+                request_data=dict(data),
+                original_exception=HTTPException(status_code=499, detail="MCP code execution cancelled"),
+                user_api_key_dict=caller,
+                route="/mcp/call_tool",
+            )
+        except Exception:
+            # A callback failure must not replace the client's cancellation.
+            verbose_proxy_logger.error("MCP code cancellation cleanup failed")
+
+
 async def run_code_tool(arguments: Mapping[str, object] | None, context: OperationContext) -> CallToolResult:
     from litellm.proxy.mcp_server.operations import (
         _fire_mcp_tool_call_logging,
@@ -158,32 +189,44 @@ async def run_code_tool(arguments: Mapping[str, object] | None, context: Operati
         return error_result("MCP code execution requires an authenticated caller")
     traced: Final = with_code_trace(context)
     started: Final = datetime.now()  # noqa: DTZ005  # MCP logging uses naive timestamps
-    data, logging_obj = await prepare_virtual_mcp_call(
-        CODE_TOOL_NAME,
-        dict(arguments or {}),
-        caller,
-        raw_headers=traced.raw_headers,
-        client_ip=traced.client_ip,
-        guardrails_only=True,
-    )
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    data: Mapping[str, object] = {  # rebind-ok: enriched by pre-call setup
+        "name": CODE_TOOL_NAME,
+        "arguments": arguments or {},
+    }
     try:
-        processed: Final = TypeAdapter(dict[str, object]).validate_python(
-            data.get("modified_arguments", data.get("mcp_arguments", data.get("arguments", {})))
-        )
-        result: Final = await _execute_script(processed, traced)
-        if logging_obj is None:
-            return result
-        return await _fire_mcp_tool_call_logging(
-            logging_obj,
-            result,
-            started,
-            datetime.now(),  # noqa: DTZ005  # MCP logging uses naive timestamps
+        data, logging_obj = await prepare_virtual_mcp_call(  # rebind-ok: retain enriched data for cancellation cleanup
+            CODE_TOOL_NAME,
+            dict(arguments or {}),
             caller,
-            data,
+            raw_headers=traced.raw_headers,
+            client_ip=traced.client_ip,
         )
-    except Exception as exc:
-        await fire_mcp_tool_call_failure_logging(logging_obj, exc, started, caller, data)
+        try:
+            processed: Final = TypeAdapter(dict[str, object]).validate_python(
+                data.get("modified_arguments", data.get("mcp_arguments", data.get("arguments", {})))
+            )
+            result: Final = await _execute_script(processed, traced)
+            if logging_obj is None:
+                return result
+            return await _fire_mcp_tool_call_logging(
+                logging_obj,
+                result,
+                started,
+                datetime.now(),  # noqa: DTZ005  # MCP logging uses naive timestamps
+                caller,
+                data,
+            )
+        except Exception as exc:
+            await fire_mcp_tool_call_failure_logging(logging_obj, exc, started, caller, data)
+            raise
+    except asyncio.CancelledError:
+        await cleanup_cancelled_call(data, caller, proxy_logging_obj)
         raise
+    finally:
+        with anyio.CancelScope(shield=True):
+            await proxy_logging_obj.arelease_max_parallel_requests(caller)
 
 
 async def _execute_script(arguments: Mapping[str, object], context: OperationContext) -> CallToolResult:
@@ -193,6 +236,7 @@ async def _execute_script(arguments: Mapping[str, object], context: OperationCon
         VIRTUAL_TOOL_NAMES,
         mcp_proxy_tool_id,
     )
+    from litellm.proxy.proxy_server import proxy_logging_obj
 
     if not settings().enabled:
         return error_result("MCP code mode is disabled")
@@ -242,19 +286,28 @@ async def _execute_script(arguments: Mapping[str, object], context: OperationCon
         support: Final = compatibility(selected)
         if support["status"] == "unsupported":
             return serialize_tool_result(error_result(f"Tool is unsupported in code mode: {support['reason']}"))
-        result: Final = await _dispatch_virtual_mcp_tool(
-            name="call_tool",
-            arguments={"tool_id": mcp_proxy_tool_id(selected), "arguments": tool_arguments},
-            user_api_key_auth=auth,
-            client_ip=client_ip,
-            mcp_servers=servers,
-            mcp_auth_header=header,
-            mcp_server_auth_headers=server_headers,
-            oauth2_headers=oauth_headers,
-            raw_headers=raw_headers,
-            mcp_proxy_mode=True,
-            incoming_bearer_token=context.incoming_bearer_token,
-        )
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import isolated_mcp_tool_call
+
+        with isolated_mcp_tool_call():
+            try:
+                result: Final = await _dispatch_virtual_mcp_tool(
+                    name="call_tool",
+                    arguments={"tool_id": mcp_proxy_tool_id(selected), "arguments": tool_arguments},
+                    user_api_key_auth=auth,
+                    client_ip=client_ip,
+                    mcp_servers=servers,
+                    mcp_auth_header=header,
+                    mcp_server_auth_headers=server_headers,
+                    oauth2_headers=oauth_headers,
+                    raw_headers=raw_headers,
+                    mcp_proxy_mode=True,
+                    incoming_bearer_token=context.incoming_bearer_token,
+                )
+            except asyncio.CancelledError:
+                await cleanup_cancelled_call(
+                    {"name": selected.name, "arguments": tool_arguments}, caller, proxy_logging_obj
+                )
+                raise
         assert result is not None
         from litellm.proxy.mcp_server.result_conversion import INPUT_REQUIRED_UNSUPPORTED_MESSAGE
 

@@ -217,3 +217,23 @@ async def test_disabled_code_name_falls_through_to_existing_tool_routing(monkeyp
         client_ip=None,
     )
     assert result is None
+
+
+def test_rest_keeps_nested_code_tool_visible_without_name_collision(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.mcp_server.rest_endpoints import _code_mode_rest_tool
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.setattr(litellm, "mcp_code_mode", True)
+    server = MCPServer(
+        server_id="nested-code-test",
+        name="gateway",
+        alias="gateway",
+        transport=MCPTransport.http,
+        url="https://example.com/mcp",
+    )
+    nested = _code_mode_rest_tool(Tool(name=CODE_TOOL_NAME, input_schema={}), server)
+    listed = with_code_tool([nested])
+    assert [tool.name for tool in listed] == ["gateway-litellm_execute_code", CODE_TOOL_NAME]
+    assert listed[0].meta is not None
+    assert listed[0].meta[CODE_MODE_META]["status"] == "unsupported"
