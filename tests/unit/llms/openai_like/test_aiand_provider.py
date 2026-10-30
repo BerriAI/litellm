@@ -1,3 +1,4 @@
+import datetime
 import json
 from typing import Final
 
@@ -93,16 +94,21 @@ AIAND_RETIREMENT_DATES: Final = {
     "aiand/deepseek-ai/deepseek-v4-flash": "2026-10-27",
     "aiand/zai-org/glm-5.2": "2026-10-27",
     "aiand/moonshotai/kimi-k2.7-code": "2026-10-27",
-    "aiand/deepseek-ai/deepseek-v4.1-flash": "2026-10-30",
+    "aiand/deepseek-ai/deepseek-v4.1-flash": "2026-11-06",
 }
-AIAND_RETIRED: Final = frozenset(AIAND_RETIREMENT_DATES)
 
 
 def test_aiand_wildcard_lists_only_its_live_models():
     catalog: Final = _aiand_catalog()
 
-    assert AIAND_RETIRED < catalog
-    assert frozenset(get_known_models_from_wildcard("aiand/*")) == catalog - AIAND_RETIRED
+    retired: Final = frozenset(
+        model
+        for model, retired_on in AIAND_RETIREMENT_DATES.items()
+        if datetime.date.fromisoformat(retired_on) <= datetime.date.today()
+    )
+
+    assert frozenset(AIAND_RETIREMENT_DATES) < catalog
+    assert frozenset(get_known_models_from_wildcard("aiand/*")) == catalog - retired
 
 
 def test_aiand_retired_models_carry_their_retirement_date():

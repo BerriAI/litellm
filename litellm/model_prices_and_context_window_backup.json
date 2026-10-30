@@ -72064,7 +72064,7 @@
     },
     "aiand/deepseek-ai/deepseek-v4.1-flash": {
         "cache_read_input_token_cost": 2e-08,
-        "deprecation_date": "2026-10-30",
+        "deprecation_date": "2026-11-06",
         "input_cost_per_token": 3e-07,
         "litellm_provider": "aiand",
         "max_input_tokens": 1048576,
