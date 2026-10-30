@@ -204,6 +204,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
+    batch_chat_usage,
 )
 from litellm.types.videos.main import VideoObject
 from litellm.utils import get_base_model_from_metadata, print_verbose
@@ -2096,6 +2097,11 @@ class Logging(LiteLLMLoggingBaseClass):
             elif router_model_id is None and "model_id" in hidden_params:  # use model_id if not already set
                 router_model_id = hidden_params["model_id"]
 
+        if isinstance(priced_result, LiteLLMBatch) and (
+            not batch_cost_is_final(priced_result) or self._is_batch_poll_without_logging(priced_result)
+        ):
+            return 0.0
+
         # Fallback: extract router_model_id from litellm_params when not available
         # from the result object. ResponsesAPIResponse objects (used by /v1/responses
         # streaming) don't carry _hidden_params["model_id"] like ModelResponse does.
@@ -3351,6 +3357,10 @@ class Logging(LiteLLMLoggingBaseClass):
         finally:
             self._restore_correlation_context()
 
+    def _is_batch_poll_without_logging(self, result: object) -> bool:
+        litellm_metadata: Final = (self.litellm_params or {}).get("litellm_metadata") or {}
+        return isinstance(result, LiteLLMBatch) and litellm_metadata.get("batch_ignore_default_logging", False) is True
+
     def _success_handler_body(
         self,
         result: object = None,
@@ -3873,11 +3883,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         ## CALCULATE COST FOR BATCH JOBS
         if self.call_type == CallTypes.aretrieve_batch.value and isinstance(result, LiteLLMBatch):
-            litellm_params = self.litellm_params or {}
-            litellm_metadata: Final = litellm_params.get("litellm_metadata") or {}
-            if (
-                litellm_metadata.get("batch_ignore_default_logging", False) is True
-            ):  # polling job will query these frequently, don't spam db logs
+            if self._is_batch_poll_without_logging(result):
                 return
 
             batch_cost: Final = kwargs.get("batch_cost", None)
@@ -7502,7 +7508,8 @@ def get_standard_logging_object_payload(
         # Extract usage as a plain dict, avoiding Pydantic round-trip
         raw_usage_dict: Final = StandardLoggingPayloadSetup.get_usage_as_dict(
             response_obj=None if is_unbilled_non_inference_call(call_type, metadata, response_obj) else response_obj,
-            combined_usage_object=cast(Usage | None, kwargs.get("combined_usage_object")),
+            combined_usage_object=cast(Usage | None, kwargs.get("combined_usage_object"))
+            or (batch_chat_usage(init_response_obj) if isinstance(init_response_obj, LiteLLMBatch) else None),
         )
         usage_dict: Final = (
             {**raw_usage_dict, "output_image_count": len(init_response_obj.data)}
