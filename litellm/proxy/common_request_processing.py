@@ -4869,8 +4869,9 @@ class ProxyBaseLLMRequestProcessing:
         if stream_usage is None:
             return None
         service_tier: Final = obj.get("service_tier")
+        served_model: Final = litellm_logging_obj.model if litellm_logging_obj is not None else None
         cost_val: Final = ProxyBaseLLMRequestProcessing._streamed_usage_cost(
-            ModelResponse(usage=stream_usage),
+            ModelResponse(model=served_model, usage=stream_usage),
             model_name,
             service_tier if isinstance(service_tier, str) else None,
             litellm_logging_obj,
