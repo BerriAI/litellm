@@ -28,6 +28,7 @@ from litellm.llms.bedrock.common_utils import (
     apply_bedrock_invoke_structured_output,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
+    bedrock_error_in_success_body,
     bedrock_supports_tool_search,
     deployment_model_info,
     get_anthropic_beta_from_headers,
@@ -416,6 +417,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
+        success_body_error: Final = bedrock_error_in_success_body(raw_response)
+        if success_body_error is not None:
+            raise success_body_error
         response: Final = AnthropicConfig.transform_response(
             self,
             model=model,

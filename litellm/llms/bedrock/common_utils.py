@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -116,6 +116,35 @@ class BedrockError(BaseLLMException):
             body=body,
             status_code_is_synthesized=status_code_is_synthesized,
         )
+
+
+class _BedrockServiceErrorOutput(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    error_type: str = Field(alias="__type")
+
+
+class _BedrockServiceErrorBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    Output: _BedrockServiceErrorOutput
+
+
+def bedrock_error_in_success_body(response: httpx.Response) -> BedrockError | None:
+    if b'"__type"' not in response.content:
+        return None
+    try:
+        error_type: Final = _BedrockServiceErrorBody.model_validate_json(response.content).Output.error_type
+    except ValidationError:
+        return None
+    return BedrockError(
+        status_code=400,
+        message=(
+            f"Bedrock answered HTTP 200 with the error {error_type}, which usually means the model id in the "
+            "model string does not name a Bedrock model or profile this route can call."
+        ),
+        headers=response.headers,
+    )
 
 
 _BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (*AWS_AUTH_PARAM_KEYS, "aws_region_name")
@@ -1061,6 +1090,21 @@ def bedrock_capability_model(model: str, base_model: object) -> str:
     return model
 
 
+def invoke_model_with_base_model_provider(model: str, base_model: object) -> str:
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    model_id: Final = strip_bedrock_routing_prefix(model)
+    if (
+        not isinstance(base_model, str)
+        or not model_id.startswith("arn:")
+        or BedrockModelInfo.get_bedrock_route(model) != "invoke"
+        or BaseAWSLLM.get_bedrock_invoke_provider(model) is not None
+    ):
+        return model
+    provider: Final = BaseAWSLLM.get_bedrock_invoke_provider(strip_bedrock_routing_prefix(base_model))
+    return model if provider is None else f"invoke/{provider}/{model_id}"
+
+
 def strip_bedrock_routing_prefix(model: str) -> str:
     """Strip LiteLLM routing prefixes from model name."""
     for prefix in ["bedrock/", "chat_completions/", "converse/", "invoke/", "openai/", "mantle/", "nova-2/", "nova/"]:
@@ -1971,21 +2015,23 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return None
 
 
-def get_bedrock_chat_config(model: str):
+def get_bedrock_chat_config(model: str, deployment_base_model: str | None = None):
     """
     Helper function to get the appropriate Bedrock chat config based on model and route.
 
     Args:
         model: The model name/identifier
+        deployment_base_model: The deployment's base_model, which names the invoke provider for a bare ARN
 
     Returns:
         The appropriate Bedrock config class instance
     """
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
-    bedrock_route: Final = BedrockModelInfo.get_bedrock_route(model)
-    bedrock_invoke_provider: Final = BaseAWSLLM.get_bedrock_invoke_provider(model=model)
-    base_model: Final = BedrockModelInfo.get_base_model(model)
+    routed_model: Final = invoke_model_with_base_model_provider(model, deployment_base_model)
+    bedrock_route: Final = BedrockModelInfo.get_bedrock_route(routed_model)
+    bedrock_invoke_provider: Final = BaseAWSLLM.get_bedrock_invoke_provider(model=routed_model)
+    base_model: Final = BedrockModelInfo.get_base_model(routed_model)
 
     # Handle explicit routes first
     if bedrock_route == "claude_platform":

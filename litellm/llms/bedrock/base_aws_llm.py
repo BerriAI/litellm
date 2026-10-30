@@ -669,7 +669,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             # like "bedrock/invoke/arn:..." are fully stripped in one call.
             from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
 
-            model_id = strip_bedrock_routing_prefix(model_id)
+            model_id = BaseAWSLLM._without_invoke_provider_spec(strip_bedrock_routing_prefix(model_id))
             # URL-encode ARNs so colons and slashes are safe in the URL path.
             if model_id.startswith("arn:"):
                 model_id = BaseAWSLLM.encode_model_id(model_id=model_id)
@@ -695,6 +695,11 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         elif "nova/" in model_id:
             model_id = BaseAWSLLM._get_model_id_from_model_with_spec(model_id, spec="nova")
         return model_id
+
+    @staticmethod
+    def _without_invoke_provider_spec(model_id: str) -> str:
+        _, _, arn = model_id.partition("/")
+        return arn if arn.startswith("arn:") else model_id
 
     @staticmethod
     def _get_model_id_from_model_with_spec(

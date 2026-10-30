@@ -129,6 +129,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_route_for_request,
     bedrock_strict_tools_fallback,
     deployment_model_info,
+    invoke_model_with_base_model_provider,
     without_bedrock_native_output_opt_in,
     without_bedrock_route_prefix,
 )
@@ -4539,10 +4540,11 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
             client=client,
         )
     else:
+        invoke_model: Final = invoke_model_with_base_model_provider(model, litellm_params.get("base_model"))
 
         def invoke_attempt(fallback: NativeOutputFallback | None) -> NativeOutputAttemptResult:
             return base_llm_http_handler.completion(
-                model=model,
+                model=invoke_model,
                 stream=stream,
                 messages=messages,
                 acompletion=acompletion,
@@ -4565,10 +4567,10 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
             (
                 partial(_native_output_fallback, ctx, invoke_params, dict(litellm_params))
                 if isinstance(provider_config, AmazonAnthropicClaudeConfig)
-                and provider_config.uses_opt_in_native_output(model, invoke_params, litellm_params)
+                and provider_config.uses_opt_in_native_output(invoke_model, invoke_params, litellm_params)
                 else None
             ),
-            model,
+            invoke_model,
         )
 
     return response

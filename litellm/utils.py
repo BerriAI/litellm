@@ -9466,7 +9466,7 @@ class ProviderConfigManager:
             # Format: (factory_function, needs_model_parameter: bool)
             LlmProviders.OPENAI: (lambda: litellm.OpenAIGPTConfig(), False),
             LlmProviders.ANTHROPIC: (lambda: litellm.AnthropicConfig(), False),
-            # AZURE is handled as a special case in get_provider_chat_config()
+            # AZURE and BEDROCK are handled as special cases in get_provider_chat_config()
             # so that base_model can be threaded through for model-type detection.
             LlmProviders.AZURE_AI: (
                 lambda model: ProviderConfigManager._get_azure_ai_config(model),
@@ -9474,10 +9474,6 @@ class ProviderConfigManager:
             ),
             LlmProviders.VERTEX_AI: (
                 lambda model: ProviderConfigManager._get_vertex_ai_config(model),
-                True,
-            ),
-            LlmProviders.BEDROCK: (
-                lambda model: ProviderConfigManager._get_bedrock_config(model),
                 True,
             ),
             LlmProviders.COHERE: (
@@ -9686,11 +9682,11 @@ class ProviderConfigManager:
             return litellm.VertexAILlama3Config()
 
     @staticmethod
-    def _get_bedrock_config(model: str) -> BaseConfig:
+    def _get_bedrock_config(model: str, base_model: str | None) -> BaseConfig:
         """Get Bedrock config based on model."""
         from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
 
-        return get_bedrock_chat_config(model=model)
+        return get_bedrock_chat_config(model=model, deployment_base_model=base_model)
 
     @staticmethod
     def _get_bigmodel_chat_config() -> BaseConfig:
@@ -9782,9 +9778,11 @@ class ProviderConfigManager:
             if not OpenAIGPTConfig.is_openai_catalog_model(model):
                 return OpenAIUnknownModelConfig()
 
-        # Handle Azure before the generic map so base_model can be threaded through
+        # Handle Azure and Bedrock before the generic map so base_model can be threaded through
         if provider == LlmProviders.AZURE:
             return ProviderConfigManager._get_azure_config(model=model, base_model=base_model)
+        if provider == LlmProviders.BEDROCK:
+            return ProviderConfigManager._get_bedrock_config(model=model, base_model=base_model)
 
         # Initialize provider config map lazily (avoids circular imports)
         if ProviderConfigManager._PROVIDER_CONFIG_MAP is None:

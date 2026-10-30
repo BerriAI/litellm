@@ -22,7 +22,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import make_call, make_sync_call
-from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.common_utils import BedrockError, bedrock_error_in_success_body
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
     merge_bedrock_invoke_headers,
@@ -390,7 +390,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             else:  # amazon titan
                 outputText = completion_response.get("results")[0].get("outputText")
         except Exception as e:
-            raise BedrockError(
+            raise bedrock_error_in_success_body(raw_response) or BedrockError(
                 message=f"Error processing={raw_response.text}, Received error={e}",
                 status_code=422,
                 headers=raw_response.headers,
@@ -412,7 +412,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             else:
                 raise Exception()
         except Exception as e:
-            raise BedrockError(
+            raise bedrock_error_in_success_body(raw_response) or BedrockError(
                 message=f"Error parsing received text={outputText}.\nError-{e}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,

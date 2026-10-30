@@ -5,6 +5,7 @@ import itertools
 import json
 import re
 import struct
+import urllib.parse
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -1982,3 +1983,248 @@ def test_invoke_stream_decoder_carries_the_guardrail_trace_of_the_message_stop_c
     assert (plain.provider_specific_fields or {}).get("amazon-bedrock-trace") is None
     assert traced.provider_specific_fields is not None
     assert traced.provider_specific_fields["amazon-bedrock-trace"] == trace
+
+
+_ARN_ACCOUNT: Final = "arn:aws:bedrock:us-east-1:123456789012"
+_APPLICATION_PROFILE_ARN: Final = f"{_ARN_ACCOUNT}:application-inference-profile/a1b2c3d4e5f6"
+_CLAUDE_INVOKE_ANSWER: Final = json.dumps(
+    {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude",
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }
+).encode()
+_CLAUDE_INVOKE_STREAM: Final = b"".join(
+    _bedrock_event_stream_frame(chunk)
+    for chunk in (
+        {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 1, "output_tokens": 0}}},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}},
+        {"type": "message_stop"},
+    )
+)
+_UNKNOWN_OPERATION_BODY: Final = (
+    b'{"Output":{"__type":"com.amazon.coral.service#UnknownOperationException"},"Version":"1.0"}'
+)
+
+
+def _claude_invoke_upstream(arn: str, stream: bool) -> httpx.MockTransport:
+    operation: Final = "invoke-with-response-stream" if stream else "invoke"
+    expected_path: Final = f"/model/{urllib.parse.quote(arn, safe='')}/{operation}"
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        path: Final = request.url.raw_path.decode()
+        body: Final = json.loads(request.content)
+        if path != expected_path or "anthropic_version" not in body or body.get("stop_sequences") != ["END"]:
+            return httpx.Response(404, json={"message": f"unexpected request {path} {body}"}, request=request)
+        if stream:
+            return httpx.Response(
+                200,
+                content=_CLAUDE_INVOKE_STREAM,
+                headers={"content-type": "application/vnd.amazon.eventstream"},
+                request=request,
+            )
+        return httpx.Response(
+            200, content=_CLAUDE_INVOKE_ANSWER, headers={"content-type": "application/json"}, request=request
+        )
+
+    return httpx.MockTransport(answer)
+
+
+def _answer_text(response: object) -> str:
+    if isinstance(response, litellm.ModelResponse):
+        return response.choices[0].message.content or ""
+    assert isinstance(response, CustomStreamWrapper)
+    return "".join(chunk.choices[0].delta.content or "" for chunk in response)
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
+@pytest.mark.parametrize(
+    ("model", "arn", "deployment"),
+    [
+        pytest.param(
+            f"bedrock/invoke/anthropic/{_APPLICATION_PROFILE_ARN}",
+            _APPLICATION_PROFILE_ARN,
+            {},
+            id="application-profile",
+        ),
+        pytest.param(
+            f"bedrock/invoke/anthropic/{_ARN_ACCOUNT}:provisioned-model/a1b2c3d4e5f6",
+            f"{_ARN_ACCOUNT}:provisioned-model/a1b2c3d4e5f6",
+            {},
+            id="provisioned",
+        ),
+        pytest.param(
+            f"bedrock/invoke/anthropic/{_ARN_ACCOUNT}:custom-model/anthropic.claude-haiku-5-5/a1b2c3d4e5f6",
+            f"{_ARN_ACCOUNT}:custom-model/anthropic.claude-haiku-5-5/a1b2c3d4e5f6",
+            {},
+            id="custom-model",
+        ),
+        pytest.param(
+            f"bedrock/invoke/{_APPLICATION_PROFILE_ARN}",
+            _APPLICATION_PROFILE_ARN,
+            {"base_model": "bedrock/us.anthropic.claude-haiku-5-5"},
+            id="base-model",
+        ),
+        pytest.param(
+            f"bedrock/invoke/{_APPLICATION_PROFILE_ARN}",
+            _APPLICATION_PROFILE_ARN,
+            {"model_info": {"base_model": "us.anthropic.claude-haiku-5-5"}},
+            id="model-info-base-model",
+        ),
+        pytest.param(
+            f"bedrock/invoke/{_ARN_ACCOUNT}:custom-model/anthropic.claude-haiku-5-5/a1b2c3d4e5f6",
+            f"{_ARN_ACCOUNT}:custom-model/anthropic.claude-haiku-5-5/a1b2c3d4e5f6",
+            {"base_model": "bedrock/meta.llama3-70b-instruct-v1:0"},
+            id="custom-model-arn-over-other-base-model",
+        ),
+        pytest.param(
+            f"bedrock/invoke/claude/{_ARN_ACCOUNT}:custom-model/anthropic.claude-haiku-5-5/a1b2c3d4e5f6",
+            f"{_ARN_ACCOUNT}:custom-model/anthropic.claude-haiku-5-5/a1b2c3d4e5f6",
+            {},
+            id="custom-model-under-unlisted-spec",
+        ),
+    ],
+)
+def test_an_arn_in_the_invoke_model_string_reaches_bedrock_as_the_encoded_model_id(
+    _aws_test_credentials: None, model: str, arn: str, deployment: Mapping[str, object], stream: bool
+) -> None:
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10,
+        stop=["END"],
+        stream=stream,
+        client=HTTPHandler(client=httpx.Client(transport=_claude_invoke_upstream(arn, stream))),
+        **deployment,
+    )
+
+    assert _answer_text(response) == "hi"
+
+
+def _no_upstream_call() -> httpx.MockTransport:
+    return httpx.MockTransport(
+        lambda request: httpx.Response(500, json={"message": f"unexpected call to {request.url}"}, request=request)
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "deployment"),
+    [
+        pytest.param(f"bedrock/invoke/{_APPLICATION_PROFILE_ARN}", {}, id="arn-without-base-model"),
+        pytest.param(
+            "bedrock/invoke/my-imported-model",
+            {"base_model": "bedrock/us.anthropic.claude-haiku-5-5"},
+            id="non-arn-with-base-model",
+        ),
+    ],
+)
+def test_an_invoke_model_with_no_provider_to_route_by_keeps_the_unknown_provider_error(
+    _aws_test_credentials: None, model: str, deployment: Mapping[str, object]
+) -> None:
+    with pytest.raises(litellm.NotFoundError, match="Unknown provider=None"):
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=10,
+            client=HTTPHandler(client=httpx.Client(transport=_no_upstream_call())),
+            **deployment,
+        )
+
+
+def _unknown_operation_upstream() -> httpx.MockTransport:
+    return httpx.MockTransport(
+        lambda request: httpx.Response(
+            200, content=_UNKNOWN_OPERATION_BODY, headers={"content-type": "application/json"}, request=request
+        )
+    )
+
+
+def _assert_unknown_operation_is_a_bad_request(error: litellm.BadRequestError) -> None:
+    assert error.status_code == 400
+    assert "com.amazon.coral.service#UnknownOperationException" in error.message
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/invoke/anthropic.claude-haiku-5-5",
+        "bedrock/invoke/mistral.mistral-large-2407-v1:0",
+        "bedrock/invoke/cohere.command-r-plus-v1:0",
+    ],
+)
+def test_a_200_unknown_operation_body_is_a_bad_request(_aws_test_credentials: None, model: str, stream: bool) -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        _answer_text(
+            litellm.completion(
+                model=model,
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=10,
+                stream=stream,
+                client=HTTPHandler(client=httpx.Client(transport=_unknown_operation_upstream())),
+            )
+        )
+
+    _assert_unknown_operation_is_a_bad_request(exc_info.value)
+
+
+async def _drain_async_unknown_operation_stream() -> None:
+    stream: Final = await litellm.acompletion(
+        model="bedrock/invoke/anthropic.claude-haiku-5-5",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10,
+        stream=True,
+        client=AsyncHTTPHandler(transport=_unknown_operation_upstream()),
+    )
+    _ = [chunk async for chunk in stream]
+
+
+@pytest.mark.asyncio
+async def test_a_200_unknown_operation_body_is_a_bad_request_on_an_async_stream(_aws_test_credentials: None) -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await _drain_async_unknown_operation_stream()
+
+    _assert_unknown_operation_is_a_bad_request(exc_info.value)
+
+
+def test_a_tool_call_whose_arguments_carry_a_type_key_is_not_read_as_a_bedrock_error(
+    _aws_test_credentials: None,
+) -> None:
+    arguments: Final = {"__type": "Document", "title": "notes"}
+    tool_call_answer: Final = json.dumps(
+        {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude",
+            "content": [{"type": "tool_use", "id": "toolu_1", "name": "save", "input": arguments}],
+            "stop_reason": "tool_use",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+    ).encode()
+    upstream: Final = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200, content=tool_call_answer, headers={"content-type": "application/json"}, request=request
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="bedrock/invoke/anthropic.claude-haiku-5-5",
+        messages=[{"role": "user", "content": "save my notes"}],
+        max_tokens=10,
+        client=HTTPHandler(client=httpx.Client(transport=upstream)),
+    )
+
+    assert isinstance(response, litellm.ModelResponse)
+    tool_calls: Final = response.choices[0].message.tool_calls
+    assert tool_calls is not None
+    assert json.loads(tool_calls[0].function.arguments) == arguments
