@@ -27,6 +27,7 @@ from litellm.llms.bedrock.common_utils import (
     apply_bedrock_invoke_structured_output,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
+    bedrock_invoke_guardrail_intervened,
     bedrock_native_output_is_opt_in,
     bedrock_supports_tool_search,
     deployment_model_info,
@@ -426,6 +427,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             json_mode=json_mode,
         )
         body: Final = object_mapping(raw_response.json()) or {}
+        if bedrock_invoke_guardrail_intervened(body):
+            for choice in response.choices:
+                choice.finish_reason = "content_filter"
         trace: Final = object_mapping(body.get(BEDROCK_INVOKE_TRACE_FIELD))
         if trace is not None:
             setattr(response, BEDROCK_INVOKE_TRACE_FIELD, trace)

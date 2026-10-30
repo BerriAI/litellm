@@ -22,7 +22,7 @@ from litellm.llms.anthropic.chat.handler import (
 )
 from litellm.llms.anthropic.chat.transformation import JsonModeRequest
 from litellm.llms.base_llm.base_utils import ResponseFormatSchema
-from litellm.llms.bedrock.common_utils import BEDROCK_INVOKE_TRACE_FIELD
+from litellm.llms.bedrock.common_utils import BEDROCK_INVOKE_TRACE_FIELD, bedrock_invoke_guardrail_intervened
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -853,10 +853,11 @@ class AWSEventStreamDecoder:
                 if message:
                     # sse_event = ServerSentEvent(data=message, event="completion")
                     _data = json.loads(message)
-                    yield self.chunk_parser(chunk_data=_data)
+                    yield from self._chunks_for_event(_data)
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
+        yield from self._stream_end_chunks()
 
     async def aiter_bytes(
         self, iterator: AsyncIterator[bytes], *, response_headers: Mapping[str, str] | None = None
@@ -874,10 +875,22 @@ class AWSEventStreamDecoder:
                 message = self._decode_event(event, tally, request_id_headers)
                 if message:
                     _data = json.loads(message)
-                    yield self.chunk_parser(chunk_data=_data)
+                    for parsed in self._chunks_for_event(_data):
+                        yield parsed
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
+        for stream_end_chunk in self._stream_end_chunks():
+            yield stream_end_chunk
+
+    def _chunks_for_event(
+        self,
+        chunk_data: dict[str, object],  # mutable-ok: chunk_parser takes the decoded event as is
+    ) -> tuple[GChunk | ModelResponseStream | dict[str, object], ...]:  # mutable-ok: mirrors chunk_parser
+        return (self.chunk_parser(chunk_data=chunk_data),)
+
+    def _stream_end_chunks(self) -> tuple[ModelResponseStream, ...]:
+        return ()
 
     def _response_stream_shape(self) -> "Shape":
         response_stream_shape: Final = get_bedrock_response_stream_shape()
@@ -952,6 +965,7 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
             json_mode=json_mode,
             response_format_schema=response_format_schema,
         )
+        self._held_finish_chunk: ModelResponseStream | None = None
 
     def _chunk_parser(self, chunk_data: dict[str, object]) -> ModelResponseStream:
         parsed: Final = self.anthropic_model_response_iterator.chunk_parser(chunk=chunk_data)
@@ -966,6 +980,37 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
                 }
             }
         )
+
+    def _chunks_for_event(
+        self,
+        chunk_data: dict[str, object],  # mutable-ok: chunk_parser takes the decoded event as is
+    ) -> tuple[ModelResponseStream, ...]:
+        released: Final = self._release_held_finish_chunk(bedrock_invoke_guardrail_intervened(chunk_data))
+        parsed: Final = self._chunk_parser(chunk_data)
+        if not any(choice.finish_reason for choice in parsed.choices):
+            return (*released, parsed)
+        self._held_finish_chunk = parsed
+        return released
+
+    def _release_held_finish_chunk(self, guardrail_intervened: bool) -> tuple[ModelResponseStream, ...]:
+        held: Final = self._held_finish_chunk
+        self._held_finish_chunk = None
+        if held is None:
+            return ()
+        if not guardrail_intervened:
+            return (held,)
+        return (
+            held.model_copy(
+                update={
+                    "choices": [
+                        choice.model_copy(update={"finish_reason": "content_filter"}) for choice in held.choices
+                    ]
+                }
+            ),
+        )
+
+    def _stream_end_chunks(self) -> tuple[ModelResponseStream, ...]:
+        return self._release_held_finish_chunk(guardrail_intervened=False)
 
 
 class AmazonDeepSeekR1StreamDecoder(AWSEventStreamDecoder):
