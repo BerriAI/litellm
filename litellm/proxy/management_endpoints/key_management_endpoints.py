@@ -2835,7 +2835,7 @@ async def _apply_object_permission_update(
     """Upsert the requested object permission row inside the caller's writer transaction."""
     new_object_permission: Final = data_json.get("object_permission")
     if new_object_permission is None:
-        return data_json
+        return MappingProxyType({k: v for k, v in data_json.items() if k != "object_permission"})
     loaded: Final[object] = (
         json.loads(new_object_permission) if isinstance(new_object_permission, str) else new_object_permission
     )
