@@ -86,7 +86,7 @@ def _resolve_provider_from_router_alias(
     if llm_router is None:
         return None
     try:
-        model_list: Final[object] = getattr(llm_router, "model_list", None)
+        model_list: Final[object] = llm_router.registry().all()
         if not model_list:
             return None
         for deployment in iter_items(model_list):

@@ -36,6 +36,7 @@ from litellm.proxy.vector_store_files_endpoints.endpoints import (
 from litellm.types.utils import EmbeddingResponse, LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
 from litellm.vector_stores.main import _direct_vector_store_embedding_executor
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 def _serialize_litellm_params(litellm_params):
@@ -279,7 +280,7 @@ async def test_vector_store_file_list_resolves_credentials_from_model_query_para
     request.query_params = {"model": "team-openai"}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.get_deployment_credentials_with_provider.return_value = {
         "api_key": "sk-team-openai",
         "api_base": "https://api.openai.com/v1",
@@ -313,7 +314,7 @@ async def test_vector_store_file_list_registry_routed_model_skips_key_model_gran
     request.query_params = {}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.get_deployment_credentials_with_provider.return_value = {
         "api_key": "sk-team-openai",
         "api_base": "https://api.openai.com/v1",
@@ -347,7 +348,7 @@ async def test_vector_store_file_list_resolves_single_openai_team_deployment():
     request.query_params = {}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.get_deployment_credentials_with_provider.return_value = {
         "api_key": "sk-team-openai",
         "api_base": "https://api.openai.com/v1",
@@ -380,7 +381,7 @@ async def test_vector_store_file_list_wildcard_model_hint_falls_back_to_team_dep
     request.query_params = {"model": "openai/*"}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.model_group_alias = {}
     llm_router.get_deployment_credentials_with_provider.side_effect = [
         None,
@@ -418,7 +419,7 @@ async def test_vector_store_file_list_authorizes_wildcard_query_param_before_cre
     request.query_params = {"model": "openai/*"}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.model_group_alias = {}
     data = {"vector_store_id": "vs_123"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -443,7 +444,7 @@ async def test_vector_store_file_list_uses_single_team_model_for_router_routing(
     request.query_params = {}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.get_model_access_groups.return_value = {}
     llm_router.get_deployment_credentials_with_provider.return_value = None
 
@@ -473,7 +474,7 @@ async def test_vector_store_file_list_authorizes_inferred_team_model():
     request.query_params = {}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.model_group_alias = {}
     llm_router.get_deployment_credentials_with_provider.return_value = {
         "api_key": "sk-team-openai",
@@ -503,7 +504,7 @@ async def test_vector_store_file_list_does_not_guess_ambiguous_team_deployment()
     request.query_params = {}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.get_deployment_credentials_with_provider.side_effect = [
         {
             "api_key": "sk-team-openai-1",
@@ -538,7 +539,7 @@ async def test_vector_store_file_list_does_not_override_existing_credentials():
     request.query_params = {"model": "team-openai"}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     data = {
         "vector_store_id": "vs_123",
         "api_key": "sk-explicit",
@@ -562,7 +563,7 @@ async def test_vector_store_file_list_requires_explicit_openai_provider_for_team
     request.query_params = {}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.get_deployment_credentials_with_provider.return_value = {
         "api_key": "sk-unknown-provider",
         "api_base": "https://example.com/v1",
@@ -591,7 +592,7 @@ async def test_vector_store_file_list_authorizes_model_query_param_before_creden
     request.query_params = {"model": "restricted-deployment"}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.model_group_alias = {}
     data = {"vector_store_id": "vs_123"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -620,7 +621,7 @@ async def test_vector_store_file_list_model_query_param_enforces_project_model_g
     request.query_params = {"model": "team-openai"}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.model_group_alias = {}
     cache = UserApiKeyCache()
     await cache.async_set_cache(

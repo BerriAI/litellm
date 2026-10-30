@@ -91,6 +91,8 @@ from litellm.types.utils import (
     TokenCountResponse,
 )
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 
 def _hugging_face_offline() -> NoReturn:
     raise OSError("unit tests never download the Kimi K3 tokenizer")
@@ -645,6 +647,7 @@ async def test_factory_anthropic_endpoint_calls_anthropic_counter():
     ):
         # Mock router to return Anthropic deployment
         with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
+            route_entry_points_to_stubs(mock_router)
             mock_router.model_list = [
                 {
                     "model_name": "claude-3-5-sonnet",
@@ -706,6 +709,7 @@ async def test_factory_gpt4_endpoint_does_not_call_anthropic_counter():
 
             # Mock router to return GPT-4 deployment
             with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
+                route_entry_points_to_stubs(mock_router)
                 mock_router.model_list = [
                     {
                         "model_name": "gpt-4",
@@ -765,6 +769,7 @@ async def test_factory_normal_token_counter_endpoint_does_not_call_anthropic():
 
             # Mock router to return Anthropic deployment
             with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
+                route_entry_points_to_stubs(mock_router)
                 mock_router.model_list = [
                     {
                         "model_name": "claude-3-5-sonnet",
@@ -1105,7 +1110,7 @@ async def test_token_counter_httpx_status_error_raises_proxy_exception():
 
         litellm.proxy.proxy_server._get_provider_token_counter = mock_get_provider_token_counter
 
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.async_get_available_deployment = AsyncMock(
             return_value={
                 "litellm_params": {
@@ -1160,7 +1165,7 @@ async def test_proxy_token_counter_error_raises_exception_when_disabled():
         "model_info": {},
     }
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.async_get_available_deployment = AsyncMock(return_value=mock_deployment)
 
     setattr(litellm.proxy.proxy_server, "llm_router", mock_router)
@@ -1224,7 +1229,7 @@ async def test_proxy_token_counter_error_raises_when_enabled():
         "model_info": {},
     }
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.async_get_available_deployment = AsyncMock(return_value=mock_deployment)
 
     setattr(litellm.proxy.proxy_server, "llm_router", mock_router)
@@ -2240,22 +2245,6 @@ async def test_framing_keeps_the_400_for_blocks_the_provider_counter_cannot_conv
             id="web_search_blocks",
         ),
         pytest.param(
-            {
-                "messages": [{"role": "user", "content": "What is new?"}],
-                "tools": [{"name": "search", "input_schema": {"type": "object", "properties": {"query": True}}}],
-            },
-            id="boolean_subschema_tool",
-        ),
-        pytest.param(
-            {
-                "messages": [{"role": "user", "content": "What is new?"}],
-                "tools": [
-                    {"name": "search", "input_schema": {"type": "object", "properties": {"tags": {"type": "array"}}}}
-                ],
-            },
-            id="array_schema_without_items",
-        ),
-        pytest.param(
             {"messages": [], "contents": [{"role": "user", "parts": [{"text": "What is new?"}]}]},
             id="google_contents",
         ),
@@ -2311,6 +2300,44 @@ async def test_framed_estimate_that_cannot_read_the_body_answers_the_provider_er
 
     assert (raised.value.code, raised.value.message) == ("400", "scripted 400 for kimi")
     assert readable.count_source == "local_estimate"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("shorthand", "explicit"),
+    [
+        pytest.param({"type": "array"}, {"type": "array", "items": {}}, id="array_schema_without_items"),
+        pytest.param(True, {}, id="boolean_subschema"),
+    ],
+)
+async def test_framed_estimate_counts_a_json_schema_shorthand_like_its_explicit_form(
+    monkeypatch: pytest.MonkeyPatch, shorthand: object, explicit: dict[str, object]
+):
+    counter: Final = _ScriptedCounter({"us.moonshotai.kimi-k3": _provider_reply("kimi", status_code=400)})
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(model_list=[{"model_name": "kimi", "litellm_params": {"model": "bedrock/us.moonshotai.kimi-k3"}}]),
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "_get_provider_token_counter", lambda deployment, model: (counter, model, "bedrock")
+    )
+
+    async def count(schema: object) -> TokenCountResponse:
+        return await token_counter(
+            request=TokenCountRequest(
+                model="kimi",
+                messages=[{"role": "user", "content": "What is new?"}],
+                tools=[{"name": "search", "input_schema": {"type": "object", "properties": {"tags": schema}}}],
+            ),
+            call_endpoint=True,
+        )
+
+    from_shorthand: Final = await count(shorthand)
+    from_explicit: Final = await count(explicit)
+
+    assert from_shorthand.count_source == "local_estimate"
+    assert from_shorthand.total_tokens == from_explicit.total_tokens
 
 
 @pytest.mark.asyncio

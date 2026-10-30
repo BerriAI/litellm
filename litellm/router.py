@@ -198,6 +198,7 @@ from litellm.router_api import (
 )
 from litellm.router_api import deployment_id as _deployment_id
 from litellm.router_deprecated import DeprecatedRouterMembers
+from litellm.router_host import router_host
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     AUTO_ROUTER_MODEL_PREFIX,
     STRATEGY_ROUTER_PARAM_FIELDS,
@@ -1616,7 +1617,7 @@ class Router(DeprecatedRouterMembers):
         self._core_deployment_names: list[str] = []  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self._core_deployment_latency_map = {}
         ### CACHING ###
-        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = "local"  # default to an in-memory cache
+        cache_type: Literal["local", "redis", "redis-semantic", "s3"] = "local"  # default to an in-memory cache
         redis_cache = None
         cache_config: Final[dict[str, Any]] = {}
 
@@ -11566,10 +11567,6 @@ class Router(DeprecatedRouterMembers):
             return
         if custom_llm_provider != "vertex_ai":
             return
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            passthrough_endpoint_router,
-        )
-
         credential_name: Final = deployment.litellm_params.litellm_credential_name
         credential_values: Final = (
             CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else {}
@@ -11595,7 +11592,7 @@ class Router(DeprecatedRouterMembers):
             raise ValueError(
                 "vertex_project, and vertex_location must be set in litellm_params for pass-through endpoints."
             )
-        passthrough_endpoint_router.add_vertex_credentials(
+        router_host().add_vertex_pass_through_credentials(
             project_id=vertex_project,
             location=vertex_location,
             vertex_credentials=vertex_credentials,
@@ -12859,7 +12856,10 @@ class Router(DeprecatedRouterMembers):
         configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
         reasoning_efforts_initialized = False
         reasoning_efforts_unknown = False
-        model_list: Final = self._core_get_model_list_of_routed_group(model_group)
+        serves_team_deployments: Final = team_id is not None and bool(
+            self._team_deployments_named(team_id, model_group)
+        )
+        model_list: Final = self._core_get_model_list_of_routed_group(model_group, team_id)
         model_group_description: Final[str | None] = next(
             (d for d in (_configured_model_info(m).get("description") for m in model_list) if isinstance(d, str)),
             None,
@@ -12867,7 +12867,8 @@ class Router(DeprecatedRouterMembers):
         for model in model_list:
             is_match = False
             if (
-                "model_name" in model
+                serves_team_deployments
+                or "model_name" in model
                 and model["model_name"] == model_group
                 or "model_name" in model
                 and self._core_pattern_router.route(model_group) is not None
@@ -14216,17 +14217,22 @@ class Router(DeprecatedRouterMembers):
             lambda name: self._core_wildcard_route_deployments(name, team_id),
         )
 
-    def _core_get_model_list_of_routed_group(self, model_group: str) -> list[DeploymentTypedDict]:
+    def _core_get_model_list_of_routed_group(
+        self, model_group: str, team_id: str | None = None
+    ) -> list[DeploymentTypedDict]:
         """
         The deployments a request the router has already resolved to model_group is
-        served from: the ones named model_group, the routing group of that name, or
-        the wildcard route matching it when neither exists.
+        served from: team_id's own deployments under that public name when the team has
+        any, else the ones named model_group, the routing group of that name, or the
+        wildcard route matching it when neither exists.
 
         Unlike get_model_list, model_group's own model_group_alias entry is not
         followed. The router resolves an alias exactly once, so a group reached as
         an alias target is served by its own deployments, never by a second hop:
         in the chain X -> T -> U a request to X is served from T's deployments.
         """
+        if team_id is not None and self._team_deployments_named(team_id, model_group):
+            return self._core_get_all_deployments(model_name=model_group, team_id=team_id)
         own: Final = cast(  # cast-ok: the private alias returns what get_all_deployments returns
             list[DeploymentTypedDict], self._get_all_deployments(model_name=model_group)
         )
@@ -16309,7 +16315,6 @@ class Router(DeprecatedRouterMembers):
             )
             return None
 
-        from litellm.proxy.auth.auto_router_checks import authorize_member_auto_router_inference
         from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
 
         marker: Final = self._selected_strategy_marker_deployment(
@@ -16354,21 +16359,15 @@ class Router(DeprecatedRouterMembers):
             messages=messages,
         )
 
-        await authorize_member_auto_router_inference(
+        await router_host().authorize_strategy_inference(
             deployment=marker,
             request_kwargs=request_kwargs,
             llm_router=self,
         )
 
-        from litellm.proxy.guardrails.auto_router_compression import (
-            messages_for_routing,
-            model_hop_compression_armed,
-            policy_for_model,
-        )
-
         # Same tag-aware lookup the proxy's pre-call arming used, so an alias with
         # several tag-scoped markers cannot suppress under one and route under another.
-        compression_policy: Final = policy_for_model(
+        compression_policy: Final = router_host().compression_policy(
             llm_router=self,
             model_alias=registered_model_name,
             request_kwargs=request_kwargs,
@@ -16378,10 +16377,14 @@ class Router(DeprecatedRouterMembers):
         # compressing twice. Conditional on arming having actually happened: only the
         # proxy arms, and on the SDK path the shortcut would skip both hops entirely.
         needs_independent_routing_compression: Final = compression_policy is not None and not (
-            compression_policy.is_same and compression_policy.model is not None and model_hop_compression_armed()
+            compression_policy.is_same
+            and compression_policy.model is not None
+            and router_host().model_hop_compression_armed()
         )
         routing_messages: Final = (
-            await messages_for_routing(policy=compression_policy, messages=messages, request_kwargs=request_kwargs)
+            await router_host().messages_for_routing(
+                policy=compression_policy, messages=messages, request_kwargs=request_kwargs
+            )
             if needs_independent_routing_compression
             else None
         )

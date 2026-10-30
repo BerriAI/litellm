@@ -17937,3 +17937,137 @@ class TestNonReasoningTier:
             "complex",
             "reasoning",
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "verdict, expected", [("quick", "fast"), (" CAREFUL ", "capable"), (None, "backup"), ("unknown", "backup")]
+)
+async def test_custom_classifier_infers_tiers_and_routes_fallback(verdict: str | None, expected: str) -> None:
+    router: Final = ComplexityRouter(
+        model_name="auto",
+        litellm_router_instance=litellm.Router(model_list=[]),
+        default_model="backup",
+        complexity_router_config={
+            "classifier_type": "custom",
+            "classifier_plugin": _FixedTierClassifier(verdict),
+            "classifier_fallback": "default_model",
+            "tiers": {"quick": "fast", "careful": "capable"},
+        },
+    )
+    result: Final = await router.async_pre_routing_hook(
+        model="auto", request_kwargs={}, messages=[{"role": "user", "content": "hello"}]
+    )
+    assert result is not None
+    assert result.model == expected
+
+
+@pytest.mark.asyncio
+async def test_custom_classifier_can_extend_builtin_tiers() -> None:
+    router: Final = ComplexityRouter(
+        model_name="auto",
+        litellm_router_instance=litellm.Router(model_list=[]),
+        default_model="backup",
+        complexity_router_config={
+            "classifier_type": "custom",
+            "classifier_plugin": _FixedTierClassifier("SECURITY"),
+            "classifier_fallback": "default_model",
+            "tiers": {"SIMPLE": "fast", "REASONING": "capable", "SECURITY": "security-model"},
+        },
+    )
+    result: Final = await router.async_pre_routing_hook(
+        model="auto", request_kwargs={}, messages=[{"role": "user", "content": "LITELLM ESCALATE"}]
+    )
+    assert result is not None
+    assert result.model == "security-model"
+
+
+@pytest.mark.parametrize(
+    "tiers", [{"": "fast"}, {" quick": "fast"}, {"quick": "fast", "QUICK": "capable"}, {"quick": []}]
+)
+def test_inferred_custom_tiers_reject_unusable_routes(tiers: dict[str, str | list[str]]) -> None:
+    with pytest.raises(ValidationError):
+        ComplexityRouterConfig(
+            classifier_type="custom",
+            classifier_plugin=_FixedTierClassifier("quick"),
+            classifier_fallback="default_model",
+            tiers=tiers,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_fallback", [None, "quick"])
+async def test_defined_custom_tiers_allow_default_model_fallback(explicit_fallback: str | None) -> None:
+    router: Final = ComplexityRouter(
+        model_name="auto",
+        litellm_router_instance=litellm.Router(model_list=[]),
+        default_model="backup",
+        complexity_router_config={
+            "classifier_type": "custom",
+            "classifier_plugin": _RaisingClassifier(),
+            "classifier_fallback": "default_model",
+            "tiers": {"quick": "fast", "careful": "capable"},
+            "tier_definitions": [
+                {"name": "quick", "description": "Routine work"},
+                {"name": "careful", "description": "Difficult work"},
+            ],
+            "fallback_tier": explicit_fallback,
+        },
+    )
+    result: Final = await router.async_pre_routing_hook(
+        model="auto", request_kwargs={}, messages=[{"role": "user", "content": "hello"}]
+    )
+    assert result is not None
+    assert result.model == ("fast" if explicit_fallback else "backup")
+
+
+@pytest.mark.parametrize("setting", ["adaptive", "session_affinity", "stall_escalation_enabled"])
+def test_inferred_custom_tiers_reject_order_dependent_features(setting: str) -> None:
+    with pytest.raises(ValidationError, match="severity order"):
+        ComplexityRouterConfig.model_validate(
+            {
+                "classifier_type": "custom",
+                "classifier_plugin": _FixedTierClassifier("quick"),
+                "classifier_fallback": "default_model",
+                "tiers": {"quick": "fast", "careful": "capable"},
+                setting: True,
+            }
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("defined", [False, True])
+@pytest.mark.parametrize("plan_mode", [False, True])
+@pytest.mark.parametrize(
+    "default_model,planned_model",
+    [("backup", "capable"), ("fast", "capable"), ("capable", "capable"), ("premium-model", "premium-model")],
+)
+async def test_custom_classifier_failure_preserves_plan_floor_and_direct_default(
+    defined: bool, plan_mode: bool, default_model: str, planned_model: str
+) -> None:
+    definitions: Final = (
+        [{"name": name, "description": name} for name in ("quick", "careful", "premium")] if defined else None
+    )
+    router: Final = ComplexityRouter(
+        model_name="auto",
+        litellm_router_instance=litellm.Router(model_list=[]),
+        default_model=default_model,
+        complexity_router_config={
+            "classifier_type": "custom",
+            "classifier_plugin": _RaisingClassifier(),
+            "classifier_fallback": "default_model",
+            "tiers": {"quick": "fast", "careful": "capable", "premium": "premium-model"},
+            "tier_definitions": definitions,
+            "plan_mode_min_tier": "careful",
+        },
+    )
+    prompt: Final = "<system-reminder>Plan mode is active</system-reminder> hello" if plan_mode else "hello"
+    result: Final = await router.async_pre_routing_hook(
+        model="auto", request_kwargs={}, messages=[{"role": "user", "content": prompt}]
+    )
+    assert result is not None
+    assert result.model == (planned_model if plan_mode else default_model)
+    assert result.routing_decision is not None
+    assert result.routing_decision.get("tier") == (
+        ("premium" if planned_model == "premium-model" else "careful") if plan_mode else None
+    )

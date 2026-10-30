@@ -1585,7 +1585,7 @@ def function_setup(
         raise e
 
 
-def _dispatch_success_logging(
+def dispatch_success_logging(
     logging_obj: LiteLLMLoggingObject,
     result: object,
     start_time: datetime.datetime,
@@ -1603,11 +1603,12 @@ def _dispatch_success_logging(
         end_time=end_time,
         is_completion_with_fallbacks=is_completion_with_fallbacks,
     )
-    logging_obj.handle_sync_success_callbacks_for_async_calls(
-        result=result,
-        start_time=start_time,
-        end_time=end_time,
-    )
+    if not logging_obj.defer_async_logging:
+        logging_obj.handle_sync_success_callbacks_for_async_calls(
+            result=result,
+            start_time=start_time,
+            end_time=end_time,
+        )
 
 
 def _schedule_async_success_logging(
@@ -1634,6 +1635,10 @@ def _schedule_async_success_logging(
     def _enqueue_async_logging() -> None:
         from litellm.responses.streaming_iterator import spawn_logging_task
 
+        if logging_obj.defer_async_logging:
+            logging_obj.handle_sync_success_callbacks_for_async_calls(
+                result=result, start_time=start_time, end_time=end_time
+            )
         logging_obj.mark_async_success_log_enqueued()
         spawn_logging_task(
             asyncio.get_running_loop(),
@@ -1652,6 +1657,11 @@ def _schedule_async_success_logging(
         return
     if logging_obj.enqueue_deferred_logging is not None:
         return
+    logging_obj.deferred_success_result = (  # rebind-ok: capture the innermost wrapper before dispatch
+        result,
+        start_time,
+        end_time,
+    )
     logging_obj.enqueue_deferred_logging = _enqueue_async_logging
 
 
@@ -2484,7 +2494,7 @@ def client(original_function):
                 and _caching_handler_response is not None
                 and _caching_handler_response.final_embedding_cached_response is not None
             ):
-                _dispatch_success_logging(
+                dispatch_success_logging(
                     logging_obj=logging_obj,
                     result=result,
                     start_time=start_time,
@@ -2507,7 +2517,7 @@ def client(original_function):
                 start_time=start_time,
                 end_time=end_time,
             )
-            _dispatch_success_logging(
+            dispatch_success_logging(
                 logging_obj=logging_obj,
                 result=result,
                 start_time=start_time,
@@ -9958,11 +9968,12 @@ class ProviderConfigManager:
             return litellm.LayaDecisionsConfig()
         if provider == LlmProviders.BESPOKE:
             return litellm.BespokeDecisionsConfig()
-        if provider in (LlmProviders.OPENAI, LlmProviders.AZURE, LlmProviders.AZURE_AI):
+        if provider in (LlmProviders.OPENAI, LlmProviders.AZURE, LlmProviders.AZURE_AI, LlmProviders.EU_JEV):
             configs: Final = {
                 LlmProviders.OPENAI: litellm.OpenAIDecisionsConfig,
                 LlmProviders.AZURE: litellm.AzureDecisionsConfig,
                 LlmProviders.AZURE_AI: litellm.AzureAIDecisionsConfig,
+                LlmProviders.EU_JEV: litellm.EuJevDecisionsConfig,
             }
             return configs[provider]()
         return None
@@ -10572,10 +10583,10 @@ class ProviderConfigManager:
             return VertexVectorStoreConfig()
         if api_type == "search_api":
             from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
-                VertexSearchAPIVectorStoreConfig,
+                vertex_search_api_vector_store_config,
             )
 
-            return VertexSearchAPIVectorStoreConfig()
+            return vertex_search_api_vector_store_config
         return None
 
     @staticmethod
@@ -10913,19 +10924,8 @@ class ProviderConfigManager:
         return None
 
     @staticmethod
-    def get_provider_image_edit_config(
-        model: str,
-        provider: LlmProviders,
-    ) -> BaseImageEditConfig | None:
-        if LlmProviders.OPENAI == provider:
-            from litellm.llms.openai.image_edit import OpenAIImageEditConfig
-
-            return OpenAIImageEditConfig()
-        elif LlmProviders.HOSTED_VLLM == provider:
-            from litellm.llms.hosted_vllm.image_edit import get_hosted_vllm_image_edit_config
-
-            return get_hosted_vllm_image_edit_config(model=model)
-        elif LlmProviders.AZURE == provider:
+    def _get_model_independent_image_edit_config(provider: LlmProviders) -> BaseImageEditConfig | None:
+        if LlmProviders.AZURE == provider:
             from litellm.llms.azure.image_edit.transformation import (
                 AzureImageEditConfig,
             )
@@ -10943,6 +10943,36 @@ class ProviderConfigManager:
             )
 
             return BlackForestLabsImageEditConfig()
+        elif LlmProviders.LITELLM_PROXY == provider:
+            from litellm.llms.litellm_proxy.image_edit.transformation import (
+                LiteLLMProxyImageEditConfig,
+            )
+
+            return LiteLLMProxyImageEditConfig()
+        elif LlmProviders.DASHSCOPE == provider:
+            from litellm.llms.dashscope.image_edit.transformation import (
+                DashScopeImageEditConfig,
+            )
+
+            return DashScopeImageEditConfig()
+        return None
+
+    @staticmethod
+    def get_provider_image_edit_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> BaseImageEditConfig | None:
+        model_independent_config: Final = ProviderConfigManager._get_model_independent_image_edit_config(provider)
+        if model_independent_config is not None:
+            return model_independent_config
+        if LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.image_edit import OpenAIImageEditConfig
+
+            return OpenAIImageEditConfig()
+        elif LlmProviders.HOSTED_VLLM == provider:
+            from litellm.llms.hosted_vllm.image_edit import get_hosted_vllm_image_edit_config
+
+            return get_hosted_vllm_image_edit_config(model=model)
         elif LlmProviders.FAL_AI == provider:
             from litellm.llms.fal_ai.image_edit import get_fal_ai_image_edit_config
 
@@ -10955,12 +10985,6 @@ class ProviderConfigManager:
             from litellm.llms.gemini.image_edit import get_gemini_image_edit_config
 
             return get_gemini_image_edit_config(model)
-        elif LlmProviders.LITELLM_PROXY == provider:
-            from litellm.llms.litellm_proxy.image_edit.transformation import (
-                LiteLLMProxyImageEditConfig,
-            )
-
-            return LiteLLMProxyImageEditConfig()
         elif LlmProviders.VERTEX_AI == provider:
             from litellm.llms.vertex_ai.image_edit import (
                 get_vertex_ai_image_edit_config,
@@ -11182,6 +11206,12 @@ class ProviderConfigManager:
             return AWSPollyTextToSpeechConfig()
         elif litellm.LlmProviders.EDENAI == provider:
             return litellm.EdenAITextToSpeechConfig()
+        elif litellm.LlmProviders.DASHSCOPE == provider:
+            from litellm.llms.dashscope.text_to_speech.transformation import (
+                DashScopeTextToSpeechConfig,
+            )
+
+            return DashScopeTextToSpeechConfig()
         return None
 
     @staticmethod
