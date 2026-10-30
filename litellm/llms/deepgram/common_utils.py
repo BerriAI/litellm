@@ -10,7 +10,7 @@ import litellm
 from litellm.constants import DEEPGRAM_DEFAULT_API_BASE, DEEPGRAM_LISTEN_DEFAULT_MODEL
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import LlmProviders, ModelInfo
 
 _WEBSOCKET_SCHEMES: Final = MappingProxyType({"https": "wss", "http": "ws", "wss": "wss", "ws": "ws"})
 DEEPGRAM_LISTEN_CALLBACK_PARAMS: Final = frozenset({"callback", "callback_method"})
@@ -50,11 +50,11 @@ def _first_occurrences(query_string: str) -> httpx.QueryParams:
     )
 
 
-def deepgram_listen_websocket_target(api_base: str | None, query_string: str) -> str:
-    listen_url: Final = httpx.URL(join_api_base(api_base or DEEPGRAM_DEFAULT_API_BASE, "listen"))
-    websocket_url: Final = listen_url.copy_with(scheme=_WEBSOCKET_SCHEMES.get(listen_url.scheme, listen_url.scheme))
+def deepgram_websocket_target(api_base: str | None, path: str, query_string: str, default_model: str) -> str:
+    http_url: Final = httpx.URL(join_api_base(api_base or DEEPGRAM_DEFAULT_API_BASE, path))
+    websocket_url: Final = http_url.copy_with(scheme=_WEBSOCKET_SCHEMES.get(http_url.scheme, http_url.scheme))
     params: Final = _first_occurrences(query_string)
-    query: Final = params if params.get("model") else params.remove("model").add("model", DEEPGRAM_LISTEN_DEFAULT_MODEL)
+    query: Final = params if params.get("model") else params.remove("model").add("model", default_model)
     return f"{websocket_url}?{query}"
 
 
@@ -86,15 +86,18 @@ def deepgram_listen_registry_key(upstream_url: str) -> str:
     return f"{LlmProviders.DEEPGRAM.value}/{deepgram_listen_pricing_model(upstream_url)}"
 
 
-def deepgram_listen_is_priced(upstream_url: str) -> bool:
-    """Only an exact registry hit counts: the cost calculator resolves a missing ``streaming/<model>`` row to the
-    pre-recorded ``<model>`` row, which is not the rate Deepgram bills a WebSocket session at."""
-    registry_key: Final = deepgram_listen_registry_key(upstream_url)
+def _exact_registry_entry(registry_key: str) -> ModelInfo | None:
+    """Only an exact registry hit counts: ``get_model_info`` can resolve a missing row to a neighbouring one, such as
+    a missing ``streaming/<model>`` row to the pre-recorded ``<model>`` row, which Deepgram bills at another rate."""
     try:
         model_info: Final = litellm.get_model_info(model=registry_key, custom_llm_provider=LlmProviders.DEEPGRAM.value)
     except Exception:
-        return False
-    return model_info["key"] == registry_key
+        return None
+    return model_info if model_info["key"] == registry_key else None
+
+
+def deepgram_listen_is_priced(upstream_url: str) -> bool:
+    return _exact_registry_entry(deepgram_listen_registry_key(upstream_url)) is not None
 
 
 def deepgram_listen_addon_pricing_models(upstream_url: str) -> tuple[str, ...]:

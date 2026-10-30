@@ -17,7 +17,7 @@ from litellm.llms.deepgram.common_utils import (
     deepgram_listen_registry_key,
     deepgram_listen_requested_model,
     deepgram_listen_transcript,
-    deepgram_listen_websocket_target,
+    deepgram_websocket_target,
 )
 
 NOVA_3_URL: Final = "wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000"
@@ -98,7 +98,7 @@ def _metadata(duration: object, channels: object = 1) -> dict[str, object]:
     ],
 )
 def test_deepgram_listen_websocket_target(api_base: str | None, query_string: str, expected: str):
-    assert deepgram_listen_websocket_target(api_base=api_base, query_string=query_string) == expected
+    assert deepgram_websocket_target(api_base, "listen", query_string, "nova-3") == expected
 
 
 @pytest.mark.parametrize(
@@ -243,7 +243,7 @@ def test_requested_model_is_the_only_model_the_upstream_target_carries(query_str
     """Authorization runs against ``deepgram_listen_requested_model``; the upstream URL is built separately, so the
     two must always agree or a key could be authorized for one model and reach another. Deepgram reads the last
     repeated ``model``, so the target must carry exactly one."""
-    target: Final = deepgram_listen_websocket_target(None, query_string)
+    target: Final = deepgram_websocket_target(None, "listen", query_string, "nova-3")
     assert parse_qs(urlparse(target).query)["model"] == [deepgram_listen_requested_model(query_string)]
     assert deepgram_listen_requested_model(query_string) == deepgram_listen_model(target)
 
