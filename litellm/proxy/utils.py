@@ -163,6 +163,7 @@ from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch, Logging, deployment_pricing_model_info
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.redact_messages import drop_token_ids
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.served_output_texts import (
@@ -171,6 +172,7 @@ from litellm.litellm_core_utils.served_output_texts import (
 )
 from litellm.litellm_core_utils.token_counter import offload_token_count, usage_tokenizer_model
 from litellm.llms import load_guardrail_translation_mappings
+from litellm.llms.base_llm.guardrail_translation.utils import stream_item_items
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
@@ -693,6 +695,11 @@ def _pipeline_step_streams_live(step: "PipelineStep") -> bool:
     if callback is None or callback.mask_response_content:
         return False
     return not unified_guardrail.resolve_streaming_flag(callback, "streaming_buffer_until_moderated", True)
+
+
+def _drop_stream_chunk_token_ids(chunk: object) -> None:
+    for choice in stream_item_items(chunk, "choices"):
+        drop_token_ids(choice)
 
 
 def _pipelines_stream_live(pipelines: Sequence[tuple[str, "GuardrailPipeline"]]) -> bool:
@@ -4569,16 +4576,20 @@ class ProxyLogging:
         stream_needs_translation: Final = ProxyLogging._stream_requires_guardrail_translation(user_api_key_dict)
 
         pipeline_gated_names: Final = _pipeline_step_guardrail_names(post_call_pipelines)
+        running_overrides: Final = tuple(
+            (callback, kind)
+            for callback, kind in caps.iterator_overrides
+            if not isinstance(callback, CustomGuardrail)
+            or (
+                callback.guardrail_name not in pipeline_gated_names
+                and callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call) is True
+            )
+        )
+        drops_token_ids: Final = bool(post_call_pipelines) or any(
+            isinstance(callback, CustomGuardrail) for callback, _ in running_overrides
+        )
         guarded_layers: Final[list[AsyncGenerator[object, None]]] = []  # mutable-ok: closed on disconnect
-        for resolved_callback, kind in caps.iterator_overrides:
-            if isinstance(resolved_callback, CustomGuardrail):
-                if resolved_callback.guardrail_name in pipeline_gated_names:
-                    continue
-                if (
-                    resolved_callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call)
-                    is not True
-                ):
-                    continue
+        for resolved_callback, kind in running_overrides:
             effective_kind = (
                 "apply_guardrail"
                 if (
@@ -4636,6 +4647,8 @@ class ProxyLogging:
         try:
             async for chunk in current_response:
                 served_chunks.append(chunk)
+                if drops_token_ids:
+                    _drop_stream_chunk_token_ids(served_chunks[-1])
                 yield chunk
         except (GeneratorExit, asyncio.CancelledError):
             await ProxyLogging._close_guarded_layers(guarded_layers)

@@ -196,11 +196,9 @@ def _redact_function_call(function_call) -> None:
 
 def _redact_choice_content(choice):
     """Helper to redact content in a choice (message or delta)."""
-    if (
-        isinstance(choice, (litellm.Choices, litellm.utils.StreamingChoices))
-        and getattr(choice, "token_ids", None) is not None
-    ):
-        setattr(choice, "token_ids", None)  # noqa: B010  # pydantic extra, not a declared field
+    if isinstance(choice, (litellm.Choices, litellm.utils.StreamingChoices)):
+        drop_token_ids(choice)
+        _redact_provider_specific_fields(choice)
     if isinstance(choice, litellm.Choices):
         if choice.message.content is not None:
             choice.message.content = REDACTED_BY_LITELLM
@@ -232,14 +230,27 @@ def _redact_provider_specific_fields(message: object) -> None:
         setattr(message, "provider_specific_fields", _redacted_provider_specific_fields(fields))  # noqa: B010  # typed as object
 
 
+def _drop_provider_specific_token_ids(holder: object) -> None:
+    fields: Final = _as_mapping(getattr(holder, "provider_specific_fields", None))
+    if fields is not None and fields.get("token_ids") is not None:
+        setattr(holder, "provider_specific_fields", {**fields, "token_ids": None})  # noqa: B010  # typed as object
+
+
+def drop_token_ids(choice: object) -> None:
+    if getattr(choice, "token_ids", None) is not None:
+        setattr(choice, "token_ids", None)  # noqa: B010  # pydantic extra, not a declared field
+    for holder in (choice, getattr(choice, "delta", None), getattr(choice, "message", None)):
+        _drop_provider_specific_token_ids(holder)
+
+
 def _redact_provider_specific_fields_dict(choice: Mapping[str, object]) -> None:
-    for message in (choice.get("message"), choice.get("delta")):
+    for holder in (choice, choice.get("message"), choice.get("delta")):
         if (
-            (readable := _as_mapping(message)) is not None
+            (readable := _as_mapping(holder)) is not None
             and (fields := _as_mapping(readable.get("provider_specific_fields"))) is not None
-            and isinstance(message, dict)
+            and isinstance(holder, dict)
         ):
-            message["provider_specific_fields"] = _redacted_provider_specific_fields(fields)
+            holder["provider_specific_fields"] = _redacted_provider_specific_fields(fields)
 
 
 def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[str, object]:

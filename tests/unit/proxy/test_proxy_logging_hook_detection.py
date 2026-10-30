@@ -347,6 +347,59 @@ async def test_post_call_stream_guardrail_keeps_own_iterator_on_chat_completions
     assert delivered_text != ""
 
 
+async def _served_token_ids(monkeypatch, guardrail_default_on: bool) -> tuple[object, ...]:
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+    from litellm.types.guardrails import BlockedWord, ContentFilterAction
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    guardrail = ContentFilterGuardrail(
+        guardrail_name="output-filter",
+        blocked_words=[BlockedWord(keyword="zebra", action=ContentFilterAction("MASK"))],
+        event_hook="post_call",
+        default_on=guardrail_default_on,
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    def chunk(content: str, token_ids: list[int], finish_reason: str | None = None) -> ModelResponseStream:
+        streamed = ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(content=content), finish_reason=finish_reason)]
+        )
+        setattr(streamed.choices[0], "token_ids", token_ids)
+        return streamed
+
+    async def fake_stream():
+        yield chunk("the zebra runs", [1, 2, 3])
+        yield chunk("", [4], finish_reason="stop")
+
+    served = [
+        served_chunk
+        async for served_chunk in ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
+            response=fake_stream(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/chat/completions"),
+            request_data={"model": "gpt-4o-mini", "metadata": {}},
+        )
+    ]
+    return tuple(getattr(served_chunk.choices[0], "token_ids", None) for served_chunk in served)
+
+
+@pytest.mark.asyncio
+async def test_post_call_stream_guardrail_drops_token_ids_that_decode_to_the_unmasked_text(monkeypatch):
+    served_token_ids = await _served_token_ids(monkeypatch, guardrail_default_on=True)
+
+    assert served_token_ids
+    assert all(token_ids is None for token_ids in served_token_ids)
+
+
+@pytest.mark.asyncio
+async def test_post_call_stream_keeps_token_ids_when_no_guardrail_runs_on_the_request(monkeypatch):
+    served_token_ids = await _served_token_ids(monkeypatch, guardrail_default_on=False)
+
+    assert served_token_ids == ([1, 2, 3], [4])
+
+
 @pytest.mark.asyncio
 async def test_post_call_stream_records_masked_text_for_deferred_logging(monkeypatch):
     from litellm.caching.caching import DualCache
