@@ -9,7 +9,7 @@ from typing import Final, Generic, TypeVar
 from pydantic import TypeAdapter, ValidationError
 from redis.exceptions import NoScriptError
 
-from litellm.caching.redis_cache import RedisCircuitBreaker
+from litellm.redis.health import RedisCircuitBreaker
 from litellm.redis.transport.batch import BatchResult, PipelineBackend, PipelineBatch
 from litellm.redis.transport.breaker import failure_from, run_under_breaker
 from litellm.redis.transport.client import AsyncPubSub, AsyncPubSubClient, AsyncRedisCommands, RedisPipeline

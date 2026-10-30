@@ -7,7 +7,7 @@ import hashlib
 import json
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import timedelta
-from typing import Any
+from typing import Any, Final
 
 import pytest
 from redis.exceptions import NoScriptError
@@ -95,6 +95,7 @@ class FakeRedisCache(RedisCache):
         self.namespace = namespace
         self._circuit_breaker = RedisCircuitBreaker(failure_threshold=5, recovery_timeout=30)
         self.service_logger_obj = ServiceLogging()
+        self._connection: Final = self._make_connection()
         self.default_ttl = None
         self.alone: list[tuple[str, Any]] = []
         self.store: dict[str, Any] = {}

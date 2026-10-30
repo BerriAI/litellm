@@ -1,7 +1,7 @@
 from collections.abc import Awaitable, Callable
 from typing import Final, TypeVar
 
-from litellm.caching.redis_cache import (
+from litellm.redis.health import (
     RedisCircuitBreaker,
     RedisCircuitBreakerOpenError,
     _is_redis_health_failure,  # pyright: ignore[reportPrivateUsage]  # same health classification as RedisCache
