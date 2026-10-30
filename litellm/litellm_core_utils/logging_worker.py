@@ -202,16 +202,17 @@ class LoggingWorker:
         """Runs the logging task and handles cleanup. Releases semaphore when done."""
         try:
             if self._queue is not None:
-                # Run the coroutine in its original context
-                callback_task: Final = self._create_callback_task(task)
                 try:
-                    await asyncio.wait_for(callback_task, timeout=self.timeout)
-                except asyncio.TimeoutError as e:
-                    if callback_task.cancelled():
-                        self._record_callback_timeout(task["coroutine"])
-                    else:
-                        verbose_logger.exception("LoggingWorker error: %s", e)
+                    callback_task: Final = self._create_callback_task(task)
+                    try:
+                        await asyncio.wait_for(callback_task, timeout=self.timeout)
+                    except asyncio.TimeoutError as e:
+                        if callback_task.cancelled():
+                            self._record_callback_timeout(task["coroutine"])
+                        else:
+                            verbose_logger.exception("LoggingWorker error: %s", e)
                 except Exception as e:
+                    task["coroutine"].close()
                     verbose_logger.exception("LoggingWorker error: %s", e)
                 finally:
                     self._untrack_dequeued(task)
