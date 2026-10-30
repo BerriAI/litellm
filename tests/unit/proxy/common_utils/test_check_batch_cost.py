@@ -80,10 +80,11 @@ def _batch_cost_result(
     """Build the BatchCostUsageResult calculate_batch_cost_and_usage now returns,
     for mocking it in tests that only care about cost/usage/models."""
     from litellm.batches.batch_utils import BatchCostUsageResult
+    from litellm.types.utils import Usage
 
     return BatchCostUsageResult(
         cost=cost,
-        usage=usage,
+        usage=Usage(**usage),
         models=models,
         successful_requests=successful_requests,
         failed_requests=failed_requests,
@@ -3261,7 +3262,7 @@ class TestMultiPodBatchCostClaim:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=_batch_cost_result(0.01, {"prompt_tokens": 10, "completion_tokens": 5}, ["gpt-4"]),
+                return_value=_batch_cost_result(0.01, {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}, ["gpt-4"]),
             ),
             patch(
                 "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
@@ -3676,7 +3677,17 @@ class TestMultiPodBatchCostClaim:
 
         assert journal == ["fetch", "claim", "bill"]
         assert row.status == "complete"
-        assert json.loads(row.file_object)["usage"] == {"prompt_tokens": 10, "completion_tokens": 5}
+        assert json.loads(row.file_object)["usage"] == {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "prompt_tokens_details": None,
+            "completion_tokens_details": None,
+            "input_tokens": 10,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 5,
+            "output_tokens_details": {"reasoning_tokens": 0},
+        }
         logging_obj.async_success_handler.assert_awaited_once()
         assert row.batch_processed is True
 

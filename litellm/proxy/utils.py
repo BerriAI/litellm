@@ -3834,7 +3834,9 @@ class ProxyLogging:
         request_data.pop("standard_logging_object", None)
 
         ### LOGGING ###
-        if self._is_proxy_only_llm_api_error(
+        if isinstance(logging_obj, Logging) and logging_obj.prepared_cost is not None:
+            await self._dispatch_proxy_only_failure_handlers(logging_obj, original_exception)
+        elif self._is_proxy_only_llm_api_error(
             original_exception=original_exception,
             error_type=error_type,
             route=user_api_key_dict.request_route,
