@@ -6,6 +6,7 @@ import copy
 import json
 import re
 from collections.abc import Container, Mapping, MutableMapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Annotated, Any, ClassVar, Final, Literal, TypeVar
@@ -51,6 +52,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_OAUTH_BETA_HEADER,
     ANTHROPIC_OAUTH_TOKEN_PREFIX,
     ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
+    ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER,
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
     AllAnthropicToolsValues,
@@ -119,6 +121,54 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
+
+
+def is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
+    if custom_llm_provider == "anthropic":
+        return True
+    model_lower: Final = model.lower()
+    if custom_llm_provider == "bedrock":
+        return "claude" in model_lower or ("arn:" in model_lower and ":bedrock:" in model_lower)
+    if custom_llm_provider == "azure_ai" or custom_llm_provider == "vertex_ai":
+        return "claude" in model_lower
+    return False
+
+
+def is_claude_model_target(custom_llm_provider: str | None, model: str) -> bool:
+    return "claude" in model.lower() and is_claude_tool_target(custom_llm_provider, model)
+
+
+def _hoistable_defer_loading(tool_dict: Mapping[object, object], custom: object) -> bool | None:
+    if not isinstance(custom, dict) or "defer_loading" in tool_dict:
+        return None
+    defer_loading: Final = OBJECT_MAPPING_ADAPTER.validate_python(custom).get("defer_loading")
+    return defer_loading if isinstance(defer_loading, bool) else None
+
+
+def _tool_without_custom_field(tool: object, hoist_defer_loading: bool, drop_custom: bool) -> object:
+    if not isinstance(tool, dict):
+        return tool
+
+    if "custom" not in tool:
+        return tool
+
+    tool_dict: Final = OBJECT_MAPPING_ADAPTER.validate_python(tool)
+
+    custom: Final = tool_dict["custom"]
+    without_custom: Final = {key: value for key, value in tool_dict.items() if key != "custom"}
+    defer_loading: Final = _hoistable_defer_loading(tool_dict, custom) if hoist_defer_loading else None
+    if defer_loading is None:
+        return without_custom if drop_custom else tool_dict
+
+    unhoisted: Final = {
+        key: value for key, value in OBJECT_MAPPING_ADAPTER.validate_python(custom).items() if key != "defer_loading"
+    }
+    kept_custom: Final = {"custom": unhoisted} if unhoisted and not drop_custom else {}
+    return {**without_custom, "defer_loading": defer_loading, **kept_custom}
+
+
+def tools_without_custom_field(tools: Sequence[object], hoist_defer_loading: bool, drop_custom: bool) -> list[object]:
+    return [_tool_without_custom_field(tool, hoist_defer_loading, drop_custom) for tool in tools]
 
 
 def is_anthropic_messages_url(url: str) -> bool:
@@ -551,6 +601,20 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if not isinstance(thinking, dict):
             return False
         return thinking.get("type") in ("adaptive", "enabled") and thinking.get("display") == "updates"
+
+    def thinking_betas(self, thinking: AnthropicThinkingParam | None) -> tuple[str, ...]:
+        return (
+            *(
+                (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,)
+                if self.is_thinking_display_updates_used(thinking)
+                else ()
+            ),
+            *(
+                (ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER,)
+                if isinstance(thinking, dict) and "block_binding" in thinking
+                else ()
+            ),
+        )
 
     def is_mid_conversation_tool_change_used(self, messages: Sequence[object]) -> bool:
         for message in messages:
@@ -1132,7 +1196,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         *,
         custom_llm_provider: str,
         is_mid_conversation_output_config_used: bool = False,
-        is_thinking_display_updates_used: bool = False,
+        thinking: AnthropicThinkingParam | None = None,
         is_mid_conversation_tool_change_used: bool = False,
     ) -> list[str]:
         """
@@ -1169,13 +1233,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if is_mid_conversation_output_config_used:
             betas.append(ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER)
 
-        thinking_display_betas: Final = (
-            (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,) if is_thinking_display_updates_used else ()
-        )
         tool_change_betas: Final = (
             (ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,) if is_mid_conversation_tool_change_used else ()
         )
-        return list(set(betas).union(thinking_display_betas, tool_change_betas))
+        return list(set(betas).union(self.thinking_betas(thinking), tool_change_betas))
 
     @staticmethod
     def _make_api_key_auth_header(
@@ -1237,7 +1298,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         api_base: str | None = None,
         use_bearer_for_custom_base: bool = False,
         is_mid_conversation_output_config_used: bool = False,
-        is_thinking_display_updates_used: bool = False,
+        thinking: AnthropicThinkingParam | None = None,
         is_mid_conversation_tool_change_used: bool = False,
         wif_minted: bool = False,
     ) -> dict:
@@ -1298,7 +1359,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             betas.update(user_anthropic_beta_headers)
 
         all_betas: Final = betas.union(
-            (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,) if is_thinking_display_updates_used else (),
+            self.thinking_betas(thinking),
             (ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,) if is_mid_conversation_tool_change_used else (),
         )
 
@@ -1385,7 +1446,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             auth_token=auth_token,
             file_id_used=file_id_used,
             is_mid_conversation_output_config_used=is_mid_conversation_output_config_used,
-            is_thinking_display_updates_used=self.is_thinking_display_updates_used(optional_params.get("thinking")),
+            thinking=optional_params.get("thinking"),
             is_mid_conversation_tool_change_used=self.is_mid_conversation_tool_change_used(messages),
             web_search_tool_used=web_search_tool_used,
             is_vertex_request=optional_params.get("is_vertex_request", False),
@@ -1712,6 +1773,48 @@ def anthropic_request_errors_on_thinking_binding_mismatch(request_body: object) 
     thinking: Final = validated_object_mapping(body.get("thinking")) if body is not None else None
     binding: Final = validated_object_mapping(thinking.get("block_binding")) if thinking is not None else None
     return binding is not None and binding.get("prefix_mismatch_behavior") == "error"
+
+
+_CLAUDE_STRICT_TOOLS_REJECTION: Final = re.compile(
+    r"Too many strict tools \(\d+\)"
+    r"|Schemas contains too many (?:optional parameters|parameters with union types)"
+    r"|[Cc]ompiled grammar (?:is too large|size)"
+    r"|tools\.\d+\.custom(?:\.strict)?: "
+    r"|Grammar compilation timed out"
+)
+_CLAUDE_TOOLS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def is_claude_strict_tools_rejection(status_code: int, error_text: str) -> bool:
+    return status_code == 400 and _CLAUDE_STRICT_TOOLS_REJECTION.search(error_text) is not None
+
+
+@dataclass(frozen=True, slots=True)
+class ToolsWithoutStrict:
+    tools: tuple[Mapping[str, object], ...]
+    dropped_count: int
+
+
+def tools_without_strict(tools: object) -> ToolsWithoutStrict | None:
+    try:
+        validated: Final = _CLAUDE_TOOLS_ADAPTER.validate_python(tools)
+    except ValidationError:
+        return None
+    dropped_count: Final = sum(tool.get("strict") is True for tool in validated)
+    if dropped_count == 0:
+        return None
+    return ToolsWithoutStrict(
+        tools=tuple({key: value for key, value in tool.items() if key != "strict"} for tool in validated),
+        dropped_count=dropped_count,
+    )
+
+
+def warn_claude_strict_tools_dropped(dropped_count: int) -> None:
+    litellm.verbose_logger.warning(
+        "Claude rejected the request's strict schemas, so litellm removed `strict` from every tool (%d had "
+        "strict true) and sent the request again because drop_params is set.",
+        dropped_count,
+    )
 
 
 def strip_thinking_blocks_from_anthropic_messages(messages: Sequence[object]) -> list[object]:

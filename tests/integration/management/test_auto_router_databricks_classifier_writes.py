@@ -3,6 +3,7 @@ import json
 import threading
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from queue import SimpleQueue
 from typing import Final
 
@@ -62,6 +63,21 @@ _ROWS_QUERY: Final = (
     "SELECT request_id, status, metadata->>'internal_call_origin' AS origin "
     'FROM "LiteLLM_SpendLogs" WHERE model_group = %s'
 )
+
+
+def _number(value: JsonValue) -> float:
+    assert isinstance(value, (int, float)) and not isinstance(value, bool), value
+    return float(value)
+
+
+def _endpoint_cost() -> float:
+    prices: Final = object_value(
+        json.loads(Path("model_prices_and_context_window.json").read_text())[f"databricks/{_ENDPOINT}"]
+    )
+    usage: Final = object_value(_ENDPOINT_ANSWER["usage"])
+    return _number(usage["input_tokens"]) * _number(prices["input_cost_per_token"]) + _number(
+        usage["output_tokens"]
+    ) * _number(prices["output_cost_per_token"])
 
 
 def _classifier(request: Request) -> Reply:
@@ -221,11 +237,14 @@ def test_validate_names_each_databricks_classifier_misconfiguration(gateway: Gat
 
 @pytest.mark.parametrize(
     ("model", "target", "cost"),
-    [(_MODEL, _ROUTE, {}), (_ENDPOINT, f"/{_ENDPOINT}/invocations", {"classifier_cost": 0.0})],
+    [
+        (_MODEL, _ROUTE, {}),
+        (_ENDPOINT, f"/{_ENDPOINT}/invocations", {"classifier_cost": pytest.approx(_endpoint_cost())}),
+    ],
     ids=["ai_decide", "serving_endpoint"],
 )
 def test_test_routing_classifies_through_databricks_without_calling_the_tier_it_picked(
-    gateway: Gateway, model: str, target: str, cost: dict[str, JsonValue]
+    gateway: Gateway, model: str, target: str, cost: dict[str, object]
 ) -> None:
     prompt: Final = f"design a distributed cache {uuid.uuid4().hex}"
     with (

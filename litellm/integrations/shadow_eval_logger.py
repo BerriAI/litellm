@@ -40,7 +40,6 @@ from litellm.litellm_core_utils.llm_judge import (
 )
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
-from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.auto_router_endpoints import ShadowEvalDirection
 from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
@@ -790,9 +789,7 @@ class ActiveShadowEvalJob(LiteLLMBaseModel):
 def _canonical_group(router: "Router | None", model_group: str) -> str:
     """A model group in the one spelling both a job's scope and a request's model compare
     under: an alias resolves to its target so the two never fail to match on spelling."""
-    return (
-        resolve_model_group_alias(router.model_group_alias, model_group) if router is not None else None
-    ) or model_group
+    return (router.registry().resolve(model_group, kind="alias") if router is not None else None) or model_group
 
 
 def _scope_admits(router: "Router | None", job: "ActiveShadowEvalJob", model_group: str) -> bool:
