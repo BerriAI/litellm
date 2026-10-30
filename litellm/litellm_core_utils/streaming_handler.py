@@ -2473,18 +2473,18 @@ class CustomStreamWrapper:
         self._earlier_rounds_spend = earlier
 
     def partial_response(self) -> "ModelResponse | TextCompletionResponse | None":
-        if not self.chunks:
-            return None
-        partial: Final = litellm.stream_chunk_builder(
-            chunks=self.chunks,
-            messages=self.messages if isinstance(self.messages, list) else None,
-            logging_obj=self.logging_obj,
-            count_prompt_tokens=self.count_prompt_tokens,
+        partial: Final = (
+            litellm.stream_chunk_builder(
+                chunks=self.chunks,
+                messages=self.messages if isinstance(self.messages, list) else None,
+                logging_obj=self.logging_obj,
+                count_prompt_tokens=self.count_prompt_tokens,
+            )
+            if self.chunks
+            else None
         )
-        if partial is None:
-            return None
         usage: Final[object] = getattr(partial, "usage", None)
-        if not isinstance(usage, Usage):
+        if partial is None or not isinstance(usage, Usage):
             return None
         if self.model:
             partial.model = self.model
