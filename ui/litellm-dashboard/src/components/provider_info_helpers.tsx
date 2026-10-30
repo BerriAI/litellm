@@ -502,7 +502,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Tencent]: "tencent/deepseek-v4-pro",
   [Providers.TypeSafe]: "typesafe/jev-latest",
   [Providers.Nace]: "nace/drex-latest",
-  [Providers.ParallelAI]: "parallel_ai/fast",
+  [Providers.ParallelAI]: "parallel_ai/decision",
   [Providers.StreamLake]: "streamlake/<model-or-endpoint>",
   [Providers.Vertex_AI]: "gemini-pro",
   [Providers.VolcEngine]: "volcengine/<any-model-on-volcengine>",

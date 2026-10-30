@@ -46248,7 +46248,7 @@
         "supports_response_schema": true,
         "supports_tool_choice": false
     },
-    "parallel_ai/fast": {
+    "parallel_ai/decision": {
         "input_cost_per_query": 0.001,
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,

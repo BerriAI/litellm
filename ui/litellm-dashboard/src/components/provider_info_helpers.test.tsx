@@ -552,12 +552,12 @@ describe("provider_info_helpers", () => {
 
     it("lists Parallel decision models with their provider and model placeholder", () => {
       const modelMap = {
-        "parallel_ai/fast": { litellm_provider: "parallel_ai", mode: "evaluation" },
+        "parallel_ai/decision": { litellm_provider: "parallel_ai", mode: "evaluation" },
       };
 
-      expect(getProviderModels("ParallelAI", modelMap)).toEqual(["parallel_ai/fast"]);
+      expect(getProviderModels("ParallelAI", modelMap)).toEqual(["parallel_ai/decision"]);
       expect(getProviderLogoAndName("parallel_ai").displayName).toBe("Parallel AI");
-      expect(getPlaceholder("ParallelAI")).toBe("parallel_ai/fast");
+      expect(getPlaceholder("ParallelAI")).toBe("parallel_ai/decision");
     });
 
     it("lists Nace decision models and resolves the provider name and model placeholder", () => {

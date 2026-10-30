@@ -2639,7 +2639,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "parallel_ai/fast"
+    "default_model_placeholder": "parallel_ai/decision"
   },
   {
     "provider": "NEBIUS",

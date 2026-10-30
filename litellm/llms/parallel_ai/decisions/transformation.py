@@ -1,4 +1,4 @@
-"""Parallel's web-grounded Decisions use System One questions with mode-based routing.
+"""Parallel's decision model uses System One questions and the native fast mode.
 
 Both LiteLLM Decisions routes share this adapter. Citations describe the whole
 request, so they stay on the response rather than being assigned to answers.
@@ -53,12 +53,14 @@ class ParallelAIDecisionsConfig(BaseDecisionsConfig):
     def transform_decisions_request(
         self, model: str, request: DecisionsIRRequest, custom_llm_provider: str
     ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
+        if model != "decision":
+            return UnsupportedDecisionsRequest(reason="Parallel Decisions supports the decision model")
         if len(request.questions) > 100:
             return UnsupportedDecisionsRequest(reason="Parallel Decisions supports at most 100 questions")
         body: Final = ir_to_systemone_request(model, request)
         if isinstance(body, UnsupportedDecisionsRequest):
             return body
-        return {"mode": model, **{key: value for key, value in body.items() if key != "model"}}
+        return {"mode": "fast", **{key: value for key, value in body.items() if key != "model"}}
 
     def parse_response(self, payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
         response: Final = _ParallelResponse.model_validate(payload)
@@ -66,7 +68,7 @@ class ParallelAIDecisionsConfig(BaseDecisionsConfig):
         return super().parse_response(
             {
                 **response.model_dump(),
-                "model": response.mode,
+                "model": "decision",
                 "answers": {key: answer for key, answer in response.answers.items() if answer.get("type") != "refusal"},
             },
             request,
