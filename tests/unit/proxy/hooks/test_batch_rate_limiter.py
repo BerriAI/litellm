@@ -72,7 +72,7 @@ async def test_batch_over_rpm_and_tpm_but_under_tpd_is_accepted():
 
 @pytest.mark.asyncio
 async def test_cumulative_batch_tokens_over_tpd_returns_429_with_remaining_daily_window():
-    window_start = datetime(2026, 9, 13, 8, 0, 0)
+    window_start = datetime(2026, 9, 13, 8, 0, 0, tzinfo=timezone.utc)
     clock = _Clock(window_start)
     _internal_usage_cache, _rate_limiter, batch_limiter = _make_limiters(clock)
     user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("tpd-key-2"), rpm_limit=1, tpd_limit=1000)
@@ -82,7 +82,7 @@ async def test_cumulative_batch_tokens_over_tpd_returns_429_with_remaining_daily
         data={},
         batch_usage=BatchFileUsage(total_tokens=600, request_count=6),
     )
-    clock.now = datetime(2026, 9, 13, 11, 0, 0)
+    clock.now = datetime(2026, 9, 13, 11, 0, 0, tzinfo=timezone.utc)
     with pytest.raises(HTTPException) as exc:
         await batch_limiter._check_and_increment_batch_counters(
             user_api_key_dict=user_api_key_dict,
