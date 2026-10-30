@@ -298,7 +298,7 @@ class LoginThrottle:
         """Refuses a blocked key before any credential is looked at; otherwise hands back the attempt to settle."""
         if not self.enabled:
             return LoginAttempt(throttle=self, username=username)
-        block: Final = await self._active_block(self._keys(username))
+        block: Final = await self._active_block(username)
         if block is None:
             return LoginAttempt(throttle=self, username=username)
         verbose_proxy_logger.warning(
@@ -310,9 +310,9 @@ class LoginThrottle:
         )
         raise self.refused(block.retry_after)
 
-    async def _active_block(self, keys: LoginKeys) -> Block | None:
-        local: Final = self._local_block_ttls(keys)
-        shared: Final = await self._shared_block_ttls(keys)
+    async def _active_block(self, username: str) -> Block | None:
+        local: Final = self._local_block_ttls(self._keys(username))
+        shared: Final = await self._shared_block_ttls(username)
         user_ttl: Final = max(local[0], shared[0])
         source_ttl: Final = max(local[1], shared[1])
         if self.source_limit is not None and source_ttl > 0:
@@ -322,11 +322,11 @@ class LoginThrottle:
         return None
 
     @with_service_target(_LOGIN_THROTTLE_TARGET)
-    async def _shared_block_ttls(self, keys: LoginKeys) -> BlockTtls:
+    async def _shared_block_ttls(self, username: str) -> BlockTtls:
         store: Final = self._store()
         if store is None:
             return LOGIN_THROTTLE_NOT_BLOCKED
-        blocks: Final = await store.blocks(keys)
+        blocks: Final = await store.blocks(source_group(self.client_ip), username)
         return LOGIN_THROTTLE_NOT_BLOCKED if isinstance(blocks, RedisFailure) else blocks
 
     def _local_block_ttls(self, keys: LoginKeys) -> BlockTtls:
@@ -347,7 +347,8 @@ class LoginThrottle:
             None
             if store is None
             else await store.record_failure(
-                keys,
+                source_group(self.client_ip),
+                username,
                 user_limit=self.user_limit,
                 source_limit=source_limit,
                 window=timedelta(seconds=self.window_seconds),
@@ -376,7 +377,7 @@ class LoginThrottle:
         keys: Final = self._keys(username)
         store: Final = self._store()
         if store is not None:
-            _ = await store.clear(keys)
+            _ = await store.clear(source_group(self.client_ip), username)
         self.counters.delete_cache(keys.pair_counter)
 
     @staticmethod

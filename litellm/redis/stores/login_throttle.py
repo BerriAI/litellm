@@ -50,30 +50,44 @@ def login_keys(source_group: str, username: str) -> LoginKeys:
 
 
 class LoginThrottleStore(Protocol):
-    async def blocks(self, keys: LoginKeys) -> BlockTtls | RedisFailure: ...
+    async def blocks(self, source_group: str, username: str) -> BlockTtls | RedisFailure: ...
 
     async def record_failure(
-        self, keys: LoginKeys, *, user_limit: int, source_limit: int, window: timedelta, block: timedelta
+        self,
+        source_group: str,
+        username: str,
+        *,
+        user_limit: int,
+        source_limit: int,
+        window: timedelta,
+        block: timedelta,
     ) -> BlockTtls | RedisFailure: ...
 
-    async def clear(self, keys: LoginKeys) -> None | RedisFailure: ...
+    async def clear(self, source_group: str, username: str) -> None | RedisFailure: ...
 
 
 @dataclass(frozen=True, slots=True)
 class TransportLoginThrottleStore:
     transport: RedisTransport
 
-    async def blocks(self, keys: LoginKeys) -> BlockTtls | RedisFailure:
-        return _ttls(await self.transport.eval(_BLOCK_TTLS_LUA, keys, ()))
+    async def blocks(self, source_group: str, username: str) -> BlockTtls | RedisFailure:
+        return _ttls(await self.transport.eval(_BLOCK_TTLS_LUA, login_keys(source_group, username), ()))
 
     async def record_failure(
-        self, keys: LoginKeys, *, user_limit: int, source_limit: int, window: timedelta, block: timedelta
+        self,
+        source_group: str,
+        username: str,
+        *,
+        user_limit: int,
+        source_limit: int,
+        window: timedelta,
+        block: timedelta,
     ) -> BlockTtls | RedisFailure:
         args: Final = (user_limit, source_limit, _whole_seconds(window), _whole_seconds(block))
-        return _ttls(await self.transport.eval(_RECORD_FAILURE_LUA, keys, args))
+        return _ttls(await self.transport.eval(_RECORD_FAILURE_LUA, login_keys(source_group, username), args))
 
-    async def clear(self, keys: LoginKeys) -> None | RedisFailure:
-        deleted: Final = await self.transport.delete(keys.pair_counter)
+    async def clear(self, source_group: str, username: str) -> None | RedisFailure:
+        deleted: Final = await self.transport.delete(login_keys(source_group, username).pair_counter)
         return deleted if isinstance(deleted, RedisFailure) else None
 
 
