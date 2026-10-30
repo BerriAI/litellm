@@ -64,7 +64,7 @@ The proxy checks every offered native MCP server and tool. Any denial rejects th
 
 Native MCP call records in non-streaming responses are checked against the same policy before returning the response. Response server labels are bound to the URLs validated for the selected deployment, including model-configured attachments. Retries and fallback attempts carry their own binding. A call with an unknown server or unreadable tool name is rejected.
 
-Normal provider GET `/v1/responses/{response_id}` retrieval checks the stored attachment URLs returned by the provider against the caller’s current policy, then checks the returned tool calls. Creation responses cannot use this retrieval fallback.
+Normal provider GET `/v1/responses/{response_id}` retrieval checks the stored attachment URLs returned by the provider against the caller’s current policy, then checks the returned tool calls. Creation responses cannot use this retrieval fallback. When a native policy is active, streamed retrieval (including resume), Redis polling reads, and creation through Redis polling return HTTP 400 in v1. These paths do not yet carry a validated server URL binding.
 
 Streaming response enforcement is added in the dependent change.
 

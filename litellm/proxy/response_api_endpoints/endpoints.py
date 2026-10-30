@@ -48,6 +48,7 @@ from litellm.llms.openai.responses.guardrail_translation.handler import (
 )
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_utils import carries_client_side_overrides
+from litellm.proxy.auth.native_mcp_policy import check_native_mcp_retrieval
 from litellm.proxy.auth.user_api_key_auth import (
     UserAPIKeyAuth,
     user_api_key_auth,
@@ -368,6 +369,7 @@ async def responses_api(
 
     # If polling is enabled, use polling mode
     if should_use_polling:
+        check_native_mcp_retrieval(user_api_key_dict, {}, polling=True)
         from litellm.proxy.response_polling.background_streaming import (
             background_streaming_task,
         )
@@ -842,6 +844,7 @@ async def get_response(
 
     # Check if this is a polling ID
     if ResponsePollingHandler.is_polling_id(response_id):
+        check_native_mcp_retrieval(user_api_key_dict, {}, polling=True)
         # Handle polling response
         if not redis_usage_cache:
             raise HTTPException(
@@ -876,6 +879,7 @@ async def get_response(
     if retrieve_query:
         body_extra_query: Final[object] = data.get("extra_query")
         data["extra_query"] = {**(body_extra_query if isinstance(body_extra_query, dict) else {}), **retrieve_query}
+    check_native_mcp_retrieval(user_api_key_dict, _PROXY_SERVER_REQUEST_ADAPTER.validate_python(data))
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         response: Final[object] = await processor.base_process_llm_request(

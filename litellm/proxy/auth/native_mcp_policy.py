@@ -74,6 +74,7 @@ def native_mcp_deployment_validator(
     def validate(data: Mapping[str, object]) -> Callable[[object], object]:
         from litellm.proxy.guardrails.tool_name_extraction import extract_request_mcp_accesses
 
+        check_native_mcp_retrieval(identity, data)
         accesses: Final = extract_request_mcp_accesses(data)
         raise_native_mcp_denial(evaluate_native_mcp_policy(policy, accesses))
         assert not isinstance(accesses, NativeMCPDenial)
@@ -188,6 +189,22 @@ def check_native_mcp_request(identity: NativeMCPIdentity, data: Mapping[str, obj
     from litellm.proxy.guardrails.tool_name_extraction import extract_request_mcp_accesses
 
     raise_native_mcp_denial(evaluate_native_mcp_policy(policy, extract_request_mcp_accesses(data)))
+
+
+def check_native_mcp_retrieval(
+    identity: NativeMCPIdentity, data: Mapping[str, object], *, polling: bool = False
+) -> None:
+    from litellm.responses.retrieve_stream_query import requests_streamed_retrieval
+
+    query: Final = {"stream": data.get("stream"), **(as_str_mapping(data.get("extra_query")) or {})}
+    unsupported: Final = polling or requests_streamed_retrieval({**data, "extra_query": query})
+    if unsupported and resolve_native_mcp_policy(identity) is not None:
+        raise_native_mcp_denial(
+            NativeMCPDenial(
+                "native_mcp_policy does not support streamed response retrieval or Redis polling in v1; "
+                "use normal provider response retrieval"
+            )
+        )
 
 
 def check_native_mcp_response(

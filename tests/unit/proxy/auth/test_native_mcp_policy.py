@@ -350,3 +350,22 @@ def test_response_binds_to_its_own_deployment_and_current_policy() -> None:
     rebound: Final = second(response)
     with pytest.raises(ProxyException, match="absent from the validated request"):
         check_native_mcp_response(identity(), {}, rebound)
+
+
+@pytest.mark.parametrize(
+    "data,polling",
+    [
+        ({"response_id": "resp_1", "extra_query": {"stream": "true", "starting_after": 7}}, False),
+        ({"response_id": "resp_1", "stream": True}, False),
+        ({}, True),
+    ],
+)
+def test_native_policy_explicitly_restricts_streamed_retrieval_and_polling(
+    data: dict[str, object], polling: bool
+) -> None:
+    from litellm.proxy.auth.native_mcp_policy import check_native_mcp_retrieval
+
+    with pytest.raises(ProxyException, match="does not support"):
+        check_native_mcp_retrieval(identity(), data, polling=polling)
+    assert check_native_mcp_retrieval(UserAPIKeyAuth(), data, polling=polling) is None
+    assert check_native_mcp_retrieval(identity(), {"response_id": "resp_1", "extra_query": {"stream": "false"}}) is None
