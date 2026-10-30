@@ -4769,6 +4769,126 @@ async def test_async_success_handler_logs_a_completed_stream_only_once():
     )
 
 
+class _ChunkLogHeldOpenRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.chunk_log_held: Final = asyncio.Event()
+        self.release_chunk_log: Final = asyncio.Event()
+        self.events: Final[list[tuple[str, object]]] = []  # mutable-ok: records each callback as it fires
+
+    async def async_logging_hook(self, kwargs, result, call_type):
+        if isinstance(result, litellm.ModelResponseStream):
+            self.chunk_log_held.set()
+            await self.release_chunk_log.wait()
+        return kwargs, result
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.events.append(("success", response_obj.choices[0].message.content))
+
+    async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        self.events.append(("stream", type(response_obj).__name__))
+
+
+async def _log_a_chunk_held_open_across_the_stream_end(
+    holder: _ChunkLogHeldOpenRecorder, callbacks: Sequence[object]
+) -> None:
+    start: Final = dt_object(2026, 1, 1)
+    logging_obj: Final = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=start,
+        litellm_call_id="chunk-race",
+        function_id="chunk-race",
+        dynamic_async_success_callbacks=list(callbacks),
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-4o",
+        user="chunk-race-user",
+        optional_params={},
+        litellm_params={"litellm_call_id": "chunk-race", "metadata": {}},
+        custom_llm_provider="openai",
+    )
+
+    chunk_log: Final = asyncio.create_task(
+        logging_obj.async_success_handler(
+            result=litellm.ModelResponseStream(model="gpt-4o", choices=[{"index": 0, "delta": {"content": "Hello"}}]),
+            start_time=start,
+            end_time=start,
+        )
+    )
+    await holder.chunk_log_held.wait()
+    await logging_obj.async_success_handler(
+        result=ModelResponse(
+            model="gpt-4o",
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "Hello there"}, "finish_reason": "stop"}],
+            usage={"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        ),
+        start_time=start,
+        end_time=start,
+    )
+    holder.release_chunk_log.set()
+    await chunk_log
+
+
+@pytest.mark.asyncio
+async def test_a_chunk_log_racing_the_stream_end_logs_a_stream_event_not_a_second_success():
+    from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
+
+    recorder: Final = _ChunkLogHeldOpenRecorder()
+
+    class ShadowEvalSuccessRecorder(ShadowEvalLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time, *, guardrail_snapshot=None):
+            recorder.events.append(("shadow", response_obj.choices[0].message.content))
+
+    async def log_success_function(kwargs, response_obj, start_time, end_time):
+        recorder.events.append(("function", response_obj.choices[0].message.content))
+
+    await _log_a_chunk_held_open_across_the_stream_end(
+        recorder, callbacks=(recorder, ShadowEvalSuccessRecorder(), log_success_function)
+    )
+
+    assert recorder.events == [
+        ("success", "Hello there"),
+        ("shadow", "Hello there"),
+        ("function", "Hello there"),
+        ("stream", "ModelResponseStream"),
+    ]
+
+
+class _StringCallbackIntegrationRecorder:
+    def __init__(self) -> None:
+        self.events: Final[list[str]] = []  # mutable-ok: records each delivery as it fires
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.events.append("success")
+
+    async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        self.events.append("stream")
+
+    async def async_log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+        self.events.append("success")
+
+
+@pytest.mark.parametrize(
+    ("callback", "integration_global", "expected_events"),
+    [("openmeter", "openMeterLogger", ["success", "stream"]), ("dynamodb", "dynamoLogger", ["success"])],
+)
+@pytest.mark.asyncio
+async def test_a_chunk_log_racing_the_stream_end_sends_a_string_callback_integration_one_success(
+    monkeypatch: pytest.MonkeyPatch, callback: str, integration_global: str, expected_events: Sequence[str]
+):
+    integration: Final = _StringCallbackIntegrationRecorder()
+    monkeypatch.setattr(litellm_logging, integration_global, integration)
+    monkeypatch.setattr(litellm, "_async_success_callback", [callback])
+    holder: Final = _ChunkLogHeldOpenRecorder()
+
+    await _log_a_chunk_held_open_across_the_stream_end(holder, callbacks=(holder,))
+
+    assert integration.events == expected_events
+
+
 @pytest.mark.asyncio
 async def test_async_success_handler_sets_standard_logging_object_for_streaming_pass_through():
     """

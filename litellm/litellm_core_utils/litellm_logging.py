@@ -3962,6 +3962,7 @@ class Logging(LiteLLMLoggingBaseClass):
             is_async=True,
             streaming_chunks=self.streaming_chunks,
         )
+        is_pass_through_call: Final[bool] = self.call_type in (CallTypes.pass_through.value,)
 
         if complete_streaming_response is not None:
             print_verbose("Async success callbacks: Got a complete streaming response")
@@ -4016,7 +4017,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
             # print standard logging payload
             self._emit_stored_standard_logging_payload()
-        elif self.call_type == "pass_through_endpoint":
+        elif is_pass_through_call:
             print_verbose("Async success callbacks: Got a pass-through endpoint response")
 
             self.model_call_details["async_complete_streaming_response"] = result
@@ -4038,6 +4039,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
                 # print standard logging payload
                 self._emit_stored_standard_logging_payload()
+        delivers_final_stream_log: Final[bool] = complete_streaming_response is not None or is_pass_through_call
         callbacks: Final = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_async_success_callbacks,
             global_callbacks=litellm._async_success_callback,
@@ -4107,7 +4109,7 @@ class Logging(LiteLLMLoggingBaseClass):
             try:
                 if callback == "openmeter" and openMeterLogger is not None:
                     if self.stream is True:
-                        if "async_complete_streaming_response" in self.model_call_details:
+                        if delivers_final_stream_log:
                             await openMeterLogger.async_log_success_event(
                                 kwargs=self.model_call_details,
                                 response_obj=self.model_call_details["async_complete_streaming_response"],
@@ -4142,9 +4144,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         model_call_details=model_call_details, custom_logger=callback
                     )
                     ##################################
-                    if isinstance(callback, ShadowEvalLogger) and (
-                        not self.stream or "async_complete_streaming_response" in model_call_details
-                    ):
+                    if isinstance(callback, ShadowEvalLogger) and (not self.stream or delivers_final_stream_log):
                         await callback.async_log_success_event(
                             kwargs=model_call_details,
                             response_obj=model_call_details["async_complete_streaming_response"]
@@ -4155,7 +4155,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             guardrail_snapshot=self.shadow_eval_request_snapshot,
                         )
                     elif self.stream is True:
-                        if "async_complete_streaming_response" in model_call_details:
+                        if delivers_final_stream_log:
                             await callback.async_log_success_event(
                                 kwargs=model_call_details,
                                 response_obj=model_call_details["async_complete_streaming_response"],
@@ -4181,7 +4181,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     if customLogger is None:
                         customLogger = CustomLogger()
                     if self.stream:
-                        if "async_complete_streaming_response" in self.model_call_details:
+                        if delivers_final_stream_log:
                             await customLogger.async_log_event(
                                 kwargs=self.model_call_details,
                                 response_obj=self.model_call_details["async_complete_streaming_response"],
@@ -4204,7 +4204,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     if dynamoLogger is None:
                         dynamoLogger = DyanmoDBLogger()
                     if self.stream:
-                        if "async_complete_streaming_response" in self.model_call_details:
+                        if delivers_final_stream_log:
                             print_verbose("DynamoDB Logger: Got Stream Event - Completed Stream Response")
                             await dynamoLogger.async_log_event(
                                 kwargs=self.model_call_details,
