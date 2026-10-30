@@ -700,7 +700,7 @@ def _has_answer_stream_text(responses_so_far: Sequence[object]) -> bool:
 
 
 def _reads_like_a_dict(chunk: object) -> bool:
-    return isinstance(chunk, dict) or hasattr(chunk, "get")
+    return hasattr(chunk, "get")
 
 
 def _envelope_has_reasoning_text(chunk: object) -> bool:

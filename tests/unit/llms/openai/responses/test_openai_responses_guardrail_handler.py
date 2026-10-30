@@ -5515,6 +5515,63 @@ class TestReasoningOutputReachesOutputGuardrails:
         assert completed["response"]["provider_specific_fields"] == _provider_fields("a [MASKED]")
 
     @pytest.mark.asyncio
+    async def test_a_provider_field_rewrite_reaches_an_earlier_envelope(self) -> None:
+        earlier: Final = {
+            "type": "response.in_progress",
+            "response": {"id": "resp_1", "output": [], "provider_specific_fields": _provider_fields("a persimmon")},
+        }
+        completed: Final = _completed_event()
+        completed["response"]["provider_specific_fields"] = _provider_fields("a persimmon")
+
+        await _deliver([earlier, completed])
+
+        assert earlier["response"]["provider_specific_fields"] == _provider_fields("a [MASKED]")
+
+    @pytest.mark.asyncio
+    async def test_a_streamed_answer_in_the_envelope_is_scanned_once(self) -> None:
+        guardrail: Final = CallRecordingGuardrail()
+        delta: Final = {
+            "type": "response.output_text.delta",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "a fig",
+        }
+
+        await _deliver([delta, _completed_event(_message_item("a fig"))], guardrail)
+
+        assert [call["texts"] for call in guardrail.calls] == [["a fig"]]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model", "named_model"),
+        [("test-model", {"model": "test-model"}), ("", {}), (7, {})],
+        ids=["named", "empty", "not-a-string"],
+    )
+    async def test_a_reasoning_call_names_only_a_real_model(self, model: object, named_model: dict) -> None:
+        guardrail: Final = CallRecordingGuardrail()
+
+        await OpenAIResponsesHandler().process_output_response(
+            {"model": model, "output": [_openai_reasoning_item("a fig")]}, guardrail
+        )
+
+        assert guardrail.calls == [{"texts": ["a fig"], **named_model}]
+
+    @pytest.mark.asyncio
+    async def test_a_reasoning_call_keeps_what_the_caller_put_in_request_data(self) -> None:
+        request_data: Final = {"response": "from the caller", "litellm_metadata": {"team": "from the caller"}}
+
+        await OpenAIResponsesHandler().process_output_response(
+            {"output": [_openai_reasoning_item("a fig")]},
+            CallRecordingGuardrail(),
+            request_data=request_data,
+            user_api_key_dict=UserAPIKeyAuth(user_id="someone-else"),
+        )
+
+        assert request_data["response"] == "from the caller"
+        assert request_data["litellm_metadata"]["team"] == "from the caller"
+
+    @pytest.mark.asyncio
     async def test_a_reasoning_only_match_reaches_a_blocking_guardrail(self) -> None:
         with pytest.raises(HTTPException) as exc_info:
             await OpenAIResponsesHandler().process_output_response(
@@ -5850,6 +5907,17 @@ class TestReasoningOutputReachesOutputGuardrails:
         assert events[1]["delta"] == "I think of a [MASKED]"
         assert events[4]["delta"] == "a [MASKED]"
         assert events[-1] == {"type": "response.failed", "response": {"id": "resp_1", "output": []}}
+
+    @pytest.mark.asyncio
+    async def test_a_failed_envelope_with_no_output_masks_a_stream_of_only_reasoning(self) -> None:
+        events: Final = [
+            *_cut_short_stream_events()[:3],
+            {"type": "response.failed", "response": {"id": "resp_1", "output": []}},
+        ]
+
+        await _deliver(events)
+
+        assert events[1]["delta"] == "I think of a [MASKED]"
 
     @pytest.mark.asyncio
     async def test_a_tool_call_between_reasoning_and_the_answer_keeps_every_text_in_place(self) -> None:
