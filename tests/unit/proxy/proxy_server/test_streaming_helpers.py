@@ -27,7 +27,7 @@ import pytest
 from fastapi import HTTPException, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from openai import APIError as OpenAIAPIError
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import litellm
 import litellm.proxy.proxy_server as ps
@@ -61,6 +61,7 @@ from litellm.types.llms.openai import (
     ResponseIncompleteEvent,
     ResponsesAPIResponse,
 )
+from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
 from tests._support.clock_loops import AutojumpClockLoop
 
@@ -235,12 +236,43 @@ def _responses_frame_payload(nested: object) -> Mapping[str, object]:
     return chunk_payload
 
 
-def test_responses_stream_frames_send_nested_header_mappings_in_their_masked_string_form() -> None:
-    assert _responses_frame_payload(_UPSTREAM_HEADERS)["nested"] == str(_UPSTREAM_HEADERS)
+class _HiddenFieldModel(BaseModel, frozen=True):
+    user: str
+    password: str = Field(repr=False)
 
 
-def test_responses_stream_frames_turn_mapping_keys_json_cannot_take_into_strings() -> None:
-    assert _responses_frame_payload(MappingProxyType({("a", "b"): 1}))["nested"] == {str(("a", "b")): 1}
+class _MaskedReprModel(BaseModel, frozen=True):
+    token: str
+
+    def __repr__(self) -> str:
+        return "_MaskedReprModel(token=[secure])"
+
+
+_REDACTED_HEADERS: Final = RedactedDict({"authorization": "Bearer hook-canary"})
+
+
+@pytest.mark.parametrize(
+    ("nested", "expected"),
+    [
+        (_UPSTREAM_HEADERS, repr(_UPSTREAM_HEADERS)),
+        (_REDACTED_HEADERS, repr(_REDACTED_HEADERS)),
+        (MappingProxyType({"headers": _REDACTED_HEADERS}), {"headers": repr(_REDACTED_HEADERS)}),
+        (_HiddenFieldModel(user="rig", password="hook-canary"), {"user": "rig"}),
+        (_MaskedReprModel(token="hook-canary"), repr(_MaskedReprModel(token="hook-canary"))),
+    ],
+    ids=["header_mapping", "redacted_dict", "proxy_over_redacted_dict", "repr_false_field", "masked_repr_model"],
+)
+def test_responses_stream_frames_never_show_what_a_nested_value_hides_from_its_repr(
+    nested: object, expected: object
+) -> None:
+    assert _responses_frame_payload(nested)["nested"] == expected
+
+
+@pytest.mark.parametrize("mapping", [dict, MappingProxyType], ids=["dict", "mapping_proxy"])
+def test_responses_stream_frames_turn_mapping_keys_json_cannot_take_into_strings(
+    mapping: Callable[[Mapping[object, object]], Mapping[object, object]],
+) -> None:
+    assert _responses_frame_payload(mapping({("a", "b"): 1}))["nested"] == {repr(("a", "b")): 1}
 
 
 def test_responses_sse_chunk_turns_top_level_keys_json_cannot_take_into_strings() -> None:
@@ -249,7 +281,7 @@ def test_responses_sse_chunk_turns_top_level_keys_json_cannot_take_into_strings(
     )
 
     assert isinstance(frame, str)
-    assert json.loads(frame.removeprefix("data: ")) == {"type": "response.output_text.delta", str(("a", "b")): "x"}
+    assert json.loads(frame.removeprefix("data: ")) == {"type": "response.output_text.delta", repr(("a", "b")): "x"}
 
 
 def _self_referencing_chunk() -> Mapping[str, object]:
@@ -259,19 +291,18 @@ def _self_referencing_chunk() -> Mapping[str, object]:
 
 
 class _UnprintableValue:
-    def __str__(self) -> str:
+    def __repr__(self) -> str:
         raise RuntimeError("no string form")
 
 
 @pytest.mark.parametrize(
     "chunk",
     [
-        {"type": "response.output_text.delta", "meta": {("a", "b"): 1}},
         _self_referencing_chunk(),
-        {"type": "response.output_text.delta", "meta": _UnprintableValue()},
         _UPSTREAM_HEADERS,
+        RedactedDict({"type": "response.output_text.delta", "authorization": "Bearer hook-canary"}),
     ],
-    ids=["nested_dict_tuple_key", "self_reference", "unprintable_value", "header_mapping_chunk"],
+    ids=["self_reference", "header_mapping_chunk", "redacted_dict_chunk"],
 )
 def test_responses_sse_chunk_json_cannot_encode_streams_as_a_plain_data_frame(chunk: Mapping[str, object]) -> None:
     assert _format_responses_sse_chunk(chunk=chunk) == _format_streaming_sse_chunk(chunk=chunk)
@@ -279,20 +310,18 @@ def test_responses_sse_chunk_json_cannot_encode_streams_as_a_plain_data_frame(ch
 
 @pytest.mark.parametrize(
     "nested",
-    [
-        MappingProxyType({"bad": {("a", "b"): 1}}),
-        _self_referencing_chunk(),
-        _UnprintableValue(),
-    ],
-    ids=["proxy_over_tuple_key", "self_reference", "unprintable_value"],
+    [_self_referencing_chunk(), _UnprintableValue()],
+    ids=["self_reference", "unprintable_value"],
 )
-def test_responses_error_event_json_cannot_encode_still_ends_the_stream_with_its_message(nested: object) -> None:
-    frame: Final = ResponsesStreamErrorState().format_error({"message": "blocked", "code": 400, "nested": nested})
+def test_responses_error_event_drops_only_the_error_detail_json_cannot_encode(nested: object) -> None:
+    frame: Final = ResponsesStreamErrorState().format_error(
+        {"message": "blocked", "code": "400", "type": "guardrail_error", "nested": nested}
+    )
 
     assert frame.startswith("event: error\ndata: ")
     payload: Final = json.loads(frame.split("data: ", 1)[1])
-    assert (payload["type"], payload["message"], payload["error"]["message"]) == ("error", "blocked", "blocked")
-    assert payload["error"]["code"] == payload["code"]
+    assert (payload["type"], payload["message"]) == ("error", "blocked")
+    assert payload["error"] == {"message": "blocked", "code": "400", "type": "guardrail_error"}
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(

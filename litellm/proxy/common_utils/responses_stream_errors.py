@@ -1,12 +1,12 @@
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from http import HTTPStatus
 from types import MappingProxyType
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
-from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
+from typing_extensions import TypeIs  # noqa: TID251  # exact-type checks keep subclasses out, isinstance cannot
 
 from litellm._logging import redact_internal_details_from_client_message
 from litellm._uuid import uuid
@@ -68,43 +68,48 @@ class _ErrorPayload(LiteLLMBaseModel):
         return {"message": self.error} if isinstance(self.error, str) else self.error
 
 
-def _is_dict_like(
-    value: object,
-) -> TypeIs[dict[object, object] | MappingProxyType[object, object]]:  # guard-ok: isinstance decides it
-    return isinstance(value, dict | MappingProxyType)
+def _is_plain_mapping(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: exact type check
+    return type(value) in (dict, MappingProxyType)
 
 
-def _is_mapping_proxy(
-    value: object,
-) -> TypeIs[MappingProxyType[object, object]]:  # guard-ok: isinstance decides it, keys and values stay object
-    return isinstance(value, MappingProxyType)
+def _is_plain_sequence(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: exact type check
+    return type(value) in (list, tuple)
 
 
 def _json_key(key: object) -> str | int | float | bool | None:
-    return key if key is None or isinstance(key, str | int | float | bool) else str(key)
+    return key if key is None or isinstance(key, str | int | float | bool) else repr(key)
 
 
-def _with_json_keys(value: Mapping[object, object]) -> Mapping[str | int | float | bool | None, object]:
-    return {_json_key(key): item for key, item in value.items()}
+def _json_safe_items(items: Iterable[tuple[object, object]]) -> Mapping[str | int | float | bool | None, object]:
+    return {_json_key(key): _json_safe(item) for key, item in items}
 
 
-def _jsonable_stream_value(value: object) -> object:
-    if _is_mapping_proxy(value):
-        return _with_json_keys(value)
-    if isinstance(value, BaseModel):
-        return value.model_dump()
-    return str(value)
+def _json_safe(value: object) -> object:
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if _is_plain_mapping(value):
+        return _json_safe_items(value.items())
+    if _is_plain_sequence(value):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, BaseModel) and type(value).__repr__ is BaseModel.__repr__:
+        shown: Final[Iterable[tuple[str | None, object]]] = value.__repr_args__()
+        return _json_safe_items(shown)
+    return repr(value)
 
 
-def _stream_json(value: Mapping[object, object]) -> str | None:
+def _stream_json(value: object) -> str | None:
     try:
-        return json.dumps(_with_json_keys(value), default=_jsonable_stream_value)
-    except Exception:  # noqa: BLE001  # hook values run their own __str__ and serializers, so any failure must fall back
+        return json.dumps(_json_safe(value))
+    except Exception:  # noqa: BLE001  # hook values run their own __repr__, so any failure must fall back
         return None
 
 
+def _encodable_items(error: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in error.items() if _stream_json(value) is not None}
+
+
 def responses_chunk_json(chunk: object) -> str | None:
-    return _stream_json(chunk) if _is_dict_like(chunk) else None
+    return _stream_json(chunk) if _is_plain_mapping(chunk) else None
 
 
 def sse_error_object(data: str | bytes) -> Mapping[str, object] | None:
@@ -192,6 +197,18 @@ def responses_error_fields(error: Mapping[str, object]) -> Mapping[str, object]:
     }
 
 
+def _error_event(
+    fields: Mapping[str, object], error: Mapping[str, object], sequence_number: int
+) -> Mapping[str, object]:
+    return {
+        "type": ResponsesAPIStreamEvents.ERROR.value,
+        **fields,
+        "param": error.get("param"),
+        "sequence_number": sequence_number,
+        "error": error,
+    }
+
+
 class ResponsesStreamErrorState:
     def __init__(self) -> None:
         self.response_id: str | None = None
@@ -225,22 +242,8 @@ class ResponsesStreamErrorState:
     def format_error(self, error: Mapping[str, object]) -> str:
         fields: Final = responses_error_fields(error)
         sequence_number: Final = self.sequence_number + 1
-        payload: Final = _stream_json(
-            {
-                "type": ResponsesAPIStreamEvents.ERROR.value,
-                **fields,
-                "param": error.get("param"),
-                "sequence_number": sequence_number,
-                "error": error,
-            }
-        ) or json.dumps(
-            {
-                "type": ResponsesAPIStreamEvents.ERROR.value,
-                **fields,
-                "param": None,
-                "sequence_number": sequence_number,
-                "error": fields,
-            }
+        payload: Final = _stream_json(_error_event(fields, _encodable_items(error), sequence_number)) or json.dumps(
+            _error_event(fields, fields, sequence_number)
         )
         return f"event: error\ndata: {payload}\n\n"
 
