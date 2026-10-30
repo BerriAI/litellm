@@ -4489,6 +4489,7 @@ class LlmProviders(str, Enum):
     STRANDS_DECIDER = "strands_decider"
     LAYA = "laya"
     BESPOKE = "bespoke"
+    EU_JEV = "eu_jev"
     MISTRAL = "mistral"
     MILVUS = "milvus"
     GROQ = "groq"

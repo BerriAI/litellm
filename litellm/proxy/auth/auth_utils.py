@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.url_utils import (
 from litellm.llms.azure.passthrough.transformation import azure_router_model_in_endpoint
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.proxy._types import *
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_metadata
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
@@ -884,7 +885,6 @@ def route_in_additonal_public_routes(current_route: str):
         public_routes: ["LiteLLMRoutes.public_routes", "/spend/calculate", "/api/*"]
     ```
     """
-    from litellm.proxy.auth.route_checks import RouteChecks
     from litellm.proxy.proxy_server import general_settings, premium_user
 
     try:
@@ -2175,6 +2175,13 @@ def _extract_model_candidates_from_request(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _dedupe_model_candidates((f"{provider}/{decision_model}",))
+    if RouteChecks.is_builtin_eu_jev_decision_route(route=route):
+        from litellm.llms.eu_jev.common_utils import eu_jev_registry_model
+
+        requested_model: Final = TypeAdapter(Mapping[str, object]).validate_python(request_data).get("model")
+        if requested_model is not None and not isinstance(requested_model, str):
+            raise HTTPException(status_code=400, detail="eu_jev model must be a string")
+        return [f"eu_jev/{eu_jev_registry_model(requested_model)}"]
     if route == "/cost/predict-cache":
         prediction_models: Final = _cache_prediction_model_candidates(request_data, llm_router, team_id)  # pyright: ignore[reportUnknownArgumentType]  # the typed reader validates each deployment ID from this legacy payload
         return _dedupe_model_candidates(prediction_models)
