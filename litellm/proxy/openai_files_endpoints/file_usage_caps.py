@@ -2,6 +2,7 @@ import math
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import TYPE_CHECKING, Annotated, Final, Literal, NoReturn, TypeAlias
 
 from pydantic import Field, TypeAdapter, ValidationError
@@ -16,19 +17,22 @@ from litellm.constants import (
     MAX_FILE_DOWNLOADS_PER_MINUTE_KEY,
 )
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.redis.stores import file_usage_counters
+from litellm.redis.stores.file_usage_counters import (
+    FileUsageCounter,
+    FileUsageCounterStore,
+    TransportFileUsageCounterStore,
+    counter_key,
+)
+from litellm.redis.transport.contract import RedisFailure
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache
 
-FileUsageSetting: TypeAlias = Literal[
-    "max_batch_file_records",
-    "max_batch_file_uploads_per_day",
-    "max_file_downloads_per_minute",
-]
 LimitSource: TypeAlias = Literal["key", "team", "general_settings"]
-CounterScope: TypeAlias = Literal["key", "user", "team"]
+FileUsageSetting: TypeAlias = file_usage_counters.FileUsageSetting
+CounterScope: TypeAlias = file_usage_counters.CounterScope
 
-_COUNTER_PREFIX: Final = "litellm:file_usage"
 _DAY_SECONDS: Final = 24 * 60 * 60
 _MINUTE_SECONDS: Final = 60
 _LIMIT_ADAPTER: Final[TypeAdapter[int]] = TypeAdapter(Annotated[int, Field(gt=0)])
@@ -131,21 +135,34 @@ def resolve_scoped_limits(
     return tuple(scoped for scoped in candidates if scoped is not None)
 
 
+async def _increment_file_counter(
+    cache: "InternalUsageCache", counter: FileUsageCounter, amount: float, ttl_seconds: int
+) -> float | None:
+    local: Final = await cache.async_increment_cache(
+        key=counter_key(counter), value=amount, litellm_parent_otel_span=None, ttl=ttl_seconds, local_only=True
+    )
+    if local is None and cache.dual_cache.in_memory_cache:
+        return None
+    if cache.dual_cache.redis_cache is None:
+        return local
+    store: Final[FileUsageCounterStore] = TransportFileUsageCounterStore(cache.dual_cache.redis_cache.transport())
+    count: Final = await store.increment(counter, amount, ttl=timedelta(seconds=ttl_seconds))
+    return local if isinstance(count, RedisFailure) else count
+
+
 async def _increment_all_or_none(
     cache: "InternalUsageCache",
-    counters: tuple[tuple[str, ScopedFileUsageLimit], ...],
+    counters: tuple[tuple[FileUsageCounter, ScopedFileUsageLimit], ...],
     ttl_seconds: int,
 ) -> ScopedFileUsageLimit | None:
     if not counters:
         return None
-    (counter_key, scoped), rest = counters[0], counters[1:]
-    count: Final = await cache.async_increment_cache(
-        key=counter_key, value=1, litellm_parent_otel_span=None, ttl=ttl_seconds
-    )
+    (counter, scoped), rest = counters[0], counters[1:]
+    count: Final = await _increment_file_counter(cache, counter, 1, ttl_seconds)
     over_here: Final = count is not None and count > scoped.limit.value
     exceeded: Final = scoped if over_here else await _increment_all_or_none(cache, rest, ttl_seconds)
     if exceeded is not None:
-        await cache.async_increment_cache(key=counter_key, value=-1, litellm_parent_otel_span=None, ttl=ttl_seconds)
+        await _increment_file_counter(cache, counter, -1, ttl_seconds)
     return exceeded
 
 
@@ -160,7 +177,7 @@ async def consume_file_usage(
     window_start: Final = int(now // window_seconds) * window_seconds
     counters: Final = tuple(
         (
-            f"{_COUNTER_PREFIX}:{scoped.limit.setting}:{scoped.scope}:{scoped.scope_id}:{subject}:{window_start}",
+            FileUsageCounter(scoped.limit.setting, scoped.scope, scoped.scope_id, subject, window_start),
             scoped,
         )
         for scoped in limits
