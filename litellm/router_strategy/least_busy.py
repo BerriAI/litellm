@@ -2,6 +2,7 @@ import contextlib
 import logging
 import threading
 import time
+import uuid
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextvars import ContextVar
 from typing import Final, Protocol, TypeAlias
@@ -22,6 +23,7 @@ SELECTION_RESERVATION_TTL_SECONDS: Final = 30.0
 SELECTION_RESERVATION_MAX_KEYS: Final = 10_000
 _RESERVATIONS_LOCK: Final = threading.Lock()
 _PICK_RESERVES: Final[ContextVar[bool]] = ContextVar("least_busy_pick_reserves")
+_PICK_OWNER: Final[ContextVar[str | None]] = ContextVar("least_busy_pick_owner", default=None)
 
 
 @contextlib.contextmanager
@@ -164,7 +166,7 @@ def _unexpired(picks: Sequence[_Pick], now: float) -> tuple[_Pick, ...]:
 
 def _without_one_pick(picks: tuple[_Pick, ...], call_id: str | None) -> tuple[_Pick, ...]:
     tags: Final = tuple(tag for _, tag in picks)
-    owner: Final = call_id if call_id in tags else None
+    owner: Final = next((tag for tag in (call_id, _PICK_OWNER.get()) if tag is not None and tag in tags), None)
     if owner not in tags:
         return picks
     index: Final = tags.index(owner)
@@ -237,6 +239,17 @@ def release_unstarted_picks(store: _ReservationStore, call_id: str | None) -> No
         store.delete_cache(_picked_deployments_key(call_id))
 
 
+@contextlib.contextmanager
+def owning_picks(store: _ReservationStore, call_id: str | None) -> Generator[None, None, None]:
+    owner: Final = call_id or _PICK_OWNER.get() or uuid.uuid4().hex
+    token: Final = _PICK_OWNER.set(owner)
+    try:
+        yield
+    finally:
+        _PICK_OWNER.reset(token)
+        release_unstarted_picks(store, owner)
+
+
 class LeastBusyLoggingHandler(CustomLogger):
     test_flag: bool = False
     logged_success: int = 0
@@ -285,9 +298,10 @@ class LeastBusyLoggingHandler(CustomLogger):
             live: Final = tuple(self._live_reservations(deployment_id, now) for deployment_id in deployment_ids)
             index: Final = _least_busy_index(tuple(count + len(r) for count, r in zip(counts, live, strict=True)))
             if reserve:
-                self._store_reservations(deployment_ids[index], (*live[index], (now, call_id)))
-                if call_id is not None:
-                    self._record_pick(call_id, deployment_ids[index])
+                tag: Final = call_id if call_id is not None else _PICK_OWNER.get()
+                self._store_reservations(deployment_ids[index], (*live[index], (now, tag)))
+                if tag is not None:
+                    self._record_pick(tag, deployment_ids[index])
         return healthy_deployments[index]
 
     def _start_attempt(self, ref: tuple[str, str], call_id: str | None) -> None:

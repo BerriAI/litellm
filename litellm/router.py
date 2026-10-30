@@ -224,9 +224,9 @@ from litellm.router_strategy.least_busy import (
     SELECTION_RESERVATION_MAX_KEYS,
     LeastBusyLoggingHandler,
     call_id_of,
+    owning_picks,
     pick_reserves,
     picks_reserve,
-    release_unstarted_picks,
 )
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
@@ -7766,72 +7766,71 @@ class Router(DeprecatedRouterMembers):
         Returns:
             VectorStoreCreateResponse
         """
-        try:
-            # If model is None, use the factory function approach (direct SDK call)
-            if model is None:
-                from litellm.vector_stores.main import acreate
+        with owning_picks(self._core_least_busy_reservations, call_id_of(CALL_IDENTITY.validate_python(kwargs))):
+            try:
+                # If model is None, use the factory function approach (direct SDK call)
+                if model is None:
+                    from litellm.vector_stores.main import acreate
 
-                # Use the factory function to handle the call
-                factory_fn: Final = self.factory_function(acreate, call_type="avector_store_create")
-                return await factory_fn(**kwargs)
+                    # Use the factory function to handle the call
+                    factory_fn: Final = self.factory_function(acreate, call_type="avector_store_create")
+                    return await factory_fn(**kwargs)
 
-            from litellm.vector_stores import acreate as avector_store_create_sdk
+                from litellm.vector_stores import acreate as avector_store_create_sdk
 
-            parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            deployment: Final = await self._core_async_get_available_deployment(
-                model=model,
-                messages=[{"role": "user", "content": "vector-store-api-fake-text"}],
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
-            data: Final = deployment["litellm_params"].copy()
-            model_name: Final = data["model"]
-            self._update_kwargs_with_deployment(
-                deployment=deployment,
-                kwargs=kwargs,
-                function_name="avector_store_create",
-            )
-
-            model_client: Final = self._get_async_openai_model_client(
-                deployment=deployment,
-                kwargs=kwargs,
-            )
-            self.total_calls[model_name] += 1
-
-            # Get custom provider from deployment params
-            custom_llm_provider = data.get("custom_llm_provider")
-            _, inferred_custom_llm_provider, _, _ = get_llm_provider(
-                model=data["model"],
-                custom_llm_provider=custom_llm_provider,
-            )
-            custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
-
-            async with self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span):
-                response = await avector_store_create_sdk(
-                    **{
-                        **data,
-                        "custom_llm_provider": custom_llm_provider,
-                        "caching": self._core_cache_responses,
-                        "client": model_client,
-                        **kwargs,
-                    }
+                parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
+                deployment: Final = await self._core_async_get_available_deployment(
+                    model=model,
+                    messages=[{"role": "user", "content": "vector-store-api-fake-text"}],
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                )
+                data: Final = deployment["litellm_params"].copy()
+                model_name: Final = data["model"]
+                self._update_kwargs_with_deployment(
+                    deployment=deployment,
+                    kwargs=kwargs,
+                    function_name="avector_store_create",
                 )
 
-            self.success_calls[model_name] += 1
-            verbose_router_logger.info("litellm.avector_store_create(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
+                model_client: Final = self._get_async_openai_model_client(
+                    deployment=deployment,
+                    kwargs=kwargs,
+                )
+                self.total_calls[model_name] += 1
 
-            return response
-        except Exception as e:
-            verbose_router_logger.exception(
-                "litellm.avector_store_create(model=%s)\x1b[31m Exception %s\x1b[0m", model, e
-            )
-            if model is not None:
-                self.fail_calls[model] += 1
-            raise e
-        finally:
-            release_unstarted_picks(
-                self._core_least_busy_reservations, call_id_of(CALL_IDENTITY.validate_python(kwargs))
-            )
+                # Get custom provider from deployment params
+                custom_llm_provider = data.get("custom_llm_provider")
+                _, inferred_custom_llm_provider, _, _ = get_llm_provider(
+                    model=data["model"],
+                    custom_llm_provider=custom_llm_provider,
+                )
+                custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
+
+                async with self._deployment_slot(
+                    deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span
+                ):
+                    response = await avector_store_create_sdk(
+                        **{
+                            **data,
+                            "custom_llm_provider": custom_llm_provider,
+                            "caching": self._core_cache_responses,
+                            "client": model_client,
+                            **kwargs,
+                        }
+                    )
+
+                self.success_calls[model_name] += 1
+                verbose_router_logger.info("litellm.avector_store_create(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
+
+                return response
+            except Exception as e:
+                verbose_router_logger.exception(
+                    "litellm.avector_store_create(model=%s)\x1b[31m Exception %s\x1b[0m", model, e
+                )
+                if model is not None:
+                    self.fail_calls[model] += 1
+                raise e
 
     def _override_vector_store_methods_for_router(self):
         """
@@ -9219,42 +9218,39 @@ class Router(DeprecatedRouterMembers):
 
         mock_timeout: Final = kwargs.pop("mock_timeout", None)
 
-        try:
-            self._handle_mock_testing_fallbacks(
-                kwargs=kwargs,
-                model_group=model_group,
-                fallbacks=fallbacks,
-                context_window_fallbacks=context_window_fallbacks,
-                content_policy_fallbacks=content_policy_fallbacks,
-            )
+        with owning_picks(self._core_least_busy_reservations, call_id_of(CALL_IDENTITY.validate_python(kwargs))):
+            try:
+                self._handle_mock_testing_fallbacks(
+                    kwargs=kwargs,
+                    model_group=model_group,
+                    fallbacks=fallbacks,
+                    context_window_fallbacks=context_window_fallbacks,
+                    content_policy_fallbacks=content_policy_fallbacks,
+                )
 
-            if mock_timeout is not None:
-                response = await self.async_function_with_retries(*args, **kwargs, mock_timeout=mock_timeout)
-            else:
-                response = await self.async_function_with_retries(*args, **kwargs)
-            if verbose_router_logger.isEnabledFor(logging.DEBUG):
-                verbose_router_logger.debug("Async Response: %s", response)
-            response = add_fallback_headers_to_response(
-                response=response,
-                attempted_fallbacks=0,
-            )
-            return response
-        except Exception as e:
-            return await self.async_function_with_fallbacks_common_utils(
-                e,
-                disable_fallbacks,
-                fallbacks,
-                context_window_fallbacks,
-                content_policy_fallbacks,
-                model_group,
-                args,
-                kwargs,
-                include_fallback_errors=include_fallback_errors,
-            )
-        finally:
-            release_unstarted_picks(
-                self._core_least_busy_reservations, call_id_of(CALL_IDENTITY.validate_python(kwargs))
-            )
+                if mock_timeout is not None:
+                    response = await self.async_function_with_retries(*args, **kwargs, mock_timeout=mock_timeout)
+                else:
+                    response = await self.async_function_with_retries(*args, **kwargs)
+                if verbose_router_logger.isEnabledFor(logging.DEBUG):
+                    verbose_router_logger.debug("Async Response: %s", response)
+                response = add_fallback_headers_to_response(
+                    response=response,
+                    attempted_fallbacks=0,
+                )
+                return response
+            except Exception as e:
+                return await self.async_function_with_fallbacks_common_utils(
+                    e,
+                    disable_fallbacks,
+                    fallbacks,
+                    context_window_fallbacks,
+                    content_policy_fallbacks,
+                    model_group,
+                    args,
+                    kwargs,
+                    include_fallback_errors=include_fallback_errors,
+                )
 
     def _handle_mock_testing_fallbacks(
         self,

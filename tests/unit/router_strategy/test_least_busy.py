@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import contextvars
 import datetime
 import json
 import logging
@@ -25,6 +26,7 @@ from litellm.router_strategy.least_busy import (
     IN_FLIGHT_COUNT_TTL_SECONDS,
     SELECTION_RESERVATION_TTL_SECONDS,
     LeastBusyLoggingHandler,
+    owning_picks,
     picks_reserve,
     release_unstarted_picks,
 )
@@ -719,6 +721,31 @@ def test_ending_one_request_frees_only_the_picks_it_never_started() -> None:
     ]
 
 
+def test_a_call_without_a_call_id_turns_its_own_pick_into_its_in_flight_count() -> None:
+    reservations: Final = InMemoryCache()
+    worker: Final = LeastBusyLoggingHandler(router_cache=DualCache(), reservation_store=reservations)
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-b", "busy-call"))
+
+    with owning_picks(reservations, None):
+        assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+        worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "attempt-call"))
+
+        assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
+def test_another_call_starting_leaves_the_pick_of_a_call_without_a_call_id_reserved() -> None:
+    reservations: Final = InMemoryCache()
+    worker: Final = LeastBusyLoggingHandler(router_cache=DualCache(), reservation_store=reservations)
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-b", "busy-call"))
+    other_call: Final = contextvars.copy_context()
+
+    with owning_picks(reservations, None):
+        assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+        other_call.run(worker.log_pre_api_call, model="m", messages=[], kwargs=_call_kwargs("dep-a", "other-call"))
+
+        assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+
+
 def test_a_call_started_without_a_pick_of_its_own_leaves_another_calls_pick_reserved() -> None:
     worker: Final = _worker(None)
     assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True, call_id="picked-call") is DEPLOYMENT_A
@@ -842,21 +869,43 @@ _VECTOR_STORE: Final = {
     "status": "completed",
 }
 _REJECTED_VECTOR_STORE: Final = {"error": {"message": "Invalid name", "type": "invalid_request_error"}}
+_CALL_IDENTITIES: Final = ({"litellm_call_id": "least-busy-call"}, {})
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("call_identity", _CALL_IDENTITIES)
 @pytest.mark.parametrize(
     "provider_response", [httpx.Response(200, json=_VECTOR_STORE), httpx.Response(400, json=_REJECTED_VECTOR_STORE)]
 )
 async def test_a_vector_store_create_does_not_keep_its_deployment_busy(
-    provider_response: httpx.Response, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    provider_response: httpx.Response,
+    call_identity: dict[str, str],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/vector_stores").mock(return_value=provider_response)
     router: Final = _least_busy_router()
 
     with contextlib.suppress(openai.BadRequestError):
-        await router.avector_store_create(model=ROUTER_GROUP, name="least-busy", litellm_call_id="vector-store-call")
+        await router.avector_store_create(model=ROUTER_GROUP, name="least-busy", **call_identity)
+    await _drain_logging()
+
+    assert _router_pick(router) == _called_deployment(route)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_identity", _CALL_IDENTITIES)
+async def test_listing_fine_tuning_jobs_does_not_keep_its_deployment_busy(
+    call_identity: dict[str, str], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.get(url__startswith="https://api.openai.com/v1/fine_tuning/jobs").mock(
+        return_value=httpx.Response(200, json={"object": "list", "data": [], "has_more": False})
+    )
+    router: Final = _least_busy_router()
+
+    await router.alist_fine_tuning_jobs(model=ROUTER_GROUP, **call_identity)
     await _drain_logging()
 
     assert _router_pick(router) == _called_deployment(route)
