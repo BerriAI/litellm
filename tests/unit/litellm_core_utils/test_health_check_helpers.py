@@ -1264,6 +1264,7 @@ async def test_image_generation_health_check_prompt(monkeypatch):
                 "litellm_params": {"model": "gpt-image-1", "api_key": "fake-key"},
                 "model_info": {
                     "mode": "image_generation",
+                    "health_check_paid_media": True,
                 },
             }
         ]

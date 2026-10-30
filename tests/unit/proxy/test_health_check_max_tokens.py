@@ -760,6 +760,57 @@ async def test_run_model_health_check_skips_auto_router_deployment():
     assert result == {}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode",
+    ["image_generation", "image_edit", "video_generation", "audio_speech"],
+)
+async def test_run_model_health_check_skips_paid_media_mode_by_default(mode):
+    """A costly generative health check must never fire unless the deployment opts in.
+
+    Regression for a proxy that billed thousands of dollars in real image generation
+    from its own background health check loop: unlike chat/completion, these modes have
+    no `max_tokens`-style cap, so an unconditional probe on a tight polling interval can
+    run up unbounded provider spend.
+    """
+    fake_ahealth_check = AsyncMock(return_value={})
+    model = {
+        "litellm_params": {"model": "openai/dall-e-3"},
+        "model_info": {"mode": mode},
+    }
+
+    with patch.object(hc_module.litellm, "ahealth_check", fake_ahealth_check):
+        result = await hc_module._run_model_health_check(model)
+
+    fake_ahealth_check.assert_not_called()
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_background_image_generation_health_check_probes_upstream_when_opted_in(
+    httpx_transport: None, respx_mock: respx.MockRouter
+) -> None:
+    """`model_info.health_check_paid_media: true` lets the deployment's operator accept the cost."""
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/images/generations").respond(
+        200,
+        json={"created": 1700000000, "data": [{"url": "https://images.test/result.png"}]},
+    )
+
+    healthy, unhealthy, _ = await hc_module.perform_health_check(
+        [
+            {
+                "litellm_params": {"model": "openai/dall-e-3", "api_key": "fake-key"},
+                "model_info": {"id": "img", "mode": "image_generation", "health_check_paid_media": True},
+            }
+        ],
+        max_concurrency=1,
+    )
+
+    assert len(healthy) == 1
+    assert unhealthy == []
+    assert upstream.called
+
+
 def test_health_check_params_merge_into_probe_params():
     """health_check_params reach the probe request for the deployment that declares them."""
     media_source = {"s3Location": {"uri": "s3://my-bucket/clip.mp4"}}
@@ -1384,7 +1435,12 @@ async def test_background_audio_speech_health_check_uses_model_info_voice(
                     "api_key": "fake-key",
                     "api_base": "https://speech.example/v1",
                 },
-                "model_info": {"id": "speech", "mode": "audio_speech", "health_check_voice": "nova"},
+                "model_info": {
+                    "id": "speech",
+                    "mode": "audio_speech",
+                    "health_check_voice": "nova",
+                    "health_check_paid_media": True,
+                },
             }
         ],
         max_concurrency=1,
@@ -1420,7 +1476,7 @@ async def test_background_health_check_observes_the_concurrency_limit_and_queue(
                 "api_key": "fake-key",
                 "api_base": "https://health.example/v1",
             },
-            "model_info": {"id": f"audio-{index}", "mode": "audio_speech"},
+            "model_info": {"id": f"audio-{index}", "mode": "audio_speech", "health_check_paid_media": True},
         }
         for index in range(10)
     ]
@@ -1465,7 +1521,12 @@ async def test_background_health_check_timeout_marks_a_blocked_provider_unhealth
                 "api_key": "fake-key",
                 "api_base": "https://health.example/v1",
             },
-            "model_info": {"id": "blocked", "mode": "audio_speech", "health_check_timeout": 2},
+            "model_info": {
+                "id": "blocked",
+                "mode": "audio_speech",
+                "health_check_timeout": 2,
+                "health_check_paid_media": True,
+            },
         }
     ]
 
@@ -1505,7 +1566,12 @@ async def test_background_health_check_timeout_does_not_cancel_a_sibling(
                 "api_key": "fake-key",
                 "api_base": "https://slow.example/v1",
             },
-            "model_info": {"id": "slow", "mode": "audio_speech", "health_check_timeout": 1},
+            "model_info": {
+                "id": "slow",
+                "mode": "audio_speech",
+                "health_check_timeout": 1,
+                "health_check_paid_media": True,
+            },
         },
         {
             "litellm_params": {
@@ -1513,7 +1579,12 @@ async def test_background_health_check_timeout_does_not_cancel_a_sibling(
                 "api_key": "fake-key",
                 "api_base": "https://fast.example/v1",
             },
-            "model_info": {"id": "fast", "mode": "audio_speech", "health_check_timeout": 2},
+            "model_info": {
+                "id": "fast",
+                "mode": "audio_speech",
+                "health_check_timeout": 2,
+                "health_check_paid_media": True,
+            },
         },
     ]
 

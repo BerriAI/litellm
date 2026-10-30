@@ -79,6 +79,19 @@ HEALTH_DISPLAY_PARAMS: Final = (
 # Per-deployment override: `model_info.health_check_supports_max_tokens`.
 _MAX_TOKEN_SUPPORT_MODES: Final[frozenset[str]] = frozenset({"chat", "completion", "responses", "anthropic_messages"})
 
+# Modes whose probe is a real, billed generation call with no cheap/free way to
+# bound its cost (no `max_tokens`-style cap, unlike chat). A background health
+# check loop polling every 30-60s against one of these can run up unbounded
+# provider spend with no user-facing request involved. Skipped by default;
+# per-deployment override: `model_info.health_check_paid_media: true`.
+_PAID_MEDIA_HEALTH_CHECK_MODES: Final[frozenset[str]] = frozenset(
+    {"image_generation", "image_edit", "video_generation", "audio_speech"}
+)
+
+
+def _requires_paid_media_opt_in(mode: str | None, model_info: Mapping[str, object]) -> bool:
+    return mode in _PAID_MEDIA_HEALTH_CHECK_MODES and not model_info.get("health_check_paid_media", False)
+
 
 def _native_health_check_mode(model: str, provider_param: object) -> str | None:
     try:
@@ -593,6 +606,8 @@ async def _run_model_health_check(model: dict):
         model_info,
         litellm_params,  # any-ok: untyped router config dict
     )
+    if _requires_paid_media_opt_in(mode, model_info):  # pyright: ignore[reportUnknownArgumentType]  # model_info is the same untyped router dict every other call in this function already passes around
+        return {}  # pyright: ignore[reportUnknownVariableType]  # matches the untyped early return 2 lines above; this function has no return type annotation
     litellm_params = update_litellm_params_for_health_check(  # rebind-ok: pre-existing rebinding on a rename-only line
         model_info, litellm_params
     )
