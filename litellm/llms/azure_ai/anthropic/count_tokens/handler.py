@@ -128,8 +128,8 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
         except AnthropicError:
             # Re-raise Anthropic exceptions as-is
             raise
-        except litellm.BadRequestError as e:
-            raise AnthropicError(status_code=400, message=e.message) from e
+        except litellm.BadRequestError:
+            raise
         except httpx.HTTPStatusError as e:
             # HTTP errors - preserve the actual status code
             verbose_logger.error("HTTP error in CountTokens handler: %s", e)
