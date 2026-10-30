@@ -386,6 +386,76 @@ class TestAzureMAIImageGeneration:
         assert normalized["input_tokens"] == 22
         assert normalized["total_tokens"] == 22
 
+    def test_normalize_mai_usage_accepts_a_bool_token_count(self):
+        normalized = AzureFoundryMAIImageGenerationConfig().normalize_mai_image_usage(
+            {"input_tokens": 22, "output_tokens": True}
+        )
+
+        assert normalized["output_tokens"] == 1
+        assert normalized["total_tokens"] == 23
+
+    def test_normalize_mai_usage_reads_string_token_counts_as_numbers(self):
+        normalized = AzureFoundryMAIImageGenerationConfig().normalize_mai_image_usage(
+            {"input_tokens": "8", "output_tokens": "1024"}
+        )
+
+        assert normalized["input_tokens"] == 8
+        assert normalized["total_tokens"] == 1032
+
+    @pytest.mark.parametrize("unreadable", ["n/a", "inf", "nan", float("inf")])
+    def test_normalize_mai_usage_falls_back_past_an_unreadable_count(self, unreadable):
+        normalized = AzureFoundryMAIImageGenerationConfig().normalize_mai_image_usage(
+            {"input_tokens": 8, "output_tokens": unreadable, "num_output_tokens": 1024}
+        )
+
+        assert normalized["output_tokens"] == 1024
+        assert normalized["total_tokens"] == 1032
+
+    @pytest.mark.parametrize("unreadable", ["n/a", {"n": 1}, [1024]])
+    def test_transform_image_generation_response_keeps_the_image_when_a_count_is_unreadable(self, unreadable):
+        raw_response = MagicMock(spec=httpx.Response)
+        raw_response.json.return_value = {
+            "created": 1780897477,
+            "data": [{"b64_json": "abc123"}],
+            "usage": {"input_tokens": 8, "output_tokens": 1024, "total_tokens": 1032, "num_output_tokens": unreadable},
+        }
+
+        image_response = AzureFoundryMAIImageGenerationConfig().transform_image_generation_response(
+            model="MAI-Image-2.5",
+            raw_response=raw_response,
+            model_response=ImageResponse(),
+            logging_obj=MagicMock(),
+            request_data={"prompt": "A red fox"},
+            optional_params={"width": 1024, "height": 1024},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert image_response.data[0].b64_json == "abc123"
+        assert image_response.usage.output_tokens == 1024
+        assert image_response.usage.total_tokens == 1032
+
+    @pytest.mark.parametrize("usage", [[], "n/a", 5])
+    def test_transform_image_generation_response_keeps_the_image_when_usage_is_not_an_object(self, usage):
+        raw_response = MagicMock(spec=httpx.Response)
+        raw_response.json.return_value = {"created": 1780897477, "data": [{"b64_json": "abc123"}], "usage": usage}
+
+        image_response = AzureFoundryMAIImageGenerationConfig().transform_image_generation_response(
+            model="MAI-Image-2.5",
+            raw_response=raw_response,
+            model_response=ImageResponse(),
+            logging_obj=MagicMock(),
+            request_data={"prompt": "A red fox"},
+            optional_params={"width": 1024, "height": 1024},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert image_response.data[0].b64_json == "abc123"
+        assert image_response.usage.input_tokens == 0
+        assert image_response.usage.output_tokens == 0
+        assert image_response.usage.total_tokens == 0
+
     def test_azure_sync_image_generation_uses_mai_response_transform(self):
         raw_response = MagicMock(spec=httpx.Response)
         raw_response.json.return_value = {

@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 import json
-from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable, Mapping, Sequence
+from collections.abc import Coroutine, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
@@ -31,7 +31,10 @@ from litellm.integrations.anthropic_cache_control_hook import (
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
-from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
+from litellm.litellm_core_utils.get_llm_provider_logic import (
+    declared_authenticating_provider,
+    get_provider_affinity_header,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -78,7 +81,7 @@ from litellm.types.llms.openai import (
 
 # Handle ResponseText import with fallback
 if TYPE_CHECKING:
-    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard
+    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard, ResponsesWsTurnAdmission
     from litellm.types.llms.openai import ResponseText
 else:
     ResponseText = str  # Fallback for ResponseText import
@@ -90,9 +93,9 @@ from litellm.types.responses.streaming_websocket import ResponsesWebSocketReques
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     ADDRESSED_RESPONSE_ID_FIELD,
+    AgenticLoopParams,
     CallTypes,
     CostPerToken,
-    CustomPricingLiteLLMParams,
     all_litellm_params,
 )
 from litellm.utils import (
@@ -106,7 +109,17 @@ if TYPE_CHECKING:
 else:
     MCPTool = Any
 
-from .streaming_iterator import BaseResponsesAPIStreamingIterator
+from .retrieve_stream_query import (
+    RETRIEVE_INCLUDE_QUERY_KEYS,
+    InvalidRetrieveStreamQuery,
+    RetrieveStreamQuery,
+    parse_retrieve_stream_query,
+)
+from .streaming_iterator import (
+    BaseResponsesAPIStreamingIterator,
+    ResponsesAPIStreamingIterator,
+    SyncResponsesAPIStreamingIterator,
+)
 
 __all__ = (
     "acancel_responses",
@@ -192,6 +205,7 @@ def mock_responses_api_response(
 
 
 _STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_STR_DICT: Final = TypeAdapter(dict[str, object])
 _FORWARDED_VALUE: Final = TypeAdapter(object)
 
 
@@ -554,12 +568,6 @@ async def aresponses_api_with_mcp(
     return response
 
 
-def _per_call_custom_pricing(litellm_params: GenericLiteLLMParams) -> Mapping[str, float]:
-    return MappingProxyType(
-        litellm_params.model_dump(include=set(CustomPricingLiteLLMParams.model_fields), exclude_none=True)
-    )
-
-
 class _DeploymentModelInfo(BaseModel):
     model_config = ConfigDict(frozen=True)
     id: object = None
@@ -754,7 +762,7 @@ def _dispatched_model_name(
     from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 
     provider_model, _ = resolve_model_and_provider_for_metadata(model=model, custom_llm_provider=custom_llm_provider)
-    return _strip_responses_routing_prefix(provider_model)
+    return strip_responses_routing_prefix(provider_model)
 
 
 def _will_bridge_to_chat_completions(
@@ -800,6 +808,7 @@ def provider_stores_the_conversation(model: str, custom_llm_provider: str | None
     return not _will_bridge_to_chat_completions(
         model,
         custom_llm_provider
+        or declared_authenticating_provider(model)
         or litellm.get_llm_provider(model=model, api_base=api_base, litellm_params=litellm_params)[1],
         bool(kwargs.get("use_chat_completions_api")),
         kwargs.get("model_info"),
@@ -1240,7 +1249,7 @@ def _pop_use_chat_completions_api_kw(kwargs: dict[str, object]) -> bool:
 _RESPONSES_ROUTING_PREFIX: Final = "responses/"
 
 
-def _strip_responses_routing_prefix(model: str) -> str:
+def strip_responses_routing_prefix(model: str) -> str:
     if not model.startswith(_RESPONSES_ROUTING_PREFIX):
         return model
     return model[len(_RESPONSES_ROUTING_PREFIX) :]
@@ -1268,7 +1277,7 @@ def _resolve_model_provider_for_responses(
         litellm_params.api_key = dynamic_api_key
     if dynamic_api_base is not None:
         litellm_params.api_base = dynamic_api_base
-    return _strip_responses_routing_prefix(provider_model), resolved_provider
+    return strip_responses_routing_prefix(provider_model), resolved_provider
 
 
 def _apply_managed_file_id_mapping(
@@ -1569,6 +1578,7 @@ def responses(
             local_vars=local_vars,
             use_chat_completions_api=use_chat_completions_api,
         )
+        litellm_logging_obj.record_agentic_loop_params(AgenticLoopParams(model=model))
 
         from litellm.litellm_core_utils.core_helpers import attribute_or_none
 
@@ -1787,7 +1797,7 @@ def responses(
             optional_params=dict(responses_api_request_params),
             litellm_params={
                 **responses_api_request_params,
-                **_per_call_custom_pricing(litellm_params),
+                **litellm_params.custom_pricing_overrides(),
                 "aresponses": _is_async,
                 "litellm_call_id": litellm_call_id,
                 "model_info": kwargs.get("model_info"),
@@ -2013,6 +2023,53 @@ def delete_responses(
         )
 
 
+def _requested_retrieve_stream_query(
+    stream: bool | None,
+    starting_after: int | None,
+    extra_query: Mapping[str, object] | None,
+    custom_llm_provider: str | None,
+    drop_malformed: bool,
+) -> RetrieveStreamQuery:
+    explicit: Final = {
+        key: value for key, value in (("stream", stream), ("starting_after", starting_after)) if value is not None
+    }
+    requested: Final = {**explicit, **(extra_query or {})}
+    parsed: Final = parse_retrieve_stream_query(
+        requested.get("stream"), requested.get("starting_after"), drop_malformed=drop_malformed
+    )
+    if isinstance(parsed, InvalidRetrieveStreamQuery):
+        raise litellm.BadRequestError(
+            message=parsed.message,
+            model=None,
+            llm_provider=custom_llm_provider,
+            body={"message": parsed.message, "type": "invalid_request_error", "param": parsed.param},
+        )
+    return parsed
+
+
+def _supported_retrieve_stream_query(
+    requested: RetrieveStreamQuery,
+    responses_api_provider_config: BaseResponsesAPIConfig,
+    custom_llm_provider: str,
+    drop_params: object,
+) -> RetrieveStreamQuery:
+    if not requested.stream:
+        return RetrieveStreamQuery(stream=False, starting_after=None)
+    if responses_api_provider_config.supports_streamed_retrieval():
+        return requested
+    if drops_unsupported_params(drop_params):
+        return RetrieveStreamQuery(stream=False, starting_after=None)
+    raise UnsupportedParamsError(
+        status_code=400,
+        llm_provider=custom_llm_provider,
+        message=(
+            f"{custom_llm_provider} does not support streaming a stored response (stream=true on "
+            "GET /v1/responses/{response_id}). To drop it, set `litellm.drop_params=True` or for proxy:\n\n"
+            "`litellm_settings:\n drop_params: true`\n"
+        ),
+    )
+
+
 @client
 async def aget_responses(
     response_id: str,
@@ -2024,8 +2081,10 @@ async def aget_responses(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
+    stream: bool | None = None,
+    starting_after: int | None = None,
     **kwargs,
-) -> ResponsesAPIResponse:
+) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
     """
     Async: Fetch a response by its ID.
 
@@ -2058,6 +2117,8 @@ async def aget_responses(
             extra_query=extra_query,
             extra_body=extra_body,
             timeout=timeout,
+            stream=stream,
+            starting_after=starting_after,
             **kwargs,
         )
 
@@ -2071,7 +2132,7 @@ async def aget_responses(
             response = init_response
 
         # Update the responses_api_response_id with the model_id
-        if not isinstance(response, ResponsesAPIResponse):  # pyright: ignore[reportUnnecessaryIsInstance]  # handlers can return non-ResponsesAPIResponse objects at runtime
+        if not isinstance(response, ResponsesAPIResponse):
             return response
         return ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
             responses_api_response=response,
@@ -2101,8 +2162,14 @@ def get_responses(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
+    stream: bool | None = None,
+    starting_after: int | None = None,
     **kwargs,
-) -> ResponsesAPIResponse | Coroutine[object, object, ResponsesAPIResponse]:
+) -> (
+    ResponsesAPIResponse
+    | SyncResponsesAPIStreamingIterator
+    | Coroutine[object, object, ResponsesAPIResponse | ResponsesAPIStreamingIterator]
+):
     """
     Fetch a response by its ID.
 
@@ -2146,6 +2213,20 @@ def get_responses(
         if responses_api_provider_config is None:
             raise ValueError(f"GET responses is not supported for {custom_llm_provider}")
 
+        stream_query: Final = _supported_retrieve_stream_query(
+            requested=_requested_retrieve_stream_query(
+                stream=stream,
+                starting_after=starting_after,
+                extra_query=extra_query,
+                custom_llm_provider=custom_llm_provider,
+                drop_malformed=drops_unsupported_params(litellm_params.drop_params),
+            ),
+            responses_api_provider_config=responses_api_provider_config,
+            custom_llm_provider=custom_llm_provider,
+            drop_params=litellm_params.drop_params,
+        )
+        litellm_metadata: Final = _STR_DICT.validate_python(kwargs.get("litellm_metadata") or {})
+
         local_vars.update(kwargs)
 
         # Pre Call logging
@@ -2169,7 +2250,13 @@ def get_responses(
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
             extra_headers=extra_headers,
+            extra_query={
+                key: value for key, value in (extra_query or {}).items() if key in RETRIEVE_INCLUDE_QUERY_KEYS
+            },
             extra_body=extra_body,
+            stream=stream_query.stream,
+            starting_after=stream_query.starting_after,
+            litellm_metadata=litellm_metadata,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
@@ -2180,7 +2267,7 @@ def get_responses(
         if isinstance(response, ResponsesAPIResponse):
             response = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
                 responses_api_response=response,
-                litellm_metadata=kwargs.get("litellm_metadata", {}),
+                litellm_metadata=litellm_metadata,
                 custom_llm_provider=custom_llm_provider,
             )
 
@@ -2780,7 +2867,7 @@ async def _aresponses_websocket(
     api_base: str | None = None,
     api_key: str | None = None,
     timeout: float | None = None,
-    turn_admission: Callable[[], Awaitable[None]] | None = None,
+    turn_admission: "ResponsesWsTurnAdmission | None" = None,
     responses_ws_frame_guard: "ResponsesWsFrameGuard | None" = None,
     **kwargs,
 ) -> Exception | None:
@@ -2810,7 +2897,7 @@ async def _aresponses_websocket(
         api_key=api_key,
         litellm_params=litellm_params,
     )
-    resolved_model: Final = _strip_responses_routing_prefix(provider_model)
+    resolved_model: Final = strip_responses_routing_prefix(provider_model)
 
     litellm_params_dict["data_residency"] = infer_openai_data_residency(
         _custom_llm_provider,
