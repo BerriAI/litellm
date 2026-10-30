@@ -8,13 +8,15 @@ use pyo3::types::PyBytes;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+use crate::depythonize::depythonize;
+
 /// Converts a `#[pyo3(from_py_with = ...)]` argument, reporting failures as `ValueError`
 /// so a bad argument reads as a bad argument rather than as whatever the conversion hit.
 pub fn from_py_argument<T>(value: &Bound<'_, PyAny>) -> PyResult<T>
 where
     T: DeserializeOwned,
 {
-    pythonize::depythonize(value)
+    depythonize(value)
         .map_err(|error| PyValueError::new_err(litellm_error::Report::new(&error).to_string()))
 }
 
@@ -22,7 +24,7 @@ pub fn from_py<T>(value: &Bound<'_, PyAny>) -> PyResult<T>
 where
     T: DeserializeOwned,
 {
-    pythonize::depythonize(value).map_err(PyErr::from)
+    depythonize(value).map_err(PyErr::from)
 }
 
 pub fn to_py<T>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>>
