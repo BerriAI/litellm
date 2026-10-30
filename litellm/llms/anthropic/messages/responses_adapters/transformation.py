@@ -30,6 +30,7 @@ from litellm.llms.anthropic.messages.responses_adapters.tool_translation import 
     ResponsesTool,
     TranslatedTool,
     UntranslatableTool,
+    forced_tool_name,
     keeps_tool_search,
     log_dropped_tools,
     responses_tool,
@@ -471,9 +472,12 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         *,
         drop_params: bool = True,
         maps_tool_search: bool = False,
+        forced: str | None = None,
     ) -> tuple[TranslatedTool, ...]:
-        runs_tool_search: Final = keeps_tool_search(tools, maps_tool_search=maps_tool_search)
-        translated: Final = tuple(responses_tool(tool, runs_tool_search=runs_tool_search) for tool in tools)
+        runs_tool_search: Final = keeps_tool_search(tools, maps_tool_search=maps_tool_search, forced=forced)
+        translated: Final = tuple(
+            responses_tool(tool, runs_tool_search=runs_tool_search, forced=forced) for tool in tools
+        )
         untranslatable: Final = tuple(tool for tool in translated if isinstance(tool, UntranslatableTool))
         if untranslatable and not drop_params:
             raise untranslatable_tools_error(untranslatable)
@@ -671,20 +675,19 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if "top_p" in anthropic_request:
             responses_kwargs["top_p"] = anthropic_request["top_p"]
 
+        tool_choice: Final = cast(AnthropicMessagesToolChoice | None, anthropic_request.get("tool_choice"))
         translated_tools: Final = self.translated_tools(
             cast(list[AllAnthropicToolsValues], anthropic_request.get("tools") or []),
             drop_params=drop_params,
             maps_tool_search=maps_tool_search,
+            forced=forced_tool_name(tool_choice),
         )
         responses_tools: Final = [dict(tool.payload) for tool in translated_tools if isinstance(tool, ResponsesTool)]
         if responses_tools:
             responses_kwargs["tools"] = responses_tools
 
-        tool_choice: Final = anthropic_request.get("tool_choice")
         responses_tool_choice: Final = (
-            self.translate_tool_choice_to_responses_api(
-                cast(AnthropicMessagesToolChoice, tool_choice), translated_tools, drop_params=drop_params
-            )
+            self.translate_tool_choice_to_responses_api(tool_choice, translated_tools, drop_params=drop_params)
             if tool_choice and (responses_tools or not translated_tools)
             else None
         )

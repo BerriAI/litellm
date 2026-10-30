@@ -650,6 +650,30 @@ class TestAnthropicMessagesHandlerInputProcessing:
         assert [tool["name"] for tool in data["tools"] if "name" in tool] == ["get_weather"]
 
     @pytest.mark.asyncio
+    async def test_a_deferred_tool_keeps_its_defer_loading_through_a_guardrail_that_returns_the_tools(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+        data = {
+            "model": "gpt-5.6-luna",
+            "messages": [{"role": "user", "content": "what is AAPL at?"}],
+            "tools": [
+                {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                {"name": "get_stock", "input_schema": {"type": "object", "properties": {}}, "defer_loading": True},
+                {"name": "get_weather", "input_schema": {"type": "object", "properties": {}}, "defer_loading": False},
+                {"name": "get_time", "input_schema": {"type": "object", "properties": {}}},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [(tool["name"], tool.get("defer_loading")) for tool in data["tools"]] == [
+            ("tool_search_tool_regex", None),
+            ("get_stock", True),
+            ("get_weather", False),
+            ("get_time", None),
+        ]
+
+    @pytest.mark.asyncio
     async def test_midturn_system_correction_is_guardrailed_when_top_level_system_is_skipped(
         self,
     ):

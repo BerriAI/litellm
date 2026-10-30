@@ -183,6 +183,9 @@ def _provider_returns_encrypted_reasoning(model: str, custom_llm_provider: objec
     return responses_config is not None and "include" in responses_config.get_supported_openai_params(provider_model)
 
 
+_DEFERRAL_DROP_PATH: Final = "tools[*].defer_loading"
+
+
 def _maps_tool_search(model: str, forwarded_kwargs: Mapping[str, object]) -> bool:
     provider: Final = _resolved_provider(model, forwarded_kwargs.get("custom_llm_provider"))
     return provider == LlmProviders.OPENAI.value and openai_runs_tool_search(
@@ -315,8 +318,9 @@ def _build_responses_kwargs(
         request_data["temperature"] = temperature
     if thinking:
         request_data["thinking"] = thinking
-    drops_tools: Final = "tools" in drop_policy(forwarded_kwargs).additional_drop_params
-    if tool_choice and not drops_tools:
+    dropped: Final = drop_policy(forwarded_kwargs).additional_drop_params
+    drops_tools: Final = "tools" in dropped
+    if tool_choice and not drops_tools and "tool_choice" not in dropped:
         request_data["tool_choice"] = tool_choice
     if tools and not drops_tools:
         request_data["tools"] = tools
@@ -333,7 +337,7 @@ def _build_responses_kwargs(
         ),
         auto_summary_level=auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider")),
         drop_params=drops_unsupported_params(forwarded_kwargs.get("drop_params")),
-        maps_tool_search=_maps_tool_search(model, forwarded_kwargs),
+        maps_tool_search=_maps_tool_search(model, forwarded_kwargs) and _DEFERRAL_DROP_PATH not in dropped,
     )
 
     # Normalize reasoning effort based on model capabilities

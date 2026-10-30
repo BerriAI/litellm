@@ -236,16 +236,38 @@ def is_tool_search(tool: Mapping[str, object]) -> bool:
     return isinstance(tool_type, str) and tool_type in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 
 
-def _defers_a_function(tool: Mapping[str, object]) -> bool:
-    translated: Final = _translated_tool(tool, False) if tool.get("defer_loading") is True else None
+def forced_tool_name(tool_choice: object) -> str | None:
+    match tool_choice:
+        case {"type": "tool", "name": str() as name}:
+            return name
+        case _:
+            return None
+
+
+def _defer_loading(tool: Mapping[str, object], forced: str | None) -> object:
+    if forced is not None and tool.get("name") == forced:
+        return None
+    if "defer_loading" in tool:
+        return tool["defer_loading"]
+    match tool.get("custom"):
+        case {"defer_loading": bool() as wrapped}:
+            return wrapped
+        case _:
+            return None
+
+
+def _defers_a_function(tool: Mapping[str, object], forced: str | None) -> bool:
+    translated: Final = _translated_tool(tool, False) if _defer_loading(tool, forced) is True else None
     return isinstance(translated, ResponsesTool) and translated.payload.get("type") == "function"
 
 
-def keeps_tool_search(tools: Sequence[Mapping[str, object]], *, maps_tool_search: bool) -> bool:
+def keeps_tool_search(
+    tools: Sequence[Mapping[str, object]], *, maps_tool_search: bool, forced: str | None = None
+) -> bool:
     return (
         maps_tool_search
         and any(is_tool_search(tool) for tool in tools)
-        and any(_defers_a_function(tool) for tool in tools)
+        and any(_defers_a_function(tool, forced) for tool in tools)
     )
 
 
@@ -257,9 +279,11 @@ def _with_deferral(translated: TranslatedTool, defer_loading: object) -> Transla
             return translated
 
 
-def responses_tool(tool: Mapping[str, object], *, runs_tool_search: bool = False) -> TranslatedTool:
+def responses_tool(
+    tool: Mapping[str, object], *, runs_tool_search: bool = False, forced: str | None = None
+) -> TranslatedTool:
     translated: Final = _translated_tool(tool, runs_tool_search)
-    return _with_deferral(translated, tool.get("defer_loading")) if runs_tool_search else translated
+    return _with_deferral(translated, _defer_loading(tool, forced)) if runs_tool_search else translated
 
 
 def _translated_tool(tool: Mapping[str, object], runs_tool_search: bool) -> TranslatedTool:
@@ -272,6 +296,8 @@ def _translated_tool(tool: Mapping[str, object], runs_tool_search: bool) -> Tran
         return _hosted(name, {"type": "web_search_preview"})
     if runs_tool_search and is_tool_search(tool):
         return _tool_search(name, tool)
+    if not version and family not in _UNVERSIONED_SERVER_TOOL_TYPES:
+        return _custom_function(name, tool)
     match family:
         case "bash":
             return _bash_tool(name)
@@ -281,10 +307,8 @@ def _translated_tool(tool: Mapping[str, object], runs_tool_search: bool) -> Tran
             return _memory_tool(name)
         case "computer":
             return _computer_tool(name, version, tool)
-        case _ if version or family in _UNVERSIONED_SERVER_TOOL_TYPES:
-            return UntranslatableTool(name=name, type=type_name)
         case _:
-            return _custom_function(name, tool)
+            return UntranslatableTool(name=name, type=type_name)
 
 
 _DROP_PARAMS_HOW_TO: Final = (
