@@ -16,7 +16,11 @@ from litellm.proxy.auth.native_mcp_policy import (
     resolve_native_mcp_policy,
 )
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
-from litellm.proxy.guardrails.tool_name_extraction import extract_request_mcp_accesses, extract_response_mcp_accesses
+from litellm.proxy.guardrails.tool_name_extraction import (
+    extract_request_mcp_accesses,
+    extract_response_mcp_accesses,
+    response_mcp_items,
+)
 
 _EVENT: Final = TypeAdapter(Mapping[str, object])
 
@@ -35,6 +39,9 @@ class NativeMCPStreamValidator:
         raise_native_mcp_denial(evaluate_native_mcp_policy(self._policy, accesses))
 
     def _check_item(self, item: Mapping[str, object]) -> None:
+        if item.get("type") == "mcp_tool_result":
+            self._check_call_id(item.get("tool_use_id"))
+            return
         if item.get("type") in ("mcp_call", "mcp_tool_use", "mcp_approval_request"):
             call_id: Final = item.get("id")
             if not isinstance(call_id, str) or not call_id:
@@ -49,8 +56,6 @@ class NativeMCPStreamValidator:
             self._pending_calls = self._pending_calls - {call_id}
         else:
             self._check_response({"output": [item]})
-        if item.get("type") == "mcp_tool_result":
-            self._check_call_id(item.get("tool_use_id"))
 
     def _check_call_id(self, call_id: object) -> None:
         if not isinstance(call_id, str) or not call_id:
@@ -68,6 +73,13 @@ class NativeMCPStreamValidator:
         return released
 
     def check_event(self, event: Mapping[str, object]) -> None:
+        if "choices" in event or "provider_specific_fields" in event:
+            items: Final = response_mcp_items(event)
+            if isinstance(items, NativeMCPDenial):
+                raise_native_mcp_denial(items)
+                return
+            for item in items:
+                self._check_item(item)
         event_type: Final = event.get("type")
         if event_type in ("response.output_item.added", "response.output_item.done", "content_block_start"):
             item: Final = as_str_mapping(

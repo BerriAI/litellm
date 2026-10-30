@@ -213,3 +213,34 @@ async def test_responses_pipeline_emits_failed_response_instead_of_denied_tool()
     assert payload["response"]["output"] == []
     assert "delete_repo" in payload["response"]["error"]["message"]
     assert events[1].data == "[DONE]"
+
+
+def translated_chunk(*calls: dict[str, object], results: tuple[dict[str, object], ...] = ()) -> dict[str, object]:
+    return {"choices": [{"delta": {"provider_specific_fields": {"mcp_tool_uses": calls, "tool_results": results}}}]}
+
+
+@pytest.mark.asyncio
+async def test_translated_second_call_is_checked_before_release() -> None:
+    allowed: Final = {"type": "mcp_tool_use", "id": "first", "server_name": "github", "name": "search_code"}
+    forbidden: Final = {"type": "mcp_tool_use", "id": "second", "server_name": "github", "name": "delete_repo"}
+    first: Final = translated_chunk(allowed)
+    stream: Final = validate_native_mcp_stream(chunks(first, translated_chunk(allowed, forbidden)), caller(), body())
+    assert await anext(stream) is first
+    with pytest.raises(ProxyException, match="delete_repo"):
+        await anext(stream)
+
+
+@pytest.mark.asyncio
+async def test_translated_result_can_reference_a_previously_validated_chunk() -> None:
+    call: Final = {"type": "mcp_tool_use", "id": "first", "server_name": "github", "name": "search_code"}
+    result: Final = {"type": "mcp_tool_result", "tool_use_id": "first", "content": "found"}
+    events: Final = (translated_chunk(call), translated_chunk(results=(result,)))
+    assert [event async for event in validate_native_mcp_stream(chunks(*events), caller(), body())] == list(events)
+
+
+@pytest.mark.asyncio
+async def test_translated_result_without_call_identity_is_never_released() -> None:
+    result: Final = {"type": "mcp_tool_result", "tool_use_id": "missing", "content": "secret"}
+    stream: Final = validate_native_mcp_stream(chunks(translated_chunk(results=(result,))), caller(), body())
+    with pytest.raises(ProxyException, match="unvalidated tool calls"):
+        await anext(stream)
