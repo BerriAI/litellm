@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from requests_mock.request import Request
 
 BASE_URL: Final = "https://proxy.example.com"
+FAKE_SECRET: Final = "a1b2c3d4" * 4
 SIGNED_IN_KEY: Final = "sk-signed-in"
 GENERATED: Final = {"key": "sk-generated", "key_alias": "experiment-1"}
 REJECTED: Final = {"error": {"message": "Authentication Error, No api key passed in.", "type": "auth_error"}}
@@ -652,17 +653,26 @@ def test_a_long_401_body_is_cut_before_it_reaches_the_terminal(
     assert sign_in.calls == []
 
 
+_ROUTES_THAT_RAISE_EACH_401_ERROR_TYPE: Final = pytest.mark.parametrize(
+    "command, method, route",
+    [(["keys", "generate"], "POST", "/key/generate"), (["users", "list"], "GET", "/user/list")],
+    ids=["http_error", "plain_string_error"],
+)
+
+
+@_ROUTES_THAT_RAISE_EACH_401_ERROR_TYPE
 def test_terminal_control_characters_in_a_401_body_never_reach_the_terminal(
-    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault], command: list[str], method: str, route: str
 ) -> None:
-    requests_mock.post(
-        f"{BASE_URL}/key/generate",
+    requests_mock.register_uri(
+        method,
+        f"{BASE_URL}{route}",
         status_code=401,
         text="\x1b]0;title\x07refused\x1b[2J\rnext\tcolumn\nsecond line\x9b31m",
     )
     sign_in: Final = FakeBrowserSignIn(_credential())
 
-    result: Final = _lite(["keys", "generate"], secret_vault_factory(), sign_in, ["--api-key", "sk-explicit"])
+    result: Final = _lite(command, secret_vault_factory(), sign_in, ["--api-key", "sk-explicit"])
 
     assert result.exit_code == 1
     assert "refused" in result.stderr
@@ -671,28 +681,49 @@ def test_terminal_control_characters_in_a_401_body_never_reach_the_terminal(
     assert sign_in.calls == []
 
 
-def test_a_key_split_by_a_control_character_in_a_401_body_stays_redacted(
-    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+@_ROUTES_THAT_RAISE_EACH_401_ERROR_TYPE
+@pytest.mark.parametrize(
+    "body",
+    [
+        f"refused sk-{FAKE_SECRET[:9]}\x07{FAKE_SECRET[9:]}",
+        f"refused Bearer\r{FAKE_SECRET}",
+        f"refused client_secret\r{FAKE_SECRET}",
+    ],
+    ids=["key_split_by_the_character", "bearer_token_after_the_character", "named_secret_after_the_character"],
+)
+def test_a_secret_beside_a_control_character_in_a_401_body_stays_redacted(
+    requests_mock: Mocker,
+    secret_vault_factory: type[FakeSecretVault],
+    command: list[str],
+    method: str,
+    route: str,
+    body: str,
 ) -> None:
-    key: Final = "sk-" + "a1b2c3d4" * 4
-    requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, text=f"refused {key[:12]}\x07{key[12:]}")
+    requests_mock.register_uri(method, f"{BASE_URL}{route}", status_code=401, text=body)
 
     result: Final = _lite(
-        ["keys", "generate"], secret_vault_factory(), FakeBrowserSignIn(_credential()), ["--api-key", "sk-explicit"]
+        command, secret_vault_factory(), FakeBrowserSignIn(_credential()), ["--api-key", "sk-explicit"]
     )
 
     assert result.exit_code == 1
     assert "refused" in result.stderr
-    assert key not in result.stderr
+    assert FAKE_SECRET[9:] not in result.stderr
 
 
-def test_a_401_body_of_only_control_characters_still_gives_a_reason(
-    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+@_ROUTES_THAT_RAISE_EACH_401_ERROR_TYPE
+@pytest.mark.parametrize("body", ["", "  \n", "\x1b\x07\r\x9b"], ids=["empty", "blank", "control_characters"])
+def test_a_401_body_with_nothing_printable_still_gives_a_reason(
+    requests_mock: Mocker,
+    secret_vault_factory: type[FakeSecretVault],
+    command: list[str],
+    method: str,
+    route: str,
+    body: str,
 ) -> None:
-    requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, text="\x1b\x07\r\x9b")
+    requests_mock.register_uri(method, f"{BASE_URL}{route}", status_code=401, text=body)
 
     result: Final = _lite(
-        ["keys", "generate"], secret_vault_factory(), FakeBrowserSignIn(_credential()), ["--api-key", "sk-explicit"]
+        command, secret_vault_factory(), FakeBrowserSignIn(_credential()), ["--api-key", "sk-explicit"]
     )
 
     assert result.exit_code == 1

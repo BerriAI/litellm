@@ -42,6 +42,7 @@ _DISPLAY_VARIABLES: Final = ("DISPLAY", "WAYLAND_DISPLAY")
 _SIGNED_IN_LOGIN_WITHOUT_KEY_ROW: Final = HTTPStatus.NOT_FOUND
 _WAIT_FOR_ANOTHER_SIGN_IN_SECONDS: Final = LOGIN_TIMEOUT_SECONDS + 60
 _PROXY_REASON_CHARS: Final = 500
+_NO_PROXY_REASON: Final = "no reason given"
 _TERMINAL_CONTROL_CHARACTERS: Final = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
 
@@ -210,15 +211,15 @@ def _attempt_with_newer_stored_key(
     return _attempt_with_key(run, ctx, stored_key)
 
 
-def _printable(text: str) -> str:
-    return _TERMINAL_CONTROL_CHARACTERS.sub("", text).strip()
+def _printable_and_redacted(text: str) -> str:
+    return redact_string(_TERMINAL_CONTROL_CHARACTERS.sub("", redact_string(text)).strip())
 
 
 def _proxy_reason(error: UnauthorizedError) -> str:
     original: Final = error.orig_exception
     response: Final = original.response if isinstance(original, requests.HTTPError) else None
     body: Final = response.text if response is not None else ""
-    reason: Final = redact_string(_printable(body) or _printable(str(error)))
+    reason: Final = _printable_and_redacted(body) or _printable_and_redacted(str(error)) or _NO_PROXY_REASON
     return reason if len(reason) <= _PROXY_REASON_CHARS else f"{reason[:_PROXY_REASON_CHARS]}..."
 
 
