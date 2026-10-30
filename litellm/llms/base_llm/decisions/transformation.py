@@ -76,7 +76,7 @@ def decisions_text(value: DecisionsJSON) -> str:
 
 
 def standard_base64(value: str) -> str:
-    return value.translate(_URL_SAFE_TO_STANDARD_BASE64)
+    return "".join(value.split()).translate(_URL_SAFE_TO_STANDARD_BASE64)
 
 
 def systemone_keys(questions: Sequence[DecisionsIRQuestion]) -> tuple[str, ...]:
@@ -269,9 +269,10 @@ def _systemone_image(image: DecisionsImage) -> str | Mapping[str, object]:
 
 
 def _standard_data_url(media_type: str, payload: str) -> str:
-    padding: Final = "=" * (-len(payload) % 4)
+    standard_payload: Final = standard_base64(payload)
+    padding: Final = "=" * (-len(standard_payload) % 4)
     standard_type: Final = _MEDIA_TYPE_ALIASES.get(media_type, media_type)
-    return f"{_DATA_URL_PREFIX}{standard_type};base64,{standard_base64(payload)}{padding}"
+    return f"{_DATA_URL_PREFIX}{standard_type};base64,{standard_payload}{padding}"
 
 
 def _data_url(image: DecisionsImage) -> str:

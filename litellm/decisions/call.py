@@ -18,7 +18,9 @@ from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpe
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_urls_to_base64,
+    async_convert_urls_to_base64_or_errors,
     convert_url_to_base64,
+    convert_url_to_base64_or_error,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
@@ -29,6 +31,7 @@ from litellm.llms.base_llm.decisions.transformation import (
     input_images,
     ir_to_systemone_response,
     remote_image_urls,
+    standard_base64,
     systemone_request_to_ir,
     with_images_where,
     with_inlined_images,
@@ -591,10 +594,31 @@ def _with_images_replaced(call: DecisionsCall, replacements: Mapping[str, str]) 
     )
 
 
+def _is_not_one_of(urls: frozenset[str], image: DecisionsImage) -> bool:
+    return not isinstance(image, str) or image not in urls
+
+
+def _with_downloads_or_dropped_failures(
+    call: DecisionsCall, downloads: Mapping[str, str | litellm.ImageFetchError]
+) -> DecisionsCall:
+    failures: Final = tuple(result for result in downloads.values() if isinstance(result, litellm.ImageFetchError))
+    failed_urls: Final = frozenset(url for url, result in downloads.items() if not isinstance(result, str))
+    if failures and _leaves_no_input(with_images_where(call.ir_request.input, partial(_is_not_one_of, failed_urls))):
+        raise failures[0]
+    return _with_images_replaced(
+        call, MappingProxyType({url: result for url, result in downloads.items() if isinstance(result, str)})
+    )
+
+
 def _with_remote_images_inlined(call: DecisionsCall) -> DecisionsCall:
     remote_urls: Final = _remote_image_urls(call)
     if not remote_urls:
         return call
+    if _drops_params(call.litellm_params):
+        return _with_downloads_or_dropped_failures(
+            call,
+            MappingProxyType({url: convert_url_to_base64_or_error(url, timeout=call.timeout) for url in remote_urls}),
+        )
     return _with_images_replaced(
         call, MappingProxyType({url: convert_url_to_base64(url, timeout=call.timeout) for url in remote_urls})
     )
@@ -604,6 +628,11 @@ async def _async_with_remote_images_inlined(call: DecisionsCall) -> DecisionsCal
     remote_urls: Final = _remote_image_urls(call)
     if not remote_urls:
         return call
+    if _drops_params(call.litellm_params):
+        downloads: Final = await async_convert_urls_to_base64_or_errors(remote_urls, timeout=call.timeout)
+        return _with_downloads_or_dropped_failures(
+            call, MappingProxyType(dict(zip(remote_urls, downloads, strict=True)))
+        )
     data_urls: Final = await async_convert_urls_to_base64(remote_urls, timeout=call.timeout)
     return _with_images_replaced(call, MappingProxyType(dict(zip(remote_urls, data_urls, strict=True))))
 
@@ -613,20 +642,33 @@ def _has_media_type_in(media_types: frozenset[str], image: DecisionsImage) -> bo
     return media_type is None or media_type in media_types
 
 
-def _checked_image_types(call: DecisionsCall) -> DecisionsCall:
-    media_types: Final = call.provider_config.image_rules_for(call.model).image_media_types
+def _within(limit: int | None, amount: int) -> bool:
+    return limit is None or amount <= limit
+
+
+def _media_type_error(media_types: frozenset[str] | None, images: Sequence[DecisionsImage]) -> str | None:
     if media_types is None:
-        return call
-    found: Final = (image_media_type(image) for image in input_images(call.ir_request.input))
+        return None
+    found: Final = (image_media_type(image) for image in images)
     unsupported: Final = tuple(
         dict.fromkeys(type_ for type_ in found if type_ is not None and type_ not in media_types)
     )
     if not unsupported:
-        return call
-    return _dropped_or_refused(
-        call,
-        with_images_where(call.ir_request.input, partial(_has_media_type_in, media_types)),
-        f"takes only {', '.join(sorted(media_types))} images, got {', '.join(unsupported)}",
+        return None
+    return f"takes only {', '.join(sorted(media_types))} images, got {', '.join(unsupported)}"
+
+
+def _count_error(max_images: int | None, image_count: int) -> str | None:
+    if _within(max_images, image_count):
+        return None
+    return f"takes at most {max_images} images per request, got {image_count}"
+
+
+def _refusal(call: DecisionsCall, refusal: str) -> litellm.BadRequestError:
+    return litellm.BadRequestError(
+        message=f"{call.custom_llm_provider} {refusal}",
+        model=call.requested_model,
+        llm_provider=call.custom_llm_provider,
     )
 
 
@@ -642,30 +684,37 @@ def _dropped_or_refused(
 ) -> DecisionsCall:
     if _drops_params(call.litellm_params) and not _leaves_no_input(kept_input):
         return replace(call, ir_request=replace(call.ir_request, input=kept_input))
-    raise litellm.BadRequestError(
-        message=f"{call.custom_llm_provider} {refusal}",
-        model=call.requested_model,
-        llm_provider=call.custom_llm_provider,
-    )
+    raise _refusal(call, refusal)
 
 
-def _checked_image_count(call: DecisionsCall) -> DecisionsCall:
-    max_images: Final = call.provider_config.image_rules_for(call.model).max_images
-    image_count: Final = len(input_images(call.ir_request.input))
-    if max_images is None or image_count <= max_images:
+def _checked_image_types(call: DecisionsCall) -> DecisionsCall:
+    media_types: Final = call.provider_config.image_rules_for(call.model).image_media_types
+    error: Final = _media_type_error(media_types, input_images(call.ir_request.input))
+    if media_types is None or error is None:
         return call
     return _dropped_or_refused(
-        call,
-        _with_images_kept(call.ir_request.input, tuple(index < max_images for index in range(image_count))),
-        f"takes at most {max_images} images per request, got {image_count}",
+        call, with_images_where(call.ir_request.input, partial(_has_media_type_in, media_types)), error
     )
+
+
+def _refused_over_count(call: DecisionsCall) -> DecisionsCall:
+    error: Final = _count_error(
+        call.provider_config.image_rules_for(call.model).max_images, len(input_images(call.ir_request.input))
+    )
+    if error is None or _drops_params(call.litellm_params):
+        return call
+    raise _refusal(call, error)
+
+
+def _decoded_byte_count(payload: str) -> int:
+    return len(standard_base64(payload).rstrip("=")) * 3 // 4
 
 
 def _decoded_image_bytes(image: DecisionsImage) -> int:
     if isinstance(image, DecisionsBase64Image):
-        return len(image.base64.rstrip("=")) * 3 // 4
+        return _decoded_byte_count(image.base64)
     marker_at: Final = image.lower().find(_BASE64_MARKER)
-    return 0 if marker_at < 0 else len(image[marker_at + len(_BASE64_MARKER) :].rstrip("=")) * 3 // 4
+    return 0 if marker_at < 0 else _decoded_byte_count(image[marker_at + len(_BASE64_MARKER) :])
 
 
 def _byte_limit(limit: int) -> str:
@@ -681,27 +730,47 @@ def _image_size_error(sizes: Sequence[int], per_image: int | None, total: int | 
     return None
 
 
-def _kept_within_sizes(sizes: Sequence[int], per_image: int | None, total: int | None) -> tuple[bool, ...]:
-    fits: Final = tuple(per_image is None or size <= per_image for size in sizes)
-    spent: Final = accumulate(size if fit else 0 for size, fit in zip(sizes, fits, strict=True))
-    return tuple(
-        fit and (total is None or bytes_so_far <= total) for fit, bytes_so_far in zip(fits, spent, strict=True)
-    )
-
-
-def _checked_image_sizes(call: DecisionsCall) -> DecisionsCall:
-    sizes: Final = tuple(_decoded_image_bytes(image) for image in input_images(call.ir_request.input))
+def _image_limit_error(call: DecisionsCall) -> str | None:
     rules: Final = call.provider_config.image_rules_for(call.model)
-    error: Final = _image_size_error(sizes, rules.max_image_bytes, rules.max_total_image_bytes)
-    if error is None:
-        return call
-    return _dropped_or_refused(
-        call,
-        _with_images_kept(
-            call.ir_request.input, _kept_within_sizes(sizes, rules.max_image_bytes, rules.max_total_image_bytes)
-        ),
-        error,
+    images: Final = input_images(call.ir_request.input)
+    return (
+        _media_type_error(rules.image_media_types, images)
+        or _count_error(rules.max_images, len(images))
+        or _image_size_error(
+            tuple(_decoded_image_bytes(image) for image in images), rules.max_image_bytes, rules.max_total_image_bytes
+        )
     )
+
+
+def _fits_alone(rules: BaseDecisionsConfig, image: DecisionsImage) -> bool:
+    return (rules.image_media_types is None or _has_media_type_in(rules.image_media_types, image)) and _within(
+        rules.max_image_bytes, _decoded_image_bytes(image)
+    )
+
+
+def _kept_images(call: DecisionsCall) -> tuple[bool, ...]:
+    rules: Final = call.provider_config.image_rules_for(call.model)
+    images: Final = input_images(call.ir_request.input)
+    failed_downloads: Final = frozenset(_remote_image_urls(call))
+    fits: Final = tuple(_is_not_one_of(failed_downloads, image) and _fits_alone(rules, image) for image in images)
+    spent: Final = accumulate(
+        _decoded_image_bytes(image) if fit else 0 for image, fit in zip(images, fits, strict=True)
+    )
+    counted: Final = accumulate(int(fit) for fit in fits)
+    return tuple(
+        fit and _within(rules.max_total_image_bytes, bytes_so_far) and _within(rules.max_images, images_so_far)
+        for fit, bytes_so_far, images_so_far in zip(fits, spent, counted, strict=True)
+    )
+
+
+def _with_images_within_limits(call: DecisionsCall, kept: Sequence[bool]) -> DecisionsCall:
+    if all(kept):
+        return call
+    kept_input: Final = _with_images_kept(call.ir_request.input, kept)
+    error: Final = _image_limit_error(call)
+    if error is None:
+        return replace(call, ir_request=replace(call.ir_request, input=kept_input))
+    return _dropped_or_refused(call, kept_input, error)
 
 
 def _request_body(call: DecisionsCall) -> Mapping[str, object]:
@@ -717,20 +786,17 @@ def _request_body(call: DecisionsCall) -> Mapping[str, object]:
     return body
 
 
-def _with_caller_urls(sent: DecisionsCall, supported: DecisionsCall, fetched: DecisionsCall) -> DecisionsCall:
-    pairs: Final = zip(input_images(fetched.ir_request.input), input_images(supported.ir_request.input), strict=True)
-    caller_urls: Final = MappingProxyType(
-        {data_url: url for data_url, url in pairs if isinstance(data_url, str) and isinstance(url, str)}
-    )
-    return _with_images_replaced(sent, caller_urls)
-
-
 def _logged_body(
-    supported: DecisionsCall, fetched: DecisionsCall, sent: DecisionsCall, body: Mapping[str, object]
+    supported: DecisionsCall, fetched: DecisionsCall, kept: Sequence[bool], body: Mapping[str, object]
 ) -> Mapping[str, object]:
     if fetched is supported:
         return body
-    return _request_body(_with_caller_urls(sent, supported, fetched))
+    return _request_body(
+        replace(
+            supported,
+            ir_request=replace(supported.ir_request, input=_with_images_kept(supported.ir_request.input, kept)),
+        )
+    )
 
 
 def _pricing_model(response: DecisionsIRResponse, call: DecisionsCall) -> str:
@@ -795,9 +861,10 @@ def _map_upstream_exception(error: Exception, call: DecisionsCall) -> Exception:
 
 
 async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
-    supported: Final = _checked_image_count(_checked_image_types(call))
+    supported: Final = _refused_over_count(_checked_image_types(call))
     fetched: Final = await _async_with_remote_images_inlined(supported)
-    inlined: Final = _checked_image_sizes(_checked_image_types(fetched))
+    kept: Final = _kept_images(fetched)
+    inlined: Final = _with_images_within_limits(fetched, kept)
     body: Final = _request_body(inlined)
     try:
         response: Final = await _HANDLER.adecisions(
@@ -807,7 +874,7 @@ async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionRespon
             provider_config=inlined.provider_config,
             request=inlined.ir_request,
             body=body,
-            logged_body=_logged_body(supported, fetched, inlined, body),
+            logged_body=_logged_body(supported, fetched, kept, body),
             api_base=inlined.api_base,
             api_key=inlined.api_key,
             headers=inlined.headers,
@@ -820,9 +887,10 @@ async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionRespon
 
 
 def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
-    supported: Final = _checked_image_count(_checked_image_types(call))
+    supported: Final = _refused_over_count(_checked_image_types(call))
     fetched: Final = _with_remote_images_inlined(supported)
-    inlined: Final = _checked_image_sizes(_checked_image_types(fetched))
+    kept: Final = _kept_images(fetched)
+    inlined: Final = _with_images_within_limits(fetched, kept)
     body: Final = _request_body(inlined)
     try:
         response: Final = _HANDLER.decisions(
@@ -832,7 +900,7 @@ def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
             provider_config=inlined.provider_config,
             request=inlined.ir_request,
             body=body,
-            logged_body=_logged_body(supported, fetched, inlined, body),
+            logged_body=_logged_body(supported, fetched, kept, body),
             api_base=inlined.api_base,
             api_key=inlined.api_key,
             headers=inlined.headers,

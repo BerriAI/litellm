@@ -2481,12 +2481,15 @@ _SMALL_PNG: Final = _png_data_url(1)
 _DROPPED_OVERSIZED_IMAGES: Final[tuple[tuple[Sequence[object], Sequence[object]], ...]] = (
     *((images, images[:kept]) for (images, _), kept in zip(_OVERSIZED_IMAGES, (0, 0, 2), strict=True)),
     ((_png_data_url(4 * _MIB + 1), _SMALL_PNG), (_SMALL_PNG,)),
+    ((*(_png_data_url(4 * _MIB + 1),) * 4, _SMALL_PNG), (_SMALL_PNG,)),
 )
 
 
 @pytest.mark.usefixtures("cloudflare_account")
 @pytest.mark.parametrize(
-    ("images", "kept"), _DROPPED_OVERSIZED_IMAGES, ids=(*_OVERSIZED_IMAGE_IDS, "oversized_then_small")
+    ("images", "kept"),
+    _DROPPED_OVERSIZED_IMAGES,
+    ids=(*_OVERSIZED_IMAGE_IDS, "oversized_then_small", "four_oversized_then_small"),
 )
 def test_images_over_cloudflares_size_limits_are_dropped_under_drop_params(
     images: Sequence[object], kept: Sequence[object], respx_mock: respx.MockRouter
@@ -2546,6 +2549,24 @@ async def test_logging_callbacks_get_the_caller_url_of_a_remote_image_kept_after
     wire_body: Final = json.loads(route.calls.last.request.content)
     assert wire_body["images"] == [async_only_image_fetch.data_url]
     assert recording_logger.inputs == [{**wire_body, "images": [_REMOTE_IMAGE_URL]}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_account", "async_only_image_fetch")
+async def test_logging_callbacks_get_each_caller_url_when_two_remote_images_have_the_same_bytes(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+    recording_logger: Final = _InputRecordingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recording_logger])
+    caller_urls: Final = [_REMOTE_IMAGE_URL, f"{_REMOTE_IMAGE_URL}?copy=1"]
+
+    await litellm.asystemone(
+        model="cloudflare/clef", state=_SCREEN_TEXT, questions=_SYSTEMONE_PREDICATE, images=caller_urls
+    )
+    await _drain_logging_worker()
+
+    assert recording_logger.inputs == [{**json.loads(route.calls.last.request.content), "images": caller_urls}]
 
 
 @pytest.mark.usefixtures("cloudflare_account")
@@ -4474,6 +4495,99 @@ def test_a_list_state_keeps_its_items_ahead_of_the_images(
         {"severity": "high"},
         {"type": "image_url", "image_url": {"url": _PNG_DATA_URL}},
     ]
+
+
+@pytest.mark.parametrize(("model", "url", "upstream_model"), _STATE_IMAGE_PROVIDERS, ids=_STATE_IMAGE_PROVIDER_IDS)
+def test_line_wrapped_base64_reaches_state_on_one_line(
+    model: str, url: str, upstream_model: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(url).respond(json=_RESPONSE)
+    image_bytes: Final = bytes(range(100))
+
+    litellm.systemone(
+        model=model,
+        state=_SCREEN_TEXT,
+        questions=_SYSTEMONE_PREDICATE,
+        images=[{"content_type": "image/png", "base64": base64.encodebytes(image_bytes).decode()}],
+        api_key="k",
+    )
+
+    assert json.loads(route.calls.last.request.content)["state"][1] == {
+        "type": "image_url",
+        "image_url": {"url": f"data:image/png;base64,{base64.b64encode(image_bytes).decode()}"},
+    }
+
+
+_MISSING_IMAGE_URL: Final = "https://images.example/missing.png"
+_FOUND_IMAGE_URL: Final = "https://images.example/found.png"
+_FOUND_PNG: Final = b"\x89PNG\r\n\x1a\n"
+
+
+@pytest.fixture
+def one_missing_remote_image(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()))
+    respx_mock.get(_MISSING_IMAGE_URL).respond(status_code=404)
+    respx_mock.get(_FOUND_IMAGE_URL).respond(content=_FOUND_PNG, headers={"content-type": "image/png"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("one_missing_remote_image")
+@pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
+async def test_a_remote_image_that_fails_to_download_is_dropped_under_drop_params(
+    sync: bool, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+    request_kwargs: Final = {
+        "model": "perplexity/pplx-decider-v1.2",
+        "state": _SCREEN_TEXT,
+        "questions": _SYSTEMONE_PREDICATE,
+        "images": [_MISSING_IMAGE_URL, _FOUND_IMAGE_URL],
+        "api_key": "k",
+        "drop_params": True,
+    }
+
+    if sync:
+        litellm.systemone(**request_kwargs)
+    else:
+        await litellm.asystemone(**request_kwargs)
+
+    assert json.loads(route.calls.last.request.content)["state"] == [
+        _SCREEN_TEXT,
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64.b64encode(_FOUND_PNG).decode()}"}},
+    ]
+
+
+_UNDROPPABLE_DOWNLOAD_FAILURES: Final[tuple[tuple[str, Mapping[str, object]], ...]] = (
+    ("asystemone", {"state": _SCREEN_TEXT, "questions": _SYSTEMONE_PREDICATE, "images": [_MISSING_IMAGE_URL]}),
+    (
+        "adecisions",
+        {
+            "input": [{"role": "user", "content": [{"type": "input_image", "image_url": _MISSING_IMAGE_URL}]}],
+            "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+            "drop_params": True,
+        },
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("one_missing_remote_image")
+@pytest.mark.parametrize(
+    ("api", "request_kwargs"),
+    _UNDROPPABLE_DOWNLOAD_FAILURES,
+    ids=("without_drop_params", "only_input_under_drop_params"),
+)
+async def test_a_remote_image_that_fails_to_download_is_refused_before_http_when_it_cannot_be_dropped(
+    api: str, request_kwargs: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match="Status code: 404"):
+        await getattr(litellm, api)(model="perplexity/pplx-decider-v1.2", api_key="k", **request_kwargs)
+
+    assert route.call_count == 0
 
 
 _STATE_IMAGE_LIMITS: Final = (
