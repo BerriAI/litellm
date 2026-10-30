@@ -13583,44 +13583,44 @@ def _stream_usage_generator_chunks():
 
 
 def test_is_injected_stream_usage_artifact():
-    from litellm.proxy.proxy_server import _is_injected_stream_usage_artifact
+    from litellm.litellm_core_utils.stream_usage_chunks import is_injected_stream_usage_artifact
     from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
 
     content_chunk, finish_chunk, empty_choices_usage_chunk = _stream_usage_test_chunks()
-    assert _is_injected_stream_usage_artifact(empty_choices_usage_chunk) is True
+    assert is_injected_stream_usage_artifact(empty_choices_usage_chunk) is True
 
     synthetic_final_chunk = ModelResponseStream(model="gpt-5.4-nano")
     synthetic_final_chunk.usage = Usage(prompt_tokens=50, completion_tokens=188, total_tokens=238)
-    assert _is_injected_stream_usage_artifact(synthetic_final_chunk) is True
+    assert is_injected_stream_usage_artifact(synthetic_final_chunk) is True
 
     azure_prompt_filter_chunk = ModelResponseStream(model="gpt-5.4-nano", choices=[])
-    assert _is_injected_stream_usage_artifact(azure_prompt_filter_chunk) is True
+    assert is_injected_stream_usage_artifact(azure_prompt_filter_chunk) is True
 
-    assert _is_injected_stream_usage_artifact(content_chunk) is False
-    assert _is_injected_stream_usage_artifact(finish_chunk) is False
+    assert is_injected_stream_usage_artifact(content_chunk) is False
+    assert is_injected_stream_usage_artifact(finish_chunk) is False
 
     content_chunk_with_usage, finish_chunk_with_usage, _ = _stream_usage_test_chunks()
     content_chunk_with_usage.usage = Usage(prompt_tokens=50, completion_tokens=188, total_tokens=238)
     finish_chunk_with_usage.usage = Usage(prompt_tokens=50, completion_tokens=188, total_tokens=238)
-    assert _is_injected_stream_usage_artifact(content_chunk_with_usage) is False
-    assert _is_injected_stream_usage_artifact(finish_chunk_with_usage) is False
+    assert is_injected_stream_usage_artifact(content_chunk_with_usage) is False
+    assert is_injected_stream_usage_artifact(finish_chunk_with_usage) is False
 
-    assert _is_injected_stream_usage_artifact({"usage": {"prompt_tokens": 1}}) is False
+    assert is_injected_stream_usage_artifact({"usage": {"prompt_tokens": 1}}) is False
 
     held_back_token_ids_chunk: Final = ModelResponseStream(
         model="qwen3", choices=[StreamingChoices(delta=Delta(content=None), token_ids=[16])]
     )
-    assert _is_injected_stream_usage_artifact(held_back_token_ids_chunk) is False
+    assert is_injected_stream_usage_artifact(held_back_token_ids_chunk) is False
 
     null_token_ids_chunk: Final = ModelResponseStream(
         model="qwen3", choices=[StreamingChoices(delta=Delta(content=None), token_ids=None)]
     )
-    assert _is_injected_stream_usage_artifact(null_token_ids_chunk) is True
+    assert is_injected_stream_usage_artifact(null_token_ids_chunk) is True
 
     unrelated_extra_chunk: Final = ModelResponseStream(
         model="qwen3", choices=[StreamingChoices(delta=Delta(content=None), text="")]
     )
-    assert _is_injected_stream_usage_artifact(unrelated_extra_chunk) is True
+    assert is_injected_stream_usage_artifact(unrelated_extra_chunk) is True
 
 
 async def _collect_async_data_generator_frames(request_data: dict) -> list:
