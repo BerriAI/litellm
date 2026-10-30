@@ -545,6 +545,11 @@ mod tests {
         &[("anthropic-beta", "web-search-2025-03-05")],
         &[("x-api-key", "k"), ("anthropic-beta", "structured-outputs-2025-11-13,web-search-2025-03-05")]
     )]
+    #[case::compaction_needs_the_compact_2026_09_04_beta(
+        json!({"compaction": {"type": "summarize"}}),
+        &[],
+        &[("x-api-key", "k"), ("anthropic-beta", "compact-2026-09-04")]
+    )]
     #[case::no_feature_needs_a_beta(json!({}), &[], &[("x-api-key", "k")])]
     #[case::safeguards_need_the_dangerous_tool_use_beta(
         json!({"safeguards": [{"type": "dangerous_tool_use"}]}),

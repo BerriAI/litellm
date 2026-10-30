@@ -50,6 +50,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     _delete_cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     can_team_access_model,
     delete_cache_key_object,
+    delete_cache_key_objects,
     get_jwt_key_mapping_cache_keys_for_token,
     get_key_end_user_budget_id,
     get_org_object,
@@ -75,9 +76,10 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
+from litellm.proxy.common_utils.openai_error_payload import openai_error_param, proxy_exception_for
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache, is_user_key_cache_key
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.management.teams.authz import TEAM_ADMIN_ONLY, TEAM_OR_ORG_ADMIN, is_team_admin
@@ -4087,21 +4089,9 @@ async def update_key_fn(
         # update based on remaining passed in values
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_key_fn(): Exception occured - %s", e)
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        if isinstance(e, ProxyException):
+            raise
+        raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
 
 
 @router.post(
@@ -4970,7 +4960,7 @@ async def info_key_fn(
         raise ProxyException(
             message="Internal server error from /key/info. Details are in the proxy server logs.",
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -4997,7 +4987,7 @@ def _check_model_access_group(models: list[str] | None, llm_router: Router | Non
         return True
 
     for model in models:
-        if llm_router.is_model_access_group_for_wildcard_route(model_access_group=model):
+        if llm_router.registry().resolve(model, kind="wildcard_access_group"):
             if not premium_user:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -5494,7 +5484,7 @@ async def delete_verification_tokens(
                 - List of keys being deleted, this contains information about the key_alias, token, and user_id being deleted,
                 this is passed down to the KeyManagementEventHooks to delete the keys from the secret manager and handle audit logs
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj
 
     failed_tokens: list = []
     try:
@@ -5578,11 +5568,11 @@ async def delete_verification_tokens(
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
 
-    for key in tokens:
-        user_api_key_cache.delete_cache(key)
-        # remove hash token from cache
-        hashed_token = hash_token(cast(str, key))
-        user_api_key_cache.delete_cache(hashed_token)
+    await delete_cache_key_objects(
+        hashed_tokens=tuple(token for token in hashed_tokens if is_user_key_cache_key(token)),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
     # After credential invalidation, so a failure here can never keep a deleted key alive.
     for deleted_key in authorized_keys:
@@ -7244,21 +7234,9 @@ async def list_keys(
 
     except Exception as e:
         verbose_proxy_logger.exception("Error in list_keys: %s", e)
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"error({e})"),
-                type=ProxyErrorTypes.internal_server_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.internal_server_error,
-            param=getattr(e, "param", "None"),
-            code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        if isinstance(e, ProxyException):
+            raise
+        raise proxy_exception_for(e, default_status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR) from e
 
 
 async def _apply_non_admin_alias_scope(
@@ -7402,21 +7380,9 @@ async def key_aliases(
 
     except Exception as e:
         verbose_proxy_logger.exception("Error in key_aliases: %s", e)
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"error({e})"),
-                type=ProxyErrorTypes.internal_server_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.internal_server_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        if isinstance(e, ProxyException):
+            raise
+        raise proxy_exception_for(e, default_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from e
 
 
 def _validate_sort_params(
@@ -8191,7 +8157,7 @@ async def key_health(
         raise ProxyException(
             message=f"Key health check failed: {e}",
             type=ProxyErrorTypes.internal_server_error,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 

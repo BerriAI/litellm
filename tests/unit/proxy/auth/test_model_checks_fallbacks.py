@@ -1,6 +1,8 @@
 import pytest
 from unittest.mock import Mock, patch
 
+from litellm.router_api import RouterSettings
+
 
 def _rendered_log_message(call):
     message = str(call.args[0])
@@ -13,9 +15,11 @@ def create_mock_router(
 ):
     """Helper function to create a mock router with fallback configurations."""
     router = Mock()
-    router.fallbacks = fallbacks or []
-    router.context_window_fallbacks = context_window_fallbacks or []
-    router.content_policy_fallbacks = content_policy_fallbacks or []
+    router.settings.return_value = RouterSettings(
+        fallbacks=fallbacks or [],
+        context_window_fallbacks=context_window_fallbacks or [],
+        content_policy_fallbacks=content_policy_fallbacks or [],
+    )
     return router
 
 

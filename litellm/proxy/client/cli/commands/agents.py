@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from itertools import chain, groupby
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, TypeAlias, TypeVar
+from typing import Final, Literal, TypeAlias, TypeVar
 from urllib.parse import urlsplit
 
 import click
@@ -41,6 +41,7 @@ from .pi import (
     LITELLM_PROXY_API_KEY_ENV,
     PI_PROVIDER_NAME,
     ListingFailure,
+    ModelLimits,
     PiSyncError,
     fetch_model_ids,
     fetch_model_limits,
@@ -693,9 +694,27 @@ class _OpenCodeLimit(LiteLLMBaseModel):
     output: int
 
 
+class _OpenCodeVariant(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    reasoningEffort: str
+
+
+class _OpenCodeReasoningOption(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["effort"] = "effort"
+    values: tuple[str, ...]
+
+
 class _OpenCodeModel(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     name: str
     limit: _OpenCodeLimit | None = None
+    reasoning: Literal[True] | None = None
+    reasoning_options: tuple[_OpenCodeReasoningOption, ...] | None = None
+    variants: Mapping[str, _OpenCodeVariant] | None = None
 
 
 class _OpenCodeProviderOptions(LiteLLMBaseModel):
@@ -714,15 +733,43 @@ class _OpenCodeConfig(LiteLLMBaseModel):
     provider: Mapping[str, _OpenCodeProvider]
 
 
-def _opencode_model_entry(model: ListedModel) -> _OpenCodeModel:
-    if model.max_input_tokens is None or model.max_output_tokens is None:
-        return _OpenCodeModel(name=model.id)
+_NO_GROUPS: Final[Mapping[str, ModelLimits]] = MappingProxyType({})
+
+
+def _reasoning_efforts(model_id: str, groups: Mapping[str, ModelLimits]) -> tuple[str, ...] | None:
+    group: Final = groups.get(model_id)
+    return group.supported_reasoning_efforts if group is not None else None
+
+
+def _opencode_model_entry(model: ListedModel, groups: Mapping[str, ModelLimits]) -> _OpenCodeModel:
+    """One OpenCode model entry, with the model group's reasoning efforts as its variants when known.
+
+    OpenCode 1.x builds its own variants for a reasoning model and replaces them only through
+    `reasoning_options`. 2.x ignores `reasoning` and `reasoning_options` and builds its own variants
+    unless the entry lists some, so the efforts go in all three, and a model with none lists an
+    empty `variants`."""
+    limit: Final = (
+        _OpenCodeLimit(context=model.max_input_tokens, output=model.max_output_tokens)
+        if model.max_input_tokens is not None and model.max_output_tokens is not None
+        else None
+    )
+    efforts: Final = _reasoning_efforts(model.id, groups)
+    if efforts is None:
+        return _OpenCodeModel(name=model.id, limit=limit)
+    if not efforts:
+        return _OpenCodeModel(name=model.id, limit=limit, variants=MappingProxyType({}))
     return _OpenCodeModel(
-        name=model.id, limit=_OpenCodeLimit(context=model.max_input_tokens, output=model.max_output_tokens)
+        name=model.id,
+        limit=limit,
+        reasoning=True,
+        reasoning_options=(_OpenCodeReasoningOption(values=efforts),),
+        variants=MappingProxyType({effort: _OpenCodeVariant(reasoningEffort=effort) for effort in efforts}),
     )
 
 
-def opencode_provider_config(base_url: str, models: Sequence[ListedModel]) -> str:
+def opencode_provider_config(
+    base_url: str, models: Sequence[ListedModel], groups: Mapping[str, ModelLimits] = _NO_GROUPS
+) -> str:
     """OPENCODE_CONFIG_CONTENT declaring the proxy as OpenCode provider `litellm`.
 
     One model entry per chat-capable /v1/models row (mode chat, responses, or
@@ -730,6 +777,7 @@ def opencode_provider_config(base_url: str, models: Sequence[ListedModel]) -> st
     is read back through {env:OPENAI_API_KEY}, which build_agent_env exports, so
     it never lands in the config text. OpenCode merges this inline config over
     the user's own files, leaving unrelated keys and providers untouched.
+    `groups` is /model_group/info by model group, where the reasoning efforts come from.
     """
     chat_models: Final = _chat_models(models)
     provider: Final = _OpenCodeProvider(
@@ -739,7 +787,7 @@ def opencode_provider_config(base_url: str, models: Sequence[ListedModel]) -> st
             baseURL=base_url.rstrip("/") + "/v1",
             apiKey=f"{{env:{OPENAI_API_KEY_ENV}}}",
         ),
-        models=MappingProxyType({m.id: _opencode_model_entry(m) for m in chat_models}),
+        models=MappingProxyType({m.id: _opencode_model_entry(m, groups) for m in chat_models}),
     )
     config: Final = _OpenCodeConfig(provider=MappingProxyType({OPENCODE_PROVIDER_ID: provider}))
     return config.model_dump_json(exclude_none=True)
@@ -754,7 +802,8 @@ def opencode_model_sync_env(
 ) -> Mapping[str, str] | ModelSyncSkipped:
     """Env addition that hands OpenCode the proxy's model list, or why it was skipped.
 
-    Fetches /v1/models with the key and packs it into OPENCODE_CONFIG_CONTENT.
+    Fetches /v1/models with the key, and /model_group/info for each model's reasoning
+    efforts, and packs them into OPENCODE_CONFIG_CONTENT.
     An OPENCODE_CONFIG_CONTENT already in the environment is left alone, and a
     failed fetch is reported rather than raised: OpenCode still launches on the
     plain OPENAI_* env, just without a synced model list.
@@ -764,10 +813,16 @@ def opencode_model_sync_env(
     listing: Final = _fetch_model_listing(base_url, api_key, get=get)
     if isinstance(listing, ModelSyncSkipped):
         return listing
-    return MappingProxyType({OPENCODE_CONFIG_CONTENT_ENV: opencode_provider_config(base_url, listing)})
+    groups: Final = fetch_model_limits(base_url, api_key, get=get)
+    return MappingProxyType({OPENCODE_CONFIG_CONTENT_ENV: opencode_provider_config(base_url, listing, groups)})
 
 
-def _codex_row(model: ListedModel, upstream: ModelUpstream | None, configured: ConfiguredModelInfo) -> CodexCatalogRow:
+def _codex_row(
+    model: ListedModel,
+    upstream: ModelUpstream | None,
+    configured: ConfiguredModelInfo,
+    groups: Mapping[str, ModelLimits],
+) -> CodexCatalogRow:
     return CodexCatalogRow(
         id=model.id,
         mode=model.mode,
@@ -776,6 +831,7 @@ def _codex_row(model: ListedModel, upstream: ModelUpstream | None, configured: C
         reasoning_effort=upstream.reasoning_effort if upstream is not None else None,
         display_name=configured.display_name,
         service_tiers=configured.service_tiers,
+        supported_reasoning_efforts=_reasoning_efforts(model.id, groups),
     )
 
 
@@ -785,6 +841,8 @@ def codex_model_catalog(
     instructions: str,
     upstreams: Mapping[str, ModelUpstream],
     configured: Mapping[str, ConfiguredModelInfo],
+    groups: Mapping[str, ModelLimits] = _NO_GROUPS,
+    client_version: str | None = None,
 ) -> str | None:
     """The `model_catalog_json` body listing the proxy's chat models, or None if there are none.
 
@@ -799,18 +857,20 @@ def codex_model_catalog(
     effort its deployments pin, and a window no larger than its listed
     max_input_tokens. A model Codex does not know gets the fallback
     entry, with the same base instructions Codex itself uses so the agent never
-    runs without a system prompt. Every entry takes the display name and service
-    tiers `configured` holds for its id, so apart from aliases the catalog is the one
-    `/v1/models?client_version=...` serves, built from the installed Codex's own
-    entries instead of the proxy's vendored ones.
+    runs without a system prompt, and offers the reasoning efforts `groups` gives its model group
+    that the installed Codex, at `client_version`, can parse. Every entry takes the display name
+    and service tiers `configured` holds for its id, so apart from aliases the catalog is the one
+    `/v1/models?client_version=...` serves, built from the installed Codex's own entries instead
+    of the proxy's vendored ones.
     """
-    rows: Final = tuple(_codex_row(m, upstreams.get(m.id), configured.get(m.id, _UNCONFIGURED)) for m in models)
+    rows: Final = tuple(_codex_row(m, upstreams.get(m.id), configured.get(m.id, _UNCONFIGURED), groups) for m in models)
     body: Final = codex_models_response_json(
         rows,
         stock=MappingProxyType({m.slug: m for m in stock}),
         instructions=instructions,
         byte_limit=None,
         alias_defaults="deployment",
+        client_version=client_version,
     )
     return body.json if body.listed else None
 
@@ -857,7 +917,7 @@ def _codex_debug_models(
             encoding="utf-8",
             timeout=_CODEX_PREFLIGHT_TIMEOUT_SECONDS,
         )
-    except (OSError, subprocess.TimeoutExpired) as e:
+    except (OSError, subprocess.TimeoutExpired, UnicodeError) as e:
         return ModelSyncSkipped(f"`{name} debug models` failed: {e}")
     if completed.returncode == 0:
         return completed.stdout
@@ -877,6 +937,25 @@ def _stock_codex_models(
     except ValidationError as e:
         name: Final = os.path.basename(binary)
         return ModelSyncSkipped(f"`{name} debug models` printed no model catalog: {e.errors()[0]['msg']}")
+
+
+def _codex_version(
+    binary: str, env: Mapping[str, str], *, run: Callable[..., subprocess.CompletedProcess[str]]
+) -> str | None:
+    """The version `codex --version` prints (`codex-cli 0.165.0`), or None when it cannot be read."""
+    try:
+        completed: Final = run(
+            _windows_command(binary, (binary, "--version")),
+            env=dict(env),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            encoding="utf-8",
+            timeout=_CODEX_PREFLIGHT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired, UnicodeError):
+        return None
+    words: Final = completed.stdout.split()
+    return words[-1] if completed.returncode == 0 and words else None
 
 
 def codex_model_sync_args(
@@ -900,7 +979,8 @@ def codex_model_sync_args(
     the key's requests route to (its team's own deployments of the name, else
     the ones no team owns) routes to the same OpenAI model and Codex knows that
     model, each under the display name and service tiers those deployments'
-    model_info sets, and then
+    model_info sets, and its version, so a model it does not know offers only
+    reasoning efforts it can parse, and then
     reads the file back once before it is handed over. The key never lands in
     the file. A failed fetch, read, listing, write or read-back is reported
     rather than raised: Codex still launches with its built-in catalog and takes
@@ -925,8 +1005,16 @@ def codex_model_sync_args(
     if isinstance(stock, ModelSyncSkipped):
         return stock
     routable: Final = _fetch_routable_deployments(base_url, api_key, get=get)
+    groups: Final = fetch_model_limits(base_url, api_key, get=get)
+    version: Final = _codex_version(binary, base_env, run=run)
     catalog: Final = codex_model_catalog(
-        listing, stock, instructions, _upstreams_by_public_name(routable), _configured_by_public_name(routable)
+        listing,
+        stock,
+        instructions,
+        _upstreams_by_public_name(routable),
+        _configured_by_public_name(routable),
+        groups,
+        version,
     )
     if catalog is None:
         return ModelSyncSkipped(f"{base_url.rstrip('/')}/v1/models lists no chat models")
