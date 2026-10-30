@@ -48,6 +48,11 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/(dashboard)/hooks/teams/useTeams")>()),
+  fetchAllTeamsPaged: (...args: any[]) => mockTeamListCall(...args),
+}));
+
 vi.mock("@/components/networking", () => {
   return {
     serverRootPath: "/",
@@ -57,7 +62,6 @@ vi.mock("@/components/networking", () => {
     modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
     invitationCreateCall: vi.fn(),
     teamInfoCall: (...args: any[]) => mockTeamInfoCall(...args),
-    teamListCall: (...args: any[]) => mockTeamListCall(...args),
     teamMemberAddCall: (...args: any[]) => mockTeamMemberAddCall(...args),
     teamMemberDeleteCall: (...args: any[]) => mockTeamMemberDeleteCall(...args),
     getProxyBaseUrl: () => "https://litellm.test",
@@ -262,7 +266,7 @@ describe("UserInfoView", () => {
     await waitFor(() => {
       expect(screen.getByText("Add User to Team")).toBeInTheDocument();
     });
-    expect(mockTeamListCall).toHaveBeenCalledWith("test-token", null);
+    expect(mockTeamListCall).toHaveBeenCalledWith("test-token");
   });
 
   it("should open remove confirmation modal when delete is clicked", async () => {

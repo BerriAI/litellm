@@ -1202,32 +1202,6 @@ export const teamInfoCall = async (accessToken: string, teamID: string | null, o
   }
 };
 
-export const teamListCall = async (
-  accessToken: string,
-  organizationID: string | null,
-  userID: string | null = null,
-  teamID: string | null = null,
-  team_alias: string | null = null,
-) => {
-  /**
-   * Get all available teams on proxy
-   */
-  try {
-    return await apiClient.get(`/team/list`, {
-      accessToken,
-      query: {
-        user_id: userID || undefined,
-        organization_id: organizationID || undefined,
-        team_id: teamID || undefined,
-        team_alias: team_alias || undefined,
-      },
-    });
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
 export const availableTeamListCall = async (accessToken: string) => {
   /**
    * Get all available teams on proxy

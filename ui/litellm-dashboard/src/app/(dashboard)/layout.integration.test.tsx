@@ -53,7 +53,8 @@ beforeEach(() => {
           return Response.json(plugins);
         case "/api/plugins/auth-token":
           return Response.json({});
-        case "/team/list":
+        case "/v2/team/list":
+          return Response.json({ teams: [], total: 0, page: 1, page_size: 100, total_pages: 1 });
         case "/organization/list":
           return Response.json([]);
         case "/health/readiness/details":

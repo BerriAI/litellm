@@ -2,7 +2,8 @@ import React, { useState, useEffect } from "react";
 import { CircleHelp } from "lucide-react";
 import { z } from "zod";
 import { Policy } from "@/components/policies/types";
-import { teamListCall, keyListCall, modelAvailableCall, estimateAttachmentImpactCall } from "@/components/networking";
+import { keyListCall, modelAvailableCall, estimateAttachmentImpactCall } from "@/components/networking";
+import { fetchAllTeamsPaged } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { toast } from "@/lib/toast";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { FieldGroup, FieldLabel, FieldTitle } from "@/components/ui/field";
@@ -132,13 +133,11 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
   const loadTeamsKeysAndModels = async () => {
     if (!accessToken) return;
 
-    // Load teams — teamListCall returns a plain array of team objects
     setIsLoadingTeams(true);
     setTeamsLoaded(false);
     try {
-      const teamsResponse = await teamListCall(accessToken, null, null);
-      const teamsArray = Array.isArray(teamsResponse) ? teamsResponse : teamsResponse?.data || [];
-      const teamAliases = teamsArray.map((t: any) => t.team_alias).filter(Boolean);
+      const teams = await fetchAllTeamsPaged(accessToken);
+      const teamAliases = teams.map((t) => t.team_alias).filter(Boolean);
       setAvailableTeams(teamAliases);
       setTeamsLoaded(true);
     } catch (error) {

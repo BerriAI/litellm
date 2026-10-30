@@ -12,7 +12,6 @@ import {
   invitationCreateCall,
   getProxyBaseUrl,
   teamInfoCall,
-  teamListCall,
   teamMemberAddCall,
   teamMemberDeleteCall,
   Member,
@@ -38,6 +37,7 @@ import { ArrowLeft, CheckIcon, CopyIcon, Plus, RefreshCw, Trash2 } from "lucide-
 import { toast } from "@/lib/toast";
 import { getBudgetDurationLabel } from "@/components/common_components/budget_duration_dropdown";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
+import { fetchAllTeamsPaged } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import MCPServerPermissions from "@/components/permissions/MCPServerPermissions";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
@@ -174,9 +174,9 @@ export default function UserInfoView({
     if (!accessToken) return;
     setIsLoadingTeams(true);
     try {
-      const teams = await teamListCall(accessToken, null);
+      const teams = await fetchAllTeamsPaged(accessToken);
       setAllTeams(
-        (teams || []).map((t: any) => ({
+        teams.map((t) => ({
           team_id: t.team_id,
           team_alias: t.team_alias || t.team_id,
         })),

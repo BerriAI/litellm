@@ -3,13 +3,8 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode } from "react";
 import { useTeams, useTeam, useAllTeams, useDeletedTeams, DeletedTeam, teamListCall } from "./useTeams";
-import { fetchTeams } from "@/app/(dashboard)/networking";
 import { teamInfoCall } from "@/components/networking";
 import type { Team } from "@/components/key_team_helpers/key_list";
-
-vi.mock("@/app/(dashboard)/networking", () => ({
-  fetchTeams: vi.fn(),
-}));
 
 vi.mock("@/components/networking", () => ({
   teamInfoCall: vi.fn(),
@@ -55,10 +50,18 @@ const mockTeams: Team[] = [
   },
 ];
 
+const pageResponse = (teams: Team[]) => ({
+  ok: true,
+  json: async () => ({ teams, total: teams.length, page: 1, page_size: 100, total_pages: 1 }),
+});
+let teamsFetchMock: ReturnType<typeof vi.fn>;
+
 describe("useTeams", () => {
   let queryClient: QueryClient;
 
   beforeEach(() => {
+    teamsFetchMock = vi.fn();
+    global.fetch = teamsFetchMock as unknown as typeof fetch;
     queryClient = new QueryClient({
       defaultOptions: {
         queries: {
@@ -87,7 +90,7 @@ describe("useTeams", () => {
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 
   it("should render", () => {
-    (fetchTeams as any).mockResolvedValue(mockTeams);
+    teamsFetchMock.mockResolvedValue(pageResponse(mockTeams));
 
     const { result } = renderHook(() => useTeams(), { wrapper });
 
@@ -96,7 +99,7 @@ describe("useTeams", () => {
 
   it("should return teams data when query is successful", async () => {
     // Mock successful API call
-    (fetchTeams as any).mockResolvedValue(mockTeams);
+    teamsFetchMock.mockResolvedValue(pageResponse(mockTeams));
 
     const { result } = renderHook(() => useTeams(), { wrapper });
 
@@ -112,16 +115,16 @@ describe("useTeams", () => {
 
     expect(result.current.data).toEqual(mockTeams);
     expect(result.current.error).toBeNull();
-    expect(fetchTeams).toHaveBeenCalledWith("test-access-token", "test-user-id", "Admin", null);
-    expect(fetchTeams).toHaveBeenCalledTimes(1);
+    expect(teamsFetchMock).toHaveBeenCalledWith("/v2/team/list?page=1&page_size=100", expect.anything());
+    expect(teamsFetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("should handle error when fetchTeams fails", async () => {
+  it("should handle error when /v2/team/list fails", async () => {
     const errorMessage = "Failed to fetch teams";
     const testError = new Error(errorMessage);
 
     // Mock failed API call
-    (fetchTeams as any).mockRejectedValue(testError);
+    teamsFetchMock.mockRejectedValue(testError);
 
     const { result } = renderHook(() => useTeams(), { wrapper });
 
@@ -136,8 +139,8 @@ describe("useTeams", () => {
 
     expect(result.current.error).toEqual(testError);
     expect(result.current.data).toBeUndefined();
-    expect(fetchTeams).toHaveBeenCalledWith("test-access-token", "test-user-id", "Admin", null);
-    expect(fetchTeams).toHaveBeenCalledTimes(1);
+    expect(teamsFetchMock).toHaveBeenCalledWith("/v2/team/list?page=1&page_size=100", expect.anything());
+    expect(teamsFetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("should not execute query when accessToken is missing", async () => {
@@ -161,7 +164,7 @@ describe("useTeams", () => {
     expect(result.current.isFetched).toBe(false);
 
     // API should not be called
-    expect(fetchTeams).not.toHaveBeenCalled();
+    expect(teamsFetchMock).not.toHaveBeenCalled();
   });
 
   it("should not execute query when accessToken is empty string", async () => {
@@ -185,12 +188,12 @@ describe("useTeams", () => {
     expect(result.current.isFetched).toBe(false);
 
     // API should not be called
-    expect(fetchTeams).not.toHaveBeenCalled();
+    expect(teamsFetchMock).not.toHaveBeenCalled();
   });
 
   it("should execute query when accessToken is present", async () => {
     // Mock successful API call
-    (fetchTeams as any).mockResolvedValue(mockTeams);
+    teamsFetchMock.mockResolvedValue(pageResponse(mockTeams));
 
     // Ensure auth values are set (already done in beforeEach)
     const { result } = renderHook(() => useTeams(), { wrapper });
@@ -200,13 +203,13 @@ describe("useTeams", () => {
       expect(result.current.isLoading).toBe(false);
     });
 
-    expect(fetchTeams).toHaveBeenCalledWith("test-access-token", "test-user-id", "Admin", null);
-    expect(fetchTeams).toHaveBeenCalledTimes(1);
+    expect(teamsFetchMock).toHaveBeenCalledWith("/v2/team/list?page=1&page_size=100", expect.anything());
+    expect(teamsFetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("should return empty teams array when API returns empty data", async () => {
     // Mock API returning empty teams array
-    (fetchTeams as any).mockResolvedValue([]);
+    teamsFetchMock.mockResolvedValue(pageResponse([]));
 
     const { result } = renderHook(() => useTeams(), { wrapper });
 
@@ -217,14 +220,14 @@ describe("useTeams", () => {
     });
 
     expect(result.current.data).toEqual([]);
-    expect(fetchTeams).toHaveBeenCalledWith("test-access-token", "test-user-id", "Admin", null);
+    expect(teamsFetchMock).toHaveBeenCalledWith("/v2/team/list?page=1&page_size=100", expect.anything());
   });
 
   it("should handle network timeout error", async () => {
     const timeoutError = new Error("Network timeout");
 
     // Mock network timeout
-    (fetchTeams as any).mockRejectedValue(timeoutError);
+    teamsFetchMock.mockRejectedValue(timeoutError);
 
     const { result } = renderHook(() => useTeams(), { wrapper });
 
@@ -237,9 +240,9 @@ describe("useTeams", () => {
     expect(result.current.data).toBeUndefined();
   });
 
-  it("should pass userId and userRole to fetchTeams", async () => {
+  it("should scope /v2/team/list to user_id for non-admin roles", async () => {
     // Mock successful API call
-    (fetchTeams as any).mockResolvedValue(mockTeams);
+    teamsFetchMock.mockResolvedValue(pageResponse(mockTeams));
 
     // Mock specific userId and userRole
     mockUseAuthorized.mockReturnValue({
@@ -260,12 +263,12 @@ describe("useTeams", () => {
       expect(result.current.isLoading).toBe(false);
     });
 
-    expect(fetchTeams).toHaveBeenCalledWith("test-access-token", "custom-user-id", "member", null);
+    expect(teamsFetchMock).toHaveBeenCalledWith("/v2/team/list?user_id=custom-user-id&page=1&page_size=100", expect.anything());
   });
 
   it("should handle null userId", async () => {
     // Mock successful API call
-    (fetchTeams as any).mockResolvedValue(mockTeams);
+    teamsFetchMock.mockResolvedValue(pageResponse(mockTeams));
 
     // Mock null userId
     mockUseAuthorized.mockReturnValue({
@@ -286,7 +289,7 @@ describe("useTeams", () => {
       expect(result.current.isLoading).toBe(false);
     });
 
-    expect(fetchTeams).toHaveBeenCalledWith("test-access-token", null, "Admin", null);
+    expect(teamsFetchMock).toHaveBeenCalledWith("/v2/team/list?page=1&page_size=100", expect.anything());
   });
 });
 

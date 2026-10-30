@@ -4,10 +4,15 @@ import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
+import * as teamHooks from "@/app/(dashboard)/hooks/teams/useTeams";
 import AddAttachmentForm from "./add_attachment_form";
 import { Policy } from "@/components/policies/types";
 
 vi.mock("@/components/networking");
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/(dashboard)/hooks/teams/useTeams")>()),
+  fetchAllTeamsPaged: vi.fn(),
+}));
 
 vi.mock("./impact_preview_alert", () => ({
   default: ({ impactResult }: { impactResult: any }) =>
@@ -42,12 +47,12 @@ const defaultProps = {
 };
 
 const teamListResult = (aliases: string[]) =>
-  aliases.map((team_alias) => ({ team_alias })) as unknown as Awaited<ReturnType<typeof networking.teamListCall>>;
+  aliases.map((team_alias) => ({ team_alias })) as unknown as Awaited<ReturnType<typeof teamHooks.fetchAllTeamsPaged>>;
 
 describe("AddAttachmentForm", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(networking.teamListCall).mockResolvedValue([]);
+    vi.mocked(teamHooks.fetchAllTeamsPaged).mockResolvedValue([]);
     vi.mocked(networking.keyListCall).mockResolvedValue({ keys: [] });
     vi.mocked(networking.modelAvailableCall).mockResolvedValue({ data: [] });
   });
@@ -65,7 +70,7 @@ describe("AddAttachmentForm", () => {
   it("should fetch teams, keys, and models on mount when visible and accessToken are provided", async () => {
     renderWithProviders(<AddAttachmentForm {...defaultProps} />);
     await waitFor(() => {
-      expect(networking.teamListCall).toHaveBeenCalled();
+      expect(teamHooks.fetchAllTeamsPaged).toHaveBeenCalled();
       expect(networking.keyListCall).toHaveBeenCalled();
       expect(networking.modelAvailableCall).toHaveBeenCalled();
     });
@@ -73,13 +78,13 @@ describe("AddAttachmentForm", () => {
 
   it("fetches all teams, not just teams the caller is a member of (LIT-4199)", async () => {
     renderWithProviders(<AddAttachmentForm {...defaultProps} />);
-    await waitFor(() => expect(networking.teamListCall).toHaveBeenCalled());
-    expect(networking.teamListCall).toHaveBeenCalledWith("test-token", null, null);
+    await waitFor(() => expect(teamHooks.fetchAllTeamsPaged).toHaveBeenCalled());
+    expect(teamHooks.fetchAllTeamsPaged).toHaveBeenCalledWith("test-token");
   });
 
   it("should not fetch teams, keys, or models when accessToken is null", () => {
     renderWithProviders(<AddAttachmentForm {...defaultProps} accessToken={null} />);
-    expect(networking.teamListCall).not.toHaveBeenCalled();
+    expect(teamHooks.fetchAllTeamsPaged).not.toHaveBeenCalled();
     expect(networking.keyListCall).not.toHaveBeenCalled();
     expect(networking.modelAvailableCall).not.toHaveBeenCalled();
   });
@@ -130,7 +135,7 @@ describe("AddAttachmentForm", () => {
 
   const openSpecificScope = async (user: UserEvent) => {
     await screen.findByText("Create Policy Attachment");
-    await waitFor(() => expect(networking.teamListCall).toHaveBeenCalled());
+    await waitFor(() => expect(teamHooks.fetchAllTeamsPaged).toHaveBeenCalled());
     await user.click(screen.getByRole("radio", { name: /specific/i }));
   };
 
@@ -150,7 +155,7 @@ describe("AddAttachmentForm", () => {
 
   it("blocks submit with a field error when a concrete team that does not exist is entered", async () => {
     const user = userEvent.setup();
-    vi.mocked(networking.teamListCall).mockResolvedValue(teamListResult(["real-team"]));
+    vi.mocked(teamHooks.fetchAllTeamsPaged).mockResolvedValue(teamListResult(["real-team"]));
     const createAttachment = vi.fn();
     renderWithProviders(<AddAttachmentForm {...defaultProps} createAttachment={createAttachment} />);
     await openSpecificScope(user);
@@ -162,7 +167,7 @@ describe("AddAttachmentForm", () => {
 
   it("does not flag a team that exists", async () => {
     const user = userEvent.setup();
-    vi.mocked(networking.teamListCall).mockResolvedValue(teamListResult(["real-team"]));
+    vi.mocked(teamHooks.fetchAllTeamsPaged).mockResolvedValue(teamListResult(["real-team"]));
     renderWithProviders(<AddAttachmentForm {...defaultProps} />);
     await openSpecificScope(user);
     await enterTeam(user, "real-team");
@@ -172,7 +177,7 @@ describe("AddAttachmentForm", () => {
 
   it("does not flag a wildcard pattern even when it matches no existing team", async () => {
     const user = userEvent.setup();
-    vi.mocked(networking.teamListCall).mockResolvedValue(teamListResult([]));
+    vi.mocked(teamHooks.fetchAllTeamsPaged).mockResolvedValue(teamListResult([]));
     renderWithProviders(<AddAttachmentForm {...defaultProps} />);
     await openSpecificScope(user);
     await enterTeam(user, "healthcare-*");
@@ -269,7 +274,7 @@ describe("AddAttachmentForm", () => {
 
   it("defers to the backend (does not flag) when the team list failed to load", async () => {
     const user = userEvent.setup();
-    vi.mocked(networking.teamListCall).mockRejectedValue(new Error("boom"));
+    vi.mocked(teamHooks.fetchAllTeamsPaged).mockRejectedValue(new Error("boom"));
     renderWithProviders(<AddAttachmentForm {...defaultProps} />);
     await openSpecificScope(user);
     await enterTeam(user, "ghost-team");

@@ -8,7 +8,6 @@ import {
 } from "@tanstack/react-query";
 import { Team } from "@/components/key_team_helpers/key_list";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { fetchTeams } from "@/app/(dashboard)/networking";
 import { createQueryKeys } from "@/app/(dashboard)/hooks/common/queryKeysFactory";
 import { teamInfoCall } from "@/components/networking";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
@@ -122,7 +121,7 @@ export const useTeams = (queryOptions: { enabled?: boolean } = {}): UseQueryResu
   const { accessToken, userId, userRole } = useAuthorized();
   const teamsQueryOptions = {
     queryKey: teamKeys.list({}),
-    queryFn: async () => await fetchTeams(accessToken!, userId, userRole, null),
+    queryFn: async () => await fetchAllTeamsPaged(accessToken!, { userID: teamListScopeUserId(userRole, userId) }),
     enabled: Boolean(accessToken) && queryOptions.enabled !== false,
   };
   return useQuery<Team[]>(teamsQueryOptions);
@@ -130,13 +129,13 @@ export const useTeams = (queryOptions: { enabled?: boolean } = {}): UseQueryResu
 
 const ALL_TEAMS_PAGE_SIZE = 100;
 
-const fetchAllTeamsPaged = async (accessToken: string, userID: string | null): Promise<Team[]> => {
-  const firstPage: TeamsResponse = await teamListCall(accessToken, 1, ALL_TEAMS_PAGE_SIZE, { userID });
+export const fetchAllTeamsPaged = async (accessToken: string, options: TeamListCallOptions = {}): Promise<Team[]> => {
+  const firstPage: TeamsResponse = await teamListCall(accessToken, 1, ALL_TEAMS_PAGE_SIZE, options);
   const totalPages = firstPage.total_pages ?? 1;
   if (totalPages <= 1) return firstPage.teams;
 
   const remainingPages: TeamsResponse[] = await Promise.all(
-    Array.from({ length: totalPages - 1 }, (_, i) => teamListCall(accessToken, i + 2, ALL_TEAMS_PAGE_SIZE, { userID })),
+    Array.from({ length: totalPages - 1 }, (_, i) => teamListCall(accessToken, i + 2, ALL_TEAMS_PAGE_SIZE, options)),
   );
   return [firstPage, ...remainingPages].flatMap((page) => page.teams);
 };
@@ -153,7 +152,7 @@ export const useAllTeams = (): UseQueryResult<Team[]> => {
         userID: scopedUserID ?? "",
       },
     }),
-    queryFn: async () => await fetchAllTeamsPaged(accessToken!, scopedUserID),
+    queryFn: async () => await fetchAllTeamsPaged(accessToken!, { userID: scopedUserID }),
     enabled: Boolean(accessToken),
     staleTime: 30000,
   });

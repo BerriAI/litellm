@@ -2,11 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchAllTeams, fetchTeamFilterOptions } from "./filter_helpers";
 
 const mockKeyListCall = vi.fn();
-const mockTeamListCall = vi.fn();
+const mockFetchAllTeamsPaged = vi.fn();
+
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  fetchAllTeamsPaged: (...args: unknown[]) => mockFetchAllTeamsPaged(...args),
+}));
 
 vi.mock("@/components/networking", () => ({
   keyListCall: (...args: unknown[]) => mockKeyListCall(...args),
-  teamListCall: (...args: unknown[]) => mockTeamListCall(...args),
   organizationListCall: vi.fn(),
 }));
 
@@ -82,36 +85,36 @@ describe("fetchTeamFilterOptions", () => {
 
 describe("fetchAllTeams", () => {
   beforeEach(() => {
-    mockTeamListCall.mockReset();
+    mockFetchAllTeamsPaged.mockReset();
   });
 
   it("forwards the scoping user id to /team/list and returns the rows it answers with", async () => {
-    mockTeamListCall.mockResolvedValue([{ team_id: "team-a" }, { team_id: "team-b" }]);
+    mockFetchAllTeamsPaged.mockResolvedValue([{ team_id: "team-a" }, { team_id: "team-b" }]);
 
     const teams = await fetchAllTeams("tok-123", null, "member-7");
 
-    expect(mockTeamListCall).toHaveBeenCalledWith("tok-123", null, "member-7");
+    expect(mockFetchAllTeamsPaged).toHaveBeenCalledWith("tok-123", { organizationID: null, userID: "member-7" });
     expect(teams.map((team) => team.team_id)).toEqual(["team-a", "team-b"]);
   });
 
   it("sends no user id when the caller is entitled to the broad list", async () => {
-    mockTeamListCall.mockResolvedValue([]);
+    mockFetchAllTeamsPaged.mockResolvedValue([]);
 
     await fetchAllTeams("tok-123");
 
-    expect(mockTeamListCall).toHaveBeenCalledWith("tok-123", null, null);
+    expect(mockFetchAllTeamsPaged).toHaveBeenCalledWith("tok-123", { organizationID: null, userID: null });
   });
 
   it("keeps the organization filter independent of the scoping user id", async () => {
-    mockTeamListCall.mockResolvedValue([]);
+    mockFetchAllTeamsPaged.mockResolvedValue([]);
 
     await fetchAllTeams("tok-123", "org-1", "member-7");
 
-    expect(mockTeamListCall).toHaveBeenCalledWith("tok-123", "org-1", "member-7");
+    expect(mockFetchAllTeamsPaged).toHaveBeenCalledWith("tok-123", { organizationID: "org-1", userID: "member-7" });
   });
 
   it("returns an empty list without calling the endpoint when there is no access token", async () => {
     expect(await fetchAllTeams(null, null, "member-7")).toEqual([]);
-    expect(mockTeamListCall).not.toHaveBeenCalled();
+    expect(mockFetchAllTeamsPaged).not.toHaveBeenCalled();
   });
 });

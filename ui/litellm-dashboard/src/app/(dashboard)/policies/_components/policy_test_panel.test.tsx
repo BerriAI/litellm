@@ -4,10 +4,15 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import * as networking from "@/components/networking";
+import * as teamHooks from "@/app/(dashboard)/hooks/teams/useTeams";
 import PolicyTestPanel from "./policy_test_panel";
 import { chooseSelectOption } from "../../../../../tests/test-utils";
 
 vi.mock("@/components/networking");
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/(dashboard)/hooks/teams/useTeams")>()),
+  fetchAllTeamsPaged: vi.fn(),
+}));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: () => ({ userId: "admin-user-id", userRole: "Admin", accessToken: "test-token" }),
@@ -35,10 +40,10 @@ const simulate = async (user: ReturnType<typeof userEvent.setup>) => {
 describe("PolicyTestPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(networking.teamListCall).mockResolvedValue([
+    vi.mocked(teamHooks.fetchAllTeamsPaged).mockResolvedValue([
       { team_alias: "team-a" },
       { team_alias: "team-b" },
-    ] as unknown as Awaited<ReturnType<typeof networking.teamListCall>>);
+    ] as unknown as Awaited<ReturnType<typeof teamHooks.fetchAllTeamsPaged>>);
     vi.mocked(networking.keyListCall).mockResolvedValue({ keys: [{ key_alias: "key-a" }] } as unknown as Awaited<
       ReturnType<typeof networking.keyListCall>
     >);
@@ -50,7 +55,7 @@ describe("PolicyTestPanel", () => {
 
   it("loads teams, keys and models for the dropdowns", async () => {
     setup();
-    await waitFor(() => expect(networking.teamListCall).toHaveBeenCalledWith("test-token", null, "admin-user-id"));
+    await waitFor(() => expect(teamHooks.fetchAllTeamsPaged).toHaveBeenCalledWith("test-token", { userID: "admin-user-id" }));
     expect(networking.keyListCall).toHaveBeenCalledWith("test-token", null, null, null, null, null, 1, 100);
     expect(networking.modelAvailableCall).toHaveBeenCalledWith("test-token", "admin-user-id", "Admin");
   });
@@ -64,7 +69,7 @@ describe("PolicyTestPanel", () => {
 
   it("sends only the fields that were filled in", async () => {
     const user = setup();
-    await waitFor(() => expect(networking.teamListCall).toHaveBeenCalled());
+    await waitFor(() => expect(teamHooks.fetchAllTeamsPaged).toHaveBeenCalled());
     await pickOption(user, "Team Alias", "team-b");
     await pickOption(user, "Model", "gpt-4");
 
@@ -126,7 +131,7 @@ describe("PolicyTestPanel", () => {
 
   it("clears both the picked context and the results on Reset", async () => {
     const user = setup();
-    await waitFor(() => expect(networking.teamListCall).toHaveBeenCalled());
+    await waitFor(() => expect(teamHooks.fetchAllTeamsPaged).toHaveBeenCalled());
     await pickOption(user, "Team Alias", "team-a");
     await simulate(user);
     await screen.findByText("Effective Guardrails");
@@ -142,7 +147,7 @@ describe("PolicyTestPanel", () => {
   it("does not resolve anything without an access token", async () => {
     const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
     renderWithProviders(<PolicyTestPanel accessToken={null} />);
-    expect(networking.teamListCall).not.toHaveBeenCalled();
+    expect(teamHooks.fetchAllTeamsPaged).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Simulate" }));
     expect(networking.resolvePoliciesCall).not.toHaveBeenCalled();
   });

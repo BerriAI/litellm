@@ -9,7 +9,6 @@ import {
   fetchToolPolicyOptions,
   getToolUsageLogs,
   keyListCall,
-  teamListCall,
   updateToolPolicy,
   type ToolDetailResponse,
   type ToolPolicyOption,
@@ -24,7 +23,6 @@ vi.mock("@/components/networking", () => ({
   fetchToolPolicyOptions: vi.fn(),
   getToolUsageLogs: vi.fn(),
   keyListCall: vi.fn(),
-  teamListCall: vi.fn(),
   updateToolPolicy: vi.fn(),
 }));
 
@@ -67,7 +65,6 @@ describe("ToolDetail", () => {
     vi.clearAllMocks();
     vi.mocked(fetchToolDetail).mockResolvedValue(detail);
     vi.mocked(fetchToolPolicyOptions).mockResolvedValue({ input_policies: [], output_policies: [] });
-    vi.mocked(teamListCall).mockResolvedValue({ data: [] });
     vi.mocked(keyListCall).mockResolvedValue({ keys: [] });
     vi.mocked(getToolUsageLogs).mockResolvedValue({ logs: [], total: 0 } as unknown as ToolUsageLogsResponse);
     vi.mocked(updateToolPolicy).mockResolvedValue(undefined as unknown as ToolRow);

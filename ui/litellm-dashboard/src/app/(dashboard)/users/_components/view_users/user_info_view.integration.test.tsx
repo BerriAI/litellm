@@ -58,6 +58,11 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/(dashboard)/hooks/teams/useTeams")>()),
+  fetchAllTeamsPaged: (...args: unknown[]) => mockTeamListCall(...args),
+}));
+
 vi.mock("@/components/networking", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/components/networking")>();
   return {
@@ -73,7 +78,6 @@ vi.mock("@/components/networking", async (importOriginal) => {
     modelInfoCall: vi.fn().mockResolvedValue({ data: [], total_pages: 1 }),
     invitationCreateCall: vi.fn(),
     teamInfoCall: (...args: unknown[]) => mockTeamInfoCall(...args),
-    teamListCall: (...args: unknown[]) => mockTeamListCall(...args),
     teamMemberAddCall: (...args: unknown[]) => mockTeamMemberAddCall(...args),
     teamMemberDeleteCall: (...args: unknown[]) => mockTeamMemberDeleteCall(...args),
     getProxyBaseUrl: () => "https://litellm.test",

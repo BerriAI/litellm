@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Team } from "@/components/key_team_helpers/key_list";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { fetchTeams } from "@/app/(dashboard)/networking";
+import { fetchAllTeamsPaged } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { teamListScopeUserId } from "@/utils/roles";
 
 /**
  * @deprecated This hook is deprecated. Use the react-query implementation from `@/app/(dashboard)/hooks/teams/useTeams` instead.
@@ -12,8 +13,9 @@ const useTeams = () => {
   const { accessToken, userId: userID, userRole } = useAuthorized();
 
   useEffect(() => {
+    if (!accessToken) return;
     (async () => {
-      const fetched = await fetchTeams(accessToken, userID, userRole, null);
+      const fetched = await fetchAllTeamsPaged(accessToken, { userID: teamListScopeUserId(userRole, userID) });
       setTeams(fetched);
     })();
   }, [accessToken, userID, userRole]);

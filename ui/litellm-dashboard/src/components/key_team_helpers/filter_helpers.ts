@@ -1,4 +1,5 @@
-import { teamListCall, organizationListCall, keyListCall } from "../networking";
+import { organizationListCall, keyListCall } from "../networking";
+import { fetchAllTeamsPaged } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { Team } from "./key_list";
 import { Organization } from "../networking";
 
@@ -126,25 +127,7 @@ export const fetchAllTeams = async (
   if (!accessToken) return [];
 
   try {
-    let allTeams: Team[] = [];
-    let currentPage = 1;
-    let hasMorePages = true;
-
-    while (hasMorePages) {
-      const response = await teamListCall(accessToken, organizationId || null, userID ?? null);
-
-      // Add teams from this page
-      allTeams = [...allTeams, ...response];
-
-      // Check if there are more pages
-      if (currentPage < response.total_pages) {
-        currentPage++;
-      } else {
-        hasMorePages = false;
-      }
-    }
-
-    return allTeams;
+    return await fetchAllTeamsPaged(accessToken, { organizationID: organizationId ?? null, userID: userID ?? null });
   } catch (error) {
     console.error("Error fetching all teams:", error);
     return [];

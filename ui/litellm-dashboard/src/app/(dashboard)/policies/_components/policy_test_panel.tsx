@@ -2,7 +2,8 @@ import React, { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { CircleAlert, Inbox } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
-import { resolvePoliciesCall, teamListCall, keyListCall, modelAvailableCall } from "@/components/networking";
+import { resolvePoliciesCall, keyListCall, modelAvailableCall } from "@/components/networking";
+import { fetchAllTeamsPaged } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
@@ -112,9 +113,8 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
     if (!accessToken) return;
 
     try {
-      const teamsResponse = await teamListCall(accessToken, null, userId);
-      const teamsArray = Array.isArray(teamsResponse) ? teamsResponse : teamsResponse?.data || [];
-      setAvailableTeams(teamsArray.map((t: any) => t.team_alias).filter(Boolean));
+      const teams = await fetchAllTeamsPaged(accessToken, { userID: userId });
+      setAvailableTeams(teams.map((t) => t.team_alias).filter(Boolean));
     } catch (error) {
       console.error("Failed to load teams:", error);
     }
