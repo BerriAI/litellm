@@ -1,18 +1,39 @@
 import asyncio
 import subprocess
 from collections.abc import Mapping, Sequence
+from contextvars import Context
 from datetime import datetime
-from typing import Final
+from typing import Final, Literal
 
 import anyio
 import pytest
 from anyio.abc import ByteReceiveStream, ByteSendStream, Process
-from mcp.types import TextContent, Tool
+from fastapi import HTTPException
+from mcp.server.connection import Connection
+from mcp.server.context import ServerRequestContext
+from mcp.server.session import ServerSession
+from mcp.shared.dispatcher import CallOptions
+from mcp.shared.exceptions import MCPError
+from mcp.shared.transport_context import TransportContext
+from mcp.types import (
+    ClientCapabilities,
+    ElicitationCapability,
+    ElicitRequestFormParams,
+    ElicitResult,
+    ErrorData,
+    FormElicitationCapability,
+    Implementation,
+    InitializeRequestParams,
+    TextContent,
+    Tool,
+)
 from pydantic import JsonValue
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -20,14 +41,18 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelReq
 from litellm.proxy.mcp_server.code_execution import CODE_TOOL_NAME, run_code_tool
 from litellm.proxy.mcp_server.code_worker import Call, Done, Reply, Start, encode_message, load_json
 from litellm.proxy.mcp_server.contracts import OperationContext
+from litellm.proxy.mcp_server.legacy_callbacks import create_elicitation_callback
+from litellm.proxy.mcp_server.mcp_context import active_mcp_request_ctx_var
 from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 from litellm.proxy.mcp_server.result_conversion import INPUT_REQUIRED_UNSUPPORTED_MESSAGE
+from litellm.proxy.mcp_server.server import active_mcp_session_var
 from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
 from litellm.proxy.mcp_server.tool_search import mcp_proxy_tool_id, with_mcp_proxy_identity
 from litellm.proxy.utils import ProxyLogging
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.mcp import MCPPostCallResponseObject, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypesLiteral, GenericGuardrailAPIInputs
 
 pytestmark: Final = pytest.mark.usefixtures("mcp_code_runtime")
 
@@ -35,8 +60,9 @@ pytestmark: Final = pytest.mark.usefixtures("mcp_code_runtime")
 class ScriptedProcess(Process, ByteReceiveStream, ByteSendStream):
     """Only the external process transport is replaced; each reply comes from LiteLLM."""
 
-    def __init__(self, calls: tuple[Call, ...]) -> None:
+    def __init__(self, calls: tuple[Call, ...], output: tuple[JsonValue, ...] | None = None) -> None:
         self.calls = calls
+        self.output = output
         self.started: Start | None = None
         self.replies: tuple[Reply, ...] = ()
         self.stopped = False
@@ -53,7 +79,9 @@ class ScriptedProcess(Process, ByteReceiveStream, ByteSendStream):
             self.calls[len(self.replies)]
             if len(self.replies) < len(self.calls)
             else Done(
-                output=tuple(
+                output=self.output
+                if self.output is not None
+                else tuple(
                     dict(reply.value) if reply.value is not None else {"error": reply.error} for reply in self.replies
                 )
             )
@@ -103,8 +131,10 @@ class ScriptedProcess(Process, ByteReceiveStream, ByteSendStream):
         return None
 
 
-def install_transport(monkeypatch: pytest.MonkeyPatch, calls: tuple[Call, ...]) -> ScriptedProcess:
-    process: Final = ScriptedProcess(calls)
+def install_transport(
+    monkeypatch: pytest.MonkeyPatch, calls: tuple[Call, ...], output: tuple[JsonValue, ...] | None = None
+) -> ScriptedProcess:
+    process: Final = ScriptedProcess(calls, output)
 
     async def open_process(command: Sequence[str], *, cwd: str, env: Mapping[str, str], stderr: int) -> Process:
         assert "-I" in command and "-u" in command
@@ -416,3 +446,197 @@ async def test_successful_continuation_text_is_not_reclassified_as_an_error(
         "isError": False,
         "resultType": "complete",
     }
+
+
+class PromptChannel:
+    can_send_request = True
+    request_id = "ordinary-request"
+    message_metadata = None
+
+    def __init__(self) -> None:
+        self.transport = TransportContext(kind="in-process", can_send_request=True)
+        self.cancel_requested = anyio.Event()
+        self.prompts: tuple[Mapping[str, object], ...] = ()
+
+    async def send_raw_request(
+        self, method: str, params: Mapping[str, object] | None, opts: CallOptions | None = None
+    ) -> dict[str, JsonValue]:  # mutable-ok: MCP SDK outbound protocol requires a dictionary
+        assert method == "elicitation/create" and params is not None
+        self.prompts = (*self.prompts, dict(params))
+        return {"action": "accept", "content": {"value": "accepted"}}
+
+    async def notify(self, method: str, params: Mapping[str, object] | None, opts: CallOptions | None = None) -> None:
+        pytest.fail("Elicitation must not send unrelated notifications")
+
+    async def progress(self, progress: float, total: float | None = None, message: str | None = None) -> None:
+        pytest.fail("Elicitation must not send unrelated progress")
+
+
+def prompt_session(channel: PromptChannel) -> ServerSession:
+    connection: Final = Connection.for_loop(channel, protocol_version_hint="2025-11-25")
+    connection.client_params = InitializeRequestParams(
+        protocol_version="2025-11-25",
+        capabilities=ClientCapabilities(elicitation=ElicitationCapability(form=FormElicitationCapability())),
+        client_info=Implementation(name="component-client", version="1"),
+    )
+    return ServerSession(channel, connection)
+
+
+@pytest.mark.asyncio
+async def test_code_elicitation_is_blocked_without_affecting_ordinary_requests(
+    monkeypatch: pytest.MonkeyPatch, registered_gateway: tuple[OperationContext, ObservedCalls, Sequence[str]]
+) -> None:
+    context, _, _ = registered_gateway
+    channel: Final = PromptChannel()
+    session: Final = prompt_session(channel)
+    session_token: Final = active_mcp_session_var.set(session)
+    request_token: Final = active_mcp_request_ctx_var.set(
+        ServerRequestContext(
+            session=session,
+            lifespan_context={},
+            protocol_version="2025-11-25",
+            method="tools/call",
+            request_id="ordinary-request",
+        )
+    )
+    params: Final = ElicitRequestFormParams(message="Confirm action", requested_schema={"type": "object"})
+    ordinary: Final = create_elicitation_callback()
+
+    async def elicit() -> str:
+        accepted: Final = await ordinary(None, params)
+        assert isinstance(accepted, ElicitResult) and accepted.action == "accept"
+        callback: Final = create_elicitation_callback()
+        denied: Final = await asyncio.create_task(callback(None, params), context=Context())
+        if isinstance(denied, ErrorData):
+            raise MCPError(code=denied.code, message=denied.message)
+        return denied.model_dump_json()
+
+    global_mcp_tool_registry.register_tool(  # pyright: ignore[reportUnknownMemberType]  # Legacy registry leaves handler Callable unparameterized.
+        name="allowed-elicit",
+        description="Confirm",
+        input_schema={"type": "object"},
+        handler=elicit,
+        server_id="allowed",
+    )
+    global_mcp_server_manager.tool_name_to_mcp_server_name_mapping["allowed-elicit"] = "allowed"
+    process: Final = install_transport(monkeypatch, (Call(id=0, tool_id="allowed-elicit", arguments={}),))
+    try:
+        result: Final = await run_code_tool({"code": "/* protocol fixture */"}, context)
+        assert not result.is_error
+        assert "unsupported in code mode. Call this tool directly" in error_text(process.replies[0])
+        assert len(channel.prompts) == 1
+        after: Final = await create_elicitation_callback()(None, params)
+        assert isinstance(after, ElicitResult) and after.content == {"value": "accepted"}
+        assert channel.prompts == (params.model_dump(mode="json", by_alias=True, exclude_none=True),) * 2
+    finally:
+        active_mcp_request_ctx_var.reset(request_token)
+        active_mcp_session_var.reset(session_token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [RuntimeError, asyncio.CancelledError])
+async def test_code_context_resets_after_worker_failure_or_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+    registered_gateway: tuple[OperationContext, ObservedCalls, Sequence[str]],
+    failure: type[Exception] | type[asyncio.CancelledError],
+) -> None:
+    context, _, _ = registered_gateway
+    channel: Final = PromptChannel()
+    token: Final = active_mcp_session_var.set(prompt_session(channel))
+
+    async def fail_start(command: Sequence[str], *, cwd: str, env: Mapping[str, str], stderr: int) -> Process:
+        raise failure()
+
+    monkeypatch.setattr(anyio, "open_process", fail_start)
+    try:
+        if failure is asyncio.CancelledError:
+            with pytest.raises(asyncio.CancelledError):
+                await run_code_tool({"code": "/* protocol fixture */"}, context)
+        else:
+            result: Final = await run_code_tool({"code": "/* protocol fixture */"}, context)
+            assert result.is_error
+        response: Final = await create_elicitation_callback()(
+            None, ElicitRequestFormParams(message="Still ordinary", requested_schema={"type": "object"})
+        )
+        assert isinstance(response, ElicitResult) and response.content == {"value": "accepted"}
+        assert len(channel.prompts) == 1
+    finally:
+        active_mcp_session_var.reset(token)
+
+
+class CodeTextPolicy(CustomGuardrail):
+    scanned: tuple[str, ...] = ()
+    directions: tuple[str, ...] = ()
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.directions = (*self.directions, input_type)
+        texts: Final = inputs.get("texts", [])
+        self.scanned = (*self.scanned, *texts)
+        if any("blocked-output" in text for text in texts):
+            raise HTTPException(status_code=403, detail="Code output rejected")
+        return {**inputs, "texts": [text.replace("mask-output", "filtered-output") for text in texts]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("output", ["allowed-output", "mask-output", "blocked-output"])
+async def test_final_code_output_policy_enforces_and_preserves_logging(
+    monkeypatch: pytest.MonkeyPatch,
+    registered_gateway: tuple[OperationContext, ObservedCalls, Sequence[str]],
+    nested: bool,
+    output: str,
+) -> None:
+    context, observed, received = registered_gateway
+    policy: Final = CodeTextPolicy(
+        guardrail_name="code-output", event_hook=GuardrailEventHooks.post_mcp_call, default_on=True
+    )
+    monkeypatch.setattr(litellm, "callbacks", [*litellm.callbacks, policy])
+    calls: Final = (Call(id=0, tool_id="allowed-echo", arguments={"message": "safe-upstream"}),) if nested else ()
+    process: Final = install_transport(monkeypatch, calls, (output,))
+    if output == "blocked-output":
+        with pytest.raises(HTTPException, match="Code output rejected"):
+            await run_code_tool({"code": "/* protocol fixture */"}, context)
+        assert len(observed.responses) == int(nested)
+        install_transport(monkeypatch, (), ("allowed-output",))
+        recovered: Final = await run_code_tool({"code": "/* protocol fixture */"}, context)
+        assert not recovered.is_error
+    else:
+        result: Final = await run_code_tool({"code": "/* protocol fixture */"}, context)
+        assert not result.is_error and isinstance(result.content[0], TextContent)
+        assert load_json(result.content[0].text) == {
+            "output": [output.replace("mask-output", "filtered-output")],
+            "error": None,
+            "calls_started": int(nested),
+        }
+    assert received == (["safe-upstream"] if nested else [])
+    assert process.stopped
+    assert len(observed.responses) == int(nested) + 1
+    assert len(policy.scanned) == int(nested) + 1 + int(output == "blocked-output")
+    assert policy.directions == ("response",) * len(policy.scanned)
+
+
+@pytest.mark.asyncio
+async def test_code_input_policy_blocks_before_worker_and_preserves_rewrites(
+    monkeypatch: pytest.MonkeyPatch, registered_gateway: tuple[OperationContext, ObservedCalls, Sequence[str]]
+) -> None:
+    context, observed, received = registered_gateway
+    policy: Final = CodeTextPolicy(
+        guardrail_name="code-input", event_hook=GuardrailEventHooks.pre_mcp_call, default_on=True
+    )
+    monkeypatch.setattr(litellm, "callbacks", [*litellm.callbacks, policy])
+    process: Final = install_transport(monkeypatch, (), ("safe-output",))
+    with pytest.raises(HTTPException, match="Code output rejected"):
+        await run_code_tool({"code": "blocked-output"}, context)
+    assert process.started is None and received == [] and observed.responses == ()
+    result: Final = await run_code_tool({"code": "mask-output"}, context)
+    assert not result.is_error
+    assert process.started is not None and process.started.code == "filtered-output"
+    assert policy.scanned == ("blocked-output", "mask-output")
+    assert policy.directions == ("request", "request")
+    assert len(observed.responses) == 1

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import os
 import subprocess
 import sys
@@ -26,6 +25,7 @@ from litellm.proxy.mcp_server.code_worker import (
     Reply,
     Start,
     encode_message,
+    json_bytes,
     load_json,
 )
 
@@ -117,7 +117,7 @@ async def _exchange(
                         calls.start(message.id)
                         group.start_soon(dispatch, message)
                     case Done():
-                        if len(json.dumps(message.output, ensure_ascii=False).encode("utf-8")) > settings.output_bytes:
+                        if len(json_bytes(message.output)) > settings.output_bytes:
                             return CodeExecutionResult(
                                 error="Code output exceeds its byte limit", calls_started=len(calls.started)
                             )

@@ -18,6 +18,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server.contracts import OperationContext
+from litellm.proxy.mcp_server.legacy_callbacks import noninteractive_code_execution
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.mcp import MCPCodeModeSettings
 
@@ -206,6 +207,7 @@ async def cleanup_cancelled_call(data: Mapping[str, object], caller: UserAPIKeyA
 async def run_code_tool(arguments: Mapping[str, object] | None, context: OperationContext) -> CallToolResult:
     from litellm.proxy.mcp_server.operations import (
         _fire_mcp_tool_call_logging,
+        _run_post_mcp_call_guardrails,
         fire_mcp_tool_call_failure_logging,
         prepare_virtual_mcp_call,
     )
@@ -235,7 +237,14 @@ async def run_code_tool(arguments: Mapping[str, object] | None, context: Operati
             processed: Final = TypeAdapter(dict[str, object]).validate_python(
                 data.get("modified_arguments", data.get("mcp_arguments", data.get("arguments", {})))
             )
-            result: Final = await _execute_script(processed, traced)
+            executed: Final = await _execute_script(processed, traced)
+            result: Final = await _run_post_mcp_call_guardrails(
+                executed,
+                litellm_logging_obj=logging_obj,
+                original_auth=caller,
+                guardrail_auth=caller,
+                request_data=data,
+            )
             if logging_obj is None:
                 return result
             return await _fire_mcp_tool_call_logging(
@@ -360,7 +369,8 @@ async def _execute_script(arguments: Mapping[str, object], context: OperationCon
             )
         return serialize_tool_result(result)
 
-    result: Final = await execute_code(request.code, call_tool)
+    with noninteractive_code_execution():
+        result: Final = await execute_code(request.code, call_tool)
     return CallToolResult(
         content=[
             TextContent(

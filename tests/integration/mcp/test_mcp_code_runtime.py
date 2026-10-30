@@ -36,6 +36,22 @@ async def test_code_roundtrips_full_results_and_chains_calls() -> None:
 
 
 @pytest.mark.asyncio
+async def test_code_preserves_surrogate_output_and_tool_values() -> None:
+    result: Final = await execute_code(
+        "text('kept'); text(String.fromCharCode(0xd800)); "
+        "text(await tools.call_tool({tool_id:'echo', arguments:{value:String.fromCharCode(0xdc00)}}));",
+        _echo,
+    )
+    assert result.error is None
+    assert result.calls_started == 1
+    assert result.output == (
+        "kept",
+        "\ud800",
+        {"structuredContent": {"value": "\udc00"}, "content": [], "isError": False},
+    )
+
+
+@pytest.mark.asyncio
 async def test_script_near_byte_limit_survives_json_escaping() -> None:
     source = "/*" + '\\"' * ((CodeExecutionLimits().script_bytes - 20) // 2) + "*/text(42)"
     result = await execute_code(source, _echo)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from typing import Final
 
 import pytest
 
@@ -44,9 +45,13 @@ def test_large_ids_as_strings_and_exact_safe_integers_survive() -> None:
     assert result.id == 7
 
 
-def test_pipe_limit_counts_unicode_bytes() -> None:
+@pytest.mark.parametrize(("value", "budget"), [("猫", 400), ("\ud800", 700)])
+def test_pipe_limit_counts_unicode_bytes(value: str, budget: int) -> None:
+    reply: Final = Reply(id=0, value={"value": value * 100})
+    encoded: Final = encode_message(reply, budget)
+    assert Reply.model_validate(load_json(encoded.decode())) == reply
     with pytest.raises(ValueError, match="byte limit"):
-        encode_message(Reply(id=0, value={"value": "猫" * 100}), 200)
+        encode_message(reply, len(encoded) - 1)
 
 
 @pytest.mark.asyncio

@@ -82,10 +82,13 @@ def load_json(value: str) -> JsonValue:
     return JSON_VALUE.validate_python(json.loads(value, parse_int=_integer, parse_float=_float, parse_constant=_float))
 
 
+def json_bytes(value: object) -> bytes:
+    return json.dumps(value, allow_nan=False, ensure_ascii=False).encode("utf-8", errors="backslashreplace")
+
+
 def encode_message(value: WireModel, maximum: int) -> bytes:
-    text: Final = json.dumps(value.model_dump(), allow_nan=False, ensure_ascii=False)
-    load_json(text)
-    encoded: Final = (text + "\n").encode("utf-8")
+    encoded: Final = json_bytes(value.model_dump()) + b"\n"
+    load_json(encoded.decode("utf-8"))
     if len(encoded) > maximum:
         raise ValueError("Code execution message exceeds its byte limit")
     return encoded
@@ -232,13 +235,13 @@ def _run(start: Start) -> Done:
     receive: Final = runtime.eval(_BRIDGE)
     if not isinstance(receive, _Receiver):
         raise TypeError("Invalid JavaScript bridge")
-    receive("start", start.model_dump_json())
+    receive("start", json_bytes(start.model_dump()).decode("utf-8"))
     while output.result is None:
         while runtime.execute_pending_job():
             if output.result is not None:
                 return output.result
         if output.result is None:
-            receive("reply", _read_reply(start.limits.message_bytes).model_dump_json())
+            receive("reply", json_bytes(_read_reply(start.limits.message_bytes).model_dump()).decode("utf-8"))
     return output.result
 
 

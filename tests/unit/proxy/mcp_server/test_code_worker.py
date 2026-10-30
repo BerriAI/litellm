@@ -14,6 +14,7 @@ from litellm.proxy.mcp_server.code_worker import (
     Reply,
     Start,
     encode_message,
+    load_json,
     main,
 )
 
@@ -26,7 +27,32 @@ def run_worker(monkeypatch: pytest.MonkeyPatch, request: bytes) -> list[Call | D
     monkeypatch.setattr(sys, "stdin", source)
     monkeypatch.setattr(sys, "stdout", destination)
     main()
-    return [WORKER_MESSAGE.validate_json(line) for line in destination.buffer.getvalue().splitlines()]
+    return [
+        WORKER_MESSAGE.validate_python(load_json(line.decode())) for line in destination.buffer.getvalue().splitlines()
+    ]
+
+
+@pytest.mark.parametrize(
+    ("codepoint", "expected"), [(0xD800, "\ud800"), (0xDC00, "\udc00"), (0x1F680, "🚀"), (0x732B, "猫")]
+)
+def test_native_worker_preserves_unicode_output(monkeypatch: pytest.MonkeyPatch, codepoint: int, expected: str) -> None:
+    limits: Final = CodeExecutionLimits()
+    request: Final = Start(code=f"text('kept'); text(String.fromCodePoint({codepoint}));", limits=limits)
+    assert run_worker(monkeypatch, encode_message(request, limits.message_bytes)) == [Done(output=("kept", expected))]
+
+
+def test_native_worker_roundtrips_surrogates_in_tool_arguments_and_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    limits: Final = CodeExecutionLimits()
+    request: Final = Start(
+        code="text('kept'); text(await tools.call_tool({tool_id:'echo',arguments:{value:String.fromCharCode(0xd800)}}));",
+        limits=limits,
+    )
+    value: Final[dict[str, JsonValue]] = {"value": "\ud800"}
+    messages: Final = run_worker(
+        monkeypatch,
+        encode_message(request, limits.message_bytes) + encode_message(Reply(id=0, value=value), limits.message_bytes),
+    )
+    assert messages == [Call(id=0, tool_id="echo", arguments=value), Done(output=("kept", value))]
 
 
 def test_native_worker_chains_full_tool_results(monkeypatch: pytest.MonkeyPatch) -> None:
