@@ -157,7 +157,7 @@ class NativeLockStore:
 
 ## Scope
 
-- The milestone order for the migration, and what each PR may and may not touch, is in `references/migration-plan.md`. The first two milestones are Python only and ship first. Nothing under `litellm-rust/` changes until milestone 2 has merged
+- Python moves ship first. Every raw redis-py keyspace outside `litellm/caching/` goes behind a store on the transport before anything under `litellm-rust/` changes for Redis. The first Rust port is the pod lock keyspace, since it is low traffic and its owner-checked release proves both stacks write the same `json.dumps` encoded owner
 - A keyspace moves whole in one commit, every operation the caller runs on those keys. Moving the read and leaving the write on `RedisCache` is not a move
 - Do only what was asked. An extraction is not a store move, a store move is not a Rust port, and a Rust port of one keyspace does not switch another
 - A Rust store that already exists does not by itself justify switching its Python caller. Switching callers is its own change with live verification
