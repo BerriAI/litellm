@@ -44,7 +44,7 @@ import secrets
 from base64 import urlsafe_b64encode
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Final, Literal, Protocol, TypeVar
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -98,6 +98,8 @@ from litellm.proxy.mcp_server.outbound_credentials.session_token import (
     open_session_refresh_token,
     open_session_token,
 )
+from litellm.redis.stores.mcp_single_use import TransportMcpSingleUseStore
+from litellm.redis.transport.contract import RedisFailure
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -1348,7 +1350,7 @@ class _SingleUseGuard:
     id replays through a different worker):
 
     - When a Redis backend is configured it is the SOLE authority: the claim goes straight to Redis
-      (``INCR`` is atomic across replicas), and any Redis fault fails the claim CLOSED — it never falls
+      (``INCRBYFLOAT`` is atomic across replicas), and any Redis fault fails the claim CLOSED — it never falls
       back to the per-worker in-memory count (``DualCache.async_increment_cache`` does fall back, which
       is exactly the replay window this avoids).
     - With no Redis configured (single-replica) the in-memory increment is authoritative within the one
@@ -1374,40 +1376,35 @@ class _SingleUseGuard:
         # proxy already treats as cross-worker, so no call site can wire the guarantee away.
         redis_cache: Final = redis_usage_cache or getattr(self._cache, "redis_cache", None)
         if redis_cache is not None:
-            # Shared, atomic authority for multi-replica deployments. Claim ONLY against Redis and fail
-            # CLOSED on any Redis fault (async_increment re-raises) rather than fall back to the
-            # per-worker in-memory count, which would let each replica observe count==1 and replay the id.
-            try:
-                count = await redis_cache.async_increment(key, 1, ttl=ttl_seconds)
-            except Exception as e:  # noqa: BLE001  # ANY Redis fault fails the single-use claim closed
-                verbose_logger.warning(
-                    "mcp gateway single-use claim: shared cache backend unavailable, failing closed: %s", e
-                )
-                return "unavailable"
-            return "first" if count == 1 else "replayed"
+            match await TransportMcpSingleUseStore(redis_cache.transport()).claim(
+                key, ttl=timedelta(seconds=ttl_seconds)
+            ):
+                case RedisFailure():
+                    return "unavailable"
+                case 1:
+                    return "first"
+                case _:
+                    return "replayed"
         # No shared backend configured (single-replica): the in-memory increment is authoritative.
-        count = await self._cache.async_increment_cache(key, 1, ttl=ttl_seconds, local_only=True)
+        count: Final = await self._cache.async_increment_cache(key, 1, ttl=ttl_seconds, local_only=True)
         return "first" if count == 1 else "replayed"
 
     @with_service_target(_DCR_CLAIMS_TARGET)
     async def peek(self, key: str) -> Literal["unclaimed", "claimed", "unavailable"]:
         """Read-only view of a single-use marker, resolved against the same shared authority as
         :meth:`claim` so introspection observes exactly the record redemption and revocation wrote.
-        A backend fault is ``"unavailable"`` (fail closed) rather than a guess either way, which is why
-        the read goes to the Redis client itself: the cache wrapper's ``async_get_cache`` turns a fault
-        into ``None``, and ``None`` here would pass as unclaimed. The key is namespaced exactly as the
-        wrapper namespaces every write, or a ``namespace`` configured under ``coordination_redis`` or
-        ``cache_params`` would hide the marker."""
+        A backend fault is ``"unavailable"`` (fail closed) rather than a guess either way."""
         from litellm.proxy.proxy_server import redis_usage_cache  # noqa: PLC0415  # circular import at module load
 
         redis_cache: Final = redis_usage_cache or getattr(self._cache, "redis_cache", None)
         if redis_cache is not None:
-            try:
-                value = await redis_cache.init_async_client().get(redis_cache.check_and_fix_namespace(key=key))
-            except Exception as e:  # noqa: BLE001  # ANY Redis fault fails the read closed
-                verbose_logger.warning("mcp gateway single-use peek: shared cache backend unavailable: %s", e)
-                return "unavailable"
-            return "unclaimed" if value is None else "claimed"
+            match await TransportMcpSingleUseStore(redis_cache.transport()).peek(key):
+                case RedisFailure():
+                    return "unavailable"
+                case True:
+                    return "claimed"
+                case False:
+                    return "unclaimed"
         local: Final = await self._cache.async_get_cache(key, local_only=True)
         return "unclaimed" if local is None else "claimed"
 
