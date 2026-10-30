@@ -12,6 +12,7 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.integrations.rag.bedrock_knowledgebase import (
     BedrockKBContent,
+    BedrockKBLocation,
     BedrockKBResponse,
     BedrockKBRetrievalConfiguration,
     BedrockKBRetrievalQuery,
@@ -284,38 +285,39 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             api_key=api_key,
         )
 
-    def _get_file_id_from_metadata(self, metadata: dict[str, Any]) -> str:
-        """
-        Extract file_id from Bedrock KB metadata.
-        Uses source URI if available, otherwise generates a fallback ID.
-        """
-        source_uri: Final = metadata.get("x-amz-bedrock-kb-source-uri", "") if metadata else ""
+    def _get_source_uri(self, metadata: Mapping[str, object], location: BedrockKBLocation | None) -> str:
+        metadata_uri: Final = metadata.get("x-amz-bedrock-kb-source-uri")
+        if isinstance(metadata_uri, str) and metadata_uri:
+            return metadata_uri
+        if not location:
+            return ""
+        location_uris: Final = (
+            (location.get("s3Location") or {}).get("uri"),
+            (location.get("webLocation") or {}).get("url"),
+            (location.get("confluenceLocation") or {}).get("url"),
+            (location.get("salesforceLocation") or {}).get("url"),
+            (location.get("sharePointLocation") or {}).get("url"),
+            (location.get("googleDriveLocation") or {}).get("url"),
+            (location.get("oneDriveLocation") or {}).get("url"),
+            (location.get("kendraDocumentLocation") or {}).get("uri"),
+            (location.get("customDocumentLocation") or {}).get("id"),
+        )
+        return next((uri for uri in location_uris if uri), "")
+
+    def _get_file_id(self, source_uri: str, metadata: Mapping[str, object]) -> str:
         if source_uri:
             return source_uri
-
-        chunk_id: Final = metadata.get("x-amz-bedrock-kb-chunk-id", "unknown") if metadata else "unknown"
+        chunk_id: Final = metadata.get("x-amz-bedrock-kb-chunk-id", "unknown")
         return f"bedrock-kb-{chunk_id}"
 
-    def _get_filename_from_metadata(self, metadata: dict[str, Any]) -> str:
-        """
-        Extract filename from Bedrock KB metadata.
-        Tries to extract filename from source URI, falls back to domain name or data source ID.
-        """
-        source_uri: Final = metadata.get("x-amz-bedrock-kb-source-uri", "") if metadata else ""
-
+    def _get_filename(self, source_uri: str, metadata: Mapping[str, object]) -> str:
         if source_uri:
             try:
                 parsed_uri: Final = urlparse(source_uri)
-                filename = (
-                    parsed_uri.path.split("/")[-1] if parsed_uri.path and parsed_uri.path != "/" else parsed_uri.netloc
-                )
-                if not filename or filename == "/":
-                    filename = parsed_uri.netloc
-                return filename
-            except Exception:
+            except ValueError:
                 return source_uri
-
-        data_source_id: Final = metadata.get("x-amz-bedrock-kb-data-source-id", "unknown") if metadata else "unknown"
+            return parsed_uri.path.split("/")[-1] or parsed_uri.netloc or source_uri
+        data_source_id: Final = metadata.get("x-amz-bedrock-kb-data-source-id", "unknown")
         return f"bedrock-kb-document-{data_source_id}"
 
     def _get_attributes_from_metadata(self, metadata: dict[str, object]) -> dict[str, object]:
@@ -339,10 +341,10 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
                 if text is None:
                     continue
 
-                # Extract metadata and use helper functions
                 metadata = item.get("metadata", {}) or {}
-                file_id = self._get_file_id_from_metadata(metadata)
-                filename = self._get_filename_from_metadata(metadata)
+                source_uri = self._get_source_uri(metadata, item.get("location"))
+                file_id = self._get_file_id(source_uri, metadata)
+                filename = self._get_filename(source_uri, metadata)
                 attributes = self._get_attributes_from_metadata(metadata)
 
                 results.append(

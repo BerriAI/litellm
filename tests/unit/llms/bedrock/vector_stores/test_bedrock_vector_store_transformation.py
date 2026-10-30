@@ -203,43 +203,107 @@ def test_transform_search_request_prefers_extra_body_user_context_over_top_level
     assert body["userContext"] == {"userId": "alice@example.com"}
 
 
-def test_get_file_id_from_metadata():
-    """Test that file_id is correctly extracted from metadata."""
-    config = BedrockVectorStoreConfig()
-
-    metadata_with_uri = {
-        "x-amz-bedrock-kb-source-uri": "https://www.litellm.ai",
-        "x-amz-bedrock-kb-chunk-id": "1%3A0%3AjNYPg5YByRuP5PdK96co",
-    }
-    file_id = config._get_file_id_from_metadata(metadata_with_uri)
-    assert file_id == "https://www.litellm.ai"
-
-    metadata_without_uri = {"x-amz-bedrock-kb-chunk-id": "1%3A0%3AjNYPg5YByRuP5PdK96co"}
-    file_id = config._get_file_id_from_metadata(metadata_without_uri)
-    assert file_id == "bedrock-kb-1%3A0%3AjNYPg5YByRuP5PdK96co"
-
-    file_id = config._get_file_id_from_metadata({})
-    assert file_id == "bedrock-kb-unknown"
+S3_VECTORS_METADATA: Final = {
+    "x-amz-bedrock-kb-chunk-id": "764f684b-5a68-4950-9881-50250f22e87d",
+    "x-amz-bedrock-kb-data-source-id": "CYQOANZ7OJ",
+}
 
 
-def test_get_filename_from_metadata():
-    """Test that filename is correctly extracted from metadata."""
-    config = BedrockVectorStoreConfig()
+@pytest.mark.parametrize(
+    ("location", "metadata", "expected_filename", "expected_file_id"),
+    [
+        (
+            {"type": "S3", "s3Location": {"uri": "s3://kb-docs/hr/hr-2024.txt"}},
+            S3_VECTORS_METADATA,
+            "hr-2024.txt",
+            "s3://kb-docs/hr/hr-2024.txt",
+        ),
+        (
+            {"type": "WEB", "webLocation": {"url": "https://docs.litellm.ai/tutorial/setup.html"}},
+            S3_VECTORS_METADATA,
+            "setup.html",
+            "https://docs.litellm.ai/tutorial/setup.html",
+        ),
+        (
+            {"type": "CONFLUENCE", "confluenceLocation": {"url": "https://wiki.example.com/display/ENG/Runbook"}},
+            S3_VECTORS_METADATA,
+            "Runbook",
+            "https://wiki.example.com/display/ENG/Runbook",
+        ),
+        (
+            {"type": "SALESFORCE", "salesforceLocation": {"url": "https://example.my.salesforce.com/0015g00000Abc"}},
+            S3_VECTORS_METADATA,
+            "0015g00000Abc",
+            "https://example.my.salesforce.com/0015g00000Abc",
+        ),
+        (
+            {"type": "SHAREPOINT", "sharePointLocation": {"url": "https://example.sharepoint.com/sites/hr/policy.docx"}},
+            S3_VECTORS_METADATA,
+            "policy.docx",
+            "https://example.sharepoint.com/sites/hr/policy.docx",
+        ),
+        (
+            {"type": "GOOGLEDRIVE", "googleDriveLocation": {"url": "https://drive.google.com/file/d/1AbC/view"}},
+            S3_VECTORS_METADATA,
+            "view",
+            "https://drive.google.com/file/d/1AbC/view",
+        ),
+        (
+            {"type": "ONEDRIVE", "oneDriveLocation": {"url": "https://onedrive.live.com/docs/plan.pdf"}},
+            S3_VECTORS_METADATA,
+            "plan.pdf",
+            "https://onedrive.live.com/docs/plan.pdf",
+        ),
+        (
+            {"type": "KENDRA", "kendraDocumentLocation": {"uri": "https://kendra.example.com/faq.html"}},
+            S3_VECTORS_METADATA,
+            "faq.html",
+            "https://kendra.example.com/faq.html",
+        ),
+        (
+            {"type": "CUSTOM", "customDocumentLocation": {"id": "doc-42"}},
+            S3_VECTORS_METADATA,
+            "doc-42",
+            "doc-42",
+        ),
+        (
+            {"type": "SQL", "sqlLocation": {"query": "SELECT * FROM policies"}},
+            S3_VECTORS_METADATA,
+            "bedrock-kb-document-CYQOANZ7OJ",
+            "bedrock-kb-764f684b-5a68-4950-9881-50250f22e87d",
+        ),
+        (
+            {"type": "S3", "s3Location": {"uri": "s3://kb-docs/hr/hr-2024.txt"}},
+            {**S3_VECTORS_METADATA, "x-amz-bedrock-kb-source-uri": "https://www.litellm.ai"},
+            "www.litellm.ai",
+            "https://www.litellm.ai",
+        ),
+        (
+            None,
+            {"x-amz-bedrock-kb-source-uri": "http://[::1/broken"},
+            "http://[::1/broken",
+            "http://[::1/broken",
+        ),
+        (None, S3_VECTORS_METADATA, "bedrock-kb-document-CYQOANZ7OJ", "bedrock-kb-764f684b-5a68-4950-9881-50250f22e87d"),
+        (None, {}, "bedrock-kb-document-unknown", "bedrock-kb-unknown"),
+    ],
+)
+def test_search_hit_names_its_source_document_from_metadata_or_location(
+    location: dict[str, object] | None,
+    metadata: dict[str, str],
+    expected_filename: str,
+    expected_file_id: str,
+):
+    retrieval_result: Final = {"content": {"text": "chunk"}, "metadata": metadata, "score": 0.7}
+    body: Final = {"retrievalResults": [retrieval_result if location is None else {**retrieval_result, "location": location}]}
+    logging_obj: Final = MagicMock(model_call_details={"query": "vacation policy"})
 
-    metadata_with_path = {"x-amz-bedrock-kb-source-uri": "https://docs.litellm.ai/tutorial/setup.html"}
-    filename = config._get_filename_from_metadata(metadata_with_path)
-    assert filename == "setup.html"
+    response: Final = BedrockVectorStoreConfig().transform_search_vector_store_response(
+        httpx.Response(200, json=body), logging_obj
+    )
 
-    metadata_domain_only = {"x-amz-bedrock-kb-source-uri": "https://www.litellm.ai"}
-    filename = config._get_filename_from_metadata(metadata_domain_only)
-    assert filename == "www.litellm.ai"
-
-    metadata_without_uri = {"x-amz-bedrock-kb-data-source-id": "CCEJIRXXFI"}
-    filename = config._get_filename_from_metadata(metadata_without_uri)
-    assert filename == "bedrock-kb-document-CCEJIRXXFI"
-
-    filename = config._get_filename_from_metadata({})
-    assert filename == "bedrock-kb-document-unknown"
+    assert [(hit["filename"], hit["file_id"]) for hit in response["data"]] == [(expected_filename, expected_file_id)]
+    assert response["data"][0]["attributes"] == metadata
 
 
 def test_get_attributes_from_metadata():

@@ -6,15 +6,17 @@ from typing_extensions import ReadOnly, TypedDict
 class BedrockKBLocation(TypedDict, total=False):
     """Location information for a retrieved document."""
 
-    type: str
-    s3Location: dict | None
-    webLocation: dict | None
-    kendraDocumentLocation: dict | None
-    salesforceLocation: dict | None
-    sharePointLocation: dict | None
-    confluenceLocation: dict | None
-    customDocumentLocation: dict | None
-    sqlLocation: dict | None
+    type: ReadOnly[str]
+    s3Location: ReadOnly[dict[str, str] | None]
+    webLocation: ReadOnly[dict[str, str] | None]
+    kendraDocumentLocation: ReadOnly[dict[str, str] | None]
+    salesforceLocation: ReadOnly[dict[str, str] | None]
+    sharePointLocation: ReadOnly[dict[str, str] | None]
+    confluenceLocation: ReadOnly[dict[str, str] | None]
+    googleDriveLocation: ReadOnly[dict[str, str] | None]
+    oneDriveLocation: ReadOnly[dict[str, str] | None]
+    customDocumentLocation: ReadOnly[dict[str, str] | None]
+    sqlLocation: ReadOnly[dict[str, str] | None]
 
 
 class BedrockKBRowValue(TypedDict):
