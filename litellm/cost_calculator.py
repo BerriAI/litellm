@@ -1959,7 +1959,10 @@ def completion_cost(
                         video_resolution=video_resolution,
                     )
                 elif call_type in _SPEECH_CALL_TYPES:
-                    prompt_characters = litellm.utils.count_characters(text=prompt)
+                    prompt_characters = _speech_billed_characters(
+                        completion_response if isinstance(completion_response, HttpxBinaryResponseContent) else None,
+                        prompt,
+                    )
                 elif call_type in _TRANSCRIPTION_CALL_TYPES:
                     audio_transcription_file_duration = _transcription_duration_for_cost(
                         completion_response, model, requested_model, custom_llm_provider
@@ -2425,6 +2428,11 @@ def response_cost_calculator(
         return response_cost
     except Exception as e:
         raise e
+
+
+def _speech_billed_characters(speech_response: HttpxBinaryResponseContent | None, prompt: str) -> int:
+    reported: Final = speech_response.hidden_params.get("billed_characters") if speech_response is not None else None
+    return reported if isinstance(reported, int) else litellm.utils.count_characters(text=prompt)
 
 
 def _video_input_image_cost(

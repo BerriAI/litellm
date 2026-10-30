@@ -2597,7 +2597,7 @@ async def user_api_key_auth_builder(
             raise ProxyException(
                 message="Authentication Error, No api key passed in.",
                 type=ProxyErrorTypes.auth_error,
-                param="None",
+                param=None,
                 code=status.HTTP_401_UNAUTHORIZED,
             )
         elif api_key == "":
@@ -2605,7 +2605,7 @@ async def user_api_key_auth_builder(
             raise ProxyException(
                 message="Authentication Error, Malformed API Key passed in. Ensure Key has `Bearer ` prefix.",
                 type=ProxyErrorTypes.auth_error,
-                param="None",
+                param=None,
                 code=status.HTTP_401_UNAUTHORIZED,
             )
 
@@ -2846,7 +2846,7 @@ async def user_api_key_auth_builder(
             raise ProxyException(
                 message=f"Authentication Error, Tried to access route={route}, which is only for MASTER KEY",
                 type=ProxyErrorTypes.auth_error,
-                param="None",
+                param=None,
                 code=status.HTTP_401_UNAUTHORIZED,
             )
 
@@ -2979,7 +2979,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
             raise ProxyException(
                 message="Authentication Error, Key is blocked. Update via `/key/unblock` if you're an admin.",
                 type=ProxyErrorTypes.auth_error,
-                param="None",
+                param=None,
                 code=status.HTTP_401_UNAUTHORIZED,
             )
         await enforce_key_and_fallback_model_access(
@@ -3030,7 +3030,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                         "Keys owned by this user cannot be used."
                     ),
                     type=ProxyErrorTypes.auth_error,
-                    param="None",
+                    param=None,
                     code=status.HTTP_401_UNAUTHORIZED,
                 )
 
@@ -3336,7 +3336,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
         raise ProxyException(
             message="Authentication Error, Invalid proxy server token passed",
             type=ProxyErrorTypes.auth_error,
-            param="None",
+            param=None,
             code=status.HTTP_401_UNAUTHORIZED,
         )
     if valid_token_dict is not None:

@@ -990,6 +990,39 @@ def _error_of(frame: str) -> dict[str, object]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "raised, expected_error",
+    [
+        pytest.param(
+            ProxyException(message="Budget has been exceeded", type="budget_exceeded", param=None, code=429),
+            {"message": "Budget has been exceeded", "type": "budget_exceeded", "param": None, "code": "429"},
+            id="proxy_exception_keeps_its_status",
+        ),
+        pytest.param(
+            RuntimeError("upstream blew up"),
+            {"message": "upstream blew up", "type": "internal_server_error", "param": None, "code": "500"},
+            id="unexpected_failure",
+        ),
+    ],
+)
+async def test_a_mid_stream_failure_frame_carries_the_status_the_error_was_raised_with(
+    monkeypatch, raised: Exception, expected_error: dict[str, object]
+):
+    _patch_logging_flags(monkeypatch)
+    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", AsyncMock(return_value=None))
+
+    frames: Final = [
+        frame
+        async for frame in async_data_generator(
+            response=_async_iter_raises(raised), user_api_key_dict=_user_auth(), request_data={}
+        )
+    ]
+
+    error_frames: Final = [frame for frame in frames if isinstance(frame, str) and frame.startswith('data: {"error":')]
+    assert [_error_of(frame.removesuffix("\n\n")) for frame in error_frames] == [expected_error]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "detail,expected_message,expected_fields",
     [
         pytest.param(
