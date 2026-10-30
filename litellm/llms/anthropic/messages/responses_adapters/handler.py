@@ -315,9 +315,10 @@ def _build_responses_kwargs(
         request_data["temperature"] = temperature
     if thinking:
         request_data["thinking"] = thinking
-    if tool_choice:
+    drops_tools: Final = "tools" in drop_policy(forwarded_kwargs).additional_drop_params
+    if tool_choice and not drops_tools:
         request_data["tool_choice"] = tool_choice
-    if tools and "tools" not in drop_policy(forwarded_kwargs).additional_drop_params:
+    if tools and not drops_tools:
         request_data["tools"] = tools
     if top_p is not None:
         request_data["top_p"] = top_p

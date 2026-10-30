@@ -940,6 +940,29 @@ async def test_additional_drop_params_tools_sends_no_tools_even_beside_one_opena
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_choice",
+    [{"type": "tool", "name": "web_fetch"}, {"type": "tool", "name": "bash"}, {"type": "any"}],
+    ids=["forcing-a-tool-openai-cannot-run", "forcing-a-client-tool", "forcing-any-tool"],
+)
+async def test_additional_drop_params_tools_sends_no_tool_choice_forcing_a_dropped_tool(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tool_choice: Mapping[str, object]
+):
+    upstream: Final = await _openai_request_for(
+        respx_mock,
+        monkeypatch,
+        [WEB_FETCH, TYPED_BASH],
+        drop_params=True,
+        additional_drop_params=["tools"],
+        tool_choice=dict(tool_choice),
+    )
+
+    sent: Final = json.loads(upstream.calls.last.request.content)
+    assert "tools" not in sent
+    assert "tool_choice" not in sent
+
+
+@pytest.mark.asyncio
 async def test_a_tool_openai_cannot_run_answers_400_before_any_openai_call_without_drop_params(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
