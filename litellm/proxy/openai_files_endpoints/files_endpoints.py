@@ -11,6 +11,7 @@ import itertools
 import traceback
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from os import PathLike
 from typing import Any, BinaryIO, Final, NoReturn, TypedDict, cast, get_args
 
 import httpx
@@ -32,10 +33,12 @@ import litellm
 from litellm import CreateFileRequest, get_secret_str
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import ANTHROPIC_DEFAULT_FILE_LIST_LIMIT
+from litellm.litellm_core_utils.batch_utils import replace_model_in_jsonl, should_replace_model_in_jsonl
 from litellm.litellm_core_utils.cloud_storage_security import (
     is_managed_cloud_storage_uri,
 )
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.files.litellm_db_storage_backend import LITELLM_DB_STORAGE_BACKEND_NAME
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints, FileListModelScope
 from litellm.llms.base_llm.managed_resources.isolation import build_list_page
@@ -111,8 +114,10 @@ from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.router import Router
 from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,
+    FileContent,
     FileExpiresAfter,
     FileListPage,
+    FileTypes,
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
@@ -378,6 +383,22 @@ def get_model_from_json_obj(json_object: dict) -> str | None:
     return body.get("model") if isinstance(body, dict) else None
 
 
+def _rewrite_batch_rows_to_deployment_model(file: FileTypes, deployment_model: str, provider: str) -> FileTypes:
+    stripped_model: Final = get_llm_provider(model=deployment_model, custom_llm_provider=provider)[0]
+    rewritten: Final = replace_model_in_jsonl(
+        file_content=file,
+        new_model_name=stripped_model,
+        keep_line_numbers=provider == LlmProviders.VERTEX_AI.value,
+    )
+    source: Final = file[1] if isinstance(file, tuple) else file
+    if rewritten is file:
+        if not isinstance(source, (bytes, PathLike)):
+            source.seek(0)
+        return file
+    content: Final = cast(FileContent, rewritten)  # cast-ok: a new object from the rewrite is always its InMemoryFile
+    return (file[0], content, file[2] if len(file) > 2 else None) if isinstance(file, tuple) else content
+
+
 async def _deprecated_loadbalanced_create_file(
     llm_router: Router | None,
     router_model: str,
@@ -468,9 +489,25 @@ async def route_create_file(
             credentials={**credentials, **deployment_drop_params(llm_router, model, _create_file_request)},
         )
 
+        upload_request: Final[CreateFileRequest] = (
+            {
+                **_create_file_request,
+                "file": await asyncio.to_thread(
+                    _rewrite_batch_rows_to_deployment_model,
+                    _create_file_request["file"],
+                    credentials["model"],
+                    credentials["custom_llm_provider"],
+                ),
+            }
+            if should_replace_model_in_jsonl(
+                purpose=purpose, passthrough=_create_file_request.get("passthrough") is True
+            )
+            else _create_file_request
+        )
+
         # Create the file with model credentials
         response = await litellm.acreate_file(
-            **_create_file_request,
+            **upload_request,
             custom_llm_provider=credentials["custom_llm_provider"],
         )
 

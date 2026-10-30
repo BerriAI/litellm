@@ -98,7 +98,7 @@ from .base import CachedTokensDetails
 if TYPE_CHECKING:
     from litellm.types.utils import Usage
 
-FileContent = IO[bytes] | bytes | PathLike
+FileContent = IO[bytes] | bytes | PathLike[str]
 
 FileTypes = (
     # file (or bytes)

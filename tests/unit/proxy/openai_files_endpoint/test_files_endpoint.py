@@ -1,3 +1,4 @@
+import io
 import itertools
 import json
 from typing import Final, List, Optional
@@ -12,21 +13,25 @@ from pytest_mock import MockerFixture
 
 
 import litellm
-from litellm import Router
+from litellm import CreateFileRequest, Router
 from litellm.constants import ANTHROPIC_DEFAULT_FILE_LIST_LIMIT
 from litellm.files.types import FileContentStreamingResult
+from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.proxy._types import LiteLLM_UserTableFiltered, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.hooks import get_proxy_hook
 from litellm.proxy.management_endpoints.internal_user_endpoints import ui_view_users
 from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import (
     FileContentStreamingHandler,
 )
+from litellm.proxy.openai_files_endpoints.files_endpoints import route_create_file
 from litellm.proxy.proxy_server import app
 from litellm.types.llms.openai import (
     FileListPage,
+    FileTypes,
     HttpxBinaryResponseContent,
     OpenAIFileObject,
 )
+from litellm.types.utils import ExtractedFileData
 
 client = TestClient(app)
 from litellm.caching.caching import DualCache
@@ -734,6 +739,20 @@ def _router_with_executed_batch_model() -> Router:
                 "litellm_params": {"model": "vertex_ai/gemini-2.5-flash", "drop_params": False},
                 "model_info": {"id": "vertex-batch-keep-id"},
             },
+            {
+                "model_name": "gpt-5.4-nano-batch",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "sk-openai"},
+                "model_info": {"id": "gpt-5.4-nano-batch-id"},
+            },
+            {
+                "model_name": "azure-batch",
+                "litellm_params": {
+                    "model": "azure/my-deployment",
+                    "api_key": "sk-azure",
+                    "api_base": "https://azure.test",
+                },
+                "model_info": {"id": "azure-batch-id"},
+            },
         ]
     )
 
@@ -778,10 +797,10 @@ def batch_upload_seams(mocker: MockerFixture, monkeypatch):
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
-def _upload_batch_file(headers: dict[str, str], form: dict[str, str]):
+def _upload_batch_file(headers: dict[str, str], form: dict[str, str], content: bytes = BATCH_JSONL_LINE):
     return client.post(
         "/v1/files",
-        files={"file": ("batch.jsonl", BATCH_JSONL_LINE, "application/jsonl")},
+        files={"file": ("batch.jsonl", content, "application/jsonl")},
         data={"purpose": "batch", **form},
         headers={"Authorization": "Bearer test-key", **headers},
     )
@@ -982,6 +1001,234 @@ def test_batch_upload_keeps_the_callers_drop_params_over_the_deployment(batch_up
 
     assert response.status_code == 200, response.text
     assert provider_upload.call_args.kwargs["drop_params"] is True
+
+
+def _batch_row(custom_id: str, model: str) -> bytes:
+    return json.dumps(
+        {
+            "custom_id": custom_id,
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {"model": model, "messages": [{"role": "user", "content": "hi"}]},
+        }
+    ).encode()
+
+
+@pytest.fixture
+def files_the_provider_received(batch_upload_seams) -> list[ExtractedFileData]:
+    _, provider_upload, _ = batch_upload_seams
+    received: Final[list[ExtractedFileData]] = []
+
+    async def read_the_upload_like_a_provider(**kwargs: object) -> OpenAIFileObject:
+        received.append(extract_file_data(kwargs["file"]))
+        return provider_upload.return_value
+
+    provider_upload.side_effect = read_the_upload_like_a_provider
+    return received
+
+
+def _models_named_by_rows(received: ExtractedFileData) -> list[str]:
+    return [json.loads(line)["body"]["model"] for line in received["content"].splitlines() if line.strip()]
+
+
+@pytest.mark.parametrize(
+    "headers, form",
+    [({"x-litellm-model": "gpt-5.4-nano-batch"}, {}), ({}, {"model": "gpt-5.4-nano-batch"})],
+    ids=["x-litellm-model header", "model form field"],
+)
+def test_model_routed_batch_upload_names_the_deployment_model_on_every_row(
+    files_the_provider_received: list[ExtractedFileData], headers: dict[str, str], form: dict[str, str]
+):
+    content = _batch_row("alias", "gpt-5.4-nano-batch") + b"\n" + _batch_row("other", "a-model-the-key-cannot-reach")
+
+    response = _upload_batch_file(headers, form, content)
+
+    assert response.status_code == 200, response.text
+    assert _models_named_by_rows(files_the_provider_received[0]) == ["gpt-5.4-nano", "gpt-5.4-nano"]
+
+
+def test_model_routed_batch_upload_strips_the_provider_prefix_from_the_deployment_model(
+    files_the_provider_received: list[ExtractedFileData],
+):
+    response = _upload_batch_file({"x-litellm-model": "azure-batch"}, {}, _batch_row("r", "azure-batch"))
+
+    assert response.status_code == 200, response.text
+    assert _models_named_by_rows(files_the_provider_received[0]) == ["my-deployment"]
+
+
+@pytest.mark.parametrize(
+    "deployment_name, requested_model",
+    [("*", "gpt-x"), ("openai/*", "openai/gpt-x")],
+    ids=["catch-all", "provider wildcard"],
+)
+def test_wildcard_routed_batch_upload_names_the_requested_model(
+    files_the_provider_received: list[ExtractedFileData],
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_name: str,
+    requested_model: str,
+):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": deployment_name,
+                    "litellm_params": {"model": "openai/*", "api_key": "sk-openai"},
+                    "model_info": {"id": "wildcard-id"},
+                }
+            ]
+        ),
+    )
+
+    response = _upload_batch_file({"x-litellm-model": requested_model}, {}, _batch_row("r", "a-row-naming-another-model"))
+
+    assert response.status_code == 200, response.text
+    assert _models_named_by_rows(files_the_provider_received[0]) == ["gpt-x"]
+
+
+def test_model_routed_batch_upload_keeps_the_callers_filename_and_content_type(
+    files_the_provider_received: list[ExtractedFileData],
+):
+    response = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {}, _batch_row("r", "gpt-5.4-nano-batch"))
+
+    assert response.status_code == 200, response.text
+    assert files_the_provider_received[0]["filename"] == "batch.jsonl"
+    assert files_the_provider_received[0]["content_type"] == "application/jsonl"
+
+
+def test_model_routed_upload_with_another_purpose_keeps_the_callers_bytes(
+    files_the_provider_received: list[ExtractedFileData],
+):
+    content = b'{"body":   {"model":   "gpt-5.4-nano-batch"}}\n'
+
+    response = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {"purpose": "assistants"}, content)
+
+    assert response.status_code == 200, response.text
+    assert files_the_provider_received[0]["content"] == content
+
+
+def test_model_routed_passthrough_upload_keeps_the_callers_bytes(
+    files_the_provider_received: list[ExtractedFileData],
+):
+    content = b'{"request":   {"contents": []}, "body":   {"model": "native"}}\n'
+
+    response = _upload_batch_file({"x-litellm-model": "vertex-batch-keep"}, {"passthrough": "true"}, content)
+
+    assert response.status_code == 200, response.text
+    assert files_the_provider_received[0]["content"] == content
+
+
+@pytest.mark.parametrize(
+    "model, deployment_model, second_row_line",
+    [("vertex-batch-keep", "gemini-2.5-flash", 3), ("gpt-5.4-nano-batch", "gpt-5.4-nano", 2)],
+    ids=["vertex_ai keeps the caller's line numbers", "other providers drop the blank line"],
+)
+def test_model_routed_batch_upload_keeps_line_numbers_only_for_vertex_ai(
+    files_the_provider_received: list[ExtractedFileData], model: str, deployment_model: str, second_row_line: int
+):
+    content = _batch_row("first", model) + b"\n\n" + _batch_row("second", model)
+
+    response = _upload_batch_file({"x-litellm-model": model}, {}, content)
+
+    assert response.status_code == 200, response.text
+    lines = files_the_provider_received[0]["content"].split(b"\n")
+    assert len(lines) == second_row_line
+    assert json.loads(lines[second_row_line - 1])["custom_id"] == "second"
+    assert _models_named_by_rows(files_the_provider_received[0]) == [deployment_model, deployment_model]
+
+
+def test_model_routed_batch_upload_refuses_a_key_without_the_alias_before_uploading(batch_upload_seams):
+    import litellm.proxy.proxy_server as ps
+
+    _, provider_upload, _ = batch_upload_seams
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="restricted-user", models=["gemini-2.0-flash"]
+    )
+
+    response = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {})
+
+    assert response.status_code == 403, response.text
+    assert "gpt-5.4-nano-batch" in response.text
+    provider_upload.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "encoding",
+    ["utf-16", "utf-16-le"],
+    ids=["rewrite raises on the byte order mark", "rewrite never parses a row"],
+)
+def test_batch_upload_the_rewrite_cannot_read_reaches_the_provider_whole(
+    files_the_provider_received: list[ExtractedFileData], encoding: str
+):
+    content = _batch_row("r", "gpt-5.4-nano-batch").decode().encode(encoding)
+
+    response = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {}, content)
+
+    assert response.status_code == 200, response.text
+    assert files_the_provider_received[0]["content"] == content
+
+
+async def _route_model_upload(mocker: MockerFixture, file: FileTypes) -> ExtractedFileData:
+    received: Final[list[ExtractedFileData]] = []
+
+    async def read_the_upload_like_a_provider(**kwargs: object) -> OpenAIFileObject:
+        received.append(extract_file_data(kwargs["file"]))
+        return OpenAIFileObject(
+            id="file-kept",
+            object="file",
+            purpose="batch",
+            created_at=0,
+            bytes=0,
+            filename="batch.jsonl",
+            status="uploaded",
+        )
+
+    mocker.patch(  # test-quality-ok: the route calls litellm.acreate_file directly with no injection seam
+        "litellm.acreate_file", new=read_the_upload_like_a_provider
+    )
+    await route_create_file(
+        llm_router=_router_with_executed_batch_model(),
+        _create_file_request=CreateFileRequest(file=file, purpose="batch"),
+        purpose="batch",
+        proxy_logging_obj=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"),
+        target_model_names_list=[],
+        is_router_model=False,
+        router_model=None,
+        custom_llm_provider="openai",
+        model="gpt-5.4-nano-batch",
+    )
+    return received[0]
+
+
+MALFORMED_TRAILING_BATCH_CONTENT: Final = (
+    _batch_row("complete", "gpt-5.4-nano-batch") + b'\n{"custom_id": "truncated", "body": {"mod'
+)
+
+
+@pytest.mark.parametrize(
+    "file",
+    [
+        ("batch.jsonl", io.BytesIO(MALFORMED_TRAILING_BATCH_CONTENT), "application/jsonl"),
+        io.BytesIO(MALFORMED_TRAILING_BATCH_CONTENT),
+        ("batch.jsonl", MALFORMED_TRAILING_BATCH_CONTENT, "application/jsonl"),
+    ],
+    ids=["tuple handle", "bare handle", "tuple bytes"],
+)
+@pytest.mark.asyncio
+async def test_route_create_file_sends_malformed_trailing_content_to_the_provider_whole(
+    mocker: MockerFixture, file: FileTypes
+):
+    received = await _route_model_upload(mocker, file)
+
+    assert received["content"] == MALFORMED_TRAILING_BATCH_CONTENT
+
+
+@pytest.mark.asyncio
+async def test_route_create_file_rewrites_a_bare_upload_to_the_deployment_model(mocker: MockerFixture):
+    received = await _route_model_upload(mocker, _batch_row("r", "gpt-5.4-nano-batch"))
+
+    assert _models_named_by_rows(received) == ["gpt-5.4-nano"]
 
 
 @pytest.mark.skip(reason="mock respx fails on ci/cd - unclear why")
