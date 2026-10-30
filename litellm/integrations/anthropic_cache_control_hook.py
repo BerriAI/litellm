@@ -195,17 +195,29 @@ def _without_oldest_mark(message: _MessageT, _: int) -> _MessageT:
     )
 
 
-def _kept_within_budget(state: tuple[int, int], marks: int) -> tuple[int, int]:
+_BudgetSpend: TypeAlias = Callable[[tuple[int, int], int], tuple[int, int]]
+
+
+def _newest_marks_kept(state: tuple[int, int], marks: int) -> tuple[int, int]:
     remaining, _ = state
     kept: Final = min(marks, remaining)
     return remaining - kept, marks - kept
 
 
-def messages_within_cache_control_limit(messages: Sequence[_MessageT], reserved_marks: int) -> Sequence[_MessageT]:
+def _whole_message_kept(state: tuple[int, int], marks: int) -> tuple[int, int]:
+    remaining, _ = state
+    if marks > remaining:
+        return remaining, marks
+    return remaining - marks, 0
+
+
+def _messages_within_budget(
+    messages: Sequence[_MessageT], reserved_marks: int, spend: _BudgetSpend
+) -> Sequence[_MessageT]:
     budget: Final = max(MAX_CACHE_CONTROL_BLOCKS - reserved_marks, 0)
     newest_first: Final = tuple(reversed(messages))
     budget_after_each: Final = itertools.accumulate(
-        (cache_control_count(message) for message in newest_first), _kept_within_budget, initial=(budget, 0)
+        (cache_control_count(message) for message in newest_first), spend, initial=(budget, 0)
     )
     dropped_counts: Final = tuple(dropped for _, dropped in itertools.islice(budget_after_each, 1, None))
     kept_newest_first: Final = tuple(
@@ -213,6 +225,16 @@ def messages_within_cache_control_limit(messages: Sequence[_MessageT], reserved_
         for message, dropped in zip(newest_first, dropped_counts)
     )
     return tuple(reversed(kept_newest_first))
+
+
+def newest_marks_within_cache_control_limit(messages: Sequence[_MessageT], reserved_marks: int) -> Sequence[_MessageT]:
+    return _messages_within_budget(messages, reserved_marks, _newest_marks_kept)
+
+
+def whole_messages_within_cache_control_limit(
+    messages: Sequence[_MessageT], reserved_marks: int
+) -> Sequence[_MessageT]:
+    return _messages_within_budget(messages, reserved_marks, _whole_message_kept)
 
 
 def _part_with_cache_control_renamed(part: object) -> object:
@@ -1544,7 +1566,7 @@ def messages_within_cache_control_cap(
     reserved_marks: Final = AnthropicCacheControlHook.count_external_cache_breakpoints(
         _validated_object_list(tools), cache_control, request_kwargs
     )
-    kept: Final = messages_within_cache_control_limit(messages, reserved_marks)
+    kept: Final = newest_marks_within_cache_control_limit(messages, reserved_marks)
     dropped: Final = sum(map(cache_control_count, messages)) - sum(map(cache_control_count, kept))
     if dropped > 0:
         verbose_logger.warning(

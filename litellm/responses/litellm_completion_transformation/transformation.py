@@ -50,7 +50,8 @@ from litellm.integrations.anthropic_cache_control_hook import (
     block_with_cache_control,
     cache_control_count,
     dropped_cache_control,
-    messages_within_cache_control_limit,
+    newest_marks_within_cache_control_limit,
+    whole_messages_within_cache_control_limit,
     with_cache_control,
 )
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
@@ -769,7 +770,7 @@ def _request_messages_for_cache_points(messages: Sequence[_MessageT], rules: _It
     as_system: Final = tuple(_developer_message_as_system_message(message) for message in messages)
     if not rules.drop_params:
         return as_system
-    return messages_within_cache_control_limit(tuple(map(rules.checked, as_system)), rules.external_marks)
+    return newest_marks_within_cache_control_limit(tuple(map(rules.checked, as_system)), rules.external_marks)
 
 
 def _replayed_messages_for_cache_points(
@@ -777,7 +778,7 @@ def _replayed_messages_for_cache_points(
 ) -> Sequence[_MessageT]:
     as_system: Final = tuple(_developer_message_as_system_message(message) for message in replayed_messages)
     current_marks: Final = sum(cache_control_count(message) for message in current_messages)
-    return messages_within_cache_control_limit(
+    return whole_messages_within_cache_control_limit(
         tuple(map(rules.sanitized, as_system)), current_marks + rules.external_marks
     )
 
