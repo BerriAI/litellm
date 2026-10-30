@@ -95,6 +95,8 @@ _SELF_SCOPED_CREDENTIAL_ROUTES: Final = (
 )
 
 
+QUEUED_INFERENCE_ROUTES: Final = frozenset({"/queue/chat/completions"})
+
 _UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
     {
         *MODEL_LIST_ROUTES,

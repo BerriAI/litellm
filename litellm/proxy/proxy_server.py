@@ -18546,6 +18546,9 @@ async def async_queue_request(
             user_api_key_dict, "team_object_permission_id", None
         )
         data["metadata"]["endpoint"] = str(request.url)
+        LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(
+            request=request, request_data=data, metadata_key="metadata"
+        )
 
         global user_temperature, user_request_timeout, user_max_tokens, user_api_base
         # override with user settings, these are params passed via cli

@@ -11199,6 +11199,7 @@ def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
     assert RouteChecks.is_llm_api_route(route="/utils/model_info") is True
     assert route_skips_budget_checks(route="/health") is False
     assert route_skips_budget_checks(route="/v1/chat/completions") is False
+    assert route_skips_budget_checks(route="/queue/chat/completions") is False
 
 
 def test_request_skips_budget_checks_extends_route_rule_with_zero_cost_models() -> None:
