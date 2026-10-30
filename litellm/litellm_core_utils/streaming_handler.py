@@ -152,6 +152,13 @@ def _upstream_choice_index(upstream_chunk: object) -> int:
     return upstream_index if isinstance(upstream_index, int) else 0
 
 
+def _response_choice_index(response_obj: Mapping[str, object]) -> int:
+    choice_index: Final = response_obj.get("choice_index")
+    if isinstance(choice_index, int):
+        return choice_index
+    return _upstream_choice_index(response_obj.get("original_chunk"))
+
+
 def _non_null_upstream_choice_fields(upstream_chunk: object, fields: Sequence[str]) -> Mapping[str, object]:
     first_choice: Final = _upstream_first_choice(upstream_chunk)
     upstream_extras: Final = first_choice.model_extra if first_choice is not None else None
@@ -890,6 +897,7 @@ class CustomStreamWrapper:
                 "finish_reason": finish_reason,
                 "usage": usage,
                 "chunk_choice_fields": _non_null_upstream_choice_fields(chunk, STREAM_CHUNK_CHOICE_FIELDS),
+                "choice_index": _upstream_choice_index(chunk),
             }
 
         except Exception as e:
@@ -1292,7 +1300,7 @@ class CustomStreamWrapper:
                     if response_obj.get("provider_specific_fields") is not None:
                         completion_obj["provider_specific_fields"] = response_obj["provider_specific_fields"]
                     model_response.choices[0].delta = Delta(**completion_obj)
-                    _index: Final[int | None] = completion_obj.get("index")
+                    _index: Final[int | None] = completion_obj.get("index", response_obj.get("choice_index"))
                     if _index is not None:
                         model_response.choices[0].index = _index
 
@@ -1303,7 +1311,7 @@ class CustomStreamWrapper:
             else:
                 return
         elif self.received_finish_reason is not None:
-            chunk_upstream_index: Final = _upstream_choice_index(response_obj.get("original_chunk"))
+            chunk_upstream_index: Final = _response_choice_index(response_obj)
             if chunk_choice_fields and self._streams_past_the_pending_finish(
                 model_response, response_obj, chunk_upstream_index
             ):
@@ -1356,7 +1364,7 @@ class CustomStreamWrapper:
                 self._apply_finish_choice_fields(model_response.choices[0])
                 if (
                     response_obj.get("is_finished")
-                    and _upstream_choice_index(_original_chunk) == model_response.choices[0].index
+                    and _response_choice_index(response_obj) == model_response.choices[0].index
                 ):
                     _apply_choice_fields(model_response.choices[0], chunk_choice_fields)
 
@@ -1366,9 +1374,7 @@ class CustomStreamWrapper:
         elif self._has_special_delta_content(model_response):
             return self._handle_special_delta_content(model_response)
         elif chunk_choice_fields:
-            return _choice_fields_chunk(
-                model_response, _upstream_choice_index(response_obj.get("original_chunk")), chunk_choice_fields
-            )
+            return _choice_fields_chunk(model_response, _response_choice_index(response_obj), chunk_choice_fields)
         else:
             if hasattr(model_response, "usage"):
                 self.chunks.append(model_response)
@@ -2049,7 +2055,7 @@ class CustomStreamWrapper:
     ) -> Mapping[str, object]:
         if not self.carried_chunk_choice_fields:
             return chunk_choice_fields
-        upstream_index: Final = _upstream_choice_index(response_obj.get("original_chunk"))
+        upstream_index: Final = _response_choice_index(response_obj)
         carried: Final = self.carried_chunk_choice_fields.get(upstream_index)
         if carried is None:
             return chunk_choice_fields
@@ -2070,7 +2076,7 @@ class CustomStreamWrapper:
         response_obj: Mapping[str, object],
         chunk_choice_fields: Mapping[str, object],
     ) -> ModelResponseStream | None:
-        upstream_index: Final = _upstream_choice_index(response_obj.get("original_chunk"))
+        upstream_index: Final = _response_choice_index(response_obj)
         is_finished: Final = bool(response_obj.get("is_finished"))
         if is_finished and upstream_index == model_response.choices[0].index and not self.sent_last_chunk:
             return None

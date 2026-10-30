@@ -165,6 +165,28 @@ def test_text_completion_stream_sends_empty_text_on_token_id_only_chunks() -> No
     ]
 
 
+def test_text_completion_stream_keeps_each_choices_text_and_token_ids_on_its_own_index() -> None:
+    responses: Final = _text_completion_stream(
+        (
+            _completion_chunk(" 5", None, index=0, token_ids=[20]),
+            _completion_chunk(" 7", None, index=1, token_ids=[22]),
+            _completion_chunk(", 6", None, index=0, token_ids=[11, 21]),
+            _completion_chunk("", None, index=1, token_ids=[11]),
+            _completion_chunk("", "stop", index=0, stop_reason=", 9", token_ids=[11, 220]),
+            _completion_chunk(", 8", "length", index=1, token_ids=[220, 23]),
+        )
+    )
+    choices: Final = tuple(chain.from_iterable(response.choices for response in responses))
+
+    assert {
+        index: (
+            "".join(choice.text or "" for choice in choices if choice.index == index),
+            list(chain.from_iterable(choice.get("token_ids") or () for choice in choices if choice.index == index)),
+        )
+        for index in (0, 1)
+    } == {0: (" 5, 6", [20, 11, 21, 11, 220]), 1: (" 7, 8", [22, 11, 220, 23])}
+
+
 def test_text_completion_conversion_rejects_non_streaming_choices() -> None:
     chunk: Final = Choices()
     wrapper: Final = TextCompletionStreamWrapper(completion_stream=None, model="test-model")
