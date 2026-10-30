@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal, Self
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, TypeAdapter, model_validator
 
 from client_apps.compat_results import (
     Failed,
@@ -40,6 +40,7 @@ class KnownGap(_Frozen):
     feature: str
     provider: str
     reason: str = Field(min_length=1)
+    strict: StrictBool = True
 
 
 class Manifest(_Frozen):

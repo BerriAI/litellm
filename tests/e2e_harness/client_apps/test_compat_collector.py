@@ -179,10 +179,13 @@ providers: [openai, vertex_ai]
 features:
   - {id: vision, name: Vision}
   - {id: web_search, name: Web search}
+  - {id: structured_output, name: Structured output}
 known_gaps:
   - {feature: web_search, provider: openai, reason: the proxy has no search route}
   - {feature: web_search, provider: vertex_ai, reason: the proxy drops search tools}
   - {feature: vision, provider: vertex_ai, reason: the relay forwards an unknown field}
+  - {feature: structured_output, provider: openai, strict: false, reason: the model sometimes loops}
+  - {feature: structured_output, provider: vertex_ai, strict: false, reason: the model sometimes stalls}
 """
 CELL_BODIES: Final = (
     (
@@ -194,6 +197,12 @@ CELL_BODIES: Final = (
     ("web_search", "vertex_ai", 'compat_result.passed("m")'),
     ("vision", "openai", 'compat_result.passed("m")'),
     ("vision", "vertex_ai", 'raise RuntimeError("proxy unreachable")'),
+    ("structured_output", "openai", 'compat_result.passed("m")'),
+    (
+        "structured_output",
+        "vertex_ai",
+        'compat_result.failed("m", "codex exec timed out")\n    pytest.fail("m: codex exec timed out", pytrace=False)',
+    ),
 )
 
 
@@ -219,7 +228,7 @@ def _run_cells(
     return pytester.runpytest_inprocess("--import-mode=importlib", "-p", "no:cacheprovider", str(client)), results
 
 
-def test_known_gap_cells_xfail_strictly_while_the_matrix_records_what_happened(
+def test_known_gap_cells_xfail_while_the_matrix_records_what_happened(
     pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run, results = _run_cells(pytester, monkeypatch, GAP_MANIFEST)
@@ -235,13 +244,15 @@ def test_known_gap_cells_xfail_strictly_while_the_matrix_records_what_happened(
         (feature.id, provider): outcome for feature in matrix.features for provider, outcome in feature.providers.items()
     }
 
-    run.assert_outcomes(passed=1, failed=1, xfailed=2)
+    run.assert_outcomes(passed=1, failed=1, xfailed=3, xpassed=1)
     assert "the proxy drops search tools" in run.stdout.str()
     assert cells == {
         ("vision", "openai"): Passed(),
         ("vision", "vertex_ai"): Failed(error="RuntimeError: proxy unreachable"),
         ("web_search", "openai"): Failed(error="m: no completed web_search item"),
         ("web_search", "vertex_ai"): Passed(),
+        ("structured_output", "openai"): Passed(),
+        ("structured_output", "vertex_ai"): Failed(error="m: codex exec timed out"),
     }
 
 

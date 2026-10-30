@@ -98,7 +98,7 @@ def _known_gap_mark(test_file: Path, clients_dir: Path) -> pytest.MarkDecorator 
     if address is None:
         return None
     gap: Final = client_manifest(clients_dir / address.client).known_gap(address.feature_id, address.provider)
-    return None if gap is None else pytest.mark.xfail(strict=True, reason=gap.reason)
+    return None if gap is None else pytest.mark.xfail(strict=gap.strict, reason=gap.reason)
 
 
 def _raised(call: pytest.CallInfo[None]) -> bool:
