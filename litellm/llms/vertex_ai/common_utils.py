@@ -1140,7 +1140,82 @@ def convert_vertex_datetime_to_openai_datetime(vertex_datetime: str) -> int:
 _convert_vertex_datetime_to_openai_datetime = convert_vertex_datetime_to_openai_datetime
 
 
-def _convert_schema_types(schema, depth=0):
+_OBJECT_AND_ARRAY_FIELDS: Final = frozenset(
+    {
+        "properties",
+        "required",
+        "additionalProperties",
+        "items",
+        "minItems",
+        "maxItems",
+        "minProperties",
+        "maxProperties",
+    }
+)
+
+
+def _const_json_type(value: object) -> str | None:
+    match value:
+        case bool():
+            return "boolean"
+        case str():
+            return "string"
+        case int():
+            return "integer"
+        case float():
+            return "number"
+        case None:
+            return "null"
+        case _:
+            return None
+
+
+def _dict_field(schema: Mapping[str, object], field: str) -> Mapping[str, object]:
+    value: Final = schema.get(field)
+    return cast("Mapping[str, object]", value) if isinstance(value, dict) else {}  # cast-ok: a JSON Schema object
+
+
+def _list_field(schema: Mapping[str, object], field: str) -> Sequence[object]:
+    value: Final = schema.get(field)
+    return cast("Sequence[object]", value) if isinstance(value, list) else ()  # cast-ok: a JSON Schema array
+
+
+def _branch_of_type(type_branch: Mapping[str, object], branch: Mapping[str, object]) -> Mapping[str, object]:
+    json_type: Final = type_branch["type"]
+    fields: Final = {
+        key: value
+        for key, value in branch.items()
+        if json_type in ("object", "array") or key not in _OBJECT_AND_ARRAY_FIELDS
+    }
+    properties: Final = {**_dict_field(type_branch, "properties"), **_dict_field(fields, "properties")}
+    required: Final = [
+        name
+        for name in dict.fromkeys((*_list_field(type_branch, "required"), *_list_field(fields, "required")))
+        if name in properties
+    ]
+    merged: Final = {**type_branch, **fields, "type": json_type, "properties": properties, "required": required}
+    return deepcopy({key: value for key, value in merged.items() if value or key not in ("properties", "required")})
+
+
+def _branch_types(branch: Mapping[str, object]) -> tuple[str, ...]:
+    branch_type: Final = branch.get("type")
+    if isinstance(branch_type, str):
+        return (branch_type,)
+    return tuple(item for item in _list_field(branch, "type") if isinstance(item, str))
+
+
+def _branches_for_types(branch: object, type_branches: Sequence[Mapping[str, object]]) -> Sequence[object]:
+    if not isinstance(branch, dict):
+        return (branch,)
+    typed_branch: Final = cast("Mapping[str, object]", branch)  # cast-ok: a JSON Schema object
+    branch_types: Final = _branch_types(typed_branch)
+    matching: Final = tuple(
+        type_branch for type_branch in type_branches if not branch_types or type_branch["type"] in branch_types
+    )
+    return tuple(_branch_of_type(type_branch, typed_branch) for type_branch in matching) or (typed_branch,)
+
+
+def _convert_schema_types(schema: object, depth: int = 0) -> None:
     """
     Convert type arrays and lowercase types for Vertex AI compatibility.
 
@@ -1154,26 +1229,21 @@ def _convert_schema_types(schema, depth=0):
 
     if not isinstance(schema, dict):
         return
+    node: Final = cast("dict[str, object]", schema)  # cast-ok: a JSON Schema object
+
+    if "const" in node and (const_type := _const_json_type(node["const"])) is not None:
+        node.setdefault("type", const_type)
+        node["enum"] = [node["const"]]
 
     # Handle type field
-    if "type" in schema:
-        type_val: Final = schema["type"]
-        if isinstance(type_val, list) and len(type_val) > 1:
+    if "type" in node:
+        type_val: Final = node["type"]
+        existing_branches: Final = _list_field(node, "anyOf")
+        type_names: Final = (type_val,) if isinstance(type_val, str) else _list_field(node, "type")
+        if len(type_names) > 1 or (type_names and existing_branches):
             # Convert type arrays to anyOf format
-            # Fields that are specific to object/array types and should move into anyOf
-            type_specific_fields: Final = {
-                "properties",
-                "required",
-                "additionalProperties",
-                "items",
-                "minItems",
-                "maxItems",
-                "minProperties",
-                "maxProperties",
-            }
-
             any_of: Final[list[dict[str, object]]] = []
-            for t in type_val:
+            for t in type_names:
                 if not isinstance(t, str):
                     continue
                 if t == "null":
@@ -1185,17 +1255,17 @@ def _convert_schema_types(schema, depth=0):
                 if t in ("object", "array"):
                     item_schema: dict[str, object] = {"type": t}
                     # Move type-specific fields into this anyOf item
-                    for field in type_specific_fields:
-                        if field in schema:
-                            item_schema[field] = deepcopy(schema[field])
+                    for field in _OBJECT_AND_ARRAY_FIELDS:
+                        if field in node:
+                            item_schema[field] = deepcopy(node[field])
                     any_of.append(item_schema)
-                elif t == "integer" and "enum" in schema and isinstance(schema["enum"], list):
+                elif t == "integer" and "enum" in node and isinstance(node["enum"], list):
                     any_of.append(
                         {
                             "type": t,
                             "enum": [
                                 value
-                                for value in cast(list[object], schema["enum"])  # cast-ok: an untyped JSON list
+                                for value in cast(list[object], node["enum"])  # cast-ok: an untyped JSON list
                                 if value is not None
                             ],
                         }
@@ -1205,30 +1275,27 @@ def _convert_schema_types(schema, depth=0):
                     any_of.append({"type": t})
 
             # Remove type-specific fields from parent if we moved them into anyOf
-            has_object_or_array: Final = any(t in ("object", "array") for t in type_val if isinstance(t, str))
+            has_object_or_array: Final = any(t in ("object", "array") for t in type_names if isinstance(t, str))
             if has_object_or_array:
-                for field in type_specific_fields:
-                    schema.pop(field, None)
+                for field in _OBJECT_AND_ARRAY_FIELDS:
+                    node.pop(field, None)
 
-            schema["anyOf"] = any_of
-            schema.pop("type")
-        elif isinstance(type_val, list) and len(type_val) == 1:
-            schema["type"] = type_val[0]
-        elif isinstance(type_val, str):
-            schema["type"] = type_val
+            node["anyOf"] = (
+                list(chain.from_iterable(_branches_for_types(branch, any_of) for branch in existing_branches))
+                if existing_branches
+                else any_of
+            )
+            node.pop("type")
+        elif type_names:
+            node["type"] = type_names[0]
 
     # Recursively process nested properties, items, and anyOf
-    for key in ["properties", "items", "anyOf"]:
-        if key in schema:
-            value = schema[key]
-            if key == "properties" and isinstance(value, dict):
-                for prop_schema in value.values():
-                    _convert_schema_types(prop_schema, depth + 1)
-            elif key == "items":
-                _convert_schema_types(value, depth + 1)
-            elif key == "anyOf" and isinstance(value, list):
-                for anyof_schema in value:
-                    _convert_schema_types(anyof_schema, depth + 1)
+    for prop_schema in _dict_field(node, "properties").values():
+        _convert_schema_types(prop_schema, depth + 1)
+    if "items" in node:
+        _convert_schema_types(node["items"], depth + 1)
+    for anyof_schema in _list_field(node, "anyOf"):
+        _convert_schema_types(anyof_schema, depth + 1)
 
 
 def get_vertex_project_id_from_url(url: str) -> str | None:

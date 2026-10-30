@@ -2628,3 +2628,260 @@ async def test_vertex_ai_token_counter_routes_like_generate_content(
         )
 
     assert (None if result is None else result.total_tokens) == vertex_counted_tokens
+
+
+def _named_branch(value: str) -> dict[str, JsonValue]:
+    return {"properties": {"name": {"const": value}}}
+
+
+def _object_with_properties(required: str) -> dict[str, JsonValue]:
+    return {
+        "type": "object",
+        "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+        "required": [required],
+    }
+
+
+def test_map_function_keeps_type_list_anyof_branches_and_leaves_caller_tools_alone():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "retrieve",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "capabilities": {
+                            "type": "array",
+                            "items": {
+                                "type": ["object", "null"],
+                                "anyOf": [_named_branch("People"), _named_branch("Email")],
+                                "required": ["name"],
+                            },
+                        }
+                    },
+                },
+            },
+        }
+    ]
+    caller_tools: Final = copy.deepcopy(tools)
+
+    mapped: Final = VertexGeminiConfig()._map_function(tools, {})
+
+    assert mapped[0]["function_declarations"][0]["parameters"]["properties"]["capabilities"]["items"] == {
+        "anyOf": [
+            {
+                "type": "object",
+                "properties": {"name": {"type": "string", "enum": [value]}},
+                "required": ["name"],
+                "nullable": True,
+            }
+            for value in ("People", "Email")
+        ]
+    }
+    assert tools == caller_tools
+
+
+@pytest.mark.parametrize("object_type", ["object", ["object"], ["object", "null"]], ids=str)
+def test_build_vertex_schema_moves_fields_next_to_anyof_into_each_branch(object_type: str | list[str]):
+    nullable: Final = {"nullable": True} if "null" in object_type else {}
+
+    built: Final = build_vertex_schema(
+        {
+            "type": "object",
+            "properties": {
+                "field": {
+                    "type": object_type,
+                    "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+                    "anyOf": [{"required": ["a"]}, {"required": ["b"]}],
+                }
+            },
+        }
+    )
+
+    assert built["properties"]["field"] == {
+        "anyOf": [{**_object_with_properties("a"), **nullable}, {**_object_with_properties("b"), **nullable}]
+    }
+
+
+def test_build_vertex_schema_unions_required_and_lets_a_branch_override_a_property():
+    built: Final = build_vertex_schema(
+        {
+            "type": "object",
+            "properties": {
+                "field": {
+                    "type": "object",
+                    "required": ["a", "b"],
+                    "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+                    "anyOf": [{"required": ["b", "c"], "properties": {"b": {"type": "integer"}, "c": {"type": "string"}}}],
+                }
+            },
+        }
+    )
+
+    assert built["properties"]["field"] == {
+        "anyOf": [
+            {
+                "type": "object",
+                "properties": {"a": {"type": "string"}, "b": {"type": "integer"}, "c": {"type": "string"}},
+                "required": ["a", "b", "c"],
+            }
+        ]
+    }
+
+
+def test_build_vertex_schema_drops_required_names_a_branch_does_not_define():
+    built: Final = build_vertex_schema(
+        {
+            "type": "object",
+            "properties": {
+                "field": {
+                    "type": ["object", "null"],
+                    "required": ["name"],
+                    "anyOf": [_named_branch("People"), {"properties": {"other": {"type": "string"}}}, {"maxProperties": 2}],
+                }
+            },
+        }
+    )
+
+    assert built["properties"]["field"] == {
+        "anyOf": [
+            {
+                "type": "object",
+                "properties": {"name": {"type": "string", "enum": ["People"]}},
+                "required": ["name"],
+                "nullable": True,
+            },
+            {"type": "object", "properties": {"other": {"type": "string"}}, "nullable": True},
+            {"type": "object", "maxProperties": 2, "nullable": True},
+        ]
+    }
+
+
+def test_build_vertex_schema_copies_an_untyped_branch_once_per_listed_type():
+    built: Final = build_vertex_schema(
+        {
+            "type": "object",
+            "properties": {
+                "field": {
+                    "type": ["object", "string"],
+                    "anyOf": [{"properties": {"a": {"type": "string"}}, "maxLength": 3}],
+                }
+            },
+        }
+    )
+
+    assert built["properties"]["field"] == {
+        "anyOf": [
+            {"type": "object", "properties": {"a": {"type": "string"}}, "maxLength": 3},
+            {"type": "string", "maxLength": 3},
+        ]
+    }
+
+
+@pytest.mark.parametrize(
+    ("type_list", "branches", "expected"),
+    [
+        (
+            ["string", "integer"],
+            [{"type": "string", "enum": ["x"]}, {"type": "integer", "minimum": 1}],
+            [{"type": "string", "enum": ["x"]}, {"type": "integer", "minimum": 1}],
+        ),
+        (
+            ["object", "null"],
+            [{"type": "object", "properties": {"a": {"type": "string"}}}, {"type": "null"}],
+            [{"type": "object", "properties": {"a": {"type": "string"}}, "nullable": True}],
+        ),
+        (
+            ["object", "null"],
+            [{"type": ["object", "null"], "properties": {"a": {"type": "string"}}}],
+            [{"type": "object", "properties": {"a": {"type": "string"}}, "nullable": True}],
+        ),
+        (["number", "null"], [{"type": "integer", "minimum": 1}], [{"type": "integer", "minimum": 1}]),
+    ],
+    ids=["two_primitives", "null_branch", "branch_type_list", "narrower_branch_type"],
+)
+def test_build_vertex_schema_keeps_a_typed_branch_on_its_own_type(
+    type_list: list[str], branches: list[JsonValue], expected: list[JsonValue]
+):
+    built: Final = build_vertex_schema(
+        {"type": "object", "properties": {"field": {"type": type_list, "anyOf": branches}}}
+    )
+
+    assert built["properties"]["field"] == {"anyOf": expected}
+
+
+def test_build_vertex_schema_lets_a_branch_override_a_field_next_to_anyof():
+    built: Final = build_vertex_schema(
+        {
+            "type": "object",
+            "properties": {
+                "field": {"type": "array", "items": {"type": "string"}, "minItems": 1, "anyOf": [{"minItems": 2}]}
+            },
+        }
+    )
+
+    assert built["properties"]["field"] == {"anyOf": [{"type": "array", "items": {"type": "string"}, "minItems": 2}]}
+
+
+def test_build_vertex_schema_cleans_every_branch_a_shared_property_moved_into():
+    built: Final = build_vertex_schema(
+        {
+            "type": "object",
+            "properties": {
+                "field": {
+                    "type": "object",
+                    "properties": {"shared": {"type": "string", "x-internal": True}},
+                    "anyOf": [{"required": ["shared"]}, {"properties": {"other": {"type": "string"}}}],
+                }
+            },
+        }
+    )
+
+    assert built["properties"]["field"] == {
+        "anyOf": [
+            {"type": "object", "properties": {"shared": {"type": "string"}}, "required": ["shared"]},
+            {"type": "object", "properties": {"shared": {"type": "string"}, "other": {"type": "string"}}},
+        ]
+    }
+
+
+def test_build_vertex_schema_unwraps_a_one_item_type_list():
+    built: Final = build_vertex_schema({"type": "object", "properties": {"field": {"type": ["string"]}}})
+
+    assert built["properties"]["field"] == {"type": "string"}
+
+
+def test_build_vertex_schema_keeps_a_boolean_anyof_branch():
+    built: Final = build_vertex_schema(
+        {"type": "object", "properties": {"field": {"type": "string", "anyOf": [True, {"maxLength": 3}]}}}
+    )
+
+    assert built["properties"]["field"] == {"anyOf": [True, {"type": "string", "maxLength": 3}]}
+
+
+@pytest.mark.parametrize(
+    ("schema", "send_integer_enums", "expected"),
+    [
+        ({"const": "x"}, False, {"type": "string", "enum": ["x"]}),
+        ({"type": "string", "const": "x"}, False, {"type": "string", "enum": ["x"]}),
+        ({"type": "string", "enum": ["x", "y"], "const": "y"}, False, {"type": "string", "enum": ["y"]}),
+        ({"const": 3}, True, {"type": "integer", "enum": ["3"]}),
+        ({"const": 3}, False, {"type": "integer"}),
+        ({"const": True}, False, {"type": "boolean"}),
+        ({"const": 1.5}, False, {"type": "number"}),
+        ({"const": None}, False, {"type": "null"}),
+        ({"const": {"a": 1}}, False, {"type": "object"}),
+    ],
+    ids=["string", "string_typed", "const_over_enum", "int_sent", "int_dropped", "bool", "float", "null", "object"],
+)
+def test_build_vertex_schema_turns_const_into_a_vertex_type_and_enum(
+    schema: dict[str, JsonValue], send_integer_enums: bool, expected: dict[str, JsonValue]
+):
+    built: Final = build_vertex_schema(
+        {"type": "object", "properties": {"field": schema}}, send_integer_enums=send_integer_enums
+    )
+
+    assert built["properties"]["field"] == expected
