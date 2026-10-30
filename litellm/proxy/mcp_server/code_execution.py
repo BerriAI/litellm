@@ -170,8 +170,7 @@ async def cleanup_cancelled_call(data: Mapping[str, object], caller: UserAPIKeyA
                 user_api_key_dict=caller,
                 route="/mcp/call_tool",
             )
-        except Exception:
-            # A callback failure must not replace the client's cancellation.
+        except Exception:  # noqa: BLE001  # Callback failures must not replace cancellation.
             verbose_proxy_logger.error("MCP code cancellation cleanup failed")
 
 
