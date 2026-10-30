@@ -605,6 +605,8 @@ def _leaves_nothing_to_decide_on(call: DecisionsCall, kept_input: DecisionsIRSta
         return True
     return (
         not call.provider_config.images_in_state
+        and not call.ir_request.audio
+        and not call.ir_request.videos
         and isinstance(kept_input, DecisionsIRState)
         and not kept_input.images
         and not kept_input.state

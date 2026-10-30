@@ -4819,6 +4819,25 @@ async def test_an_empty_state_with_only_a_dropped_image_is_refused_when_the_mode
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("cloudflare_account")
+@pytest.mark.parametrize(
+    "clips",
+    ({"audio": ["data:audio/wav;base64,YQ=="]}, {"videos": ["data:video/mp4;base64,YQ=="]}),
+    ids=("audio", "videos"),
+)
+async def test_an_empty_state_with_only_a_dropped_image_still_reaches_the_model_with_its_clips(
+    clips: Mapping[str, list[str]], respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef-omni").respond(json=_RESPONSE)
+
+    await litellm.asystemone(model="cloudflare/clef-omni", state="", **_NOT_AN_IMAGE_REQUEST, **clips)
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent.get("images", []) == []
+    assert {name: sent[name] for name in clips} == clips
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_account")
 async def test_an_empty_state_keeps_the_images_that_survive_a_drop(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
 
