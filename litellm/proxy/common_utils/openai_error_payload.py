@@ -10,7 +10,7 @@ from typing import Final
 from fastapi import HTTPException, status
 from pydantic import TypeAdapter
 
-from litellm._logging import redact_internal_details_from_client_fields
+from litellm._logging import redact_internal_details_from_client_fields, redact_internal_details_from_client_message
 from litellm.constants import STRINGIFIED_NONE
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, proxy_exception_status_code
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
@@ -161,7 +161,7 @@ def route_failure_proxy_exception(
     raised_status: Final = error_status_code(exc, default_status_code)
     answered_status: Final = answered_status_code(message, raised_status)
     return ProxyException(
-        message=message,
+        message=redact_internal_details_from_client_message(message),
         type=_route_failure_error_type(exc, raised_status, answered_status),
         param=openai_error_param(exc),
         headers=headers,

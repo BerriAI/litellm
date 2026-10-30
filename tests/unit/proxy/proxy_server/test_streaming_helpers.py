@@ -1065,6 +1065,32 @@ async def test_upstream_failure_mid_stream_ends_with_an_error_event(
     assert frames[2:] == closing_frames
 
 
+@pytest.mark.asyncio
+async def test_a_provider_stream_cut_mid_stream_sends_the_error_line_without_the_servers_traceback() -> None:
+    stream_cut: Final = litellm.APIConnectionError(
+        message=(
+            "AzureException APIConnectionError - Response payload is not completed\n"
+            "Traceback (most recent call last):\n"
+            '  File "/usr/local/lib/python3.13/site-packages/litellm/litellm_core_utils/streaming_handler.py", '
+            "line 2363, in __anext__\n"
+            "httpx.ReadError: Response payload is not completed"
+        ),
+        llm_provider="azure",
+        model="gpt-5.4-mini",
+    )
+
+    status_code, _, frames = await _served(_async_iter_raises(stream_cut))
+
+    assert status_code == 200
+    assert _error_of(frames[1]) == {
+        "message": "litellm.APIConnectionError: AzureException APIConnectionError - Response payload is not completed",
+        "type": "internal_server_error",
+        "param": None,
+        "code": "500",
+    }
+    assert frames[2:] == ("data: [DONE]",)
+
+
 class _ReplacesClientErrors(CustomLogger):
     async def async_post_call_failure_hook(
         self,

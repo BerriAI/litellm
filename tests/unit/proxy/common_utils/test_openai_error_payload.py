@@ -18,6 +18,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_param,
     openai_error_type,
     proxy_exception_for,
+    route_failure_proxy_exception,
     with_litellm_call_id,
 )
 from litellm.types.router import RouterErrors
@@ -497,3 +498,33 @@ def test_a_router_rejection_is_labelled_by_the_status_it_answers_with(
     wrapped: Final = proxy_exception_for(ValueError(router_rejection), default_status_code=400)
 
     assert (wrapped.code, wrapped.type) == expected
+
+
+_STREAM_CUT_LINE: Final = "AzureException APIConnectionError - Response payload is not completed"
+_SERVER_TRACEBACK: Final = (
+    "Traceback (most recent call last):\n"
+    '  File "/usr/local/lib/python3.13/site-packages/litellm/litellm_core_utils/streaming_handler.py", '
+    "line 2363, in __anext__\n"
+    "httpx.ReadError: Response payload is not completed"
+)
+
+
+def test_a_route_failure_answers_with_the_error_line_without_the_servers_traceback() -> None:
+    stream_cut: Final = litellm.APIConnectionError(
+        message=f"{_STREAM_CUT_LINE}\n{_SERVER_TRACEBACK}", llm_provider="azure", model="gpt-5.4-mini"
+    )
+
+    wrapped: Final = route_failure_proxy_exception(stream_cut, stream_cut.message, default_status_code=500)
+
+    assert wrapped.message == f"litellm.APIConnectionError: {_STREAM_CUT_LINE}"
+    assert (wrapped.code, wrapped.type) == ("500", "internal_server_error")
+
+
+def test_a_route_failure_keeps_the_status_its_unredacted_message_classifies() -> None:
+    rejection: Final = f"{RouterErrors.no_deployments_available.value}. Passed model=gpt-5.4-mini"
+
+    wrapped: Final = route_failure_proxy_exception(
+        ValueError(rejection), f"{rejection}\n{_SERVER_TRACEBACK}", default_status_code=500
+    )
+
+    assert (wrapped.message, wrapped.code, wrapped.type) == (rejection, "429", "rate_limit_error")
