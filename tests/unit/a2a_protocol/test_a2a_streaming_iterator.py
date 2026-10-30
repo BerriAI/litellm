@@ -12,6 +12,7 @@ from typing import Final
 from types import SimpleNamespace
 
 import pytest
+from a2a.compat.v0_3.types import SendStreamingMessageResponse
 
 import litellm
 from litellm.a2a_protocol import streaming_iterator as a2a_streaming_iterator_module
@@ -178,7 +179,9 @@ async def test_stream_logs_its_first_chunk_time_measured_from_the_call_start():
 
     iterator: Final = A2AStreamingIterator(
         stream=_stream(),
-        request=SimpleNamespace(params=SimpleNamespace(message={"role": "user", "parts": [{"kind": "text", "text": "hi"}]})),
+        request=SimpleNamespace(
+            params=SimpleNamespace(message={"role": "user", "parts": [{"kind": "text", "text": "hi"}]})
+        ),
         logging_obj=logging_obj,
         agent_name="test-agent",
     )
@@ -199,14 +202,34 @@ _REPLY: Final = (
 )
 
 
-def _artifact_event(text: str, append: bool | None) -> Mapping[str, object]:
+def _artifact_event(text: str, append: bool | None, artifact_id: str = "a1") -> Mapping[str, object]:
     result: Final = {
         "kind": "artifact-update",
         "taskId": "t1",
         "contextId": "c1",
-        "artifact": {"artifactId": "a1", "parts": [{"kind": "text", "text": text}]},
+        "artifact": {"artifactId": artifact_id, "parts": [{"kind": "text", "text": text}]},
     }
     return {"jsonrpc": "2.0", "id": "r1", "result": result if append is None else {**result, "append": append}}
+
+
+def _status_event(state: str, text: str | None = None) -> Mapping[str, object]:
+    message: Final = {"kind": "message", "role": "agent", "messageId": "m1", "parts": [{"kind": "text", "text": text}]}
+    status: Final = {"state": state} if text is None else {"state": state, "message": message}
+    return {
+        "jsonrpc": "2.0",
+        "id": "r1",
+        "result": {
+            "kind": "status-update",
+            "taskId": "t1",
+            "contextId": "c1",
+            "final": state == "completed",
+            "status": status,
+        },
+    }
+
+
+_FIRST_ARTIFACT: Final = "Paris is the capital of France and sits on the Seine."
+_SECOND_ARTIFACT: Final = "It has been the seat of the French government for most of the last thousand years."
 
 
 async def _snapshot_stream() -> AsyncIterator[Mapping[str, object]]:
@@ -223,13 +246,55 @@ async def _watsonx_stream() -> AsyncIterator[Mapping[str, object]]:
         yield event
 
 
+async def _two_artifact_stream() -> AsyncIterator[Mapping[str, object]]:
+    yield _artifact_event(_FIRST_ARTIFACT, append=None, artifact_id="a1")
+    yield _artifact_event(_SECOND_ARTIFACT, append=None, artifact_id="a2")
+    yield _status_event("completed")
+
+
+async def _status_message_stream() -> AsyncIterator[Mapping[str, object]]:
+    yield _status_event("working", "Looking that up")
+    yield _status_event("working", _REPLY)
+    yield _status_event("completed")
+
+
+async def _artifact_without_id_stream() -> AsyncIterator[Mapping[str, object]]:
+    yield {
+        "jsonrpc": "2.0",
+        "id": "r1",
+        "result": {
+            "kind": "artifact-update",
+            "taskId": "t1",
+            "contextId": "c1",
+            "artifact": {"parts": [{"kind": "text", "text": _REPLY}]},
+        },
+    }
+    yield _status_event("completed")
+
+
+async def _url_agent_sdk_stream() -> AsyncIterator[SendStreamingMessageResponse]:
+    for event in (
+        _status_event("working", "Looking that up"),
+        _artifact_event(_REPLY, append=False),
+        _status_event("completed"),
+    ):
+        yield SendStreamingMessageResponse.model_validate(event)
+
+
 @pytest.mark.parametrize(
-    "agent_stream",
-    (pytest.param(_snapshot_stream, id="replacing_snapshots"), pytest.param(_watsonx_stream, id="watsonx_chunks")),
+    ("agent_stream", "reply"),
+    (
+        pytest.param(_snapshot_stream, _REPLY, id="replacing_snapshots"),
+        pytest.param(_watsonx_stream, _REPLY, id="watsonx_chunks"),
+        pytest.param(_two_artifact_stream, f"{_FIRST_ARTIFACT} {_SECOND_ARTIFACT}", id="two_artifacts"),
+        pytest.param(_status_message_stream, _REPLY, id="status_message_reply"),
+        pytest.param(_artifact_without_id_stream, _REPLY, id="artifact_without_id"),
+        pytest.param(_url_agent_sdk_stream, _REPLY, id="url_agent_sdk_events"),
+    ),
 )
 @pytest.mark.asyncio
-async def test_stream_counts_the_whole_artifact_once(
-    agent_stream: Callable[[], AsyncIterator[Mapping[str, object]]], monkeypatch: pytest.MonkeyPatch
+async def test_stream_counts_the_whole_reply_once(
+    agent_stream: Callable[[], AsyncIterator[object]], reply: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "success_callback", [])
     monkeypatch.setattr(litellm, "_async_success_callback", [])
@@ -247,9 +312,8 @@ async def test_stream_counts_the_whole_artifact_once(
         request=SimpleNamespace(params=SimpleNamespace(message={"role": "user", "parts": []})),
         logging_obj=logging_obj,
         agent_name="trip-planner",
-        output_text=A2ARequestUtils.extract_text_from_stream_event,
     )
 
     _ = [chunk async for chunk in iterator]
 
-    assert logging_obj.model_call_details["usage"].completion_tokens == A2ARequestUtils.count_tokens(_REPLY)
+    assert logging_obj.model_call_details["usage"].completion_tokens == A2ARequestUtils.count_tokens(reply)

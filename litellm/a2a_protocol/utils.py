@@ -100,8 +100,13 @@ class A2ARequestUtils:
     @staticmethod
     def extract_text_from_stream_event(event: Mapping[str, object]) -> str:
         result: Final = as_str_mapping(event.get("result"))
-        if result is not None and result.get("kind") == "artifact-update":
+        if result is None:
+            return ""
+        if result.get("kind") == "artifact-update":
             return A2ARequestUtils.extract_text_from_message(result.get("artifact"))
+        if result.get("kind") == "status-update":
+            status: Final = as_str_mapping(result.get("status"))
+            return A2ARequestUtils.extract_text_from_message(status.get("message")) if status is not None else ""
         return A2ARequestUtils.extract_text_from_response(event)
 
     @staticmethod

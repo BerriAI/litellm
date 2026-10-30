@@ -746,7 +746,6 @@ async def asend_message_streaming(
             request=request,
             logging_obj=bridge_logging_obj,
             agent_name=agent_name or "unknown",
-            output_text=A2ARequestUtils.extract_text_from_stream_event,
         ):
             yield chunk
         return

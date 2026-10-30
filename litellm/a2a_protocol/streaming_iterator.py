@@ -3,7 +3,7 @@ A2A Streaming Iterator with token tracking and logging support.
 """
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
@@ -53,18 +53,16 @@ class A2AStreamingIterator:
         request: "SendStreamingMessageRequest",
         logging_obj: LiteLLMLoggingObj,
         agent_name: str = "unknown",
-        output_text: Callable[[Mapping[str, object]], str] = A2ARequestUtils.extract_text_from_response,
     ):
         self.stream = stream
         self.request = request
         self.logging_obj = logging_obj
         self.agent_name = agent_name
-        self.output_text = output_text
         self.start_time = logging_obj.start_time
 
         # Collect chunks for token counting
         self.chunks: list[SendStreamingMessageResponse | Mapping[str, object]] = []
-        self.collected_text_parts: list[str] = []
+        self.latest_message_text = ""
         self.artifact_texts: Mapping[str, str] = {}
         self.saw_error = False
         self.final_chunk: SendStreamingMessageResponse | Mapping[str, object] | None = None
@@ -100,21 +98,24 @@ class A2AStreamingIterator:
             raise
 
     def _collect_text_from_chunk(self, payload: Mapping[str, object]) -> None:
-        """Extract text from a streaming chunk and add to collected parts."""
+        """Record the reply text a streaming chunk carries."""
         try:
-            text: Final = self.output_text(payload)
+            text: Final = A2ARequestUtils.extract_text_from_stream_event(payload)
             if not text:
                 return
             artifact_update: Final = _artifact_update(payload)
             if artifact_update is None:
-                self.collected_text_parts.append(text)
+                self.latest_message_text = text
                 return
             artifact_id, append = artifact_update
             artifact_text: Final = self.artifact_texts.get(artifact_id, "") + text if append else text
             self.artifact_texts = {**self.artifact_texts, artifact_id: artifact_text}
-            self.collected_text_parts.append(artifact_text)
         except Exception:
             verbose_logger.debug("Failed to extract text from A2A streaming chunk")
+
+    def _reply_text(self) -> str:
+        artifact_text: Final = " ".join(text for text in self.artifact_texts.values() if text)
+        return artifact_text or self.latest_message_text
 
     def _is_completed_chunk(self, payload: Mapping[str, object]) -> bool:
         """Check if chunk indicates stream completion."""
@@ -138,9 +139,7 @@ class A2AStreamingIterator:
             input_text: Final = A2ARequestUtils.extract_text_from_message(input_message)
             prompt_tokens: Final = await asyncify(A2ARequestUtils.count_tokens)(input_text)
 
-            # Use the last (most complete) text from chunks
-            output_text: Final = self.collected_text_parts[-1] if self.collected_text_parts else ""
-            completion_tokens: Final = await asyncify(A2ARequestUtils.count_tokens)(output_text)
+            completion_tokens: Final = await asyncify(A2ARequestUtils.count_tokens)(self._reply_text())
 
             total_tokens: Final = prompt_tokens + completion_tokens
 
