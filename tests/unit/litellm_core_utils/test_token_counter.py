@@ -14,6 +14,7 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from itertools import accumulate, chain
 from pathlib import Path
+from queue import SimpleQueue
 from typing import Final, cast
 from unittest.mock import MagicMock, sentinel
 
@@ -29,7 +30,11 @@ import litellm
 from litellm import decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
 import litellm.constants
-from litellm.constants import HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS, TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+from litellm.constants import (
+    HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
+    PDF_MAX_XOBJECT_DRAWS_PER_PAGE,
+    TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
+)
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
     _encoding_count,
@@ -45,6 +50,7 @@ from litellm.litellm_core_utils.token_counter import (
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.utils import SelectTokenizerResponse
 from tests.large_text import text
 from tests.unit.litellm_core_utils.event_loop_lag import (
     assert_loop_stayed_free,
@@ -521,6 +527,43 @@ def test_token_counter_skips_non_mapping_tools():
     assert mixed_tokens == valid_tokens
 
 
+@pytest.mark.parametrize(
+    ("shorthand", "explicit"),
+    [({"type": "array"}, {"type": "array", "items": {}}), (True, {})],
+    ids=["array_without_items", "boolean_subschema"],
+)
+def test_token_counter_counts_json_schema_shorthands_like_their_explicit_form(shorthand: object, explicit: object) -> None:
+    assert _count_with_property_schema(shorthand) == _count_with_property_schema(explicit)
+
+
+@pytest.mark.parametrize(
+    ("malformed", "without_keyword"),
+    [
+        (
+            {"type": "object", "properties": {"id": {"type": "string"}}, "required": True},
+            {"type": "object", "properties": {"id": {"type": "string"}}},
+        ),
+        ({"type": "object", "properties": [{"id": {"type": "string"}}]}, {"type": "object"}),
+        ({"type": "string", "enum": None}, {"type": "string"}),
+        ({"type": "integer", "enum": 3}, {"type": "integer"}),
+    ],
+    ids=["required_true", "properties_list", "string_enum_null", "integer_enum_number"],
+)
+def test_token_counter_counts_a_malformed_schema_keyword_as_absent(malformed: object, without_keyword: object) -> None:
+    assert _count_with_property_schema(malformed) == _count_with_property_schema(without_keyword)
+
+
+def _count_with_property_schema(property_schema: object) -> int:
+    tool: Final = {
+        "type": "function",
+        "function": {
+            "name": "read_files",
+            "parameters": {"type": "object", "properties": {"paths": property_schema}},
+        },
+    }
+    return token_counter_new(model="gpt-4o", messages=[{"role": "user", "content": "Read the config files"}], tools=[tool])
+
+
 _WEATHER_FUNCTION: Final = {
     "name": "get_weather",
     "description": "Get the current weather for a city",
@@ -700,6 +743,7 @@ def test_token_counter_counts_anthropic_tool_choices_like_openai_choices(
         _anthropic_tool(_WEATHER_FUNCTION),
         {**_anthropic_tool(_WEATHER_FUNCTION), "strict": True},
         {**_anthropic_tool(_WEATHER_FUNCTION), "defer_loading": True, "input_examples": [{"location": "Paris"}]},
+        {**_anthropic_tool(_WEATHER_FUNCTION), "custom": {"eager_input_streaming": True}},
         _anthropic_tool(_WEB_SEARCH_FUNCTION),
     ],
 )
@@ -977,16 +1021,17 @@ def test_token_counter():
 import unittest
 
 from litellm.utils import (
-    _HUGGINGFACE_TOKENIZER_LOAD_FAILURES,
-    _load_huggingface_tokenizer,
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES,
+    _HuggingFaceTokenizerLoadFailure,
+    _HuggingFaceTokenizerLoadOutcomes,
+    _return_huggingface_tokenizer,
     _select_tokenizer_helper,
     claude_json_str,
     encoding,
 )
 
 # Clear the cache at module load to ensure clean state
-_load_huggingface_tokenizer.cache_clear()
-_HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+_HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
 
 
 class TestTokenizerSelection(unittest.TestCase):
@@ -997,8 +1042,7 @@ class TestTokenizerSelection(unittest.TestCase):
         @lru_cache, which can cause cache hits from previous tests when running with
         --dist=loadscope (tests from same file run on same worker).
         """
-        _load_huggingface_tokenizer.cache_clear()
-        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
 
     @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
     def test_llama3_tokenizer_api_failure(self, mock_from_pretrained):
@@ -1086,64 +1130,23 @@ class TestTokenizerSelection(unittest.TestCase):
     def test_failed_huggingface_tokenizer_download_is_not_retried_on_every_count(
         self, mock_from_pretrained: MagicMock
     ):
-        _load_huggingface_tokenizer.cache_clear()
-        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
         try:
-            with patch("litellm.utils.time.monotonic", return_value=0.0):
-                mock_from_pretrained.side_effect = RuntimeError("HF unavailable")
-                model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
-                text: Final = "Count the tokens for this message."
-                expected: Final = len(encoding.encode(text, disallowed_special=()))
-
-                first_count: Final = litellm.token_counter(model=model, text=text)
-                first_attempts: Final = mock_from_pretrained.call_count
-                second_count: Final = litellm.token_counter(model=model, text=text)
-
-                assert first_attempts > 0
-                assert mock_from_pretrained.call_count == first_attempts
-                assert first_count == expected
-                assert second_count == expected
-        finally:
-            _load_huggingface_tokenizer.cache_clear()
-            _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
-
-    @patch("litellm.utils.time.monotonic", return_value=299.0)
-    @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
-    def test_failed_huggingface_tokenizer_download_is_retried_after_retry_window(
-        self, mock_from_pretrained: MagicMock, mock_monotonic: MagicMock
-    ):
-        _load_huggingface_tokenizer.cache_clear()
-        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
-        try:
-            def from_pretrained_side_effect(_: str) -> object:
-                if mock_from_pretrained.call_count == 1:
-                    mock_monotonic.return_value = 322.0
-                    raise RuntimeError("HF unavailable")
-                return sentinel.tokenizer
-
-            mock_from_pretrained.side_effect = from_pretrained_side_effect
+            mock_from_pretrained.side_effect = RuntimeError("HF unavailable")
             model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+            text: Final = "Count the tokens for this message."
+            expected: Final = len(encoding.encode(text, disallowed_special=()))
 
-            first_result: Final = _select_tokenizer_helper(model)
-            assert first_result["type"] == "openai_tokenizer"
-            mock_monotonic.return_value = 323.0
-            second_result: Final = _select_tokenizer_helper(model)
-            assert second_result["type"] == "openai_tokenizer", "tokenizer was retried at t=323"
-            assert mock_from_pretrained.call_count == 1
+            first_count: Final = litellm.token_counter(model=model, text=text)
+            first_attempts: Final = mock_from_pretrained.call_count
+            second_count: Final = litellm.token_counter(model=model, text=text)
 
-            mock_monotonic.return_value = 322.0 + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS - 1
-            third_result: Final = _select_tokenizer_helper(model)
-            assert third_result["type"] == "openai_tokenizer"
-            assert mock_from_pretrained.call_count == 1
-
-            mock_monotonic.return_value = 322.0 + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS + 1
-            retried_result: Final = _select_tokenizer_helper(model)
-            assert retried_result["type"] == "huggingface_tokenizer"
-            assert retried_result["tokenizer"] is sentinel.tokenizer
-            assert mock_from_pretrained.call_count == 2
+            assert first_attempts > 0
+            assert mock_from_pretrained.call_count == first_attempts
+            assert first_count == expected
+            assert second_count == expected
         finally:
-            _load_huggingface_tokenizer.cache_clear()
-            _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+            _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
 
 
 _CODE_SAMPLE: Final = "    for item in items:\n        total += item.price * item.quantity\n" * 20
@@ -1211,8 +1214,7 @@ def test_disable_hf_tokenizer_download_keeps_deepseek_v4_on_cl100k(monkeypatch: 
 
 @pytest.mark.parametrize("model", ["llama-2-7b", "meta-llama/llama-3-8b-instruct"])
 def test_offline_mode_counts_downloaded_tokenizer_models_with_tiktoken(monkeypatch: pytest.MonkeyPatch, model: str):
-    _load_huggingface_tokenizer.cache_clear()
-    _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
     monkeypatch.setenv("LITELLM_OFFLINE_MODE", "true")
 
     with patch("litellm.utils.tokenizer_dispatch.from_pretrained") as from_pretrained:
@@ -1231,8 +1233,7 @@ def test_offline_mode_keeps_deepseek_v4_on_its_bundled_tokenizer(monkeypatch: py
 
 
 def test_concurrent_first_deepseek_counts_share_one_loaded_tokenizer():
-    _load_huggingface_tokenizer.cache_clear()
-    _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
     start: Final = threading.Barrier(8)
 
     def first_tokenizer(_: int) -> object:
@@ -1246,8 +1247,7 @@ def test_concurrent_first_deepseek_counts_share_one_loaded_tokenizer():
 
 
 def test_remembered_tokenizer_failure_warns_once_instead_of_on_every_count(caplog: pytest.LogCaptureFixture):
-    _load_huggingface_tokenizer.cache_clear()
-    _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
     model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
     try:
         with (
@@ -1259,15 +1259,346 @@ def test_remembered_tokenizer_failure_warns_once_instead_of_on_every_count(caplo
         assert types == ("openai_tokenizer",) * 3
         assert len(fallback_warnings) == 1
     finally:
-        _load_huggingface_tokenizer.cache_clear()
-        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+
+
+def test_download_that_fails_after_another_count_loaded_the_tokenizer_counts_with_it():
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    slow_download_started: Final = threading.Event()
+    loading_count_finished: Final = threading.Event()
+
+    def download(_: str) -> object:
+        if threading.current_thread().name.startswith("slow-download"):
+            slow_download_started.set()
+            loading_count_finished.wait(timeout=5)
+            raise RuntimeError("HF rate limited")
+        return sentinel.tokenizer
+
+    try:
+        with patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=download):
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="slow-download") as pool:
+                slow_count: Final = pool.submit(_select_tokenizer_helper, model)
+                assert slow_download_started.wait(timeout=5)
+                loading_count: Final = _select_tokenizer_helper(model)
+                loading_count_finished.set()
+                slow_count_tokenizer: Final = slow_count.result(timeout=5)["tokenizer"]
+            later_counts: Final = tuple(_select_tokenizer_helper(model) for _ in range(3))
+        assert slow_count_tokenizer is sentinel.tokenizer
+        assert loading_count["tokenizer"] is sentinel.tokenizer
+        assert tuple(count["tokenizer"] for count in later_counts) == (sentinel.tokenizer,) * 3
+    finally:
+        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+
+
+def test_loaded_tokenizer_serves_later_counts_without_downloading_it_again():
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    try:
+        with patch("litellm.utils.tokenizer_dispatch.from_pretrained", return_value=sentinel.tokenizer):
+            loaded: Final = _select_tokenizer_helper(model)
+        with patch(
+            "litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=RuntimeError("HF rate limited")
+        ) as from_pretrained:
+            later_counts: Final = tuple(_select_tokenizer_helper(model) for _ in range(3))
+        assert loaded["tokenizer"] is sentinel.tokenizer
+        assert tuple(count["tokenizer"] for count in later_counts) == (sentinel.tokenizer,) * 3
+        assert from_pretrained.call_count == 0
+    finally:
+        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+
+
+def _run_now(retry: Callable[[], None]) -> None:
+    retry()
+
+
+def _start_retry_resolving(ended: Future[None]) -> Callable[[Callable[[], None]], None]:
+    def start(retry: Callable[[], None]) -> None:
+        def run_then_resolve() -> None:
+            retry()
+            ended.set_result(None)
+
+        threading.Thread(target=run_then_resolve, daemon=True).start()
+
+    return start
+
+
+def _eventually(probe: Callable[[], bool]) -> bool:
+    deadline: Final = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if probe():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_failed_download_is_retried_once_per_window_until_it_loads():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=299.0)
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock, start_retry=_run_now)
+
+    def download(_: str) -> object:
+        if from_pretrained.call_count == 1:
+            clock.return_value = 322.0
+            raise RuntimeError("HF unavailable")
+        if from_pretrained.call_count == 2:
+            raise RuntimeError("HF rate limited")
+        return sentinel.tokenizer
+
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=download) as from_pretrained:
+        first: Final = _return_huggingface_tokenizer(model, outcomes)
+        clock.return_value = 322.0 + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS - 1
+        inside_the_window: Final = _return_huggingface_tokenizer(model, outcomes)
+        downloads_inside_the_window: Final = from_pretrained.call_count
+        clock.return_value = 322.0 + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        claimant: Final = _return_huggingface_tokenizer(model, outcomes)
+        inside_the_next_window: Final = _return_huggingface_tokenizer(model, outcomes)
+        downloads_inside_the_next_window: Final = from_pretrained.call_count
+        clock.return_value = 322.0 + 2 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        _return_huggingface_tokenizer(model, outcomes)
+        after_the_second_retry: Final = _return_huggingface_tokenizer(model, outcomes)
+    assert isinstance(first, _HuggingFaceTokenizerLoadFailure)
+    assert isinstance(inside_the_window, _HuggingFaceTokenizerLoadFailure)
+    assert downloads_inside_the_window == 1
+    assert isinstance(claimant, _HuggingFaceTokenizerLoadFailure)
+    assert isinstance(inside_the_next_window, _HuggingFaceTokenizerLoadFailure)
+    assert downloads_inside_the_next_window == 2
+    assert from_pretrained.call_count == 3
+    assert after_the_second_retry == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+
+
+def test_retry_after_the_window_runs_in_the_background_while_every_count_answers_at_once():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=0.0)
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock)
+    retry_started: Final = threading.Event()
+    retry_released: Final = threading.Event()
+
+    def download(_: str) -> object:
+        if from_pretrained.call_count == 1:
+            raise RuntimeError("HF unavailable")
+        retry_started.set()
+        retry_released.wait(timeout=5)
+        return sentinel.tokenizer
+
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=download) as from_pretrained:
+        _return_huggingface_tokenizer(model, outcomes)
+        clock.return_value = 3 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        counts_while_retry_runs: Final = tuple(_return_huggingface_tokenizer(model, outcomes) for _ in range(4))
+        assert retry_started.wait(timeout=5)
+        clock.return_value = 9 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        later_counts_while_retry_runs: Final = tuple(_return_huggingface_tokenizer(model, outcomes) for _ in range(2))
+        downloads_while_retry_runs: Final = from_pretrained.call_count
+        retry_released.set()
+        retried: Final = _eventually(
+            lambda: _return_huggingface_tokenizer(model, outcomes)
+            == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+        )
+    assert all(
+        isinstance(count, _HuggingFaceTokenizerLoadFailure)
+        for count in counts_while_retry_runs + later_counts_while_retry_runs
+    )
+    assert downloads_while_retry_runs == 2
+    assert retried
+    assert from_pretrained.call_count == 2
+
+
+def test_download_from_before_the_first_failure_ending_during_a_retry_leaves_it_the_only_retry():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=0.0)
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock)
+    early_download_started: Final = threading.Event()
+    early_download_released: Final = threading.Event()
+    retry_started: Final = threading.Event()
+    retry_released: Final = threading.Event()
+
+    def download(_: str) -> object:
+        if from_pretrained.call_count == 1:
+            early_download_started.set()
+            early_download_released.wait(timeout=5)
+            raise RuntimeError("HF unavailable")
+        if from_pretrained.call_count == 2:
+            raise RuntimeError("HF unavailable")
+        retry_started.set()
+        retry_released.wait(timeout=5)
+        return sentinel.tokenizer
+
+    with (
+        patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=download) as from_pretrained,
+        ThreadPoolExecutor(max_workers=1) as early_pool,
+    ):
+        early_count: Final = early_pool.submit(_return_huggingface_tokenizer, model, outcomes)
+        assert early_download_started.wait(timeout=5)
+        _return_huggingface_tokenizer(model, outcomes)
+        clock.return_value = HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS + 1.0
+        _return_huggingface_tokenizer(model, outcomes)
+        assert retry_started.wait(timeout=5)
+        early_download_released.set()
+        early: Final = early_count.result(timeout=5)
+        clock.return_value = 5 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        counts_while_retry_runs: Final = tuple(_return_huggingface_tokenizer(model, outcomes) for _ in range(3))
+        downloads_while_retry_runs: Final = from_pretrained.call_count
+        retry_released.set()
+        retried: Final = _eventually(
+            lambda: _return_huggingface_tokenizer(model, outcomes)
+            == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+        )
+    assert isinstance(early, _HuggingFaceTokenizerLoadFailure)
+    assert all(isinstance(count, _HuggingFaceTokenizerLoadFailure) for count in counts_while_retry_runs)
+    assert downloads_while_retry_runs == 3
+    assert retried
+
+
+def test_retry_failing_after_an_earlier_download_loaded_the_tokenizer_keeps_it():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=0.0)
+    retry_ended: Final = Future[None]()
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock, start_retry=_start_retry_resolving(retry_ended))
+    early_download_started: Final = threading.Event()
+    early_download_released: Final = threading.Event()
+    retry_started: Final = threading.Event()
+    retry_released: Final = threading.Event()
+
+    def download(_: str) -> object:
+        if from_pretrained.call_count == 1:
+            early_download_started.set()
+            early_download_released.wait(timeout=5)
+            return sentinel.tokenizer
+        if from_pretrained.call_count == 2:
+            raise RuntimeError("HF unavailable")
+        retry_started.set()
+        retry_released.wait(timeout=5)
+        raise RuntimeError("HF rate limited")
+
+    with (
+        patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=download) as from_pretrained,
+        ThreadPoolExecutor(max_workers=1) as early_pool,
+    ):
+        early_count: Final = early_pool.submit(_return_huggingface_tokenizer, model, outcomes)
+        assert early_download_started.wait(timeout=5)
+        _return_huggingface_tokenizer(model, outcomes)
+        clock.return_value = HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        _return_huggingface_tokenizer(model, outcomes)
+        assert retry_started.wait(timeout=5)
+        early_download_released.set()
+        early: Final = early_count.result(timeout=5)
+        retry_released.set()
+        retry_ended.result(timeout=5)
+        later_counts: Final = tuple(_return_huggingface_tokenizer(model, outcomes) for _ in range(3))
+    loaded: Final = {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+    assert early == loaded
+    assert from_pretrained.call_count == 3
+    assert later_counts == (loaded,) * 3
+
+
+class _NativePanic(BaseException):
+    pass
+
+
+def _fork_guard_error() -> BaseException:
+    from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
+
+    return ForkedAfterNativeRuntimeStarted("native runtime started before fork")
+
+
+def _native_panic() -> BaseException:
+    return _NativePanic("tokenizer parser panicked")
+
+
+@pytest.mark.parametrize("escaping_error", (_fork_guard_error, _native_panic), ids=("fork_guard", "native_panic"))
+def test_retry_that_raises_past_failure_handling_still_retries_after_the_next_window(
+    escaping_error: Callable[[], BaseException],
+):
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=0.0)
+    error: Final = escaping_error()
+    retries: Final = SimpleQueue[Future[None]]()
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="tokenizer-retry") as pool:
+
+        def start_retry(retry: Callable[[], None]) -> None:
+            retries.put(pool.submit(retry))
+
+        outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock, start_retry=start_retry)
+        with patch(
+            "litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=RuntimeError("HF unavailable")
+        ) as from_pretrained:
+            _return_huggingface_tokenizer(model, outcomes)
+            clock.return_value = HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+            from_pretrained.side_effect = error
+            _return_huggingface_tokenizer(model, outcomes)
+            raised: Final = retries.get(timeout=5).exception(timeout=5)
+            from_pretrained.side_effect = None
+            from_pretrained.return_value = sentinel.tokenizer
+            inside_the_next_window: Final = _return_huggingface_tokenizer(model, outcomes)
+            no_retry_inside_the_next_window: Final = retries.empty()
+            clock.return_value = 2 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+            _return_huggingface_tokenizer(model, outcomes)
+            retries.get(timeout=5).result(timeout=5)
+            after_the_next_window: Final = _return_huggingface_tokenizer(model, outcomes)
+    assert raised is error
+    assert isinstance(inside_the_next_window, _HuggingFaceTokenizerLoadFailure)
+    assert no_retry_inside_the_next_window
+    assert from_pretrained.call_count == 3
+    assert after_the_next_window == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+
+
+def test_process_forked_during_a_retry_starts_its_own_retry_instead_of_waiting_on_the_parents():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=0.0)
+    pid: Final = MagicMock(return_value=100)
+    start_retry: Final = MagicMock()
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock, start_retry=start_retry, pid=pid)
+    with patch(
+        "litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=RuntimeError("HF unavailable")
+    ) as from_pretrained:
+        _return_huggingface_tokenizer(model, outcomes)
+        clock.return_value = HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        _return_huggingface_tokenizer(model, outcomes)
+        _return_huggingface_tokenizer(model, outcomes)
+        retries_started_by_the_parent: Final = start_retry.call_count
+        pid.return_value = 101
+        from_pretrained.side_effect = None
+        from_pretrained.return_value = sentinel.tokenizer
+        _return_huggingface_tokenizer(model, outcomes)
+        start_retry.call_args.args[0]()
+        in_the_forked_process: Final = _return_huggingface_tokenizer(model, outcomes)
+    assert retries_started_by_the_parent == 1
+    assert start_retry.call_count == 2
+    assert in_the_forked_process == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+
+
+def test_retry_thread_that_cannot_start_answers_the_count_and_retries_after_the_next_window():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=0.0)
+    thread_starts: Final = MagicMock(side_effect=(RuntimeError("can't start new thread"), None))
+
+    def start_thread_then_retry(retry: Callable[[], None]) -> None:
+        thread_starts()
+        retry()
+
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock, start_retry=start_thread_then_retry)
+    with patch(
+        "litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=RuntimeError("HF unavailable")
+    ) as from_pretrained:
+        _return_huggingface_tokenizer(model, outcomes)
+        clock.return_value = HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        when_the_thread_cannot_start: Final = _return_huggingface_tokenizer(model, outcomes)
+        from_pretrained.side_effect = None
+        from_pretrained.return_value = sentinel.tokenizer
+        inside_the_next_window: Final = _return_huggingface_tokenizer(model, outcomes)
+        clock.return_value = 2 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        _return_huggingface_tokenizer(model, outcomes)
+        after_the_next_window: Final = _return_huggingface_tokenizer(model, outcomes)
+    assert isinstance(when_the_thread_cannot_start, _HuggingFaceTokenizerLoadFailure)
+    assert isinstance(inside_the_next_window, _HuggingFaceTokenizerLoadFailure)
+    assert from_pretrained.call_count == 2
+    assert after_the_next_window == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
 
 
 def test_fork_guard_error_while_loading_a_tokenizer_is_raised_and_not_remembered():
     from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
 
-    _load_huggingface_tokenizer.cache_clear()
-    _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
     model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
     forked: Final = ForkedAfterNativeRuntimeStarted("native runtime started before fork")
     try:
@@ -1279,8 +1610,7 @@ def test_fork_guard_error_while_loading_a_tokenizer_is_raised_and_not_remembered
         assert loaded["type"] == "huggingface_tokenizer"
         assert loaded["tokenizer"] is sentinel.tokenizer
     finally:
-        _load_huggingface_tokenizer.cache_clear()
-        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
 
 
 def test_token_counter_with_anthropic_tool_use():
@@ -1632,6 +1962,97 @@ def test_token_counter_with_redacted_thinking_content():
 
     assert token_counter(model=model, messages=with_block) == token_counter(model=model, messages=without_block)
 
+
+def test_token_counter_with_compaction_block():
+    """
+    A replayed on-demand compaction block (Anthropic's signed summary of the earlier turns) counts its
+    summary text like a text block and nothing for its signature. It used to raise, which turned every
+    /v1/messages/count_tokens call on a compacted history into a 500 once the provider count fell back here.
+    """
+    model = "anthropic/claude-sonnet-5-5"
+    summary = "The user is building a recipe app in Python and asked for one-sentence class descriptions."
+    follow_up = {"role": "user", "content": [{"type": "text", "text": "Now do the same for Ingredient."}]}
+    signed_block = {"type": "compaction", "content": summary, "signature": "EqQBCkYIBRgCKkBjZ2xhc3M" * 40}
+
+    as_compaction = [{"role": "assistant", "content": [signed_block]}, follow_up]
+    unsigned = [{"role": "assistant", "content": [{"type": "compaction", "content": summary}]}, follow_up]
+    as_text = [{"role": "assistant", "content": [{"type": "text", "text": summary}]}, follow_up]
+
+    assert token_counter(model=model, messages=as_compaction) == token_counter(model=model, messages=as_text)
+    assert token_counter(model=model, messages=unsigned) == token_counter(model=model, messages=as_text)
+
+
+def test_token_counter_counts_chat_compaction_blocks_like_their_summary_text():
+    """
+    Chat clients replay a compaction block in the assistant message's provider_specific_fields, and inference
+    sends it to Anthropic as a content block, so the local count includes its summary text and skips its signature.
+    """
+    model = "anthropic/claude-sonnet-5-5"
+    summary = "The user is building a recipe app in Python and asked for one-sentence class descriptions."
+    follow_up = {"role": "user", "content": "Now do the same for Ingredient."}
+    signed_block = {"type": "compaction", "content": summary, "signature": "EqQBCkYIBRgCKkBjZ2xhc3M" * 40}
+
+    replayed = [
+        {"role": "assistant", "content": None, "provider_specific_fields": {"compaction_blocks": [signed_block]}},
+        follow_up,
+    ]
+    as_text = [{"role": "assistant", "content": summary}, follow_up]
+
+    assert token_counter(model=model, messages=replayed) == token_counter(model=model, messages=as_text)
+
+
+class _BosEncoder:
+    def encode_batch_fast(self, texts: list[str]) -> list[list[int]]:
+        return [[0] * (len(text.split()) + 1) for text in texts]
+
+
+def test_token_counter_charges_nothing_for_a_chat_compaction_block_with_no_summary():
+    """
+    A tokenizer that prepends a BOS token charges one token for the empty string, so a replayed
+    compaction block with an empty summary must not reach it, like an empty thinking block.
+    """
+    model = "anthropic/claude-sonnet-5-5"
+    tokenizer = {"type": "huggingface_tokenizer", "tokenizer": _BosEncoder()}
+    follow_up = {"role": "user", "content": "Now do the same for Ingredient."}
+    replayed = [
+        {
+            "role": "assistant",
+            "content": None,
+            "provider_specific_fields": {"compaction_blocks": [{"type": "compaction", "content": ""}]},
+        },
+        follow_up,
+    ]
+    bare = [{"role": "assistant", "content": None}, follow_up]
+
+    assert token_counter(model=model, messages=replayed, custom_tokenizer=tokenizer) == token_counter(
+        model=model, messages=bare, custom_tokenizer=tokenizer
+    )
+
+
+def test_count_content_list_skips_the_tokenizer_for_empty_block_text():
+    """
+    An empty thinking block, a redacted_thinking block (no thinking text at all) and a compaction
+    block with no summary carry no tokens, even under a tokenizer that charges for the empty string
+    (the llama-2 tokenizer prepends its BOS token to every encode call). Counting them through the
+    tokenizer added one token per block on such models.
+    """
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    def charges_for_empty_text(text: str) -> int:
+        return len(text.split()) + 1
+
+    empty_blocks = [
+        {"type": "thinking", "thinking": "", "signature": "EqcLCkYICxgCKkCrqu6lP..."},
+        {"type": "thinking", "thinking": None, "signature": "EqcLCkYICxgCKkCrqu6lP..."},
+        {"type": "redacted_thinking", "data": "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIw"},
+        {"type": "compaction", "content": ""},
+        {"type": "text", "text": ""},
+    ]
+
+    assert _count_content_list(charges_for_empty_text, empty_blocks, False, None) == 0
+    assert _count_content_list(charges_for_empty_text, [{"type": "thinking", "thinking": "two words"}], False, None) == 3
+
+
 def test_token_counter_with_tool_reference_block():
     """
     Regression test: a message containing an Anthropic tool-search
@@ -1843,6 +2264,20 @@ def test_token_counter_counts_anthropic_search_result_text() -> None:
     )
 
 
+def test_token_counter_counts_a_search_result_without_a_title() -> None:
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    search_result: Final = {
+        "type": "search_result",
+        "source": "https://example.invalid/notes",
+        "content": [{"type": "text", "text": "The code word is 7f3a."}],
+    }
+
+    assert _count_content_list(len, [search_result], False, None) == len(
+        "https://example.invalid/notesThe code word is 7f3a."
+    )
+
+
 @pytest.mark.parametrize("nested", (False, True))
 def test_unknown_content_type_remains_a_value_error_with_an_optional_fallback(nested: bool) -> None:
     from litellm.litellm_core_utils.token_counter import _count_content_list
@@ -1879,11 +2314,11 @@ def test_anthropic_image_block_without_source_raises():
     )
 
 
-def _count_user_content(content: list[dict]) -> int:
+def _count_user_content(content: list[dict], model: str = "anthropic/claude-fable-5") -> int:
     from litellm.litellm_core_utils.token_counter import token_counter
 
     return token_counter(
-        model="anthropic/claude-fable-5",
+        model=model,
         messages=[{"role": "user", "content": content}],
         use_default_image_token_count=True,
     )
@@ -1979,14 +2414,27 @@ def test_openai_file_block_without_inline_bytes_counts_what_it_carries():
     )
 
 
-def _pdf_base64(pages: tuple[str, ...], width: int = 612, height: int = 792) -> str:
+def _pdf_base64(
+    pages: tuple[str, ...],
+    width: int = 612,
+    height: int = 792,
+    xobjects: tuple[bytes, ...] = (),
+    drawing: bytes = b"",
+    page_resources: str | None = None,
+) -> str:
+    """`xobjects` are numbered from 4 + 2 * len(pages), every page lists the first one as its /X0 XObject, and every
+    page's content stream ends with `drawing`. `page_resources` replaces every page's /Resources dictionary."""
+    first_xobject: Final = 4 + 2 * len(pages)
+    page_xobjects: Final = f" /XObject << /X0 {first_xobject} 0 R >>" if xobjects else ""
+    resources: Final = page_resources if page_resources is not None else f"<< /Font << /F1 3 0 R >>{page_xobjects} >>"
+
     def page_objects(index: int, text: str) -> tuple[bytes, bytes]:
         escaped: Final = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-        stream: Final = f"BT /F1 12 Tf 72 720 Td ({escaped}) Tj ET".encode("latin-1")
+        stream: Final = f"BT /F1 12 Tf 72 720 Td ({escaped}) Tj ET".encode("latin-1") + drawing
         content: Final = f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"\nendstream"
         page: Final = (
             f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] "
-            f"/Resources << /Font << /F1 3 0 R >> >> /Contents {4 + 2 * index} 0 R >>"
+            f"/Resources {resources} /Contents {4 + 2 * index} 0 R >>"
         ).encode()
         return content, page
 
@@ -1996,6 +2444,7 @@ def _pdf_base64(pages: tuple[str, ...], width: int = 612, height: int = 792) -> 
         f"<< /Type /Pages /Count {len(pages)} /Kids [ {kids} ] >>".encode(),
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
         *chain.from_iterable(page_objects(index, text) for index, text in enumerate(pages)),
+        *xobjects,
     )
     header: Final = b"%PDF-1.4\n"
     objects: Final = tuple(
@@ -2072,6 +2521,401 @@ def test_pdf_document_without_pypdf_is_priced_like_an_image(monkeypatch: pytest.
     priced_as_image: Final = _count_user_content([prompt, {"type": "document", "source": source}])
     assert priced_as_image == _count_user_content([prompt, {"type": "image", "source": source}])
     assert priced_as_image < priced_by_page
+
+
+_REVENUE_LINE: Final = "Revenue grew eleven percent while churn fell to two percent."
+_HEADCOUNT_LINE: Final = "Headcount is flat and the office lease was renewed for three years."
+_ONE_PIXEL_IMAGE: Final = (
+    b"<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 "
+    b"/Length 1 >>\nstream\n\x00\nendstream"
+)
+
+
+_DRAW_X0: Final = b" q 10 0 0 10 0 0 cm /X0 Do Q"
+_DRAW_X1: Final = b"/X1 Do"
+
+
+def _form_xobject(resources_number: int, drawing: bytes = _DRAW_X1) -> bytes:
+    return (
+        f"<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources {resources_number} 0 R "
+        f"/Length {len(drawing)} >>\nstream\n".encode()
+        + drawing
+        + b"\nendstream"
+    )
+
+
+def _xobject_resources(xobject_number: int) -> bytes:
+    return f"<< /XObject << /X1 {xobject_number} 0 R >> >>".encode()
+
+
+def _as_pdf_document(pdf_base64: str) -> Mapping[str, object]:
+    return {"type": "document", "source": _pdf_source(pdf_base64)}
+
+
+def _as_pdf_file(pdf_base64: str) -> Mapping[str, object]:
+    file_data: Final = "data:application/pdf;base64," + pdf_base64
+    return {"type": "file", "file": {"filename": "report.pdf", "file_data": file_data}}
+
+
+def _as_pdf_tool_result(pdf_base64: str) -> Mapping[str, object]:
+    return {"type": "tool_result", "tool_use_id": "t1", "content": [_as_pdf_document(pdf_base64)]}
+
+
+def _pdf_cost(model: str, pdf_base64: str, wrap: Callable[[str], Mapping[str, object]] = _as_pdf_document) -> int:
+    return _count_user_content([wrap(pdf_base64)], model) - _count_user_content([wrap(_pdf_base64(()))], model)
+
+
+def _text_cost(model: str, *lines: str) -> int:
+    return sum(
+        _count_user_content([{"type": "text", "text": line}], model) - _count_user_content([], model) for line in lines
+    )
+
+
+def _rendered_page_cost(width: int = 612, height: int = 792) -> int:
+    return _pdf_cost("my-private-model", _pdf_base64(("",), width, height))
+
+
+@pytest.mark.parametrize(
+    "wrap", [_as_pdf_document, _as_pdf_file, _as_pdf_tool_result], ids=["document", "file", "tool_result"]
+)
+@pytest.mark.parametrize(
+    "model",
+    ["gpt-4o", "azure/gpt-5.6-sol", "o3-2025-04-16", "azure/gpt-41", "eu/gpt-5.6-sol", "gpt-5.6-sol-2026-07-09"],
+)
+def test_openai_model_prices_each_pdf_text_page_as_its_text_plus_framing(
+    model: str, wrap: Callable[[str], Mapping[str, object]]
+):
+    """OpenAI models bill a PDF page with text as its text plus 13 tokens and a blank page as nothing, with no page
+    image. Measured 2026-10-20 on Azure chat completions gpt-5.6-sol (1, 2, and 10 pages of 15 text tokens billed
+    +28, +56, +280, and 1, 2, or 10 blank pages billed the same as none) and on OpenAI /v1/responses/input_tokens
+    for gpt-4o, gpt-4.1, gpt-5, gpt-5.5, o3, and o4-mini.
+
+    Before the fix every model got Claude's pricing, so count_tokens answered about 1586 for a one-page text PDF
+    that Azure gpt-5.6-sol billed at 61.
+    """
+    one_page: Final = _pdf_cost(model, _pdf_base64((_REVENUE_LINE,)), wrap)
+
+    assert one_page == _text_cost(model, _REVENUE_LINE) + 13
+    assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE, _HEADCOUNT_LINE)), wrap) == (
+        _text_cost(model, _REVENUE_LINE, _HEADCOUNT_LINE) + 2 * 13
+    )
+    assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,) * 10), wrap) == 10 * one_page
+    assert _pdf_cost(model, _pdf_base64(("",) * 5), wrap) == 0
+    assert _pdf_cost(model, _pdf_base64(("", _REVENUE_LINE, "")), wrap) == one_page
+
+
+@pytest.mark.parametrize(
+    "xobjects",
+    [(_ONE_PIXEL_IMAGE,), (_form_xobject(7), _xobject_resources(8), _ONE_PIXEL_IMAGE)],
+    ids=["image_on_the_page", "image_inside_a_form"],
+)
+def test_openai_model_prices_a_page_that_draws_a_raster_image_as_its_text_plus_the_rendered_page(
+    xobjects: tuple[bytes, ...],
+):
+    """A page embedding a raster image keeps the rendered-page estimate every model got before, so a reservation
+    never undercounts it: on 2026-10-20 /v1/responses/input_tokens billed a page with one drawn image at 1620 on
+    gpt-5.6-sol and gpt-6-sol, above OpenAI's own high-detail page image (765 for Letter), while a vector-drawn
+    chart page billed no image.
+    """
+    model: Final = "gpt-4o"
+
+    assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,), xobjects=xobjects, drawing=_DRAW_X0)) == (
+        _text_cost(model, _REVENUE_LINE) + _rendered_page_cost()
+    )
+    assert _pdf_cost(model, _pdf_base64(("",), xobjects=xobjects, drawing=_DRAW_X0)) == _rendered_page_cost()
+    assert _pdf_cost(model, _pdf_base64(("",), 300, 300, xobjects=xobjects, drawing=_DRAW_X0)) == (
+        _rendered_page_cost(300, 300)
+    )
+
+
+def test_openai_model_prices_no_page_image_for_an_image_the_page_lists_but_never_draws():
+    """Pages sharing one /Resources all list its logo, but only the page that paints it bills a page image: measured
+    2026-10-20 on Azure gpt-5.6-sol, a 3-page PDF drawing a logo on page 1 billed 403, not three page images."""
+    model: Final = "gpt-4o"
+
+    assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,), xobjects=(_ONE_PIXEL_IMAGE,))) == (
+        _text_cost(model, _REVENUE_LINE) + 13
+    )
+    form_listing_an_unused_image: Final = (_form_xobject(7, b""), _xobject_resources(8), _ONE_PIXEL_IMAGE)
+    assert _pdf_cost(model, _pdf_base64(("",), xobjects=form_listing_an_unused_image, drawing=_DRAW_X0)) == 0
+
+
+def test_openai_model_prices_no_image_for_forms_that_draw_none():
+    """A vector-drawn form XObject bills no page image, and a form that lists itself cannot loop the walk."""
+    model: Final = "gpt-4o"
+    self_referencing_form: Final = (_form_xobject(7), _xobject_resources(6))
+
+    assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,), xobjects=self_referencing_form, drawing=_DRAW_X0)) == (
+        _text_cost(model, _REVENUE_LINE) + 13
+    )
+
+
+_INLINE_IMAGE: Final = b" q 200 0 0 200 72 400 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \x00 EI Q"
+
+
+def test_openai_model_prices_a_page_that_draws_an_inline_image_like_an_image_xobject():
+    """An image drawn inline in the content stream (BI ... ID ... EI) bills like an image XObject: measured
+    2026-10-20, the same 200x200 pt picture billed 351 either way on Azure gpt-5.6-sol and 303 on gpt-4o."""
+    model: Final = "gpt-4o"
+    form_drawing_inline_image: Final = (
+        f"<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length {len(_INLINE_IMAGE)} >>\nstream\n".encode()
+        + _INLINE_IMAGE
+        + b"\nendstream"
+    )
+
+    assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,), drawing=_INLINE_IMAGE)) == (
+        _text_cost(model, _REVENUE_LINE) + _rendered_page_cost()
+    )
+    assert _pdf_cost(model, _pdf_base64(("",), drawing=_INLINE_IMAGE, page_resources="<< >>")) == (
+        _rendered_page_cost()
+    )
+    assert _pdf_cost(model, _pdf_base64(("",), xobjects=(form_drawing_inline_image,), drawing=_DRAW_X0)) == (
+        _rendered_page_cost()
+    )
+
+
+def test_openai_model_keeps_the_text_of_a_page_whose_forms_nest_too_deep_to_walk():
+    """A chain of 2,000 nested form XObjects used to exhaust the stack, which dropped the whole document's text and
+    priced it as one image. The walk now stops at a fixed depth and prices the page as if it drew an image."""
+    model: Final = "gpt-4o"
+    depth: Final = 2000
+    first: Final = 6
+    chain_objects: Final = tuple(
+        chain.from_iterable(
+            (_form_xobject(first + 2 * level + 1), _xobject_resources(first + 2 * level + 2)) for level in range(depth)
+        )
+    )
+
+    assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,), xobjects=chain_objects, drawing=_DRAW_X0)) == (
+        _text_cost(model, _REVENUE_LINE) + _rendered_page_cost()
+    )
+
+
+@pytest.mark.parametrize("drawing", [b" /A Do /B Do", b" /B Do /A Do"])
+def test_openai_model_finds_an_image_a_shared_form_without_resources_draws_from_one_parent(drawing: bytes):
+    """A form with no /Resources resolves names in the resources of whichever form draws it, so a child that two
+    parents share reaches the image only through the parent whose resources list it."""
+    model: Final = "gpt-4o"
+    child_without_resources: Final = (
+        b"<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 5 >>\nstream\n/Y Do\nendstream"
+    )
+    parents_and_child: Final = (
+        _form_xobject(7, b"/C Do"),
+        b"<< /XObject << /C 10 0 R >> >>",
+        _form_xobject(9, b"/C Do"),
+        b"<< /XObject << /C 10 0 R /Y 11 0 R >> >>",
+        child_without_resources,
+        _ONE_PIXEL_IMAGE,
+    )
+
+    assert _pdf_cost(
+        model,
+        _pdf_base64(
+            ("",),
+            xobjects=parents_and_child,
+            drawing=drawing,
+            page_resources="<< /XObject << /A 6 0 R /B 8 0 R >> >>",
+        ),
+    ) == _rendered_page_cost()
+
+
+@pytest.mark.parametrize(
+    ("drawing", "draws_image"),
+    [(b" /X0 %scale it first\n Do", True), (b" /X0 % Do\n", False)],
+    ids=["comment-before-do", "do-inside-a-comment"],
+)
+def test_openai_model_reads_a_comment_in_a_content_stream_as_whitespace(drawing: bytes, draws_image: bool):
+    """A comment runs to the end of its line and separates tokens like whitespace, so it neither hides the Do after
+    it nor draws anything itself."""
+    model: Final = "gpt-4o"
+
+    assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,), xobjects=(_ONE_PIXEL_IMAGE,), drawing=drawing)) == (
+        _text_cost(model, _REVENUE_LINE) + (_rendered_page_cost() if draws_image else 13)
+    )
+
+
+@pytest.mark.parametrize("escaped_name", ["/Im#231", "/#C4#E3", "/caf#C3#A9"], ids=["hex_escape", "gbk", "utf8"])
+def test_openai_model_finds_an_image_drawn_by_an_escaped_name(escaped_name: str):
+    """A name written with #xx escapes reads the same in the content stream and in /Resources, decoded the way pypdf
+    decodes it, so an image drawn under such a name still prices the page as rendered."""
+    model: Final = "gpt-4o"
+
+    assert _pdf_cost(
+        model,
+        _pdf_base64(
+            ("",),
+            xobjects=(_ONE_PIXEL_IMAGE,),
+            drawing=f" {escaped_name} Do".encode(),
+            page_resources=f"<< /XObject << {escaped_name} 6 0 R >> >>",
+        ),
+    ) == _rendered_page_cost()
+
+
+@pytest.mark.parametrize(("parent_count", "draws_too_many"), [(1, False), (2, True)])
+def test_openai_model_prices_a_page_whose_forms_draw_too_many_xobjects_as_rendered(
+    parent_count: int, draws_too_many: bool
+):
+    """A page prices as if it drew an image once its forms draw more than PDF_MAX_XOBJECT_DRAWS_PER_PAGE XObjects
+    between them, so a page of forms nested to blow up the walk cannot stall the request."""
+    model: Final = "gpt-4o"
+    first: Final = 6
+    child_number: Final = first + 2 * parent_count
+    child_drawing: Final = b" ".join((b"/D Do",) * (PDF_MAX_XOBJECT_DRAWS_PER_PAGE // 2))
+    child: Final = (
+        f"<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length {len(child_drawing)} >>\nstream\n".encode()
+        + child_drawing
+        + b"\nendstream"
+    )
+    parents: Final = tuple(
+        chain.from_iterable(
+            (_form_xobject(first + 2 * index + 1, b"/C Do"), f"<< /XObject << /C {child_number} 0 R >> >>".encode())
+            for index in range(parent_count)
+        )
+    )
+    page_resources: Final = (
+        "<< /Font << /F1 3 0 R >> /XObject << "
+        + " ".join(f"/P{index} {first + 2 * index} 0 R" for index in range(parent_count))
+        + " >> >>"
+    )
+    page_drawing: Final = b" " + b" ".join(f"/P{index} Do".encode() for index in range(parent_count))
+
+    assert _pdf_cost(
+        model,
+        _pdf_base64(
+            (_REVENUE_LINE,), xobjects=(*parents, child), drawing=page_drawing, page_resources=page_resources
+        ),
+    ) == _text_cost(model, _REVENUE_LINE) + (_rendered_page_cost() if draws_too_many else 13)
+
+
+_NON_LATIN_SAMPLE: Final = "Привет, как дела? これは日本語のテキストです。 Ceci est un texte en français: éèàç. " * 8
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-5.6-sol",
+        "gpt-5.4-mini",
+        "gpt-6-sol",
+        "azure/gpt-41",
+        "azure/gpt-5.6-sol",
+        "eu/gpt-5.6-sol",
+        "gpt-5.6-sol-2026-07-09",
+    ],
+)
+def test_openai_models_tiktoken_does_not_know_count_with_o200k(model: str):
+    """OpenAI models newer than the installed tiktoken's map bill text with o200k_base: measured 2026-10-20 on
+    /v1/responses/input_tokens, gpt-5, gpt-5.4-mini, gpt-5.5, gpt-5.6-sol, and gpt-6-sol all billed 255 for a
+    non-Latin sample like this one that is 249 tokens in o200k_base and 297 in cl100k_base."""
+    o200k: Final = tiktoken.get_encoding("o200k_base")
+
+    assert token_counter_new(model=model, text=_NON_LATIN_SAMPLE) == len(o200k.encode(_NON_LATIN_SAMPLE))
+
+
+@pytest.mark.parametrize(("deployment_name", "model"), [("azure/gpt-4", "gpt-4"), ("eu/gpt-35-turbo", "gpt-35-turbo")])
+def test_prefixed_openai_model_names_count_text_like_the_model_they_name(deployment_name: str, model: str):
+    assert token_counter_new(model=deployment_name, text=_NON_LATIN_SAMPLE) == token_counter_new(
+        model=model, text=_NON_LATIN_SAMPLE
+    )
+
+
+@pytest.mark.parametrize(
+    "model", ["azure/gpt-chat-latest", "azure/codex-mini", "azure/gpt-5.3-chat", "azure/gpt-4.5-preview"]
+)
+def test_azure_openai_models_only_azure_lists_get_openai_pricing_and_o200k(model: str):
+    assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,))) == _text_cost(model, _REVENUE_LINE) + 13
+    assert token_counter_new(model=model, text=_NON_LATIN_SAMPLE) == len(
+        tiktoken.get_encoding("o200k_base").encode(_NON_LATIN_SAMPLE)
+    )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "openrouter/openai/gpt-4o",
+        "github_copilot/gpt-4o",
+        "azure_ai/gpt-4o",
+        "azure/responses/gpt-5.6-sol",
+        "azure/o_series/o3-mini",
+    ],
+)
+def test_gpt_names_behind_any_provider_or_route_prefix_count_like_the_bare_name(model: str):
+    """The proxy counts a deployment with its model name minus the provider prefix, so the SDK prices and encodes
+    a prefixed GPT name the same way the bare name counts. OpenRouter gpt-4o billed a text PDF page at 237 on
+    2026-10-20, closer to OpenAI's pricing than to Claude's 1534."""
+    bare_name: Final = model.rpartition("/")[2]
+    pdf_with_a_drawn_image: Final = _pdf_base64((_REVENUE_LINE,), xobjects=(_ONE_PIXEL_IMAGE,), drawing=_DRAW_X0)
+
+    assert _pdf_cost(model, pdf_with_a_drawn_image) == _pdf_cost(bare_name, pdf_with_a_drawn_image)
+    assert _pdf_cost(model, _pdf_base64(("",))) == 0
+    assert token_counter_new(model=model, text=_NON_LATIN_SAMPLE) == len(
+        tiktoken.get_encoding("o200k_base").encode(_NON_LATIN_SAMPLE)
+    )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "text-embedding-ada-002-v2",
+        "tts-1",
+        "whisper-1",
+        "azure/whisper-1",
+        "github_copilot/text-embedding-3-small-inference",
+        "azure_text/gpt-35-turbo-instruct",
+        "ft:davinci-002:my-org::abc123",
+    ],
+)
+def test_openai_models_that_are_not_chat_models_keep_counting_with_cl100k_and_claude_pdf_pricing(model: str):
+    assert token_counter_new(model=model, text=_NON_LATIN_SAMPLE) == len(
+        tiktoken.get_encoding("cl100k_base").encode(_NON_LATIN_SAMPLE)
+    )
+    assert _pdf_cost(model, _pdf_base64(("",))) == 1534
+
+
+@pytest.mark.parametrize(
+    ("fine_tune", "base_model"),
+    [
+        ("ft:gpt-4o-mini-2024-07-18:my-org::abc123", "gpt-4o-mini-2024-07-18"),
+        ("openai/ft:gpt-4.1-2025-04-14:my-org:support:def456", "gpt-4.1-2025-04-14"),
+    ],
+)
+def test_openai_fine_tunes_count_like_their_base_model(fine_tune: str, base_model: str):
+    pdf: Final = _pdf_base64((_REVENUE_LINE,))
+
+    assert _pdf_cost(fine_tune, pdf) == _pdf_cost(base_model, pdf) == _text_cost(base_model, _REVENUE_LINE) + 13
+    assert token_counter_new(model=fine_tune, text=_NON_LATIN_SAMPLE) == token_counter_new(
+        model=base_model, text=_NON_LATIN_SAMPLE
+    )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "",
+        "anthropic/claude-fable-5",
+        "DeepSeek-V4-Flash-0731",
+        "my-private-model",
+        "azure/mistral-large-latest",
+        "command-r-plus",
+    ],
+)
+def test_non_openai_models_keep_pricing_pdf_pages_as_claude_renders_them(model: str):
+    """Only known OpenAI and Azure OpenAI models switch to OpenAI's PDF billing, so an empty or unknown model keeps
+    Claude's text plus rendered page image, 1534 tokens for a blank Letter page."""
+    assert _pdf_cost(model, _pdf_base64(("",))) == 1534
+    assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,))) == _text_cost(model, _REVENUE_LINE) + 1534
+
+
+def test_messages_reach_token_count_prices_pdf_pages_like_token_counter():
+    from litellm.litellm_core_utils.token_counter import messages_reach_token_count
+
+    messages: Final = [{"role": "user", "content": [_as_pdf_document(_pdf_base64((_REVENUE_LINE, "")))]}]
+    total: Final = token_counter_new(model="azure/gpt-5.6-sol", messages=messages)
+
+    assert total == token_counter_new(model="azure/gpt-5.6-sol", messages=[{"role": "user", "content": []}]) + (
+        _text_cost("azure/gpt-5.6-sol", _REVENUE_LINE) + 13
+    )
+    assert messages_reach_token_count(model="azure/gpt-5.6-sol", messages=messages, threshold=total) is True
+    assert messages_reach_token_count(model="azure/gpt-5.6-sol", messages=messages, threshold=total + 1) is False
 
 
 def _png_data_url(width: int, height: int) -> str:
@@ -2324,6 +3168,27 @@ tokens = litellm.encode(model="meta-llama/Llama-2-7b-chat", text=text)
 print(json.dumps({"tokens": tokens, "decoded": litellm.decode(model="meta-llama/Llama-2-7b-chat", tokens=tokens), "requested": sorted(set(requested))}))
 """
 
+HUB_RETRY_DURING_EXIT_SCRIPT: Final = HUB_SETUP_SCRIPT + """
+import threading
+import time
+from litellm.utils import _HuggingFaceTokenizerLoadOutcomes, _return_huggingface_tokenizer
+retry_reached_hub = threading.Event()
+def answer_once_the_process_is_exiting(request):
+    retry_reached_hub.set()
+    while threading.main_thread().is_alive():
+        time.sleep(0.01)
+    time.sleep(0.5)
+    return handle(request)
+now = [0.0]
+outcomes = _HuggingFaceTokenizerLoadOutcomes(clock=lambda: now[0])
+model = "meta-llama/llama-3-70b-instruct"
+_return_huggingface_tokenizer(model, outcomes)
+huggingface_hub.set_client_factory(lambda: httpx.Client(transport=httpx.MockTransport(answer_once_the_process_is_exiting)))
+now[0] = 3600.0
+_return_huggingface_tokenizer(model, outcomes)
+print(json.dumps({"retry_reached_hub": retry_reached_hub.wait(timeout=60)}))
+"""
+
 
 def _word_level_tokenizer_json(
     pre_tokenizer: pre_tokenizers.PreTokenizer, vocab: Mapping[str, int] | None = None
@@ -2384,6 +3249,18 @@ def test_token_counter_uses_the_tokenizer_of_each_model_family_and_of_a_custom_t
         "custom": expected["Xenova/llama-3-tokenizer"],
         "requested": sorted(served),
     }
+
+
+def test_custom_openai_tokenizer_without_a_model_counts_with_the_default_encoding() -> None:
+    sample: Final = "A custom tokenizer passed with no model still counts."
+
+    assert litellm.token_counter(model=None, custom_tokenizer=litellm.utils.select_tokenizer("gpt-4o"), text=sample) == (
+        len(tiktoken.get_encoding("cl100k_base").encode(sample))
+    )
+
+
+def test_process_exits_cleanly_while_a_background_tokenizer_retry_is_downloading(tmp_path: Path) -> None:
+    assert _run_in_memory_hub(HUB_RETRY_DURING_EXIT_SCRIPT, {}, "", tmp_path) == {"retry_reached_hub": True}
 
 
 def test_empty_custom_tokenizer_uses_model_tokenizer() -> None:

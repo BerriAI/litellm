@@ -227,6 +227,7 @@ jobs:
               tests/unit/llms/test_oss_decision.py
               tests/unit/llms/test_polling_url_origin_match.py
               tests/unit/llms/test_predibase_transformation.py
+              tests/unit/llms/test_subscription_accounts.py
               tests/unit/llms/a2a
               tests/unit/llms/aiml
               tests/unit/llms/aiohttp_openai
@@ -245,6 +246,7 @@ jobs:
               tests/unit/llms/chatgpt
               tests/unit/llms/clarifai
               tests/unit/llms/claude_code
+              tests/unit/llms/clf_ai_gateway
               tests/unit/llms/cloudflare
               tests/unit/llms/codestral
               tests/unit/llms/codex
@@ -322,6 +324,7 @@ jobs:
               tests/unit/llms/openai_like
               tests/unit/llms/opencode
               tests/unit/llms/opensandbox
+              tests/unit/llms/opensearch
               tests/unit/llms/openrouter
               tests/unit/llms/ovhcloud
               tests/unit/llms/parallel_ai
@@ -1002,9 +1005,9 @@ jobs:
         run: |
           diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
           if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils
           else
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project
             uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
             cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
             uv run --no-sync python -c "import importlib.metadata; import litellm.rust_bridge._native; print(importlib.metadata.version('litellm'))"
@@ -1149,18 +1152,20 @@ jobs:
         env:
           CI: "true"
           GH_TOKEN: ${{ github.token }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           full_suite() { npm run test -- --run --pool forks --maxWorkers=14; }
 
-          if [ -z "$BASE_SHA" ]; then
+          if [ -z "$PR_NUMBER" ]; then
             echo "Push to $GITHUB_REF_NAME: running the full suite"
             full_suite
             exit 0
           fi
 
-          merge_base=$(gh api "repos/${{ github.repository }}/compare/${BASE_SHA}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
+          base_ref=$(gh api "repos/${GITHUB_REPOSITORY}/branches/${EVENT_BASE_REF}" --jq .name) || base_ref=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .base.ref)
+          merge_base=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${base_ref}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
           test -n "$merge_base"
           git fetch --no-tags --depth=1 origin "$merge_base" "$HEAD_SHA"
           changed_files=()
@@ -1450,9 +1455,9 @@ jobs:
           RUST_BRIDGE_ARTIFACT: ${{ needs.rust-bridge.outputs.artifact }}
         run: |
           if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils
           else
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project
             uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
             cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
           fi

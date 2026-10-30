@@ -5,11 +5,14 @@ Test for response_api_endpoints/endpoints.py
 import asyncio
 import contextlib
 import dataclasses
+import datetime
 import json
 import unittest
 from collections.abc import Callable, Mapping
 from typing import Any, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
+
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 import httpx
 import pytest
@@ -22,6 +25,7 @@ import litellm
 from litellm.constants import EMPTY_MAPPING
 from litellm.proxy._types import ProxyException
 from litellm.proxy.proxy_server import app
+from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.router import RouterErrors
 from tests._master_key import MASTER_KEY
@@ -910,7 +914,7 @@ def _configured_deployment_router(fetched: ResponsesAPIResponse) -> MagicMock:
         )
     )
     router.aget_responses = AsyncMock(return_value=fetched)
-    return router
+    return route_entry_points_to_stubs(router)
 
 
 def _background_response(response_id: str, status: str, input_tokens: int) -> ResponsesAPIResponse:
@@ -975,7 +979,13 @@ def _request_for(method: str, path: str, body: bytes):
         return {"type": "http.request", "body": body, "more_body": False}
 
     return Request(
-        {"type": "http", "method": method, "path": path, "headers": [(b"content-type", b"application/json")]},
+        {
+            "type": "http",
+            "method": method,
+            "path": path,
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+        },
         receive,
     )
 
@@ -1292,6 +1302,205 @@ async def test_a_streamed_background_create_bills_its_finished_response_once_und
     (billed,) = spend_events.payloads
     assert billed["metadata"]["user_api_key_hash"] == hash_token("sk-creator")
     assert billed["request_tags"] == ["nightly"]
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_read_bills_the_finished_job_once_before_the_client_sees_it_finish(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Reading a finished background job as a stream settles its bill like a plain read does, before
+    the terminal event reaches the client, while the replayed stream's own log carries no cost and a
+    later read of the same job bills nothing more."""
+    from fastapi import Response as FastAPIResponse
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.response_api_endpoints.endpoints import (
+        _bill_finished_background_response,
+        _streamed_retrieval_data_generator,
+    )
+
+    spend_events: Final = _capture_spend_events(monkeypatch)
+    stored: Final = _one_pending_background_response()
+    finished: Final = _background_response(stored.response_id, "completed", 100)
+    stream: Final = _replayed_stream(stored.response_id)
+
+    async def replayed_events(**_: object):
+        async for event in stream:
+            yield f"data: {event.model_dump_json()}\n\n"
+
+    status_before_each_event: Final[list[str]] = []
+    with _proxy_over(stored.prisma_client, stored.proxy_logging, _configured_deployment_router(finished)):
+        async for _ in _streamed_retrieval_data_generator(
+            replayed_events, stored.response_id, True, stream, UserAPIKeyAuth(api_key="sk-reader"), {}
+        ):
+            status_before_each_event.extend(row.status for row in stored.table.rows)
+        await _bill_finished_background_response(
+            response=finished,
+            response_id=stored.response_id,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-reader"),
+            fastapi_response=FastAPIResponse(),
+            read_settles_billing=True,
+        )
+        await _drain_spend_events()
+
+    assert status_before_each_event == ["queued", "completed"]
+    (billed,) = tuple(payload for payload in spend_events.payloads if payload["response_cost"])
+    assert billed["prompt_tokens"] == 100
+
+
+_RESUMED_UPSTREAM: Final = "https://resume.example/v1"
+
+
+def _resumed_events(response_id: str) -> tuple[Mapping[str, object], ...]:
+    return (
+        {
+            "type": "response.output_text.delta",
+            "sequence_number": 4,
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "hi",
+            "logprobs": [],
+        },
+        {
+            "type": "response.completed",
+            "sequence_number": 5,
+            "response": _background_response(response_id, "completed", 100).model_dump(mode="json"),
+        },
+    )
+
+
+def _replayed_stream(response_id: str) -> ResponsesAPIStreamingIterator:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+
+    wire: Final = "".join(
+        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in _resumed_events(response_id)
+    )
+    return ResponsesAPIStreamingIterator(
+        response=httpx.Response(200, content=wire, headers={"content-type": "text/event-stream"}),
+        model="gpt-5.6",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=Logging(
+            model="gpt-5.6",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="aresponses",
+            start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC),
+            litellm_call_id="resumed-read",
+            function_id="resumed-read",
+        ),
+        custom_llm_provider="openai",
+        request_data={"model": "gpt-5.6", "input": "hi", "stream": True},
+        replays_stored_stream=True,
+    )
+
+
+def _sse_events(text: str) -> tuple[Mapping[str, object], ...]:
+    frames: Final = (frame for frame in text.split("\n\n") if "data: " in frame and "data: [DONE]" not in frame)
+    return tuple(
+        json.loads(next(line[6:] for line in frame.splitlines() if line.startswith("data: "))) for frame in frames
+    )
+
+
+async def _read_through_proxy(
+    monkeypatch: pytest.MonkeyPatch, query: Mapping[str, str], upstream: httpx.Response
+) -> tuple[httpx.Response, tuple[httpx.Request, ...]]:
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.6",
+                "litellm_params": {"model": "openai/gpt-5.6", "api_base": _RESUMED_UPSTREAM, "api_key": "fixture-key"},
+                "model_info": {"id": "deployment-read"},
+            }
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, _auth_override)
+    with respx.mock(assert_all_called=False) as transport:
+        route: Final = transport.get(_RESUMED_UPSTREAM + "/responses/resp_read").mock(return_value=upstream)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
+            result: Final = await client.get(f"/v1/responses/{_proxy_issued_id('resp_read')}", params=query)
+        return result, tuple(call.request for call in route.calls)
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_read_through_the_proxy_replays_the_events_after_the_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    wire: Final = "".join(
+        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in _resumed_events("resp_read")
+    )
+    result, upstream_requests = await _read_through_proxy(
+        monkeypatch,
+        {"stream": "true", "starting_after": "3"},
+        httpx.Response(200, content=wire, headers={"Content-Type": "text/event-stream"}),
+    )
+    events: Final = _sse_events(result.text)
+
+    assert result.status_code == 200, result.text
+    assert result.headers["content-type"].startswith("text/event-stream")
+    assert [event["type"] for event in events] == ["response.output_text.delta", "response.completed"]
+    assert events[-1]["response"]["id"] == _proxy_issued_id("resp_read")
+    assert [dict(request.url.params) for request in upstream_requests] == [{"stream": "true", "starting_after": "3"}]
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_read_cut_before_its_terminal_event_ends_in_a_responses_failure_event(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    delta: Final = _resumed_events("resp_read")[0]
+    result, _ = await _read_through_proxy(
+        monkeypatch,
+        {"stream": "true", "starting_after": "3"},
+        httpx.Response(
+            200,
+            content=f"event: {delta['type']}\ndata: {json.dumps(delta)}\n\n",
+            headers={"Content-Type": "text/event-stream"},
+        ),
+    )
+    events: Final = _sse_events(result.text)
+
+    assert result.status_code == 200, result.text
+    assert [event["type"] for event in events] == ["response.output_text.delta", "response.failed"]
+    assert "before any terminal event" in events[-1]["response"]["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_a_plain_read_through_the_proxy_still_answers_json(monkeypatch: pytest.MonkeyPatch):
+    result, upstream_requests = await _read_through_proxy(
+        monkeypatch,
+        {"starting_after": "3"},
+        httpx.Response(200, json=_background_response("resp_read", "in_progress", 100).model_dump(mode="json")),
+    )
+
+    assert result.status_code == 200, result.text
+    assert result.json()["id"] == _proxy_issued_id("resp_read")
+    assert [dict(request.url.params) for request in upstream_requests] == [{}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query, bad_param",
+    [
+        ({"stream": "maybe"}, "stream"),
+        ({"stream": "true", "starting_after": "-1"}, "starting_after"),
+        ({"stream": "true", "starting_after": "abc"}, "starting_after"),
+    ],
+)
+async def test_a_malformed_resume_query_through_the_proxy_is_a_400(
+    monkeypatch: pytest.MonkeyPatch, query: Mapping[str, str], bad_param: str
+):
+    result, upstream_requests = await _read_through_proxy(monkeypatch, query, httpx.Response(500))
+
+    assert result.status_code == 400, result.text
+    assert bad_param in result.json()["error"]["message"]
+    assert upstream_requests == ()
 
 
 @pytest.mark.asyncio
@@ -1846,6 +2055,22 @@ def test_responses_ws_failure_frame_uses_the_http_status_for_the_same_failure(
     assert frame["status"] == expected_status
     assert frame["error"]["type"] == expected_type
     assert frame["error"]["message"] == handle_exception_on_proxy(failure).message
+
+
+def test_responses_ws_failure_frame_shows_only_the_refusal_for_a_model_that_refuses_the_endpoint():
+    from litellm.exceptions import EndpointNotSupportedByModelError
+    from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_failure_frame
+
+    refusal: Final = "/v1/responses is not supported by model=embed-only. Supported endpoints: /v1/embeddings"
+    failure: Final = EndpointNotSupportedByModelError(
+        message=f"{refusal}\n\nLiteLLM: model group 'embed-only' failed with the error above", model="embed-only"
+    )
+
+    assert json.loads(_responses_ws_failure_frame(failure)) == {
+        "type": "error",
+        "status": 400,
+        "error": {"type": "invalid_request_error", "message": refusal},
+    }
 
 
 class TestWSSessionCostTracking:
@@ -3713,7 +3938,7 @@ class TestCursorInputArmFlattening:
 
 class TestChatCompletionsBodyDetection:
     def test_routing_matrix(self):
-        from litellm.proxy.response_api_endpoints.endpoints import _is_chat_completions_body
+        from litellm.proxy.litellm_pre_call_utils import is_chat_completions_body as _is_chat_completions_body
 
         assert _is_chat_completions_body({"messages": [{"role": "user", "content": "hi"}]}) is True
         assert _is_chat_completions_body({"messages": [{"role": "user", "content": "hi"}], "input": []}) is True
@@ -3905,7 +4130,7 @@ class TestResolveCursorModelVariant:
 
 
 def _router_serving_only(base_model: str) -> MagicMock:
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.model_names = set()
     mock_router.model_group_alias = {}
     mock_router.team_public_model_names = frozenset()

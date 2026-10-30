@@ -132,6 +132,7 @@ from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import ModelTableRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router import Router
+from litellm.router_api import ChangeSet
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     GATED_AUTO_ROUTER_CAPABILITIES,
     STRATEGY_ROUTER_PARAM_FIELDS,
@@ -673,7 +674,7 @@ async def _auto_router_capability_slot(
     async with transaction as tx_ctx:
         tables: Final[_TxModelTables] = tx_ctx
         await tx_ctx.query_raw(_CAPABILITY_LOCK_SQL, AUTO_ROUTER_CAPABILITY_SLOT_LOCK_KEY)
-        config_rows: Final = () if llm_router is None else tuple(llm_router.config_deployments())
+        config_rows: Final = () if llm_router is None else tuple(llm_router.registry().deployments(source="config"))
         if member_write is not None:
             if member_write.model_id is not None:
                 await tx_ctx.query_raw(
@@ -728,7 +729,7 @@ async def _auto_router_capability_slot(
                 )
                 team_aliases: Final = team_model_aliases(team)
                 aliases: Final = (
-                    *(llm_router.model_group_alias or ()),
+                    *(llm_router.registry().aliases() or ()),
                     *(litellm.model_alias_map or ()),
                     *(team_aliases or ()),
                 )
@@ -778,7 +779,11 @@ async def _auto_router_capability_slot(
                 limit=limit,
             )
         yield tables.litellm_proxymodeltable
-    await publish_config_change(redis_cache=coordination_redis_cache(), object_type="litellm_proxymodeltable")
+    await publish_config_change(
+        redis_cache=coordination_redis_cache(),
+        object_type="litellm_proxymodeltable",
+        model_ids=() if model_id is None else (model_id,),
+    )
 
 
 ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING: Final = "enforce_rpm_tpm_on_model_add"
@@ -1437,7 +1442,7 @@ async def get_kubernetes_pods(
         )
 
     deployment: Final[Mapping[str, object] | None] = _OPTIONAL_JSON_OBJECT.validate_python(
-        llm_router.get_model_info(id=model_id)  # pyright: ignore[reportUnknownMemberType]  # validated below
+        llm_router.registry().deployment_dict(model_id)  # pyright: ignore[reportUnknownMemberType]  # validated below
     )
     if deployment is None:
         raise ProxyException(
@@ -1447,7 +1452,7 @@ async def get_kubernetes_pods(
             param="model_id",
         )
 
-    lookup: Final = await llm_router.kubernetes_pod_discovery.async_lookup_pods(deployment)
+    lookup: Final = await llm_router.settings().kubernetes_pod_discovery.async_lookup_pods(deployment)
     if lookup is None:
         raw_litellm_params: Final = deployment.get("litellm_params")
         litellm_params: Final[Mapping[str, object] | None] = (
@@ -1534,7 +1539,7 @@ async def patch_model(
 
         if db_model is None:
             # Check if model exists in config but not DB
-            if llm_router and llm_router.get_deployment(model_id=model_id) is not None:
+            if llm_router and llm_router.registry().deployment(model_id) is not None:
                 raise ProxyException(
                     message="Cannot edit config-based model. Store model in DB via /model/new first.",
                     type=ProxyErrorTypes.validation_error.value,
@@ -1794,7 +1799,7 @@ async def _set_model_blocked_status(
         )
 
         if db_model is None:
-            if llm_router and llm_router.get_deployment(model_id=data.model_id) is not None:
+            if llm_router and llm_router.registry().deployment(data.model_id) is not None:
                 raise ProxyException(
                     message="Cannot edit config-based model. Store model in DB via /model/new first.",
                     type=ProxyErrorTypes.validation_error.value,
@@ -2253,7 +2258,7 @@ async def delete_team_models(
         proxy_config.remove_auto_router_catalog_entries(frozenset(deleted_model_ids))
         if llm_router is not None:
             for model_id in deleted_model_ids:
-                llm_router.delete_deployment(id=model_id)
+                llm_router.apply(ChangeSet(delete=[model_id]))
 
     return deleted_model_ids
 
@@ -2311,7 +2316,7 @@ async def _remove_unbacked_team_models(
         return
 
     deleted_name_still_served: Final = (
-        llm_router is not None and model_params.model_name in llm_router.model_name_to_deployment_indices
+        llm_router is not None and model_params.model_name in llm_router.registry().index("model_name")
     )
     removed_model_aliases: Final[list[tuple[str, str]]] = (
         []
@@ -2332,7 +2337,7 @@ async def _remove_unbacked_team_models(
 
     team_backed_names: Final = await _get_team_public_model_names(team_id=team_id, prisma_client=prisma_client)
     router_served_names: Final = (
-        frozenset(name for name in candidate_names if name in llm_router.model_name_to_deployment_indices)
+        frozenset(name for name in candidate_names if name in llm_router.registry().index("model_name"))
         if llm_router is not None
         else frozenset()
     )
@@ -2806,7 +2811,7 @@ async def delete_model(
             async with MODEL_RECONCILE_LOCK:
                 proxy_config.remove_auto_router_catalog_entries(frozenset({model_info.id}))
                 if llm_router is not None:
-                    llm_router.delete_deployment(id=model_info.id)
+                    llm_router.apply(ChangeSet(delete=[model_info.id]))
 
             # Runs after the row delete so the sibling check sees post-delete state.
             if model_params.model_info.team_id is not None:
@@ -3168,7 +3173,7 @@ async def update_model(
         _existing_litellm_params = await ModelRepository(prisma_client).table.find_unique(where={"model_id": _model_id})
 
         if _existing_litellm_params is None:
-            if llm_router is not None and llm_router.get_deployment(model_id=_model_id) is not None:
+            if llm_router is not None and llm_router.registry().deployment(_model_id) is not None:
                 raise HTTPException(
                     status_code=400,
                     detail={"error": "Can't edit model. Model in config. Store model in db via `/model/new`. to edit."},
@@ -3701,7 +3706,7 @@ def live_model_ids_snapshot() -> frozenset[str]:
 
     if llm_router is None:
         return frozenset()
-    return frozenset(llm_router.get_model_ids())
+    return frozenset(llm_router.registry().names(kind="ids"))
 
 
 def reload_serving_verdict(
@@ -3834,7 +3839,7 @@ async def clear_cache() -> ReconcileOutcome:
             verbose_proxy_logger.debug("Clearing only DB models, preserving config models")
 
             # Get current models and filter out DB models
-            current_models: Final = llm_router.model_list.copy()
+            current_models: Final = llm_router.registry().all().copy()
             config_models: Final = []
             db_model_ids: Final = []
 
@@ -3853,7 +3858,7 @@ async def clear_cache() -> ReconcileOutcome:
                         db_router_names.add(model_name)
                         router_model_id = model_info.get("id")
                         if router_model_id is not None:
-                            llm_router.delete_deployment(id=router_model_id)
+                            llm_router.apply(ChangeSet(delete=[router_model_id]))
                 else:
                     # This is a config model, preserved by the reconcile below
                     config_models.append(model)
@@ -3892,10 +3897,10 @@ async def clear_cache() -> ReconcileOutcome:
             # quality/adaptive entry would otherwise make init raise "already exists"
             # on reload and abort it.
             for model_name in db_router_names:
-                llm_router.auto_routers.pop(model_name, None)
-                llm_router.complexity_routers.pop(model_name, None)
-                llm_router.adaptive_routers.pop(model_name, None)
-                llm_router.quality_routers.pop(model_name, None)
+                llm_router.registry().plugins("auto").pop(model_name, None)
+                llm_router.registry().plugins("complexity").pop(model_name, None)
+                llm_router.registry().plugins("adaptive").pop(model_name, None)
+                llm_router.registry().plugins("quality").pop(model_name, None)
 
             # Reload only DB models. _add_deployment_locked, not add_deployment: this
             # coroutine already holds MODEL_RECONCILE_LOCK and asyncio.Lock is not
