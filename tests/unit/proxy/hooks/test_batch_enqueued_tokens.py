@@ -171,8 +171,9 @@ def _redis_store(
     fail_from_call: Mapping[str, int] = MappingProxyType({}),
     raise_after_landing_keys: frozenset[str] = frozenset(),
     monotonic: Callable[[], float] = time.monotonic,
+    namespace: str | None = None,
 ) -> tuple[BatchEnqueuedTokenStore, fakeredis.FakeAsyncRedis]:
-    cache = fake_redis_cache(server)
+    cache = fake_redis_cache(server, namespace=namespace)
     raw = fakeredis.FakeAsyncRedis(server=server)
     litellm.in_memory_llm_clients_cache.set_cache(
         key=cache._get_async_client_cache_key(),
@@ -223,19 +224,54 @@ async def test_a_counter_an_old_pod_wrote_counts_against_the_allowance():
     assert await raw.get(_counter(scope)) == b"100"
 
 
-@pytest.mark.asyncio
-async def test_a_reservation_record_round_trips_with_old_pods():
-    store, raw = _redis_store(fakeredis.FakeServer())
-    scope = _scope(limit=100)
-    reservation = BatchEnqueuedTokenReservation(tokens=5, scopes=(scope,), backend="redis")
-    old_writer_document = _RESERVATION_ADAPTER.dump_json(reservation)
-    await raw.set(_record("batch_old"), old_writer_document, ex=60)
+def _saved_reservation() -> BatchEnqueuedTokenReservation:
+    return BatchEnqueuedTokenReservation(
+        tokens=5,
+        scopes=(
+            BatchEnqueuedTokenScope(key="api_key", value='clé "one"', limit=100),
+            BatchEnqueuedTokenScope(key="team", value="組/二", limit=200),
+        ),
+        backend="memory",
+        owner="worker\n雪",
+        reserved_at_monotonic=1000.25,
+    )
 
-    assert await store.pop_reservation("batch_old") == reservation
-    assert await raw.get(_record("batch_old")) == b""
+
+_SAVED_DOCUMENT: Final = (
+    '{"tokens":5,"scopes":[{"key":"api_key","value":"clé \\"one\\"","limit":100},'
+    '{"key":"team","value":"組/二","limit":200}],"backend":"memory",'
+    '"owner":"worker\\n雪","reserved_at_monotonic":1000.25}'
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("namespace", (None, "test-namespace"))
+async def test_a_reservation_record_round_trips_with_old_pods(
+    monkeypatch: pytest.MonkeyPatch, namespace: str | None
+) -> None:
+    monkeypatch.setattr(time, "time", lambda: 1000.0)
+    store, raw = _redis_store(fakeredis.FakeServer(), monotonic=lambda: 1030.5, namespace=namespace)
+    reservation: Final = _saved_reservation()
+    prefix: Final = f"{namespace}:" if namespace else ""
+    old_key: Final = prefix + _record("batch_old")
+    new_key: Final = prefix + _record("batch_new")
+    await raw.set(old_key, _SAVED_DOCUMENT.encode("utf-8"), ex=60)
+
+    popped: Final = await store.pop_reservation("batch_old")
+    assert popped == reservation
+    assert popped.reserved_at_monotonic == reservation.reserved_at_monotonic
+    assert await raw.get(old_key) == b""
+    assert await raw.pttl(old_key) == BATCH_ENQUEUED_TOKEN_TTL_SECONDS * 1000
+    assert await store.pop_reservation("batch_old") is None
 
     await store.save_reservation("batch_new", reservation)
-    assert _RESERVATION_ADAPTER.validate_json(await raw.get(_record("batch_new"))) == reservation
+    document: Final = await raw.get(new_key)
+    assert document == _SAVED_DOCUMENT.encode("utf-8")
+    old_reader: Final = _RESERVATION_ADAPTER.validate_json(document)
+    assert old_reader == reservation
+    assert old_reader.reserved_at_monotonic == reservation.reserved_at_monotonic
+    assert await raw.pttl(new_key) == (BATCH_ENQUEUED_TOKEN_TTL_SECONDS - 31) * 1000
+    assert set(await raw.keys("*")) == {old_key.encode(), new_key.encode()}
 
 
 @pytest.mark.asyncio
@@ -293,7 +329,9 @@ async def test_local_ghost_left_by_landed_save_never_refunds_twice():
     reservation = await store.reserve(tokens=60, scopes=(scope,))
     assert isinstance(reservation, BatchEnqueuedTokenReservation)
     await store.save_reservation("batch_ghost", reservation)
-    assert await raw.get(_record("batch_ghost"))
+    saved: Final = _RESERVATION_ADAPTER.dump_json(reservation)
+    assert await raw.get(_record("batch_ghost")) == saved
+    assert store.internal_usage_cache.dual_cache.in_memory_cache.cache_dict[_record("batch_ghost")] == saved.decode()
 
     first = await store.pop_reservation("batch_ghost")
     assert first == reservation
@@ -311,6 +349,70 @@ async def test_local_ghost_left_by_landed_save_never_refunds_twice():
     assert await store.pop_reservation("batch_ghost") is None
     assert isinstance(await store.reserve(tokens=100, scopes=(scope,)), BatchEnqueuedTokenReservation)
     assert await raw.get(_counter(scope)) == b"100"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("document", (b"{", b"{}", b"null", b'"text"', b"\xff"))
+async def test_consumed_malformed_record_does_not_refund_a_local_ghost(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, document: bytes
+) -> None:
+    monkeypatch.setattr(time, "time", lambda: 1000.0)
+    server: Final = fakeredis.FakeServer()
+    store, raw = _redis_store(server, namespace="test-namespace")
+    key: Final = _record("malformed")
+    wire_key: Final = f"test-namespace:{key}"
+    local: Final = store.internal_usage_cache.dual_cache.in_memory_cache
+    local.set_cache(key=key, value=_SAVED_DOCUMENT)
+    await raw.set(wire_key, document, ex=60)
+
+    assert await store.pop_reservation("malformed") is None
+    assert "Discarding malformed enqueued-token reservation record for malformed" in caplog.text
+    assert await raw.get(wire_key) == b""
+    assert await raw.pttl(wire_key) == BATCH_ENQUEUED_TOKEN_TTL_SECONDS * 1000
+    assert await store.pop_reservation("malformed") is None
+    assert local.get_cache(key) is None
+    server.connected = False
+    assert await store.pop_reservation("malformed") is None
+
+
+@pytest.mark.asyncio
+async def test_reservation_record_outage_keeps_exact_local_bytes_and_consumes_once() -> None:
+    server: Final = fakeredis.FakeServer()
+    store, raw = _redis_store(server, monotonic=lambda: 1000.25, namespace="test-namespace")
+    server.connected = False
+    await store.save_reservation("outage", _saved_reservation())
+    local: Final = store.internal_usage_cache.dual_cache.in_memory_cache
+    assert local.cache_dict[_record("outage")] == _SAVED_DOCUMENT
+
+    popped: Final = await store.pop_reservation("outage")
+    assert popped == _saved_reservation()
+    assert popped.reserved_at_monotonic == 1000.25
+    assert local.get_cache(_record("outage")) is None
+    assert await store.pop_reservation("outage") is None
+    server.connected = True
+    assert await raw.keys("*") == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", (_SAVED_DOCUMENT, _SAVED_DOCUMENT.encode("utf-8")))
+async def test_local_record_preserves_all_saved_fields(raw: str | bytes) -> None:
+    store: Final = _in_memory_store()
+    local: Final = store.internal_usage_cache.dual_cache.in_memory_cache
+    local.set_cache(key=_record("local"), value=raw)
+    popped: Final = await store.pop_reservation("local")
+    assert popped == _saved_reservation()
+    assert popped.reserved_at_monotonic == 1000.25
+    assert local.get_cache(_record("local")) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", ("{", b"{}", {"tokens": 5}, 0))
+async def test_malformed_local_record_is_consumed_without_a_refund(raw: object) -> None:
+    store: Final = _in_memory_store()
+    local: Final = store.internal_usage_cache.dual_cache.in_memory_cache
+    local.set_cache(key=_record("local"), value=raw)
+    assert await store.pop_reservation("local") is None
+    assert local.get_cache(_record("local")) is None
 
 
 @pytest.mark.asyncio
@@ -360,16 +462,20 @@ async def test_failed_redis_refund_leaves_local_counters_untouched():
 
 
 @pytest.mark.asyncio
-async def test_pop_reservation_defaults_legacy_records_to_redis_backend():
-    store = _in_memory_store()
+@pytest.mark.parametrize("redis_backed", (False, True))
+async def test_pop_reservation_defaults_legacy_records_to_redis_backend(redis_backed: bool) -> None:
+    store, raw = _redis_store(fakeredis.FakeServer())
     legacy = '{"tokens": 5, "scopes": [{"key": "api_key", "value": "k", "limit": 10}]}'
-    store.internal_usage_cache.dual_cache.in_memory_cache.set_cache(
-        key="batch_enqueued_token_reservation:batch_legacy", value=legacy
-    )
+    if redis_backed:
+        await raw.set(_record("batch_legacy"), legacy, ex=60)
+    else:
+        store.internal_usage_cache.dual_cache.in_memory_cache.set_cache(key=_record("batch_legacy"), value=legacy)
     popped = await store.pop_reservation("batch_legacy")
     assert popped == BatchEnqueuedTokenReservation(
         tokens=5, scopes=(BatchEnqueuedTokenScope(key="api_key", value="k", limit=10),), backend="redis"
     )
+    assert popped.owner == ""
+    assert isinstance(popped.reserved_at_monotonic, float)
 
 
 def test_canonical_provider_batch_id_passes_raw_ids_through():

@@ -13,7 +13,7 @@ import math
 import time
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
 
@@ -23,14 +23,19 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY, BATCH_ENQUEUED_TOKEN_TTL_SECONDS
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.redis.stores import enqueued_tokens
 from litellm.redis.stores.enqueued_tokens import (
+    RESERVATION_ADAPTER,
     AlreadyPopped,
     EnqueuedTokensStore,
+    MalformedRecord,
     OverLimit,
     Popped,
     Reserved,
     TransportEnqueuedTokensStore,
     counter_key,
+    decode_reservation,
+    encode_reservation,
     record_key,
 )
 from litellm.redis.transport.contract import RedisFailure
@@ -48,26 +53,10 @@ BATCH_ENQUEUED_REFUND_STATUSES: Final[frozenset[str]] = frozenset(
     {"completed", "complete", "failed", "expired", "cancelled", "cancelling"}
 )
 
-ScopeKey: TypeAlias = Literal["api_key", "team"]
-
-
-@dataclass(frozen=True, slots=True)
-class BatchEnqueuedTokenScope:
-    key: ScopeKey
-    value: str
-    limit: int
-
-
-ReservationBackend: TypeAlias = Literal["redis", "memory"]
-
-
-@dataclass(frozen=True, slots=True)
-class BatchEnqueuedTokenReservation:
-    tokens: int
-    scopes: tuple[BatchEnqueuedTokenScope, ...]
-    backend: ReservationBackend = "redis"
-    owner: str = ""
-    reserved_at_monotonic: float = field(default_factory=time.monotonic, compare=False)
+ScopeKey: TypeAlias = enqueued_tokens.ScopeKey
+ReservationBackend: TypeAlias = enqueued_tokens.ReservationBackend
+BatchEnqueuedTokenScope: TypeAlias = enqueued_tokens.BatchEnqueuedTokenScope
+BatchEnqueuedTokenReservation: TypeAlias = enqueued_tokens.BatchEnqueuedTokenReservation
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,8 +68,8 @@ class BatchEnqueuedTokenOverLimit:
 BatchEnqueuedTokenOutcome: TypeAlias = BatchEnqueuedTokenReservation | BatchEnqueuedTokenOverLimit
 
 _LIMIT_ADAPTER: Final = TypeAdapter(Annotated[int, Field(gt=0)])
+_RESERVATION_ADAPTER: Final = RESERVATION_ADAPTER
 _STORED_COUNTER_ADAPTER: Final = TypeAdapter(int | None)
-_RESERVATION_ADAPTER: Final = TypeAdapter(BatchEnqueuedTokenReservation)
 _LOCAL_RECORD_ADAPTER: Final = TypeAdapter(object)
 
 
@@ -309,16 +298,15 @@ class BatchEnqueuedTokenStore:
         reservation: BatchEnqueuedTokenReservation,
         litellm_parent_otel_span: "Span | None" = None,
     ) -> None:
-        serialized: Final = _RESERVATION_ADAPTER.dump_json(reservation).decode("utf-8")
         elapsed: Final = self._monotonic() - reservation.reserved_at_monotonic
         ttl: Final = max(1, BATCH_ENQUEUED_TOKEN_TTL_SECONDS - math.ceil(elapsed))
         if self._store is not None:
-            saved: Final = await self._store.save_record(batch_id, serialized, ttl=timedelta(seconds=ttl))
+            saved: Final = await self._store.save_record(batch_id, reservation, ttl=timedelta(seconds=ttl))
             if saved is None:
                 return
         await self.internal_usage_cache.async_set_cache(
             key=self._record_key(batch_id),
-            value=serialized,
+            value=encode_reservation(reservation),
             ttl=ttl,
             litellm_parent_otel_span=litellm_parent_otel_span,
             local_only=True,
@@ -337,22 +325,21 @@ class BatchEnqueuedTokenStore:
             # left behind by a save that raised after landing must not refund again.
             await self._pop_local_record(batch_id, litellm_parent_otel_span)
             return None
-        raw: Final = (
-            popped.document
-            if isinstance(popped, Popped)
-            else await self._pop_local_record(batch_id, litellm_parent_otel_span)
-        )
-        if raw is None:
-            return None
-        try:
-            if isinstance(raw, (str, bytes)):
-                return _RESERVATION_ADAPTER.validate_json(raw)
-            return _RESERVATION_ADAPTER.validate_python(raw)
-        except ValidationError:
+        if isinstance(popped, Popped):
+            return popped.reservation
+        if isinstance(popped, MalformedRecord):
             verbose_proxy_logger.warning("Discarding malformed enqueued-token reservation record for %s", batch_id)
             return None
+        raw: Final = await self._pop_local_record(batch_id, litellm_parent_otel_span)
+        if raw is None:
+            return None
+        decoded: Final = decode_reservation(raw)
+        if isinstance(decoded, MalformedRecord):
+            verbose_proxy_logger.warning("Discarding malformed enqueued-token reservation record for %s", batch_id)
+            return None
+        return decoded
 
-    async def _pop_redis_record(self, batch_id: str) -> Popped | AlreadyPopped | None:
+    async def _pop_redis_record(self, batch_id: str) -> Popped | AlreadyPopped | MalformedRecord | None:
         if self._store is None:
             return None
         popped: Final = await self._store.pop_record(
