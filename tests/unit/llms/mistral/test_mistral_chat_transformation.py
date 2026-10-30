@@ -1899,7 +1899,7 @@ def test_prompt_cache_key_rejection_for_a_sync_codestral_call_is_an_unsupported_
 
     with pytest.raises(
         litellm.UnsupportedParamsError, match=r"^litellm.UnsupportedParamsError: codestral does not support"
-    ):
+    ) as rejection:
         litellm.completion(
             model="codestral/codestral-latest",
             messages=[{"role": "user", "content": "hi"}],
@@ -1910,6 +1910,7 @@ def test_prompt_cache_key_rejection_for_a_sync_codestral_call_is_an_unsupported_
         )
 
     assert not azure_route.called
+    assert rejection.value.response.status_code == rejection.value.status_code == 400
 
 
 def test_prompt_cache_key_for_another_host_is_dropped_under_drop_params() -> None:
