@@ -46,6 +46,7 @@ from litellm.proxy.common_utils.callback_utils import (  # noqa: F401  # legacy 
     encrypt_callback_vars,
     is_sensitive_callback_key,
 )
+from litellm.proxy.common_utils.openai_error_payload import openai_error_param
 from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy module exports
     _get_validated_callback_metadata,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     convert_key_logging_metadata_to_callback,
@@ -463,7 +464,7 @@ async def add_team_callbacks(
         raise ProxyException(
             message="Internal Server Error, " + str(e),
             type=ProxyErrorTypes.internal_server_error.value,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -606,7 +607,7 @@ async def delete_team_callback(
         raise ProxyException(
             message="Internal Server Error, " + str(e),
             type=ProxyErrorTypes.internal_server_error.value,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     else:
@@ -747,7 +748,7 @@ async def disable_team_logging(
         raise ProxyException(
             message="Internal Server Error, " + str(e),
             type=ProxyErrorTypes.internal_server_error.value,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -838,7 +839,7 @@ async def get_team_callbacks(
             raise ProxyException(
                 message=getattr(e, "detail", f"Internal Server Error({e})"),
                 type=ProxyErrorTypes.internal_server_error.value,
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -846,6 +847,6 @@ async def get_team_callbacks(
         raise ProxyException(
             message="Internal Server Error, " + str(e),
             type=ProxyErrorTypes.internal_server_error.value,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )

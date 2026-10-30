@@ -18,6 +18,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Coroutine, Mapping
 from datetime import datetime
+from threading import Event
 from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -29,8 +30,9 @@ import respx
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.llm_cost_calc.finalization import finalize_cost
 from litellm.types.utils import StandardLoggingPayload
-from litellm.utils import _dispatch_success_logging
+from litellm.utils import dispatch_success_logging
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -46,9 +48,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 def _attach_mock_success_dispatch(mock_logging_obj, async_success_fn):
     """Match production entrypoint: ``_run_deferred_stream_guardrails`` uses dispatch."""
 
-    async def dispatch_success_handlers(
-        result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
-    ):
+    async def dispatch_success_handlers(result=None, start_time=None, end_time=None, cache_hit=None, **kwargs):
         await async_success_fn(
             result,
             start_time=start_time,
@@ -75,11 +75,30 @@ class _RecordingLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.standard_logging_object: StandardLoggingPayload | None = None
+        self.logged: asyncio.Event = asyncio.Event()
+        self.success_calls = 0
 
     async def async_log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
         self.standard_logging_object = cast(StandardLoggingPayload, kwargs["standard_logging_object"])
+        self.success_calls += 1
+        self.logged.set()
+
+
+class _SyncRecordingLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.standard_logging_object: StandardLoggingPayload | None = None
+        self.logged: Event = Event()
+        self.success_calls = 0
+
+    def log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.standard_logging_object = cast(StandardLoggingPayload, kwargs["standard_logging_object"])
+        self.success_calls += 1
+        self.logged.set()
 
 
 class PostCallGuardrail(CustomGuardrail):
@@ -92,9 +111,7 @@ class PostCallGuardrail(CustomGuardrail):
             event_hook=GuardrailEventHooks.post_call,
         )
 
-    async def async_post_call_success_hook(
-        self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: Any
-    ) -> Any:
+    async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: Any) -> Any:
         return response
 
 
@@ -192,9 +209,7 @@ class TestHasPostCallGuardrailsForPassthrough:
 
     @staticmethod
     def _has(data: dict) -> bool:
-        return ProxyBaseLLMRequestProcessing(
-            data=data
-        )._has_post_call_guardrails_for_passthrough()
+        return ProxyBaseLLMRequestProcessing(data=data)._has_post_call_guardrails_for_passthrough()
 
     def test_returns_true_for_event_hook_none(self):
         with patch("litellm.callbacks", [AllEventsGuardrail()]):
@@ -239,57 +254,51 @@ class TestHasPostCallGuardrailsForPassthrough:
 
 
 @pytest.mark.asyncio
-async def test_deferred_flag_stores_and_executes_closure():
-    """
-    When defer_async_logging is True on logging_obj:
-    1. wrapper_async stores a callable closure instead of calling create_task
-    2. Calling the closure fires create_task
-    3. Sync callbacks fire immediately (not deferred)
-    """
-    mock_logging_obj = MagicMock()
-    mock_logging_obj.defer_async_logging = True
-    mock_logging_obj.enqueue_deferred_logging = None
-
-    await litellm.acompletion(
-        model="gpt-3.5-turbo",
+@pytest.mark.parametrize("deferred", (False, True))
+async def test_success_logging_waits_for_deferred_closure_when_requested(deferred: bool) -> None:
+    recorder: Final = _RecordingLogger()
+    sync_recorder: Final = _SyncRecordingLogger()
+    logging_obj: Final = Logging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="deferred-success",
+        function_id="deferred-success",
+        dynamic_async_success_callbacks=[recorder],
+        dynamic_success_callbacks=[sync_recorder],
+    )
+    logging_obj.defer_async_logging = deferred
+    response: Final = await litellm.acompletion(
+        model="gpt-4o-mini",
         messages=[{"role": "user", "content": "hi"}],
         mock_response="Hello!",
-        litellm_logging_obj=mock_logging_obj,
+        litellm_logging_obj=logging_obj,
     )
-
-    # Closure was stored
-    enqueue_fn = mock_logging_obj.enqueue_deferred_logging
-    assert callable(enqueue_fn), "Closure should be stored on logging_obj"
-
-    # Sync callbacks fired immediately
-    mock_logging_obj.handle_sync_success_callbacks_for_async_calls.assert_called_once()
-
-    # Calling the closure fires create_task
-    created_tasks = []
-    real_create_task = asyncio.create_task
-
-    def tracking_create_task(coro):
-        task = real_create_task(coro)
-        created_tasks.append(task)
-        return task
-
-    with patch("asyncio.create_task", side_effect=tracking_create_task):
-        enqueue_fn()
-
-    assert len(created_tasks) >= 1, "Closure should fire asyncio.create_task"
-
-    for task in created_tasks:
-        if not task.done():
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+    if deferred:
+        assert recorder.standard_logging_object is None
+        assert sync_recorder.standard_logging_object is None
+        logging_obj.record_finalized_cost(finalize_cost(0.125, None))
+        assert logging_obj.enqueue_deferred_logging is not None
+        logging_obj.enqueue_deferred_logging()
+    await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+    assert await asyncio.to_thread(sync_recorder.logged.wait, 5)
+    assert recorder.standard_logging_object is not None
+    assert sync_recorder.standard_logging_object is not None
+    assert recorder.standard_logging_object["id"] == response.id
+    assert sync_recorder.standard_logging_object["id"] == response.id
+    assert recorder.success_calls == sync_recorder.success_calls == 1
+    if deferred:
+        assert recorder.standard_logging_object["response_cost"] == 0.125
+        assert sync_recorder.standard_logging_object["response_cost"] == 0.125
+        assert recorder.standard_logging_object["cost_finalized"] is True
+        assert sync_recorder.standard_logging_object["cost_finalized"] is True
 
 
 @pytest.mark.asyncio
 async def test_deferred_slot_keeps_the_innermost_wrapper_result():
-    """Nested @client wrappers exit through _dispatch_success_logging with one shared logging
+    """Nested @client wrappers exit through dispatch_success_logging with one shared logging
     object. The deferred slot must keep the first stored result, the way the immediate path's
     has_logged dedupe keeps the first fired task, so the spend log reads usage from the
     innermost provider-shaped response and never from an outer wrapper's translation of it."""
@@ -301,7 +310,7 @@ async def test_deferred_slot_keeps_the_innermost_wrapper_result():
     outer_result: Final = object()
 
     for result in (inner_result, outer_result):
-        _dispatch_success_logging(
+        dispatch_success_logging(
             logging_obj=logging_obj,
             result=result,
             start_time=datetime.now(),
@@ -315,7 +324,7 @@ async def test_deferred_slot_keeps_the_innermost_wrapper_result():
 
     logging_obj.async_success_handler.assert_awaited_once()
     assert logging_obj.async_success_handler.await_args.kwargs["result"] is inner_result
-    assert logging_obj.handle_sync_success_callbacks_for_async_calls.call_count == 2
+    assert logging_obj.handle_sync_success_callbacks_for_async_calls.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -397,42 +406,10 @@ async def test_deferred_anthropic_messages_bridged_to_the_responses_api_logs_the
 
     assert recorder.standard_logging_object is not None
     assert recorder.standard_logging_object["prompt_tokens"] == 7336
-    assert recorder.standard_logging_object["metadata"]["usage_object"]["prompt_tokens_details"]["cached_tokens"] == 7333
+    assert (
+        recorder.standard_logging_object["metadata"]["usage_object"]["prompt_tokens_details"]["cached_tokens"] == 7333
+    )
     assert recorder.standard_logging_object["response_cost"] == pytest.approx(3 * 2e-7 + 7333 * 2e-8 + 23 * 1.25e-6)
-
-
-# ---------------------------------------------------------------------------
-# 3. Non-streaming regression: without flag, create_task fires normally
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_no_flag_fires_create_task_normally():
-    """Without defer_async_logging, wrapper_async calls create_task as before."""
-    created_tasks = []
-    real_create_task = asyncio.create_task
-
-    def tracking_create_task(coro):
-        task = real_create_task(coro)
-        created_tasks.append(task)
-        return task
-
-    with patch("asyncio.create_task", side_effect=tracking_create_task):
-        await litellm.acompletion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "hi"}],
-            mock_response="Hello!",
-        )
-
-    assert len(created_tasks) >= 1
-
-    for task in created_tasks:
-        if not task.done():
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
 
 
 # ---------------------------------------------------------------------------
@@ -580,8 +557,7 @@ def test_proxy_finally_block_routes_through_flush_helper():
     # was the symptom of the duplicate-log bug; assert it stays inside the
     # helper, not in the request-processing function.
     assert "enqueue_deferred_logging = None" not in src, (
-        "Reset of enqueue_deferred_logging must live inside "
-        "_flush_deferred_async_logging, not in the request path."
+        "Reset of enqueue_deferred_logging must live inside _flush_deferred_async_logging, not in the request path."
     )
 
 
@@ -689,9 +665,7 @@ class TestDeferredStreamingClosure:
                 return response
 
         class TrackingLogger(CustomLogger):
-            async def async_post_call_success_hook(
-                self, user_api_key_dict, data, response
-            ):
+            async def async_post_call_success_hook(self, user_api_key_dict, data, response):
                 nonlocal logger_called
                 logger_called = True
                 return response
@@ -741,9 +715,7 @@ class TestDeferredStreamingClosure:
             await asyncio.sleep(0)
 
         assert guardrail_called is True, "Guardrail hook should be called"
-        assert (
-            logger_called is False
-        ), "Non-guardrail logger should NOT be called by closure"
+        assert logger_called is False, "Non-guardrail logger should NOT be called by closure"
 
     @pytest.mark.asyncio
     async def test_closure_passes_guardrail_modified_response_to_logging(self):
@@ -788,9 +760,7 @@ class TestDeferredStreamingClosure:
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
-        assert (
-            logged_response is modified_response
-        ), "Logging must receive the guardrail-modified response"
+        assert logged_response is modified_response, "Logging must receive the guardrail-modified response"
 
     @pytest.mark.asyncio
     async def test_closure_logs_even_on_guardrail_exception(self):
@@ -837,13 +807,10 @@ class TestDeferredStreamingClosure:
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
-        assert (
-            logging_called is True
-        ), "Logging must fire even when guardrail raises HTTPException"
-        assert (
-            mock_logging_obj.model_call_details["metadata"].get("guardrail_blocked")
-            is True
-        ), "guardrail_blocked must be set for HTTPException"
+        assert logging_called is True, "Logging must fire even when guardrail raises HTTPException"
+        assert mock_logging_obj.model_call_details["metadata"].get("guardrail_blocked") is True, (
+            "guardrail_blocked must be set for HTTPException"
+        )
 
     @pytest.mark.asyncio
     async def test_transient_error_does_not_set_guardrail_blocked(self):
@@ -884,10 +851,9 @@ class TestDeferredStreamingClosure:
 
         await asyncio.sleep(0)
 
-        assert (
-            mock_logging_obj.model_call_details["metadata"].get("guardrail_blocked")
-            is not True
-        ), "guardrail_blocked must NOT be set for transient errors"
+        assert mock_logging_obj.model_call_details["metadata"].get("guardrail_blocked") is not True, (
+            "guardrail_blocked must NOT be set for transient errors"
+        )
 
     @pytest.mark.asyncio
     async def test_production_closure_integration(self):
@@ -953,9 +919,9 @@ class TestDeferredStreamingClosure:
             await asyncio.sleep(0)
 
         assert hook_called is True, "Production closure must call guardrail hook"
-        assert (
-            logged_response is modified_response
-        ), "Production closure must pass guardrail-modified response to logging"
+        assert logged_response is modified_response, (
+            "Production closure must pass guardrail-modified response to logging"
+        )
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_skipped_in_deferred_path(self):
@@ -1002,9 +968,7 @@ class TestDeferredStreamingClosure:
 
         await asyncio.sleep(0)
 
-        assert (
-            apply_guardrail_called is False
-        ), "apply_guardrail guardrails must be SKIPPED in deferred path"
+        assert apply_guardrail_called is False, "apply_guardrail guardrails must be SKIPPED in deferred path"
 
     @pytest.mark.asyncio
     async def test_streaming_iterator_hook_skipped_in_deferred_path(self):
@@ -1021,9 +985,7 @@ class TestDeferredStreamingClosure:
                     event_hook=GuardrailEventHooks.post_call,
                 )
 
-            async def async_post_call_streaming_iterator_hook(
-                self, user_api_key_dict, response, request_data
-            ):
+            async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
                 async for chunk in response:
                     yield chunk
 
@@ -1127,12 +1089,12 @@ class TestDeferredStreamingClosure:
             )
 
         assert hook_received_data is not None, "Guardrail hook must be called"
-        assert (
-            hook_received_data.get("_merged_marker") is True
-        ), "Hook must receive guardrail_data (merged), not original captured_data"
-        assert "model-guardrail" in hook_received_data.get("metadata", {}).get(
-            "guardrails", []
-        ), "Hook data must contain model-level guardrails"
+        assert hook_received_data.get("_merged_marker") is True, (
+            "Hook must receive guardrail_data (merged), not original captured_data"
+        )
+        assert "model-guardrail" in hook_received_data.get("metadata", {}).get("guardrails", []), (
+            "Hook data must contain model-level guardrails"
+        )
 
     @pytest.mark.asyncio
     async def test_multiple_guardrails_all_receive_merged_data(self):
@@ -1192,9 +1154,9 @@ class TestDeferredStreamingClosure:
 
         for name in ("guardrail-a", "guardrail-b"):
             assert name in received_data_per_guardrail, f"{name} must be called"
-            assert (
-                received_data_per_guardrail[name].get("_merged_marker") is True
-            ), f"{name} must receive guardrail_data (merged), not captured_data"
+            assert received_data_per_guardrail[name].get("_merged_marker") is True, (
+                f"{name} must receive guardrail_data (merged), not captured_data"
+            )
 
     @pytest.mark.asyncio
     async def test_logging_fires_even_if_guardrail_init_raises(self):
@@ -1230,9 +1192,7 @@ class TestDeferredStreamingClosure:
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
-        assert (
-            logging_called is True
-        ), "Logging must fire even when guardrail initialization raises"
+        assert logging_called is True, "Logging must fire even when guardrail initialization raises"
 
     @pytest.mark.asyncio
     async def test_deferred_logging_forces_async_for_sync_classified_call_type(self):
@@ -1268,12 +1228,8 @@ class TestDeferredStreamingClosure:
         assert LiteLLMLoggingObj.is_sync_litellm_request({}) is True
 
         with (
-            patch.object(
-                logging_obj, "async_success_handler", new_callable=AsyncMock
-            ) as mock_async,
-            patch.object(
-                logging_obj, "success_handler", new_callable=MagicMock
-            ) as mock_sync,
+            patch.object(logging_obj, "async_success_handler", new_callable=AsyncMock) as mock_async,
+            patch.object(logging_obj, "success_handler", new_callable=MagicMock) as mock_sync,
             patch.object(
                 logging_obj,
                 "_should_run_sync_callbacks_for_async_calls",
@@ -1378,9 +1334,7 @@ class TestFireDeferredStreamLogging:
             ) -> Any:
                 # Simulate writing guardrail_information
                 metadata = data.setdefault("metadata", {})
-                info_list = metadata.setdefault(
-                    "standard_logging_guardrail_information", []
-                )
+                info_list = metadata.setdefault("standard_logging_guardrail_information", [])
                 info_list.append({"guardrail_name": "info-writer", "status": "success"})
                 return response
 
@@ -1538,6 +1492,27 @@ class TestArmDeferredStreamDispatch:
         assert recorded["prefer_async_handlers"] is True
 
     @pytest.mark.asyncio
+    async def test_text_completion_stream_logs_after_the_guardrails_finish(self):
+        from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper
+
+        logging_obj, recorded = self._dispatch_recording_logging_obj()
+
+        self._processor()._arm_deferred_stream_dispatch(
+            response=TextCompletionStreamWrapper(completion_stream=MagicMock(), model="gpt-test"),
+            route_type="atext_completion",
+            user_api_key_dict=MagicMock(),
+            logging_obj=logging_obj,
+        )
+
+        assembled = object()
+        logging_obj._deferred_stream_complete_args = (assembled, False)
+        ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+        await asyncio.sleep(0)
+
+        assert recorded["result"] is assembled
+        assert recorded["cache_hit"] is False
+
+    @pytest.mark.asyncio
     async def test_router_wrapped_bridged_iterator_gets_csw_arg_shape(self):
         """The router wraps iterators without _hidden_params in
         HiddenParamsAsyncIteratorWrapper before the proxy arms deferral, so
@@ -1593,9 +1568,11 @@ class TestArmDeferredStreamDispatch:
 
         coro = _logging_coroutine()
         logging_obj._deferred_stream_complete_args = (coro,)
-        with patch.object(  # test-quality-ok: GLOBAL_LOGGING_WORKER is a process-global singleton with no injection seam
-            GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue"
-        ) as mock_enqueue:
+        with (
+            patch.object(  # test-quality-ok: GLOBAL_LOGGING_WORKER is a process-global singleton with no injection seam
+                GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue"
+            ) as mock_enqueue
+        ):
             ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
             await asyncio.sleep(0)
         mock_enqueue.assert_called_once_with(async_coroutine=coro)
@@ -1626,9 +1603,11 @@ class TestArmDeferredStreamDispatch:
 
         assembled = object()
         logging_obj._deferred_stream_complete_args = (assembled, True)
-        with patch.object(  # test-quality-ok: GLOBAL_LOGGING_WORKER is a process-global singleton with no injection seam
-            GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue"
-        ) as mock_enqueue:
+        with (
+            patch.object(  # test-quality-ok: GLOBAL_LOGGING_WORKER is a process-global singleton with no injection seam
+                GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue"
+            ) as mock_enqueue
+        ):
             ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
             await asyncio.sleep(0)
 
