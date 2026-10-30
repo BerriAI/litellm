@@ -5,7 +5,7 @@ This file contains common utils for anthropic calls.
 import copy
 import json
 import re
-from collections.abc import Container, Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Container, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import chain
@@ -28,7 +28,6 @@ from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
-    is_encrypted_reasoning_block,
     native_redacted_thinking_data,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import THOUGHT_SIGNATURE_SEPARATOR
@@ -1889,13 +1888,16 @@ def strip_thinking_blocks_from_anthropic_messages(messages: Sequence[object]) ->
     return out
 
 
-def _replayable_message(message: dict) -> dict | None:  # mutable-ok: Anthropic message payload shape
+def _replayable_message(
+    message: dict,  # mutable-ok: Anthropic message payload shape
+    unreplayable: Callable[[object], bool],
+) -> dict | None:  # mutable-ok: Anthropic message payload shape
     if not isinstance(message, Mapping):
         return message
     content: Final = message.get("content")
     if not isinstance(content, list):
         return message
-    kept: Final = [_with_native_redacted_data(b) for b in content if not is_encrypted_reasoning_block(b)]
+    kept: Final = [_with_native_redacted_data(b) for b in content if not unreplayable(b)]
     if kept == content:
         return message
     if not kept:
@@ -1916,16 +1918,16 @@ def _with_native_redacted_data(block: object) -> object:
             return block
 
 
-def strip_encrypted_reasoning_blocks_from_anthropic_messages(
+def strip_unreplayable_blocks_from_anthropic_messages(
     messages: Sequence[dict],  # mutable-ok: Anthropic message payload shape
+    unreplayable: Callable[[object], bool],
 ) -> list[dict]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
     """
-    Drop thinking / redacted_thinking blocks that carry another provider's encrypted
-    reasoning (a turn the Responses API bridge served) before the request reaches
-    Anthropic, which cannot verify them. Anthropic's own signed blocks are kept, with a
-    redacted block's Bedrock Converse-wrapped `data` unwrapped back to Claude's own.
+    Drop the content blocks `unreplayable` matches (thinking from another provider that
+    the backend cannot verify) before the request reaches it, and any message left empty.
+    A kept redacted block's Bedrock Converse-wrapped `data` is unwrapped back to Claude's own.
     """
-    stripped: Final = (_replayable_message(m) for m in messages)
+    stripped: Final = (_replayable_message(m, unreplayable) for m in messages)
     return [m for m in stripped if m is not None]
 
 

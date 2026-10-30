@@ -125,6 +125,7 @@ from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingCho
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     anthropic_image_source_to_openai_url,
     anthropic_inline_document,
+    is_encrypted_reasoning_block,
     parse_tool_call_arguments,
     reasoning_content_from_thinking_blocks,
     with_prompt_cache_breakpoint,
@@ -139,7 +140,7 @@ from litellm.llms.anthropic.common_utils import (
     eager_input_streaming_flag,
     is_empty_unsigned_thinking_block,
     normalize_anthropic_tool_use_id,
-    strip_encrypted_reasoning_blocks_from_anthropic_messages,
+    strip_unreplayable_blocks_from_anthropic_messages,
 )
 from litellm.llms.anthropic.messages.context_management import (
     PolyfillResult,
@@ -489,7 +490,9 @@ class LiteLLMAnthropicMessagesAdapter:
         preserve_midturn_system: bool = False,
     ) -> list[AllMessageValues]:
         new_messages: Final[list[AllMessageValues]] = []
-        replayable_messages: Final = strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
+        replayable_messages: Final = strip_unreplayable_blocks_from_anthropic_messages(
+            messages, is_encrypted_reasoning_block
+        )
         leading_count: Final = next(
             (i for i, m in enumerate(replayable_messages) if not is_system_role_message(m)),
             len(replayable_messages),

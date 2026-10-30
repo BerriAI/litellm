@@ -95,6 +95,9 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
     def handles_web_search_natively(self) -> bool:
         return False
 
+    def verifies_thinking_signatures(self, model: str) -> bool:
+        return "claude" in model.lower()
+
     def drops_safeguards(self, safeguards: object, drop_params: bool) -> bool:
         return not self.supports_safeguards()
 

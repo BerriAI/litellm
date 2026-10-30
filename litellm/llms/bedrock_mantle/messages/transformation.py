@@ -53,6 +53,9 @@ class BedrockMantleAnthropicMessagesConfig(BedrockMantleAuthMixin, AmazonMantleM
     def custom_llm_provider(self) -> str | None:
         return "bedrock_mantle"
 
+    def verifies_thinking_signatures(self, model: str) -> bool:
+        return "claude" in model.lower()
+
     def uses_get_llm_provider_api_base(self) -> bool:
         return True
 
