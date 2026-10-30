@@ -1604,6 +1604,30 @@ def test_responses_over_anthropic_return_the_refusal_explanation_as_a_refusal_pa
     assert [_part_texts(item) for item in response.output] == [expected_parts]
 
 
+def test_a_refused_responses_turn_sent_back_keeps_its_explanation_in_the_history(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(200, json={**ANTHROPIC_DOCS_REFUSAL_MESSAGE, "content": []})
+    )
+    refused: Final = litellm.responses(model=_MODEL, input="Write the exploit.", api_key="mock_api_key")
+
+    litellm.responses(
+        model=_MODEL,
+        input=[
+            {"role": "user", "content": "Write the exploit."},
+            *(item.model_dump(exclude_none=True) for item in refused.output),
+            {"role": "user", "content": "Then explain what SFT is."},
+        ],
+        api_key="mock_api_key",
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert [(message["role"], message["content"]) for message in sent["messages"][1:2]] == [
+        ("assistant", [{"type": "text", "text": _REFUSAL_EXPLANATION}])
+    ]
+
+
 def _refusal_stream(*content: Mapping[str, object]) -> bytes:
     text_events: Final = tuple(
         chain.from_iterable(

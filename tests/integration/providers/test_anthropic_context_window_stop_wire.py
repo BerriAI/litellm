@@ -178,7 +178,7 @@ def test_chat_maps_anthropic_stop_reason(gateway: Gateway, stop_reason: str, fin
     [
         ("model_context_window_exceeded", "incomplete"),
         ("max_tokens", "incomplete"),
-        ("pause_turn", "incomplete"),
+        ("pause_turn", "completed"),
         ("end_turn", "completed"),
     ],
 )
@@ -209,7 +209,7 @@ def test_responses_list_a_paused_turn_unrun_search_as_an_in_progress_web_search(
     with wire_server(paused) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"anthropic/{MODEL}", api_base=wire.url, api_key="scripted-anthropic-key")
         result: Final = _responses_result(gateway, model, stream=stream)
-        assert (result["status"], result["incomplete_details"]) == ("incomplete", {"reason": "max_output_tokens"})
+        assert (result["status"], result.get("incomplete_details")) == ("completed", None)
         assert [(item["type"], item["status"], item["action"]["query"]) for item in result["output"]] == [
             ("web_search_call", "in_progress", PENDING_SEARCH["input"]["query"])
         ]

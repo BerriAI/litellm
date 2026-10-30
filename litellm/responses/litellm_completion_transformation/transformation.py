@@ -2626,44 +2626,54 @@ class LiteLLMCompletionResponsesConfig:
             for item in content:
                 if isinstance(item, str):
                     content_list.append(item)
-                elif isinstance(item, dict):
-                    if (
-                        media := decode_responses_media(
-                            fields := _validate_responses_media(_STR_KEY_DICT_ADAPTER, item)
+                elif (
+                    isinstance(item, dict)
+                    and (
+                        part
+                        := LiteLLMCompletionResponsesConfig._transform_responses_api_content_part_to_chat_completion_part(
+                            _validate_responses_media(_STR_KEY_DICT_ADAPTER, item)
                         )
-                    ) is not None:
-                        content_list.append(dict(media))
-                    elif fields.get("type") == "input_image":
-                        content_list.append(dict(_responses_image_part(fields)))
-                    elif fields.get("type") == "input_file":
-                        content_list.append(dict(_responses_file_part(fields)))
-                    elif fields.get("type") == "input_audio":
-                        content_list.append(dict(_validate_responses_media(_AUDIO_PART_ADAPTER, fields)))
-                    elif fields.get("type") == "encrypted_content":
-                        encrypted_content = fields.get("encrypted_content")
-                        if encrypted_content is not None:
-                            content_list.append(
-                                OpenAIChatCompletionTextObject(type="text", text=str(encrypted_content))
-                            )
-                    else:
-                        # Skip text blocks with None text to avoid downstream errors
-                        text_value = fields.get("text")
-                        if text_value is None:
-                            continue
-                        content_block: dict[str, object] = {
-                            "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
-                                content_type
-                                if isinstance(content_type := fields.get("type"), str) and content_type
-                                else "text"
-                            ),
-                            "text": text_value,
-                        }
-                        if "cache_control" in fields:
-                            content_block["cache_control"] = fields["cache_control"]
-                        content_list.append(content_block)
+                    )
+                    is not None
+                ):
+                    content_list.append(part)
             return content_list
         else:
             raise ValueError(f"Invalid content type: {type(content)}")
+
+    @staticmethod
+    def _transform_responses_api_content_part_to_chat_completion_part(
+        fields: dict[str, object],
+    ) -> dict[str, object] | None:
+        if (media := decode_responses_media(fields)) is not None:
+            return dict(media)
+        part_type: Final = fields.get("type")
+        if part_type == "input_image":
+            return dict(_responses_image_part(fields))
+        if part_type == "input_file":
+            return dict(_responses_file_part(fields))
+        if part_type == "input_audio":
+            return dict(_validate_responses_media(_AUDIO_PART_ADAPTER, fields))
+        if part_type == "refusal":
+            refusal: Final = fields.get("refusal")
+            return dict(OpenAIChatCompletionTextObject(type="text", text=refusal)) if isinstance(refusal, str) else None
+        if part_type == "encrypted_content":
+            encrypted_content: Final = fields.get("encrypted_content")
+            return (
+                None
+                if encrypted_content is None
+                else dict(OpenAIChatCompletionTextObject(type="text", text=str(encrypted_content)))
+            )
+        text_value: Final = fields.get("text")
+        if text_value is None:
+            return None
+        return {
+            "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
+                part_type if isinstance(part_type, str) and part_type else "text"
+            ),
+            "text": text_value,
+            **({"cache_control": fields["cache_control"]} if "cache_control" in fields else {}),
+        }
 
     @staticmethod
     def _get_chat_completion_request_content_type(

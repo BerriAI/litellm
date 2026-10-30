@@ -8231,8 +8231,10 @@ def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
 
 
 
-def _paused_web_search_turn(thinking_blocks, content="Step 1 is Tokyo."):
-    assistant_message = {
+def _paused_web_search_turn(
+    thinking_blocks: list[dict[str, str]] | None, content: str | list[dict[str, str]] = "Step 1 is Tokyo."
+) -> dict[str, object]:
+    assistant_message: Final[dict[str, object]] = {
         "role": "assistant",
         "content": content,
         "tool_calls": [
