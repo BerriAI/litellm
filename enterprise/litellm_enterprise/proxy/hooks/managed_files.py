@@ -521,9 +521,12 @@ def _with_model_id(
 
 async def _stored_model_id(managed_object_table: _ManagedObjectTableActions, unified_object_id: str) -> str | None:
     row: Final = await managed_object_table.find_first(where={"unified_object_id": unified_object_id})
-    if row is None:
+    if row is None or not isinstance(row.file_object, str):  # pyright: ignore[reportUnnecessaryIsInstance]  # mocks and older rows
         return None
-    parsed: Final = _JSON_VALUE_ADAPTER.validate_json(row.file_object)
+    try:
+        parsed: Final = _JSON_VALUE_ADAPTER.validate_json(row.file_object)
+    except ValidationError:
+        return None
     model_id: Final = parsed.get("model_id") if isinstance(parsed, dict) else None
     return model_id if isinstance(model_id, str) and model_id else None
 
