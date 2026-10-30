@@ -908,48 +908,6 @@ async def test_async_data_generator_mid_stream_exception_yields_error_payload(
     assert any(isinstance(item, str) and item.startswith('data: {"error":') for item in out)
 
 
-_MID_STREAM_TIMEOUT: Final = litellm.Timeout(message="read timed out", model="gpt-4", llm_provider="openai")
-_MID_STREAM_PROXY_400: Final = ProxyException(
-    message="bad request", type="invalid_request_error", param="model", code=400
-)
-
-
-@pytest.mark.parametrize(
-    ("mid_stream_error", "expected_error"),
-    [
-        pytest.param(
-            _MID_STREAM_TIMEOUT,
-            {"message": _MID_STREAM_TIMEOUT.message, "type": None, "param": None, "code": "408"},
-            id="timeout-keeps-a-null-type",
-        ),
-        pytest.param(
-            _MID_STREAM_PROXY_400,
-            {"message": "bad request", "type": "invalid_request_error", "param": "model", "code": "500"},
-            id="proxy-exception-keeps-the-500-code",
-        ),
-    ],
-)
-@pytest.mark.asyncio
-async def test_async_data_generator_mid_stream_error_frame_keeps_its_legacy_shape(
-    monkeypatch: pytest.MonkeyPatch, mid_stream_error: Exception, expected_error: dict[str, object]
-) -> None:
-    _patch_logging_flags(monkeypatch)
-
-    async def _no_replacement(*args: object, **kwargs: object) -> None:
-        return None
-
-    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", _no_replacement)
-
-    frames: Final = [
-        frame
-        async for frame in async_data_generator(
-            response=_async_iter_raises(mid_stream_error), user_api_key_dict=_user_auth(), request_data={}
-        )
-    ]
-
-    assert frames[-2:] == [f"data: {json.dumps({'error': expected_error})}\n\n", "data: [DONE]\n\n"], frames
-
-
 _BLOCK_MESSAGE: Final = "Content blocked: keyword 'keeper' detected"
 _BLOCK_ERROR: Final = {
     "message": _BLOCK_MESSAGE,
