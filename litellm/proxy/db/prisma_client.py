@@ -1127,6 +1127,18 @@ class PrismaManager:
         return ProxyExtrasDBManager.build_request_log_indexes()
 
     @staticmethod
+    def migration_dry_run_summary(use_migrate: bool = True) -> tuple[bool, str]:
+        """`--check_migrations_against_existing_data` on its own: the pending migrations applied inside a
+        transaction that is rolled back, as (whether they all applied, what the operator reads)."""
+        from litellm_proxy_extras.utils import (
+            ProxyExtrasDBManager,  # pyright: ignore[reportUnknownVariableType]  # litellm-proxy-extras is an optional install
+        )
+        from pydantic import TypeAdapter
+
+        summary: Final[object] = ProxyExtrasDBManager.migration_dry_run_summary(use_migrate=use_migrate)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # litellm-proxy-extras is an optional install
+        return TypeAdapter(tuple[bool, str]).validate_python(summary)
+
+    @staticmethod
     def start_request_log_index_build() -> None:
         """Build the request-log indexes on a daemon thread, for a serving proxy that ran the
         migrations itself (`DISABLE_SCHEMA_UPDATE` unset), so a long build never delays
