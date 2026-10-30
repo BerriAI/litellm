@@ -1,15 +1,15 @@
-use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
-use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
-
-use litellm_auth::{InputSource, SecretValue, Sourced, TokenProviderHandle};
-use litellm_core_utils::{call_arguments::CallArguments, settings::ProcessEnvironment};
-use litellm_http::outbound::{OutboundRequest, RequestSigner};
-use litellm_secrets::source::Secrets;
 use serde::{
     Serialize,
     de::{DeserializeOwned, IntoDeserializer},
 };
 use serde_json::{Map, Value};
+use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
+
+use litellm_auth::{InputSource, SecretValue, Sourced, TokenProviderHandle};
+use litellm_core_utils::{call_arguments::CallArguments, settings::ProcessEnvironment};
+use litellm_http::outbound::RequestSigner;
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
+use litellm_secrets::source::Secrets;
 
 use crate::base_llm::ocr::{
     error::Error,
@@ -21,6 +21,7 @@ pub const OCR_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
 pub const OCR_INLINE_MAX_BYTES: usize = 50 * 1024 * 1024;
 pub const OCR_MAX_FETCH_REDIRECTS: usize = 10;
 pub const OCR_POLL_RETRY_SECS: u64 = 2;
+pub const DROP_PARAMS_PARAM: &str = "drop_params";
 
 #[derive(Clone, Default)]
 pub struct OcrCredentialInputs {
@@ -185,6 +186,10 @@ pub fn response_format(optional_params: &CallArguments) -> Result<OcrResponseFor
         .map(|format| format.unwrap_or_default())
 }
 
+pub fn drops_unsupported_params(optional_params: &CallArguments) -> bool {
+    optional_params.get(DROP_PARAMS_PARAM) == Some(&Value::Bool(true))
+}
+
 #[derive(Debug)]
 pub struct DecodedOcrResponse<T> {
     pub data: T,
@@ -194,17 +199,13 @@ pub struct DecodedOcrResponse<T> {
 
 pub fn decode_request_value<T: DeserializeOwned>(value: Value, prefix: &str) -> Result<T, Error> {
     serde_path_to_error::deserialize(value.into_deserializer()).map_err(|error| {
-        Error::RequestField {
-            path: format!("{prefix}.{}", error.path()),
-        }
+        Error::request_field(format!("{prefix}.{}", error.path()), error.into_inner())
     })
 }
 
 pub fn decode_response_value<T: DeserializeOwned>(value: Value, prefix: &str) -> Result<T, Error> {
     serde_path_to_error::deserialize(value.into_deserializer()).map_err(|error| {
-        Error::ResponseField {
-            path: format!("{prefix}.{}", error.path()),
-        }
+        Error::response_field(format!("{prefix}.{}", error.path()), error.into_inner())
     })
 }
 
@@ -213,19 +214,15 @@ pub fn decode_response<T: DeserializeOwned>(
     native: bool,
 ) -> Result<DecodedOcrResponse<T>, Error> {
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
-    let data = serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
-        Error::ResponseField {
-            path: error.path().to_string(),
-        }
-    })?;
-    deserializer.end().map_err(|_| Error::ResponseField {
-        path: "response".into(),
-    })?;
+    let data = serde_path_to_error::deserialize(&mut deserializer)
+        .map_err(|error| Error::response_field(error.path().to_string(), error.into_inner()))?;
+    deserializer
+        .end()
+        .map_err(|error| Error::response_field("response", error))?;
     let native = if native {
         Some(
-            serde_json::from_slice(bytes).map_err(|_| Error::ResponseField {
-                path: "response".into(),
-            })?,
+            serde_json::from_slice(bytes)
+                .map_err(|error| Error::response_field("response", error))?,
         )
     } else {
         None
@@ -369,12 +366,12 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
         &self,
         error_message: String,
         status_code: u16,
-        headers: Vec<(String, String)>,
+        headers: reqwest::header::HeaderMap,
     ) -> Error {
         Error::Provider {
             status: status_code,
             body: error_message,
-            headers,
+            headers: Box::new(headers),
         }
     }
 
@@ -391,7 +388,7 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
         request: &PreparedOcrRequest,
         client: &OcrClient,
         hooks: &dyn CallHooks<Error>,
-    ) -> impl Future<Output = Result<OutboundRequest, Error>> + Send {
+    ) -> impl Future<Output = Result<reqwest::Request, Error>> + Send {
         async move {
             let params = self.map_ocr_params(&request.optional_params, &request.model)?;
             let environment = self.validate_environment(request, client).await?;

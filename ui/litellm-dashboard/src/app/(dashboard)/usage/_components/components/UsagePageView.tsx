@@ -19,7 +19,6 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
-import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
@@ -27,7 +26,7 @@ import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrgan
 import { toast } from "@/lib/toast";
 import { hasCapability } from "@/utils/capabilities";
 import { copyToClipboard } from "@/utils/dataUtils";
-import { hasProxyWideSpendView, internalUserRoles } from "@/utils/roles";
+import { hasProxyWideSpendView, internalUserRoles, isProxyAdminRole } from "@/utils/roles";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import UserDropdown from "@/components/common_components/UserDropdown";
@@ -93,7 +92,7 @@ import {
   usageViewFromParams,
   usageViewPatch,
 } from "../usageUrlState";
-import { overviewTotals, rollUpBreakdown } from "./overview/overviewData";
+import { overviewTotals, providerSpendRows } from "./overview/overviewData";
 import TopAgents from "./overview/TopAgents";
 import { parseUsageClient, topAgents, type AgentRow } from "./overview/agentCatalog";
 import ClientUsagePanel from "./ClientUsagePanel";
@@ -101,6 +100,7 @@ import { resolveClientUsageScope } from "../hooks/clientUsageScope";
 import { useUsagePanelContext } from "../hooks/useUsagePanelContext";
 import ClientUsageSelect from "./ClientUsageSelect";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
+import SubscriptionCosts from "./SubscriptionCost/SubscriptionCosts";
 import { useTagSummary } from "@/app/(dashboard)/hooks/tags/useTagSummary";
 import { Panel } from "./overview/Primitives";
 import UsageOverview from "./overview/UsageOverview";
@@ -113,7 +113,7 @@ interface UsagePageProps {
 }
 
 const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoading = false, defaultTimeRange }) => {
-  const { accessToken, userRole, userId: userID, premiumUser, isLoading: authorizationLoading } = useAuthorized();
+  const { accessToken, userRole, userId: userID, premiumUser, isViewOnly, isLoading: authLoading } = useAuthorized();
   const [gatewayActivityData, setGatewayActivityData] = useState<FetchedGatewayActivity | null>(null);
 
   const defaultRange = useMemo(() => defaultUsageDateRange(defaultTimeRange), [defaultTimeRange]);
@@ -138,9 +138,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
     clientStartTime?.getTime() === dateValue.from?.getTime() && clientEndTime?.getTime() === dateValue.to?.getTime();
 
   const [fetchedTags, setFetchedTags] = useState<FetchedForRange<EntityList[]> | null>(null);
-  // No [] default: an unresolved query must stay undefined so the customer
-  // filter reads as loading rather than as a range with no customers.
-  const { data: customers } = useCustomers();
   const { data: agentsResponse } = useAgents();
   const { data: currentUser } = useCurrentUser();
   const isAdmin = hasProxyWideSpendView(userRole);
@@ -191,7 +188,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   };
 
   const { isLoading: organizationsLoading } = useOrganizations();
-  const authorizationSettled = !authorizationLoading && userRole !== null;
+  const authorizationSettled = !authLoading && userRole !== null;
   const accessSettled = authorizationSettled && !organizationsLoading && !teamsLoading;
   useEffect(() => {
     if (!accessSettled) return;
@@ -378,10 +375,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
     () => overviewTotals(userSpendData.metadata, gatewayActivity),
     [userSpendData.metadata, gatewayActivity],
   );
-  const providerSpend = useMemo(
-    () => rollUpBreakdown(userSpendData.results, "providers").map(({ key, ...row }) => ({ provider: key, ...row })),
-    [userSpendData.results],
-  );
+  const providerSpend = useMemo(() => providerSpendRows(userSpendData.results), [userSpendData.results]);
   const {
     data: tagSummary,
     isLoading: tagSummaryLoading,
@@ -550,6 +544,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                     loading={loading}
                     requestCountsPending={requestCountsPending}
                     budget={currentUser?.max_budget ?? null}
+                    subscriptionCosts={
+                      <SubscriptionCosts
+                        accessToken={accessToken}
+                        startTime={startTime}
+                        endTime={endTime}
+                        enabled={isAdmin && effectiveUserId === null}
+                        meteredSpend={totals.spend}
+                        canEdit={!isViewOnly && isProxyAdminRole(userRole || "")}
+                      />
+                    }
                     topKeys={
                       <TopKeyView
                         topKeys={topKeys}
@@ -719,12 +723,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
               {...entitySelection("customer")}
               userID={userID}
               userRole={userRole}
-              entityList={
-                customers?.map((customer) => ({
-                  label: customer.alias || customer.user_id,
-                  value: customer.user_id,
-                })) || null
-              }
+              entityList={null}
               premiumUser={premiumUser}
               dateValue={dateValue}
             />

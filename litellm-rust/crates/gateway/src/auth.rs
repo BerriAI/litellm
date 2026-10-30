@@ -64,10 +64,8 @@ impl OperationAuthorizer for McpPolicy {
 }
 
 fn mcp_error(error: Error) -> litellm_gateway_mcp::Error {
-    match error {
-        Error::InvalidToken | Error::Expired | Error::Forbidden => {
-            litellm_gateway_mcp::Error::Forbidden
-        }
-        _ => litellm_gateway_mcp::Error::Configuration("MCP authorization unavailable".into()),
+    if error.is_denied() {
+        return litellm_gateway_mcp::Error::Forbidden;
     }
+    litellm_gateway_mcp::Error::AuthorizationUnavailable(litellm_error::Source::new(error))
 }

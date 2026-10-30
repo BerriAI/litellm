@@ -800,28 +800,17 @@ def filter_tools_by_allowed_tools(
         Filtered list of tools
     """
     from litellm.proxy.mcp_server.utils import (
+        is_tool_allowed_for_server,
         server_applies_tool_allowlist,
     )
 
-    tools_to_return = tools
-
-    # Filter by allowed_tools (whitelist)
-    if server_applies_tool_allowlist(mcp_server):
-        if not mcp_server.allowed_tools:
-            return []
-        tools_to_return = [
-            tool for tool in tools if _tool_name_matches(tool.name, mcp_server.allowed_tools, mcp_server)
-        ]
-
-    # Filter by disallowed_tools (blacklist)
-    if mcp_server.disallowed_tools:
-        tools_to_return = [
-            tool
-            for tool in tools_to_return
-            if not _tool_name_matches(tool.name, mcp_server.disallowed_tools, mcp_server)
-        ]
-
-    return tools_to_return
+    if not server_applies_tool_allowlist(mcp_server) and not mcp_server.disallowed_tools:
+        return tools
+    return [
+        tool
+        for tool in tools
+        if is_tool_allowed_for_server(strip_known_server_prefix(tool.name, mcp_server), mcp_server)
+    ]
 
 
 def apply_display_name_overrides(
@@ -2391,6 +2380,10 @@ async def _execute_mcp_tool(
             ),
             incoming_bearer_token=incoming_bearer_token,
             guardrail_auth=effective_guardrail_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            client_ip=client_ip,
         )
         # `pre_call_tool_check` may return guardrail-modified
         # arguments; honor them on the local path too.
@@ -2533,6 +2526,10 @@ async def _execute_mcp_tool(
                 ),
                 incoming_bearer_token=incoming_bearer_token,
                 guardrail_auth=effective_guardrail_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                client_ip=client_ip,
             )
             if "arguments" in hook_result:
                 arguments = hook_result["arguments"]  # pyright: ignore[reportAny]  # hook returns untyped args

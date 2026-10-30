@@ -42,7 +42,7 @@ jobs:
         id: rust-bridge-key
         if: steps.changes.outputs.decision != 'skip'
         env:
-          RUST_BRIDGE_CACHE_KEY: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm-rust/Cargo.lock', 'litellm-rust/Cargo.toml', 'litellm-rust/crates/**', 'pyproject.toml') }}
+          RUST_BRIDGE_CACHE_KEY: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm-rust/Cargo.lock', 'litellm-rust/Cargo.toml', 'litellm-rust/crates/**', 'model_prices_and_context_window.json', 'pyproject.toml') }}
         run: echo "key=$RUST_BRIDGE_CACHE_KEY" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
@@ -137,6 +137,7 @@ jobs:
         include:
           - shard: core-utils
             test-path: |-
+              tests/unit/accounting
               tests/unit/batch_completion
               tests/unit/decisions
               tests/unit/extraction
@@ -226,6 +227,7 @@ jobs:
               tests/unit/llms/test_oss_decision.py
               tests/unit/llms/test_polling_url_origin_match.py
               tests/unit/llms/test_predibase_transformation.py
+              tests/unit/llms/test_subscription_accounts.py
               tests/unit/llms/a2a
               tests/unit/llms/aiml
               tests/unit/llms/aiohttp_openai
@@ -235,6 +237,7 @@ jobs:
               tests/unit/llms/azure_ai
               tests/unit/llms/base_llm
               tests/unit/llms/baseten
+              tests/unit/llms/bigmodel
               tests/unit/llms/black_forest_labs
               tests/unit/llms/brave
               tests/unit/llms/bytez
@@ -243,7 +246,9 @@ jobs:
               tests/unit/llms/chatgpt
               tests/unit/llms/clarifai
               tests/unit/llms/claude_code
+              tests/unit/llms/clf_ai_gateway
               tests/unit/llms/cloudflare
+              tests/unit/llms/codestral
               tests/unit/llms/codex
               tests/unit/llms/cohere
               tests/unit/llms/cometapi
@@ -302,6 +307,7 @@ jobs:
               tests/unit/llms/modelscope
               tests/unit/llms/mongodb
               tests/unit/llms/moonshot
+              tests/unit/llms/morph
               tests/unit/llms/nadir
               tests/unit/llms/nebius
               tests/unit/llms/neosantara
@@ -318,6 +324,7 @@ jobs:
               tests/unit/llms/openai_like
               tests/unit/llms/opencode
               tests/unit/llms/opensandbox
+              tests/unit/llms/opensearch
               tests/unit/llms/openrouter
               tests/unit/llms/ovhcloud
               tests/unit/llms/parallel_ai
@@ -998,9 +1005,9 @@ jobs:
         run: |
           diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
           if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils
           else
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project
             uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
             cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
             uv run --no-sync python -c "import importlib.metadata; import litellm.rust_bridge._native; print(importlib.metadata.version('litellm'))"
@@ -1145,18 +1152,20 @@ jobs:
         env:
           CI: "true"
           GH_TOKEN: ${{ github.token }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           full_suite() { npm run test -- --run --pool forks --maxWorkers=14; }
 
-          if [ -z "$BASE_SHA" ]; then
+          if [ -z "$PR_NUMBER" ]; then
             echo "Push to $GITHUB_REF_NAME: running the full suite"
             full_suite
             exit 0
           fi
 
-          merge_base=$(gh api "repos/${{ github.repository }}/compare/${BASE_SHA}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
+          base_ref=$(gh api "repos/${GITHUB_REPOSITORY}/branches/${EVENT_BASE_REF}" --jq .name) || base_ref=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .base.ref)
+          merge_base=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${base_ref}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
           test -n "$merge_base"
           git fetch --no-tags --depth=1 origin "$merge_base" "$HEAD_SHA"
           changed_files=()
@@ -1305,6 +1314,8 @@ jobs:
           done
   openai-sdk-compat:
     name: OpenAI ${{ matrix.openai-version }} compatibility
+    needs: rust-bridge
+    if: ${{ !cancelled() }}
     permissions:
       contents: read
       pull-requests: read
@@ -1341,10 +1352,18 @@ jobs:
         with:
           version: "0.10.9"
 
+      - name: Set up the Rust bridge
+        if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: 5
+        uses: ./.github/actions/rust-bridge
+        with:
+          artifact: ${{ needs.rust-bridge.outputs.artifact }}
+
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
         run: |
           .github/scripts/uv_sync_with_retries.sh --frozen --group dev --group proxy-dev --extra proxy --no-install-workspace
+          cp rust-bridge-dist/litellm/rust_bridge/_native.* litellm/rust_bridge/
           uv pip install "openai==${OPENAI_VERSION:?}" --exclude-newer-package openai=2026-10-07T00:00:00Z
           uv run --no-sync python -c 'import os, openai; assert openai.__version__ == os.environ["OPENAI_VERSION"], openai.__version__'
 
@@ -1436,9 +1455,9 @@ jobs:
           RUST_BRIDGE_ARTIFACT: ${{ needs.rust-bridge.outputs.artifact }}
         run: |
           if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils
           else
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project
             uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
             cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
           fi

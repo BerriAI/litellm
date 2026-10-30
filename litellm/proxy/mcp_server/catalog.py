@@ -761,38 +761,22 @@ class _ListingState(BaseModel):
     failures: Mapping[str, JsonValue] = {}
 
 
-async def get_filtered_server_tools(
+async def prepare_tool_listing_headers(
     server: MCPServer,
-    *,
     context: OperationContext,
     allowed_mcp_servers: Sequence[MCPServer],
-    prefetched_oauth_creds: Mapping[str, OAuthCredentialPayload],
-    params: PaginatedRequestParams | None = None,
-    record_listing: bool = False,
-    listing_updates: ExitStack | None = None,
-) -> tuple[ListToolsResult, ServerOutcome]:
-    from mcp.types import ListToolsResult
-
-    from litellm.proxy.mcp_server.exceptions import MCPUpstreamAuthError
-    from litellm.proxy.mcp_server.faults.list_outcomes import ServerListOk, classify_list_exception
+    prefetched_oauth_creds: Mapping[str, OAuthCredentialPayload] | None,
+) -> tuple[str | Mapping[str, str] | None, Mapping[str, str] | None, str | Mapping[str, str] | None]:
     from litellm.proxy.mcp_server.operations import (
         _get_byok_credential,
         _get_user_oauth_extra_headers_from_db,
         _prepare_mcp_server_headers,
-        apply_display_name_overrides,
-        filter_tools_by_allowed_tools,
-        filter_tools_by_key_team_permissions,
-        global_mcp_server_manager,
     )
     from litellm.types.mcp import MCPAuth
 
-    user_api_key_auth, mcp_auth_header, _, mcp_server_auth_headers, oauth2_headers, raw_headers, client_ip = (
+    user_api_key_auth, mcp_auth_header, _, mcp_server_auth_headers, oauth2_headers, raw_headers, _ = (
         context.legacy_auth()
     )
-    mcp_proxy_mode: Final = context.mcp_proxy_mode
-    if server is None:
-        return ListToolsResult(tools=[]), ServerListOk(tool_count=0)
-
     server_auth_header, extra_headers = _prepare_mcp_server_headers(
         server=server,
         mcp_server_auth_headers=mcp_server_auth_headers,
@@ -828,7 +812,6 @@ async def get_filtered_server_tools(
         if db_headers:
             extra_headers = db_headers
 
-    # If still no OAuth2 token, fall back to pre-fetched creds (non-stale-client path)
     elif not migrated_to_v2 and extra_headers is None and server.auth_type == MCPAuth.oauth2:
         extra_headers = await _get_user_oauth_extra_headers_from_db(
             server,
@@ -839,6 +822,44 @@ async def get_filtered_server_tools(
     catalog_auth_header: Final = server_auth_header
     if server.is_byok and server.auth_type != MCPAuth.oauth2 and server_auth_header is None:
         server_auth_header = await _get_byok_credential(server, user_api_key_auth)
+
+    return server_auth_header, extra_headers, catalog_auth_header
+
+
+async def get_filtered_server_tools(
+    server: MCPServer,
+    *,
+    context: OperationContext,
+    allowed_mcp_servers: Sequence[MCPServer],
+    prefetched_oauth_creds: Mapping[str, OAuthCredentialPayload],
+    params: PaginatedRequestParams | None = None,
+    record_listing: bool = False,
+    listing_updates: ExitStack | None = None,
+) -> tuple[ListToolsResult, ServerOutcome]:
+    from mcp.types import ListToolsResult
+
+    from litellm.proxy.mcp_server.exceptions import MCPUpstreamAuthError
+    from litellm.proxy.mcp_server.faults.list_outcomes import ServerListOk, classify_list_exception
+    from litellm.proxy.mcp_server.operations import (
+        apply_display_name_overrides,
+        filter_tools_by_allowed_tools,
+        filter_tools_by_key_team_permissions,
+        global_mcp_server_manager,
+    )
+
+    user_api_key_auth, _, _, _, oauth2_headers, raw_headers, client_ip = context.legacy_auth()
+    mcp_proxy_mode: Final = context.mcp_proxy_mode
+    if server is None:
+        return ListToolsResult(tools=[]), ServerListOk(tool_count=0)
+
+    prepared_auth, prepared_headers, prepared_catalog_auth = await prepare_tool_listing_headers(
+        server, context, allowed_mcp_servers, prefetched_oauth_creds
+    )
+    server_auth_header: Final = dict(prepared_auth) if isinstance(prepared_auth, Mapping) else prepared_auth
+    extra_headers: Final = dict(prepared_headers) if prepared_headers is not None else None
+    catalog_auth_header: Final = (
+        dict(prepared_catalog_auth) if isinstance(prepared_catalog_auth, Mapping) else prepared_catalog_auth
+    )
 
     try:
         from litellm.proxy.proxy_server import proxy_logging_obj
