@@ -22,20 +22,24 @@ from ..common_utils import OpenAILikeBase, OpenAILikeError
 
 _KEY_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
 _EXTRA_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_TRANSPORT_HEADER_NAMES: Final = frozenset({"host", "content-length", "transfer-encoding"})
 
 
-def _header_text(value: object) -> str | None:
+def _header_text(name: str, value: object) -> str | None:
+    if name.lower() in _TRANSPORT_HEADER_NAMES:
+        return None
     if isinstance(value, bool) or not isinstance(value, str | int | float):
         return None
     return str(value)
 
 
 def _extra_headers_as_text(extra_headers: Mapping[str, object], model: str, drop_params: bool) -> Mapping[str, str]:
-    texts: Final = MappingProxyType({name: _header_text(value) for name, value in extra_headers.items()})
-    malformed: Final = sorted(name for name, text in texts.items() if text is None)
-    if malformed and not drop_params:
+    texts: Final = MappingProxyType({name: _header_text(name, value) for name, value in extra_headers.items()})
+    refused: Final = sorted(name for name, text in texts.items() if text is None)
+    if refused and not drop_params:
         raise litellm.UnsupportedParamsError(
-            message=f"extra_headers {', '.join(malformed)} must be text or a number. "
+            message=f"extra_headers {', '.join(refused)} cannot be sent. Values must be text or a number, "
+            "and Host, Content-Length and Transfer-Encoding come from the request. "
             "To drop them from the call, set `litellm.drop_params = True`.",
             model=model,
         )
