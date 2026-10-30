@@ -20,9 +20,8 @@ def is_baggage_mapped_route(route: str) -> bool:
 
     return (
         (
-            RouteChecks.is_llm_api_route(route)
+            RouteChecks.is_llm_handler_route(route)
             or InitPassThroughEndpointHelpers.is_registered_pass_through_route(route)
-            or RouteChecks.is_provider_prefixed_batch_or_file_route(route)
         )
         and not RouteChecks.is_unbilled_route(route)
         and not RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.mcp_inference_routes.value)

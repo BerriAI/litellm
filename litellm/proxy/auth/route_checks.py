@@ -113,8 +113,10 @@ _TOKEN_COUNTING_ACTION: Final = "countTokens"
 
 class RouteChecks:
     @staticmethod
-    def is_provider_prefixed_batch_or_file_route(route: str) -> bool:
-        return _PROVIDER_PREFIXED_BATCH_OR_FILE_ROUTE.fullmatch(route) is not None
+    def is_llm_handler_route(route: str) -> bool:
+        return RouteChecks.is_llm_api_route(route=route) or (
+            _PROVIDER_PREFIXED_BATCH_OR_FILE_ROUTE.fullmatch(route) is not None
+        )
 
     @staticmethod
     def check_route_enabled(route: str) -> None:

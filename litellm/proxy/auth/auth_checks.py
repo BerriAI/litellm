@@ -1080,10 +1080,7 @@ def model_max_budget_of(holder: ModelMaxBudgetHolder) -> Mapping[str, object] | 
 
 def route_skips_budget_checks(route: str) -> bool:
     return route not in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES and (
-        route in MODEL_DISCOVERY_ROUTES
-        or not (
-            RouteChecks.is_llm_api_route(route=route) or RouteChecks.is_provider_prefixed_batch_or_file_route(route)
-        )
+        route in MODEL_DISCOVERY_ROUTES or not RouteChecks.is_llm_handler_route(route)
     )
 
 
