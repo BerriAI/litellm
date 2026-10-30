@@ -883,8 +883,8 @@ _GOOGLE_PASSTHROUGH_PROVIDERS: Final = frozenset(
 
 
 def _passthrough_google_provider(url_route: str, custom_llm_provider: str | None) -> str | None:
-    if custom_llm_provider in _GOOGLE_PASSTHROUGH_PROVIDERS:
-        return custom_llm_provider
+    if custom_llm_provider is not None:
+        return custom_llm_provider if custom_llm_provider in _GOOGLE_PASSTHROUGH_PROVIDERS else None
     if VertexPassthroughLoggingHandler.is_google_ai_url(url_route):
         return VertexPassthroughLoggingHandler.custom_llm_provider_from_url(url_route)
     return None
@@ -2072,6 +2072,7 @@ async def pass_through_request(
             content=json.dumps(error_body),
             status_code=200,
             media_type="application/json",
+            headers={"x-litellm-call-id": litellm_call_id},
         )
     except Exception as e:
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(

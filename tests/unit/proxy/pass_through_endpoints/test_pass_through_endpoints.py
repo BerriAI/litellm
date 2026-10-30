@@ -8650,6 +8650,36 @@ class _FailureHookRecorder(CustomLogger):
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _PassthroughRun:
+    failure: _RecordedFailure
+    response: Response | None
+
+
+async def _drained_pass_through_response(
+    request: Request,
+    target: str,
+    custom_llm_provider: str | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    stream: bool,
+) -> Response | None:
+    try:
+        received: Final = await pass_through_request(
+            request=request,
+            target=target,
+            custom_headers={},
+            user_api_key_dict=user_api_key_dict,
+            custom_llm_provider=custom_llm_provider,
+            stream=stream,
+        )
+        if isinstance(received, StreamingResponse):
+            async for _ in received.body_iterator:
+                pass
+    except (ProxyException, httpx.HTTPError):
+        return None
+    return received if isinstance(received, Response) else None
+
+
 async def _run_passthrough_failure(
     target: str,
     custom_llm_provider: str | None,
@@ -8660,6 +8690,22 @@ async def _run_passthrough_failure(
     guardrail: CustomGuardrail | None = None,
     body: bytes = b'{"contents": "not a list"}',
 ) -> _RecordedFailure:
+    run: Final = await _run_passthrough(
+        target, custom_llm_provider, upstream, stream, user_api_key_dict, dispatched_endpoint, guardrail, body
+    )
+    return run.failure
+
+
+async def _run_passthrough(
+    target: str,
+    custom_llm_provider: str | None,
+    upstream: httpx.Response | Exception,
+    stream: bool = False,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+    dispatched_endpoint: Callable[..., object] | None = None,
+    guardrail: CustomGuardrail | None = None,
+    body: bytes = b'{"contents": "not a list"}',
+) -> _PassthroughRun:
     recorder: Final = _FailureHookRecorder()
     with (
         pytest.MonkeyPatch.context() as litellm_patch,
@@ -8689,24 +8735,17 @@ async def _run_passthrough_failure(
         mock_request.body = AsyncMock(return_value=body)
         mock_request.headers = Headers({"content-type": "application/json"})
         mock_request.query_params = QueryParams({})
-        try:
-            received: Final = await pass_through_request(
-                request=mock_request,
-                target=target,
-                custom_headers={},
-                user_api_key_dict=user_api_key_dict or UserAPIKeyAuth(api_key="sk-test"),
-                custom_llm_provider=custom_llm_provider,
-                stream=stream,
-            )
-            if isinstance(received, StreamingResponse):
-                async for _ in received.body_iterator:
-                    pass
-        except (ProxyException, httpx.HTTPError):
-            pass
+        response: Final = await _drained_pass_through_response(
+            mock_request,
+            target,
+            custom_llm_provider,
+            user_api_key_dict or UserAPIKeyAuth(api_key="sk-test"),
+            stream,
+        )
         await asyncio.sleep(0)
         litellm.in_memory_llm_clients_cache.flush_cache()
     assert len(recorder.failures) == 1
-    return recorder.failures[0]
+    return _PassthroughRun(recorder.failures[0], response)
 
 
 def _upstream_400(target: str) -> httpx.Response:
@@ -8866,6 +8905,22 @@ async def test_passthrough_guardrail_block_logs_model_from_url(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("body", [b'{"contents": "not a list"}', b'{"litellm_call_id": "client-chosen-id"}'])
+async def test_passthrough_guardrail_block_response_names_the_call_id_of_its_spend_row(body: bytes):
+    guardrail: Final = _ModifyResponseOnPreCallGuardrail(
+        guardrail_name="block-policy", event_hook=GuardrailEventHooks.pre_call, default_on=True
+    )
+    run: Final = await _run_passthrough(
+        _GEMINI_FLASH_TARGET, "gemini", _upstream_400(_GEMINI_FLASH_TARGET), guardrail=guardrail, body=body
+    )
+    assert isinstance(run.failure.original_exception, ModifyResponseException)
+    assert run.response is not None
+    assert run.response.headers["x-litellm-call-id"] == get_spend_logs_id(
+        CallTypes.pass_through.value, {}, run.failure.request_data
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("body", [b'{"contents": "not a list"}', b'{"custom_llm_provider": "vertex_ai"}'])
 async def test_passthrough_guardrail_block_on_a_user_defined_route_gets_no_url_attribution(body: bytes):
     guardrail: Final = _ModifyResponseOnPreCallGuardrail(
@@ -8956,9 +9011,10 @@ async def _run_websocket_connect_failure(
         ({"model": "from-body"}, _GEMINI_FLASH_TARGET, "gemini", "from-body", "gemini"),
         ({"contents": []}, _GEMINI_FLASH_TARGET, "gemini", "gemini-3.8-flash", "gemini"),
         ({"contents": []}, _VERTEX_FLASH_TARGET, None, "gemini-3.8-flash", "vertex_ai"),
-        ({"contents": []}, _VERTEX_FLASH_TARGET, "anthropic", "gemini-3.8-flash", "anthropic"),
+        ({"contents": []}, _VERTEX_FLASH_TARGET, "anthropic", "", "anthropic"),
+        ({}, "https://generativelanguage.googleapis.com/v1beta/openai/models/gemini-3.8-flash", "openai", "", "openai"),
         ({"custom_llm_provider": "from-body"}, _VERTEX_FLASH_TARGET, None, "gemini-3.8-flash", "vertex_ai"),
-        ({"custom_llm_provider": "gemini"}, _VERTEX_FLASH_TARGET, "anthropic", "gemini-3.8-flash", "anthropic"),
+        ({"custom_llm_provider": "gemini"}, _VERTEX_FLASH_TARGET, "anthropic", "", "anthropic"),
         ({"contents": []}, _GEMINI_FLASH_TARGET, None, "gemini-3.8-flash", "gemini"),
         (
             {},
