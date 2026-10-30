@@ -11,6 +11,7 @@ import respx
 from pydantic import BaseModel, TypeAdapter
 
 import litellm
+from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.llms.openai import (
     ContentPartDonePartOutputText,
@@ -455,7 +456,7 @@ def test_codex_chat_completion_stream_strips_cache_control_and_transforms_tools(
             "role": "system",
             "content": [{"type": "input_text", "text": "Use tools carefully."}],
         },
-        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Find the value."}]}
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Find the value."}]},
     ]
     assert request_body["tools"] == [
         {
@@ -659,3 +660,196 @@ async def test_router_responses_alias_stream_uses_underlying_model(sync_mode: bo
     assert len(requests) == 1
     request_body: Final = _JSON_OBJECT.validate_json(requests[0].request.content)
     assert request_body["model"] == "gpt-4o"
+
+
+_COMPATIBLE_API_BASE: Final = "https://compatible.example.com/v1"
+_COMPATIBLE_URL: Final = f"{_COMPATIBLE_API_BASE}/responses"
+_TITLE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"title": {"type": "string"}},
+    "required": ["title"],
+    "additionalProperties": False,
+}
+_JSON_SCHEMA_TEXT: Final = {
+    "format": {"type": "json_schema", "name": "title", "strict": True, "schema": _TITLE_SCHEMA},
+    "verbosity": "low",
+}
+_FORMAT_UNAVAILABLE: Final = "<400> InternalError.Algo.InvalidParameter: This text.format type is unavailable now"
+
+
+def _sent_requests(route: respx.Route) -> tuple[httpx.Request, ...]:
+    return tuple(request for call in route.calls if isinstance(request := call.request, httpx.Request))
+
+
+def _format_type(request: httpx.Request) -> object:
+    text: Final = _JSON_OBJECT.validate_json(request.content).get("text")
+    return _json_object(_json_object(text)["format"])["type"] if isinstance(text, dict) else None
+
+
+def _failed_stream(error: dict[str, object]) -> httpx.Response:
+    created: Final = _response_events("resp_failed")[0]
+    failed_response: Final = {**_json_object(created["response"]), "status": "failed", "text": _JSON_SCHEMA_TEXT}
+    return _sse_reply(
+        _sse(
+            (
+                created,
+                {"type": "response.failed", "sequence_number": 1, "response": {**failed_response, "error": error}},
+            )
+        )
+    )
+
+
+def _streams(request: httpx.Request) -> bool:
+    return _JSON_OBJECT.validate_json(request.content).get("stream") is True
+
+
+def _format_unavailable(request: httpx.Request) -> httpx.Response:
+    if _streams(request):
+        return _failed_stream({"code": "InvalidParameter", "message": _FORMAT_UNAVAILABLE})
+    return httpx.Response(status_code=400, json={"error": {"code": "InvalidParameter", "message": _FORMAT_UNAVAILABLE}})
+
+
+def _json_object_only_host(request: httpx.Request) -> httpx.Response:
+    """An OpenAI-compatible /responses host that implements text.format ``text`` and ``json_object`` only"""
+    if _format_type(request) == "json_schema":
+        return _format_unavailable(request)
+    if _streams(request):
+        return _sse_reply(_response_sse("resp_json"))
+    return httpx.Response(status_code=200, json=_response_body("resp_json"))
+
+
+async def _call_responses(sync_mode: bool, stream: bool, api_base: str | None = _COMPATIBLE_API_BASE) -> object:
+    kwargs: Final = {
+        "model": "openai/gpt-4o",
+        "api_key": "sk-test",
+        "api_base": api_base,
+        "input": "hello",
+        "instructions": "Answer in English",
+        "text": _JSON_SCHEMA_TEXT,
+        "stream": stream,
+    }
+    if sync_mode:
+        response = litellm.responses(**kwargs)
+        return tuple(response) if stream else response
+    awaited: Final = await litellm.aresponses(**kwargs)
+    return tuple([event async for event in awaited]) if stream else awaited
+
+
+@pytest.mark.parametrize("stream", (False, True))
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_a_host_without_json_schema_gets_the_schema_as_json_object_instructions(
+    sync_mode: bool, stream: bool
+) -> None:
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post(_COMPATIBLE_URL).mock(side_effect=_json_object_only_host)
+        result: Final = await _call_responses(sync_mode, stream)
+        requests: Final = _sent_requests(route)
+
+    if stream:
+        _assert_valid_stream(tuple(result), "msg_resp_json")
+    else:
+        _assert_valid_response(result, final_chunk=True)
+    assert [_format_type(request) for request in requests] == ["json_schema", "json_object"]
+    retried: Final = _JSON_OBJECT.validate_json(requests[1].content)
+    assert retried["text"] == {"format": {"type": "json_object"}, "verbosity": "low"}
+    instructions: Final = str(retried["instructions"])
+    assert instructions.startswith("Answer in English")
+    assert json.dumps(_TITLE_SCHEMA) in instructions
+    assert "json" in instructions.lower()
+
+
+@pytest.mark.parametrize("stream", (False, True))
+@pytest.mark.asyncio
+async def test_a_host_that_rejects_json_object_too_fails_after_one_retry(stream: bool) -> None:
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post(_COMPATIBLE_URL).mock(side_effect=_format_unavailable)
+        with pytest.raises(MidStreamFallbackError if stream else litellm.BadRequestError) as exc_info:
+            _ = await _call_responses(sync_mode=False, stream=stream)
+        requests: Final = _sent_requests(route)
+
+    assert [_format_type(request) for request in requests] == ["json_schema", "json_object"]
+    assert "text.format type is unavailable" in str(exc_info.value)
+
+
+_UNRELATED_400: Final = httpx.Response(
+    status_code=400, json={"error": {"code": "invalid_value", "message": "Input is longer than the context window"}}
+)
+_SCHEMA_ERROR_400: Final = httpx.Response(
+    status_code=400,
+    json={"error": {"code": "invalid_json_schema", "message": "Invalid schema for text.format 'title'"}},
+)
+_FORMAT_ERROR_500: Final = httpx.Response(
+    status_code=500, json={"error": {"code": "server_error", "message": "text.format handling crashed"}}
+)
+
+
+@pytest.mark.parametrize(
+    ("api_base", "reply"),
+    (
+        (_COMPATIBLE_API_BASE, _UNRELATED_400),
+        (_COMPATIBLE_API_BASE, _FORMAT_ERROR_500),
+        (None, _SCHEMA_ERROR_400),
+    ),
+    ids=("error about something else", "server error", "OpenAI rejecting the schema itself"),
+)
+@pytest.mark.asyncio
+async def test_a_rejection_that_json_object_cannot_fix_is_not_retried(
+    api_base: str | None, reply: httpx.Response
+) -> None:
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post(_COMPATIBLE_URL if api_base else _OPENAI_URL).mock(return_value=reply)
+        with pytest.raises(litellm.InternalServerError if reply.status_code >= 500 else litellm.BadRequestError):
+            _ = await _call_responses(sync_mode=False, stream=False, api_base=api_base)
+        requests: Final = _sent_requests(route)
+
+    assert [_format_type(request) for request in requests] == ["json_schema"]
+
+
+@pytest.mark.asyncio
+async def test_a_stream_failing_for_another_reason_is_not_retried_even_when_its_response_echoes_the_format() -> None:
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post(_COMPATIBLE_URL).mock(
+            return_value=_failed_stream({"code": "server_error", "message": "The server is overloaded"})
+        )
+        with pytest.raises(MidStreamFallbackError) as exc_info:
+            _ = await _call_responses(sync_mode=False, stream=True)
+        requests: Final = _sent_requests(route)
+
+    assert [_format_type(request) for request in requests] == ["json_schema"]
+    assert "overloaded" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_azure_openai_rejecting_the_schema_itself_is_not_retried() -> None:
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post(host="example-resource.openai.azure.com").mock(return_value=_SCHEMA_ERROR_400)
+        with pytest.raises(litellm.BadRequestError):
+            _ = await litellm.aresponses(
+                model="azure/gpt-4o",
+                api_key="sk-test",
+                api_base="https://example-resource.openai.azure.com",
+                api_version="2025-04-01-preview",
+                input="hello",
+                text=_JSON_SCHEMA_TEXT,
+            )
+        requests: Final = _sent_requests(route)
+
+    assert [_format_type(request) for request in requests] == ["json_schema"]
+
+
+@pytest.mark.asyncio
+async def test_a_json_schema_stream_with_endless_lifecycle_events_still_streams() -> None:
+    created, in_progress, *output = _response_events("resp_slow")
+    heartbeats: Final = tuple({**in_progress, "sequence_number": 1} for _ in range(5000))
+
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post(_COMPATIBLE_URL).mock(
+            return_value=_sse_reply(_sse((created, *heartbeats, *output)))
+        )
+        events: Final = await _call_responses(sync_mode=False, stream=True)
+        requests: Final = _sent_requests(route)
+
+    assert [_format_type(request) for request in requests] == ["json_schema"]
+    assert isinstance(events, tuple)
+    assert _completed_response(events).output[0].id == "msg_resp_slow"
