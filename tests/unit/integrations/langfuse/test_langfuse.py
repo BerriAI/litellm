@@ -434,6 +434,33 @@ async def test_langfuse_logging_vllm_embedding(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("response_id", [None, "decision-1"])
+async def test_langfuse_logging_systemone(
+    langfuse_export: tuple[respx.Route, str], respx_mock: respx.MockRouter, response_id: str | None
+) -> None:
+    route, trace_id = langfuse_export
+    answers: Final = {"urgent": {"type": "noul", "noul": 0.87}}
+    upstream: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(
+        json={
+            **({"id": response_id} if response_id is not None else {}),
+            "model": "typesafe/jev-1.13",
+            "answers": answers,
+            "usage": {"input_tokens": 283, "output_tokens": 20, "cost": 1.1886e-05},
+        }
+    )
+    await litellm.asystemone(
+        model="openrouter/typesafe/jev-1.13",
+        state="Customer writes: my payout has failed three days in a row.",
+        questions={"urgent": {"type": "noul", "instructions": "Is this urgent?"}},
+        api_key="caller-key",
+        metadata={"trace_id": trace_id},
+    )
+    await _flush_langfuse()
+    assert upstream.call_count == 1
+    _expected_generation(route, "systemone.json", trace_id)
+
+
+@pytest.mark.asyncio
 async def test_langfuse_logging_with_router(langfuse_export: tuple[respx.Route, str]) -> None:
     route, trace_id = langfuse_export
     router: Final = litellm.Router(
