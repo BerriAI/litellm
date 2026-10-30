@@ -1452,12 +1452,12 @@ class TestToolPermissionGuardrailAnthropicMessages:
     def _ended_by_upstream_error(self, chunks: list[bytes]) -> list[bytes]:
         return [*chunks, f"event: error\ndata: {json.dumps(self.UPSTREAM_ERROR)}\n\n".encode()]
 
-    def _cut_off_tool_use(self, index: int, name: str) -> list[bytes]:
+    def _cut_off_tool_use(self, index: int, name: str, block_type: str = "tool_use") -> list[bytes]:
         events: Final = (
             {
                 "type": "content_block_start",
                 "index": index,
-                "content_block": {"type": "tool_use", "id": f"tu_{index}", "name": name, "input": {}},
+                "content_block": {"type": block_type, "id": f"tu_{index}", "name": name, "input": {}},
             },
             {"type": "content_block_delta", "index": index, "delta": {"type": "input_json_delta", "partial_json": '{"command": "l'}},
         )
@@ -1531,6 +1531,26 @@ class TestToolPermissionGuardrailAnthropicMessages:
         out: Final = await self._drain(self.blocking, chunks)
 
         assert b"".join(out) == b"".join([*delivered, error_frame])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("block_type", ["server_tool_use", "mcp_tool_use"])
+    async def test_stream_drops_a_server_side_call_cut_off_by_an_upstream_error(self, block_type: str):
+        delivered: Final = self._sse_chunks("Bash")[:3]
+        chunks: Final = [*delivered, *self._cut_off_tool_use(2, "web_search", block_type), *self._ended_by_upstream_error([])]
+
+        out: Final = await self._drain(self.blocking, chunks)
+
+        assert b"".join(out) == b"".join([*delivered, *self._ended_by_upstream_error([])])
+
+    @pytest.mark.asyncio
+    async def test_error_name_on_a_message_delta_frame_keeps_the_stream_as_sent(self):
+        source: Final = self._sse_chunks("Bash")
+        message_delta_frame: Final = source[-2]
+        chunks: Final = [*source[:-2], message_delta_frame.replace(b"event: message_delta", b"event: error"), source[-1]]
+
+        out: Final = await self._drain(self.blocking, chunks)
+
+        assert b"".join(out) == b"".join(chunks)
 
     @pytest.mark.asyncio
     async def test_denied_tool_use_delivered_before_an_upstream_error_is_still_blocked(self):

@@ -277,19 +277,23 @@ def build_complete_streaming_response_legacy(
     return complete_streaming_response
 
 
-def extract_sse_data(event_str: str) -> dict | None:
-    """Parse the JSON object from the ``data:`` line of an Anthropic SSE event."""
+def _sse_data_payload(event_str: str) -> str | None:
     for line in split_sse_lines(event_str):
         stripped = line.strip()
         if stripped.startswith("data:"):
-            payload = stripped[len("data:") :].strip()
-            if not payload.startswith("{"):
-                return None
-            try:
-                return json.loads(payload)
-            except (ValueError, TypeError):
-                return None
+            return stripped[len("data:") :].strip()
     return None
+
+
+def extract_sse_data(event_str: str) -> dict | None:
+    """Parse the JSON object from the ``data:`` line of an Anthropic SSE event."""
+    payload: Final = _sse_data_payload(event_str)
+    if payload is None or not payload.startswith("{"):
+        return None
+    try:
+        return json.loads(payload)
+    except (ValueError, TypeError):
+        return None
 
 
 def build_usage_only_response_from_chunks(
@@ -499,6 +503,21 @@ def is_anthropic_sse_stream(all_chunks: Sequence[object]) -> bool:
     return any(event.get("type") in _ANTHROPIC_EVENT_TYPES for event in _parsed_sse_events(sse_stream))
 
 
+def _is_json_value_other_than_object_or_null(payload: str) -> bool:
+    try:
+        return not isinstance(json.loads(payload), (dict, type(None)))
+    except ValueError:
+        return False
+
+
+def has_non_object_json_event(all_chunks: Sequence[object]) -> bool:
+    """Whether a frame's data is JSON that no reader of these streams can take as an event."""
+    return any(
+        _is_json_value_other_than_object_or_null(_sse_data_payload(event) or "")
+        for event in split_sse_chunk_into_events(_joined_sse_stream(all_chunks) or "")
+    )
+
+
 def anthropic_sse_event_type(event: str) -> object:
     return next((event_data.get("type") for event_data in _parsed_sse_events(event)), None)
 
@@ -515,7 +534,9 @@ def _is_named_error_event(event: str) -> bool:
 
 
 def _is_error_event(event: str) -> bool:
-    return _is_named_error_event(event) or anthropic_sse_event_type(event) == "error"
+    event_type: Final = anthropic_sse_event_type(event)
+    data_is_another_event: Final = isinstance(event_type, str) and event_type in _ANTHROPIC_EVENT_TYPES
+    return event_type == "error" or (_is_named_error_event(event) and not data_is_another_event)
 
 
 def _error_events(sse_stream: str) -> tuple[str, ...]:
@@ -528,8 +549,9 @@ def anthropic_sse_error_events(all_chunks: Sequence[object]) -> tuple[str, ...]:
     A stream whose upstream fails after it started ends with an ``error`` event in place of
     ``message_stop``. That frame is the outcome the client is owed, not content, so assembly through
     the upstream error leaves it out and a caller re-emitting a rewritten response puts it back.
-    A frame counts by its SSE ``event:`` name or its data ``type``, since a client SDK raises on the
-    name alone and an upstream that is not Anthropic may send anything as the data.
+    A frame counts by its data ``type``, or by its SSE ``event:`` name unless its data is another
+    Anthropic event, since a client SDK raises on the name alone and an upstream that is not
+    Anthropic may send anything as the data.
     """
     return _error_events(_joined_sse_stream(all_chunks) or "")
 

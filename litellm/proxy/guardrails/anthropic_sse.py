@@ -28,6 +28,9 @@ from litellm.llms.anthropic.messages.stream_assembly import (
     assemble_anthropic_sse_stream as assemble_anthropic_sse_stream,  # noqa: PLC0414  # public re-export
 )
 from litellm.llms.anthropic.messages.stream_assembly import (
+    has_non_object_json_event as has_non_object_json_event,  # noqa: PLC0414  # public re-export
+)
+from litellm.llms.anthropic.messages.stream_assembly import (
     is_anthropic_sse_stream as is_anthropic_sse_stream,  # noqa: PLC0414  # public re-export
 )
 from litellm.llms.anthropic.messages.stream_assembly import (
@@ -111,6 +114,7 @@ def _rewritten_message_delta_fields(
 
 
 _MESSAGE_END_EVENT_TYPES: Final = frozenset({"message_delta", "message_stop"})
+_TOOL_CALL_BLOCK_TYPES: Final = ("tool_use", "server_tool_use", "mcp_tool_use")
 
 
 def without_cut_off_tool_use(source_chunks: Sequence[object]) -> Sequence[object]:
@@ -124,7 +128,7 @@ def without_cut_off_tool_use(source_chunks: Sequence[object]) -> Sequence[object
     cut_off: Final = frozenset(
         index
         for index, block in anthropic_sse_unfinished_blocks(source_chunks).items()
-        if block.get("type") == "tool_use"
+        if block.get("type") in _TOOL_CALL_BLOCK_TYPES
     )
     return anthropic_sse_events_without_blocks(source_chunks, cut_off) if cut_off else source_chunks
 
