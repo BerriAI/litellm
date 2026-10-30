@@ -145,15 +145,30 @@ def _assert_answered(response: httpx.Response, marker: str, content_type: str) -
     assert rv.answer(marker) in response.text, response.text
 
 
-def _chatgpt_usage_on(gateway: Gateway, day: str) -> _ProviderUsage | None:
-    response: Final = gateway.request("GET", "/user/daily/activity", params={"start_date": day, "end_date": day})
+def _today() -> str:
+    return datetime.now(UTC).date().isoformat()
+
+
+def _chatgpt_usage_between(gateway: Gateway, first_day: str, last_day: str) -> tuple[_ProviderUsage, ...]:
+    response: Final = gateway.request(
+        "GET", "/user/daily/activity", params={"start_date": first_day, "end_date": last_day}
+    )
     assert response.status_code == 200, response.text
     activity: Final = _DailyActivity.model_validate_json(response.content)
-    buckets: Final = tuple(
+    return tuple(
         result.breakdown.providers[_PROVIDER] for result in activity.results if _PROVIDER in result.breakdown.providers
     )
-    assert len(buckets) <= 1, response.text
-    return buckets[0] if buckets else None
+
+
+def _summed(buckets: tuple[_ProviderUsage, ...]) -> _Metrics:
+    return _Metrics(
+        spend=sum(bucket.metrics.spend for bucket in buckets),
+        prompt_tokens=sum(bucket.metrics.prompt_tokens for bucket in buckets),
+        completion_tokens=sum(bucket.metrics.completion_tokens for bucket in buckets),
+        api_requests=sum(bucket.metrics.api_requests for bucket in buckets),
+        successful_requests=sum(bucket.metrics.successful_requests for bucket in buckets),
+        failed_requests=sum(bucket.metrics.failed_requests for bucket in buckets),
+    )
 
 
 def _usage(gateway: Gateway, *, key: str | None = None) -> httpx.Response:
@@ -218,7 +233,7 @@ def _assert_fee_reported(account: _Account, identity: str) -> None:
 
 
 def test_responses_calls_on_a_deployment_login_count_as_subscription_covered_chatgpt_usage(rig: _Rig) -> None:
-    day: Final = datetime.now(UTC).date().isoformat()
+    first_day: Final = _today()
     rig.wire.drain()
     plain_marker: Final = uuid.uuid4().hex
     stream_marker: Final = uuid.uuid4().hex
@@ -232,23 +247,24 @@ def test_responses_calls_on_a_deployment_login_count_as_subscription_covered_cha
     assert len(forwarded) == 2, [request.target for request in forwarded]
     for request, marker in zip(forwarded, (plain_marker, stream_marker), strict=True):
         cv.forwarded(request, marker)
-    usage: Final = eventually(
-        lambda: _chatgpt_usage_on(rig.gateway, day),
-        lambda found: found is not None and found.metrics.api_requests >= 2,
+    last_day: Final = _today()
+    buckets: Final = eventually(
+        lambda: _chatgpt_usage_between(rig.gateway, first_day, last_day),
+        lambda found: _summed(found).api_requests >= 2,
         seconds=70,
     )
-    assert usage is not None
-    assert (
-        usage.metrics.api_requests,
-        usage.metrics.successful_requests,
-        usage.metrics.failed_requests,
-        usage.metrics.spend,
-    ) == (2, 2, 0, 0), usage
-    assert (usage.metrics.prompt_tokens, usage.metrics.completion_tokens) == (
+    totals: Final = _summed(buckets)
+    assert (totals.api_requests, totals.successful_requests, totals.failed_requests, totals.spend) == (
+        2,
+        2,
+        0,
+        0,
+    ), buckets
+    assert (totals.prompt_tokens, totals.completion_tokens) == (
         2 * _TOKENS.validate_python(cv.USAGE["input_tokens"]),
         2 * _TOKENS.validate_python(cv.USAGE["output_tokens"]),
-    ), usage
-    assert usage.metadata.get("subscription_covered") is True, usage
+    ), buckets
+    assert all(bucket.metadata.get("subscription_covered") is True for bucket in buckets), buckets
 
 
 def test_fee_on_the_deployment_account_reports_its_fixed_cost_until_deleted(rig: _Rig) -> None:
@@ -294,9 +310,13 @@ def test_internal_user_is_refused_setting_a_fee_and_reading_usage(rig: _Rig) -> 
         assert usage.status_code == 401, usage.text
 
 
-def test_fee_on_an_account_no_deployment_uses_is_neither_listed_nor_counted(rig: _Rig) -> None:
+def test_fee_on_an_account_no_deployment_uses_stays_listed_and_counted(rig: _Rig) -> None:
     unused: Final = f"acct-unused-{uuid.uuid4().hex}"
     with rig.gateway.scenario() as scenario:
         identity: Final = _set_fee(scenario, unused)
-        assert rig.gateway.rows(_FEE_TABLE_QUERY, (_PROVIDER, unused)) == [{"subscription_account_id": identity}]
-        _assert_no_fee(_deployment_account(rig))
+        accounts: Final = _accounts(rig.gateway)
+        assert frozenset(account.account_id for account in accounts) == {cv.ACCOUNT, unused}, accounts
+        (unused_account,) = (account for account in accounts if account.account_id == unused)
+        assert unused_account.fee is not None, unused_account
+        assert (unused_account.deployments, unused_account.fee.subscription_account_id) == ((), identity)
+        assert unused_account.fixed_cost == _MONTHLY_FEE, unused_account

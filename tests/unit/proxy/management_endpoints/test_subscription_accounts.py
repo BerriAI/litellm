@@ -174,7 +174,7 @@ def test_fee_counts_once_per_billing_period_however_many_deployments_share_the_a
     assert between_starts["accounts"][0]["billing_periods"] == []
 
 
-def test_fee_of_an_account_no_deployment_uses_is_neither_listed_nor_counted(client):
+def test_fee_of_an_account_no_deployment_uses_stays_listed_and_counted(client):
     test_client, _ = client
     other = {**_TEST_FEE, "account_id": "org-other", "monthly_fee": 200.0, "currency": "EUR"}
     assert test_client.post("/subscription_accounts/new", json=other).status_code == 200
@@ -182,9 +182,10 @@ def test_fee_of_an_account_no_deployment_uses_is_neither_listed_nor_counted(clie
 
     body = _usage(test_client, "2026-10-01", "2026-10-07")
 
-    (account,) = body["accounts"]
-    assert account["account_id"] == _ACCOUNT
-    assert account["fixed_cost"] == 25.0
+    unused, used = body["accounts"]
+    assert (unused["account_id"], unused["deployments"], unused["fee"]["currency"]) == ("org-other", [], "EUR")
+    assert unused["fixed_cost"] == 200.0
+    assert (used["account_id"], used["fixed_cost"]) == (_ACCOUNT, 25.0)
 
 
 @pytest.mark.parametrize(
@@ -286,22 +287,15 @@ def test_rejects_an_infinite_monthly_fee():
         )
 
 
-class _MissingTableStore:
-    async def list_all(self) -> list[LiteLLM_SubscriptionAccountTable]:
-        raise RuntimeError('relation "LiteLLM_SubscriptionAccountTable" does not exist')
+@pytest.mark.parametrize("deployments", [()])
+def test_fee_stays_listed_after_the_last_subscription_deployment_is_removed(client):
+    test_client, _ = client
+    assert test_client.post("/subscription_accounts/new", json=_TEST_FEE).status_code == 200
 
+    body = _usage(test_client, "2026-10-01", "2026-10-07")
 
-def test_proxy_without_subscription_deployments_answers_without_reading_fees():
-    app: Final = FastAPI()
-    app.include_router(router)
-    app.dependency_overrides[get_subscription_account_repository] = _MissingTableStore
-    app.dependency_overrides[get_subscription_deployments] = lambda: ()
-    app.dependency_overrides[user_api_key_auth] = _resolve_auth
-
-    with TestClient(app) as test_client:
-        body = _usage(test_client, "2026-10-01", "2026-10-07")
-
-    assert body["accounts"] == []
+    (account,) = body["accounts"]
+    assert (account["account_id"], account["deployments"], account["fixed_cost"]) == (_ACCOUNT, [], 25.0)
 
 
 def test_usage_rejects_a_malformed_or_inverted_range(client):

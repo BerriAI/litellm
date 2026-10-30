@@ -16122,8 +16122,8 @@ export interface paths {
         };
         /**
          * Get Subscription Usage
-         * @description Subscription-backed accounts behind the proxy's deployments, each with its configured
-         *     monthly fee and the fixed cost attributed to the date range: the fee once per billing
+         * @description Subscription-backed accounts behind the proxy's deployments or carrying a stored fee, each with
+         *     its configured monthly fee and the fixed cost attributed to the date range: the fee once per billing
          *     period whose start date falls inside the range, however many deployments share the account.
          */
         get: operations["get_subscription_usage_subscription_accounts_usage_get"];

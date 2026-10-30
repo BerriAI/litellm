@@ -169,7 +169,7 @@ def build_subscription_usage(
     deployment_tuple: Final = tuple(deployments)
     fees_by_account: Final = {(row.custom_llm_provider, row.account_id): row for row in fee_rows}
     deployment_keys: Final = {(d.custom_llm_provider, d.account_id) for d in deployment_tuple}
-    account_keys: Final = sorted(deployment_keys, key=lambda key: (key[0], key[1] or "~"))
+    account_keys: Final = sorted(deployment_keys | set(fees_by_account), key=lambda key: (key[0], key[1] or "~"))
     accounts: Final = tuple(
         _account_usage(
             provider,
@@ -219,8 +219,8 @@ async def get_subscription_usage(
     deployments: Deployments,
 ) -> SubscriptionUsageResponse:
     """
-    Subscription-backed accounts behind the proxy's deployments, each with its configured
-    monthly fee and the fixed cost attributed to the date range: the fee once per billing
+    Subscription-backed accounts behind the proxy's deployments or carrying a stored fee, each with
+    its configured monthly fee and the fixed cost attributed to the date range: the fee once per billing
     period whose start date falls inside the range, however many deployments share the account.
     """
     if not user_api_key_has_admin_view(user_api_key_dict):
@@ -231,8 +231,6 @@ async def get_subscription_usage(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail={"error": "end_date must not be before start_date"}
         )
-    if not deployments:
-        return build_subscription_usage((), (), start, end)
     return build_subscription_usage(deployments, await repository.list_all(), start, end)
 
 
