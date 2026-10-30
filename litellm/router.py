@@ -6242,34 +6242,35 @@ class Router(DeprecatedRouterMembers):
         **kwargs,
     ):
         messages: Final = [{"role": "user", "content": prompt}]
-        try:
-            kwargs["model"] = model
-            kwargs["prompt"] = prompt
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+        with owning_picks(self._core_least_busy_reservations, call_id_of(CALL_IDENTITY.validate_python(kwargs))):
+            try:
+                kwargs["model"] = model
+                kwargs["prompt"] = prompt
+                kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+                kwargs.setdefault("metadata", {}).update({"model_group": model})
 
-            # pick the one that is available (lowest TPM/RPM)
-            with endpoint_selection("text_completion", model=model), picks_reserve(True):
-                deployment: Final = self.get_available_deployment(
-                    model=model,
-                    messages=messages,
-                    specific_deployment=kwargs.pop("specific_deployment", None),
-                    request_kwargs=kwargs,
+                # pick the one that is available (lowest TPM/RPM)
+                with endpoint_selection("text_completion", model=model), picks_reserve(True):
+                    deployment: Final = self.get_available_deployment(
+                        model=model,
+                        messages=messages,
+                        specific_deployment=kwargs.pop("specific_deployment", None),
+                        request_kwargs=kwargs,
+                    )
+
+                data: Final = deployment["litellm_params"].copy()
+                for k, v in self._core_default_litellm_params.items():
+                    if k not in kwargs:  # prioritize model-specific params > default router params
+                        kwargs[k] = v
+                    elif k == "metadata":
+                        kwargs[k].update(v)
+
+                # call via litellm.completion()
+                return litellm.text_completion(
+                    **{**data, "prompt": prompt, "caching": self._core_cache_responses, **kwargs}
                 )
-
-            data: Final = deployment["litellm_params"].copy()
-            for k, v in self._core_default_litellm_params.items():
-                if k not in kwargs:  # prioritize model-specific params > default router params
-                    kwargs[k] = v
-                elif k == "metadata":
-                    kwargs[k].update(v)
-
-            # call via litellm.completion()
-            return litellm.text_completion(
-                **{**data, "prompt": prompt, "caching": self._core_cache_responses, **kwargs}
-            )
-        except Exception as e:
-            raise e
+            except Exception as e:
+                raise e
 
     async def atext_completion(
         self,

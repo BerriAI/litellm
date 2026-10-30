@@ -327,11 +327,11 @@ ROUTER_GROUP: Final = "least-busy-router-group"
 ROUTER_DEPLOYMENT_IDS: Final = ("1", "2", "3")
 
 
-def _least_busy_router() -> Router:
+def _least_busy_router(group: str = ROUTER_GROUP) -> Router:
     return Router(
         model_list=[
             {
-                "model_name": ROUTER_GROUP,
+                "model_name": group,
                 "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": f"key-{deployment_id}"},
                 "model_info": {"id": deployment_id},
             }
@@ -610,8 +610,8 @@ def test_a_reservation_and_a_release_on_one_deployment_at_once_both_count() -> N
     assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_B
 
 
-def _router_pick(router: Router) -> str:
-    deployment: Final = router.get_available_deployment(ROUTER_GROUP, request_kwargs={"metadata": {}})
+def _router_pick(router: Router, group: str = ROUTER_GROUP) -> str:
+    deployment: Final = router.get_available_deployment(group, request_kwargs={"metadata": {}})
     return deployment["model_info"]["id"]
 
 
@@ -909,6 +909,34 @@ async def test_listing_fine_tuning_jobs_does_not_keep_its_deployment_busy(
     await _drain_logging()
 
     assert _router_pick(router) == _called_deployment(route)
+
+
+TEXT_GROUP: Final = "openai/least-busy-text-group"
+
+
+@pytest.mark.parametrize("call_identity", _CALL_IDENTITIES)
+def test_a_sync_text_completion_does_not_keep_its_deployment_busy(
+    call_identity: dict[str, str], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "cmpl-least-busy",
+                "object": "text_completion",
+                "created": 1,
+                "model": "least-busy-text-group",
+                "choices": [{"text": "ok", "index": 0, "finish_reason": "stop", "logprobs": None}],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+            },
+        )
+    )
+    router: Final = _least_busy_router(TEXT_GROUP)
+
+    router.text_completion(model=TEXT_GROUP, prompt="Say ok", **call_identity)
+
+    assert _router_pick(router, TEXT_GROUP) == _called_deployment(route)
 
 
 @pytest.mark.asyncio
