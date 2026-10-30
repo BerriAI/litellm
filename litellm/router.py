@@ -3826,6 +3826,19 @@ class Router(DeprecatedRouterMembers):
             async def __anext__(self):
                 return await self._async_generator.__anext__()
 
+            def arm_disconnect_drain(self) -> None:
+                super().arm_disconnect_drain()
+                model_response.arm_disconnect_drain()
+
+            def disconnect_drain_target(self) -> CustomStreamWrapper | None:
+                return None if self.fallback_headers_adopted else model_response.disconnect_drain_target()
+
+            async def aclose(self) -> None:
+                await super().aclose()
+                with anyio.CancelScope(shield=True):
+                    await close_model_response()
+                    await held_slot.aclose()
+
         async def close_model_response() -> None:
             if not hasattr(model_response, "aclose"):
                 return
@@ -3976,9 +3989,18 @@ class Router(DeprecatedRouterMembers):
                 # back to the connection pool when the generator is closed
                 # (e.g. on client disconnect).
                 # Shield from anyio cancellation so the awaits can complete.
+                # A wrapper armed for the disconnect drain closes the original
+                # attempt in its own aclose, after the proxy has drained it.
+                draining_wrapper: Final = wrapper_ref()
+                keeps_attempt_open: Final = (
+                    fallback_response is None
+                    and draining_wrapper is not None
+                    and draining_wrapper.drains_upstream_on_disconnect
+                )
                 with anyio.CancelScope(shield=True):
-                    await close_model_response()
-                    await held_slot.aclose()
+                    if not keeps_attempt_open:
+                        await close_model_response()
+                        await held_slot.aclose()
                     if fallback_response is not None and hasattr(fallback_response, "aclose"):
                         try:
                             await fallback_response.aclose()

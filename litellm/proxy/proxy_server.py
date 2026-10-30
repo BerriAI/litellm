@@ -463,6 +463,7 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     ProxyBaseLLMRequestProcessing,
     _is_azure_model_router_request,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _should_return_raw_model_name,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    arm_disconnect_drain,
     close_guarded_stream,
     create_response,
     is_azure_model_router_request,
@@ -10502,6 +10503,7 @@ async def async_data_generator(
     verbose_proxy_logger.debug("inside generator")
     stream_completed = False
     client_disconnected = False
+    arm_disconnect_drain(response)
     error_state: Final = ResponsesStreamErrorState() if responses_stream_errors else None
     ends_with_openai_done: Final = not request_data.get("_litellm_skip_openai_stream_done")
     needs_iterator_wrap: Final = proxy_logging_obj.needs_iterator_wrap()

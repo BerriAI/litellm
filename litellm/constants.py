@@ -717,6 +717,10 @@ ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE: Final = get_env_int(
 # upstream stream immediately, instead of continuing to drain for the real
 # terminal usage.
 ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS: Final = get_env_int("ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", 100)
+# Same bound for /v1/chat/completions streams the proxy keeps reading after the
+# client disconnects, so it can bill the provider's terminal usage. 0 disables
+# the drain: the request is billed on the chunks the client already received.
+CHAT_COMPLETIONS_MAX_DETACHED_STREAM_DRAINS: Final = get_env_int("CHAT_COMPLETIONS_MAX_DETACHED_STREAM_DRAINS", 100)
 LOGGING_WORKER_CONCURRENCY: Final = get_env_int("LOGGING_WORKER_CONCURRENCY", 100)  # Must be above 0
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = get_env_int("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000)
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = get_env_float("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0)

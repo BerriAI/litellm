@@ -7666,7 +7666,10 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "sk-synthetic"},
                     "model_info": {"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/embeddings"]},
                 },
-                {"model_name": "chat-model", "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "sk-synthetic"}},
+                {
+                    "model_name": "chat-model",
+                    "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "sk-synthetic"},
+                },
             ],
             fallbacks=[{"rate-limited": ["embed-alias", "chat-model"]}],
         )
@@ -9233,6 +9236,136 @@ class TestStreamingClientDisconnectBilling:
         assert getattr(usage, "cache_creation_input_tokens", None) == 3
         assert usage.prompt_tokens_details is not None
         assert usage.prompt_tokens_details.cached_tokens == 7
+
+
+class _ProviderWithLateUsage(litellm.CustomLLM):
+    """Streams a few words, holds the rest until ``tail`` is set, then reports the usage it billed."""
+
+    def __init__(self, fail_after_tail: bool = False):
+        super().__init__()
+        self.tail: Final = asyncio.Event()
+        self.tail_streamed = False
+        self.fail_after_tail: Final = fail_after_tail
+
+    async def astreaming(self, *args, **kwargs):
+        for word in ("Once ", "upon ", "a "):
+            yield _generic_chunk(word)
+        await self.tail.wait()
+        self.tail_streamed = True
+        if self.fail_after_tail:
+            raise litellm.InternalServerError(message="provider dropped", llm_provider="late", model="m")
+        for word in ("time ", "there ", "was "):
+            yield _generic_chunk(word)
+        yield {
+            **_generic_chunk(""),
+            "is_finished": True,
+            "finish_reason": "stop",
+            "usage": {"prompt_tokens": 50, "completion_tokens": 2000, "total_tokens": 2050},
+        }
+
+
+def _generic_chunk(text: str) -> dict:
+    return {"text": text, "is_finished": False, "finish_reason": None, "usage": None, "index": 0, "tool_use": None}
+
+
+class _RecordingFailureLogger(_RecordingSuccessLogger):
+    def __init__(self):
+        super().__init__()
+        self.failure_events = []
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.failure_events.append(kwargs)
+        self.logged.set()
+
+
+class TestStreamingDisconnectDrainsProviderUsage:
+    """
+    The provider keeps generating, and billing, a chat stream after the client
+    disconnects; its usage only arrives on the last chunk. The proxy must keep
+    reading the stream after the client leaves so the spend row carries that
+    usage instead of an estimate from the few chunks the client received.
+    """
+
+    async def _disconnect_mid_read(self, monkeypatch, provider: _ProviderWithLateUsage, recorder, use_router: bool):
+        from litellm.proxy.common_request_processing import arm_disconnect_drain
+
+        monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "late", "custom_handler": provider}])
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
+        messages: Final = [{"role": "user", "content": "tell me a long story"}]
+        response: Final = (
+            await Router(model_list=[{"model_name": "m", "litellm_params": {"model": "late/m"}}]).acompletion(
+                model="m", messages=messages, stream=True
+            )
+            if use_router
+            else await litellm.acompletion(model="late/m", messages=messages, stream=True)
+        )
+        arm_disconnect_drain(response)
+        stream: Final = response.__aiter__()
+        delivered: Final = [await stream.__anext__() for _ in range(3)]
+        waiting_for_tail: Final = asyncio.ensure_future(stream.__anext__())
+        await asyncio.sleep(0.05)
+        waiting_for_tail.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting_for_tail
+        await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
+            request=None,
+            request_data={"litellm_logging_obj": response.logging_obj},
+            response=response,
+            stream_completed=False,
+            client_disconnected=True,
+        )
+        provider.tail.set()
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+        await asyncio.sleep(0.2)
+        return delivered
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("use_router", [False, True])
+    async def test_disconnect_bills_the_usage_the_provider_reported_after_the_client_left(
+        self, monkeypatch, use_router: bool
+    ):
+        provider: Final = _ProviderWithLateUsage()
+        recorder: Final = _RecordingSuccessLogger()
+
+        delivered: Final = await self._disconnect_mid_read(monkeypatch, provider, recorder, use_router)
+
+        assert len(delivered) == 3
+        assert len(recorder.success_events) == 1, recorder.success_events
+        logged: Final = recorder.success_events[0]["kwargs"]["standard_logging_object"]
+        assert (logged["prompt_tokens"], logged["completion_tokens"]) == (50, 2000)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("drain_cap", [0, 1])
+    async def test_disconnect_over_the_drain_cap_bills_what_was_sent_and_stops_the_provider(
+        self, monkeypatch, drain_cap: int
+    ):
+        import litellm.proxy.common_request_processing as common_request_processing
+
+        monkeypatch.setattr(common_request_processing, "CHAT_COMPLETIONS_MAX_DETACHED_STREAM_DRAINS", drain_cap)
+        running_drain: Final = asyncio.ensure_future(asyncio.Event().wait())
+        monkeypatch.setattr(common_request_processing, "_DETACHED_STREAM_DRAINS", {running_drain})
+        provider: Final = _ProviderWithLateUsage()
+        recorder: Final = _RecordingSuccessLogger()
+        try:
+            await self._disconnect_mid_read(monkeypatch, provider, recorder, use_router=False)
+        finally:
+            running_drain.cancel()
+
+        assert len(recorder.success_events) == 1
+        logged: Final = recorder.success_events[0]["kwargs"]["standard_logging_object"]
+        assert 0 < logged["completion_tokens"] < 2000
+        assert provider.tail_streamed is False, "the provider stream kept running past the drain cap"
+
+    @pytest.mark.asyncio
+    async def test_provider_error_after_disconnect_logs_a_failure_not_a_success(self, monkeypatch):
+        provider: Final = _ProviderWithLateUsage(fail_after_tail=True)
+        recorder: Final = _RecordingFailureLogger()
+
+        await self._disconnect_mid_read(monkeypatch, provider, recorder, use_router=False)
+
+        assert recorder.success_events == []
+        assert len(recorder.failure_events) == 1
+        assert recorder.failure_events[0]["standard_logging_object"]["status"] == "failure"
 
 
 def _apply_stream_usage_tracking(

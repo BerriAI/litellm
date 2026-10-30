@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 import traceback
-from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence, Sized
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypeVar, cast
@@ -70,6 +70,20 @@ TOOL_CALLS_ATTRIBUTE: Final = "tool_calls"
 FUNCTION_CALL_ATTRIBUTE: Final = "function_call"
 
 _SYNC_ITER_EXHAUSTED: Final = object()
+_ASYNC_ITER_EXHAUSTED: Final = object()
+
+
+def _has_no_parts(chunk: object) -> bool:
+    parts: Final[object] = getattr(chunk, "parts", None)
+    return isinstance(parts, Sized) and len(parts) == 0
+
+
+async def _read_upstream_chunk(iterator: AsyncIterator[object]) -> object:
+    try:
+        return await iterator.__anext__()
+    except StopAsyncIteration:
+        return _ASYNC_ITER_EXHAUSTED
+
 
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 _CompleteStreamingResponse = ModelResponse | TextCompletionResponse | ModelResponseStream | None
@@ -305,6 +319,9 @@ def _provider_hidden_params(
 
 class CustomStreamWrapper:
     _earlier_rounds_spend: "BilledRoundsSpend | None" = None
+    _drains_upstream_on_disconnect: bool = False
+    _upstream_iterator: AsyncIterator[object] | None = None
+    _pending_upstream_read: "asyncio.Future[object] | None" = None
 
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
@@ -537,10 +554,15 @@ class CustomStreamWrapper:
         if self.completion_stream is not None:
             stream_to_close: Final = self.completion_stream
             self.completion_stream = None
+            pending_read: Final = self._pending_upstream_read
+            self._pending_upstream_read = None
             # Shield from anyio cancellation so cleanup awaits can complete.
             # Without this, CancelledError is thrown into every await during
             # task group cancellation, preventing HTTP connection release.
             with anyio.CancelScope(shield=True):
+                if pending_read is not None:
+                    pending_read.cancel()
+                    await asyncio.gather(pending_read, return_exceptions=True)
                 try:
                     if hasattr(stream_to_close, "aclose"):
                         await stream_to_close.aclose()
@@ -554,6 +576,58 @@ class CustomStreamWrapper:
                         e,
                     )
         self._restore_consumer_correlation_context()
+
+    def arm_disconnect_drain(self) -> None:
+        """Keep the provider stream readable when the consumer is cancelled mid-read.
+
+        Reads then run in a task the consumer awaits through ``asyncio.shield``, so a
+        cancellation (a client disconnect tearing down the proxy's response task)
+        stops the wait instead of unwinding the provider's async generators, and
+        ``disconnect_drain_target`` can hand the stream to a drain that reads it to
+        the terminal usage chunk the provider billed. ``aclose`` still aborts it.
+        """
+        self._drains_upstream_on_disconnect = True
+
+    @property
+    def drains_upstream_on_disconnect(self) -> bool:
+        return self._drains_upstream_on_disconnect
+
+    def disconnect_drain_target(self) -> "CustomStreamWrapper | None":
+        """The stream to read to its end after the consumer left, or None when there is nothing to drain."""
+        if not self._drains_upstream_on_disconnect or self._closed or self.completion_stream is None:
+            return None
+        if not self.chunks or self.logging_obj.model_call_details.get("has_dispatched_final_stream_success"):
+            return None
+        return self
+
+    def _async_completion_stream(self) -> AsyncIterable[object]:
+        stream: Final[object] = self.completion_stream
+        if not isinstance(stream, AsyncIterable):
+            raise StopAsyncIteration
+        return cast(AsyncIterable[object], stream)  # cast-ok: provider streams yield untyped chunks
+
+    async def _anext_upstream_chunk(self) -> object:
+        if self._upstream_iterator is None:
+            self._upstream_iterator = self._async_completion_stream().__aiter__()
+        if not self._drains_upstream_on_disconnect:
+            return await self._upstream_iterator.__anext__()
+        pending: Final = self._pending_upstream_read or asyncio.ensure_future(
+            _read_upstream_chunk(self._upstream_iterator)
+        )
+        self._pending_upstream_read = pending
+        try:
+            chunk: Final = await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            if pending.cancelled():
+                self._pending_upstream_read = None
+            raise
+        except Exception:
+            self._pending_upstream_read = None
+            raise
+        self._pending_upstream_read = None
+        if chunk is _ASYNC_ITER_EXHAUSTED:
+            raise StopAsyncIteration
+        return chunk
 
     def check_send_stream_usage(self, stream_options: dict | None):
         return stream_options is not None and stream_options.get("include_usage", False) is True
@@ -2277,11 +2351,12 @@ class CustomStreamWrapper:
                 await self.fetch_stream()
 
             if is_async_iterable(self.completion_stream):
-                async for chunk in self.completion_stream:  # pyright: ignore[reportOptionalIterable]  # is_async_iterable guard proves __aiter__
+                while True:
+                    chunk = await self._anext_upstream_chunk()
                     if chunk == "None" or chunk is None:
                         continue  # skip None chunks
 
-                    elif self.custom_llm_provider == "gemini" and hasattr(chunk, "parts") and len(chunk.parts) == 0:
+                    elif self.custom_llm_provider == "gemini" and _has_no_parts(chunk):
                         continue
                     processed_chunk: ModelResponseStream | None = self.chunk_creator(chunk=chunk)
                     if processed_chunk is None:
@@ -2324,7 +2399,6 @@ class CustomStreamWrapper:
                         processed_chunk = self._add_mcp_metadata_to_final_chunk(processed_chunk)
 
                     return processed_chunk
-                raise StopAsyncIteration
             else:  # temporary patch for non-aiohttp async calls
                 # example - boto3 bedrock llms
                 while True:
