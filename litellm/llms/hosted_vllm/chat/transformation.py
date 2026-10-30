@@ -3,8 +3,10 @@ Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
 import json
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping, Sequence
 from typing import Final, Literal, cast, overload
+
+from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
@@ -23,8 +25,41 @@ from litellm.types.llms.openai import (
     ChatCompletionVideoUrlObject,
 )
 
-from ....utils import remove_additional_properties, remove_strict_from_schema
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+
+
+def _is_str_keyed_mapping(value: object) -> TypeIs[Mapping[str, object]]:  # guard-ok: JSON tool objects have str keys
+    return isinstance(value, Mapping)
+
+
+def _is_strict(tool: object) -> bool:
+    function: Final = tool.get("function") if _is_str_keyed_mapping(tool) else None
+    return _is_str_keyed_mapping(function) and function.get("strict") is True
+
+
+def _str_keyed(value: object) -> Mapping[str, object]:
+    return value if _is_str_keyed_mapping(value) else {}
+
+
+def _forces_a_tool_call(tool_choice: object) -> bool:
+    return tool_choice == "required" or _is_str_keyed_mapping(tool_choice)
+
+
+def _with_forwardable_strict(tool: object, keep_strict_false: bool) -> object:
+    if not _is_str_keyed_mapping(tool):
+        return tool
+    function: Final = tool.get("function")
+    if not _is_str_keyed_mapping(function):
+        return tool
+    strict: Final = function.get("strict", True)
+    if strict is True or (keep_strict_false and strict is False):
+        return tool
+    return {**tool, "function": {key: value for key, value in function.items() if key != "strict"}}
+
+
+def _tools_with_forwardable_strict(tools: Sequence[object], tool_choice: object) -> Sequence[object]:
+    keep_strict_false: Final = not _forces_a_tool_call(tool_choice) and any(_is_strict(tool) for tool in tools)
+    return [_with_forwardable_strict(tool, keep_strict_false) for tool in tools]
 
 
 class HostedVLLMChatConfig(OpenAIGPTConfig):
@@ -86,21 +121,23 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        _tools = non_default_params.pop("tools", None)
-        if _tools is not None:
-            _tools = remove_additional_properties(_tools)
-            _tools = remove_strict_from_schema(_tools)
-            if isinstance(_tools, list):
-                _tools = self._convert_custom_tools_to_function_tools(_tools)
-        if _tools is not None:
-            non_default_params["tools"] = _tools
-
-        thinking: Final = non_default_params.pop("thinking", None)
+        params: Final = _str_keyed(non_default_params)
         thinking_effort: Final = (
             None
-            if "reasoning_effort" in non_default_params
-            else reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
+            if "reasoning_effort" in params
+            else reasoning_effort_from_thinking(params.get("thinking"), model=model, drop_params=drop_params)
         )
+        tools: Final = non_default_params.pop("tools", None)
+        if tools is not None:
+            non_default_params["tools"] = (
+                _tools_with_forwardable_strict(
+                    self._convert_custom_tools_to_function_tools(tools), params.get("tool_choice")
+                )
+                if isinstance(tools, list)
+                else tools
+            )
+
+        non_default_params.pop("thinking", None)
         if thinking_effort is not None:
             non_default_params["reasoning_effort"] = thinking_effort
 

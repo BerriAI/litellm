@@ -1,14 +1,18 @@
+import copy
 import json
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
-
+from pydantic import BaseModel, ConfigDict
 
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
 )
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+from litellm.utils import get_optional_params
 
 
 def test_hosted_vllm_chat_transformation_file_url():
@@ -397,3 +401,175 @@ def test_hosted_vllm_custom_tools_use_top_level_input_schema():
     assert tools[0]["function"]["name"] == "search"
     assert tools[0]["function"]["description"] == "Search docs"
     assert tools[0]["function"]["parameters"] == input_schema
+
+
+def _record_code_function() -> Mapping[str, object]:
+    return {
+        "name": "record_code",
+        "description": "Record a ten letter code",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "object",
+                    "properties": {"value": {"type": "string", "pattern": "^Z{10}$"}},
+                    "required": ["value"],
+                    "additionalProperties": False,
+                }
+            },
+            "required": ["code"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _strict_tools(strict: object = True) -> list[dict[str, object]]:
+    return [{"type": "function", "function": {**_record_code_function(), "strict": strict}}]
+
+
+def _unmarked_tool() -> Mapping[str, object]:
+    return {"type": "function", "function": _record_code_function()}
+
+
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_hosted_vllm_forwards_strict_tool_schema_as_sent(drop_params: bool) -> None:
+    tools: Final = _strict_tools()
+    sent: Final = copy.deepcopy(tools)
+
+    optional_params: Final = get_optional_params(
+        model="my-vllm-model",
+        custom_llm_provider="hosted_vllm",
+        tools=tools,
+        tool_choice="auto",
+        drop_params=drop_params,
+    )
+
+    assert optional_params["tools"] == sent
+    assert tools == sent
+
+
+@pytest.mark.parametrize("unmarked_strict", [False, None, "true", 1])
+def test_hosted_vllm_drops_a_strict_that_is_not_true(unmarked_strict: object) -> None:
+    tools: Final = [*_strict_tools(), *_strict_tools(unmarked_strict)]
+    sent: Final = copy.deepcopy(tools)
+
+    optional_params: Final = get_optional_params(
+        model="my-vllm-model",
+        custom_llm_provider="hosted_vllm",
+        tools=tools,
+        tool_choice="required",
+    )
+
+    assert optional_params["tools"] == [*_strict_tools(), _unmarked_tool()]
+    assert tools == sent
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "keeps_strict_false"),
+    [
+        (None, True),
+        ("auto", True),
+        ("required", False),
+        ({"type": "function", "function": {"name": "record_code"}}, False),
+    ],
+)
+def test_hosted_vllm_keeps_strict_false_beside_a_strict_tool_unless_a_call_is_forced(
+    tool_choice: object, keeps_strict_false: bool
+) -> None:
+    tools: Final = [*_strict_tools(), *_strict_tools(False)]
+
+    optional_params: Final = get_optional_params(
+        model="my-vllm-model",
+        custom_llm_provider="hosted_vllm",
+        tools=tools,
+        tool_choice=tool_choice,
+    )
+
+    expected_second: Final = _strict_tools(False)[0] if keeps_strict_false else _unmarked_tool()
+    assert optional_params["tools"] == [*_strict_tools(), expected_second]
+
+
+def test_hosted_vllm_drops_strict_false_when_no_tool_is_strict() -> None:
+    optional_params: Final = get_optional_params(
+        model="my-vllm-model",
+        custom_llm_provider="hosted_vllm",
+        tools=_strict_tools(False),
+        tool_choice="auto",
+    )
+
+    assert optional_params["tools"] == [_unmarked_tool()]
+
+
+class _PydanticTool(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: str = "function"
+
+
+@pytest.mark.parametrize("non_dict_tool", [_PydanticTool(), None])
+def test_hosted_vllm_passes_tools_that_are_not_dicts_through(non_dict_tool: object) -> None:
+    optional_params: Final = get_optional_params(
+        model="my-vllm-model",
+        custom_llm_provider="hosted_vllm",
+        tools=[*_strict_tools(), non_dict_tool],
+        tool_choice="auto",
+    )
+
+    assert optional_params["tools"] == [*_strict_tools(), non_dict_tool]
+
+
+def test_hosted_vllm_additional_drop_params_removes_only_the_named_tool_fields() -> None:
+    tools: Final = _strict_tools()
+    sent: Final = copy.deepcopy(tools)
+
+    optional_params: Final = get_optional_params(
+        model="my-vllm-model",
+        custom_llm_provider="hosted_vllm",
+        tools=tools,
+        tool_choice="auto",
+        additional_drop_params=["tools[*].function.strict", "tools[*].function.parameters.additionalProperties"],
+    )
+
+    assert optional_params["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "record_code",
+                "description": "Record a ten letter code",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {
+                            "type": "object",
+                            "properties": {"value": {"type": "string", "pattern": "^Z{10}$"}},
+                            "required": ["value"],
+                            "additionalProperties": False,
+                        }
+                    },
+                    "required": ["code"],
+                },
+            },
+        }
+    ]
+    assert tools == sent
+
+
+def test_hosted_vllm_additional_drop_params_removes_function_level_additional_properties() -> None:
+    parameters: Final = {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]}
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {"name": "search", "parameters": parameters, "additionalProperties": False, "strict": True},
+        }
+    ]
+
+    optional_params: Final = get_optional_params(
+        model="my-vllm-model",
+        custom_llm_provider="hosted_vllm",
+        tools=tools,
+        additional_drop_params=["tools[*].function.additionalProperties"],
+    )
+
+    assert optional_params["tools"] == [
+        {"type": "function", "function": {"name": "search", "parameters": parameters, "strict": True}}
+    ]

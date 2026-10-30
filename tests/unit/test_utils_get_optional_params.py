@@ -685,7 +685,6 @@ def test_unmapped_gemini_model_params():
 @pytest.mark.parametrize(
     "provider, model",
     [
-        ("hosted_vllm", "my-vllm-model"),
         ("gemini", "gemini-1.5-pro"),
         ("vertex_ai", "gemini-1.5-pro"),
     ],
