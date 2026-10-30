@@ -73,7 +73,7 @@ class _StreamParser:
         )
 
     @staticmethod
-    def to_openai_chunk(event_obj: dict) -> OpenAIChatCompletionChunk | None:
+    def to_openai_chunk(event_obj: dict[str, object]) -> OpenAIChatCompletionChunk | None:
         """
         Accepts:
           - {"final_result": <openai-style CHUNK>}   (IMPORTANT: this is just another chunk, NOT terminal)
@@ -89,7 +89,10 @@ class _StreamParser:
 
         # FINAL RESULT IS *NOT* TERMINAL: treat it as the next chunk
         if "final_result" in event_obj:
-            fr: Final = event_obj["final_result"] or {}
+            final_result: Final = event_obj["final_result"]
+            if not isinstance(final_result, dict):
+                return None
+            fr: Final[dict[str, object]] = final_result
             # ensure it looks like an OpenAI chunk
             if "object" not in fr:
                 fr["object"] = "chat.completion.chunk"

@@ -204,3 +204,24 @@ async def test_sap_chat_required_headers(
                 f"Header '{header_name}' has incorrect value. "
                 f"Expected: '{expected_value}', Got: '{request.headers[header_name]}'"
             )
+
+
+def test_to_openai_chunk_ignores_non_dict_final_result():
+    from litellm.llms.sap.chat.handler import _StreamParser
+
+    assert _StreamParser.to_openai_chunk({"final_result": None}) is None
+    assert _StreamParser.to_openai_chunk({"final_result": "not-a-chunk"}) is None
+
+    chunk = _StreamParser.to_openai_chunk(
+        {
+            "final_result": {
+                "id": "chatcmpl-sap-final",
+                "object": "chat.completion.chunk",
+                "created": 1761319270,
+                "model": "gpt-4o-2024-08-06",
+                "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": None}],
+            }
+        }
+    )
+    assert chunk is not None
+    assert chunk.choices[0].delta.content == "hi"
