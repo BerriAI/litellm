@@ -435,7 +435,7 @@ def _parsed_sse_events(sse_stream: str) -> tuple[Mapping[str, object], ...]:
     return tuple(
         event_data
         for event in split_sse_chunk_into_events(sse_stream)
-        if (event_data := extract_sse_data(event)) is not None
+        if (event_data := as_str_mapping(extract_sse_data(event))) is not None
     )
 
 
@@ -557,7 +557,7 @@ def _sse_events_with_data(sse_stream: str) -> tuple[tuple[str, Mapping[str, obje
     return tuple(
         (event, event_data)
         for event in split_sse_chunk_into_events(sse_stream)
-        if (event_data := extract_sse_data(event)) is not None
+        if (event_data := as_str_mapping(extract_sse_data(event))) is not None
     )
 
 

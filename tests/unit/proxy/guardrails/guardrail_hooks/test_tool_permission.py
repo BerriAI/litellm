@@ -1486,6 +1486,15 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert out == chunks, "the client must see the upstream error, not a guardrail block that hides it"
 
     @pytest.mark.asyncio
+    async def test_non_object_data_frame_in_a_stream_ended_by_an_upstream_error_is_passed_through_verbatim(self):
+        sse_chunks: Final = self._sse_chunks("Bash")
+        chunks = self._ended_by_upstream_error([sse_chunks[0], b"data: 5\n\n", *sse_chunks[1:3]])
+
+        out = await self._drain(self.blocking, chunks)
+
+        assert out == chunks
+
+    @pytest.mark.asyncio
     async def test_denied_tool_use_delivered_before_an_upstream_error_is_still_blocked(self):
         chunks = self._ended_by_upstream_error(self._sse_chunks("Read")[:7])
 
