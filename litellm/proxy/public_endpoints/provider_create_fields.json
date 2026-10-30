@@ -3130,6 +3130,34 @@
     "default_model_placeholder": "oci/xai.grok-3"
   },
   {
+    "provider": "OUTRUN",
+    "provider_display_name": "Outrun",
+    "litellm_provider": "outrun",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.outrun.to/v1",
+        "tooltip": "Optional. Leave blank to use the provider's default endpoint.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "outrun/claude-sonnet-5-5"
+  },
+  {
     "provider": "OVHCLOUD",
     "provider_display_name": "Ovhcloud",
     "litellm_provider": "ovhcloud",
