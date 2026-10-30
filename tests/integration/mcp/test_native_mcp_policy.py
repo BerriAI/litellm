@@ -402,7 +402,11 @@ def test_native_mcp_response_checks_returned_tool(gateway: Gateway, surface: Sur
 
 
 def test_native_mcp_allowed_response_remains_retrievable(gateway: Gateway) -> None:
-    reply: Final = Reply(body=json.dumps(_response("responses", "search_code")).encode())
+    reply: Final = Reply(
+        body=json.dumps(
+            {**_response("responses", "search_code"), "tools": _request("responses", "unused")["tools"]}
+        ).encode()
+    )
     with wire_server(lambda _: reply) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(api_base=wire.url)
         key: Final = scenario.key(native_mcp_policy=_policy())
@@ -507,7 +511,11 @@ def test_native_mcp_fallback_checks_its_configured_tools(gateway: Gateway, grant
 def test_native_mcp_retrieval_applies_current_policy_after_revocation(
     gateway: Gateway,
 ) -> None:
-    reply: Final = Reply(body=json.dumps(_response("responses", "search_code")).encode())
+    reply: Final = Reply(
+        body=json.dumps(
+            {**_response("responses", "search_code"), "tools": _request("responses", "unused")["tools"]}
+        ).encode()
+    )
     with wire_server(lambda _: reply) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(api_base=wire.url)
         key: Final = scenario.key(native_mcp_policy=_policy())
@@ -554,3 +562,15 @@ def test_native_policy_rejects_unsupported_retrieval_before_dispatch(gateway: Ga
         assert rejected.status_code == 400, rejected.text
         assert "does not support" in rejected.text
         assert wire.drain() == ()
+
+
+def test_native_policy_retrieval_requires_provider_server_url_binding(gateway: Gateway) -> None:
+    reply: Final = Reply(body=json.dumps(_response("responses", "search_code")).encode())
+    with wire_server(lambda _: reply) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(api_base=wire.url)
+        key: Final = scenario.key(native_mcp_policy=_policy())
+        created: Final = gateway.post("/v1/responses", _request("responses", model), key=key)
+        fetched: Final = gateway.request("GET", f"/v1/responses/{created['id']}", key=key)
+        assert fetched.status_code == 400, fetched.text
+        assert "absent from the validated request" in fetched.text
+        assert len(wire.drain()) == 2
