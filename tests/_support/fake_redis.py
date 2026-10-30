@@ -3,6 +3,7 @@ from typing import Final, TypeVar
 
 import fakeredis
 from pydantic import TypeAdapter
+from redis.asyncio import Redis
 
 import litellm
 from litellm._service_logger import ServiceLogging
@@ -91,6 +92,12 @@ def async_client(cache: RedisCache) -> fakeredis.FakeAsyncRedis:
     client: Final = cache.init_async_client()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # legacy RedisCache API is untyped
     assert isinstance(client, fakeredis.FakeAsyncRedis)
     return client
+
+
+def raw_client(cache: RedisCache) -> "Redis[bytes]":
+    client: Final = cache.init_async_client()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # legacy RedisCache API is untyped
+    assert isinstance(client, Redis)
+    return client  # pyright: ignore[reportUnknownVariableType]  # redis-py erases the reply type at runtime
 
 
 def pin_async_client(cache: RedisCache) -> Callable[[], None]:
