@@ -126,16 +126,19 @@ if __name__ == "__main__":
 
 
 @pytest.mark.parametrize("redact", (False, True))
+@pytest.mark.parametrize("exception_kind", ("missing", "none", "error"))
 def test_retry_diagnostic_hides_exception_and_dynamic_details_only_when_opted_in(
-    redact: bool, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    redact: bool, exception_kind: str, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from litellm.integrations.deepeval.api import log_retry_error
 
     monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", redact)
     marker: Final = "synthetic-private-retry-content"
-    failure: Final = ValueError(marker)
-    details: Final = {"exception": failure, "tries": 2}
+    failure: Final = ValueError(marker) if exception_kind == "error" else None
+    details: Final = {"tries": 2} if exception_kind == "missing" else {"exception": failure, "tries": 2}
     log_retry_error(details)
-    assert (marker in caplog.text) is not redact
+    assert ("Confident AI Error:" in caplog.text) is (failure is not None)
+    assert (marker in caplog.text) is (failure is not None and not redact)
     assert ("redacted-by-litellm" in caplog.text) is redact
-    assert details["exception"] is failure
+    assert details.get("exception") is failure
+    assert ("exception" in details) is (exception_kind != "missing")
