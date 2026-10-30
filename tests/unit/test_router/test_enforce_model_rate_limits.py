@@ -6,7 +6,7 @@ regardless of the routing strategy being used.
 """
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -526,6 +526,13 @@ async def _async_rejects(check: ModelRateLimitingCheck, deployment: dict[str, ob
 _FRESH_LIMITS: Final = ({"rpm": 0}, {"rpm": 0.0}, {"rpm": False}, {"rpd": 0}, {"tpm": 0}, {"tpd": 0}, {"rpm": 1, "tpm": 1})
 
 
+def _redis_batch_answering(usage: int) -> Callable[[list[str]], dict[str, int]]:
+    def batch_get_cache(key_list: list[str]) -> dict[str, int]:
+        return dict.fromkeys(key_list, usage)
+
+    return batch_get_cache
+
+
 def _deployment_with(limits: Mapping[str, float]) -> dict[str, object]:
     return {
         "litellm_params": {"model": "gpt-4.1-mini", **limits},
@@ -623,6 +630,48 @@ class TestDailyLimits:
         at_limit = await asyncio.wait_for(check.async_deployment_ids_at_limit(deployments, None), timeout=5)
 
         assert at_limit == frozenset({"concurrent-0", "concurrent-1", "concurrent-2"})
+
+    def test_sync_deployment_limit_reads_reach_redis_in_one_round_trip(self):
+        deployments: list[dict[str, object]] = [
+            {
+                "litellm_params": {"model": "gpt-4.1-mini", "rpm": 5, "rpd": 50},
+                "model_info": {"id": f"batched-{index}"},
+                "model_name": "daily-model",
+            }
+            for index in range(3)
+        ]
+        redis_cache = MagicMock()
+        redis_cache.batch_get_cache.side_effect = _redis_batch_answering(5)
+        check = ModelRateLimitingCheck(dual_cache=DualCache(redis_cache=redis_cache), clock=Clock(DAY_ONE))
+
+        at_limit = check.deployment_ids_at_limit(deployments)
+
+        assert at_limit == frozenset({"batched-0", "batched-1", "batched-2"})
+        assert redis_cache.batch_get_cache.call_count == 1
+        assert len(redis_cache.batch_get_cache.call_args.kwargs["key_list"]) == 6
+
+    @pytest.mark.parametrize(
+        "redis_batch_get",
+        [_redis_batch_answering(0), RedisCircuitBreakerOpenError()],
+        ids=["redis-behind-this-worker", "redis-circuit-open"],
+    )
+    def test_sync_a_deployment_this_worker_counted_to_its_limit_stays_at_its_limit(
+        self, redis_batch_get: Callable[[list[str]], dict[str, int]] | Exception
+    ):
+        spent: dict[str, object] = {
+            "litellm_params": {"model": "gpt-4.1-mini", "rpm": 1},
+            "model_info": {"id": "spent-test-id"},
+            "model_name": "daily-model",
+        }
+        redis_cache = MagicMock()
+        redis_cache.batch_get_cache.side_effect = redis_batch_get
+        dual_cache = DualCache(redis_cache=redis_cache)
+        check = ModelRateLimitingCheck(dual_cache=dual_cache, clock=Clock(DAY_ONE))
+        _, rpm_key = check._get_cache_keys(spent, DAY_ONE.strftime("%H-%M"))
+        dual_cache.set_cache(key=rpm_key, value=1, local_only=True)
+
+        assert check.deployment_ids_at_limit([spent, _deployment_with({"rpd": 2})]) == frozenset({"spent-test-id"})
+        assert rpm_key not in redis_cache.batch_get_cache.call_args.kwargs["key_list"]
 
     @pytest.mark.parametrize("limits", _FRESH_LIMITS, ids=lambda limits: ",".join(f"{kind}={value!r}" for kind, value in limits.items()))
     def test_a_deployment_is_reported_at_its_limit_exactly_when_its_next_request_is_rejected(

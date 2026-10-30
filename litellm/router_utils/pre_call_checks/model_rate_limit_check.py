@@ -361,14 +361,39 @@ class ModelRateLimitingCheck(CustomLogger):
         now: Final = self.clock()
         return tuple(chain.from_iterable(self._limit_counters(deployment, now) for deployment in deployments))
 
+    def _local_usage(self, key: str) -> object:
+        return self.dual_cache.get_cache(key=key, local_only=True)
+
+    def _redis_usages(self, keys: list[str]) -> Mapping[str, object] | None:
+        redis_cache: Final = self.dual_cache.redis_cache
+        if redis_cache is None or not keys:
+            return None
+        try:
+            return redis_cache.batch_get_cache(key_list=keys)
+        except RedisCircuitBreakerOpenError:
+            return None
+
+    @with_service_target(ROUTER_USAGE_TARGET)
+    def _current_usages(self, counters: Sequence[_LimitCounter]) -> tuple[object, ...]:
+        local_usages: Final = tuple(self._local_usage(counter.key) for counter in counters)
+        redis_usages: Final = self._redis_usages(
+            [counter.key for counter, usage in zip(counters, local_usages, strict=True) if not counter.reached(usage)]
+        )
+        if redis_usages is None:
+            return local_usages
+        return tuple(
+            usage if counter.reached(usage) else redis_usages.get(counter.key)
+            for counter, usage in zip(counters, local_usages, strict=True)
+        )
+
     def deployment_ids_at_limit(
         self,
         deployments: Sequence[dict[str, object]],  # mutable-ok: _limit_counters reads router deployment dicts
     ) -> frozenset[str]:
+        counters: Final = self._counters_of(deployments)
+        usages: Final = self._current_usages(counters)
         return frozenset(
-            counter.model_id
-            for counter in self._counters_of(deployments)
-            if counter.reached(self._get_current_tpm(counter.key, counter.limit))
+            counter.model_id for counter, usage in zip(counters, usages, strict=True) if counter.reached(usage)
         )
 
     async def async_deployment_ids_at_limit(
