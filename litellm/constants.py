@@ -897,6 +897,8 @@ PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO: Final = frozenset(
     }
 )
 
+PROVIDERS_THAT_SEND_KEYS_ON_MODEL_INFO_LOOKUPS: Final = frozenset({"ollama", "ollama_chat", "lemonade"})
+
 A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS: Final = frozenset({"databricks_agent"})
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS: Final = [

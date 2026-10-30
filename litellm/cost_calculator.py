@@ -377,9 +377,13 @@ def _per_second_pricing_cost(
     custom_llm_provider: str | None,
     response_time_ms: float | None,
     audio_seconds: float = 0.0,
+    api_base: str | None = None,
+    api_key: str | None = None,
 ) -> tuple[float, float] | None:
     try:
-        model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        model_info: Final = cached_get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key
+        )
     except Exception:  # noqa: BLE001  # the lookup raises plain Exception for an unmapped model
         return None
     if _has_token_or_tiered_pricing(model_info) or not _bills_wall_clock_seconds(model_info):
@@ -447,6 +451,8 @@ def cost_per_token(
     request_model: str | None = None,  # original request model for router detection
     custom_model_info: OCRPricing | None = None,
     bedrock_model_info: ModelInfo | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -600,7 +606,9 @@ def cost_per_token(
         model = model_without_prefix
 
     if is_decisions_call_type(call_type):
-        decisions_model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        decisions_model_info: Final = cached_get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key
+        )
         decisions_overrides: Final = decisions_pricing_fields(
             litellm.model_cost.get(decisions_model_info["key"], {})  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # model cost map is dynamically loaded
         )
@@ -719,6 +727,8 @@ def cost_per_token(
             custom_llm_provider=custom_llm_provider,
             response_time_ms=response_time_ms,
             audio_seconds=audio_transcription_file_duration,
+            api_base=api_base,
+            api_key=api_key,
         )
     ) is not None:
         return per_second_cost
@@ -804,7 +814,9 @@ def cost_per_token(
             service_tier=service_tier,
         )
     else:
-        model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        model_info: Final = cached_get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key
+        )
         if _has_token_or_tiered_pricing(model_info):
             return generic_cost_per_token(
                 model=model,
@@ -2146,6 +2158,8 @@ def completion_cost(
                     response=completion_response,
                     custom_model_info=_ocr_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                     bedrock_model_info=bedrock_model_info,
+                    api_base=_request_api_base(litellm_logging_obj),
+                    api_key=_request_api_key(litellm_logging_obj),
                 )
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)
@@ -2238,6 +2252,8 @@ def completion_cost(
                             vertex_location=vertex_location,
                             custom_cost_per_token=custom_cost_per_token,
                             model_info=bedrock_model_info,
+                            api_base=_request_api_base(litellm_logging_obj),
+                            api_key=_request_api_key(litellm_logging_obj),
                         )
                         _reasoning_cost = _token_type_breakdown.reasoning_cost
                         _cache_read_cost = _token_type_breakdown.cache_read_cost
@@ -2456,6 +2472,19 @@ def _configured_search_cost_per_query(litellm_logging_obj: LitellmLoggingObject 
     return float(cost_per_query) if isinstance(cost_per_query, (int, float)) else None
 
 
+def _request_api_base(litellm_logging_obj: LitellmLoggingObject | None) -> str | None:
+    logged_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
+    if not isinstance(logged_params, Mapping):
+        return None
+    api_base: Final = _LOGGED_LITELLM_PARAMS.validate_python(logged_params).get("api_base")
+    return api_base if isinstance(api_base, str) and api_base else None
+
+
+def _request_api_key(litellm_logging_obj: LitellmLoggingObject | None) -> str | None:
+    api_key: Final = getattr(litellm_logging_obj, "model_info_api_key", None)
+    return api_key if isinstance(api_key, str) else None
+
+
 def _deployment_model_info(
     litellm_logging_obj: LitellmLoggingObject | None,
     custom_pricing: bool | None,
@@ -2510,9 +2539,13 @@ def _layered_ocr_pricing(*sources: Mapping[str, object] | None) -> OCRPricing:
     )
 
 
-def _cost_map_model_info(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
+def _cost_map_model_info(
+    model: str, custom_llm_provider: str | None, api_base: str | None = None, api_key: str | None = None
+) -> ModelInfo | None:
     try:
-        return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        return litellm.get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key
+        )
     except Exception:
         return None
 
@@ -2574,8 +2607,11 @@ def pricing_entry_for_cost_calc(
     if bedrock_model_info is not None:
         return bedrock_model_info["key"], bedrock_model_info
     candidates: Final = (selected_model, _get_response_model(completion_response), model)
+    api_base: Final = _request_api_base(litellm_logging_obj)
+    api_key: Final = _request_api_key(litellm_logging_obj)
+    lookups: Final = (_cost_map_model_info(name, custom_llm_provider, api_base, api_key) for name in candidates if name)
     resolved: Final = next(
-        (info for info in (_cost_map_model_info(name, custom_llm_provider) for name in candidates if name) if info),
+        (info for info in lookups if info),
         None,
     )
     if resolved is None:

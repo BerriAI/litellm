@@ -4039,6 +4039,49 @@ async def test_ollama_decisions_resolves_environment_key_and_explicit_connection
 
 
 @pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=False)
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+@pytest.mark.parametrize(
+    ("api_base", "api_key", "authorization"),
+    (
+        (None, None, "Bearer environment-key"),
+        ("http://ollama.local:11434/v1", "call-key", "Bearer call-key"),
+        ("http://ollama.local:11434/v1", "fake-api-key", None),
+    ),
+    ids=("environment", "explicit", "placeholder"),
+)
+async def test_ollama_decisions_model_info_lookups_go_to_the_call_server_with_the_call_key(
+    provider: str,
+    api_base: str | None,
+    api_key: str | None,
+    authorization: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    from litellm.utils import cached_get_model_info_helper
+
+    monkeypatch.setenv("OLLAMA_API_BASE", "http://ignored.local:11434" if api_base else "http://ollama.local:11434")
+    monkeypatch.setenv("OLLAMA_API_KEY", "environment-key")
+    route: Final = respx_mock.post("http://ollama.local:11434/v1/systemone").respond(json=_RESPONSE)
+    lookup: Final = respx_mock.post("http://ollama.local:11434/api/show").respond(json={"model_info": {}})
+    stray: Final = respx_mock.route().respond(404)
+    litellm.get_model_info.cache_clear()
+    cached_get_model_info_helper.cache_clear()
+    try:
+        await litellm.asystemone(
+            model=f"{provider}/d3:4b", state="review", questions=_QUESTIONS, api_base=api_base, api_key=api_key
+        )
+    finally:
+        litellm.get_model_info.cache_clear()
+        cached_get_model_info_helper.cache_clear()
+
+    assert route.calls.last.request.headers.get("authorization") == authorization
+    assert lookup.call_count > 0
+    assert {call.request.headers.get("authorization") for call in lookup.calls} == {authorization}
+    assert [str(call.request.url) for call in stray.calls] == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
 async def test_ollama_decisions_maps_upstream_bad_requests(
     provider: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter

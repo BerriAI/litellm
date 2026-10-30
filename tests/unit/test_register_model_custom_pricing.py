@@ -812,7 +812,9 @@ def test_register_model_prices_a_geo_alias_from_its_builtin_when_the_lookup_fail
     alias: Final = f"bedrock/{route}{canonical_key}"
     canonical: Final = litellm.model_cost[canonical_key]
 
-    def lookup_tripped_by_a_concurrent_registration(model: str, custom_llm_provider: str | None = None) -> NoReturn:
+    def lookup_tripped_by_a_concurrent_registration(
+        model: str, custom_llm_provider: str | None = None, api_base: str | None = None, api_key: str | None = None
+    ) -> NoReturn:
         raise RuntimeError("dictionary changed size during iteration")
 
     with pytest.MonkeyPatch.context() as lookup_patch:
@@ -867,7 +869,9 @@ def test_register_model_keeps_a_catalog_rows_own_prices_when_the_lookup_fails(mo
     )
     _invalidate_model_cost_lowercase_map()
 
-    def lookup_tripped_by_a_concurrent_registration(model: str, custom_llm_provider: str | None = None) -> NoReturn:
+    def lookup_tripped_by_a_concurrent_registration(
+        model: str, custom_llm_provider: str | None = None, api_base: str | None = None, api_key: str | None = None
+    ) -> NoReturn:
         raise RuntimeError("dictionary changed size during iteration")
 
     with pytest.MonkeyPatch.context() as lookup_patch:
@@ -908,10 +912,12 @@ def test_register_model_leaves_no_shadow_key_when_the_lookup_trips_once(
     real_lookup: Final = litellm.utils.get_model_info
     lookups: Final = itertools.count()
 
-    def lookup_tripped_once_by_a_concurrent_registration(model: str, custom_llm_provider: str | None = None) -> object:
+    def lookup_tripped_once_by_a_concurrent_registration(
+        model: str, custom_llm_provider: str | None = None, api_base: str | None = None, api_key: str | None = None
+    ) -> object:
         if next(lookups) == 0:
             raise RuntimeError("dictionary changed size during iteration")
-        return real_lookup(model=model, custom_llm_provider=custom_llm_provider)
+        return real_lookup(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
 
     with pytest.MonkeyPatch.context() as lookup_patch:
         lookup_patch.setattr(litellm.utils, "get_model_info", lookup_tripped_once_by_a_concurrent_registration)
@@ -944,7 +950,9 @@ def test_register_model_bills_a_catalog_rows_tier_rates_the_same_when_the_lookup
     builtin_cost_map: Final = litellm.get_model_cost_map(url="")
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
-    def lookup_tripped_by_a_concurrent_registration(model: str, custom_llm_provider: str | None = None) -> NoReturn:
+    def lookup_tripped_by_a_concurrent_registration(
+        model: str, custom_llm_provider: str | None = None, api_base: str | None = None, api_key: str | None = None
+    ) -> NoReturn:
         raise RuntimeError("dictionary changed size during iteration")
 
     def long_prompt_cost_after_registering_with(lookup: Callable[..., object]) -> float:
@@ -999,7 +1007,9 @@ def test_register_model_prices_a_provider_less_azure_ai_key_without_repricing_th
     )
     _invalidate_model_cost_lowercase_map()
 
-    def lookup_tripped_by_a_concurrent_registration(model: str, custom_llm_provider: str | None = None) -> NoReturn:
+    def lookup_tripped_by_a_concurrent_registration(
+        model: str, custom_llm_provider: str | None = None, api_base: str | None = None, api_key: str | None = None
+    ) -> NoReturn:
         raise RuntimeError("dictionary changed size during iteration")
 
     with pytest.MonkeyPatch.context() as lookup_patch:
@@ -1039,8 +1049,12 @@ def test_register_model_keeps_the_prices_a_reload_adopts_while_it_registers(monk
     }
     real_lookup: Final = litellm.utils.get_model_info
 
-    def lookup_racing_a_price_data_reload(model: str, custom_llm_provider: str | None = None) -> object:
-        info: Final = real_lookup(model=model, custom_llm_provider=custom_llm_provider)
+    def lookup_racing_a_price_data_reload(
+        model: str, custom_llm_provider: str | None = None, api_base: str | None = None, api_key: str | None = None
+    ) -> object:
+        info: Final = real_lookup(
+            model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key
+        )
         if litellm.model_cost is not reloaded_cost_map:
             adopt_model_cost_map(reloaded_cost_map)
         return info

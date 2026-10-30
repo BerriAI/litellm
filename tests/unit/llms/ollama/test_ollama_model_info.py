@@ -21,6 +21,7 @@ import httpx
 import litellm
 
 from litellm.llms.ollama.common_utils import OllamaModelInfo
+from litellm.types.utils import AdminApiKeySecretReference
 
 
 class DummyResponse:
@@ -388,16 +389,7 @@ class TestOllamaGetModelInfo:
         assert model_info["max_input_tokens"] == 32768
         assert captured_headers[0] == {"Authorization": "Bearer explicit-api-key"}
 
-    def test_litellm_get_model_info_does_not_cache_on_api_key(self, monkeypatch):
-        """Regression: api_key must not be part of the get_model_info cache key.
-
-        Distinct api_keys for the same (model, api_base) must not each create their
-        own cache entry (which would churn the shared LRU cache), and every explicit
-        key must still reach the backend rather than be served from a result cached
-        with a different key.
-        """
-        from litellm.utils import _cached_get_model_info
-
+    def test_litellm_get_model_info_caches_ollama_lookups_per_api_key(self, monkeypatch):
         captured_headers = []
 
         def mock_post(url, json, headers=None):
@@ -413,19 +405,32 @@ class TestOllamaGetModelInfo:
         monkeypatch.setattr("litellm.module_level_client.post", mock_post)
         litellm.get_model_info.cache_clear()
         try:
-            for api_key in ("key-one", "key-two", "key-three"):
+            for api_key in ("key-one", "key-two", "key-one", "key-two"):
                 litellm.get_model_info(
                     "ollama/unknown-model",
                     api_base="https://ollama.example",
                     api_key=api_key,
                 )
 
-            assert _cached_get_model_info.cache_info().currsize <= 1
             assert captured_headers == [
                 {"Authorization": "Bearer key-one"},
                 {"Authorization": "Bearer key-two"},
-                {"Authorization": "Bearer key-three"},
             ]
+        finally:
+            litellm.get_model_info.cache_clear()
+
+    def test_litellm_get_model_info_shares_one_cache_entry_across_keys_when_the_lookup_sends_none(self):
+        openai_model = next(
+            name
+            for name, entry in litellm.model_cost.items()
+            if entry.get("litellm_provider") == "openai" and entry.get("mode") == "chat"
+        )
+        litellm.get_model_info.cache_clear()
+        try:
+            for api_key in ("key-one", "key-two", "key-three"):
+                litellm.get_model_info(openai_model, custom_llm_provider="openai", api_key=api_key)
+
+            assert litellm.get_model_info.cache_info().currsize == 1
         finally:
             litellm.get_model_info.cache_clear()
 
@@ -574,6 +579,148 @@ class TestOllamaGetModelInfo:
 
         assert model_info["key"] == "ollama/llama2"
         assert model_info["litellm_provider"] == "ollama"
+
+
+@pytest.mark.parametrize(
+    ("api_key", "environment_key", "authorization"),
+    [
+        (None, None, None),
+        ("call-key", "environment-key", "Bearer call-key"),
+        (None, "environment-key", "Bearer environment-key"),
+    ],
+    ids=["no-key", "explicit-key", "environment-key"],
+)
+@pytest.mark.parametrize(
+    ("model", "generation_path", "generation_body"),
+    [
+        ("ollama/api-base-probe", "/api/generate", {"response": "hi"}),
+        ("ollama_chat/api-base-probe", "/api/chat", {"message": {"role": "assistant", "content": "hi"}}),
+    ],
+)
+def test_completion_sends_every_model_info_lookup_to_the_call_api_base_with_its_key(
+    monkeypatch, model, generation_path, generation_body, api_key, environment_key, authorization
+):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.utils import cached_get_model_info_helper
+
+    lookups = []
+    generation_authorizations = []
+
+    def respond(request):
+        if request.url.path == "/api/show":
+            lookups.append((request.url.host, request.headers.get("authorization")))
+            return httpx.Response(200, json={"template": "", "model_info": {}})
+        assert request.url.path == generation_path
+        generation_authorizations.append(request.headers.get("authorization"))
+        return httpx.Response(
+            200,
+            json={"model": "api-base-probe", "done": True, "prompt_eval_count": 3, "eval_count": 2, **generation_body},
+        )
+
+    transport = httpx.MockTransport(respond)
+    monkeypatch.setattr(litellm, "module_level_client", HTTPHandler(client=httpx.Client(transport=transport)))
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setenv("OLLAMA_API_BASE", "http://ollama-default.test:11434")
+    if environment_key is None:
+        monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("OLLAMA_API_KEY", environment_key)
+    client = HTTPHandler(client=httpx.Client(transport=transport))
+
+    def complete():
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            api_base="http://ollama-call.test:11434",
+            api_key=api_key,
+            client=client,
+        )
+
+    litellm.get_model_info.cache_clear()
+    cached_get_model_info_helper.cache_clear()
+    try:
+        complete()
+        lookups_after_first_call = len(lookups)
+        complete()
+    finally:
+        litellm.get_model_info.cache_clear()
+        cached_get_model_info_helper.cache_clear()
+
+    assert set(generation_authorizations) == {authorization}
+    assert set(lookups) == {("ollama-call.test", authorization)}
+    assert len(lookups) == lookups_after_first_call
+
+
+@pytest.mark.parametrize("reload_catalog", [False, True])
+@pytest.mark.parametrize(
+    "provider_params",
+    [
+        {"model": "ollama_chat/registration-probe"},
+        {"model": "registration-probe", "custom_llm_provider": "ollama_chat"},
+    ],
+)
+@pytest.mark.parametrize(
+    ("api_key", "authorization"),
+    [
+        (None, None),
+        ("deployment-key", "Bearer deployment-key"),
+        (
+            AdminApiKeySecretReference(
+                "oidc/google/https://ollama-deployment.test", frozenset({"http://ollama-deployment.test:11434"})
+            ),
+            None,
+        ),
+    ],
+    ids=["no-key", "deployment-key", "secret-reference"],
+)
+def test_router_registration_sends_model_info_lookup_to_the_deployment_api_base_with_its_key(
+    monkeypatch, reload_catalog, provider_params, api_key, authorization
+):
+    from litellm import Router
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    lookups = []
+
+    def respond(request):
+        lookups.append((request.url.host, request.headers.get("authorization")))
+        return httpx.Response(200, json={"template": "", "model_info": {}})
+
+    transport = httpx.MockTransport(respond)
+    monkeypatch.setattr(litellm, "module_level_client", HTTPHandler(client=httpx.Client(transport=transport)))
+    monkeypatch.setenv("OLLAMA_API_BASE", "http://ollama-default.test:11434")
+    monkeypatch.setenv("OLLAMA_API_KEY", "environment-key")
+    catalog = dict(litellm.model_cost)
+    monkeypatch.setattr(litellm, "model_cost", dict(catalog))
+    litellm.get_model_info.cache_clear()
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "registration-probe",
+                    "litellm_params": {
+                        **provider_params,
+                        "api_base": "http://ollama-deployment.test:11434",
+                        "api_key": api_key,
+                    },
+                }
+            ]
+        )
+        if reload_catalog:
+            lookups.clear()
+            monkeypatch.setattr(litellm, "model_cost", dict(catalog))
+            litellm.get_model_info.cache_clear()
+            router.replay_model_cost_registrations()
+    finally:
+        litellm.get_model_info.cache_clear()
+
+    assert set(lookups) == {("ollama-deployment.test", authorization)}
+
+
+def test_model_info_lookup_for_a_decisions_endpoint_goes_to_the_server_root():
+    assert (
+        OllamaModelInfo.get_server_api_base("http://ollama.test:11434/prefix/v1/systemone")
+        == "http://ollama.test:11434/prefix"
+    )
 
 
 class TestOllamaAuthHeaders:

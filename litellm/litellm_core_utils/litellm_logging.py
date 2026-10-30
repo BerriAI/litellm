@@ -205,7 +205,7 @@ from litellm.types.utils import (
     batch_chat_usage,
 )
 from litellm.types.videos.main import VideoObject
-from litellm.utils import get_base_model_from_metadata, print_verbose
+from litellm.utils import get_base_model_from_metadata, model_info_lookup_api_key, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
@@ -833,6 +833,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
         # Passthrough endpoint guardrails config for field targeting
         self.passthrough_guardrails_config: dict[str, object] | None = None
+
+        self.model_info_api_key: str | None = None
 
         self.model_call_details: dict[str, Any] = {
             "litellm_trace_id": self.litellm_trace_id,
@@ -1557,6 +1559,12 @@ class Logging(LiteLLMLoggingBaseClass):
 
         self.model_call_details["input"] = input
         self.model_call_details["api_key"] = api_key
+        provider: Final = self.model_call_details.get("custom_llm_provider")
+        self.model_info_api_key = model_info_lookup_api_key(
+            self.model,
+            provider if isinstance(provider, str) else None,
+            api_key if isinstance(api_key, str) and api_key else None,
+        )
         self.model_call_details["additional_args"] = additional_args
         self.model_call_details["log_event_type"] = "pre_api_call"
         if is_classifier_call(self.call_type, self.model_call_details.get("litellm_params") or EMPTY_MAPPING):
@@ -6838,6 +6846,7 @@ class StandardLoggingPayloadSetup:
         init_response_obj: object,
         api_base: str | None = None,
         router_model_id: str | None = None,
+        api_key: str | None = None,
     ) -> StandardLoggingModelInformation:
         model_cost_name: Final = select_model_name_for_cost_calc(
             model=base_model if custom_pricing else None,
@@ -6864,6 +6873,7 @@ class StandardLoggingPayloadSetup:
                     model=pricing_model_name or model_cost_name,
                     custom_llm_provider=custom_llm_provider,
                     api_base=api_base,
+                    api_key=api_key,
                 )
                 model_cost_information = StandardLoggingModelInformation(
                     model_map_key=model_cost_name,
@@ -7584,6 +7594,7 @@ def get_standard_logging_object_payload(
             init_response_obj=init_response_obj,
             api_base=litellm_params.get("api_base"),
             router_model_id=logging_obj.get_router_model_id(),
+            api_key=logging_obj.model_info_api_key,
         )
 
         error_information, error_str = StandardLoggingPayloadSetup.get_error_information_for_logging_payload(

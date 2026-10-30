@@ -134,6 +134,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
             "/api/embeddings",
             "/api/show",
             "/api/tags",
+            "/v1/systemone",
         ):
             if api_base.endswith(suffix):
                 return api_base[: -len(suffix)]

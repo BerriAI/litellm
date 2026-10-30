@@ -479,6 +479,7 @@ from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
     PROMPT_QUOTING_ROUTING_DECISION_FIELDS,
+    AdminApiKeySecretReference,
     CustomPricingLiteLLMParams,
     GenericBudgetConfigType,
     LiteLLMBatch,
@@ -11869,6 +11870,11 @@ class Router(DeprecatedRouterMembers):
         return (backend_key,)
 
     @staticmethod
+    def _model_info_lookup_api_key(deployment: Deployment) -> str | None:
+        api_key: Final = deployment.litellm_params.api_key
+        return None if isinstance(api_key, AdminApiKeySecretReference) else api_key
+
+    @staticmethod
     def _deployment_model_cost_payload(deployment: Deployment) -> dict[str, object]:  # mutable-ok: cost-map entry
         """The ``model_info`` a deployment contributes to ``litellm.model_cost``.
 
@@ -11941,6 +11947,8 @@ class Router(DeprecatedRouterMembers):
             model=deployment.litellm_params.model,
             custom_llm_provider=deployment.litellm_params.custom_llm_provider,
             pricing_provider=deployment.model_info.pricing_provider,
+            api_base=deployment.litellm_params.api_base,
+            api_key=Router._model_info_lookup_api_key(deployment),
         )
 
     @staticmethod
@@ -11951,6 +11959,8 @@ class Router(DeprecatedRouterMembers):
         model: str,
         custom_llm_provider: str | None,
         pricing_provider: str | None = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
     ) -> None:
         """Write a deployment's metadata into ``litellm.model_cost``.
 
@@ -11976,6 +11986,8 @@ class Router(DeprecatedRouterMembers):
                 warning_display_name=model,
                 custom_llm_provider=pricing_provider or custom_llm_provider,
                 add_to_provider_model_sets=False,
+                api_base=api_base,
+                api_key=api_key,
             )
 
         ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
@@ -11991,6 +12003,8 @@ class Router(DeprecatedRouterMembers):
         litellm.register_model(
             model_cost={_key: keep_registered_mode(_key, shared_model_info) for _key in backend_keys},
             persist_across_reloads=False,
+            api_base=api_base,
+            api_key=api_key,
         )
 
     def replay_model_cost_registrations(self) -> None:
@@ -12017,6 +12031,8 @@ class Router(DeprecatedRouterMembers):
                 model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.custom_llm_provider,
                 pricing_provider=deployment.model_info.pricing_provider,
+                api_base=deployment.litellm_params.api_base,
+                api_key=Router._model_info_lookup_api_key(deployment),
             )
         self._invalidate_model_group_info_cache()
 

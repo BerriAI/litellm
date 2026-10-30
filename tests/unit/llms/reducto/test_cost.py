@@ -9,7 +9,7 @@ def test_ocr_cost_prefers_credit_pricing_when_pages_processed_is_none(monkeypatc
     monkeypatch.setattr(
         litellm,
         "get_model_info",
-        lambda model, custom_llm_provider=None: {"ocr_cost_per_credit": 0.003},
+        lambda model, custom_llm_provider=None, api_base=None, api_key=None: {"ocr_cost_per_credit": 0.003},
     )
 
     response = OCRResponse(
@@ -32,7 +32,7 @@ def test_ocr_cost_prefers_zero_credit_pricing_over_page_pricing(monkeypatch):
     monkeypatch.setattr(
         litellm,
         "get_model_info",
-        lambda model, custom_llm_provider=None: {
+        lambda model, custom_llm_provider=None, api_base=None, api_key=None: {
             "ocr_cost_per_credit": 0.0,
             "ocr_cost_per_page": 0.5,
         },
@@ -58,7 +58,7 @@ def test_ocr_cost_falls_back_to_page_pricing(monkeypatch):
     monkeypatch.setattr(
         litellm,
         "get_model_info",
-        lambda model, custom_llm_provider=None: {"ocr_cost_per_page": 0.5},
+        lambda model, custom_llm_provider=None, api_base=None, api_key=None: {"ocr_cost_per_page": 0.5},
     )
 
     response = OCRResponse(
@@ -81,7 +81,7 @@ def test_ocr_cost_returns_zero_when_no_pricing_and_no_pages(monkeypatch):
     monkeypatch.setattr(
         litellm,
         "get_model_info",
-        lambda model, custom_llm_provider=None: {},
+        lambda model, custom_llm_provider=None, api_base=None, api_key=None: {},
     )
 
     response = OCRResponse(
@@ -104,7 +104,7 @@ def test_ocr_cost_raises_when_pages_processed_missing_for_page_pricing(monkeypat
     monkeypatch.setattr(
         litellm,
         "get_model_info",
-        lambda model, custom_llm_provider=None: {"ocr_cost_per_page": 0.5},
+        lambda model, custom_llm_provider=None, api_base=None, api_key=None: {"ocr_cost_per_page": 0.5},
     )
 
     response = OCRResponse(

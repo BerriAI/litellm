@@ -81,6 +81,7 @@ from litellm.constants import (
     NON_INFERENCE_CALL_TYPES,
     OPENAI_EMBEDDING_PARAMS,
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
+    PROVIDERS_THAT_SEND_KEYS_ON_MODEL_INFO_LOOKUPS,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
 from litellm.litellm_core_utils.core_helpers import (
@@ -3987,8 +3988,12 @@ def _lookup_mapped_model_info(lookup: Callable[[], _ModelInfoT]) -> _ModelInfoT 
     return ModelInfoLookupMiss(tripped=False) if is_generalized_model_info(info) else info
 
 
-def lookup_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | ModelInfoLookupMiss:
-    return _lookup_mapped_model_info(lambda: get_model_info(model=model, custom_llm_provider=custom_llm_provider))
+def lookup_model_info_for_registration(
+    model: str, custom_llm_provider: str | None, api_base: str | None = None, api_key: str | None = None
+) -> ModelInfo | ModelInfoLookupMiss:
+    return _lookup_mapped_model_info(
+        lambda: get_model_info(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
+    )
 
 
 def lookup_catalog_model_info(model: str, custom_llm_provider: str | None) -> ModelInfoBase | ModelInfoLookupMiss:
@@ -3998,7 +4003,7 @@ def lookup_catalog_model_info(model: str, custom_llm_provider: str | None) -> Mo
 
 
 def _get_builtin_model_info_for_registration(
-    model: str, custom_llm_provider: str | None
+    model: str, custom_llm_provider: str | None, api_base: str | None, api_key: str | None
 ) -> ModelInfo | ModelInfoLookupMiss:
     """Resolve ``model`` to its built-in cost-map entry for registration merging.
 
@@ -4009,7 +4014,8 @@ def _get_builtin_model_info_for_registration(
     where the untripped lookup would.
     """
     lookups: Final = (
-        lookup_model_info_for_registration(model, custom_llm_provider) for _ in range(_REGISTRATION_ATTEMPTS)
+        lookup_model_info_for_registration(model, custom_llm_provider, api_base, api_key)
+        for _ in range(_REGISTRATION_ATTEMPTS)
     )
     return next(
         (lookup for lookup in lookups if not (isinstance(lookup, ModelInfoLookupMiss) and lookup.tripped)),
@@ -4034,19 +4040,29 @@ def model_cost_registration_row(key: str, provider: object) -> Mapping[str, obje
     ``litellm.model_cost`` row it resolves to (``openai/o3-pro`` lands on ``o3-pro``), else the row it seeds ``key``
     with from the built-in entry it falls back to (an OpenAI fine-tune takes its base model's row)."""
     base: Final = _registration_base(
-        key, {"litellm_provider": provider}, custom_llm_provider=None, warning_display_name=None
+        key,
+        {"litellm_provider": provider},
+        custom_llm_provider=None,
+        warning_display_name=None,
+        api_base=None,
+        api_key=None,
     )
     return _builtin_cost_map().get(base.key) or base.entry
 
 
 def _registration_base(
-    key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
+    key: str,
+    value: Mapping[str, object],
+    custom_llm_provider: str | None,
+    warning_display_name: str | None,
+    api_base: str | None,
+    api_key: str | None,
 ) -> _RegistrationWrite:
     provider: Final = str(value.get("litellm_provider") or "")
     if _skips_builtin_registration_lookup(key, provider):
         return _RegistrationWrite(key=key, entry=dict(_builtin_cost_map().get(key, {})))
     builtin_model_info: Final = _get_builtin_model_info_for_registration(
-        model=key, custom_llm_provider=custom_llm_provider
+        model=key, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key
     )
     if not isinstance(builtin_model_info, ModelInfoLookupMiss):
         return _RegistrationWrite(
@@ -4077,9 +4093,14 @@ def _base_fields_replaced_by(value: Mapping[str, object]) -> frozenset[str]:
 
 
 def _registration_write(
-    key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
+    key: str,
+    value: Mapping[str, object],
+    custom_llm_provider: str | None,
+    warning_display_name: str | None,
+    api_base: str | None,
+    api_key: str | None,
 ) -> _RegistrationWrite:
-    base: Final = _registration_base(key, value, custom_llm_provider, warning_display_name)
+    base: Final = _registration_base(key, value, custom_llm_provider, warning_display_name, api_base, api_key)
     # ``get_model_info`` returns ``litellm_provider: None`` when the
     # provider is unknown (e.g. custom deployments registered via
     # ``Router.add_deployment``). Persisting that None into
@@ -4101,16 +4122,23 @@ def _registration_attempt(
     value: Mapping[str, object],
     custom_llm_provider: str | None,
     warning_display_name: str | None,
+    api_base: str | None,
+    api_key: str | None,
     final_attempt: bool,
 ) -> _RegistrationWrite | None:
     source: Final = _builtin_cost_map()
-    write: Final = _registration_write(key, value, custom_llm_provider, warning_display_name)
+    write: Final = _registration_write(key, value, custom_llm_provider, warning_display_name, api_base, api_key)
     _replace_cost_map_entry(_builtin_cost_map() if final_attempt else source, write.key, write.entry, value)
     return write if final_attempt or litellm.model_cost is source else None
 
 
 def _register_on_current_map(
-    key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
+    key: str,
+    value: Mapping[str, object],
+    custom_llm_provider: str | None,
+    warning_display_name: str | None,
+    api_base: str | None,
+    api_key: str | None,
 ) -> _RegistrationWrite:
     """A price data reload that swaps the map while the entry is being built or written would otherwise get the old
     map's prices written over its own, or drop the entry with the old map, so each attempt writes into the map it was
@@ -4118,7 +4146,13 @@ def _register_on_current_map(
     writes into the current map, so the entry is never lost."""
     attempts: Final = (
         _registration_attempt(
-            key, value, custom_llm_provider, warning_display_name, final_attempt=attempt == _REGISTRATION_ATTEMPTS - 1
+            key,
+            value,
+            custom_llm_provider,
+            warning_display_name,
+            api_base,
+            api_key,
+            final_attempt=attempt == _REGISTRATION_ATTEMPTS - 1,
         )
         for attempt in range(_REGISTRATION_ATTEMPTS)
     )
@@ -4217,6 +4251,8 @@ def register_model(
     warning_display_name: str | None = None,
     custom_llm_provider: str | None = None,
     add_to_provider_model_sets: bool = True,
+    api_base: str | None = None,
+    api_key: str | None = None,
 ):
     """
     Register new / Override existing models (and their pricing) to specific providers.
@@ -4249,6 +4285,9 @@ def register_model(
     ``add_to_provider_model_sets`` adds the keys to the per-provider model sets
     behind provider resolution and wildcard model listing. Pass False when the
     keys are opaque ids rather than model names (e.g. router deployment ids).
+
+    ``api_base`` and ``api_key`` send a provider's runtime model-info lookup (an Ollama ``/api/show``)
+    to the server the registered deployment calls, with its credential, instead of the provider's defaults.
     """
 
     loaded_model_cost = {}
@@ -4267,7 +4306,7 @@ def register_model(
             )
 
     for key, value in loaded_model_cost.items():
-        write = _register_on_current_map(str(key), value, custom_llm_provider, warning_display_name)
+        write = _register_on_current_map(str(key), value, custom_llm_provider, warning_display_name, api_base, api_key)
 
         # Invalidate case-insensitive lookup map since model_cost was modified
         _invalidate_model_cost_lowercase_map()
@@ -6888,6 +6927,7 @@ def cached_get_model_info_helper(
     model: str,
     custom_llm_provider: str | None,
     api_base: str | None = None,
+    api_key: str | None = None,
 ) -> ModelInfoBase:
     """
     _get_model_info_helper wrapped with lru_cache
@@ -6898,6 +6938,7 @@ def cached_get_model_info_helper(
         model=model,
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
+        api_key=api_key,
     )
 
 
@@ -7430,13 +7471,19 @@ def _build_model_info(
     return ModelInfo(**_model_info, supported_openai_params=supported_openai_params)
 
 
+def model_info_lookup_api_key(model: str | None, custom_llm_provider: str | None, api_key: str | None) -> str | None:
+    provider: Final = custom_llm_provider or (model or "").partition("/")[0]
+    return api_key if provider in PROVIDERS_THAT_SEND_KEYS_ON_MODEL_INFO_LOOKUPS else None
+
+
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
 def _cached_get_model_info(
     model: str,
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
+    api_key: str | None = None,
 ) -> ModelInfo:
-    return _build_model_info(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)
+    return _build_model_info(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
 
 
 def get_model_info(
@@ -7518,11 +7565,9 @@ def get_model_info(
             "supported_openai_params": ["temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty"]
         }
     """
-    # api_key is a per-caller credential, not part of the model identity, so it is
-    # kept out of the cache key; explicit keys are resolved without the cache.
-    if api_key is not None:
-        return _build_model_info(model, custom_llm_provider, api_base, api_key)
-    return _cached_get_model_info(model, custom_llm_provider, api_base)
+    return _cached_get_model_info(
+        model, custom_llm_provider, api_base, model_info_lookup_api_key(model, custom_llm_provider, api_key)
+    )
 
 
 get_model_info.cache_clear = _cached_get_model_info.cache_clear

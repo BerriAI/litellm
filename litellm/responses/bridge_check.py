@@ -167,7 +167,7 @@ def responses_api_bridge_check(
     try:
         model_info = cast(
             dict[str, object],
-            get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider),
+            get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider, catalog_only=True),
         )
     except Exception as e:
         verbose_logger.debug("Error getting model info: %s", e)

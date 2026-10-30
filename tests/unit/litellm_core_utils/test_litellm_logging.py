@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from datetime import datetime as datetime_standard_logging, datetime as datetime_unit_test, datetime as dt_object
 from importlib.machinery import ModuleSpec
 from types import MappingProxyType, ModuleType
-from typing import Final, Literal
+from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -463,6 +463,23 @@ def test_pre_call_tolerates_missing_api_base(logging_obj):
     logging_obj.pre_call(input="", api_key="", additional_args={"api_base": None, "headers": {}})
 
     assert logging_obj.model_call_details["litellm_params"]["api_base"] == ""
+
+
+def test_pre_call_without_a_model_still_logs_the_call():
+    files_api_logging_obj = LitellmLogging(
+        model=cast(str, None),
+        messages=[],
+        stream=False,
+        call_type="adelete_file",
+        start_time=time.time(),
+        litellm_call_id="12345",
+        function_id="1245",
+    )
+    files_api_logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+
+    files_api_logging_obj.pre_call(input="", api_key="call-key", additional_args={"api_base": None, "headers": {}})
+
+    assert files_api_logging_obj.model_call_details["log_event_type"] == "pre_api_call"
 
 
 def test_post_call_serializes_dict_with_datetime(logging_obj):
