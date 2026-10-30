@@ -4892,7 +4892,7 @@ async def test_health_endpoint_probes_only_the_access_groups_deployments_of_a_sh
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("direct_grant", ["gpt-5.4-mini", "*"])
+@pytest.mark.parametrize("direct_grant", ["gpt-5.4-mini", "*", "all-proxy-models"])
 async def test_health_endpoint_probes_every_deployment_of_a_name_the_key_also_holds_directly(direct_grant: str) -> None:
     caller: Final = UserAPIKeyAuth(api_key="hashed-test-key", models=["premium", direct_grant])
 
