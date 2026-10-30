@@ -1266,6 +1266,7 @@ def generic_response_convertor(
     sso_jwt_handler: JWTHandler | None = None,
     role_mappings: Optional["RoleMappings"] = None,
     team_mappings: Optional["TeamMappings"] = None,
+    jwt_auth_enabled: bool = False,
 ) -> CustomOpenID:
     generic_user_id_attribute_name: Final = os.getenv("GENERIC_USER_ID_ATTRIBUTE", "preferred_username")
     generic_user_display_name_attribute_name: Final = os.getenv("GENERIC_USER_DISPLAY_NAME_ATTRIBUTE", "sub")
@@ -1311,7 +1312,7 @@ def generic_response_convertor(
     team_id_jwt_field: Final = jwt_handler.litellm_jwtauth.team_id_jwt_field
     upsert_candidate: Final[object] = (
         get_nested_value(data=token, key_path=team_id_jwt_field)
-        if jwt_handler.litellm_jwtauth.team_id_upsert and team_id_jwt_field is not None
+        if jwt_auth_enabled and jwt_handler.litellm_jwtauth.team_id_upsert and team_id_jwt_field is not None
         else None
     )
     team_id_to_upsert: Final = (
@@ -1625,6 +1626,8 @@ async def get_generic_sso_response(
     # make generic sso provider
     from fastapi_sso.sso.base import DiscoveryDocument
 
+    from litellm.proxy.proxy_server import general_settings
+
     received_response: dict | None = None
     sso_assertion: SSOIdentityAssertion | None = None
 
@@ -1676,6 +1679,7 @@ async def get_generic_sso_response(
             sso_jwt_handler=sso_jwt_handler,
             role_mappings=role_mappings,
             team_mappings=team_mappings,
+            jwt_auth_enabled=general_settings.get("enable_jwt_auth", False) is True,
         )
 
     SSOProvider: Final = create_generic_sso_provider(

@@ -210,16 +210,24 @@ def test_free_sso_admission_preserves_existing_users_and_serializes_the_last_sea
 
 
 @pytest.mark.parametrize(
-    ("team_id_upsert", "team_exists_before", "expect_member"),
-    [(True, False, True), (False, False, False), (False, True, True)],
-    ids=["upsert-creates-missing-team", "no-upsert-skips-missing-team", "no-upsert-joins-existing-team"],
+    ("enable_jwt_auth", "team_id_upsert", "team_exists_before", "expect_member"),
+    [(True, True, False, True), (False, True, False, False), (True, False, False, False), (True, False, True, True)],
+    ids=[
+        "upsert-creates-missing-team",
+        "upsert-without-jwt-auth-skips-missing-team",
+        "no-upsert-skips-missing-team",
+        "no-upsert-joins-existing-team",
+    ],
 )
 def test_sso_sign_in_upserts_the_team_id_jwt_field_team_only_when_team_id_upsert_is_on(
-    tmp_path: Path, team_id_upsert: bool, team_exists_before: bool, expect_member: bool
+    tmp_path: Path, enable_jwt_auth: bool, team_id_upsert: bool, team_exists_before: bool, expect_member: bool
 ) -> None:
     subject: Final = f"sso-dept-user-{uuid.uuid4().hex[:12]}"
     team_id: Final = _dept(subject)
-    jwtauth: Final = {"litellm_jwtauth": {"team_id_jwt_field": "dept", "team_id_upsert": team_id_upsert}}
+    jwtauth: Final = {
+        "enable_jwt_auth": enable_jwt_auth,
+        "litellm_jwtauth": {"team_id_jwt_field": "dept", "team_id_upsert": team_id_upsert},
+    }
     with _sso_gateway(tmp_path, {}, jwtauth) as gateway, contextlib.ExitStack() as cleanups:
         cleanups.callback(gateway.request, "POST", "/team/delete", {"team_ids": [team_id]})
         cleanups.callback(_delete_user, gateway, subject)
@@ -241,7 +249,10 @@ def test_sso_sign_in_with_db_team_mappings_creates_the_team_id_jwt_field_team_an
     subject: Final = f"sso-mapped-user-{uuid.uuid4().hex[:12]}"
     team_id: Final = _dept(subject)
     group_team_id: Final = _group(subject)
-    jwtauth: Final = {"litellm_jwtauth": {"team_id_jwt_field": "dept", "team_id_upsert": True}}
+    jwtauth: Final = {
+        "enable_jwt_auth": True,
+        "litellm_jwtauth": {"team_id_jwt_field": "dept", "team_id_upsert": True},
+    }
     team_mappings: Final = {"team_mappings": {"team_ids_jwt_field": "groups"}}
     with (
         _sso_gateway(tmp_path, {}, jwtauth, db_sso_settings=team_mappings) as gateway,

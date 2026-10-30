@@ -11223,9 +11223,22 @@ def test_generic_sso_login_upserts_only_the_team_id_jwt_field_claim(
     result: Final = generic_response_convertor(
         response={"preferred_username": "alice", "email": "alice@example.com", **userinfo},
         jwt_handler=_upsert_jwt_handler(**jwtauth),
+        jwt_auth_enabled=True,
     )
 
     assert (result.team_ids, result.team_id_to_upsert) == (expected_team_ids, expected_upsert)
+
+
+def test_generic_sso_login_does_not_upsert_the_team_id_jwt_field_claim_when_jwt_auth_is_disabled() -> None:
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+    result: Final = generic_response_convertor(
+        response={"preferred_username": "alice", "email": "alice@example.com", "dept": "finance"},
+        jwt_handler=_upsert_jwt_handler(team_id_jwt_field="dept", team_id_upsert=True),
+        jwt_auth_enabled=False,
+    )
+
+    assert (result.team_ids, result.team_id_to_upsert) == (["finance"], None)
 
 
 def test_generic_sso_login_marks_the_team_id_jwt_field_team_for_upsert_without_adding_it_to_team_ids() -> None:
@@ -11235,6 +11248,7 @@ def test_generic_sso_login_marks_the_team_id_jwt_field_team_for_upsert_without_a
         response={"preferred_username": "alice", "email": "alice@example.com", "groups": ["g1"], "dept": "finance"},
         jwt_handler=_upsert_jwt_handler(team_id_jwt_field="dept", team_id_upsert=True),
         team_mappings=TeamMappings(team_ids_jwt_field="groups"),
+        jwt_auth_enabled=True,
     )
 
     assert (result.team_ids, result.team_id_to_upsert) == (["g1"], "finance")
@@ -11247,6 +11261,7 @@ def test_generic_sso_login_keeps_team_ids_empty_for_a_dept_only_user_so_the_acce
         response={"preferred_username": "alice", "email": "alice@example.com", "dept": "d1"},
         jwt_handler=_upsert_jwt_handler(team_id_jwt_field="dept", team_id_upsert=True),
         team_mappings=TeamMappings(team_ids_jwt_field="groups"),
+        jwt_auth_enabled=True,
     )
 
     assert (result.team_ids, result.team_id_to_upsert) == ([], "d1")
@@ -11261,6 +11276,7 @@ def test_restricted_sso_group_still_rejects_a_user_whose_only_team_is_the_upsert
         response=response,
         jwt_handler=_upsert_jwt_handler(team_id_jwt_field="dept", team_id_upsert=True),
         team_mappings=TeamMappings(team_ids_jwt_field="groups"),
+        jwt_auth_enabled=True,
     )
 
     with pytest.raises(ProxyException) as denied:
