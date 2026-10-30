@@ -2547,6 +2547,47 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_cut_off_by_an_upstr
 
 
 @pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_bytes_led_by_a_non_object_data_line_are_masked():
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<CREDIT_CARD>"},
+    )
+    byte_chunks: Final = (
+        b"data: 5\n\n"
+        + _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "4111 1111 1111 1111"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    )
+
+    async def mock_stream() -> AsyncIterator[bytes]:
+        for chunk in byte_chunks:
+            yield chunk
+
+    collected: Final = [
+        chunk
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"), response=mock_stream(), request_data={}
+        )
+    ]
+
+    assert "4111" not in b"".join(collected).decode()
+    assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<CREDIT_CARD>"
+
+
+@pytest.mark.asyncio
 async def test_apply_to_output_streaming_anthropic_sse_bytes_without_pii_are_forwarded_unchanged():
     guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,

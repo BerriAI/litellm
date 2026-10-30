@@ -1495,6 +1495,14 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert out == chunks
 
     @pytest.mark.asyncio
+    async def test_allowed_stream_led_by_a_non_object_data_line_is_passed_through_verbatim(self):
+        chunks: Final = [b"data: 5\n\n", *self._sse_chunks("Bash")]
+
+        out = await self._drain(self.blocking, chunks)
+
+        assert out == chunks
+
+    @pytest.mark.asyncio
     async def test_denied_tool_use_delivered_before_an_upstream_error_is_still_blocked(self):
         chunks = self._ended_by_upstream_error(self._sse_chunks("Read")[:7])
 

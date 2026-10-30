@@ -155,6 +155,8 @@ def collapse_pure_text_chunks(
             continue
 
         json_str = ev[idx + len("data:") :].strip()
+        if not json_str.startswith("{"):
+            continue
         try:
             data = json.loads(json_str)
         except (json.JSONDecodeError, ValueError):
