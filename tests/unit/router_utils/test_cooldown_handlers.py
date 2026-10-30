@@ -3,6 +3,7 @@ import copy
 import datetime
 import importlib
 import itertools
+import json
 import random
 import time
 import uuid
@@ -2135,6 +2136,25 @@ async def test_should_cooldown_deployment(testing_litellm_router):
 
     # expect this to fail since it's now 51% of requests are failing
     assert _should_cooldown_deployment(testing_litellm_router, deployment_id, 500, Exception("Test")) is True
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_role_less_requests_do_not_count_toward_the_deployments_failure_rate():
+    """A caller's role-less message is not the deployment failing, so it must not push a healthy one into cooldown."""
+    litellm_params: Final = {"model": "house-model", "custom_llm_provider": "openai", "mock_response": "ok"}
+    router: Final = Router(
+        model_list=[
+            {"model_name": "house", "litellm_params": litellm_params, "model_info": {"id": "d1"}},
+            {"model_name": "house", "litellm_params": litellm_params, "model_info": {"id": "d2"}},
+        ]
+    )
+    for _ in range(6):
+        with pytest.raises(litellm.MalformedRequestFieldError):
+            await router.acompletion(model="d1", messages=json.loads('[{"content": "hi"}]'))
+    await asyncio.sleep(1)
+
+    assert _should_cooldown_deployment(router, "d1", 500, Exception("Test")) is False
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")

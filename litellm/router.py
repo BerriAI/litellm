@@ -12550,7 +12550,7 @@ class Router:
             idx: Final = self.model_id_to_deployment_index_map.get(id)
             return None if idx is None else self.model_list[idx]
 
-    def get_model_group(self, id: str) -> list | None:
+    def get_model_group(self, id: str) -> Sequence[DeploymentTypedDict] | None:
         """
         Return list of all models in the same model group as that model id
         """

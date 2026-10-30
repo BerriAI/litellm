@@ -8277,14 +8277,17 @@ def test_validate_tool_choice_without_model_is_still_a_400():
         ([{"role": "user", "content": "hi"}, {"role": "", "content": "hello"}], 1),
     ],
 )
-def test_completion_message_without_role_is_a_400(messages, index):
+def test_completion_message_without_role_is_a_400(messages: list[dict[str, str | None]], index: int):
     """A message with no role is the caller's mistake, rejected before any provider sees it, never sent as assistant."""
     with pytest.raises(
-        litellm.BadRequestError, match=re.escape(f"Missing required parameter: 'messages[{index}].role'.")
+        litellm.MalformedRequestFieldError, match=re.escape(f"Missing required parameter: 'messages[{index}].role'.")
     ) as exc_info:
         litellm.completion(model=MODEL, messages=messages, mock_response="Hello there!")
     assert exc_info.value.status_code == 400
     assert exc_info.value.model == MODEL
+    assert exc_info.value.llm_provider == "anthropic"
+    assert exc_info.value.param == f"messages[{index}].role"
+    assert exc_info.value.code == "missing_required_parameter"
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")

@@ -5469,7 +5469,7 @@ def completion(
     if model is None:
         raise ValueError("model param not passed in.")
     # validate messages
-    messages = validate_and_fix_openai_messages(messages=messages, model=model)
+    messages = validate_and_fix_openai_messages(messages=messages, model=model, request_kwargs=kwargs)
     tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice, model=model)

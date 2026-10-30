@@ -140,6 +140,7 @@ from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import (
     GuardrailRaisedException,
+    MalformedRequestFieldError,
     RejectedRequestError,
     SensitiveDataRouteException,
 )
@@ -624,6 +625,8 @@ class _StreamIteratorHook(Protocol[_T]):
 
 
 def _is_client_error_exception(exc: Exception) -> bool:
+    if isinstance(exc, MalformedRequestFieldError):
+        return True
     if isinstance(exc, HTTPException):
         return exc.status_code < 500
     if isinstance(exc, ProxyException):

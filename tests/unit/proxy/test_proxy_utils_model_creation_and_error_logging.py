@@ -1805,6 +1805,12 @@ class TestPostCallFailureHookLLMExceptionAlerting:
         assert (await self._alerted(HTTPException(status_code=400, detail="blocked"))).called is False
 
     @pytest.mark.asyncio
+    async def test_role_less_message_does_not_alert(self):
+        with pytest.raises(litellm.MalformedRequestFieldError) as exc_info:
+            litellm.completion(model="openai/gpt-5.6", messages=[{"content": "hi"}], mock_response="ok")
+        assert (await self._alerted(exc_info.value)).called is False
+
+    @pytest.mark.asyncio
     async def test_genuine_llm_api_error_still_alerts(self):
         assert (await self._alerted(Exception("upstream 503"))).called is True
 

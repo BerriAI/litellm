@@ -9121,7 +9121,9 @@ def convert_list_message_to_dict(
     return [dict(cleanup_none_field_in_message(message=_as_message_value(message))) for message in messages]
 
 
-def validate_and_fix_openai_messages(messages: list, model: str = ""):
+def validate_and_fix_openai_messages(
+    messages: list, model: str = "", request_kwargs: Mapping[str, object] | None = None
+):
     """
     Ensures all messages are valid OpenAI chat completion messages.
 
@@ -9142,7 +9144,7 @@ def validate_and_fix_openai_messages(messages: list, model: str = ""):
         )
         cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
         new_messages.append(cleaned_message)
-    return validate_chat_completion_user_messages(messages=new_messages, model=model)
+    return validate_chat_completion_user_messages(messages=new_messages, model=model, request_kwargs=request_kwargs)
 
 
 def validate_and_fix_openai_tools(tools: list | None) -> list[dict] | None:
@@ -9195,28 +9197,36 @@ def cleanup_none_field_in_message(message: AllMessageValues):
     return {k: v for k, v in new_message.items() if v is not None}
 
 
-def validate_chat_completion_user_messages(messages: list[AllMessageValues], model: str = ""):
+def validate_chat_completion_user_messages(
+    messages: list[AllMessageValues], model: str = "", request_kwargs: Mapping[str, object] | None = None
+):
     """
-    Ensures all user messages are valid OpenAI chat completion messages.
+    Ensures every message has a role and all user messages are valid OpenAI chat completion messages.
 
     Args:
         messages: List of message dictionaries
         model: Model named on the error raised for a message without a role
+        request_kwargs: The request's provider settings, read to name the provider on that error
         message_content_type: Type to validate content against
 
     Returns:
         List[dict]: The validated messages
 
     Raises:
-        BadRequestError: If a message has no role
+        MalformedRequestFieldError: If a message has no role
         ValueError: If any message is invalid
     """
     for idx, m in enumerate(messages):
         if "role" not in m or not m["role"]:
-            raise BadRequestError(
+            raise MalformedRequestFieldError(
                 message=f"Missing required parameter: 'messages[{idx}].role'.",
                 model=model,
-                llm_provider="",
+                llm_provider=_deployment_provider({**(request_kwargs or {}), "model": model}),
+                body={
+                    "type": "invalid_request_error",
+                    "param": f"messages[{idx}].role",
+                    "code": "missing_required_parameter",
+                },
             )
         try:
             if m["role"] == "user":
