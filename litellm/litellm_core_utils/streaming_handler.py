@@ -108,6 +108,14 @@ def _choice_progress(chunk: object) -> tuple[tuple[int, bool], ...]:
             return ()
 
 
+def _ends_every_choice(chunk: object) -> bool:
+    match chunk:
+        case {"is_finished": True}:
+            return True
+        case _:
+            return False
+
+
 def _stamp_usage_cost(
     usage_chunk: ModelResponse | TextCompletionResponse | ModelResponseStream,
     complete_response: ModelResponse | TextCompletionResponse | ModelResponseStream,
@@ -2277,8 +2285,10 @@ class CustomStreamWrapper:
     def _record_choice_progress(self, chunk: object) -> None:
         progress: Final = _choice_progress(chunk)
         self._streamed_choice_indices = self._streamed_choice_indices.union(index for index, _ in progress)
-        self._finished_choice_indices = self._finished_choice_indices.union(
-            index for index, finished in progress if finished
+        self._finished_choice_indices = (
+            self._streamed_choice_indices
+            if _ends_every_choice(chunk)
+            else self._finished_choice_indices.union(index for index, finished in progress if finished)
         )
 
     def _every_choice_finished(self) -> bool:

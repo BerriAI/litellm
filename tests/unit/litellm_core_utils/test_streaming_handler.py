@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.streaming_handler import (
     _ProviderChunkParsed,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.fireworks_ai.chat.transformation import FireworksAIChatCompletionStreamingHandler
 from litellm.llms.ollama.completion.transformation import OllamaTextCompletionResponseIterator
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
 from litellm.responses.mcp.chat_completions_handler import _add_mcp_metadata_to_response
@@ -5451,6 +5452,45 @@ async def test_ollama_generate_stream_dropped_after_its_done_line_ends_cleanly(l
     assert "".join(chunk.choices[0].delta.content or "" for chunk in collected if chunk.choices) == "Hi"
     assert [chunk.choices[0].finish_reason for chunk in collected if chunk.choices[0].finish_reason] == ["stop"]
 
+
+
+def _fireworks_sse_line_for_choice(index: int, content: str) -> str:
+    chunk: Final = {
+        "id": "chatcmpl-two-choices",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "accounts/fireworks/models/deepseek-v4p1-flash",
+        "choices": [{"index": index, "delta": {"role": "assistant", "content": content}, "finish_reason": None}],
+    }
+    return f"data: {json.dumps(chunk)}"
+
+
+def _fireworks_n2_lines_without_finish_reasons_through_done_then(failure: Exception) -> Iterator[str]:
+    yield _fireworks_sse_line_for_choice(0, "Hi")
+    yield _fireworks_sse_line_for_choice(1, "Hel")
+    yield "data: [DONE]"
+    raise failure
+
+
+@pytest.mark.asyncio
+@_SYNC_AND_ASYNC
+async def test_n2_stream_dropped_after_done_without_choice_finish_reasons_ends_cleanly(
+    logging_obj: Logging, sync_mode: bool
+):
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={"n": 2})
+    lines: Final = _fireworks_n2_lines_without_finish_reasons_through_done_then(_httpx2_read_error())
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=FireworksAIChatCompletionStreamingHandler(
+            streaming_response=lines if sync_mode else _as_async(lines), sync_stream=sync_mode
+        ),
+        model="accounts/fireworks/models/deepseek-v4p1-flash",
+        custom_llm_provider="fireworks_ai",
+        logging_obj=logging_obj,
+    )
+
+    collected: Final = await _collect(wrapper, sync_mode)
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in collected if chunk.choices) == "HiHel"
 
 def _generic_chunks_with_a_second_content_block_then(failure: Exception) -> Iterator[GenericStreamingChunk]:
     yield GenericStreamingChunk(text="Hi", is_finished=False, finish_reason="", usage=None, index=0)
