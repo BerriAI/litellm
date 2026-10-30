@@ -275,11 +275,11 @@ def prompt() -> str:
     return f"cache probe {uuid.uuid4().hex}"
 
 
-def redis_store() -> Redis:
+def redis_store() -> Redis[bytes]:
     return Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"]))
 
 
-def entry_keys(store: Redis, needle: str) -> Iterator[str]:
+def entry_keys(store: Redis[bytes], needle: str) -> Iterator[str]:
     for raw_key in store.scan_iter(count=1000):
         key: Final = raw_key.decode()
         if not CACHE_KEY.match(key) or store.type(key) != b"string":
@@ -289,12 +289,12 @@ def entry_keys(store: Redis, needle: str) -> Iterator[str]:
             yield key
 
 
-def entry_key(store: Redis, needle: str) -> str | None:
+def entry_key(store: Redis[bytes], needle: str) -> str | None:
     """The response cache key (a bare sha256) whose stored value names ``needle``, or ``None``."""
     return next(entry_keys(store, needle), None)
 
 
-def await_entry(store: Redis, needle: str) -> str:
+def await_entry(store: Redis[bytes], needle: str) -> str:
     key: Final = eventually(lambda: entry_key(store, needle), lambda found: found is not None)
     assert key is not None
     return key

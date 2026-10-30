@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO \"LiteLLM_EndUserTable\" (user_id, spend, blocked)\nSELECT id, SUM(cost), false FROM UNNEST($1::text[], $2::float8[]) AS a(id, cost)\nGROUP BY id\nORDER BY id\nON CONFLICT (user_id) DO UPDATE\nSET spend = \"LiteLLM_EndUserTable\".spend + EXCLUDED.spend\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Float8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "345c02595f55a7f0274ef7214b02288e0f2c1f12a2a79ed53f0002826724cd0a"
+}

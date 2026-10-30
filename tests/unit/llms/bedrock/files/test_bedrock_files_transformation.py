@@ -4458,6 +4458,20 @@ class TestMalformedBatchJsonl:
 _VALID_BATCH_RECORD: Final = json.loads(_VALID_BATCH_LINE)
 
 
+def test_file_content_conversion_keeps_a_line_whose_json_holds_unicode_line_separators() -> None:
+    text: Final = "Hello\u2028from\u2029batch"
+    body: Final = {**_VALID_BATCH_RECORD["body"], "messages": [{"role": "user", "content": text}]}
+    record: Final = {**_VALID_BATCH_RECORD, "body": body}
+    file_content: Final = f"{json.dumps(record, ensure_ascii=False)}\n".encode()
+
+    bedrock_jsonl, _ = BedrockJsonlFilesTransformation().transform_openai_file_content_to_bedrock_file_content(
+        file_content
+    )
+
+    (bedrock_record,) = (json.loads(line) for line in bedrock_jsonl.split("\n"))
+    assert bedrock_record["modelInput"]["messages"] == [{"role": "user", "content": [{"text": text}]}]
+
+
 def _batch_line(body: object) -> str:
     return json.dumps({**_VALID_BATCH_RECORD, "body": body})
 
