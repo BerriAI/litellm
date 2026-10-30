@@ -11,6 +11,7 @@ import litellm
 from litellm import CustomLLM
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.litellm_core_utils.get_llm_provider_logic import (
+    declared_provider,
     get_llm_provider,
     resolve_model_and_provider_for_metadata,
     get_provider_affinity_header,
@@ -68,6 +69,26 @@ def test_get_llm_provider_still_rejects_unregistered_prefix(registered_custom_pr
 )
 def test_is_registered_custom_provider(registered_custom_provider: str, candidate: str | None, expected: bool) -> None:
     assert is_registered_custom_provider(candidate) is expected
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected"),
+    [
+        ("vertex_ai/gemini-live-2.5-flash", None, "vertex_ai"),
+        ("llama-4-scout", "groq", "groq"),
+        ("gemini/gemini-2.0-flash-live-001", "vertex_ai", "vertex_ai"),
+        ("veniceai/venice-uncensored", None, "veniceai"),
+        (f"{CUSTOM_PROVIDER}/my-model", None, CUSTOM_PROVIDER),
+        ("gemini-live-2.5-flash", None, None),
+        ("models/gemini-live-2.5-flash", None, None),
+    ],
+    ids=["provider-prefix", "custom-llm-provider", "custom-llm-provider-wins", "json-provider", "custom-provider",
+         "bare-name", "unknown-prefix"],
+)
+def test_declared_provider_names_only_a_provider_the_pair_spells_out(
+    registered_custom_provider: str, model: str, custom_llm_provider: str | None, expected: str | None
+) -> None:
+    assert declared_provider(model, custom_llm_provider) == expected
 
 
 def test_get_llm_provider_leaves_fal_ai_api_base_unset_for_global_fallback() -> None:

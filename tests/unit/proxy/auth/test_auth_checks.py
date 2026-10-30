@@ -1,7 +1,7 @@
 # What is this?
 ## Tests if 'get_end_user_object' works as expected
 
-import sys, os, asyncio, time, random, uuid
+import sys, os, asyncio, time, random, re, uuid
 import hashlib
 import json
 import traceback
@@ -39,6 +39,7 @@ from litellm.proxy.utils import PrismaClient
 import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.auth.auth_checks import (
+    can_caller_call_resolved_model,
     can_team_access_model,
     delete_cache_key_objects,
     is_model_cost_zero,
@@ -2425,6 +2426,37 @@ async def test_bulk_eviction_clears_the_redis_copies_before_waiting_on_a_wedged_
 
     assert refilled == []
     assert redis.entries == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("team_id", "refused"), [(None, True), ("live-team", False)], ids=["personal-key", "team-key"])
+async def test_can_caller_call_resolved_model_holds_a_personal_key_to_its_owners_models(
+    team_id: str | None, refused: bool
+) -> None:
+    owner_id: Final = f"live-owner-{uuid.uuid4()}"
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(key=owner_id, value=LiteLLM_UserTable(user_id=owner_id, models=["gemini-3.8-live"]))
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "gemini-3.8-live", "litellm_params": {"model": "vertex_ai/gemini-3.8-live"}},
+            {"model_name": "gemini-live-2.5-flash", "litellm_params": {"model": "vertex_ai/gemini-live-2.5-flash"}},
+        ]
+    )
+
+    call: Final = can_caller_call_resolved_model(
+        model="gemini-live-2.5-flash",
+        valid_token=UserAPIKeyAuth(api_key="sk-live", user_id=owner_id, team_id=team_id),
+        llm_router=router,
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    if refused:
+        with pytest.raises(ProxyException, match=re.escape("gemini-live-2.5-flash")):
+            await call
+    else:
+        await call
 
 
 class _SignallingPublishRedisClient(_SlowPublishRedisClient):
