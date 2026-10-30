@@ -36,7 +36,8 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
-from litellm.caching.affinity_cache import ROUTER_SESSION_PINS_TARGET, claim_affinity_pin, read_affinity_pin
+from litellm.caching.affinity_cache import ROUTER_SESSION_PINS_TARGET, claim_affinity_pin, set_local_affinity_pin
+from litellm.caching.redis_batch import active_request_redis_batch
 from litellm.constants import (
     COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY,
     EMPTY_MAPPING,
@@ -64,6 +65,17 @@ from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_CONFIG
+from litellm.redis.stores.complexity_session_affinity import (
+    ComplexitySessionAffinityStore,
+    ComplexitySessionPin,
+    TransportComplexitySessionAffinityStore,
+)
+from litellm.redis.stores.complexity_session_affinity import (
+    affinity_key as session_affinity_key,
+)
+from litellm.redis.stores.complexity_session_affinity import (
+    pin_value as session_pin_value,
+)
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
 from litellm.router_strategy.complexity_router.tier_predictor import (
@@ -1388,7 +1400,7 @@ def _parse_session_affinity_pin(value: object, active_tiers: tuple[str, ...]) ->
 
 def _session_affinity_cache_value(model: str, tier: ComplexityTier | str | None) -> Mapping[str, str | None]:
     tier_value: Final = _tier_name(tier) if tier is not None else None
-    return {"model": model, "tier": tier_value}
+    return session_pin_value(model, tier_value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -4412,7 +4424,7 @@ class ComplexityRouter(CustomLogger):
         return self._get_session_id_from_request_kwargs(request_kwargs)
 
     @staticmethod
-    def _get_user_api_key_hash_from_request_kwargs(request_kwargs: dict) -> str | None:
+    def _get_user_api_key_hash_from_request_kwargs(request_kwargs: Mapping[str, object]) -> str | None:
         """Resolve the proxy-derived API key hash, the same trust boundary
         DeploymentAffinityCheck uses for its own key-based affinity (not the
         client-supplied OpenAI `user` param, which isn't authenticated)."""
@@ -4422,13 +4434,69 @@ class ComplexityRouter(CustomLogger):
                 return str(user_key)
         return None
 
-    def _get_session_affinity_cache_key(self, session_id: str, request_kwargs: dict) -> str:
+    def _get_session_affinity_cache_key(self, session_id: str, request_kwargs: Mapping[str, object]) -> str:
         # Namespace by the caller's API key hash so two different callers reusing the
         # same client-supplied session_id can't poison each other's routing pin. Falls
         # back to "unscoped" only when there's no authenticated caller to scope by
         # (e.g. direct Router usage without the proxy layer).
         caller_scope: Final = self._get_user_api_key_hash_from_request_kwargs(request_kwargs) or "unscoped"
-        return f"complexity_router_session_affinity:v1:{self.model_name}:{caller_scope}:{session_id}"
+        return session_affinity_key(self.model_name, caller_scope, session_id)
+
+    async def _read_session_affinity_pin(self, session_id: str, request_kwargs: Mapping[str, object]) -> object:
+        cache: Final = self.litellm_router_instance.cache
+        cache_key: Final = self._get_session_affinity_cache_key(session_id, request_kwargs)
+        ttl: Final = self.config.session_affinity_ttl_seconds
+        redis_cache: Final = cache.redis_cache
+        if redis_cache is not None:
+            batch: Final = active_request_redis_batch(redis_cache)
+            store: Final[ComplexitySessionAffinityStore] = TransportComplexitySessionAffinityStore(
+                redis_cache.transport(), coalesce_reads=batch is not None and batch.pending > 0
+            )
+            result: Final = await store.read_and_refresh(
+                self.model_name,
+                self._get_user_api_key_hash_from_request_kwargs(request_kwargs) or "unscoped",
+                session_id,
+                ttl_seconds=ttl,
+            )
+            if isinstance(result, ComplexitySessionPin):
+                if result.value is None:
+                    cache.in_memory_cache.delete_cache(cache_key)
+                else:
+                    set_local_affinity_pin(cache, cache_key, result.value, ttl)
+                return result.value
+        local: Final = TypeAdapter(object).validate_python(cache.in_memory_cache.get_cache(cache_key))
+        if local is not None:
+            set_local_affinity_pin(cache, cache_key, local, ttl)
+        return local
+
+    async def _store_session_affinity_pin(
+        self,
+        session_id: str,
+        request_kwargs: Mapping[str, object],
+        model: str,
+        tier: ComplexityTier | str | None,
+    ) -> None:
+        cache: Final = self.litellm_router_instance.cache
+        ttl: Final = self.config.session_affinity_ttl_seconds
+        await cache.async_set_cache(
+            key=self._get_session_affinity_cache_key(session_id, request_kwargs),
+            value=_session_affinity_cache_value(model, tier),
+            ttl=ttl,
+            local_only=True,
+        )
+        redis_cache: Final = cache.redis_cache
+        if redis_cache is not None:
+            store: Final[ComplexitySessionAffinityStore] = TransportComplexitySessionAffinityStore(
+                redis_cache.transport()
+            )
+            await store.overwrite(
+                self.model_name,
+                self._get_user_api_key_hash_from_request_kwargs(request_kwargs) or "unscoped",
+                session_id,
+                model,
+                _tier_name(tier) if tier is not None else None,
+                ttl_seconds=ttl,
+            )
 
     @property
     def _uses_tier_pin(self) -> bool:
@@ -4456,7 +4524,7 @@ class ComplexityRouter(CustomLogger):
     async def async_pre_routing_hook(
         self,
         model: str,
-        request_kwargs: dict,
+        request_kwargs: dict[str, object],
         messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
@@ -4496,7 +4564,6 @@ class ComplexityRouter(CustomLogger):
 
         use_session_affinity: Final = self._uses_tier_pin
         session_id: Final = self._get_tier_pin_session_id(request_kwargs) if use_session_affinity else None
-        cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
 
         # In 'user_turn' mode a held pin is replayed only on continuation turns; a new human
         # ask falls through and re-classifies. session_affinity restores pin-first for asks too.
@@ -4507,10 +4574,8 @@ class ComplexityRouter(CustomLogger):
             or codex_compaction
         )
 
-        if cache_key is not None and pin_replay_allowed:
-            pinned_value: Final = await read_affinity_pin(
-                self.litellm_router_instance.cache, cache_key, self.config.session_affinity_ttl_seconds
-            )
+        if session_id is not None and pin_replay_allowed:
+            pinned_value: Final = await self._read_session_affinity_pin(session_id, request_kwargs)
             pinned_pin: Final = _parse_session_affinity_pin(pinned_value, self.config.tier_names())
             if pinned_pin is not None:
                 user_message: Final = (
@@ -4608,10 +4673,8 @@ class ComplexityRouter(CustomLogger):
                         else floor_model
                     )
                     if escalated:
-                        await self.litellm_router_instance.cache.async_set_cache(
-                            key=cache_key,
-                            value=_session_affinity_cache_value(session_model, resolved_pin_tier),
-                            ttl=self.config.session_affinity_ttl_seconds,
+                        await self._store_session_affinity_pin(
+                            session_id, request_kwargs, session_model, resolved_pin_tier
                         )
                     if self.config.adaptive:
                         from litellm.router_strategy.adaptive_router.config import (
@@ -4705,19 +4768,17 @@ class ComplexityRouter(CustomLogger):
         # the hard floor constrained its pick, so pinning it would carry a plan-mode-shaped
         # choice past plan mode's exit. No sentinel turn writes the pin, whatever its cause.
         pinnable: Final = (
-            cache_key is not None
+            session_id is not None
             and response is not None
             and _decision_is_pinnable(response.routing_decision)
             and self._matched_plan_mode_signal(request_kwargs, resolved_messages) is None
         )
-        if pinnable and cache_key is not None and response is not None:
-            await self.litellm_router_instance.cache.async_set_cache(
-                key=cache_key,
-                value=_session_affinity_cache_value(
-                    response.model,
-                    response.routing_decision.get("tier") if response.routing_decision is not None else None,
-                ),
-                ttl=self.config.session_affinity_ttl_seconds,
+        if pinnable and session_id is not None and response is not None:
+            await self._store_session_affinity_pin(
+                session_id,
+                request_kwargs,
+                response.model,
+                response.routing_decision.get("tier") if response.routing_decision is not None else None,
             )
         return self._with_session_deployment_affinity(response)
 
