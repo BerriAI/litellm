@@ -2628,6 +2628,10 @@ STREAMS_WITH_A_NON_OBJECT_LINE_AND_NO_ANTHROPIC_FRAME: Final = {
     "then-broken-json": (b"data: 5\n\n", b'data: {"foo"\n\n'),
     "two-data-lines-in-one-frame": (b'data: 5\ndata: {"type": "message_start"}\n\n',),
     "past-the-byte-cap": (b"data: 5\n\n" * 12_000,),
+    "list-type": (b'data: {"type": []}\n\n', b'data: {"text": "4111"}\n\n'),
+    "dict-type": (b'data: {"type": {"a": 1}}\n\n', b'data: {"text": "4111"}\n\n'),
+    "error-frame-with-a-list-type": (b'event: error\ndata: {"type": []}\n\n', b'data: {"text": "4111"}\n\n'),
+    "cut-character-at-the-end": (b'data: [5]\xe2',),
 }
 
 
@@ -2714,6 +2718,7 @@ async def test_apply_to_output_streaming_unreadable_stream_with_a_non_object_lin
 
 STREAMS_OF_UNKNOWN_SHAPE_MAIN_PASSED: Final = {
     "null-line": (b"data: null\n\n", b'data: {"foo": 1}\n\n'),
+    "number-type": (b'data: {"type": 5}\n\n', b'data: {"foo": 1}\n\n'),
     "line-that-is-not-json": (b"data: not json\n\n", b'data: {"foo": 1}\n\n'),
     "done-sentinel": (b"data: [DONE]\n\n", b'data: {"foo": 1}\n\n'),
     "non-object-line-after-the-shape-is-decided": (b'data: {"foo": 1}\n\n', b"data: 5\n\n"),

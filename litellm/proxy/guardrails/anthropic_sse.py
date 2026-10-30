@@ -28,7 +28,7 @@ from litellm.llms.anthropic.messages.stream_assembly import (
     assemble_anthropic_sse_stream as assemble_anthropic_sse_stream,  # noqa: PLC0414  # public re-export
 )
 from litellm.llms.anthropic.messages.stream_assembly import (
-    has_non_object_json_event as has_non_object_json_event,  # noqa: PLC0414  # public re-export
+    has_unreadable_json_event as has_unreadable_json_event,  # noqa: PLC0414  # public re-export
 )
 from litellm.llms.anthropic.messages.stream_assembly import (
     is_anthropic_sse_stream as is_anthropic_sse_stream,  # noqa: PLC0414  # public re-export

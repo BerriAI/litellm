@@ -514,19 +514,23 @@ def is_anthropic_sse_stream(all_chunks: Sequence[object]) -> bool:
     return any(_is_anthropic_event_type(event.get("type")) for event in _parsed_sse_events(sse_stream))
 
 
-def _is_json_value_other_than_object_or_null(payload: str) -> bool:
+def _is_json_no_reader_can_take(payload: str) -> bool:
     try:
-        return not isinstance(json.loads(payload), (dict, type(None)))
+        value: Final[object] = json.loads(payload)
     except ValueError:
         return False
+    if value is None:
+        return False
+    event: Final = as_str_mapping(value)
+    return event is None or isinstance(event.get("type"), (list, dict))
 
 
-def has_non_object_json_event(all_chunks: Sequence[object]) -> bool:
+def has_unreadable_json_event(all_chunks: Sequence[object]) -> bool:
     """Whether a frame's data is JSON that no reader of these streams can take as an event."""
-    return any(
-        _is_json_value_other_than_object_or_null(_sse_data_payload(event) or "")
-        for event in _sse_frames(_joined_sse_bytes(all_chunks).decode("utf-8", errors="replace"))
+    sse_stream: Final = codecs.getincrementaldecoder("utf-8")(errors="replace").decode(
+        _joined_sse_bytes(all_chunks), final=False
     )
+    return any(_is_json_no_reader_can_take(_sse_data_payload(event) or "") for event in _sse_frames(sse_stream))
 
 
 def anthropic_sse_event_type(event: str) -> object:

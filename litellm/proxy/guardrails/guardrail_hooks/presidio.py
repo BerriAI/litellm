@@ -48,7 +48,7 @@ from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
     assemble_anthropic_sse_stream,
-    has_non_object_json_event,
+    has_unreadable_json_event,
     is_anthropic_sse_stream,
     model_response_text,
 )
@@ -1580,7 +1580,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     def _is_anthropic_first_frame(self, chunk: bytes) -> bool:
         if is_anthropic_sse_stream((chunk,)):
             return True
-        if has_non_object_json_event((chunk,)):
+        if has_unreadable_json_event((chunk,)):
             raise self._unreadable_stream_refusal()
         return False
 
@@ -1598,7 +1598,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         chunks: Final = (first_chunk, *rest_chunks)
         assembled: Final = assemble_anthropic_sse_stream(chunks, restore_identity=True, through_upstream_error=True)
         if assembled is None:
-            if has_non_object_json_event(chunks):
+            if has_unreadable_json_event(chunks):
                 raise self._unreadable_stream_refusal()
             verbose_proxy_logger.warning(
                 "Presidio apply_to_output: raw SSE stream could not be assembled into a response. "
