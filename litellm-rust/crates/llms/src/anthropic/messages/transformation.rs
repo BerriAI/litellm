@@ -1173,7 +1173,7 @@ mod tests {
         &["mid-conversation-tool-changes-2026-07-01", "thinking-display-updates-2026-08-18"]
     )]
     #[case::bedrock_converse(BetaProvider::BedrockConverse, &["thinking-display-updates-2026-08-18"])]
-    #[case::databricks(BetaProvider::Databricks, &[])]
+    #[case::databricks(BetaProvider::Databricks, &["thinking-display-updates-2026-08-18"])]
     fn tool_change_and_display_betas_reach_the_providers_that_accept_them(
         #[case] provider: BetaProvider,
         #[case] expected: &[&str],
