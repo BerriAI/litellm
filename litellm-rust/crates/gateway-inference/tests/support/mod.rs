@@ -71,9 +71,24 @@ pub fn app_with_cache_for_principal(
 }
 
 pub fn app_with_litellm_params(model: &str, api_base: &str, litellm_params: Value) -> Router {
+    app_with_shaping(
+        model,
+        api_base,
+        litellm_params,
+        Value::Object(Default::default()),
+    )
+}
+
+pub fn app_with_shaping(
+    model: &str,
+    api_base: &str,
+    litellm_params: Value,
+    shaping: Value,
+) -> Router {
     deployment_app(
         Deployment {
             litellm_params: serde_json::from_value(litellm_params).unwrap(),
+            shaping: serde_json::from_value(shaping).unwrap(),
             ..test_deployment(model, api_base)
         },
         litellm_gateway_auth::Permissions::All,
