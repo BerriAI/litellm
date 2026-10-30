@@ -900,6 +900,7 @@ async def hierarchical_router_settings_updates(
     llm_router: Router,
     proxy_config: ProxyConfig,
     proxy_logging_obj: ProxyLogging,
+    apply_model_group_alias: bool,
 ) -> Mapping[str, object]:
     # Apply hierarchical router_settings (Key > Team)
     # Global router_settings are already on the Router object itself.
@@ -930,11 +931,15 @@ async def hierarchical_router_settings_updates(
             return None
 
     router_weights: Final = validated_router_weights()
-    alias_target: Final = await _resolve_per_request_model_group_alias(
-        requested_model=requested_model,
-        router_settings=router_settings,
-        user_api_key_dict=user_api_key_dict,
-        llm_router=llm_router,
+    alias_target: Final = (
+        await _resolve_per_request_model_group_alias(
+            requested_model=requested_model,
+            router_settings=router_settings,
+            user_api_key_dict=user_api_key_dict,
+            llm_router=llm_router,
+        )
+        if apply_model_group_alias
+        else None
     )
     settings_updates: Final[Mapping[str, object]] = {
         "router_settings_override": router_settings,
@@ -2553,6 +2558,7 @@ class ProxyBaseLLMRequestProcessing:
                     llm_router=llm_router,
                     proxy_config=proxy_config,
                     proxy_logging_obj=proxy_logging_obj,
+                    apply_model_group_alias=True,
                 )
             )
 

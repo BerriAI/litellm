@@ -11,6 +11,7 @@ from fastapi.responses import ORJSONResponse
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.constants import MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -144,6 +145,7 @@ async def image_generation(
                     llm_router=llm_router,
                     proxy_config=proxy_config,
                     proxy_logging_obj=proxy_logging_obj,
+                    apply_model_group_alias=request.scope.get(MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY) is not True,
                 )
             )
 
