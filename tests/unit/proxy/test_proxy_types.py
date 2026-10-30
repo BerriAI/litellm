@@ -3,6 +3,7 @@ import importlib
 import json
 import socket
 import subprocess
+from typing import Final
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
@@ -12,6 +13,29 @@ import pytest
 import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+
+@pytest.mark.parametrize("serialized_metadata", (False, True))
+@pytest.mark.parametrize(
+    "policy",
+    ({}, {"mcp_servers": [{"name": "github", "url": "https://mcp.example.com", "tools": ["search_code"]}]}, None),
+)
+def test_generated_key_response_policy_can_be_sent_back_unchanged(
+    serialized_metadata: bool, policy: object
+) -> None:
+    from litellm.proxy._types import GenerateKeyResponse, UpdateKeyRequest
+
+    metadata: Final = {"native_mcp_policy": policy, "note": "kept"}
+    response: Final = GenerateKeyResponse.model_validate(
+        {"token": "test", "metadata": json.dumps(metadata) if serialized_metadata else metadata}
+    ).model_dump(mode="json")
+    request: Final = UpdateKeyRequest.model_validate(
+        {"key": response["key"], "metadata": response["metadata"], "native_mcp_policy": response["native_mcp_policy"]}
+    )
+    assert request.metadata is not None
+    assert request.metadata["note"] == "kept"
+    assert response["native_mcp_policy"] == request.metadata["native_mcp_policy"]
+    assert (request.native_mcp_policy is None) == (policy is None)
 
 
 

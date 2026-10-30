@@ -29,6 +29,7 @@ from typing_extensions import (
 
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_arize_otlp_protocol_value,
     validate_capture_message_content_value,
@@ -1245,6 +1246,9 @@ class GenerateKeyResponse(KeyRequestBase):
                 except json.JSONDecodeError:
                     raise ValueError(f"Field {field} should be a valid dictionary")
 
+        metadata: Final = as_str_mapping(values.get("metadata")) or {}
+        if "native_mcp_policy" in metadata:
+            return {**values, "native_mcp_policy": metadata["native_mcp_policy"]}
         return values
 
 

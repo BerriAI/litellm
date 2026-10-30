@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from typing import Annotated, Final, Literal, TypeAlias
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, StringConstraints, ValidationError, field_validator
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
@@ -40,6 +40,17 @@ class NativeMCPPolicy(BaseModel):
     mcp_servers: tuple[NativeMCPServerGrant, ...] = ()
 
 
+def native_mcp_policy_values_equal(left: object, right: object) -> bool:
+    if left == right:
+        return True
+    if left is None or right is None:
+        return False
+    try:
+        return NativeMCPPolicy.model_validate(left) == NativeMCPPolicy.model_validate(right)
+    except ValidationError:
+        return False
+
+
 def normalize_native_mcp_policy_input(value: object) -> object:
     data: Final = as_str_mapping(value)
     if data is None:
@@ -57,6 +68,6 @@ def normalize_native_mcp_policy_input(value: object) -> object:
     persisted: Final[Mapping[str, object] | None] = policy.model_dump(mode="json") if policy is not None else None
     return {
         **data,
-        **({"native_mcp_policy": policy} if "native_mcp_policy" in data else {}),
+        **({"native_mcp_policy": persisted} if "native_mcp_policy" in data else {}),
         **({"metadata": {**metadata, "native_mcp_policy": persisted}} if "native_mcp_policy" in metadata else {}),
     }

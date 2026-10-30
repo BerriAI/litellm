@@ -35,6 +35,7 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_MANAGED_TEAM_METADATA_KEY,
     SCIM_TEAM_DATA_METADATA_KEY,
 )
+from litellm.types.proxy.native_mcp_policy import native_mcp_policy_values_equal
 
 TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING: Final = "team_admin_editable_team_fields"
 
@@ -323,7 +324,11 @@ def _metadata_changes(
     return frozenset(
         key if key in _METADATA_FOLDED_FIELDS else "metadata"
         for key in (merged.keys() | stored.keys()) - _SYSTEM_MANAGED_METADATA_KEYS
-        if merged.get(key) != stored.get(key)
+        if (
+            not native_mcp_policy_values_equal(merged.get(key), stored.get(key))
+            if key == "native_mcp_policy"
+            else merged.get(key) != stored.get(key)
+        )
     )
 
 
@@ -411,7 +416,9 @@ def _comparable_json(value: JsonValue) -> object:
     )
 
 
-def _metadata_value_changed(new: object, old: object) -> bool:
+def _metadata_value_changed(key: str, new: object, old: object) -> bool:
+    if key == "native_mcp_policy":
+        return not native_mcp_policy_values_equal(new, old)
     return _comparable_json(_JSON_VALUE.validate_python(new)) != _comparable_json(_JSON_VALUE.validate_python(old))
 
 
@@ -437,7 +444,7 @@ def changed_team_metadata(data: UpdateTeamRequest, existing_row: LiteLLM_TeamTab
         {
             key: merged.get(key)
             for key in (merged.keys() | stored.keys()) - restored
-            if (key in merged) != (key in stored) or _metadata_value_changed(merged.get(key), stored.get(key))
+            if (key in merged) != (key in stored) or _metadata_value_changed(key, merged.get(key), stored.get(key))
         }
     )
 
@@ -448,7 +455,10 @@ def _only_changes(data: UpdateTeamRequest, changed: frozenset[str]) -> UpdateTea
     sent: Final = frozenset(data.model_fields_set)
     via_metadata: Final = frozenset({"metadata"}) if changed - sent else frozenset[str]()
     kept: Final = frozenset({"team_id"}) | (changed & sent) | via_metadata
-    return UpdateTeamRequest.model_validate(data.model_dump(include=MappingProxyType({field: True for field in kept})))
+    preserved_policy: Final = sent & {"native_mcp_policy"} if "metadata" in kept else frozenset[str]()
+    return UpdateTeamRequest.model_validate(
+        data.model_dump(include=MappingProxyType({field: True for field in kept | preserved_policy}))
+    )
 
 
 def team_admin_edit_verdict(

@@ -11,7 +11,10 @@ from litellm.proxy._types import (
     LiteLLMKeyType,
     UpdateKeyRequest,
     UpdateTeamRequest,
+    UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_utils import enforce_native_mcp_policy_is_admin_only
+from litellm.proxy.management_endpoints.common_utils import update_metadata_fields
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
     TeamAdminDeclaredMetadataKeyCleared,
@@ -19,7 +22,11 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     TeamAdminEditingDisabled,
     TeamAdminFieldNotPermitted,
     TeamAdminKeyEditAllowed,
+    TeamAdminMemberKeyCreationAllowed,
+    TeamAdminMemberKeyCreationDisabled,
     TeamAdminMemberKeyEditingDisabled,
+    TeamAdminMemberKeyOwnerNotPermitted,
+    TeamAdminMemberKeyTypeNotPermitted,
     TeamAdminMetadataKeyProxyControlled,
     TeamMemberDefaults,
     changed_key_fields,
@@ -34,14 +41,30 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     team_admin_may_raise_max_budget,
     team_admin_member_key_creation_or_raise,
     team_admin_member_key_creation_verdict,
-    TeamAdminMemberKeyCreationAllowed,
-    TeamAdminMemberKeyCreationDisabled,
-    TeamAdminMemberKeyOwnerNotPermitted,
-    TeamAdminMemberKeyTypeNotPermitted,
     team_admin_request_or_raise,
 )
 
 _SUPPORTED = frozenset({"tpm_limit", "rpm_limit", "team_alias"})
+
+
+@pytest.mark.parametrize("nested", (False, True))
+def test_team_admin_metadata_edit_preserves_previously_stored_empty_native_policy(nested: bool) -> None:
+    existing: Final = LiteLLM_TeamTable(team_id="team", metadata={"native_mcp_policy": {}, "note": "original"})
+    request: Final = UpdateTeamRequest.model_validate(
+        {"team_id": "team", "metadata": {"native_mcp_policy": {}, "note": "updated"}}
+        if nested
+        else {"team_id": "team", "native_mcp_policy": {}, "metadata": {"note": "updated"}}
+    )
+    verdict: Final = team_admin_edit_verdict(request, existing, permitted=frozenset({"metadata"}))
+    assert isinstance(verdict, TeamAdminEditAllowed)
+    assert verdict.request.metadata is not None
+    assert verdict.request.metadata["note"] == "updated"
+    enforce_native_mcp_policy_is_admin_only(
+        verdict.request, {"native_mcp_policy": {}}, UserAPIKeyAuth(user_role="internal_user"), "team"
+    )
+    persisted: Final = verdict.request.model_dump(mode="json", exclude_unset=True)
+    update_metadata_fields(persisted)
+    assert persisted["metadata"] == {"native_mcp_policy": {"mcp_servers": []}, "note": "updated"}
 
 
 def _team(**overrides):

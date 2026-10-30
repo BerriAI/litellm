@@ -38,7 +38,7 @@ from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_me
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
-from litellm.types.proxy.native_mcp_policy import NativeMCPPolicy
+from litellm.types.proxy.native_mcp_policy import NativeMCPPolicy, native_mcp_policy_values_equal
 from litellm.types.router import (
     CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
     Deployment,
@@ -1509,7 +1509,7 @@ def enforce_native_mcp_policy_is_admin_only(
         if "native_mcp_policy" in data.model_fields_set
         else requested.get("native_mcp_policy")
     )
-    if effective == stored.get("native_mcp_policy"):
+    if native_mcp_policy_values_equal(effective, stored.get("native_mcp_policy")):
         return
     raise HTTPException(
         status_code=403,
