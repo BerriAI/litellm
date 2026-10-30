@@ -7,6 +7,7 @@ from typing import Final, Literal
 
 from litellm.litellm_core_utils.env_utils import (
     get_env_float,
+    get_env_float_in_range,
     get_env_float_or_none,
     get_env_int,
     get_env_int_in_range,
@@ -149,6 +150,9 @@ DEFAULT_FAILURE_THRESHOLD_PERCENT: Final = get_env_float(
     "DEFAULT_FAILURE_THRESHOLD_PERCENT", 0.5
 )  # default cooldown a deployment if 50% of requests fail in a given minute
 DEFAULT_MAX_TOKENS: Final = get_env_int("DEFAULT_MAX_TOKENS", 4096)
+NO_MAX_TOKENS_TPM_RESERVATION_FRACTION: Final = get_env_float_in_range(
+    "NO_MAX_TOKENS_TPM_RESERVATION_FRACTION", 0.25, 0.01, 1.0
+)
 DEFAULT_ALLOWED_FAILS: Final = get_env_int("DEFAULT_ALLOWED_FAILS", 3)
 DEFAULT_REDIS_SYNC_INTERVAL: Final = get_env_int("DEFAULT_REDIS_SYNC_INTERVAL", 1)
 DEFAULT_COOLDOWN_TIME_SECONDS: Final = get_env_int("DEFAULT_COOLDOWN_TIME_SECONDS", 5)
@@ -819,6 +823,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "ollama",
     "ollama_chat",
     "deepinfra",
+    "clf_ai_gateway",
     "perplexity",
     "mistral",
     "groq",
@@ -1018,6 +1023,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "api.perplexity.ai",
     "api.endpoints.anyscale.com/v1",
     "api.deepinfra.com/v1/openai",
+    "api.clfaigateway.dev/v1",
     "api.mistral.ai/v1",
     "codestral.mistral.ai/v1/chat/completions",
     "codestral.mistral.ai/v1/fim/completions",
@@ -1089,6 +1095,7 @@ openai_compatible_providers: Final[list[str]] = [
     "deepseek",
     "tencent",
     "deepinfra",
+    "clf_ai_gateway",
     "perplexity",
     "xinference",
     "xai",
