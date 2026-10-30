@@ -16,6 +16,7 @@ from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
+from litellm.llms.sagemaker.common_utils import deployment_inference_component
 from litellm.types.router import (
     CredentialLiteLLMParams,
     Deployment,
@@ -39,6 +40,9 @@ _DEPLOYMENT_ROWS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] =
     tuple[Mapping[str, object], ...]
 )
 _DEPLOYMENT_IDS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+_FALLBACK_ENTRIES_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
+    tuple[Mapping[str, object], ...]
+)
 
 
 def with_admin_api_key_secret_reference(deployment: Deployment) -> Deployment:
@@ -254,6 +258,40 @@ def format_fallback_outcome_message(
 
     targets: Final = ", ".join(str(mask_sensitive_structure(target)) for target in fallback_model_group)
     return f"{lead} Fallback model group(s) configured: {targets}."
+
+
+def format_content_policy_fallback_hint(
+    model_group: str | None, content_policy_fallbacks: object, fallbacks: object
+) -> str:
+    return (
+        f"model={model_group}. content_policy_fallback={mask_sensitive_structure(content_policy_fallbacks)}. "
+        f"fallbacks={mask_sensitive_structure(fallbacks)}.\n\nSet 'content_policy_fallback' - "
+        "https://docs.litellm.ai/docs/routing#fallbacks"
+    )
+
+
+def _as_fallback_entries(fallbacks: object) -> tuple[Mapping[str, object], ...] | None:
+    try:
+        return _FALLBACK_ENTRIES_ADAPTER.validate_python(fallbacks)
+    except ValidationError:
+        return None
+
+
+def format_content_policy_no_fallback_note(
+    model_group: str,
+    lookup_groups: tuple[str, ...],
+    content_policy_fallbacks: object,
+    fallbacks: object,
+    nested_fallback_hop: bool,
+) -> str:
+    outcome: Final = "" if nested_fallback_hop else format_fallback_outcome_message(model_group, None, "")
+    if content_policy_fallbacks is not None:
+        return outcome
+    hint: Final = f"\n{format_content_policy_fallback_hint(model_group, content_policy_fallbacks, fallbacks)}"
+    fallback_entries: Final = _as_fallback_entries(fallbacks) if fallbacks is not None else None
+    if fallback_entries is None or not lookup_groups or nested_fallback_hop:
+        return hint + outcome
+    return hint + format_no_fallback_group_message(lookup_groups, fallback_entries)
 
 
 def get_litellm_params_sensitive_credential_hash(litellm_params: dict) -> str:
@@ -483,6 +521,16 @@ PROVIDER_SPECIFIC_CAPABILITY_FIELDS: Final = frozenset(ProviderSpecificModelInfo
 
 
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def deployment_model_id_pin(deployment_litellm_params: Mapping[str, object]) -> object | None:
+    clientside_params: Final = deployment_litellm_params.get("configurable_clientside_auth_params")
+    if isinstance(clientside_params, list | tuple) and "model_id" in clientside_params:
+        return None
+    own_model_id: Final = deployment_litellm_params.get("model_id")
+    if own_model_id is not None:
+        return own_model_id
+    return deployment_inference_component(deployment_litellm_params)
 
 
 def is_model_capability_field(name: str) -> bool:

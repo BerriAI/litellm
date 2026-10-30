@@ -38,6 +38,8 @@ from litellm.types.videos.utils import (
 )
 from litellm.utils import get_model_info
 
+from ..common_utils import resolve_dashscope_endpoints
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -206,6 +208,9 @@ def _parse_task_response(raw_response: httpx.Response) -> _TaskResponse:
 
 
 def _normalized_api_base(api_base: str) -> str:
+    endpoints: Final = resolve_dashscope_endpoints(api_base)
+    if endpoints is not None:
+        return endpoints.origin
     trimmed: Final = api_base.rstrip("/")
     if trimmed.endswith(DASHSCOPE_COMPATIBLE_MODE_PATH):
         return trimmed[: -len(DASHSCOPE_COMPATIBLE_MODE_PATH)]
