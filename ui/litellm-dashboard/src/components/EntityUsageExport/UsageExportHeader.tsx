@@ -1,4 +1,4 @@
-import type { DateRangePickerValue } from "@tremor/react";
+import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { Download } from "lucide-react";
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -10,27 +10,27 @@ import {
   ComboboxClear,
   ComboboxContent,
   ComboboxEmpty,
-  ComboboxInput,
   ComboboxItem,
   ComboboxList,
   ComboboxValue,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 import EntityUsageExportModal from "./EntityUsageExportModal";
-import type { EntitySpendData, EntityType } from "./types";
+import type { EntityType, ExportFormat, ExportType } from "./types";
 import type { Team } from "@/components/key_team_helpers/key_list";
 
 interface UsageExportHeaderProps {
   dateValue: DateRangePickerValue;
   entityType: EntityType;
-  spendData: EntitySpendData;
+  onExport: (exportType: ExportType, format: ExportFormat) => Promise<Blob>;
   // Optional filter props
   showFilters?: boolean;
   filterLabel?: string;
   filterPlaceholder?: string;
-  selectedFilters?: string[];
+  selectedFilters?: readonly string[];
   onFiltersChange?: (filters: string[]) => void;
   filterOptions?: Array<{ label: string; value: string }>;
-  filterMode?: "multiple" | "single";
+  filterSlot?: React.ReactNode;
   customTitle?: string;
   compactLayout?: boolean;
   teams?: Team[];
@@ -39,26 +39,32 @@ interface UsageExportHeaderProps {
 const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   dateValue,
   entityType,
-  spendData,
+  onExport,
   showFilters = false,
   filterLabel,
   filterPlaceholder,
   selectedFilters = [],
   onFiltersChange,
   filterOptions = [],
-  filterMode = "multiple",
+  filterSlot,
   customTitle,
   compactLayout = false,
   teams = [],
 }) => {
+  const anchor = useComboboxAnchor();
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
-  const hasFilters = showFilters && filterOptions.length > 0;
+  const hasFilters = filterSlot != null || showFilters;
   const optionValues = filterOptions.map((option) => option.value);
   const labelOf = (value: string) => filterOptions.find((option) => option.value === value)?.label ?? value;
+  const hasNoOptions = filterOptions.length === 0;
+  const emptyPlaceholder = `No ${entityType}s with usage in this range`;
+  // A selection carried over from a range that did have options still scopes
+  // the data below, so the control has to stay usable long enough to clear it.
+  const isFilterDisabled = hasNoOptions && selectedFilters.length === 0;
 
   const filterList = (
-    <ComboboxContent>
+    <ComboboxContent anchor={anchor}>
       <ComboboxEmpty>No options found</ComboboxEmpty>
       <ComboboxList>
         {(value: string) => (
@@ -70,65 +76,52 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
     </ComboboxContent>
   );
 
+  const builtInFilter = (
+    <Combobox
+      multiple
+      disabled={isFilterDisabled}
+      items={optionValues}
+      value={[...selectedFilters]}
+      onValueChange={(next: string[]) => onFiltersChange?.(next)}
+    >
+      <ComboboxChips render={<div ref={anchor} />} className="w-full">
+        <ComboboxValue>
+          {(selected: string[]) =>
+            selected.map((value) => (
+              <ComboboxChip key={value} aria-label={labelOf(value)}>
+                {labelOf(value)}
+              </ComboboxChip>
+            ))
+          }
+        </ComboboxValue>
+        <ComboboxChipsInput
+          placeholder={hasNoOptions ? emptyPlaceholder : filterPlaceholder}
+          aria-label={hasNoOptions ? emptyPlaceholder : filterPlaceholder}
+        />
+        {selectedFilters.length > 0 && <ComboboxClear aria-label={`Clear ${filterLabel ?? "filters"}`} />}
+      </ComboboxChips>
+      {filterList}
+    </Combobox>
+  );
+
   return (
     <>
-      <div className="mb-4">
+      <div className="mb-3">
         {/**
          * Use CSS grid with items-end so all cells (filter, button)
          * align to the same baseline regardless of label heights. This removes
          * vertical drift when the right column has a label above the input.
          */}
-        <div className={`grid ${hasFilters ? "grid-cols-[1fr_auto]" : "grid-cols-[auto]"} items-end gap-4`}>
+        <div className={`grid ${hasFilters ? "grid-cols-[1fr_auto]" : "grid-cols-[auto]"} items-end gap-3`}>
           {hasFilters && (
             <div>
-              {filterLabel && <label className="text-sm font-medium text-gray-700 block mb-2">{filterLabel}</label>}
-              {filterMode === "single" ? (
-                <Combobox
-                  items={optionValues}
-                  value={selectedFilters[0] ?? null}
-                  onValueChange={(next: string | null) => onFiltersChange?.(next ? [next] : [])}
-                  itemToStringLabel={labelOf}
-                >
-                  <ComboboxInput
-                    className="w-full"
-                    placeholder={filterPlaceholder}
-                    aria-label={filterPlaceholder}
-                    showClear={selectedFilters.length > 0}
-                  />
-                  {filterList}
-                </Combobox>
-              ) : (
-                <Combobox
-                  multiple
-                  items={optionValues}
-                  value={selectedFilters}
-                  onValueChange={(next: string[]) => onFiltersChange?.(next)}
-                >
-                  <ComboboxChips className="w-full">
-                    <ComboboxValue>
-                      {(selected: string[]) =>
-                        selected.map((value) => (
-                          <ComboboxChip key={value} aria-label={labelOf(value)}>
-                            {labelOf(value)}
-                          </ComboboxChip>
-                        ))
-                      }
-                    </ComboboxValue>
-                    <ComboboxChipsInput
-                      className="border-0 bg-transparent"
-                      placeholder={filterPlaceholder}
-                      aria-label={filterPlaceholder}
-                    />
-                    {selectedFilters.length > 0 && <ComboboxClear aria-label={`Clear ${filterLabel ?? "filters"}`} />}
-                  </ComboboxChips>
-                  {filterList}
-                </Combobox>
-              )}
+              {filterLabel && <label className="text-sm font-medium text-foreground block mb-2">{filterLabel}</label>}
+              {filterSlot ?? builtInFilter}
             </div>
           )}
 
           <div className="justify-self-end">
-            <Button onClick={() => setIsExportModalOpen(true)}>
+            <Button variant="outline" size="sm" onClick={() => setIsExportModalOpen(true)}>
               <Download />
               Export Data
             </Button>
@@ -140,7 +133,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
         isOpen={isExportModalOpen}
         onClose={() => setIsExportModalOpen(false)}
         entityType={entityType}
-        spendData={spendData}
+        onExport={onExport}
         dateRange={dateValue}
         selectedFilters={selectedFilters}
         customTitle={customTitle}

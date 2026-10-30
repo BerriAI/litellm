@@ -105,6 +105,18 @@ variable "ui_password" {
 }
 
 # TLS — provide an ACM cert for production, or opt into HTTP-only for dev.
+variable "image_registry" {
+  description = "Registry path prefix; images composed as <image_registry>/litellm-<component>:<image_tag>."
+  type        = string
+  default     = "ghcr.io/berriai"
+}
+
+variable "image_tag" {
+  description = "Tag applied to all four litellm-* images. Bump in lockstep."
+  type        = string
+  default     = ""
+}
+
 variable "acm_certificate_arn" {
   description = "ACM cert ARN for the ALB HTTPS listener. Empty → no TLS."
   type        = string
@@ -157,4 +169,16 @@ variable "backend_extra_secrets" {
   description = "Backend env vars sourced from Secrets Manager (name → ARN)."
   type        = map(string)
   default     = {}
+}
+
+variable "gateway_metrics_port" {
+  description = "Port for the Prometheus metrics sidecar in the gateway task. Null keeps /metrics on the gateway port only."
+  type        = number
+  default     = null
+}
+
+variable "gateway_metrics_scrape_cidrs" {
+  description = "CIDRs allowed to scrape gateway_metrics_port."
+  type        = list(string)
+  default     = []
 }

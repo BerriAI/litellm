@@ -21,9 +21,9 @@ describe("BarChart", () => {
   });
 
   it("renders the No data placeholder instead of a chart when data is empty", () => {
-    const { container, getByText } = render(<BarChart data={[]} index="date" categories={["passed"]} />);
+    const { container } = render(<BarChart data={[]} index="date" categories={["passed"]} />);
 
-    expect(getByText("No data")).toBeTruthy();
+    expect(screen.getByText("No data")).toBeInTheDocument();
     expect(container.querySelector('[data-slot="chart"]')).toBeNull();
   });
 
@@ -80,6 +80,28 @@ describe("BarChart", () => {
     expect(screen.getAllByText("alpha").length).toBeGreaterThan(0);
     expect(screen.getAllByText("beta").length).toBeGreaterThan(0);
   });
+
+  it.each(["horizontal", "vertical"] as const)(
+    "should shorten category labels independently of numeric ticks in %s layout",
+    (layout) => {
+      const fullLabel = "primary-model-with-a-long-deployment-name";
+      render(
+        <BarChart
+          data={[{ model: fullLabel, spend: 12 }]}
+          index="model"
+          categories={["spend"]}
+          layout={layout}
+          indexFormatter={(label) => `${label.slice(0, 13)}…`}
+          valueFormatter={(value) => `${value} USD`}
+          showLegend={false}
+        />,
+      );
+
+      expect(screen.getByText("primary-model…")).toBeInTheDocument();
+      expect(screen.queryByText(fullLabel)).not.toBeInTheDocument();
+      expect(screen.getAllByText(/ USD$/).length).toBeGreaterThan(0);
+    },
+  );
 
   it("applies valueFormatter to the value axis ticks", () => {
     render(

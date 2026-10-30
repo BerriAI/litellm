@@ -4,11 +4,16 @@ https://docs.cohere.com/reference/rerank
 
 """
 
-from pydantic import BaseModel, PrivateAttr
-from typing_extensions import Required, TypedDict
+from collections.abc import Sequence
+from typing import Literal, overload
+
+from pydantic import ConfigDict, PrivateAttr
+from typing_extensions import ReadOnly, Required, TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class RerankRequest(BaseModel):
+class RerankRequest(LiteLLMBaseModel):
     model: str
     query: str
     top_n: int | None = None
@@ -21,6 +26,18 @@ class RerankRequest(BaseModel):
     # (e.g. hosted vLLM / Qwen3-Reranker, DeepInfra). Omitted from the outgoing
     # request when None, so this is fully backward-compatible.
     instruction: str | None = None
+    truncate_prompt_tokens: int | None = None
+    truncation_side: Literal["left", "right"] | None = None
+    max_tokens_per_query: int | None = None
+
+
+class HostedVLLMRerankTruncationParams(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    truncate_prompt_tokens: int | None = None
+    truncation_side: Literal["left", "right"] | None = None
+    max_tokens_per_query: int | None = None
+    max_tokens_per_doc: int | None = None
 
 
 class OptionalRerankParams(TypedDict, total=False):
@@ -32,6 +49,9 @@ class OptionalRerankParams(TypedDict, total=False):
     max_chunks_per_doc: int | None
     max_tokens_per_doc: int | None
     instruction: str | None
+    truncate_prompt_tokens: ReadOnly[int | None]
+    truncation_side: ReadOnly[Literal["left", "right"] | None]
+    max_tokens_per_query: ReadOnly[int | None]
 
 
 class RerankBilledUnits(TypedDict, total=False):
@@ -60,7 +80,7 @@ class RerankResponseResult(TypedDict, total=False):
     document: RerankResponseDocument
 
 
-class RerankResponse(BaseModel):
+class RerankResponse(LiteLLMBaseModel):
     id: str | None = None
     results: list[RerankResponseResult] | None = None  # Contains index and relevance_score
     meta: RerankResponseMeta | None = None  # Contains api_version and billed_units
@@ -68,11 +88,43 @@ class RerankResponse(BaseModel):
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
-    def __getitem__(self, key):
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
+    @overload
+    def __getitem__(self, key: Literal["id"]) -> str | None: ...
+
+    @overload
+    def __getitem__(self, key: Literal["results"]) -> list[RerankResponseResult] | None: ...
+
+    @overload
+    def __getitem__(self, key: Literal["meta"]) -> RerankResponseMeta | None: ...
+
+    @overload
+    def __getitem__(self, key: str) -> str | Sequence[RerankResponseResult] | RerankResponseMeta | None: ...
+
+    def __getitem__(self, key: str) -> str | Sequence[RerankResponseResult] | RerankResponseMeta | None:
         return self.__dict__[key]
 
-    def get(self, key, default=None):
+    @overload
+    def get(self, key: Literal["id"], default: None = None) -> str | None: ...
+
+    @overload
+    def get(self, key: Literal["results"], default: None = None) -> list[RerankResponseResult] | None: ...
+
+    @overload
+    def get(self, key: Literal["meta"], default: None = None) -> RerankResponseMeta | None: ...
+
+    @overload
+    def get(self, key: str, default: object = None) -> object: ...
+
+    def get(self, key: str, default: object = None) -> object:
         return self.__dict__.get(key, default)
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return key in self.__dict__

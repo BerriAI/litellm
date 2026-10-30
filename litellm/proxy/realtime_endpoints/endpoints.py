@@ -2,11 +2,14 @@
 
 import json
 import time
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi import status as http_status
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -16,13 +19,24 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    read_request_body,
+)
+from litellm.proxy.common_utils.openai_error_payload import (
+    error_status_code,
+    openai_error_param,
+    openai_error_type,
+)
 from litellm.types.realtime import (
     RealtimeClientSecretRequest,
     RealtimeClientSecretResponse,
     RealtimeTranscriptionSessionRequest,
     RealtimeTranscriptionSessionResponse,
 )
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 router: Final = APIRouter()
 
@@ -32,13 +46,27 @@ _DEFAULT_TRANSCRIPTION_MODEL: Final = "gpt-realtime-whisper"
 _ALLOWED_SESSION_TYPES: Final = ("realtime", "transcription")
 
 
+@with_config(ConfigDict(strict=True, extra="allow"))
+class _RealtimeTokenPayload(TypedDict, total=False):
+    v: NotRequired[ReadOnly[object]]
+    ephemeral_key: NotRequired[ReadOnly[str]]
+    model_id: NotRequired[ReadOnly[str]]
+    user_id: NotRequired[ReadOnly[str | None]]
+    team_id: NotRequired[ReadOnly[str | None]]
+    expires_at: NotRequired[ReadOnly[object]]
+    session_type: NotRequired[ReadOnly[str | None]]
+
+
+_REALTIME_TOKEN_PAYLOAD_ADAPTER: Final = TypeAdapter(_RealtimeTokenPayload)
+
+
 def _coerce_realtime_session_type(session_type: str | None) -> str:
     if session_type in _ALLOWED_SESSION_TYPES:
         return session_type
     return "realtime"
 
 
-def _append_model_candidate(candidates: list[str], model: Any) -> None:
+def _append_model_candidate(candidates: list[str], model: object) -> None:
     if isinstance(model, str) and model and model not in candidates:
         candidates.append(model)
 
@@ -116,7 +144,7 @@ async def _prepare_client_secret_session(
     req: RealtimeClientSecretRequest,
     user_api_key_dict: UserAPIKeyAuth,
     llm_model_list: list | None,
-    llm_router: Any,
+    llm_router: "Router | None",
 ) -> tuple[str, dict | None, str]:
     session_type: Final = _coerce_realtime_session_type(req.session.type if req.session else None)
     session_data: Final[dict | None] = req.session.model_dump(exclude_none=True) if req.session else None
@@ -171,7 +199,7 @@ def _encode_realtime_token_payload(
     Encode metadata with the upstream ephemeral key so /realtime/calls can
     route without requiring model as a query param.
     """
-    payload: Final[dict[str, Any]] = {
+    payload: Final[dict[str, str | int | None]] = {
         "v": _REALTIME_TOKEN_VERSION,
         "ephemeral_key": ephemeral_key,
         "model_id": model_id,
@@ -183,18 +211,19 @@ def _encode_realtime_token_payload(
     return json.dumps(payload, separators=(",", ":"))
 
 
+def _header_value(headers: Mapping[str, str], name: str, default: str) -> str:
+    return headers.get(name, default)
+
+
 def _decode_realtime_token_payload(
     decrypted_value: str,
-) -> dict[str, Any] | None:
+) -> _RealtimeTokenPayload | None:
     """
     Decode realtime token payload; returns None for legacy/raw ephemeral tokens.
     """
     try:
-        decoded: Final = json.loads(decrypted_value)
+        decoded: Final = _REALTIME_TOKEN_PAYLOAD_ADAPTER.validate_python(json.loads(decrypted_value))
     except Exception:
-        return None
-
-    if not isinstance(decoded, dict):
         return None
     if decoded.get("v") != _REALTIME_TOKEN_VERSION:
         return None
@@ -239,7 +268,7 @@ async def create_realtime_client_secret(
 
     data: dict = {}
     try:
-        body: Final = await _read_request_body(request=request)
+        body: Final = await read_request_body(request=request)
         req: Final = RealtimeClientSecretRequest(**body)
 
         model, session_data, session_type = await _prepare_client_secret_session(
@@ -301,15 +330,15 @@ async def create_realtime_client_secret(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", http_status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, http_status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, http_status.HTTP_400_BAD_REQUEST),
             )
         raise ProxyException(
             message=getattr(e, "message", str(e)),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
+            type=openai_error_type(e, error_status_code(e, 500)),
+            param=openai_error_param(e),
+            code=error_status_code(e, 500),
         )
 
     if upstream_resp.status_code != 200:
@@ -492,21 +521,21 @@ async def proxy_realtime_calls(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", http_status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, http_status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, http_status.HTTP_400_BAD_REQUEST),
             )
         raise ProxyException(
             message=getattr(e, "message", str(e)),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
+            type=openai_error_type(e, error_status_code(e, 500)),
+            param=openai_error_param(e),
+            code=error_status_code(e, 500),
         )
 
     return Response(
         content=upstream_resp.content,
         status_code=upstream_resp.status_code,
-        media_type=upstream_resp.headers.get("content-type", "application/sdp"),
+        media_type=_header_value(upstream_resp.headers, "content-type", "application/sdp"),
     )
 
 
@@ -551,7 +580,7 @@ async def create_realtime_transcription_session(
 
     data: dict = {}
     try:
-        body: Final = await _read_request_body(request=request)
+        body: Final = await read_request_body(request=request)
         req: Final = RealtimeTranscriptionSessionRequest(**body)
 
         model: Final[str] = req.resolved_model() or "gpt-realtime-whisper"
@@ -605,15 +634,15 @@ async def create_realtime_transcription_session(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", getattr(e, "message", str(e))),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", http_status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, http_status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, http_status.HTTP_400_BAD_REQUEST),
             )
         raise ProxyException(
             message=getattr(e, "message", str(e)),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
+            type=openai_error_type(e, error_status_code(e, 500)),
+            param=openai_error_param(e),
+            code=error_status_code(e, 500),
         )
 
     if upstream_resp.status_code != 200:

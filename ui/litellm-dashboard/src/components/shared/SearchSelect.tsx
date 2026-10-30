@@ -1,5 +1,6 @@
 "use client";
 
+import React, { useState } from "react";
 import {
   Combobox,
   ComboboxContent,
@@ -14,17 +15,29 @@ export interface SearchSelectOption {
   value: string;
   /** Optional muted second line (e.g. an id); also matched when searching. */
   sublabel?: string;
+  /** Optional leading glyph (e.g. a provider logo); not matched when searching. */
+  icon?: React.ReactNode;
+}
+
+interface CustomValue {
+  hint: string;
+  accepts: (typed: string) => boolean;
 }
 
 interface SearchSelectProps {
   options: SearchSelectOption[];
-  value?: string;
-  onValueChange: (value: string) => void;
+  value?: string | null;
+  onValueChange: (value: string | null) => void;
   placeholder?: string;
   emptyText?: string;
   disabled?: boolean;
   className?: string;
   inputId?: string;
+  allowClear?: boolean;
+  customValue?: CustomValue;
+  reservedValues?: readonly string[];
+  "aria-label"?: string;
+  id?: string;
 }
 
 const matchesQuery = (option: SearchSelectOption, query: string): boolean => {
@@ -42,28 +55,40 @@ export function SearchSelect({
   disabled = false,
   className,
   inputId,
+  allowClear = true,
+  customValue,
+  reservedValues = [],
+  "aria-label": ariaLabel,
+  id,
 }: SearchSelectProps) {
+  const [query, setQuery] = useState("");
   const selected =
-    value === undefined || value === ""
-      ? null
-      : options.find((option) => option.value === value) ?? { label: value, value };
-  const items =
+    value == null || value === "" ? null : options.find((option) => option.value === value) ?? { label: value, value };
+  const known =
     selected !== null && !options.some((option) => option.value === selected.value) ? [selected, ...options] : options;
+  const typed = query.trim();
+  const isNewValue = typed !== "" && !reservedValues.includes(typed) && !known.some((option) => option.value === typed);
+  const items =
+    customValue !== undefined && isNewValue && customValue.accepts(typed)
+      ? [...known, { label: typed, value: typed, sublabel: customValue.hint }]
+      : known;
 
   return (
     <Combobox
       items={items}
       value={selected}
-      onValueChange={(item: SearchSelectOption | null) => onValueChange(item?.value ?? "")}
+      onValueChange={(item: SearchSelectOption | null) => onValueChange(item?.value ?? null)}
       isItemEqualToValue={(a: SearchSelectOption, b: SearchSelectOption) => a.value === b.value}
       itemToStringLabel={(item: SearchSelectOption) => item.label}
       filter={matchesQuery}
+      onInputValueChange={setQuery}
       disabled={disabled}
     >
       <ComboboxInput
-        id={inputId}
+        id={id ?? inputId}
+        aria-label={ariaLabel}
         placeholder={placeholder}
-        showClear={value != null && value !== ""}
+        showClear={allowClear && value != null && value !== ""}
         className={`h-8 w-full text-sm ${className ?? ""}`}
       />
       <ComboboxContent side="bottom" collisionAvoidance={{ side: "shift", align: "shift", fallbackAxisSide: "none" }}>
@@ -71,6 +96,7 @@ export function SearchSelect({
         <ComboboxList>
           {(item: SearchSelectOption) => (
             <ComboboxItem key={item.value} value={item}>
+              {item.icon}
               <span className="flex min-w-0 flex-col">
                 <span className="truncate">{item.label}</span>
                 {item.sublabel != null && item.sublabel !== "" && (

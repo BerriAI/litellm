@@ -107,12 +107,40 @@ const mockDeploymentsPage = () => {
   modelInfoCall.mockResolvedValue(pageOf(DEPLOYMENTS));
 };
 
+// Oldest-first, as the proxy returns them, and two more than the ten-row first page holds.
+const BULK_ROUTER_NAMES = [
+  "router-01-oldest",
+  ...Array.from({ length: 10 }, (_, i) => `router-${i + 2}`),
+  "router-12-newest",
+];
+
+const A_FULL_PAGE_AND_TWO_MORE = Array.from({ length: 12 }, (_, index) => ({
+  model_name: BULK_ROUTER_NAMES[index],
+  litellm_params: {
+    model: "auto_router/complexity_router",
+    complexity_router_config: { tiers: {}, classifier_type: "heuristic" },
+  },
+  model_info: {
+    id: `bulk-${index + 1}`,
+    db_model: true,
+    created_at: `2026-08-${String(index + 1).padStart(2, "0")}T00:00:00.000000+00:00`,
+  },
+}));
+
+/** Row order as rendered, header row dropped. */
+const routerNamesInOrder = () =>
+  screen
+    .getAllByRole("row")
+    .slice(1)
+    .map((row) => row.querySelector("span.text-sm.font-medium")?.textContent ?? "");
+
 const renderPanel = (canModify = true) =>
   renderWithProviders(
     <AutoRoutersPanel
       accessToken="token"
       userRole="Admin"
       userID="u-admin"
+      isViewOnly={false}
       teams={null}
       createScope={canModify ? "unscoped-ok" : "forbidden"}
     />,
@@ -256,5 +284,33 @@ describe("AutoRoutersPanel", () => {
 
     await screen.findByText("config-router");
     expect(screen.queryByTestId("auto-router-actions-auto-4")).not.toBeInTheDocument();
+  });
+
+  // /v2/model/info returns an unordered model_list, and created_at is absent on config routers
+  // and on non-enterprise proxies, so both halves of the order have to be pinned here.
+  it("orders newest first, then the undated routers by name", async () => {
+    renderPanel();
+
+    await screen.findByText("tri-tier-router");
+
+    expect(routerNamesInOrder()).toEqual([
+      "tri-tier-router", // 2026-07-28
+      "support-router", // 2026-07-27
+      "adaptive-router", // undated, sorts after every dated row, then by name
+      "config-router",
+    ]);
+  });
+
+  // The reported bug: the newest router was rendered last, so it landed on page 2 and read
+  // as never created.
+  it("puts a just-created router on the first page of a list longer than one page", async () => {
+    modelInfoCall.mockResolvedValue(pageOf(A_FULL_PAGE_AND_TWO_MORE));
+
+    renderPanel();
+
+    expect(await screen.findByRole("button", { name: "router-12-newest" })).toBeInTheDocument();
+    // Page one holds the ten newest, so the two oldest are the ones pushed off it.
+    expect(screen.queryByRole("button", { name: "router-01-oldest" })).not.toBeInTheDocument();
+    expect(routerNamesInOrder()[0]).toBe("router-12-newest");
   });
 });

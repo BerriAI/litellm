@@ -6,8 +6,15 @@ import openai from "openai";
 import React, { useEffect, useState } from "react";
 import DeleteResourceModal from "../../../common_components/DeleteResourceModal";
 import { ProviderLogo } from "../../../molecules/models/ProviderLogo";
-import NotificationsManager from "../../../molecules/notifications_manager";
-import { getCallbacksCall, setCallbacksCall } from "../../../networking";
+import { toast } from "@/lib/toast";
+import { getCallbacksCall, getRouterSettingsCall, setCallbacksCall } from "../../../networking";
+import {
+  CONFIG_OWNED_HINT,
+  SOURCE_UNKNOWN_HINT,
+  ConfigOwnedBadge,
+  RouterSettingsSource,
+  isOwnedByConfig,
+} from "../../../router_settings/ConfigOwned";
 import { isProxyAdminRole } from "@/utils/roles";
 import AddFallbacks from "./AddFallbacks";
 import EditFallbacks from "./EditFallbacks";
@@ -16,7 +23,7 @@ type FallbackEntry = { [modelName: string]: string[] };
 type Fallbacks = FallbackEntry[];
 
 const modelCardClass =
-  "inline-flex items-center gap-2 px-2.5 py-1 rounded-md border border-gray-200 bg-gray-50 text-sm font-medium text-gray-800 shrink-0";
+  "inline-flex items-center gap-2 px-2.5 py-1 rounded-md border border-border bg-muted text-sm font-medium text-foreground shrink-0";
 
 const iconWrapperClass = "inline-flex shrink-0 items-center justify-center px-1.5 py-1.5";
 
@@ -49,14 +56,14 @@ function renderFallbacksChain(
   };
   return (
     <span className="grid grid-cols-[auto_1fr] items-start gap-x-2 w-full min-w-0">
-      <span className="inline-flex items-center justify-center w-8 h-8 shrink-0 self-start text-blue-600" aria-hidden>
+      <span className="inline-flex items-center justify-center w-8 h-8 shrink-0 self-start text-info" aria-hidden>
         <ArrowRight className="w-5 h-5 stroke-[2.5]" />
       </span>
       <span className="flex flex-wrap items-start gap-1 min-w-0">
         {list.map((model, i) => (
           <React.Fragment key={model}>
             {i > 0 && (
-              <span className={`${iconWrapperClass} text-gray-400`}>
+              <span className={`${iconWrapperClass} text-muted-foreground`}>
                 <ArrowRight className="h-3 w-3 shrink-0" />
               </span>
             )}
@@ -87,7 +94,7 @@ async function testFallbackModelResponse(selectedModel: string, accessToken: str
   });
 
   try {
-    NotificationsManager.info("Testing fallback model response...");
+    toast.info("Testing fallback model response...");
 
     const response = await client.chat.completions.create({
       model: selectedModel,
@@ -101,7 +108,7 @@ async function testFallbackModelResponse(selectedModel: string, accessToken: str
       mock_testing_fallbacks: true,
     });
 
-    NotificationsManager.success(
+    toast.success(
       <span>
         Test model=<strong>{selectedModel}</strong>, received model=
         <strong>{response.model}</strong>. See{" "}
@@ -115,10 +122,14 @@ async function testFallbackModelResponse(selectedModel: string, accessToken: str
       </span>,
     );
   } catch (error) {
-    NotificationsManager.fromBackend(
-      `Error occurred while generating model response. Please try again. Error: ${error}`,
-    );
+    toast.fromError(`Error occurred while generating model response. Please try again. Error: ${error}`);
   }
+}
+
+function fallbacksWriteHint(source: RouterSettingsSource | null, ownedByConfig: boolean): string | undefined {
+  if (ownedByConfig) return CONFIG_OWNED_HINT;
+  if (source === null) return SOURCE_UNKNOWN_HINT;
+  return undefined;
 }
 
 const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) => {
@@ -127,6 +138,7 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
   const [fallbackToDelete, setFallbackToDelete] = useState<FallbackEntry | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [fallbackToEdit, setFallbackToEdit] = useState<FallbackEntry | null>(null);
+  const [routerSettingsSource, setRouterSettingsSource] = useState<RouterSettingsSource | null>(null);
 
   const { data: modelCostMapData } = useModelCostMap();
   const getProviderFromModel = (model: string): string => {
@@ -147,6 +159,9 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
       }
       setRouterSettings(router_settings);
     });
+    getRouterSettingsCall(accessToken)
+      .then((data) => setRouterSettingsSource(data.source ?? {}))
+      .catch(() => setRouterSettingsSource(null));
   }, [accessToken, userRole, userID]);
 
   const handleDeleteClick = (fallbackEntry: FallbackEntry) => {
@@ -195,9 +210,9 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
     try {
       await setCallbacksCall(accessToken, payload);
       setRouterSettings(updatedSettings);
-      NotificationsManager.success("Router settings updated successfully");
+      toast.success("Router settings updated successfully");
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to update router settings: " + error);
+      toast.fromError("Failed to update router settings: " + error);
     } finally {
       setIsDeleting(false);
       setIsDeleteModalOpen(false);
@@ -234,7 +249,7 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
       setRouterSettings(updatedSettings);
     } catch (error) {
       // Revert on error by refetching from server
-      NotificationsManager.fromBackend("Failed to update router settings: " + error);
+      toast.fromError("Failed to update router settings: " + error);
       if (accessToken && userRole && userID) {
         getCallbacksCall(accessToken, userID, userRole).then((data) => {
           let router_settings = data.router_settings;
@@ -252,18 +267,27 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
   const hasFallbacks = Array.isArray(routerSettings.fallbacks) && routerSettings.fallbacks.length > 0;
   // Admin Viewer follows the read-parity rule: see fallbacks, no writes.
   const canModify = isProxyAdminRole(userRole ?? "");
+  const ownedByConfig = routerSettingsSource !== null && isOwnedByConfig(routerSettingsSource, "fallbacks");
+  const writeHint = fallbacksWriteHint(routerSettingsSource, ownedByConfig);
+  const canWrite = canModify && writeHint === undefined;
+  const writeActionClass = (hoverClass: string) =>
+    canWrite ? `${iconWrapperClass} cursor-pointer ${hoverClass}` : `${iconWrapperClass} cursor-not-allowed opacity-50`;
 
   return (
     <TooltipProvider>
       {canModify && (
-        <AddFallbacks
-          accessToken={accessToken || ""}
-          value={routerSettings.fallbacks || []}
-          onChange={handleFallbacksChange}
-        />
+        <div className="flex items-center">
+          <AddFallbacks
+            accessToken={accessToken || ""}
+            value={routerSettings.fallbacks || []}
+            onChange={handleFallbacksChange}
+            disabledReason={writeHint}
+          />
+          {ownedByConfig && <ConfigOwnedBadge />}
+        </div>
       )}
       {!hasFallbacks ? (
-        <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-6 text-center">
+        <div className="rounded-lg border border-border bg-muted px-4 py-6 text-center">
           <span className="text-muted-foreground">
             No fallbacks configured. Add fallbacks to automatically try another model when the primary fails.
           </span>
@@ -296,7 +320,7 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
                             render={
                               <span
                                 onClick={() => testFallbackModelResponse(Object.keys(item)[0], accessToken || "")}
-                                className={`${iconWrapperClass} cursor-pointer hover:text-blue-600`}
+                                className={`${iconWrapperClass} cursor-pointer hover:text-info`}
                               />
                             }
                           >
@@ -311,15 +335,16 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
                                 data-testid="edit-fallback-button"
                                 role="button"
                                 tabIndex={0}
-                                onClick={() => handleEditClick(item)}
-                                onKeyDown={(e) => e.key === "Enter" && handleEditClick(item)}
-                                className={`${iconWrapperClass} cursor-pointer hover:text-blue-600`}
+                                aria-disabled={!canWrite}
+                                onClick={() => canWrite && handleEditClick(item)}
+                                onKeyDown={(e) => canWrite && e.key === "Enter" && handleEditClick(item)}
+                                className={writeActionClass("hover:text-info")}
                               />
                             }
                           >
                             <Pencil className="h-5 w-5 shrink-0" />
                           </TooltipTrigger>
-                          <TooltipContent>Edit fallback</TooltipContent>
+                          <TooltipContent>{writeHint ?? "Edit fallback"}</TooltipContent>
                         </Tooltip>
                         <Tooltip>
                           <TooltipTrigger
@@ -328,15 +353,16 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
                                 data-testid="delete-fallback-button"
                                 role="button"
                                 tabIndex={0}
-                                onClick={() => handleDeleteClick(item)}
-                                onKeyDown={(e) => e.key === "Enter" && handleDeleteClick(item)}
-                                className={`${iconWrapperClass} cursor-pointer hover:text-red-600`}
+                                aria-disabled={!canWrite}
+                                onClick={() => canWrite && handleDeleteClick(item)}
+                                onKeyDown={(e) => canWrite && e.key === "Enter" && handleDeleteClick(item)}
+                                className={writeActionClass("hover:text-destructive")}
                               />
                             }
                           >
                             <Trash2 className="h-5 w-5 shrink-0" />
                           </TooltipTrigger>
-                          <TooltipContent>Delete fallback</TooltipContent>
+                          <TooltipContent>{writeHint ?? "Delete fallback"}</TooltipContent>
                         </Tooltip>
                       </>
                     )}

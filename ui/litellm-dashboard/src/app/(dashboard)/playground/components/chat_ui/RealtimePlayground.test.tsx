@@ -1,10 +1,11 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import RealtimePlayground from "./RealtimePlayground";
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: () => "https://proxy.example.com",
+  getGatewayBaseUrl: () => "https://gateway.example.com",
 }));
 
 class FakeSocket {
@@ -112,7 +113,7 @@ describe("RealtimePlayground", () => {
 
     await user.click(screen.getByRole("button", { name: /Connect/i }));
 
-    expect(latestSocket().url).toBe("wss://proxy.example.com/v1/realtime?model=gpt-realtime");
+    expect(latestSocket().url).toBe("wss://gateway.example.com/v1/realtime?model=gpt-realtime");
     expect(latestSocket().protocols).toEqual(["realtime", "openai-insecure-api-key.sk-realtime"]);
   });
 
@@ -172,12 +173,32 @@ describe("RealtimePlayground", () => {
     expect(update.session.type).toBe("realtime");
   });
 
+  it("starts recording on the configuration the session was created with", async () => {
+    const user = userEvent.setup();
+    render(<RealtimePlayground {...props} />);
+
+    await connect(user);
+    await act(async () => {
+      latestSocket().emit({ type: "session.created" });
+    });
+    await user.click(screen.getByTitle("Start recording"));
+
+    const updates = latestSocket()
+      .sent.map((raw) => JSON.parse(raw))
+      .filter((payload) => payload.type === "session.update");
+    expect(updates).toHaveLength(2);
+    expect(updates[1]).toEqual(updates[0]);
+    expect(updates[0].session.turn_detection).toEqual({ type: "server_vad" });
+  });
+
   it("sends what was typed and then asks for a response", async () => {
     const user = userEvent.setup();
     render(<RealtimePlayground {...props} />);
 
     await connect(user);
-    await user.type(screen.getByPlaceholderText("Type a message or use the mic..."), "hello there");
+    fireEvent.change(screen.getByPlaceholderText("Type a message or use the mic..."), {
+      target: { value: "hello there" },
+    });
     await user.click(screen.getByRole("button", { name: /send/i }));
 
     const payloads = latestSocket().sent.map((raw) => JSON.parse(raw));
@@ -261,7 +282,7 @@ describe("RealtimePlayground", () => {
     await user.click(screen.getByRole("button", { name: /Disconnect/i }));
 
     expect(socket.close).toHaveBeenCalled();
-    await waitFor(() => expect(screen.getByRole("button", { name: /Connect/i })).toBeInTheDocument());
+    expect(await screen.findByRole("button", { name: /Connect/i })).toBeInTheDocument();
     expect(screen.queryByPlaceholderText("Type a message or use the mic...")).not.toBeInTheDocument();
   });
 });

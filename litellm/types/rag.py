@@ -2,11 +2,13 @@
 Type definitions for RAG (Retrieval Augmented Generation) Ingest API.
 """
 
-from typing import Any, Literal
+from collections.abc import Mapping
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
-from typing_extensions import TypedDict
+from pydantic import ConfigDict
+from typing_extensions import ReadOnly, TypedDict
 
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import ModelResponse
 
 
@@ -217,19 +219,20 @@ class RAGIngestOptions(TypedDict, total=False):
 class RAGIngestResponse(TypedDict, total=False):
     """Response from RAG ingest API."""
 
-    id: str  # Unique ingest job ID
-    status: Literal["completed", "in_progress", "failed"]
-    vector_store_id: str  # The vector store ID (created or existing)
-    file_id: str | None  # The file ID in the vector store
-    error: str | None  # Error message if status is "failed"
+    id: ReadOnly[str]  # Unique ingest job ID
+    status: ReadOnly[Literal["completed", "in_progress", "failed"]]
+    vector_store_id: ReadOnly[str]  # The vector store ID (created or existing)
+    file_id: ReadOnly[str | None]  # The file ID in the vector store
+    error: ReadOnly[str | None]  # Error message if status is "failed"
+    error_status_code: ReadOnly[int | None]
 
 
-class RAGIngestRequest(BaseModel):
+class RAGIngestRequest(LiteLLMBaseModel):
     """Request body for RAG ingest API (for validation)."""
 
     file_url: str | None = None  # URL to fetch file from
     file_id: str | None = None  # Existing file ID
-    ingest_options: dict[str, Any]  # RAGIngestOptions as dict for flexibility
+    ingest_options: dict[str, object]  # RAGIngestOptions as dict for flexibility
 
     model_config = ConfigDict(extra="allow")  # Allow additional fields
 
@@ -237,10 +240,11 @@ class RAGIngestRequest(BaseModel):
 class RAGRetrievalConfig(TypedDict, total=False):
     """Configuration for vector store retrieval."""
 
-    vector_store_id: str
-    custom_llm_provider: str
-    top_k: int  # max results from vector store
-    filters: dict[str, Any] | None  # optional - vector store filters
+    vector_store_id: ReadOnly[str]
+    custom_llm_provider: ReadOnly[str]
+    top_k: ReadOnly[int]
+    filters: ReadOnly[Mapping[str, object] | None]
+    retrieval_filter: ReadOnly[Mapping[str, object] | None]
 
 
 class RAGRerankConfig(TypedDict, total=False):
@@ -252,11 +256,11 @@ class RAGRerankConfig(TypedDict, total=False):
     return_documents: bool | None
 
 
-class RAGQueryRequest(BaseModel):
+class RAGQueryRequest(LiteLLMBaseModel):
     """Request body for RAG query API."""
 
     model: str
-    messages: list[Any]
+    messages: list[object]
     retrieval_config: RAGRetrievalConfig
     rerank: RAGRerankConfig | None = None
     stream: bool | None = False

@@ -7,15 +7,21 @@ import ssl
 import sys
 import threading
 import time
+import weakref
 from collections.abc import AsyncIterable, Callable, Iterable, Mapping
 from http.cookiejar import CookieJar, DefaultCookiePolicy
-from typing import TYPE_CHECKING, Any, Final, Optional, TypeAlias, TypedDict
+from io import BytesIO
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, Optional, TypeAlias, TypedDict, TypeVar
 
 import certifi
 import httpx
 from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
-from httpx._types import RequestFiles
+from httpx._config import DEFAULT_LIMITS
+from httpx._types import CertTypes, RequestFiles
+from httpx._utils import get_environment_proxies
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -38,6 +44,7 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
+from litellm.llms.custom_httpx.http2_connection_spread import AsyncHTTP2ConnectionSpread
 from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
@@ -66,6 +73,60 @@ _AddrInfo: TypeAlias = tuple[int | socket.AddressFamily, int | socket.SocketKind
 
 _RequestContent: TypeAlias = str | bytes | Iterable[bytes] | AsyncIterable[bytes]
 
+_IPV4_LOCAL_ADDRESS: Final = "0.0.0.0"
+
+_HttpxTransportT: Final = TypeVar("_HttpxTransportT", httpx.BaseTransport, httpx.AsyncBaseTransport)
+
+HTTPEventHooks: TypeAlias = Mapping[str, list[Callable[..., object]]]
+
+
+def http2_enabled() -> bool:
+    from litellm.secret_managers.main import str_to_bool
+
+    return litellm.http2 is True or str_to_bool(os.getenv("LITELLM_HTTP2", "False")) is True
+
+
+_HTTP2_OFF_VALUES: Final = frozenset({"false", "0", "no", "off"})
+
+
+def _is_http2_off(value: bool | int | str | None) -> bool:
+    return str(value).strip().lower() in _HTTP2_OFF_VALUES
+
+
+def http2_disabled() -> bool:
+    return _is_http2_off(litellm.http2) or _is_http2_off(os.getenv("LITELLM_HTTP2"))
+
+
+def _resolve_http2(provider_default: bool, ssl_verify: VerifyTypes | None) -> bool:
+    if http2_enabled():
+        return True
+    return provider_default and not http2_disabled() and not isinstance(ssl_verify, ssl.SSLContext)
+
+
+def _aiohttp_env_proxies_disabled() -> bool:
+    from litellm.secret_managers.main import str_to_bool
+
+    return litellm.disable_aiohttp_trust_env or str_to_bool(os.getenv("DISABLE_AIOHTTP_TRUST_ENV", "False")) is True
+
+
+_AIOHTTP_EQUIVALENT_LIMITS: Final = httpx.Limits(
+    max_connections=AIOHTTP_CONNECTOR_LIMIT if AIOHTTP_CONNECTOR_LIMIT > 0 else None,
+    max_keepalive_connections=None,
+    keepalive_expiry=AIOHTTP_KEEPALIVE_TIMEOUT,
+)
+
+
+def _environment_proxy_mounts(
+    build_proxy_transport: Callable[[str], _HttpxTransportT],
+) -> Mapping[str, _HttpxTransportT | None]:
+    """httpx skips its own HTTP(S)_PROXY / NO_PROXY mounts whenever an explicit `transport=` is passed."""
+    return MappingProxyType(
+        {
+            pattern: None if proxy_url is None else build_proxy_transport(proxy_url)
+            for pattern, proxy_url in get_environment_proxies().items()
+        }
+    )
+
 
 class _TCPConnectorKwargs(TypedDict, total=False):
     local_addr: tuple[str, int] | None
@@ -78,7 +139,7 @@ class _TCPConnectorKwargs(TypedDict, total=False):
     socket_factory: Callable[[_AddrInfo], socket.socket]
 
 
-def _build_aiohttp_keepalive_socket_factory() -> Callable[[_AddrInfo], socket.socket] | None:
+def build_aiohttp_keepalive_socket_factory() -> Callable[[_AddrInfo], socket.socket] | None:
     """
     Build a socket_factory that enables SO_KEEPALIVE on aiohttp TCP sockets.
 
@@ -113,7 +174,10 @@ def _build_aiohttp_keepalive_socket_factory() -> Callable[[_AddrInfo], socket.so
     return factory
 
 
-def get_default_headers() -> dict:
+_build_aiohttp_keepalive_socket_factory = build_aiohttp_keepalive_socket_factory
+
+
+def get_default_headers() -> dict[str, str]:
     """
     Get default headers for HTTP requests.
 
@@ -124,7 +188,11 @@ def get_default_headers() -> dict:
     if user_agent is not None:
         return {"User-Agent": user_agent}
 
-    return {"User-Agent": f"litellm/{version}"}
+    return {"User-Agent": default_user_agent()}
+
+
+def default_user_agent() -> str:
+    return f"litellm/{version}"
 
 
 # Initialize headers (User-Agent)
@@ -158,6 +226,33 @@ def _handler_may_close_client(client_refcount: int, owns_client: bool) -> bool:
     refcount at the call site, since binding the client to a parameter would inflate it.
     """
     return owns_client and client_refcount <= _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER
+
+
+def _drop_streaming_anchor(_handler: object) -> None:
+    """Release a handler anchored to a streaming response. See ``_anchor_handler_to``.
+
+    The work is the reference held until this point, so there is nothing to do here.
+    """
+
+
+def _anchor_handler_to(response: httpx.Response, handler: object) -> None:
+    """Keep the handler alive for as long as a streaming response can still read.
+
+    A body still arriving reads through the handler's connection pool, and closing
+    the client tears that pool down. The refcount ``_handler_may_close_client``
+    reads cannot see that body: the reference graph runs response -> stream ->
+    connection and stops there, so a client carrying one looks exactly like an
+    unreferenced client, and the finalizer closes it mid-body.
+
+    ``weakref.finalize`` holds the handler in its own registry rather than on the
+    response, which matters twice. The handler stays out of the response's
+    reference cycle, so it is finalized by refcount once the anchor drops and can
+    still schedule an async close, instead of being finalized inside a cyclic
+    collection that reaps its aiohttp session in the same pass. And a handler
+    serving several streams collects only once every one of them is done, because
+    each anchor holds it separately.
+    """
+    weakref.finalize(response, _drop_streaming_anchor, handler)
 
 
 def blocked_cookie_jar() -> CookieJar:
@@ -217,9 +312,7 @@ def _prepare_request_data_and_content(
 
 
 # Cache for SSL contexts to avoid creating duplicate contexts with the same configuration
-# Key: tuple of (cafile, ssl_security_level, ssl_ecdh_curve)
-# Value: ssl.SSLContext
-_ssl_context_cache: Final[dict[tuple[str | None, str | None, str | None], ssl.SSLContext]] = {}
+_ssl_context_cache: Final[dict[tuple[str | None, str | None, str | None, bool], ssl.SSLContext]] = {}
 
 
 def _create_ssl_context(
@@ -312,6 +405,7 @@ def get_ssl_verify(
 
 def get_ssl_configuration(
     ssl_verify: VerifyTypes | None = None,
+    http2: bool = False,
 ) -> bool | str | ssl.SSLContext:
     """
     Unified SSL configuration function that handles ssl_context and ssl_verify logic.
@@ -334,6 +428,8 @@ def get_ssl_configuration(
             - False: Disable SSL verification
             - True: Enable SSL verification
             - str: Path to CA bundle file
+        http2: Whether the context is for an HTTP/2 client. httpx sets ALPN on the context it is given,
+            so HTTP/2 clients get their own cached context instead of sharing the HTTP/1.1 one
 
     Returns:
         Union[bool, str, ssl.SSLContext]: Appropriate SSL configuration
@@ -360,7 +456,7 @@ def get_ssl_configuration(
 
     if ssl_verify is not False:
         # Create cache key from configuration parameters
-        cache_key: Final = (cafile, ssl_security_level, ssl_ecdh_curve)
+        cache_key: Final = (cafile, ssl_security_level, ssl_ecdh_curve, http2)
 
         # Check if we have a cached SSL context for this configuration
         if cache_key not in _ssl_context_cache:
@@ -376,6 +472,11 @@ def get_ssl_configuration(
     return ssl_verify
 
 
+def _httpx_default_verify_unless_configured(verify: VerifyTypes) -> VerifyTypes:
+    litellm_defaults: Final = (get_ssl_configuration(True), get_ssl_configuration(True, http2=True))
+    return True if any(verify is default for default in litellm_defaults) else verify
+
+
 _shared_realtime_ssl_context: bool | str | ssl.SSLContext | None = None
 
 
@@ -388,6 +489,18 @@ def get_shared_realtime_ssl_context() -> bool | str | ssl.SSLContext:
     if _shared_realtime_ssl_context is None:
         _shared_realtime_ssl_context = get_ssl_configuration()
     return _shared_realtime_ssl_context
+
+
+def realtime_ssl_for_url(url: str) -> bool | str | ssl.SSLContext | None:
+    if url.startswith("ws://"):
+        return None
+    shared: Final = get_shared_realtime_ssl_context()
+    if shared is not False:
+        return shared
+    unverified: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    unverified.check_hostname = False
+    unverified.verify_mode = ssl.CERT_NONE
+    return unverified
 
 
 def mask_sensitive_info(error_message):
@@ -422,6 +535,11 @@ def _safe_get_response_text(response: httpx.Response) -> str:
         return ""
 
 
+def header_value(headers: Mapping[str, str], name: str) -> str | None:
+    """Read one header as ``str | None``; ``httpx.Headers.get`` itself is typed ``Any``."""
+    return headers.get(name)
+
+
 async def _safe_aread_response(response: httpx.Response, timeout: float | None = None) -> bytes:
     """Safely read async response body, falling back to empty bytes on errors."""
     try:
@@ -447,7 +565,7 @@ def _safe_read_response(response: httpx.Response, timeout: float | None = None) 
         return b""
 
 
-def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> None:
+def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> NoReturn:
     """Raise a MaskedHTTPStatusError for sync HTTP handlers."""
     if stream:
         try:
@@ -467,7 +585,7 @@ def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> None:
     raise MaskedHTTPStatusError(e, message=_text, text=_text) from None
 
 
-async def _raise_masked_async_error(e: httpx.HTTPStatusError, stream: bool) -> None:
+async def _raise_masked_async_error(e: httpx.HTTPStatusError, stream: bool) -> NoReturn:
     """Raise a MaskedHTTPStatusError for async HTTP handlers."""
     if stream:
         try:
@@ -485,6 +603,38 @@ async def _raise_masked_async_error(e: httpx.HTTPStatusError, stream: bool) -> N
                 pass
     _text: Final = mask_sensitive_info(_safe_get_response_text(e.response))
     raise MaskedHTTPStatusError(e, message=_text, text=_text) from None
+
+
+_TIMEOUT_PHASES: Final[Mapping[type[httpx.TimeoutException], tuple[str, str]]] = MappingProxyType(
+    {
+        httpx.ConnectTimeout: ("Connection", "connect"),
+        httpx.ReadTimeout: ("Read", "read"),
+        httpx.WriteTimeout: ("Write", "write"),
+        httpx.PoolTimeout: ("Connection pool", "pool"),
+    }
+)
+_UNKNOWN_TIMEOUT_PHASE: Final = ("Request", "read")
+_TIMEOUT_EXTENSION: Final = TypeAdapter(dict[str, float | None])
+
+
+def _timeout_phase_seconds(error: httpx.TimeoutException, phase: str) -> float | None:
+    """The limit httpx enforced for ``phase`` on the request that raised ``error``, from the request itself."""
+    return _TIMEOUT_EXTENSION.validate_python(error.request.extensions["timeout"]).get(phase)
+
+
+def _raise_timeout(error: httpx.TimeoutException, started_at: float) -> NoReturn:
+    label, phase = _TIMEOUT_PHASES.get(type(error), _UNKNOWN_TIMEOUT_PHASE)
+    seconds: Final = _timeout_phase_seconds(error, phase)
+    time_taken: Final = round(time.time() - started_at, 3)
+    raise litellm.Timeout(
+        message=f"{label} timed out. Timeout passed={seconds}, time taken={time_taken} seconds",
+        model="default-model-name",
+        llm_provider="litellm-httpx-handler",
+    )
+
+
+class HTTPResponseLimitError(ValueError):
+    pass
 
 
 class MaskedHTTPStatusError(httpx.HTTPStatusError):
@@ -548,11 +698,17 @@ class AsyncHTTPHandler:
         client_alias: str | None = None,  # name for client in logs
         ssl_verify: VerifyTypes | None = None,
         shared_session: Optional["ClientSession"] = None,
+        transport: httpx.AsyncBaseTransport | None = None,
+        follow_redirects: bool = True,
+        http2: bool = False,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
         self.ssl_verify = ssl_verify
         self.shared_session = shared_session
+        self.transport = transport
+        self.follow_redirects = follow_redirects
+        self.http2 = http2
         self._owns_client = True
         self._client = self.create_client(
             timeout=timeout,
@@ -581,12 +737,25 @@ class AsyncHTTPHandler:
     def create_client(
         self,
         timeout: float | httpx.Timeout | None,
-        event_hooks: Mapping[str, list[Callable[..., object]]] | None,
+        event_hooks: HTTPEventHooks | None,
         ssl_verify: VerifyTypes | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> httpx.AsyncClient:
+        if self.transport is not None:
+            return httpx.AsyncClient(
+                transport=self.transport,
+                event_hooks=event_hooks,
+                timeout=timeout if timeout is not None else _DEFAULT_TIMEOUT,
+                headers=get_default_headers(),
+                cookies=blocked_cookie_jar(),
+                follow_redirects=self.follow_redirects,
+                trust_env=False,
+            )
+        use_http2: Final = _resolve_http2(self.http2, ssl_verify)
+        replaces_aiohttp: Final = use_http2 and AsyncHTTPHandler.should_use_aiohttp_transport()
+        limits: Final = _AIOHTTP_EQUIVALENT_LIMITS if replaces_aiohttp else DEFAULT_LIMITS
         # Get unified SSL configuration
-        ssl_config: Final = get_ssl_configuration(ssl_verify)
+        ssl_config: Final = get_ssl_configuration(ssl_verify, http2=use_http2)
 
         # An SSL certificate used by the requested host to authenticate the client.
         # /path/to/client.pem
@@ -596,24 +765,36 @@ class AsyncHTTPHandler:
             timeout = _DEFAULT_TIMEOUT
         # Create a client with a connection pool
 
-        transport: Final = AsyncHTTPHandler._create_async_transport(
+        transport: Final = AsyncHTTPHandler.create_async_transport(
             ssl_context=ssl_config if isinstance(ssl_config, ssl.SSLContext) else None,
             ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
             shared_session=shared_session,
+            http2=use_http2,
+            cert=cert,
+            limits=limits,
         )
 
         # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
         default_headers: Final = get_default_headers()
+        trust_env: Final = not (replaces_aiohttp and _aiohttp_env_proxies_disabled())
 
         return httpx.AsyncClient(
             transport=transport,
+            mounts=AsyncHTTPHandler.create_httpx_proxy_mounts(
+                transport, verify=ssl_config, cert=cert, http2=use_http2, limits=limits
+            )
+            if trust_env
+            else None,
+            limits=limits,
             event_hooks=event_hooks,
             timeout=timeout,
             verify=ssl_config,
             cert=cert,
             headers=default_headers,
             cookies=blocked_cookie_jar(),
-            follow_redirects=True,
+            follow_redirects=self.follow_redirects,
+            http2=use_http2,
+            trust_env=trust_env,
         )
 
     async def close(self):
@@ -635,21 +816,118 @@ class AsyncHTTPHandler:
         headers: dict | None = None,
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
+        max_response_bytes: int | None = None,
+        stream: bool = False,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
+        query: Final = httpx.QueryParams(params).merge(HTTPHandler.extract_query_params(url))
+        request_headers: Final = httpx.Headers(headers)
 
-        params = params or {}
-        params.update(HTTPHandler.extract_query_params(url))
+        if stream:
+            return await self._send_streaming_get(
+                url, params=query, headers=request_headers, follow_redirects=follow_redirects, timeout=timeout
+            )
+
+        if max_response_bytes is not None:
+            return await self._get_with_response_limit(
+                url,
+                params=query,
+                headers=request_headers,
+                max_bytes=max_response_bytes,
+                follow_redirects=self.client.follow_redirects if follow_redirects is None else follow_redirects,
+                timeout=self.client.timeout if timeout is None else httpx.Timeout(timeout),
+            )
 
         response: Final = await self.client.get(
             url,
-            params=params,
-            headers=headers,
+            params=query,
+            headers=request_headers,
             follow_redirects=_follow_redirects,
             timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
         )
         return response
+
+    async def _send_streaming_get(
+        self,
+        url: str,
+        *,
+        params: httpx.QueryParams,
+        headers: httpx.Headers,
+        follow_redirects: bool | None,
+        timeout: float | httpx.Timeout | None,
+    ) -> httpx.Response:
+        start_time: Final = time.time()
+        request: Final = self.client.build_request(
+            "GET", url, params=params, headers=headers, timeout=USE_CLIENT_DEFAULT if timeout is None else timeout
+        )
+        try:
+            response: Final = await self.client.send(
+                request,
+                stream=True,
+                follow_redirects=USE_CLIENT_DEFAULT if follow_redirects is None else follow_redirects,
+            )
+            _anchor_handler_to(response, self)
+            response.raise_for_status()
+        except httpx.TimeoutException as e:
+            _raise_timeout(e, start_time)
+        except httpx.HTTPStatusError as e:
+            await _raise_masked_async_error(e, True)
+        else:
+            return response
+
+    async def _get_with_response_limit(
+        self,
+        url: str,
+        *,
+        params: httpx.QueryParams,
+        headers: httpx.Headers,
+        timeout: httpx.Timeout,
+        max_bytes: int,
+        follow_redirects: bool,
+    ) -> httpx.Response:
+        request: Final = self.client.build_request(
+            "GET",
+            url,
+            headers=MappingProxyType({**headers, "accept-encoding": "identity"}),
+            params=params,
+            timeout=timeout,
+        )
+        response: Final = await self.client.send(request, stream=True, follow_redirects=False)
+        return await self._read_with_response_limit(response, max_bytes=max_bytes, follow_redirects=follow_redirects)
+
+    async def _read_with_response_limit(
+        self, response: httpx.Response, *, max_bytes: int, follow_redirects: bool, redirects_remaining: int = 10
+    ) -> httpx.Response:
+        try:
+            if response.next_request is not None and follow_redirects:
+                if redirects_remaining == 0:
+                    raise ValueError("Too many redirects")
+                await response.aclose()
+                following: Final = await self.client.send(
+                    response.next_request, auth=None, stream=True, follow_redirects=False
+                )
+                return await self._read_with_response_limit(
+                    following, max_bytes=max_bytes, follow_redirects=True, redirects_remaining=redirects_remaining - 1
+                )
+            if response.is_redirect or response.is_error:
+                return httpx.Response(response.status_code, headers=response.headers, request=response.request)
+            content_encoding: Final = header_value(response.headers, "content-encoding")
+            if ("identity" if content_encoding is None else content_encoding).lower() != "identity":
+                raise HTTPResponseLimitError("Response size limits require an uncompressed response")
+            content_length: Final = header_value(response.headers, "content-length")
+            if int("0" if content_length is None else content_length) > max_bytes:
+                raise HTTPResponseLimitError("Response exceeds the configured size limit")
+            with BytesIO() as body:
+                async for chunk in response.aiter_bytes(chunk_size=65536):
+                    if body.tell() + len(chunk) > max_bytes:
+                        raise HTTPResponseLimitError("Response exceeds the configured size limit")
+                    body.write(chunk)
+                return httpx.Response(
+                    response.status_code, headers=response.headers, content=body.getvalue(), request=response.request
+                )
+        finally:
+            await response.aclose()
 
     @track_llm_api_timing()
     async def post(
@@ -685,38 +963,29 @@ class AsyncHTTPHandler:
                 content=request_content,
             )
             response: Final = await self.client.send(req, stream=stream)
+            if stream:
+                _anchor_handler_to(response, self)
             response.raise_for_status()
             return response
-        except (httpx.RemoteProtocolError, httpx.ConnectError):
+        except httpx.ConnectError:
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
-                return await self.single_connection_post_request(
+                return await self.single_connection_request(
                     url=url,
+                    method="POST",
                     client=new_client,
                     data=data,
                     json=json,
                     params=params,
                     headers=headers,
                     stream=stream,
+                    content=content,
                 )
             finally:
                 await new_client.aclose()
         except httpx.TimeoutException as e:
-            end_time: Final = time.time()
-            time_delta: Final = round(end_time - start_time, 3)
-            headers = {}
-            error_response: Final[httpx.Response | None] = getattr(e, "response", None)
-            if error_response is not None:
-                for key, value in error_response.headers.items():
-                    headers[f"response_headers-{key}"] = value
-
-            raise litellm.Timeout(
-                message=f"Connection timed out. Timeout passed={timeout}, time taken={time_delta} seconds",
-                model="default-model-name",
-                llm_provider="litellm-httpx-handler",
-                headers=headers,
-            )
+            _raise_timeout(e, start_time)
         except httpx.HTTPStatusError as e:
             await _raise_masked_async_error(e, stream)
         except Exception as e:
@@ -732,7 +1001,10 @@ class AsyncHTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         stream: bool = False,
         content: _RequestContent | None = None,
+        follow_redirects: bool | None = None,
     ):
+        _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
+        start_time: Final = time.time()
         try:
             if timeout is None:
                 timeout = self.timeout
@@ -750,37 +1022,34 @@ class AsyncHTTPHandler:
                 timeout=timeout,
                 content=request_content,
             )
-            response: Final = await self.client.send(req)
+            response: Final = await self.client.send(req, follow_redirects=_follow_redirects)
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
-                return await self.single_connection_post_request(
-                    url=url,
-                    client=new_client,
-                    data=data,
+                retry_data, retry_content = _prepare_request_data_and_content(data, content)
+                retry: Final = new_client.build_request(
+                    "PUT",
+                    url,
+                    data=retry_data,
                     json=json,
                     params=params,
                     headers=headers,
-                    stream=stream,
+                    timeout=timeout,
+                    content=retry_content,
                 )
+                retried: Final = await new_client.send(retry, stream=stream, follow_redirects=_follow_redirects)
+                try:
+                    retried.raise_for_status()
+                except httpx.HTTPStatusError as retried_error:
+                    await _raise_masked_async_error(retried_error, stream)
+                return retried
             finally:
                 await new_client.aclose()
         except httpx.TimeoutException as e:
-            headers = {}
-            error_response: Final[httpx.Response | None] = getattr(e, "response", None)
-            if error_response is not None:
-                for key, value in error_response.headers.items():
-                    headers[f"response_headers-{key}"] = value
-
-            raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
-                model="default-model-name",
-                llm_provider="litellm-httpx-handler",
-                headers=headers,
-            )
+            _raise_timeout(e, start_time)
         except httpx.HTTPStatusError as e:
             await _raise_masked_async_error(e, stream)
         except Exception as e:
@@ -797,6 +1066,7 @@ class AsyncHTTPHandler:
         stream: bool = False,
         content: _RequestContent | None = None,
     ):
+        start_time: Final = time.time()
         try:
             if timeout is None:
                 timeout = self.timeout
@@ -817,34 +1087,25 @@ class AsyncHTTPHandler:
             response: Final = await self.client.send(req)
             response.raise_for_status()
             return response
-        except (httpx.RemoteProtocolError, httpx.ConnectError):
+        except httpx.ConnectError:
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
-                return await self.single_connection_post_request(
+                return await self.single_connection_request(
                     url=url,
+                    method="PATCH",
                     client=new_client,
                     data=data,
                     json=json,
                     params=params,
                     headers=headers,
                     stream=stream,
+                    content=content,
                 )
             finally:
                 await new_client.aclose()
         except httpx.TimeoutException as e:
-            headers = {}
-            error_response: Final[httpx.Response | None] = getattr(e, "response", None)
-            if error_response is not None:
-                for key, value in error_response.headers.items():
-                    headers[f"response_headers-{key}"] = value
-
-            raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
-                model="default-model-name",
-                llm_provider="litellm-httpx-handler",
-                headers=headers,
-            )
+            _raise_timeout(e, start_time)
         except httpx.HTTPStatusError as e:
             await _raise_masked_async_error(e, stream)
         except Exception as e:
@@ -879,20 +1140,24 @@ class AsyncHTTPHandler:
                 content=request_content,
             )
             response: Final = await self.client.send(req, stream=stream)
+            if stream:
+                _anchor_handler_to(response, self)
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
-                return await self.single_connection_post_request(
+                return await self.single_connection_request(
                     url=url,
+                    method="DELETE",
                     client=new_client,
                     data=data,
                     json=json,
                     params=params,
                     headers=headers,
                     stream=stream,
+                    content=content,
                 )
             finally:
                 await new_client.aclose()
@@ -901,9 +1166,10 @@ class AsyncHTTPHandler:
         except Exception as e:
             raise e
 
-    async def single_connection_post_request(
+    async def single_connection_request(
         self,
         url: str,
+        method: str,
         client: httpx.AsyncClient,
         data: dict | str | bytes | None = None,
         json: dict | None = None,
@@ -913,7 +1179,7 @@ class AsyncHTTPHandler:
         content: _RequestContent | None = None,
     ):
         """
-        Making POST request for a single connection client.
+        Making request for a single connection client.
 
         Used for retrying connection client errors.
         """
@@ -921,7 +1187,7 @@ class AsyncHTTPHandler:
         request_data, request_content = _prepare_request_data_and_content(data, content)
 
         req: Final = client.build_request(
-            "POST",
+            method,
             url,
             data=request_data,
             json=json,
@@ -933,20 +1199,106 @@ class AsyncHTTPHandler:
         response.raise_for_status()
         return response
 
+    # Strong references to finalizer-scheduled client-close tasks. A bare
+    # create_task() result may be garbage-collected before it runs, leaving
+    # the underlying aiohttp session unclosed ("Unclosed client session").
+    # Mirrors LiteLLMAiohttpTransport._background_close_tasks.
+    _finalizer_close_tasks: ClassVar[set["asyncio.Task[None]"]] = set()  # mutable-ok: strong refs for pending closes
+
+    @classmethod
+    async def _close_client_at_finalization(cls, client: httpx.AsyncClient) -> None:
+        try:
+            await client.aclose()
+        except (OSError, RuntimeError) as exc:
+            verbose_logger.debug("Error closing client at finalization: %s", exc)
+        finally:
+            task: Final = asyncio.current_task()
+            if task is not None:
+                cls._finalizer_close_tasks.discard(task)
+
+    @classmethod
+    def _on_finalizer_close_done(cls, task: "asyncio.Task[None]") -> None:
+        cls._finalizer_close_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc: Final = task.exception()
+        if exc is not None:
+            verbose_logger.debug("Error closing client at finalization: %s", exc)
+
+    def _aiohttp_session_bound_elsewhere(self, loop: asyncio.AbstractEventLoop) -> bool:
+        """True when the wrapped aiohttp session is bound to a loop other than
+        ``loop`` — awaiting ``aclose()`` here would touch that loop's internals."""
+        from litellm.llms.custom_httpx.aiohttp_transport import (
+            LiteLLMAiohttpTransport,
+        )
+
+        transport: Final = getattr(self._client, "_transport", None)
+        if not isinstance(transport, LiteLLMAiohttpTransport):
+            return False
+        session: Final = transport.client
+        if not isinstance(session, ClientSession) or session.closed:
+            return False
+        return getattr(session, "_loop", None) is not loop
+
+    def _dispose_wrapped_aiohttp_session(self) -> None:
+        """Dispose the wrapped aiohttp session when ``aclose()`` cannot run here.
+
+        Finalization either has no running loop, or a loop the session is not
+        bound to. Delegating to the transport's lifecycle-aware disposal picks
+        the safe path per session state (async close on its own loop, threadsafe
+        handoff to a loop running elsewhere, or the synchronous connector
+        teardown that flips the flags ``ClientSession.__del__`` checks), so no
+        "Unclosed client session" / "Unclosed connector" warnings fire at
+        garbage collection.
+        """
+        from litellm.llms.custom_httpx.aiohttp_transport import (
+            LiteLLMAiohttpTransport,
+        )
+
+        transport: Final = getattr(self._client, "_transport", None)
+        if not isinstance(transport, LiteLLMAiohttpTransport):
+            return
+        # A shared session (e.g. the proxy's) is never this handler's to close.
+        if not getattr(transport, "_owns_session", False):
+            return
+        session: Final = transport.client
+        if isinstance(session, ClientSession) and not session.closed:
+            transport._close_recycled_session(session)  # pyright: ignore[reportPrivateUsage]  # deliberate reuse of the transport's lifecycle-aware disposal; an async close can never run in this context
+
     def __del__(self) -> None:
         try:
             if not _handler_may_close_client(sys.getrefcount(self._client), self._owns_client):
                 return
-            asyncio.get_running_loop().create_task(self._client.aclose())
+            try:
+                loop: Final = asyncio.get_running_loop()
+            except RuntimeError:
+                # No running loop at finalization time (worker threads after
+                # their loop closed, interpreter/worker shutdown, GC in a
+                # sync context). An async close can never run here.
+                self._dispose_wrapped_aiohttp_session()
+                return
+            if self._aiohttp_session_bound_elsewhere(loop):
+                # GC ran on a live loop (e.g. the app's) but the session
+                # belongs to another, possibly dead, loop — awaiting aclose()
+                # here is the cross-loop path the transport refuses.
+                self._dispose_wrapped_aiohttp_session()
+                return
+            cls: Final = type(self)
+            task: Final = loop.create_task(cls._close_client_at_finalization(self._client))
+            cls._finalizer_close_tasks.add(task)
+            task.add_done_callback(cls._on_finalizer_close_done)
         except Exception:
             pass
 
     @staticmethod
-    def _create_async_transport(
+    def create_async_transport(
         ssl_context: ssl.SSLContext | None = None,
         ssl_verify: bool | None = None,
         shared_session: Optional["ClientSession"] = None,
-    ) -> LiteLLMAiohttpTransport | AsyncHTTPTransport | None:
+        http2: bool = False,
+        cert: CertTypes | None = None,
+        limits: httpx.Limits = DEFAULT_LIMITS,
+    ) -> LiteLLMAiohttpTransport | AsyncHTTPTransport | AsyncHTTP2ConnectionSpread | None:
         """
         - Creates a transport for httpx.AsyncClient
             - if litellm.force_ipv4 is True, it will return AsyncHTTPTransport with local_address="0.0.0.0"
@@ -964,8 +1316,8 @@ class AsyncHTTPHandler:
         #########################################################
         # AIOHTTP TRANSPORT is off by default
         #########################################################
-        if AsyncHTTPHandler._should_use_aiohttp_transport():
-            return AsyncHTTPHandler._create_aiohttp_transport(
+        if not http2 and AsyncHTTPHandler.should_use_aiohttp_transport():
+            return AsyncHTTPHandler.create_aiohttp_transport(
                 ssl_context=ssl_context,
                 ssl_verify=ssl_verify,
                 shared_session=shared_session,
@@ -974,10 +1326,17 @@ class AsyncHTTPHandler:
         #########################################################
         # HTTPX TRANSPORT is used when aiohttp is not installed
         #########################################################
-        return AsyncHTTPHandler._create_httpx_transport()
+        return AsyncHTTPHandler._create_httpx_transport(
+            http2=http2,
+            verify=ssl_context if ssl_context is not None else ssl_verify is not False,
+            cert=cert,
+            limits=limits,
+        )
+
+    _create_async_transport = create_async_transport
 
     @staticmethod
-    def _should_use_aiohttp_transport() -> bool:
+    def should_use_aiohttp_transport() -> bool:
         """
         AiohttpTransport is the default transport for litellm.
 
@@ -988,6 +1347,10 @@ class AsyncHTTPHandler:
         import os
 
         from litellm.secret_managers.main import str_to_bool
+
+        if http2_enabled():
+            verbose_logger.debug("LITELLM_HTTP2 enabled, using httpx transport (aiohttp has no HTTP/2 support)")
+            return False
 
         #########################################################
         # Check if user disabled aiohttp transport
@@ -1003,6 +1366,8 @@ class AsyncHTTPHandler:
         ########################################################
         verbose_logger.debug("Using AiohttpTransport...")
         return True
+
+    _should_use_aiohttp_transport = should_use_aiohttp_transport
 
     @staticmethod
     def _get_ssl_connector_kwargs(
@@ -1033,7 +1398,7 @@ class AsyncHTTPHandler:
         return connector_kwargs
 
     @staticmethod
-    def _create_aiohttp_transport(
+    def create_aiohttp_transport(
         ssl_verify: bool | None = None,
         ssl_context: ssl.SSLContext | None = None,
         shared_session: Optional["ClientSession"] = None,
@@ -1082,7 +1447,7 @@ class AsyncHTTPHandler:
             transport_connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
         # Returns None when SO_KEEPALIVE is disabled or aiohttp is too old to
         # accept socket_factory — version detection lives inside the builder.
-        socket_factory: Final = _build_aiohttp_keepalive_socket_factory()
+        socket_factory: Final = build_aiohttp_keepalive_socket_factory()
         if socket_factory is not None:
             transport_connector_kwargs["socket_factory"] = socket_factory
 
@@ -1110,18 +1475,63 @@ class AsyncHTTPHandler:
             ssl_verify=ssl_for_transport,
         )
 
+    _create_aiohttp_transport = create_aiohttp_transport
+
     @staticmethod
-    def _create_httpx_transport() -> AsyncHTTPTransport | None:
+    def _create_httpx_transport(
+        http2: bool = False,
+        verify: ssl.SSLContext | bool = True,
+        cert: CertTypes | None = None,
+        limits: httpx.Limits = DEFAULT_LIMITS,
+    ) -> AsyncHTTPTransport | AsyncHTTP2ConnectionSpread | None:
         """
         Creates an AsyncHTTPTransport
 
+        - If HTTP/2 is on, it spreads requests over as many HTTP/2 connections as the stream limit needs
         - If force_ipv4 is True, it will create an AsyncHTTPTransport with local_address set to "0.0.0.0"
-        - [Default] If force_ipv4 is False, it will return None
+        - [Default] Otherwise it will return None
         """
+        local_address: Final = _IPV4_LOCAL_ADDRESS if litellm.force_ipv4 else None
+        transport_verify: Final = (
+            _httpx_default_verify_unless_configured(verify)
+            if litellm.force_ipv4 and not AsyncHTTPHandler.should_use_aiohttp_transport()
+            else verify
+        )
+        if http2 or http2_enabled():
+            return AsyncHTTP2ConnectionSpread(
+                lambda lane_limits: AsyncHTTPTransport(
+                    local_address=local_address, verify=transport_verify, cert=cert, http2=True, limits=lane_limits
+                ),
+                limits,
+            )
         if litellm.force_ipv4:
-            return AsyncHTTPTransport(local_address="0.0.0.0")
-        else:
+            return AsyncHTTPTransport(local_address=local_address, verify=transport_verify, cert=cert, limits=limits)
+        return None
+
+    @staticmethod
+    def create_httpx_proxy_mounts(
+        transport: LiteLLMAiohttpTransport | AsyncHTTPTransport | AsyncHTTP2ConnectionSpread | None,
+        verify: VerifyTypes,
+        cert: CertTypes | None,
+        http2: bool = False,
+        limits: httpx.Limits = DEFAULT_LIMITS,
+    ) -> Mapping[str, httpx.AsyncBaseTransport | None] | None:
+        if not isinstance(transport, (AsyncHTTPTransport, AsyncHTTP2ConnectionSpread)):
             return None
+        if http2 or http2_enabled():
+            return _environment_proxy_mounts(
+                lambda proxy_url: AsyncHTTP2ConnectionSpread(
+                    lambda lane_limits: AsyncHTTPTransport(
+                        proxy=proxy_url, verify=verify, cert=cert, http2=True, limits=lane_limits
+                    ),
+                    limits,
+                )
+            )
+        return _environment_proxy_mounts(
+            lambda proxy_url: AsyncHTTPTransport(proxy=proxy_url, verify=verify, cert=cert, limits=limits)
+        )
+
+    _create_httpx_proxy_mounts = create_httpx_proxy_mounts
 
 
 class HTTPHandler:
@@ -1133,17 +1543,20 @@ class HTTPHandler:
         ssl_verify: bool | str | None = None,
         disable_default_headers: bool
         | None = False,  # arize phoenix returns different API responses when user agent header in request
+        follow_redirects: bool = True,
     ):
         self.timeout = timeout
         self.ssl_verify = ssl_verify
         self.disable_default_headers = disable_default_headers
+        self.follow_redirects = follow_redirects
         self._owns_client = client is None
         self._heal_lock = threading.Lock()
         self._client = self.create_client() if client is None else client
 
     def create_client(self) -> httpx.Client:
+        use_http2: Final = http2_enabled()
         # Get unified SSL configuration
-        ssl_config: Final = get_ssl_configuration(self.ssl_verify)
+        ssl_config: Final = get_ssl_configuration(self.ssl_verify, http2=use_http2)
 
         # An SSL certificate used by the requested host to authenticate the client.
         # /path/to/client.pem
@@ -1152,15 +1565,19 @@ class HTTPHandler:
         # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
         default_headers: Final = get_default_headers() if not self.disable_default_headers else None
 
+        transport: Final = self._create_sync_transport(verify=ssl_config, cert=cert, http2=use_http2)
+
         # Create a client with a connection pool
         return httpx.Client(
-            transport=self._create_sync_transport(),
+            transport=transport,
+            mounts=self._create_sync_proxy_mounts(transport, verify=ssl_config, cert=cert, http2=use_http2),
             timeout=self.timeout if self.timeout is not None else _DEFAULT_TIMEOUT,
             verify=ssl_config,
             cert=cert,
             headers=default_headers,
             cookies=blocked_cookie_jar(),
-            follow_redirects=True,
+            follow_redirects=self.follow_redirects,
+            http2=use_http2,
         )
 
     @property
@@ -1185,24 +1602,57 @@ class HTTPHandler:
         self,
         url: str,
         params: dict | None = None,
-        headers: dict | None = None,
+        headers: Mapping[str, Any] | None = None,
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
+        stream: bool = False,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
-        params = params or {}
-        params.update(self.extract_query_params(url))
+        query: Final = httpx.QueryParams(params).merge(self.extract_query_params(url))
+
+        if stream:
+            return self._send_streaming_get(
+                url, params=query, headers=headers, follow_redirects=follow_redirects, timeout=timeout
+            )
 
         response: Final = self.client.get(
             url,
-            params=params,
+            params=query,
             headers=headers,
             follow_redirects=_follow_redirects,
             timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
         )
 
         return response
+
+    def _send_streaming_get(
+        self,
+        url: str,
+        *,
+        params: httpx.QueryParams,
+        headers: Mapping[str, str] | None,
+        follow_redirects: bool | None,
+        timeout: float | httpx.Timeout | None,
+    ) -> httpx.Response:
+        start_time: Final = time.time()
+        request: Final = self.client.build_request(
+            "GET", url, params=params, headers=headers, timeout=USE_CLIENT_DEFAULT if timeout is None else timeout
+        )
+        try:
+            response: Final = self.client.send(
+                request,
+                stream=True,
+                follow_redirects=USE_CLIENT_DEFAULT if follow_redirects is None else follow_redirects,
+            )
+            _anchor_handler_to(response, self)
+            response.raise_for_status()
+        except httpx.TimeoutException as e:
+            _raise_timeout(e, start_time)
+        except httpx.HTTPStatusError as e:
+            _raise_masked_sync_error(e, True)
+        else:
+            return response
 
     @staticmethod
     def extract_query_params(url: str) -> dict[str, str]:
@@ -1230,6 +1680,7 @@ class HTTPHandler:
         content: _RequestContent | None = None,
         logging_obj: LiteLLMLoggingObject | None = None,
     ):
+        start_time: Final = time.time()
         try:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
             request_data, request_content = _prepare_request_data_and_content(data, content)
@@ -1258,14 +1709,12 @@ class HTTPHandler:
                     content=request_content,
                 )
             response: Final = self.client.send(req, stream=stream)
+            if stream:
+                _anchor_handler_to(response, self)
             response.raise_for_status()
             return response
-        except httpx.TimeoutException:
-            raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
-                model="default-model-name",
-                llm_provider="litellm-httpx-handler",
-            )
+        except httpx.TimeoutException as e:
+            _raise_timeout(e, start_time)
         except httpx.HTTPStatusError as e:
             _raise_masked_sync_error(e, stream)
         except Exception as e:
@@ -1282,6 +1731,7 @@ class HTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         content: _RequestContent | None = None,
     ):
+        start_time: Final = time.time()
         try:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
             request_data, request_content = _prepare_request_data_and_content(data, content)
@@ -1308,14 +1758,12 @@ class HTTPHandler:
                     content=request_content,
                 )
             response: Final = self.client.send(req, stream=stream)
+            if stream:
+                _anchor_handler_to(response, self)
             response.raise_for_status()
             return response
-        except httpx.TimeoutException:
-            raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
-                model="default-model-name",
-                llm_provider="litellm-httpx-handler",
-            )
+        except httpx.TimeoutException as e:
+            _raise_timeout(e, start_time)
         except httpx.HTTPStatusError as e:
             _raise_masked_sync_error(e, stream)
         except Exception as e:
@@ -1332,6 +1780,7 @@ class HTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         content: _RequestContent | None = None,
     ):
+        start_time: Final = time.time()
         try:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
             request_data, request_content = _prepare_request_data_and_content(data, content)
@@ -1358,13 +1807,11 @@ class HTTPHandler:
                     content=request_content,
                 )
             response: Final = self.client.send(req, stream=stream)
+            if stream:
+                _anchor_handler_to(response, self)
             return response
-        except httpx.TimeoutException:
-            raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
-                model="default-model-name",
-                llm_provider="litellm-httpx-handler",
-            )
+        except httpx.TimeoutException as e:
+            _raise_timeout(e, start_time)
         except httpx.HTTPStatusError as e:
             _raise_masked_sync_error(e, stream)
         except Exception as e:
@@ -1381,6 +1828,7 @@ class HTTPHandler:
         stream: bool = False,
         content: _RequestContent | None = None,
     ):
+        start_time: Final = time.time()
         try:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
             request_data, request_content = _prepare_request_data_and_content(data, content)
@@ -1407,14 +1855,12 @@ class HTTPHandler:
                     content=request_content,
                 )
             response: Final = self.client.send(req, stream=stream)
+            if stream:
+                _anchor_handler_to(response, self)
             response.raise_for_status()
             return response
-        except httpx.TimeoutException:
-            raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
-                model="default-model-name",
-                llm_provider="litellm-httpx-handler",
-            )
+        except httpx.TimeoutException as e:
+            _raise_timeout(e, start_time)
         except httpx.HTTPStatusError as e:
             _raise_masked_sync_error(e, stream)
         except Exception as e:
@@ -1427,21 +1873,39 @@ class HTTPHandler:
         except Exception:
             pass
 
-    def _create_sync_transport(self) -> HTTPTransport | None:
+    @staticmethod
+    def _create_sync_transport(verify: VerifyTypes, cert: CertTypes | None, http2: bool) -> HTTPTransport | None:
         """
         Create an HTTP transport with IPv4 only if litellm.force_ipv4 is True.
-        Otherwise, return None.
+        Otherwise, return litellm.sync_transport or None.
 
         Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
         """
         if litellm.force_ipv4:
-            return HTTPTransport(local_address="0.0.0.0")
-        else:
-            return getattr(litellm, "sync_transport", None)
+            return HTTPTransport(
+                local_address=_IPV4_LOCAL_ADDRESS,
+                verify=_httpx_default_verify_unless_configured(verify),
+                cert=cert,
+                http2=http2,
+            )
+        return getattr(litellm, "sync_transport", None)
+
+    @staticmethod
+    def _create_sync_proxy_mounts(
+        transport: httpx.BaseTransport | None,
+        verify: VerifyTypes,
+        cert: CertTypes | None,
+        http2: bool,
+    ) -> Mapping[str, httpx.BaseTransport | None] | None:
+        if transport is None or transport is getattr(litellm, "sync_transport", None):
+            return None
+        return _environment_proxy_mounts(
+            lambda proxy_url: HTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=http2)
+        )
 
 
 def get_async_httpx_client(
-    llm_provider: LlmProviders | httpxSpecialProvider,
+    llm_provider: LlmProviders | httpxSpecialProvider | str,
     params: dict | None = None,
     shared_session: Optional["ClientSession"] = None,
 ) -> AsyncHTTPHandler:
@@ -1494,7 +1958,7 @@ def get_async_httpx_client(
     return _new_client
 
 
-def _get_httpx_client(params: dict | None = None) -> HTTPHandler:
+def get_httpx_client(params: dict | None = None) -> HTTPHandler:
     """
     Retrieves the HTTP client from the cache
     If not present, creates a new client
@@ -1520,7 +1984,7 @@ def _get_httpx_client(params: dict | None = None) -> HTTPHandler:
         cache = LLMClientCache()
         setattr(litellm, "in_memory_llm_clients_cache", cache)
 
-    _cached_client: Final = cache.get_cache(_cache_key_name)
+    _cached_client: Final = cache.get_cache(_cache_key_name, loop_bound=False)
     if _cached_client:
         return _cached_client
 
@@ -1536,5 +2000,9 @@ def _get_httpx_client(params: dict | None = None) -> HTTPHandler:
         value=_new_client,
         ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
         litellm_owned_client=True,
+        loop_bound=False,
     )
     return _new_client
+
+
+_get_httpx_client = get_httpx_client

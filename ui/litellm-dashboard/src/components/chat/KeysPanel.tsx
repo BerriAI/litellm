@@ -10,8 +10,17 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import MessageManager from "@/components/molecules/message_manager";
+import {
+  NUMERIC_CELL_CLASS,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { cn } from "@/lib/cva.config";
+import { toast } from "@/lib/toast";
 import { keyListCall, regenerateKeyCall } from "../networking";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { formatExpiresUtc, isKeyExpired, calculateExpiryPreviewFromDuration } from "@/utils/keyExpiryUtils";
@@ -132,10 +141,10 @@ const KeysPanel: React.FC<Props> = ({ accessToken, userId, premiumUser }) => {
 
       const response = await regenerateKeyCall(accessToken, rotateTarget.token || rotateTarget.token_id, payload);
       setRegeneratedKey(response.key);
-      MessageManager.success("Key rotated successfully");
+      toast.success("Key rotated successfully");
       queryClient.invalidateQueries({ queryKey: [KEYS_QUERY_KEY] });
     } catch {
-      MessageManager.error("Failed to rotate key");
+      toast.error("Failed to rotate key");
     } finally {
       setIsRegenerating(false);
     }
@@ -176,7 +185,9 @@ const KeysPanel: React.FC<Props> = ({ accessToken, userId, premiumUser }) => {
             <TableHeader>
               <TableRow className="bg-muted/50">
                 <TableHead className="text-xs font-semibold uppercase tracking-wide">Key</TableHead>
-                <TableHead className="text-xs font-semibold uppercase tracking-wide">Spend</TableHead>
+                <TableHead className={cn("text-xs font-semibold uppercase tracking-wide", NUMERIC_CELL_CLASS)}>
+                  Spend
+                </TableHead>
                 <TableHead className="text-xs font-semibold uppercase tracking-wide">Expires</TableHead>
                 <TableHead className="text-xs font-semibold uppercase tracking-wide">Created</TableHead>
                 {premiumUser && (
@@ -220,7 +231,9 @@ const KeysPanel: React.FC<Props> = ({ accessToken, userId, premiumUser }) => {
             <TableHeader>
               <TableRow className="bg-muted/50">
                 <TableHead className="text-xs font-semibold uppercase tracking-wide">Key</TableHead>
-                <TableHead className="text-xs font-semibold uppercase tracking-wide">Spend</TableHead>
+                <TableHead className={cn("text-xs font-semibold uppercase tracking-wide", NUMERIC_CELL_CLASS)}>
+                  Spend
+                </TableHead>
                 <TableHead className="text-xs font-semibold uppercase tracking-wide">Expires</TableHead>
                 <TableHead className="text-xs font-semibold uppercase tracking-wide">Created</TableHead>
                 {premiumUser && (
@@ -237,7 +250,7 @@ const KeysPanel: React.FC<Props> = ({ accessToken, userId, premiumUser }) => {
                       <span className="font-mono text-[13px]">{maskKey(record.key_name)}</span>
                       {record.key_alias && <div className="text-xs text-muted-foreground">{record.key_alias}</div>}
                     </TableCell>
-                    <TableCell className="text-[13px]">
+                    <TableCell className={cn("text-[13px]", NUMERIC_CELL_CLASS)}>
                       ${record.spend?.toFixed(2) ?? "0.00"}
                       {record.max_budget != null && record.max_budget > 0 && (
                         <span className="text-muted-foreground"> / ${record.max_budget.toFixed(2)}</span>
@@ -279,7 +292,7 @@ const KeysPanel: React.FC<Props> = ({ accessToken, userId, premiumUser }) => {
 
           {regeneratedKey ? (
             <div>
-              <div className="rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950 px-3 py-2 text-sm text-amber-800 dark:text-amber-300 mb-4">
+              <div className="rounded-lg border border-warning/20 bg-warning/10 px-3 py-2 text-sm text-warning mb-4">
                 Save this key now; you will not see it again
               </div>
               <div className="text-xs text-muted-foreground mb-1">New Key</div>
@@ -333,9 +346,7 @@ const KeysPanel: React.FC<Props> = ({ accessToken, userId, premiumUser }) => {
                     Current: {rotateTarget?.expires ? formatExpiresUtc(rotateTarget.expires) : "Never"}
                     {keyIsExpired && " (expired)"}
                   </p>
-                  {newExpiryTime && (
-                    <p className="text-xs text-emerald-600 dark:text-emerald-400">New: {newExpiryTime}</p>
-                  )}
+                  {newExpiryTime && <p className="text-xs text-success">New: {newExpiryTime}</p>}
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <Label>Grace Period</Label>

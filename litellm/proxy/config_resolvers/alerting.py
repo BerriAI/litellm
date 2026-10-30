@@ -25,3 +25,7 @@ EMAIL_DESCRIPTORS: Final[tuple[FieldDescriptor, ...]] = (
 SLACK_DESCRIPTORS: Final[tuple[FieldDescriptor, ...]] = (
     FieldDescriptor("SLACK_WEBHOOK_URL", "SLACK_WEBHOOK_URL", "SLACK_WEBHOOK_URL", is_secret=True),
 )
+
+MS_TEAMS_DESCRIPTORS: Final[tuple[FieldDescriptor, ...]] = (
+    FieldDescriptor("MS_TEAMS_WEBHOOK_URL", "MS_TEAMS_WEBHOOK_URL", "MS_TEAMS_WEBHOOK_URL", is_secret=True),
+)

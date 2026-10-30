@@ -27,6 +27,30 @@ Common naming + label helpers shared by gateway, backend, and ui templates.
 {{- printf "%s-ui" (include "litellm.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- define "litellm.ui.publicOrigin" -}}
+{{- $origin := .Values.ui.publicUrl | trim | trimSuffix "/" -}}
+{{- if not (regexMatch "^https?://[^/\\s]+$" $origin) -}}
+{{- fail "ui.publicUrl must be an origin like https://ui.example.com, without a path" -}}
+{{- end -}}
+{{- $origin -}}
+{{- end -}}
+
+{{- define "litellm.ui.backendOrigin" -}}
+{{- $origin := .Values.ui.backendUrl | trim | trimSuffix "/" -}}
+{{- if not (regexMatch "^https?://[^/\\s]+$" $origin) -}}
+{{- fail "ui.backendUrl must be an origin like https://backend.example.com, without a path, when ingress.componentHosts is set" -}}
+{{- end -}}
+{{- $origin -}}
+{{- end -}}
+
+{{- define "litellm.backend.gatewayOrigin" -}}
+{{- $origin := .Values.backend.gatewayUrl | trim | trimSuffix "/" -}}
+{{- if not (regexMatch "^https?://[^/\\s]+$" $origin) -}}
+{{- fail "backend.gatewayUrl must be an origin like https://gateway.example.com, without a path, when ingress.componentHosts is set" -}}
+{{- end -}}
+{{- $origin -}}
+{{- end -}}
+
 {{- define "litellm.commonLabels" -}}
 app.kubernetes.io/name: {{ include "litellm.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
@@ -202,7 +226,9 @@ the chart context (needed for .Values), `component` selects which component's
 Sensitive values (master key, DB username + password, Redis password) come
 only from referenced Secrets; the chart never accepts inline values for them.
 
-The chart never assembles DATABASE_URL itself. It emits only the discrete
+The chart never assembles DATABASE_URL itself. When
+database.writer.passwordSecret.urlKey is set, the chart passes the operator's
+URL through from the Secret. Otherwise it emits only the discrete
 DATABASE_HOST/PORT/USER/NAME/SCHEMA (+ DATABASE_PASSWORD for password auth)
 vars; the proxy's entrypoint (DatabaseURLSettings in
 litellm/proxy/db/db_url_settings.py) builds the URL from them and
@@ -213,18 +239,21 @@ whenever the password contains a URL-reserved character (@, /, ?, %, +,
 
 When `database.writer.useIAMAuth: true`, the chart injects
 IAM_TOKEN_DB_AUTH=true and omits DATABASE_PASSWORD — the entrypoint mints
-the URL from DATABASE_HOST/PORT/USER/NAME plus a short-lived IAM token
-instead of a static password.
+the URL from DATABASE_HOST/PORT/USER/NAME plus a short-lived AWS RDS IAM
+token instead of a static password. `database.writer.useAzureEntraAuth: true`
+does the same with AZURE_POSTGRESQL_AUTH=true and a Microsoft Entra ID token,
+for Azure Database for PostgreSQL. The two are mutually exclusive.
 
-The read replica is opt-in via `database.reader.host`. The chart emits
-DATABASE_HOST_READ_REPLICA / DATABASE_PORT_READ_REPLICA /
-DATABASE_NAME_READ_REPLICA (+ DATABASE_SCHEMA_READ_REPLICA) for both auth
-modes, plus DATABASE_USER_READ_REPLICA / DATABASE_PASSWORD_READ_REPLICA for
-password auth. When `database.reader.useIAMAuth: true` it omits
+The read replica is opt-in via `database.reader.host`, `hostKey`, or `urlKey`.
+The chart emits DATABASE_URL_READ_REPLICA alone for urlKey, or discrete
+DATABASE_*_READ_REPLICA vars for host and hostKey configurations, plus
+DATABASE_USER_READ_REPLICA / DATABASE_PASSWORD_READ_REPLICA for password auth.
+When `database.reader.useIAMAuth: true` (or
+`database.reader.useAzureEntraAuth: true`) it omits
 DATABASE_PASSWORD_READ_REPLICA and the entrypoint mints the reader URL the
-same way. Reader IAM only takes effect when the writer also uses IAM auth
-(the proxy gates URL minting on IAM_TOKEN_DB_AUTH, which only the writer
-sets).
+same way. Reader token auth only takes effect when the writer uses the same
+token source, since the proxy gates URL minting on the single global
+IAM_TOKEN_DB_AUTH / AZURE_POSTGRESQL_AUTH toggle that only the writer sets.
 */}}
 {{- define "litellm.serverEnv" -}}
 {{- $root := .root -}}
@@ -239,8 +268,36 @@ sets).
   value: {{ $component.logLevel | quote }}
 {{- end }}
 {{- with $root.Values.database.writer }}
+{{- $hostKey := .passwordSecret.hostKey }}
+{{- $urlKey := .passwordSecret.urlKey }}
+{{- if and .host $hostKey }}
+{{- fail "database.writer.host and database.writer.passwordSecret.hostKey cannot both be set" }}
+{{- end }}
+{{- if and $urlKey (or .host $hostKey .dbname .schema .sslMode .sslRootCert .useIAMAuth .useAzureEntraAuth) }}
+{{- fail "database.writer.passwordSecret.urlKey cannot be combined with host, hostKey, dbname, schema, sslMode, sslRootCert, useIAMAuth, or useAzureEntraAuth" }}
+{{- end }}
+{{- if and (not .host) (not $hostKey) (not $urlKey) }}
+{{- fail "one of database.writer.host, database.writer.passwordSecret.hostKey, or database.writer.passwordSecret.urlKey is required" }}
+{{- end }}
+{{- if and (or $hostKey $urlKey) (not .passwordSecret.name) }}
+{{- fail "database.writer.passwordSecret.name is required when hostKey or urlKey is set" }}
+{{- end }}
+{{- if $urlKey }}
+- name: DATABASE_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ .passwordSecret.name | quote }}
+      key: {{ $urlKey | quote }}
+{{- else }}
 - name: DATABASE_HOST
-  value: {{ required "database.writer.host is required" .host | quote }}
+  {{- if $hostKey }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ .passwordSecret.name | quote }}
+      key: {{ $hostKey | quote }}
+  {{- else }}
+  value: {{ .host | quote }}
+  {{- end }}
 - name: DATABASE_PORT
   value: {{ .port | default 5432 | quote }}
 - name: DATABASE_USER
@@ -254,8 +311,22 @@ sets).
 - name: DATABASE_SCHEMA
   value: {{ .schema | quote }}
 {{- end }}
+{{- if .sslMode }}
+- name: DATABASE_SSLMODE
+  value: {{ .sslMode | quote }}
+{{- end }}
+{{- if .sslRootCert }}
+- name: DATABASE_SSLROOTCERT
+  value: {{ .sslRootCert | quote }}
+{{- end }}
+{{- if and .useIAMAuth .useAzureEntraAuth }}
+{{- fail "database.writer.useIAMAuth and database.writer.useAzureEntraAuth are mutually exclusive: the database password can only come from one token source" }}
+{{- end }}
 {{- if .useIAMAuth }}
 - name: IAM_TOKEN_DB_AUTH
+  value: "true"
+{{- else if .useAzureEntraAuth }}
+- name: AZURE_POSTGRESQL_AUTH
   value: "true"
 {{- else }}
 - name: DATABASE_PASSWORD
@@ -265,22 +336,53 @@ sets).
       key: {{ .passwordSecret.passwordKey | default "password" }}
 {{- end }}
 {{- end }}
+{{- end }}
 {{- with $root.Values.database.reader }}
-{{- if .host }}
+{{- $readerSecret := .passwordSecret | default dict }}
+{{- $hostKey := $readerSecret.hostKey }}
+{{- $urlKey := $readerSecret.urlKey }}
+{{- $readerEnabled := or .host $hostKey $urlKey }}
+{{- if and .host $hostKey }}
+{{- fail "database.reader.host and database.reader.passwordSecret.hostKey cannot both be set" }}
+{{- end }}
+{{- if and $urlKey (or .host $hostKey .dbname .schema .useIAMAuth .useAzureEntraAuth) }}
+{{- fail "database.reader.passwordSecret.urlKey cannot be combined with host, hostKey, dbname, schema, useIAMAuth, or useAzureEntraAuth" }}
+{{- end }}
+{{- if and (or $hostKey $urlKey) (not $readerSecret.name) }}
+{{- fail "database.reader.passwordSecret.name is required when hostKey or urlKey is set" }}
+{{- end }}
+{{- if $readerEnabled }}
+{{- if $urlKey }}
+- name: DATABASE_URL_READ_REPLICA
+  valueFrom:
+    secretKeyRef:
+      name: {{ $readerSecret.name | quote }}
+      key: {{ $urlKey | quote }}
+{{- else }}
 {{- if and .useIAMAuth (not $root.Values.database.writer.useIAMAuth) }}
 {{- fail "database.reader.useIAMAuth requires database.writer.useIAMAuth: true (the proxy gates IAM URL minting on IAM_TOKEN_DB_AUTH, which is only set by the writer)" }}
 {{- end }}
+{{- if and .useAzureEntraAuth (not $root.Values.database.writer.useAzureEntraAuth) }}
+{{- fail "database.reader.useAzureEntraAuth requires database.writer.useAzureEntraAuth: true (the proxy gates Entra URL minting on AZURE_POSTGRESQL_AUTH, which is only set by the writer)" }}
+{{- end }}
 - name: DATABASE_HOST_READ_REPLICA
+  {{- if $hostKey }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $readerSecret.name | quote }}
+      key: {{ $hostKey | quote }}
+  {{- else }}
   value: {{ .host | quote }}
+  {{- end }}
 - name: DATABASE_PORT_READ_REPLICA
   value: {{ .port | default 5432 | quote }}
 - name: DATABASE_NAME_READ_REPLICA
-  value: {{ required "database.reader.dbname is required when database.reader.host is set" .dbname | quote }}
+  value: {{ required "database.reader.dbname is required when database.reader.host, hostKey, or urlKey is set" .dbname | quote }}
 {{- if .schema }}
 - name: DATABASE_SCHEMA_READ_REPLICA
   value: {{ .schema | quote }}
 {{- end }}
-{{- if .useIAMAuth }}
+{{- if or .useIAMAuth .useAzureEntraAuth }}
 {{- if .passwordSecret.name }}
 - name: DATABASE_USER_READ_REPLICA
   valueFrom:
@@ -305,6 +407,7 @@ sets).
 {{- end }}
 {{- end }}
 {{- end }}
+{{- end }}
 {{/*
 The migrations Job (helm.sh/hook: pre-upgrade) is the single owner of
 `prisma migrate deploy`. Without this, every gateway/backend pod also runs
@@ -321,9 +424,34 @@ harmless no-op for the Job and authoritative for the app pods.
      tracking, pod lock manager) via its REDIS_* env fallback. An explicit
      `general_settings.coordination_redis` block in proxy_config takes
      precedence over anything emitted here. */}}
-{{- if $root.Values.redis.host }}
+{{- $redisSecret := $root.Values.redis.passwordSecret | default dict }}
+{{- $hostKey := $redisSecret.hostKey }}
+{{- $urlKey := $redisSecret.urlKey }}
+{{- if and $root.Values.redis.host $hostKey }}
+{{- fail "redis.host and redis.passwordSecret.hostKey cannot both be set" }}
+{{- end }}
+{{- if and $urlKey (or $root.Values.redis.host $hostKey $root.Values.redis.cluster) }}
+{{- fail "redis.passwordSecret.urlKey cannot be combined with host, hostKey, or cluster" }}
+{{- end }}
+{{- if and (or $hostKey $urlKey) (not $redisSecret.name) }}
+{{- fail "redis.passwordSecret.name is required when hostKey or urlKey is set" }}
+{{- end }}
+{{- if $urlKey }}
+- name: REDIS_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ $redisSecret.name | quote }}
+      key: {{ $urlKey | quote }}
+{{- else if or $root.Values.redis.host $hostKey }}
 - name: REDIS_HOST
+  {{- if $hostKey }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $redisSecret.name | quote }}
+      key: {{ $hostKey | quote }}
+  {{- else }}
   value: {{ $root.Values.redis.host | quote }}
+  {{- end }}
 - name: REDIS_PORT
   value: {{ $root.Values.redis.port | quote }}
 {{- if $root.Values.redis.passwordSecret.name }}
@@ -340,11 +468,50 @@ harmless no-op for the Job and authoritative for the app pods.
      configured endpoint; the cluster client discovers the remaining nodes from
      CLUSTER SLOTS at startup. */}}
 - name: REDIS_CLUSTER_NODES
+  {{- if $hostKey }}
+  value: {{ printf "[{\"host\":\"$(REDIS_HOST)\",\"port\":%v}]" (int $root.Values.redis.port) | quote }}
+  {{- else }}
   value: {{ printf "[{\"host\":%q,\"port\":%v}]" $root.Values.redis.host (int $root.Values.redis.port) | quote }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- $sslCertReqs := $root.Values.redis.sslCertReqs }}
+{{- if and $sslCertReqs (not (has $sslCertReqs (list "none" "optional" "required"))) }}
+{{- fail (printf "redis.sslCertReqs must be one of none, optional, required (got %q)" $sslCertReqs) }}
+{{- end }}
+{{- if and $urlKey (or $root.Values.redis.ssl $sslCertReqs $root.Values.redis.sslCaCerts) }}
+{{- fail "redis.ssl, redis.sslCertReqs and redis.sslCaCerts cannot be combined with redis.passwordSecret.urlKey, use a rediss:// URL with ssl_cert_reqs / ssl_ca_certs query parameters instead" }}
+{{- end }}
+{{- if or $root.Values.redis.host $hostKey }}
+{{- if $root.Values.redis.ssl }}
+- name: REDIS_SSL
+  value: "true"
+{{- end }}
+{{- if $sslCertReqs }}
+- name: REDIS_SSL_CERT_REQS
+  value: {{ $sslCertReqs | quote }}
+{{- end }}
+{{- if $root.Values.redis.sslCaCerts }}
+- name: REDIS_SSL_CA_CERTS
+  value: {{ $root.Values.redis.sslCaCerts | quote }}
 {{- end }}
 {{- end }}
 {{- with $component.extraEnv }}
 {{ toYaml . }}
+{{- end }}
+{{- end -}}
+
+{{/*
+In-container PgBouncer env for the gateway container. Under IAM or Entra auth the pooler mints and renews the database token itself.
+*/}}
+{{- define "litellm.connectionPoolEnv" -}}
+{{- with .Values.database.connectionPool -}}
+- name: LITELLM_PGBOUNCER_ENABLED
+  value: "true"
+- name: LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS
+  value: {{ required "database.connectionPool.maxDbConnections is required when the pool is enabled" .maxDbConnections | quote }}
+- name: LITELLM_PGBOUNCER_MAX_CLIENT_CONN
+  value: {{ required "database.connectionPool.maxClientConn is required when the pool is enabled" .maxClientConn | quote }}
 {{- end }}
 {{- end -}}
 
@@ -413,6 +580,78 @@ envFrom:
 {{- range $component.envSecrets }}
   - secretRef:
       name: {{ . }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
+ingress-nginx's admission webhook rejects a dot in an Exact or Prefix path
+(strict-validate-path-type) and serves ImplementationSpecific as a plain
+prefix location, so a dotted path takes that type there.
+*/}}
+{{- define "litellm.ingress.pathType" -}}
+{{- if and (eq .controller "nginx") (contains "." .path) -}}
+ImplementationSpecific
+{{- else -}}
+{{- .pathType -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.gateway.prometheusMultiprocDir" -}}/tmp/litellm_prometheus_multiproc{{- end -}}
+
+{{/*
+Directory of the collector's unix socket, shared by the gateway and
+collector containers through an emptyDir. Empty when the sidecar is off
+or gateway.collector.address is a tcp://127.0.0.1:<port> address.
+*/}}
+{{- define "litellm.gateway.collectorSocketDir" -}}
+{{- if and .Values.gateway.collector.enabled (hasPrefix "unix://" .Values.gateway.collector.address) -}}
+{{- dir (trimPrefix "unix://" .Values.gateway.collector.address) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+LITELLM_COLLECTOR_* env shared by the producer (gateway container) and the
+consumer (collector container), so both agree on the transport and the
+shutdown drain window.
+*/}}
+{{- define "litellm.gateway.collectorEnv" -}}
+{{- with .Values.gateway.collector }}
+- name: LITELLM_COLLECTOR_ENABLED
+  value: "true"
+- name: LITELLM_COLLECTOR_ADDRESS
+  value: {{ .address | quote }}
+- name: LITELLM_COLLECTOR_BUFFER_SIZE
+  value: {{ .bufferSize | quote }}
+- name: LITELLM_COLLECTOR_ON_UNAVAILABLE
+  value: {{ .onUnavailable | quote }}
+- name: LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS
+  value: {{ .drainTimeoutSeconds | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "litellm.lensConnectionEnv" -}}
+{{- with .Values.lensWorker }}
+{{- if or .enabled (and .mode (ne .mode "disabled")) }}
+{{- fail "lensWorker was removed; deploy Lens from its own chart and set lens.* instead, see the chart README" }}
+{{- end }}
+{{- end }}
+{{- with .Values.lens }}
+{{- if .enabled }}
+- name: LITELLM_LENS_URL
+  value: {{ required "lens.url is required when lens.enabled is true" .url | quote }}
+- name: LITELLM_LENS_PUBLIC_URL
+  value: {{ required "lens.publicUrl is required when lens.enabled is true" .publicUrl | quote }}
+- name: LENS_GATEWAY_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: {{ required "lens.gatewaySecret.name is required when lens.enabled is true" .gatewaySecret.name | quote }}
+      key: {{ .gatewaySecret.key | quote }}
+- name: LITELLM_LENS_SERVICE_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ required "lens.serviceTokenSecret.name is required when lens.enabled is true" .serviceTokenSecret.name | quote }}
+      key: {{ .serviceTokenSecret.key | quote }}
 {{- end }}
 {{- end }}
 {{- end -}}

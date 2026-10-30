@@ -1,24 +1,35 @@
 "use client";
 
-import { InfoCircleOutlined } from "@ant-design/icons";
+import type { ReactNode } from "react";
+import { Info } from "lucide-react";
 import { ColumnDef } from "@tanstack/react-table";
-import { Popover, Typography } from "antd";
 
 import { DataTableMultiSortHeader, DataTableSortHeader, type DataTableSortField } from "@/components/shared/DataTable";
+import {
+  inheritedBudgetGates,
+  keyOwnerBudgetSource,
+  teamMemberBudgetGate,
+  type TeamMemberBudgetSource,
+} from "@/components/shared/InheritedBudgetHint";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   DateCell,
+  ENTITY_CELL_TITLE_CLASSES,
   IdCell,
   IdentityCell,
   ModelsCell,
+  MoneyCell,
   SpendBudgetCell,
   StatusBadge,
+  UserPopoverCell,
   type StatusTone,
 } from "@/components/shared/table_cells";
+import { orgDetailHref, teamDetailHref } from "@/utils/entityLinks";
 
-import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
+import { KEY_RATE_LIMIT_SORT_FIELDS } from "../key_team_helpers/key_sorting";
 
 interface KeyStatus {
   tone: StatusTone;
@@ -31,7 +42,27 @@ const SPEND_BUDGET_SORT_FIELDS: DataTableSortField[] = [
   { id: "max_budget", label: "Budget" },
 ];
 
+export const KEY_TABLE_SORT_FIELDS: readonly string[] = [
+  "key_alias",
+  "token",
+  "created_at",
+  "updated_at",
+  ...SPEND_BUDGET_SORT_FIELDS.map((field) => field.id),
+  "expires",
+  "last_active",
+  "budget_reset_at",
+  "total_spend",
+  ...KEY_RATE_LIMIT_SORT_FIELDS.map((field) => field.id),
+];
+
 const getKeyStatus = (key: KeyResponse): KeyStatus => {
+  if (key.deleted_at) {
+    return {
+      tone: "neutral",
+      label: "Deleted",
+      tooltip: `Deleted ${new Date(key.deleted_at).toLocaleString()}${key.deleted_by ? ` by ${key.deleted_by}` : ""}. Kept for audit and spend history; requests using this key are rejected.`,
+    };
+  }
   if (key.blocked === true) {
     const isScimBlocked = (key.metadata as Record<string, unknown> | null | undefined)?.scim_blocked === true;
     return {
@@ -53,79 +84,30 @@ const getKeyStatus = (key: KeyResponse): KeyStatus => {
   };
 };
 
-const UserPopoverCell = ({
-  userAlias,
-  userEmail,
-  userId,
-  width,
-}: {
-  userAlias: string | null;
-  userEmail: string | null;
-  userId: string | null;
-  width: number;
-}) => {
-  const displayValue = userAlias || userEmail || userId;
-  const isDefaultAdmin = userId === "default_user_id";
-
-  const popoverContent = (
-    <div className="flex flex-col gap-2 text-xs min-w-[200px] max-w-[300px]">
-      {[
-        { label: "User Alias", value: userAlias },
-        { label: "User Email", value: userEmail },
-        { label: "User ID", value: userId },
-      ].map(({ label, value }) => (
-        <div key={label} className="flex flex-col min-w-0">
-          <span className="text-gray-400">{label}</span>
-          {value ? (
-            <Typography.Text className="font-mono text-xs" ellipsis={{ tooltip: value }} copyable>
-              {value}
-            </Typography.Text>
-          ) : (
-            <span className="font-mono">-</span>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-
-  if (isDefaultAdmin && !userAlias && !userEmail) {
-    return (
-      <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
-        <span className="cursor-default">
-          <DefaultProxyAdminTag userId={userId} />
-        </span>
-      </Popover>
-    );
-  }
-
-  return (
-    <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
-      <span className="font-mono text-xs truncate block cursor-default" style={{ maxWidth: width, overflow: "hidden" }}>
-        {displayValue || "-"}
-      </span>
-    </Popover>
-  );
-};
-
-const InfoHeader = ({ label, tooltip }: { label: string; tooltip: string }) => (
+const InfoHeader = ({ label, tooltip }: { label: ReactNode; tooltip: string }) => (
   <span className="flex items-center gap-1">
     {label}
-    <Popover content={tooltip} trigger="hover">
-      <InfoCircleOutlined className="text-gray-400 text-xs cursor-help" />
-    </Popover>
+    <HoverCard>
+      <HoverCardTrigger render={<Info className="size-3 text-muted-foreground cursor-help" />} />
+      <HoverCardContent className="w-auto">{tooltip}</HoverCardContent>
+    </HoverCard>
   </span>
 );
 
 interface KeyTableColumnsDeps {
   allTeams: Team[];
   organizations: Organization[];
+  teamMemberBudgets: Readonly<Record<string, TeamMemberBudgetSource>>;
   onSelectKey: (key: KeyResponse) => void;
+  applyUserBudgetToTeamKeys: boolean;
 }
 
 export const getKeyTableColumns = ({
   allTeams,
   organizations,
+  teamMemberBudgets,
   onSelectKey,
+  applyUserBudgetToTeamKeys,
 }: KeyTableColumnsDeps): ColumnDef<KeyResponse>[] => [
   {
     id: "key_alias",
@@ -184,12 +166,12 @@ export const getKeyTableColumns = ({
       const teamId = info.getValue() as string | null;
       if (!teamId) return "-";
       const team = allTeams.find((t) => t.team_id === teamId);
-      const displayValue = team?.team_alias || teamId;
-      const width = info.cell.column.getSize();
       return (
-        <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
-          {displayValue}
-        </span>
+        <IdentityCell
+          title={team?.team_alias || teamId}
+          titleClassName={ENTITY_CELL_TITLE_CLASSES}
+          href={teamDetailHref(teamId)}
+        />
       );
     },
   },
@@ -204,12 +186,12 @@ export const getKeyTableColumns = ({
       const orgId = info.getValue() as string | null;
       if (!orgId) return "-";
       const org = organizations.find((o) => o.organization_id === orgId);
-      const displayValue = org?.organization_alias || orgId;
-      const width = info.cell.column.getSize();
       return (
-        <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
-          {displayValue}
-        </span>
+        <IdentityCell
+          title={org?.organization_alias || orgId}
+          titleClassName={ENTITY_CELL_TITLE_CLASSES}
+          href={orgDetailHref(orgId)}
+        />
       );
     },
   },
@@ -277,51 +259,88 @@ export const getKeyTableColumns = ({
     id: "last_active",
     accessorKey: "last_active",
     meta: { title: "Last Active" },
-    header: () => (
+    header: ({ column }) => (
       <InfoHeader
-        label="Last Active"
+        label={<DataTableSortHeader column={column} title="Last Active" />}
         tooltip="This is a new field and is not backfilled. Only new key usage will update this value."
       />
     ),
     size: 130,
-    enableSorting: false,
+    enableSorting: true,
+    sortDescFirst: false,
     cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Unknown" />,
   },
   {
     id: "expires",
     accessorKey: "expires",
     meta: { title: "Expires" },
-    header: "Expires",
+    header: ({ column }) => <DataTableSortHeader column={column} title="Expires" />,
     size: 120,
-    enableSorting: false,
+    enableSorting: true,
+    sortDescFirst: false,
     cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Never" />,
   },
   {
     id: "spend",
     accessorKey: "spend",
-    meta: { title: "Spend / Budget", skeleton: "meter" },
+    meta: { title: "Spend / Budget", skeleton: "meter", numeric: true },
     header: ({ table }) => <DataTableMultiSortHeader table={table} fields={SPEND_BUDGET_SORT_FIELDS} />,
-    size: 180,
+    size: 240,
     enableSorting: true,
     cell: ({ row }) => {
-      const teamId = row.original.team_id;
-      const team = allTeams.find((t) => t.team_id === teamId);
+      const team = allTeams.find((t) => t.team_id === row.original.team_id);
+      const orgId = row.original.organization_id || row.original.org_id || team?.organization_id;
+      const organization = organizations.find((o) => o.organization_id === orgId);
+      const memberGate =
+        row.original.max_budget == null
+          ? teamMemberBudgetGate(
+              teamMemberBudgets[row.original.team_id ?? ""],
+              row.original.user_id,
+              row.original.user?.user_email,
+            )
+          : null;
       return (
         <SpendBudgetCell
           spend={row.original.spend}
           maxBudget={row.original.max_budget}
-          teamMaxBudget={team?.max_budget ?? null}
+          teamMemberGate={memberGate}
+          inheritedGates={
+            row.original.max_budget == null
+              ? inheritedBudgetGates(
+                  team,
+                  organization,
+                  keyOwnerBudgetSource(row.original, applyUserBudgetToTeamKeys),
+                  memberGate,
+                )
+              : []
+          }
         />
       );
     },
   },
   {
+    id: "total_spend",
+    accessorKey: "total_spend",
+    meta: { title: "Lifetime Spend" },
+    header: ({ column }) => (
+      <InfoHeader
+        label={<DataTableSortHeader column={column} title="Lifetime Spend" />}
+        tooltip="Cumulative spend across every budget period. Budget resets do not touch this value. Lifetime tracking started with LiteLLM v1.103.0 on September 19, 2026, so keys created earlier only count spend since that upgrade."
+      />
+    ),
+    size: 130,
+    enableSorting: true,
+    sortDescFirst: true,
+    cell: (info) => <MoneyCell value={info.getValue() as number | null | undefined} showZero />,
+  },
+  {
     id: "budget_reset_at",
     accessorKey: "budget_reset_at",
     meta: { title: "Budget Reset" },
-    header: "Budget Reset",
+    header: ({ column }) => <DataTableSortHeader column={column} title="Budget Reset" />,
     size: 130,
-    enableSorting: false,
+    enableSorting: true,
+    sortDescFirst: false,
     cell: (info) => <DateCell value={info.getValue() as string | null} fallback="Never" />,
   },
   {
@@ -342,7 +361,7 @@ export const getKeyTableColumns = ({
   {
     id: "rate_limits",
     meta: { title: "Rate Limits" },
-    header: "Rate Limits",
+    header: ({ table }) => <DataTableMultiSortHeader table={table} fields={KEY_RATE_LIMIT_SORT_FIELDS} />,
     size: 140,
     enableSorting: false,
     cell: ({ row }) => {

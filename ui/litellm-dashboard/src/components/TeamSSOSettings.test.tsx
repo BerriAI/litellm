@@ -4,9 +4,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, testQueryClient, waitFor, within } from "../../tests/test-utils";
 import TeamSSOSettings from "./TeamSSOSettings";
 import * as networking from "./networking";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 vi.mock("./networking");
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({
+    token: "test-token",
+    accessToken: "test-token",
+    userId: "test-user",
+    userEmail: "test-user@example.com",
+    userRole: "Admin",
+    premiumUser: true,
+    disabledPersonalKeyCreation: null,
+    showSSOBanner: false,
+  }),
+}));
 
 vi.mock("./common_components/budget_duration_dropdown", () => {
   const BudgetDurationDropdown = ({ value, onChange }: { value: string | null; onChange: (value: string) => void }) => (
@@ -99,7 +112,7 @@ vi.mock("./ModelSelect/ModelSelect", () => {
 const mockGetDefaultTeamSettings = vi.mocked(networking.getDefaultTeamSettings);
 const mockUpdateDefaultTeamSettings = vi.mocked(networking.updateDefaultTeamSettings);
 const mockOrganizationListCall = vi.mocked(networking.organizationListCall);
-const mockNotificationsManager = vi.mocked(NotificationsManager);
+const mockToast = vi.mocked(toast);
 
 const MOCK_ORGANIZATIONS = [
   { organization_id: "org-1", organization_alias: "Engineering" },
@@ -151,7 +164,7 @@ describe("TeamSSOSettings", () => {
         screen.getByText("No team settings available or you do not have permission to view them."),
       ).toBeInTheDocument();
     });
-    expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith("Failed to fetch team settings");
+    expect(mockToast.fromError).toHaveBeenCalledWith("Failed to fetch team settings");
   });
 
   it("should not fetch settings when access token is null", async () => {
@@ -368,7 +381,7 @@ describe("TeamSSOSettings", () => {
     await userEvent.click(screen.getByRole("button", { name: /Edit Settings/i }));
     const permissionComboboxes = screen.getAllByRole("combobox");
     const permissionCombobox = permissionComboboxes[permissionComboboxes.length - 1];
-    expect(permissionCombobox).toBeDefined();
+    expect(permissionCombobox).toBeInTheDocument();
     await userEvent.click(permissionCombobox!);
     const deletePermissionOptions = await screen.findAllByText("/key/delete");
     await userEvent.click(deletePermissionOptions[deletePermissionOptions.length - 1]);
@@ -407,7 +420,7 @@ describe("TeamSSOSettings", () => {
       expect(mockUpdateDefaultTeamSettings).toHaveBeenCalledWith("test-token", expect.any(Object));
     });
 
-    expect(mockNotificationsManager.success).toHaveBeenCalledWith("Default team settings updated successfully");
+    expect(mockToast.success).toHaveBeenCalledWith("Default team settings updated successfully");
 
     // Should exit edit mode after save
     await waitFor(() => {
@@ -547,7 +560,7 @@ describe("TeamSSOSettings", () => {
     await userEvent.click(screen.getByRole("button", { name: /Save Changes/i }));
 
     await waitFor(() => {
-      expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith("Failed to update team settings");
+      expect(mockToast.fromError).toHaveBeenCalledWith("Failed to update team settings");
     });
   });
 

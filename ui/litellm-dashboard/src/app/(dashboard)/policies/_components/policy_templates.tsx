@@ -1,10 +1,11 @@
+import { useTerminology } from "@/contexts/TerminologyContext";
 import React, { useState, useEffect, useMemo } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { ShieldCheck, ShieldAlert, FlaskConical, CircleDollarSign, CheckCircle2 } from "lucide-react";
 import { getPolicyTemplates } from "@/components/networking";
 
@@ -106,6 +107,7 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({
   onTemplatesLoaded,
   accessToken,
 }) => {
+  const term = useTerminology();
   const [templates, setTemplates] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
@@ -159,7 +161,7 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({
         onTemplatesLoaded?.(data);
       } catch (error) {
         console.error("Error fetching policy templates:", error);
-        MessageManager.error("Failed to fetch policy templates");
+        toast.error("Failed to fetch policy templates");
       } finally {
         setIsLoading(false);
       }
@@ -191,7 +193,7 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({
           <svg className="w-4 h-4" viewBox="0 0 16 16" fill="currentColor">
             <path d="M8 1l1.5 3.5L13 6l-3.5 1.5L8 11 6.5 7.5 3 6l3.5-1.5L8 1zm4 7l.75 1.75L14.5 10.5l-1.75.75L12 13l-.75-1.75L9.5 10.5l1.75-.75L12 8zM4 9l.75 1.75L6.5 11.5l-1.75.75L4 14l-.75-1.75L1.5 11.5l1.75-.75L4 9z" />
           </svg>
-          Use AI to find templates
+          {term("Use AI to find templates")}
         </Button>
       </div>
 

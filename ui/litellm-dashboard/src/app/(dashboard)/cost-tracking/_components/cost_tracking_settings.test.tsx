@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import CostTrackingSettings from "./cost_tracking_settings";
@@ -41,7 +41,7 @@ vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock("@/components/HelpLink", () => ({
+vi.mock("@/components/DocsMenu", () => ({
   DocsMenu: () => null,
 }));
 
@@ -73,7 +73,7 @@ describe("CostTrackingSettings", () => {
     const { container } = renderWithProviders(
       <CostTrackingSettings userID="user-1" userRole="proxy_admin" accessToken={null} />,
     );
-    expect(container.firstChild).toBeNull();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should render the page title", () => {
@@ -136,7 +136,7 @@ describe("CostTrackingSettings", () => {
       const addButton = await screen.findByRole("button", { name: /add provider discount/i });
       await user.click(addButton);
 
-      expect(await screen.findByText("Add Provider Discount", { selector: "h2" })).toBeInTheDocument();
+      expect(await screen.findByRole("dialog", { name: "Add Provider Discount" })).toBeInTheDocument();
     });
   });
 
@@ -153,7 +153,7 @@ describe("CostTrackingSettings", () => {
       const addButton = await screen.findByRole("button", { name: /add provider margin/i });
       await user.click(addButton);
 
-      expect(await screen.findByText("Add Provider Margin", { selector: "h2" })).toBeInTheDocument();
+      expect(await screen.findByRole("dialog", { name: "Add Provider Margin" })).toBeInTheDocument();
     });
   });
 
@@ -195,6 +195,28 @@ describe("CostTrackingSettings", () => {
 
       expect(mockRemoveDiscount).not.toHaveBeenCalled();
       expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+    });
+
+    it("should hold the confirmation open while the removal is still in flight", async () => {
+      mockDiscountConfig.mockReturnValue({ openai: 0.05 });
+      const { promise, resolve: settleRemoval } = Promise.withResolvers<void>();
+      mockRemoveDiscount.mockReturnValue(promise);
+
+      const user = await expandAndRemove("Provider Discounts", "Remove discount for openai");
+      await user.click(await screen.findByRole("button", { name: "Remove" }));
+
+      const removing = await screen.findByRole("button", { name: "Removing…" });
+      expect(removing).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+
+      await act(async () => {
+        settleRemoval();
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      });
+      expect(mockRemoveDiscount).toHaveBeenCalledWith("openai");
     });
 
     it("should remove the margin once removal is confirmed", async () => {

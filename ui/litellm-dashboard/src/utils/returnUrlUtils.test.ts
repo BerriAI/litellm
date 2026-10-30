@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import {
   buildLoginUrlWithReturn,
   clearStoredReturnUrl,
@@ -8,6 +10,7 @@ import {
   getReturnUrlFromParams,
   getStoredReturnUrl,
   isValidReturnUrl,
+  normalizeBackendPageUrlToUiOrigin,
   storeReturnUrl,
 } from "./returnUrlUtils";
 
@@ -119,6 +122,83 @@ describe("returnUrlUtils", () => {
 
       const loginUrl = buildLoginUrlWithReturn(getLoginUrl());
       expect(loginUrl).toBe("/ui/login/?redirect_to=http%3A%2F%2Flocalhost%3A3000%2Fui%3Fpage%3Dapi-keys");
+    });
+  });
+
+  describe("normalizeBackendPageUrlToUiOrigin", () => {
+    const backendPageUrl = "https://backend.example.com/ui?tab=keys#details";
+
+    it("moves runtime backend page URLs to the UI origin", () => {
+      expect(
+        normalizeBackendPageUrlToUiOrigin(
+          backendPageUrl,
+          "https://backend.example.com/litellm",
+          "https://ui.example.com",
+          true,
+        ),
+      ).toBe("/ui?tab=keys#details");
+    });
+
+    it("anchors protocol-relative paths to the UI origin", () => {
+      const normalizedUrl = normalizeBackendPageUrlToUiOrigin(
+        "https://backend.example.com//attacker.example/login",
+        "https://backend.example.com",
+        "https://ui.example.com",
+        true,
+      );
+
+      expect(new URL(normalizedUrl, "https://ui.example.com").origin).toBe("https://ui.example.com");
+      expect(normalizedUrl).toBe("https://ui.example.com//attacker.example/login");
+    });
+
+    it("anchors backslash-normalized protocol-relative paths to the UI origin", () => {
+      const normalizedUrl = normalizeBackendPageUrlToUiOrigin(
+        "https://backend.example.com/\\attacker.example/login",
+        "https://backend.example.com",
+        "https://ui.example.com",
+        true,
+      );
+
+      expect(new URL(normalizedUrl, "https://ui.example.com").origin).toBe("https://ui.example.com");
+      expect(normalizedUrl).toBe("https://ui.example.com//attacker.example/login");
+    });
+
+    it("returns an absolute UI-origin URL for generated links", () => {
+      expect(
+        normalizeBackendPageUrlToUiOrigin(backendPageUrl, "https://backend.example.com", "https://ui.example.com"),
+      ).toBe("https://ui.example.com/ui?tab=keys#details");
+    });
+
+    it("keeps runtime backend URLs unchanged when the backend and UI share an origin", () => {
+      expect(
+        normalizeBackendPageUrlToUiOrigin(
+          backendPageUrl.replace("backend.example.com", "ui.example.com"),
+          "https://ui.example.com/litellm",
+          "https://ui.example.com",
+          true,
+        ),
+      ).toBe("https://ui.example.com/ui?tab=keys#details");
+    });
+
+    it("keeps URLs unchanged when no runtime backend URL is configured", () => {
+      expect(normalizeBackendPageUrlToUiOrigin(backendPageUrl, null, "https://ui.example.com", true)).toBe(
+        backendPageUrl,
+      );
+    });
+  });
+
+  describe("consumeReturnUrl", () => {
+    it("accepts a return URL from the configured runtime backend", () => {
+      const backendPageUrl = "http://backend.lit.test:8080/ui?tab=keys";
+      Object.defineProperty(window, "location", {
+        value: {
+          ...window.location,
+          search: `?redirect_to=${encodeURIComponent(backendPageUrl)}`,
+        },
+        writable: true,
+      });
+
+      expect(consumeReturnUrl("http://backend.lit.test:8080")).toBe(backendPageUrl);
     });
   });
 

@@ -4,11 +4,11 @@ import json
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.bedrock.image_generation.amazon_nova_canvas_transformation import (
     AmazonNovaCanvasConfig,
 )
@@ -24,12 +24,14 @@ from litellm.llms.bedrock.image_generation.amazon_titan_transformation import (
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.bedrock import BearerPreparedRequest
 from litellm.types.utils import ImageResponse
 
-from ..base_aws_llm import BaseAWSLLM
+from ..base_aws_llm import BaseAWSLLM, bedrock_bearer_token
 from ..common_utils import BedrockError
 
 if TYPE_CHECKING:
@@ -38,13 +40,13 @@ else:
     AWSPreparedRequest = Any
 
 
-class BedrockImagePreparedRequest(BaseModel):
+class BedrockImagePreparedRequest(LiteLLMBaseModel):
     """
     Internal/Helper class for preparing the request for bedrock image generation
     """
 
     endpoint_url: str
-    prepped: AWSPreparedRequest
+    prepped: AWSPreparedRequest | BearerPreparedRequest
     body: bytes
     data: dict
 
@@ -64,11 +66,11 @@ class BedrockImageGeneration(BaseAWSLLM):
 
     @classmethod
     def get_config_class(cls, model: str | None) -> BedrockImageConfigClass:
-        if AmazonTitanImageGenerationConfig._is_titan_model(model):
+        if AmazonTitanImageGenerationConfig.is_titan_model(model):
             return AmazonTitanImageGenerationConfig
-        elif AmazonNovaCanvasConfig._is_nova_model(model):
+        elif AmazonNovaCanvasConfig.is_nova_model(model):
             return AmazonNovaCanvasConfig
-        elif AmazonStability3Config._is_stability_3_model(model):
+        elif AmazonStability3Config.is_stability_3_model(model):
             return AmazonStability3Config
         else:
             return litellm.AmazonStabilityConfig
@@ -109,7 +111,7 @@ class BedrockImageGeneration(BaseAWSLLM):
             )
 
         if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client()
+            client = get_httpx_client()
         try:
             response: Final = client.post(
                 url=prepared_request.endpoint_url,
@@ -119,7 +121,12 @@ class BedrockImageGeneration(BaseAWSLLM):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
-            raise BedrockError(status_code=error_code, message=err.response.text)
+            raise BedrockError(
+                status_code=error_code,
+                message=err.response.text,
+                headers=err.response.headers,
+                response=err.response,
+            )
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
         ### FORMAT RESPONSE TO OPENAI FORMAT ###
@@ -162,7 +169,12 @@ class BedrockImageGeneration(BaseAWSLLM):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
-            raise BedrockError(status_code=error_code, message=err.response.text)
+            raise BedrockError(
+                status_code=error_code,
+                message=err.response.text,
+                headers=err.response.headers,
+                response=err.response,
+            )
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
@@ -220,7 +232,9 @@ class BedrockImageGeneration(BaseAWSLLM):
             prepped (httpx.Request): The prepared request object
             body (bytes): The request body
         """
-        boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(optional_params, model)
+        boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(
+            optional_params, model, bearer_token=bedrock_bearer_token(api_key)
+        )
 
         # Use the existing ARN-aware provider detection method
         bedrock_provider: Final = self.get_bedrock_invoke_provider(model)
@@ -235,7 +249,7 @@ class BedrockImageGeneration(BaseAWSLLM):
             aws_bedrock_runtime_endpoint=boto3_credentials_info.aws_bedrock_runtime_endpoint,
             aws_region_name=boto3_credentials_info.aws_region_name,
         )
-        proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
+        proxy_endpoint_url = join_api_base(proxy_endpoint_url, f"model/{modelId}/invoke")
         data: Final = self._get_request_body(
             model=model,
             prompt=prompt,

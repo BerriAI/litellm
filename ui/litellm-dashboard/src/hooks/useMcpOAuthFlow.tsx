@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   buildMcpOAuthAuthorizeUrl,
   cacheTemporaryMcpServer,
@@ -16,20 +16,48 @@ import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 export type McpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
 
+export interface McpDcrCredentials {
+  client_id: string;
+  client_secret?: string | null;
+  dcr_issuer?: string | null;
+  dcr_server_url?: string | null;
+  token_endpoint_auth_method?: string | null;
+  redirect_uris?: string[];
+}
+
+const getRegisteredOAuthClient = (
+  registration: (Partial<McpDcrCredentials> & { dcr_redirect_uris?: string[] }) | undefined,
+): McpDcrCredentials | undefined =>
+  registration?.client_id
+    ? {
+        client_id: registration.client_id,
+        client_secret: registration.client_secret ?? null,
+        ...(registration.dcr_server_url && {
+          dcr_issuer: registration.dcr_issuer ?? null,
+          dcr_server_url: registration.dcr_server_url,
+          token_endpoint_auth_method:
+            registration.token_endpoint_auth_method === "client_secret_basic" ? "client_secret_basic" : null,
+          redirect_uris: registration.dcr_redirect_uris,
+        }),
+      }
+    : undefined;
+
+const oauthClientRequest = (client: McpDcrCredentials | undefined) => ({
+  clientId: client?.client_id,
+  clientSecret: client?.client_secret ?? undefined,
+});
+
 interface UseMcpOAuthFlowOptions {
   accessToken: string | null;
   getCredentials: () =>
     | {
         client_id?: string;
-        client_secret?: string;
+        client_secret?: string | null;
         scopes?: string[];
       }
     | undefined;
   getTemporaryPayload: () => Record<string, any> | null;
-  onTokenReceived: (
-    tokenResponse: Record<string, any>,
-    registeredClient?: { clientId?: string; clientSecret?: string },
-  ) => void;
+  onTokenReceived: (tokenResponse: Record<string, any>, registeredClient?: McpDcrCredentials) => void;
   onBeforeRedirect?: () => void;
   // Distinguishes which form started the flow (e.g. "create" vs "edit"). Both forms
   // mount this hook with shared storage keys, so the return handler only processes a
@@ -69,6 +97,8 @@ export const useMcpOAuthFlow = ({
     codeVerifier: string;
     clientId?: string;
     clientSecret?: string;
+    client?: McpDcrCredentials;
+    dcrCredentials?: McpDcrCredentials;
     serverId: string;
     redirectUri: string;
     flowSource?: string;
@@ -126,7 +156,7 @@ export const useMcpOAuthFlow = ({
 
     if (!accessToken) {
       setError("Missing admin token");
-      NotificationsManager.error("Access token missing. Please re-authenticate and try again.");
+      toast.error("Access token missing. Please re-authenticate and try again.");
       return;
     }
 
@@ -134,7 +164,7 @@ export const useMcpOAuthFlow = ({
     if (!temporaryPayload || !temporaryPayload.url || !temporaryPayload.transport) {
       const message = "Please complete server URL and transport before starting OAuth.";
       setError(message);
-      NotificationsManager.error(message);
+      toast.error(message);
       return;
     }
     try {
@@ -147,7 +177,7 @@ export const useMcpOAuthFlow = ({
         throw new Error("Temporary MCP server identifier missing. Please retry.");
       }
 
-      let registeredClient: { clientId?: string; clientSecret?: string } = {};
+      let registeredClient: McpDcrCredentials | undefined;
       const hasPreconfiguredCredentials = Boolean(temporaryPayload.credentials?.client_id);
 
       if (!hasPreconfiguredCredentials) {
@@ -162,24 +192,22 @@ export const useMcpOAuthFlow = ({
           // rejects the registration and the admin authorize dead-ends.
           redirect_uris: [callbackUrl()],
         });
-        registeredClient = {
-          clientId: registration?.client_id,
-          clientSecret: registration?.client_secret,
-        };
+        registeredClient = getRegisteredOAuthClient(registration);
       }
 
       const verifier = generateCodeVerifier();
       const challenge = await generateCodeChallenge(verifier);
       const state = crypto.randomUUID();
 
-      const clientId = registeredClient.clientId || credentials.client_id;
+      const client = registeredClient ?? getRegisteredOAuthClient(credentials);
       const scopeString = Array.isArray(credentials.scopes)
         ? credentials.scopes.filter((s) => s && s.trim().length > 0).join(" ")
         : undefined;
 
+      const { clientId } = oauthClientRequest(client);
       const authorizeUrl = buildMcpOAuthAuthorizeUrl({
         serverId,
-        clientId: clientId,
+        clientId,
         redirectUri: callbackUrl(),
         state,
         codeChallenge: challenge,
@@ -189,8 +217,7 @@ export const useMcpOAuthFlow = ({
       const flowState: StoredFlowState = {
         state,
         codeVerifier: verifier,
-        clientId,
-        clientSecret: registeredClient.clientSecret || credentials.client_secret,
+        client,
         serverId,
         redirectUri: callbackUrl(),
         flowSource,
@@ -221,7 +248,7 @@ export const useMcpOAuthFlow = ({
       setStatus("error");
       const message = extractErrorMessage(err);
       setError(message);
-      NotificationsManager.error(message);
+      toast.error(message);
     }
   }, [accessToken, getCredentials, getTemporaryPayload, onBeforeRedirect]);
 
@@ -263,7 +290,7 @@ export const useMcpOAuthFlow = ({
       processingRef.current = false;
       setError("Failed to resume OAuth flow. Please retry.");
       setStatus("error");
-      NotificationsManager.error("Failed to resume OAuth flow. Please retry.");
+      toast.error("Failed to resume OAuth flow. Please retry.");
       return;
     }
 
@@ -311,12 +338,15 @@ export const useMcpOAuthFlow = ({
         throw new Error("Authorization code missing in callback.");
       }
 
+      const client =
+        flowState.client ??
+        flowState.dcrCredentials ??
+        getRegisteredOAuthClient({ client_id: flowState.clientId, client_secret: flowState.clientSecret });
       setStatus("exchanging");
       const token = await exchangeMcpOAuthToken({
         serverId: flowState.serverId,
         code: payload.code,
-        clientId: flowState.clientId,
-        clientSecret: flowState.clientSecret,
+        ...oauthClientRequest(client),
         codeVerifier: flowState.codeVerifier,
         redirectUri: flowState.redirectUri,
         accessToken,
@@ -326,11 +356,11 @@ export const useMcpOAuthFlow = ({
         return;
       }
 
-      onTokenReceived(token, { clientId: flowState.clientId, clientSecret: flowState.clientSecret });
+      onTokenReceived(token, client);
       setTokenResponse(token);
       setStatus("success");
       setError(null);
-      NotificationsManager.success("OAuth token retrieved successfully");
+      toast.success("OAuth token retrieved successfully");
     } catch (err) {
       if (resetVersion !== resetVersionRef.current) {
         return;
@@ -338,7 +368,7 @@ export const useMcpOAuthFlow = ({
       const message = extractErrorMessage(err);
       setError(message);
       setStatus("error");
-      NotificationsManager.error(message);
+      toast.error(message);
     } finally {
       if (resetVersion === resetVersionRef.current) {
         clearStoredFlow();

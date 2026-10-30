@@ -8,10 +8,6 @@ vi.mock("@/components/networking", () => ({
   getCategoryYaml: vi.fn(),
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), error: vi.fn(), fromBackend: vi.fn() },
-}));
-
 const PREBUILT = [
   { name: "us_ssn", display_name: "US Social Security Number", category: "PII Patterns", description: "d" },
 ];

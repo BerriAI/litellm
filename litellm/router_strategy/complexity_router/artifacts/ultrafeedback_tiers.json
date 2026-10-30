@@ -1,0 +1,4069 @@
+{
+  "schema_version": 1,
+  "global_statistics": [
+    {
+      "tier": 1,
+      "successes": 36619.0,
+      "observations": 45504.0
+    },
+    {
+      "tier": 2,
+      "successes": 59797.0,
+      "observations": 70062.0
+    },
+    {
+      "tier": 3,
+      "successes": 48604.0,
+      "observations": 52245.0
+    },
+    {
+      "tier": 4,
+      "successes": 11393.0,
+      "observations": 11561.0
+    }
+  ],
+  "domain_statistics": [
+    {
+      "tier": 1,
+      "successes": 1592.0,
+      "observations": 2211.0,
+      "request_type": "analytical_reasoning"
+    },
+    {
+      "tier": 2,
+      "successes": 2654.0,
+      "observations": 3374.0,
+      "request_type": "analytical_reasoning"
+    },
+    {
+      "tier": 3,
+      "successes": 2243.0,
+      "observations": 2481.0,
+      "request_type": "analytical_reasoning"
+    },
+    {
+      "tier": 4,
+      "successes": 538.0,
+      "observations": 546.0,
+      "request_type": "analytical_reasoning"
+    },
+    {
+      "tier": 1,
+      "successes": 750.0,
+      "observations": 1015.0,
+      "request_type": "code_generation"
+    },
+    {
+      "tier": 2,
+      "successes": 1271.0,
+      "observations": 1511.0,
+      "request_type": "code_generation"
+    },
+    {
+      "tier": 3,
+      "successes": 1030.0,
+      "observations": 1111.0,
+      "request_type": "code_generation"
+    },
+    {
+      "tier": 4,
+      "successes": 233.0,
+      "observations": 235.0,
+      "request_type": "code_generation"
+    },
+    {
+      "tier": 1,
+      "successes": 243.0,
+      "observations": 277.0,
+      "request_type": "code_understanding"
+    },
+    {
+      "tier": 2,
+      "successes": 385.0,
+      "observations": 425.0,
+      "request_type": "code_understanding"
+    },
+    {
+      "tier": 3,
+      "successes": 322.0,
+      "observations": 334.0,
+      "request_type": "code_understanding"
+    },
+    {
+      "tier": 4,
+      "successes": 74.0,
+      "observations": 76.0,
+      "request_type": "code_understanding"
+    },
+    {
+      "tier": 1,
+      "successes": 2014.0,
+      "observations": 2170.0,
+      "request_type": "factual_lookup"
+    },
+    {
+      "tier": 2,
+      "successes": 3120.0,
+      "observations": 3266.0,
+      "request_type": "factual_lookup"
+    },
+    {
+      "tier": 3,
+      "successes": 2612.0,
+      "observations": 2670.0,
+      "request_type": "factual_lookup"
+    },
+    {
+      "tier": 4,
+      "successes": 540.0,
+      "observations": 542.0,
+      "request_type": "factual_lookup"
+    },
+    {
+      "tier": 1,
+      "successes": 30571.0,
+      "observations": 38161.0,
+      "request_type": "general"
+    },
+    {
+      "tier": 2,
+      "successes": 50037.0,
+      "observations": 58821.0,
+      "request_type": "general"
+    },
+    {
+      "tier": 3,
+      "successes": 40460.0,
+      "observations": 43618.0,
+      "request_type": "general"
+    },
+    {
+      "tier": 4,
+      "successes": 9565.0,
+      "observations": 9716.0,
+      "request_type": "general"
+    },
+    {
+      "tier": 1,
+      "successes": 159.0,
+      "observations": 170.0,
+      "request_type": "technical_design"
+    },
+    {
+      "tier": 2,
+      "successes": 282.0,
+      "observations": 303.0,
+      "request_type": "technical_design"
+    },
+    {
+      "tier": 3,
+      "successes": 231.0,
+      "observations": 236.0,
+      "request_type": "technical_design"
+    },
+    {
+      "tier": 4,
+      "successes": 47.0,
+      "observations": 47.0,
+      "request_type": "technical_design"
+    },
+    {
+      "tier": 1,
+      "successes": 1290.0,
+      "observations": 1500.0,
+      "request_type": "writing"
+    },
+    {
+      "tier": 2,
+      "successes": 2048.0,
+      "observations": 2362.0,
+      "request_type": "writing"
+    },
+    {
+      "tier": 3,
+      "successes": 1706.0,
+      "observations": 1795.0,
+      "request_type": "writing"
+    },
+    {
+      "tier": 4,
+      "successes": 396.0,
+      "observations": 399.0,
+      "request_type": "writing"
+    }
+  ],
+  "cohort_statistics": [
+    {
+      "tier": 1,
+      "successes": 272.0,
+      "observations": 372.0,
+      "cohort": "analytical_reasoning|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 420.0,
+      "observations": 519.0,
+      "cohort": "analytical_reasoning|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 341.0,
+      "observations": 381.0,
+      "cohort": "analytical_reasoning|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 82.0,
+      "observations": 84.0,
+      "cohort": "analytical_reasoning|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 0.0,
+      "observations": 1.0,
+      "cohort": "analytical_reasoning|long|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 2,
+      "successes": 0.0,
+      "observations": 2.0,
+      "cohort": "analytical_reasoning|long|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 3,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "analytical_reasoning|long|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 1,
+      "successes": 11.0,
+      "observations": 18.0,
+      "cohort": "analytical_reasoning|long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 33.0,
+      "observations": 45.0,
+      "cohort": "analytical_reasoning|long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 28.0,
+      "observations": 34.0,
+      "cohort": "analytical_reasoning|long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "analytical_reasoning|long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 131.0,
+      "observations": 176.0,
+      "cohort": "analytical_reasoning|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 210.0,
+      "observations": 274.0,
+      "cohort": "analytical_reasoning|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 187.0,
+      "observations": 209.0,
+      "cohort": "analytical_reasoning|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 39.0,
+      "observations": 41.0,
+      "cohort": "analytical_reasoning|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 4.0,
+      "observations": 9.0,
+      "cohort": "analytical_reasoning|long|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 2,
+      "successes": 11.0,
+      "observations": 13.0,
+      "cohort": "analytical_reasoning|long|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 3,
+      "successes": 6.0,
+      "observations": 7.0,
+      "cohort": "analytical_reasoning|long|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 4,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "analytical_reasoning|long|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 1,
+      "successes": 10.0,
+      "observations": 15.0,
+      "cohort": "analytical_reasoning|long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 14.0,
+      "observations": 16.0,
+      "cohort": "analytical_reasoning|long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 15.0,
+      "observations": 16.0,
+      "cohort": "analytical_reasoning|long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 5.0,
+      "observations": 5.0,
+      "cohort": "analytical_reasoning|long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 15.0,
+      "observations": 20.0,
+      "cohort": "analytical_reasoning|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 33.0,
+      "observations": 38.0,
+      "cohort": "analytical_reasoning|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 28.0,
+      "observations": 29.0,
+      "cohort": "analytical_reasoning|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 5.0,
+      "observations": 5.0,
+      "cohort": "analytical_reasoning|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1.0,
+      "observations": 2.0,
+      "cohort": "analytical_reasoning|long|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "analytical_reasoning|long|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 26.0,
+      "observations": 34.0,
+      "cohort": "analytical_reasoning|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 39.0,
+      "observations": 50.0,
+      "cohort": "analytical_reasoning|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 42.0,
+      "observations": 45.0,
+      "cohort": "analytical_reasoning|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 11.0,
+      "observations": 11.0,
+      "cohort": "analytical_reasoning|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 2.0,
+      "observations": 3.0,
+      "cohort": "analytical_reasoning|long|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 4.0,
+      "observations": 4.0,
+      "cohort": "analytical_reasoning|long|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "analytical_reasoning|long|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 452.0,
+      "observations": 634.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 745.0,
+      "observations": 962.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 634.0,
+      "observations": 691.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 151.0,
+      "observations": 153.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1.0,
+      "observations": 3.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 2,
+      "successes": 1.0,
+      "observations": 4.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 1,
+      "successes": 10.0,
+      "observations": 20.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 30.0,
+      "observations": 44.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 12.0,
+      "observations": 15.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 5.0,
+      "observations": 5.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 178.0,
+      "observations": 270.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 304.0,
+      "observations": 402.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 266.0,
+      "observations": 295.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 73.0,
+      "observations": 73.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 7.0,
+      "observations": 18.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 2,
+      "successes": 17.0,
+      "observations": 32.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 3,
+      "successes": 17.0,
+      "observations": 27.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 4,
+      "successes": 7.0,
+      "observations": 7.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 1,
+      "successes": 11.0,
+      "observations": 17.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 17.0,
+      "observations": 25.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 10.0,
+      "observations": 16.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 6.0,
+      "observations": 6.0,
+      "cohort": "analytical_reasoning|medium|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 58.0,
+      "observations": 72.0,
+      "cohort": "analytical_reasoning|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 90.0,
+      "observations": 103.0,
+      "cohort": "analytical_reasoning|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 72.0,
+      "observations": 78.0,
+      "cohort": "analytical_reasoning|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 19.0,
+      "observations": 19.0,
+      "cohort": "analytical_reasoning|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "analytical_reasoning|medium|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "analytical_reasoning|medium|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "analytical_reasoning|medium|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 37.0,
+      "observations": 56.0,
+      "cohort": "analytical_reasoning|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 95.0,
+      "observations": 110.0,
+      "cohort": "analytical_reasoning|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 73.0,
+      "observations": 82.0,
+      "cohort": "analytical_reasoning|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 20.0,
+      "observations": 20.0,
+      "cohort": "analytical_reasoning|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 69.0,
+      "observations": 83.0,
+      "cohort": "analytical_reasoning|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 102.0,
+      "observations": 110.0,
+      "cohort": "analytical_reasoning|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 93.0,
+      "observations": 98.0,
+      "cohort": "analytical_reasoning|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 17.0,
+      "observations": 17.0,
+      "cohort": "analytical_reasoning|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "analytical_reasoning|short|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 6.0,
+      "observations": 6.0,
+      "cohort": "analytical_reasoning|short|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "analytical_reasoning|short|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 21.0,
+      "observations": 32.0,
+      "cohort": "analytical_reasoning|short|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 45.0,
+      "observations": 59.0,
+      "cohort": "analytical_reasoning|short|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 45.0,
+      "observations": 48.0,
+      "cohort": "analytical_reasoning|short|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 9.0,
+      "observations": 9.0,
+      "cohort": "analytical_reasoning|short|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "analytical_reasoning|short|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "analytical_reasoning|short|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "analytical_reasoning|short|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 7.0,
+      "observations": 9.0,
+      "cohort": "analytical_reasoning|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 8.0,
+      "observations": 12.0,
+      "cohort": "analytical_reasoning|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 11.0,
+      "observations": 11.0,
+      "cohort": "analytical_reasoning|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 5.0,
+      "observations": 9.0,
+      "cohort": "analytical_reasoning|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 9.0,
+      "observations": 11.0,
+      "cohort": "analytical_reasoning|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 8.0,
+      "observations": 8.0,
+      "cohort": "analytical_reasoning|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 136.0,
+      "observations": 176.0,
+      "cohort": "analytical_reasoning|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 221.0,
+      "observations": 267.0,
+      "cohort": "analytical_reasoning|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 172.0,
+      "observations": 194.0,
+      "cohort": "analytical_reasoning|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 37.0,
+      "observations": 39.0,
+      "cohort": "analytical_reasoning|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 6.0,
+      "observations": 11.0,
+      "cohort": "analytical_reasoning|very_long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 10.0,
+      "observations": 15.0,
+      "cohort": "analytical_reasoning|very_long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 7.0,
+      "observations": 8.0,
+      "cohort": "analytical_reasoning|very_long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "analytical_reasoning|very_long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 68.0,
+      "observations": 84.0,
+      "cohort": "analytical_reasoning|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 103.0,
+      "observations": 136.0,
+      "cohort": "analytical_reasoning|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 113.0,
+      "observations": 119.0,
+      "cohort": "analytical_reasoning|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 21.0,
+      "observations": 21.0,
+      "cohort": "analytical_reasoning|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "analytical_reasoning|very_long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 1.0,
+      "observations": 3.0,
+      "cohort": "analytical_reasoning|very_long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 4.0,
+      "observations": 4.0,
+      "cohort": "analytical_reasoning|very_long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 13.0,
+      "observations": 16.0,
+      "cohort": "analytical_reasoning|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 27.0,
+      "observations": 34.0,
+      "cohort": "analytical_reasoning|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 15.0,
+      "observations": 16.0,
+      "cohort": "analytical_reasoning|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 6.0,
+      "observations": 6.0,
+      "cohort": "analytical_reasoning|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 4.0,
+      "observations": 5.0,
+      "cohort": "analytical_reasoning|very_long|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 4.0,
+      "observations": 7.0,
+      "cohort": "analytical_reasoning|very_long|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "analytical_reasoning|very_long|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "analytical_reasoning|very_long|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 32.0,
+      "observations": 39.0,
+      "cohort": "analytical_reasoning|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 48.0,
+      "observations": 63.0,
+      "cohort": "analytical_reasoning|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 35.0,
+      "observations": 40.0,
+      "cohort": "analytical_reasoning|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 14.0,
+      "observations": 14.0,
+      "cohort": "analytical_reasoning|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1.0,
+      "observations": 3.0,
+      "cohort": "analytical_reasoning|very_long|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 1.0,
+      "observations": 2.0,
+      "cohort": "analytical_reasoning|very_long|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 1.0,
+      "observations": 2.0,
+      "cohort": "analytical_reasoning|very_long|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "analytical_reasoning|very_long|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 28.0,
+      "observations": 31.0,
+      "cohort": "code_generation|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 41.0,
+      "observations": 46.0,
+      "cohort": "code_generation|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 25.0,
+      "observations": 26.0,
+      "cohort": "code_generation|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 5.0,
+      "observations": 5.0,
+      "cohort": "code_generation|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 6.0,
+      "observations": 9.0,
+      "cohort": "code_generation|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 20.0,
+      "observations": 23.0,
+      "cohort": "code_generation|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 16.0,
+      "observations": 16.0,
+      "cohort": "code_generation|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 4.0,
+      "observations": 4.0,
+      "cohort": "code_generation|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 46.0,
+      "observations": 60.0,
+      "cohort": "code_generation|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 72.0,
+      "observations": 91.0,
+      "cohort": "code_generation|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 59.0,
+      "observations": 64.0,
+      "cohort": "code_generation|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 17.0,
+      "observations": 17.0,
+      "cohort": "code_generation|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 32.0,
+      "observations": 49.0,
+      "cohort": "code_generation|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 60.0,
+      "observations": 76.0,
+      "cohort": "code_generation|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 48.0,
+      "observations": 52.0,
+      "cohort": "code_generation|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 15.0,
+      "observations": 15.0,
+      "cohort": "code_generation|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 93.0,
+      "observations": 121.0,
+      "cohort": "code_generation|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 149.0,
+      "observations": 170.0,
+      "cohort": "code_generation|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 146.0,
+      "observations": 151.0,
+      "cohort": "code_generation|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 26.0,
+      "observations": 26.0,
+      "cohort": "code_generation|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 12.0,
+      "observations": 16.0,
+      "cohort": "code_generation|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 22.0,
+      "observations": 25.0,
+      "cohort": "code_generation|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 13.0,
+      "observations": 15.0,
+      "cohort": "code_generation|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 4.0,
+      "observations": 4.0,
+      "cohort": "code_generation|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 196.0,
+      "observations": 268.0,
+      "cohort": "code_generation|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 312.0,
+      "observations": 370.0,
+      "cohort": "code_generation|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 234.0,
+      "observations": 253.0,
+      "cohort": "code_generation|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 56.0,
+      "observations": 57.0,
+      "cohort": "code_generation|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 0.0,
+      "observations": 1.0,
+      "cohort": "code_generation|medium|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "code_generation|medium|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "code_generation|medium|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 40.0,
+      "observations": 59.0,
+      "cohort": "code_generation|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 73.0,
+      "observations": 92.0,
+      "cohort": "code_generation|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 78.0,
+      "observations": 83.0,
+      "cohort": "code_generation|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 14.0,
+      "observations": 14.0,
+      "cohort": "code_generation|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 2.0,
+      "observations": 3.0,
+      "cohort": "code_generation|medium|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "code_generation|medium|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 106.0,
+      "observations": 140.0,
+      "cohort": "code_generation|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 220.0,
+      "observations": 247.0,
+      "cohort": "code_generation|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 167.0,
+      "observations": 178.0,
+      "cohort": "code_generation|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 43.0,
+      "observations": 43.0,
+      "cohort": "code_generation|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 2.0,
+      "observations": 4.0,
+      "cohort": "code_generation|short|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 7.0,
+      "observations": 9.0,
+      "cohort": "code_generation|short|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 7.0,
+      "observations": 7.0,
+      "cohort": "code_generation|short|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 147.0,
+      "observations": 199.0,
+      "cohort": "code_generation|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 233.0,
+      "observations": 269.0,
+      "cohort": "code_generation|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 189.0,
+      "observations": 209.0,
+      "cohort": "code_generation|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 34.0,
+      "observations": 35.0,
+      "cohort": "code_generation|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 7.0,
+      "observations": 10.0,
+      "cohort": "code_generation|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 18.0,
+      "observations": 22.0,
+      "cohort": "code_generation|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 10.0,
+      "observations": 10.0,
+      "cohort": "code_generation|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "code_generation|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 2.0,
+      "observations": 4.0,
+      "cohort": "code_generation|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 5.0,
+      "observations": 8.0,
+      "cohort": "code_generation|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 7.0,
+      "observations": 8.0,
+      "cohort": "code_generation|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "code_generation|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 3.0,
+      "observations": 5.0,
+      "cohort": "code_generation|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "code_generation|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "code_generation|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 7.0,
+      "observations": 9.0,
+      "cohort": "code_generation|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 7.0,
+      "observations": 8.0,
+      "cohort": "code_generation|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 9.0,
+      "observations": 9.0,
+      "cohort": "code_generation|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "code_generation|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 24.0,
+      "observations": 33.0,
+      "cohort": "code_generation|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 25.0,
+      "observations": 45.0,
+      "cohort": "code_generation|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 19.0,
+      "observations": 27.0,
+      "cohort": "code_generation|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 7.0,
+      "observations": 7.0,
+      "cohort": "code_generation|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "code_understanding|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "code_understanding|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 6.0,
+      "observations": 6.0,
+      "cohort": "code_understanding|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "code_understanding|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 3.0,
+      "observations": 5.0,
+      "cohort": "code_understanding|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "code_understanding|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 2.0,
+      "observations": 3.0,
+      "cohort": "code_understanding|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "code_understanding|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 17.0,
+      "observations": 23.0,
+      "cohort": "code_understanding|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 27.0,
+      "observations": 37.0,
+      "cohort": "code_understanding|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 32.0,
+      "observations": 33.0,
+      "cohort": "code_understanding|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "code_understanding|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 24.0,
+      "observations": 28.0,
+      "cohort": "code_understanding|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 37.0,
+      "observations": 44.0,
+      "cohort": "code_understanding|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 33.0,
+      "observations": 33.0,
+      "cohort": "code_understanding|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 7.0,
+      "observations": 7.0,
+      "cohort": "code_understanding|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 8.0,
+      "observations": 9.0,
+      "cohort": "code_understanding|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 19.0,
+      "observations": 21.0,
+      "cohort": "code_understanding|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 10.0,
+      "observations": 10.0,
+      "cohort": "code_understanding|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 4.0,
+      "observations": 4.0,
+      "cohort": "code_understanding|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 2.0,
+      "observations": 3.0,
+      "cohort": "code_understanding|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 2.0,
+      "observations": 3.0,
+      "cohort": "code_understanding|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "code_understanding|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "code_understanding|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 73.0,
+      "observations": 76.0,
+      "cohort": "code_understanding|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 107.0,
+      "observations": 111.0,
+      "cohort": "code_understanding|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 87.0,
+      "observations": 87.0,
+      "cohort": "code_understanding|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 22.0,
+      "observations": 22.0,
+      "cohort": "code_understanding|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 32.0,
+      "observations": 33.0,
+      "cohort": "code_understanding|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 44.0,
+      "observations": 44.0,
+      "cohort": "code_understanding|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 44.0,
+      "observations": 47.0,
+      "cohort": "code_understanding|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 8.0,
+      "observations": 8.0,
+      "cohort": "code_understanding|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 0.0,
+      "observations": 1.0,
+      "cohort": "code_understanding|medium|code=1|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 2,
+      "successes": 0.0,
+      "observations": 2.0,
+      "cohort": "code_understanding|medium|code=1|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "code_understanding|medium|code=1|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 1,
+      "successes": 15.0,
+      "observations": 16.0,
+      "cohort": "code_understanding|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 23.0,
+      "observations": 23.0,
+      "cohort": "code_understanding|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 12.0,
+      "observations": 14.0,
+      "cohort": "code_understanding|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "code_understanding|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 2.0,
+      "observations": 3.0,
+      "cohort": "code_understanding|short|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "code_understanding|short|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 36.0,
+      "observations": 43.0,
+      "cohort": "code_understanding|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 71.0,
+      "observations": 74.0,
+      "cohort": "code_understanding|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 48.0,
+      "observations": 50.0,
+      "cohort": "code_understanding|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 12.0,
+      "observations": 13.0,
+      "cohort": "code_understanding|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 5.0,
+      "observations": 6.0,
+      "cohort": "code_understanding|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 10.0,
+      "observations": 10.0,
+      "cohort": "code_understanding|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 7.0,
+      "observations": 7.0,
+      "cohort": "code_understanding|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "code_understanding|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "code_understanding|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 0.0,
+      "observations": 1.0,
+      "cohort": "code_understanding|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "code_understanding|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 9.0,
+      "observations": 11.0,
+      "cohort": "code_understanding|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 18.0,
+      "observations": 23.0,
+      "cohort": "code_understanding|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 11.0,
+      "observations": 13.0,
+      "cohort": "code_understanding|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "code_understanding|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "code_understanding|very_long|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "code_understanding|very_long|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 13.0,
+      "observations": 17.0,
+      "cohort": "code_understanding|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 19.0,
+      "observations": 23.0,
+      "cohort": "code_understanding|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 27.0,
+      "observations": 28.0,
+      "cohort": "code_understanding|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 7.0,
+      "observations": 8.0,
+      "cohort": "code_understanding|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 49.0,
+      "observations": 54.0,
+      "cohort": "factual_lookup|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 64.0,
+      "observations": 75.0,
+      "cohort": "factual_lookup|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 80.0,
+      "observations": 80.0,
+      "cohort": "factual_lookup|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 15.0,
+      "observations": 15.0,
+      "cohort": "factual_lookup|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 9.0,
+      "observations": 9.0,
+      "cohort": "factual_lookup|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 12.0,
+      "observations": 14.0,
+      "cohort": "factual_lookup|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 9.0,
+      "observations": 10.0,
+      "cohort": "factual_lookup|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "factual_lookup|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "factual_lookup|long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "factual_lookup|long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 19.0,
+      "observations": 22.0,
+      "cohort": "factual_lookup|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 35.0,
+      "observations": 38.0,
+      "cohort": "factual_lookup|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 37.0,
+      "observations": 41.0,
+      "cohort": "factual_lookup|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 7.0,
+      "observations": 7.0,
+      "cohort": "factual_lookup|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 66.0,
+      "observations": 75.0,
+      "cohort": "factual_lookup|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 73.0,
+      "observations": 86.0,
+      "cohort": "factual_lookup|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 69.0,
+      "observations": 74.0,
+      "cohort": "factual_lookup|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 21.0,
+      "observations": 21.0,
+      "cohort": "factual_lookup|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "factual_lookup|long|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "factual_lookup|long|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "factual_lookup|long|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 174.0,
+      "observations": 181.0,
+      "cohort": "factual_lookup|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 204.0,
+      "observations": 215.0,
+      "cohort": "factual_lookup|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 206.0,
+      "observations": 210.0,
+      "cohort": "factual_lookup|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 42.0,
+      "observations": 42.0,
+      "cohort": "factual_lookup|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 31.0,
+      "observations": 37.0,
+      "cohort": "factual_lookup|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 41.0,
+      "observations": 48.0,
+      "cohort": "factual_lookup|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 44.0,
+      "observations": 45.0,
+      "cohort": "factual_lookup|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 10.0,
+      "observations": 10.0,
+      "cohort": "factual_lookup|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 0.0,
+      "observations": 1.0,
+      "cohort": "factual_lookup|medium|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "factual_lookup|medium|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "factual_lookup|medium|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 131.0,
+      "observations": 142.0,
+      "cohort": "factual_lookup|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 162.0,
+      "observations": 171.0,
+      "cohort": "factual_lookup|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 146.0,
+      "observations": 151.0,
+      "cohort": "factual_lookup|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 24.0,
+      "observations": 24.0,
+      "cohort": "factual_lookup|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 41.0,
+      "observations": 46.0,
+      "cohort": "factual_lookup|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 55.0,
+      "observations": 59.0,
+      "cohort": "factual_lookup|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 45.0,
+      "observations": 46.0,
+      "cohort": "factual_lookup|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 9.0,
+      "observations": 9.0,
+      "cohort": "factual_lookup|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1382.0,
+      "observations": 1473.0,
+      "cohort": "factual_lookup|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 2290.0,
+      "observations": 2348.0,
+      "cohort": "factual_lookup|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 1824.0,
+      "observations": 1853.0,
+      "cohort": "factual_lookup|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 368.0,
+      "observations": 370.0,
+      "cohort": "factual_lookup|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 3.0,
+      "observations": 5.0,
+      "cohort": "factual_lookup|short|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 2,
+      "successes": 12.0,
+      "observations": 13.0,
+      "cohort": "factual_lookup|short|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 3,
+      "successes": 7.0,
+      "observations": 7.0,
+      "cohort": "factual_lookup|short|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 4,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "factual_lookup|short|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 1,
+      "successes": 11.0,
+      "observations": 16.0,
+      "cohort": "factual_lookup|short|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 28.0,
+      "observations": 31.0,
+      "cohort": "factual_lookup|short|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 15.0,
+      "observations": 17.0,
+      "cohort": "factual_lookup|short|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 4.0,
+      "observations": 4.0,
+      "cohort": "factual_lookup|short|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 36.0,
+      "observations": 39.0,
+      "cohort": "factual_lookup|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 63.0,
+      "observations": 66.0,
+      "cohort": "factual_lookup|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 64.0,
+      "observations": 66.0,
+      "cohort": "factual_lookup|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 13.0,
+      "observations": 13.0,
+      "cohort": "factual_lookup|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 4.0,
+      "observations": 4.0,
+      "cohort": "factual_lookup|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 5.0,
+      "observations": 6.0,
+      "cohort": "factual_lookup|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 4.0,
+      "observations": 5.0,
+      "cohort": "factual_lookup|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "factual_lookup|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 27.0,
+      "observations": 31.0,
+      "cohort": "factual_lookup|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 29.0,
+      "observations": 37.0,
+      "cohort": "factual_lookup|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 26.0,
+      "observations": 29.0,
+      "cohort": "factual_lookup|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 11.0,
+      "observations": 11.0,
+      "cohort": "factual_lookup|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "factual_lookup|very_long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 0.0,
+      "observations": 2.0,
+      "cohort": "factual_lookup|very_long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "factual_lookup|very_long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 7.0,
+      "observations": 8.0,
+      "cohort": "factual_lookup|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 17.0,
+      "observations": 20.0,
+      "cohort": "factual_lookup|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 14.0,
+      "observations": 14.0,
+      "cohort": "factual_lookup|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "factual_lookup|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 4.0,
+      "observations": 4.0,
+      "cohort": "factual_lookup|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 6.0,
+      "observations": 6.0,
+      "cohort": "factual_lookup|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 5.0,
+      "observations": 5.0,
+      "cohort": "factual_lookup|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "factual_lookup|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 17.0,
+      "observations": 21.0,
+      "cohort": "factual_lookup|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 19.0,
+      "observations": 25.0,
+      "cohort": "factual_lookup|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 13.0,
+      "observations": 13.0,
+      "cohort": "factual_lookup|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 5.0,
+      "observations": 5.0,
+      "cohort": "factual_lookup|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 2828.0,
+      "observations": 3552.0,
+      "cohort": "general|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 4621.0,
+      "observations": 5551.0,
+      "cohort": "general|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 3628.0,
+      "observations": 3931.0,
+      "cohort": "general|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 911.0,
+      "observations": 922.0,
+      "cohort": "general|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 127.0,
+      "observations": 406.0,
+      "cohort": "general|long|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 2,
+      "successes": 250.0,
+      "observations": 583.0,
+      "cohort": "general|long|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 3,
+      "successes": 219.0,
+      "observations": 396.0,
+      "cohort": "general|long|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 4,
+      "successes": 98.0,
+      "observations": 107.0,
+      "cohort": "general|long|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 1,
+      "successes": 94.0,
+      "observations": 127.0,
+      "cohort": "general|long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 168.0,
+      "observations": 196.0,
+      "cohort": "general|long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 135.0,
+      "observations": 146.0,
+      "cohort": "general|long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 34.0,
+      "observations": 35.0,
+      "cohort": "general|long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 912.0,
+      "observations": 1219.0,
+      "cohort": "general|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 1417.0,
+      "observations": 1736.0,
+      "cohort": "general|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 1163.0,
+      "observations": 1258.0,
+      "cohort": "general|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 278.0,
+      "observations": 283.0,
+      "cohort": "general|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 33.0,
+      "observations": 122.0,
+      "cohort": "general|long|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 2,
+      "successes": 41.0,
+      "observations": 150.0,
+      "cohort": "general|long|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 3,
+      "successes": 61.0,
+      "observations": 96.0,
+      "cohort": "general|long|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 4,
+      "successes": 24.0,
+      "observations": 24.0,
+      "cohort": "general|long|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 1,
+      "successes": 16.0,
+      "observations": 24.0,
+      "cohort": "general|long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 24.0,
+      "observations": 34.0,
+      "cohort": "general|long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 18.0,
+      "observations": 21.0,
+      "cohort": "general|long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 5.0,
+      "observations": 5.0,
+      "cohort": "general|long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 271.0,
+      "observations": 348.0,
+      "cohort": "general|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 488.0,
+      "observations": 555.0,
+      "cohort": "general|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 369.0,
+      "observations": 386.0,
+      "cohort": "general|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 67.0,
+      "observations": 71.0,
+      "cohort": "general|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1.0,
+      "observations": 3.0,
+      "cohort": "general|long|code=1|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 2,
+      "successes": 0.0,
+      "observations": 3.0,
+      "cohort": "general|long|code=1|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 3,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "general|long|code=1|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 1,
+      "successes": 9.0,
+      "observations": 9.0,
+      "cohort": "general|long|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 14.0,
+      "observations": 17.0,
+      "cohort": "general|long|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 9.0,
+      "observations": 10.0,
+      "cohort": "general|long|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 4.0,
+      "observations": 4.0,
+      "cohort": "general|long|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 340.0,
+      "observations": 426.0,
+      "cohort": "general|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 544.0,
+      "observations": 635.0,
+      "cohort": "general|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 472.0,
+      "observations": 491.0,
+      "cohort": "general|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 120.0,
+      "observations": 120.0,
+      "cohort": "general|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "general|long|code=1|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 3,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "general|long|code=1|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "general|long|code=1|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 1,
+      "successes": 0.0,
+      "observations": 2.0,
+      "cohort": "general|long|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "general|long|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 0.0,
+      "observations": 1.0,
+      "cohort": "general|long|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 8332.0,
+      "observations": 10133.0,
+      "cohort": "general|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 13225.0,
+      "observations": 15509.0,
+      "cohort": "general|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 10614.0,
+      "observations": 11347.0,
+      "cohort": "general|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 2499.0,
+      "observations": 2531.0,
+      "cohort": "general|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 437.0,
+      "observations": 1294.0,
+      "cohort": "general|medium|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 2,
+      "successes": 863.0,
+      "observations": 1932.0,
+      "cohort": "general|medium|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 3,
+      "successes": 738.0,
+      "observations": 1269.0,
+      "cohort": "general|medium|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 4,
+      "successes": 296.0,
+      "observations": 325.0,
+      "cohort": "general|medium|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 1,
+      "successes": 117.0,
+      "observations": 173.0,
+      "cohort": "general|medium|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 183.0,
+      "observations": 252.0,
+      "cohort": "general|medium|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 171.0,
+      "observations": 191.0,
+      "cohort": "general|medium|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 47.0,
+      "observations": 52.0,
+      "cohort": "general|medium|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 927.0,
+      "observations": 1353.0,
+      "cohort": "general|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 1550.0,
+      "observations": 2023.0,
+      "cohort": "general|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 1273.0,
+      "observations": 1430.0,
+      "cohort": "general|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 348.0,
+      "observations": 354.0,
+      "cohort": "general|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 60.0,
+      "observations": 255.0,
+      "cohort": "general|medium|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 2,
+      "successes": 143.0,
+      "observations": 377.0,
+      "cohort": "general|medium|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 3,
+      "successes": 145.0,
+      "observations": 243.0,
+      "cohort": "general|medium|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 4,
+      "successes": 58.0,
+      "observations": 61.0,
+      "cohort": "general|medium|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 1,
+      "successes": 27.0,
+      "observations": 47.0,
+      "cohort": "general|medium|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 30.0,
+      "observations": 48.0,
+      "cohort": "general|medium|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 30.0,
+      "observations": 36.0,
+      "cohort": "general|medium|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 5.0,
+      "observations": 5.0,
+      "cohort": "general|medium|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1119.0,
+      "observations": 1348.0,
+      "cohort": "general|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 1816.0,
+      "observations": 2024.0,
+      "cohort": "general|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 1472.0,
+      "observations": 1552.0,
+      "cohort": "general|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 301.0,
+      "observations": 304.0,
+      "cohort": "general|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "general|medium|code=1|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 2,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "general|medium|code=1|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 3,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "general|medium|code=1|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 1,
+      "successes": 8.0,
+      "observations": 10.0,
+      "cohort": "general|medium|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 9.0,
+      "observations": 12.0,
+      "cohort": "general|medium|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 8.0,
+      "observations": 9.0,
+      "cohort": "general|medium|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "general|medium|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 349.0,
+      "observations": 439.0,
+      "cohort": "general|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 549.0,
+      "observations": 622.0,
+      "cohort": "general|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 495.0,
+      "observations": 526.0,
+      "cohort": "general|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 111.0,
+      "observations": 113.0,
+      "cohort": "general|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "general|medium|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 4.0,
+      "observations": 6.0,
+      "cohort": "general|medium|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 4.0,
+      "observations": 4.0,
+      "cohort": "general|medium|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "general|medium|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 11635.0,
+      "observations": 12910.0,
+      "cohort": "general|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 19249.0,
+      "observations": 20591.0,
+      "cohort": "general|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 15415.0,
+      "observations": 15867.0,
+      "cohort": "general|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 3362.0,
+      "observations": 3392.0,
+      "cohort": "general|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 68.0,
+      "observations": 155.0,
+      "cohort": "general|short|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 2,
+      "successes": 113.0,
+      "observations": 202.0,
+      "cohort": "general|short|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 3,
+      "successes": 97.0,
+      "observations": 124.0,
+      "cohort": "general|short|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 4,
+      "successes": 31.0,
+      "observations": 31.0,
+      "cohort": "general|short|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 1,
+      "successes": 6.0,
+      "observations": 11.0,
+      "cohort": "general|short|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 20.0,
+      "observations": 21.0,
+      "cohort": "general|short|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 23.0,
+      "observations": 24.0,
+      "cohort": "general|short|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 4.0,
+      "observations": 4.0,
+      "cohort": "general|short|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 199.0,
+      "observations": 270.0,
+      "cohort": "general|short|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 334.0,
+      "observations": 414.0,
+      "cohort": "general|short|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 309.0,
+      "observations": 337.0,
+      "cohort": "general|short|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 75.0,
+      "observations": 75.0,
+      "cohort": "general|short|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 3.0,
+      "observations": 5.0,
+      "cohort": "general|short|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 2,
+      "successes": 1.0,
+      "observations": 5.0,
+      "cohort": "general|short|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 3,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "general|short|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 1,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "general|short|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "general|short|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "general|short|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 629.0,
+      "observations": 778.0,
+      "cohort": "general|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 1131.0,
+      "observations": 1286.0,
+      "cohort": "general|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 919.0,
+      "observations": 989.0,
+      "cohort": "general|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 227.0,
+      "observations": 227.0,
+      "cohort": "general|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 3.0,
+      "observations": 4.0,
+      "cohort": "general|short|code=1|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 2,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "general|short|code=1|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 3,
+      "successes": 4.0,
+      "observations": 5.0,
+      "cohort": "general|short|code=1|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 1,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "general|short|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "general|short|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 28.0,
+      "observations": 37.0,
+      "cohort": "general|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 54.0,
+      "observations": 64.0,
+      "cohort": "general|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 41.0,
+      "observations": 46.0,
+      "cohort": "general|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 9.0,
+      "observations": 9.0,
+      "cohort": "general|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1066.0,
+      "observations": 1437.0,
+      "cohort": "general|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 1639.0,
+      "observations": 2007.0,
+      "cohort": "general|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 1397.0,
+      "observations": 1507.0,
+      "cohort": "general|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 333.0,
+      "observations": 341.0,
+      "cohort": "general|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 3.0,
+      "observations": 6.0,
+      "cohort": "general|very_long|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 2,
+      "successes": 2.0,
+      "observations": 4.0,
+      "cohort": "general|very_long|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 3,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "general|very_long|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 4,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "general|very_long|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 1,
+      "successes": 65.0,
+      "observations": 89.0,
+      "cohort": "general|very_long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 119.0,
+      "observations": 139.0,
+      "cohort": "general|very_long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 98.0,
+      "observations": 103.0,
+      "cohort": "general|very_long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 21.0,
+      "observations": 21.0,
+      "cohort": "general|very_long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 403.0,
+      "observations": 546.0,
+      "cohort": "general|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 700.0,
+      "observations": 875.0,
+      "cohort": "general|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 556.0,
+      "observations": 612.0,
+      "cohort": "general|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 133.0,
+      "observations": 135.0,
+      "cohort": "general|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 17.0,
+      "observations": 27.0,
+      "cohort": "general|very_long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 19.0,
+      "observations": 33.0,
+      "cohort": "general|very_long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 25.0,
+      "observations": 27.0,
+      "cohort": "general|very_long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 9.0,
+      "observations": 9.0,
+      "cohort": "general|very_long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 210.0,
+      "observations": 280.0,
+      "cohort": "general|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 307.0,
+      "observations": 378.0,
+      "cohort": "general|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 258.0,
+      "observations": 289.0,
+      "cohort": "general|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 64.0,
+      "observations": 65.0,
+      "cohort": "general|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 17.0,
+      "observations": 23.0,
+      "cohort": "general|very_long|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 31.0,
+      "observations": 39.0,
+      "cohort": "general|very_long|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 16.0,
+      "observations": 19.0,
+      "cohort": "general|very_long|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "general|very_long|code=1|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 202.0,
+      "observations": 282.0,
+      "cohort": "general|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 361.0,
+      "observations": 478.0,
+      "cohort": "general|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 262.0,
+      "observations": 310.0,
+      "cohort": "general|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 82.0,
+      "observations": 82.0,
+      "cohort": "general|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 4.0,
+      "observations": 5.0,
+      "cohort": "general|very_long|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 9.0,
+      "observations": 11.0,
+      "cohort": "general|very_long|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 4.0,
+      "observations": 4.0,
+      "cohort": "general|very_long|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 19.0,
+      "observations": 21.0,
+      "cohort": "technical_design|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 23.0,
+      "observations": 25.0,
+      "cohort": "technical_design|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 28.0,
+      "observations": 29.0,
+      "cohort": "technical_design|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 5.0,
+      "observations": 5.0,
+      "cohort": "technical_design|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "technical_design|long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "technical_design|long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "technical_design|long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "technical_design|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 8.0,
+      "observations": 9.0,
+      "cohort": "technical_design|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 9.0,
+      "observations": 9.0,
+      "cohort": "technical_design|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "technical_design|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 14.0,
+      "observations": 15.0,
+      "cohort": "technical_design|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 24.0,
+      "observations": 25.0,
+      "cohort": "technical_design|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 18.0,
+      "observations": 18.0,
+      "cohort": "technical_design|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "technical_design|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "technical_design|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "technical_design|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "technical_design|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "technical_design|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 44.0,
+      "observations": 45.0,
+      "cohort": "technical_design|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 84.0,
+      "observations": 86.0,
+      "cohort": "technical_design|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 74.0,
+      "observations": 74.0,
+      "cohort": "technical_design|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 15.0,
+      "observations": 15.0,
+      "cohort": "technical_design|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "technical_design|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 6.0,
+      "observations": 6.0,
+      "cohort": "technical_design|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "technical_design|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 23.0,
+      "observations": 24.0,
+      "cohort": "technical_design|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 47.0,
+      "observations": 53.0,
+      "cohort": "technical_design|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 28.0,
+      "observations": 29.0,
+      "cohort": "technical_design|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 10.0,
+      "observations": 10.0,
+      "cohort": "technical_design|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 4.0,
+      "observations": 4.0,
+      "cohort": "technical_design|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 7.0,
+      "observations": 7.0,
+      "cohort": "technical_design|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 7.0,
+      "observations": 8.0,
+      "cohort": "technical_design|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "technical_design|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 13.0,
+      "observations": 13.0,
+      "cohort": "technical_design|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 31.0,
+      "observations": 31.0,
+      "cohort": "technical_design|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 23.0,
+      "observations": 23.0,
+      "cohort": "technical_design|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 5.0,
+      "observations": 5.0,
+      "cohort": "technical_design|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "technical_design|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 3.0,
+      "observations": 4.0,
+      "cohort": "technical_design|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "technical_design|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 10.0,
+      "observations": 15.0,
+      "cohort": "technical_design|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 26.0,
+      "observations": 30.0,
+      "cohort": "technical_design|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 19.0,
+      "observations": 21.0,
+      "cohort": "technical_design|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "technical_design|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "technical_design|very_long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "technical_design|very_long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "technical_design|very_long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "technical_design|very_long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 5.0,
+      "observations": 6.0,
+      "cohort": "technical_design|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 6.0,
+      "observations": 7.0,
+      "cohort": "technical_design|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 6.0,
+      "observations": 6.0,
+      "cohort": "technical_design|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "technical_design|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "technical_design|very_long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 4.0,
+      "observations": 6.0,
+      "cohort": "technical_design|very_long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "technical_design|very_long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 8.0,
+      "observations": 8.0,
+      "cohort": "technical_design|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 5.0,
+      "observations": 6.0,
+      "cohort": "technical_design|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 5.0,
+      "observations": 5.0,
+      "cohort": "technical_design|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "technical_design|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "technical_design|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "technical_design|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "technical_design|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 176.0,
+      "observations": 226.0,
+      "cohort": "writing|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 267.0,
+      "observations": 329.0,
+      "cohort": "writing|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 229.0,
+      "observations": 245.0,
+      "cohort": "writing|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 51.0,
+      "observations": 52.0,
+      "cohort": "writing|long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 0.0,
+      "observations": 2.0,
+      "cohort": "writing|long|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 2,
+      "successes": 1.0,
+      "observations": 2.0,
+      "cohort": "writing|long|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 3,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "writing|long|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "writing|long|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 1,
+      "successes": 3.0,
+      "observations": 5.0,
+      "cohort": "writing|long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 4.0,
+      "observations": 5.0,
+      "cohort": "writing|long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "writing|long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 36.0,
+      "observations": 47.0,
+      "cohort": "writing|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 53.0,
+      "observations": 59.0,
+      "cohort": "writing|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 47.0,
+      "observations": 51.0,
+      "cohort": "writing|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 14.0,
+      "observations": 15.0,
+      "cohort": "writing|long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 17.0,
+      "observations": 21.0,
+      "cohort": "writing|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 27.0,
+      "observations": 32.0,
+      "cohort": "writing|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 24.0,
+      "observations": 24.0,
+      "cohort": "writing|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "writing|long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1.0,
+      "observations": 2.0,
+      "cohort": "writing|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 1.0,
+      "observations": 2.0,
+      "cohort": "writing|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 6.0,
+      "observations": 6.0,
+      "cohort": "writing|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "writing|long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 541.0,
+      "observations": 598.0,
+      "cohort": "writing|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 892.0,
+      "observations": 997.0,
+      "cohort": "writing|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 728.0,
+      "observations": 756.0,
+      "cohort": "writing|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 164.0,
+      "observations": 165.0,
+      "cohort": "writing|medium|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 2.0,
+      "observations": 7.0,
+      "cohort": "writing|medium|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 2,
+      "successes": 7.0,
+      "observations": 15.0,
+      "cohort": "writing|medium|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 3,
+      "successes": 7.0,
+      "observations": 10.0,
+      "cohort": "writing|medium|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 4,
+      "successes": 4.0,
+      "observations": 4.0,
+      "cohort": "writing|medium|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 1,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "writing|medium|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "writing|medium|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "writing|medium|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 25.0,
+      "observations": 35.0,
+      "cohort": "writing|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 41.0,
+      "observations": 63.0,
+      "cohort": "writing|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 39.0,
+      "observations": 46.0,
+      "cohort": "writing|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 12.0,
+      "observations": 12.0,
+      "cohort": "writing|medium|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1.0,
+      "observations": 2.0,
+      "cohort": "writing|medium|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 2,
+      "successes": 2.0,
+      "observations": 4.0,
+      "cohort": "writing|medium|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 3,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "writing|medium|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "writing|medium|code=0|math=1|mc=0|intl=1"
+    },
+    {
+      "tier": 1,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "writing|medium|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "writing|medium|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 24.0,
+      "observations": 27.0,
+      "cohort": "writing|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 49.0,
+      "observations": 56.0,
+      "cohort": "writing|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 46.0,
+      "observations": 49.0,
+      "cohort": "writing|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 8.0,
+      "observations": 8.0,
+      "cohort": "writing|medium|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 11.0,
+      "observations": 13.0,
+      "cohort": "writing|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 13.0,
+      "observations": 13.0,
+      "cohort": "writing|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 10.0,
+      "observations": 10.0,
+      "cohort": "writing|medium|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 327.0,
+      "observations": 353.0,
+      "cohort": "writing|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 508.0,
+      "observations": 555.0,
+      "cohort": "writing|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 415.0,
+      "observations": 432.0,
+      "cohort": "writing|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 92.0,
+      "observations": 92.0,
+      "cohort": "writing|short|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "writing|short|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 3,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "writing|short|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "writing|short|code=0|math=0|mc=0|intl=1"
+    },
+    {
+      "tier": 1,
+      "successes": 4.0,
+      "observations": 4.0,
+      "cohort": "writing|short|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 7.0,
+      "observations": 7.0,
+      "cohort": "writing|short|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "writing|short|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "writing|short|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 2.0,
+      "observations": 3.0,
+      "cohort": "writing|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 8.0,
+      "observations": 9.0,
+      "cohort": "writing|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 4.0,
+      "observations": 4.0,
+      "cohort": "writing|short|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "writing|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "writing|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "writing|short|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 63.0,
+      "observations": 85.0,
+      "cohort": "writing|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 111.0,
+      "observations": 139.0,
+      "cohort": "writing|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 95.0,
+      "observations": 99.0,
+      "cohort": "writing|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 29.0,
+      "observations": 29.0,
+      "cohort": "writing|very_long|code=0|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 3.0,
+      "observations": 5.0,
+      "cohort": "writing|very_long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 1.0,
+      "observations": 2.0,
+      "cohort": "writing|very_long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 4.0,
+      "observations": 4.0,
+      "cohort": "writing|very_long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "writing|very_long|code=0|math=0|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 26.0,
+      "observations": 36.0,
+      "cohort": "writing|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 30.0,
+      "observations": 44.0,
+      "cohort": "writing|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 23.0,
+      "observations": 28.0,
+      "cohort": "writing|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 8.0,
+      "observations": 8.0,
+      "cohort": "writing|very_long|code=0|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "writing|very_long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "writing|very_long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 1.0,
+      "observations": 1.0,
+      "cohort": "writing|very_long|code=0|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 14.0,
+      "observations": 14.0,
+      "cohort": "writing|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 14.0,
+      "observations": 16.0,
+      "cohort": "writing|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 6.0,
+      "observations": 7.0,
+      "cohort": "writing|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 4,
+      "successes": 3.0,
+      "observations": 3.0,
+      "cohort": "writing|very_long|code=1|math=0|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 5.0,
+      "observations": 5.0,
+      "cohort": "writing|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 7.0,
+      "observations": 8.0,
+      "cohort": "writing|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 7.0,
+      "observations": 7.0,
+      "cohort": "writing|very_long|code=1|math=1|mc=0|intl=0"
+    },
+    {
+      "tier": 1,
+      "successes": 0.0,
+      "observations": 1.0,
+      "cohort": "writing|very_long|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 2,
+      "successes": 2.0,
+      "observations": 2.0,
+      "cohort": "writing|very_long|code=1|math=1|mc=1|intl=0"
+    },
+    {
+      "tier": 3,
+      "successes": 0.0,
+      "observations": 1.0,
+      "cohort": "writing|very_long|code=1|math=1|mc=1|intl=0"
+    }
+  ],
+  "domain_prior_mass": 200.0,
+  "cohort_prior_mass": 20.0,
+  "routing_threshold": 0.75,
+  "datasets": [
+    {
+      "name": "openbmb/UltraFeedback",
+      "url": "https://huggingface.co/datasets/openbmb/UltraFeedback",
+      "license": "MIT",
+      "rows": 255864,
+      "success_definition": "UltraFeedback overall_score >= 4"
+    }
+  ],
+  "success_definition": "UltraFeedback overall_score >= 4",
+  "split_method": "sha256(prompt): 70% train, 15% validation, 15% test"
+}

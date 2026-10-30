@@ -10,9 +10,12 @@ from urllib.parse import urlparse
 import click
 from pydantic import TypeAdapter
 
-from .private_json import write_private_json
+from litellm.litellm_core_utils.private_json import ensure_private_dir, write_private_json
 
 HIDDEN_COMMANDS_KEY: Final = "hidden_commands"
+CLAUDE_SUBSCRIPTION_KEY: Final = "claude_subscription"
+CODEX_SUBSCRIPTION_KEY: Final = "codex_subscription"
+PKCE_KEY: Final = "pkce"
 
 _config_adapter: Final[TypeAdapter[Mapping[str, str]]] = TypeAdapter(Mapping[str, str])
 
@@ -42,7 +45,9 @@ def load_config() -> Mapping[str, str]:
 
 def save_config(config: Mapping[str, str]) -> None:
     """Save CLI config to file"""
-    write_private_json(get_config_file_path(), config)
+    config_file: Final = Path(get_config_file_path())
+    ensure_private_dir(config_file.parent)
+    write_private_json(str(config_file), config)
 
 
 def get_config_value(key: str) -> str | None:
@@ -60,12 +65,16 @@ def hidden_command_names() -> frozenset[str]:
     return parse_hidden_commands(get_config_value(HIDDEN_COMMANDS_KEY))
 
 
-def _normalize_base_url(value: str) -> str:
+def normalize_base_url(value: str) -> str:
+    if any(ord(char) <= 32 or ord(char) == 127 for char in value):
+        raise click.UsageError("base_url must not contain whitespace or control characters")
     parsed: Final = urlparse(value)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise click.UsageError("base_url must be a full http:// or https:// URL including a host")
     if "?" in value or "#" in value:
         raise click.UsageError("base_url must not include a query string or fragment")
+    if parsed.username is not None or parsed.password is not None:
+        raise click.UsageError("base_url must not contain credentials; pass --api-key separately")
     return value.rstrip("/")
 
 
@@ -82,10 +91,53 @@ def _normalize_hidden_commands(value: str) -> str:
     return ",".join(sorted(names))
 
 
+_BOOLEAN_WORDS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "true": "true",
+        "on": "true",
+        "1": "true",
+        "yes": "true",
+        "false": "false",
+        "off": "false",
+        "0": "false",
+        "no": "false",
+    }
+)
+
+
+def _normalize_boolean(key: str) -> Callable[[str], str]:
+    def normalize(value: str) -> str:
+        normalized: Final = _BOOLEAN_WORDS.get(value.strip().lower())
+        if normalized is None:
+            raise click.UsageError(f"{key} must be true or false, e.g. `lite config set {key} true`")
+        return normalized
+
+    return normalize
+
+
+_SUBSCRIPTION_KEYS: Final[Mapping[str, str]] = MappingProxyType(
+    {"claude": CLAUDE_SUBSCRIPTION_KEY, "codex": CODEX_SUBSCRIPTION_KEY}
+)
+
+
+def subscription_default(agent: str) -> bool:
+    """Whether `lite <agent>` keeps the agent's own subscription login unless told otherwise."""
+    key: Final = _SUBSCRIPTION_KEYS.get(agent)
+    return key is not None and get_config_value(key) == "true"
+
+
+def pkce_default() -> bool:
+    """Whether `lite login` signs in with browser PKCE unless told otherwise."""
+    return get_config_value(PKCE_KEY) == "true"
+
+
 _NORMALIZERS: Final[Mapping[str, Callable[[str], str]]] = MappingProxyType(
     {
-        "base_url": _normalize_base_url,
+        "base_url": normalize_base_url,
         HIDDEN_COMMANDS_KEY: _normalize_hidden_commands,
+        CLAUDE_SUBSCRIPTION_KEY: _normalize_boolean(CLAUDE_SUBSCRIPTION_KEY),
+        CODEX_SUBSCRIPTION_KEY: _normalize_boolean(CODEX_SUBSCRIPTION_KEY),
+        PKCE_KEY: _normalize_boolean(PKCE_KEY),
     }
 )
 

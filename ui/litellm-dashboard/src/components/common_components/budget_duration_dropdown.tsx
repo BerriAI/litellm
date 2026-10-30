@@ -12,8 +12,9 @@ const DURATION_LABELS: Record<string, string> = {
 };
 
 interface BudgetDurationDropdownProps {
+  id?: string;
   value?: string | null;
-  onChange?: (value: string | undefined) => void;
+  onChange?: (value: string | null) => void;
   className?: string;
   style?: React.CSSProperties;
   placeholder?: string;
@@ -21,20 +22,17 @@ interface BudgetDurationDropdownProps {
 }
 
 const BudgetDurationDropdown: React.FC<BudgetDurationDropdownProps> = ({
+  id,
   value,
   onChange,
   className = "",
   style = {},
-  placeholder = "n/a",
+  placeholder = "Never resets",
   showNeverResets = false,
 }) => {
   return (
-    <Select
-      items={DURATION_LABELS}
-      value={value || null}
-      onValueChange={(next: string | null) => onChange?.(next ?? undefined)}
-    >
-      <SelectTrigger className={`w-full ${className}`} style={style}>
+    <Select items={DURATION_LABELS} value={value || null} onValueChange={onChange}>
+      <SelectTrigger id={id} className={`w-full ${className}`} style={style}>
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>

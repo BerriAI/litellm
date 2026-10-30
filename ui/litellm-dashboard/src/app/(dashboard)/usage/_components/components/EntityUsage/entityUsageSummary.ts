@@ -11,6 +11,7 @@ export interface SummaryTile {
 interface SpendSummaryMetadata {
   total_spend: number;
   total_flat_cost?: number;
+  total_ptu_hours?: number;
   total_api_requests: number;
   total_successful_requests: number;
   total_failed_requests: number;
@@ -26,10 +27,28 @@ export const REQUEST_COST_TOOLTIP =
 export const FLAT_COST_TOOLTIP =
   "Reserved provisioned throughput, billed per hour whether or not requests are sent. Reported here only; it does not count toward team, key, user, or organization budgets.";
 
+export const PTU_HOURS_TOOLTIP =
+  "Provisioned throughput consumed, in PTU-hours: the tokens sent to PTU deployments converted through the Azure sizing table for each model. Divide it by the PTUs reserved times the hours in the period to see how much of the reservation was used.";
+
 export const hasFlatCost = (metadata: SpendSummaryMetadata): boolean => (metadata.total_flat_cost ?? 0) > 0;
 
-export const buildSummaryTiles = (metadata: SpendSummaryMetadata, showFlatCost: boolean): SummaryTile[] => {
+export const hasPtuHours = (metadata: SpendSummaryMetadata): boolean => (metadata.total_ptu_hours ?? 0) > 0;
+
+export const buildSummaryTiles = (
+  metadata: SpendSummaryMetadata,
+  showFlatCost: boolean,
+  showPtuHours: boolean = false,
+): SummaryTile[] => {
   const flatCost = metadata.total_flat_cost ?? 0;
+  const ptuHoursTile: SummaryTile[] = showPtuHours
+    ? [
+        {
+          title: "PTU Hours",
+          value: formatNumberWithCommas(metadata.total_ptu_hours ?? 0, 2),
+          tooltip: PTU_HOURS_TOOLTIP,
+        },
+      ]
+    : [];
   return [
     showFlatCost
       ? {
@@ -43,10 +62,11 @@ export const buildSummaryTiles = (metadata: SpendSummaryMetadata, showFlatCost: 
     {
       title: "Successful Requests",
       value: metadata.total_successful_requests.toLocaleString(),
-      className: "text-green-600",
+      className: "text-success",
     },
-    { title: "Failed Requests", value: metadata.total_failed_requests.toLocaleString(), className: "text-red-600" },
+    { title: "Failed Requests", value: metadata.total_failed_requests.toLocaleString(), className: "text-destructive" },
     { title: "Total Tokens", value: metadata.total_tokens.toLocaleString() },
+    ...ptuHoursTile,
   ];
 };
 
@@ -54,7 +74,7 @@ export const buildCostBreakdownTiles = (metadata: SpendSummaryMetadata): Summary
   {
     title: "Request Cost",
     value: `$${formatNumberWithCommas(metadata.total_spend, 2)}`,
-    className: "text-cyan-600",
+    className: "text-info",
     tooltip: REQUEST_COST_TOOLTIP,
   },
   {

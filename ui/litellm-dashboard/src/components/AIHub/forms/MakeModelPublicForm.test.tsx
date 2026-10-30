@@ -43,14 +43,6 @@ vi.mock("../../model_filters", () => ({
   ),
 }));
 
-// Mock NotificationsManager
-vi.mock("../../molecules/notifications_manager", () => ({
-  default: {
-    fromBackend: vi.fn(),
-    success: vi.fn(),
-  },
-}));
-
 describe("MakeModelPublicForm", () => {
   const mockProps = {
     visible: true,
@@ -121,7 +113,7 @@ describe("MakeModelPublicForm", () => {
 
     // Check that the Next button is enabled (models are preselected)
     const nextButton = screen.getByRole("button", { name: "Next" });
-    expect(nextButton).not.toBeDisabled();
+    expect(nextButton).toBeEnabled();
   });
 
   it("should handle model selection and navigation", async () => {
@@ -138,7 +130,7 @@ describe("MakeModelPublicForm", () => {
 
     // Verify Next button is enabled
     const nextButton = screen.getByRole("button", { name: "Next" });
-    expect(nextButton).not.toBeDisabled();
+    expect(nextButton).toBeEnabled();
 
     // Click Next
     await act(async () => {
@@ -335,6 +327,19 @@ describe("MakeModelPublicForm", () => {
 
     // Should show provider badges
     expect(screen.getAllByText("openai")).toHaveLength(2);
+  });
+
+  it("labels an evaluation-mode model as decisions, matching the mode filter", () => {
+    const decisionModel = {
+      ...mockProps.modelHubData[0],
+      model_group: "jev-latest",
+      providers: ["typesafe"],
+      mode: "evaluation",
+    };
+    render(<MakeModelPublicForm {...mockProps} modelHubData={[decisionModel]} />);
+
+    expect(screen.getByText("decisions")).toBeInTheDocument();
+    expect(screen.queryByText("evaluation")).not.toBeInTheDocument();
   });
 
   it("should handle submit error properly", async () => {

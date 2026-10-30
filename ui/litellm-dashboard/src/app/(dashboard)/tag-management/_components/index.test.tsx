@@ -13,14 +13,6 @@ vi.mock("@/components/networking", () => ({
   modelInfoCall: vi.fn(),
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  __esModule: true,
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
-
 vi.mock("./TagTable", () => ({
   __esModule: true,
   default: ({ isLoading, onDelete }: { isLoading?: boolean; onDelete: (tagName: string) => void }) => (

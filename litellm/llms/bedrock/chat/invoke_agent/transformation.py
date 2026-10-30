@@ -15,7 +15,7 @@ from litellm._uuid import uuid
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -38,6 +38,7 @@ from litellm.types.utils import Choices, Message, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -100,9 +101,10 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         encoded_agent_alias_id: Final = encode_url_path_segment(agent_alias_id, field_name="agent_alias_id")
         encoded_session_id: Final = encode_url_path_segment(session_id, field_name="session_id")
 
-        endpoint_url = f"{endpoint_url}/agents/{encoded_agent_id}/agentAliases/{encoded_agent_alias_id}/sessions/{encoded_session_id}/text"
-
-        return endpoint_url
+        return join_api_base(
+            endpoint_url,
+            f"agents/{encoded_agent_id}/agentAliases/{encoded_agent_alias_id}/sessions/{encoded_session_id}/text",
+        )
 
     def sign_request(
         self,
@@ -436,7 +438,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -468,6 +470,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             raise BedrockError(
                 message=f"Error processing response: {e}",
                 status_code=raw_response.status_code,
+                headers=raw_response.headers,
             )
 
     def validate_environment(
@@ -483,7 +486,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         return headers
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
-        return BedrockError(status_code=status_code, message=error_message)
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     def should_fake_stream(
         self,

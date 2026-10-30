@@ -4,8 +4,9 @@ Functions to create audit logs for LiteLLM Proxy
 
 import asyncio
 import json
+from collections.abc import Awaitable, Sequence
 from datetime import datetime, timezone
-from typing import Final
+from typing import Final, TypeVar
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -22,6 +23,22 @@ from litellm.types.utils import StandardAuditLogPayload
 
 _audit_log_callback_cache: Final[dict[str, CustomLogger]] = {}
 ALLOW_LITELLM_CHANGED_BY_HEADER_METADATA_KEY: Final = "allow_litellm_changed_by_header"
+
+
+def is_audit_logging_enabled(store_audit_logs: bool | None = None) -> bool:
+    from litellm.secret_managers.main import get_secret_bool
+
+    configured_value: Final[bool | None] = litellm.store_audit_logs if store_audit_logs is None else store_audit_logs
+    if configured_value is not None:
+        return configured_value
+
+    environment_value: Final[bool | None] = get_secret_bool("LITELLM_STORE_AUDIT_LOGS")
+    if environment_value is not None:
+        return environment_value
+
+    from litellm.proxy.proxy_server import premium_user
+
+    return premium_user is True
 
 
 def _allows_litellm_changed_by_header(user_api_key_dict: UserAPIKeyAuth) -> bool:
@@ -118,6 +135,56 @@ def _audit_log_task_done_callback(task: asyncio.Task) -> None:
         verbose_proxy_logger.error("Audit log callback task failed: %s", exc, exc_info=exc)
 
 
+_T: Final = TypeVar("_T")
+
+
+class AuditTaskRegistry:
+    __slots__ = ("_pending_tasks",)
+
+    def __init__(self) -> None:
+        self._pending_tasks: Final[set[asyncio.Task[object]]] = set()  # mutable-ok: background task tracking
+
+    def track(self, task: asyncio.Task[_T]) -> asyncio.Task[_T]:
+        if task.done() or task in self._pending_tasks:
+            return task
+        self._pending_tasks.add(task)
+        task.add_done_callback(self._on_task_done)
+        return task
+
+    def _on_task_done(self, task: asyncio.Task[object]) -> None:
+        self._pending_tasks.discard(task)
+        _audit_log_task_done_callback(task)
+
+    async def drain(self, timeout: float = 5.0) -> None:
+        loop: Final = asyncio.get_running_loop()
+        deadline: Final = loop.time() + timeout
+        while self._pending_tasks:
+            _, pending = await asyncio.wait(tuple(self._pending_tasks), timeout=max(deadline - loop.time(), 0))
+            if pending:
+                self._pending_tasks.difference_update(pending)
+                verbose_proxy_logger.warning(
+                    "Timed out draining %d audit tasks on shutdown, dropping: %s",
+                    len(pending),
+                    ", ".join(sorted(task.get_name() for task in pending)),
+                )
+                return
+
+
+_audit_task_registry: Final = AuditTaskRegistry()
+
+
+def track_audit_task(task: asyncio.Task[_T]) -> asyncio.Task[_T]:
+    return _audit_task_registry.track(task)
+
+
+async def drain_audit_tasks(timeout: float = 5.0) -> None:
+    await _audit_task_registry.drain(timeout=timeout)
+
+
+def _audit_task_name(request_data: LiteLLM_AuditLogs, destination: str) -> str:
+    return f"{request_data.action} {request_data.table_name.value} {request_data.object_id} to {destination}"
+
+
 async def _dispatch_audit_log_to_callbacks(
     request_data: LiteLLM_AuditLogs,
 ) -> None:
@@ -137,8 +204,12 @@ async def _dispatch_audit_log_to_callbacks(
                     continue
 
             if isinstance(resolved, CustomLogger):
-                task = asyncio.create_task(resolved.async_log_audit_log_event(payload))
-                task.add_done_callback(_audit_log_task_done_callback)
+                track_audit_task(
+                    asyncio.create_task(
+                        resolved.async_log_audit_log_event(payload),
+                        name=_audit_task_name(request_data, type(resolved).__name__),
+                    )
+                )
         except Exception as e:
             verbose_proxy_logger.error("Failed dispatching audit log to callback: %s", e)
 
@@ -164,11 +235,7 @@ async def create_object_audit_log(
     - user_api_key_dict: UserAPIKeyAuth - The user api key dictionary.
     - litellm_proxy_admin_name: Optional[str] - The name of the proxy admin.
     """
-    from litellm.secret_managers.main import get_secret_bool
-
-    _store_audit_logs: Final[bool | None] = litellm.store_audit_logs or get_secret_bool("LITELLM_STORE_AUDIT_LOGS")
-
-    if _store_audit_logs is not True:
+    if not is_audit_logging_enabled():
         return
 
     _changed_by: Final = get_audit_log_changed_by(
@@ -192,14 +259,26 @@ async def create_object_audit_log(
     )
 
 
+async def _insert_audit_logs(insert: Awaitable[object], description: str) -> None:
+    try:
+        await insert
+    except Exception as e:
+        # [Non-Blocking Exception. Do not allow blocking LLM API call]
+        verbose_proxy_logger.error("Failed Creating %s %s", description, e)
+
+
+def _json_encoded(request_data: LiteLLM_AuditLogs) -> LiteLLM_AuditLogs:
+    values: Final = (("updated_values", request_data.updated_values), ("before_value", request_data.before_value))
+    return request_data.model_copy(
+        update={field: json.dumps(value) for field, value in values if isinstance(value, dict)}
+    )
+
+
 async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
     """
     Create an audit log for an object.
     """
-    from litellm.secret_managers.main import get_secret_bool
-
-    _store_audit_logs: Final[bool | None] = litellm.store_audit_logs or get_secret_bool("LITELLM_STORE_AUDIT_LOGS")
-    if _store_audit_logs is not True:
+    if not is_audit_logging_enabled():
         return
 
     from litellm.proxy.proxy_server import premium_user, prisma_client
@@ -208,28 +287,52 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
         return
 
     verbose_proxy_logger.debug("creating audit log for %s", request_data)
-
-    if isinstance(request_data.updated_values, dict):
-        request_data.updated_values = json.dumps(request_data.updated_values)
-
-    if isinstance(request_data.before_value, dict):
-        request_data.before_value = json.dumps(request_data.before_value)
+    encoded: Final = _json_encoded(request_data)
 
     # Dispatch to external audit log callbacks regardless of DB availability
-    await _dispatch_audit_log_to_callbacks(request_data)
+    await _dispatch_audit_log_to_callbacks(encoded)
 
     if prisma_client is None:
         verbose_proxy_logger.error("prisma_client is None, cannot write audit log to DB")
         return
 
-    _request_data: Final = request_data.model_dump(exclude_none=True)
-
-    try:
-        await AuditLogRepository(prisma_client).table.create(
-            data={
-                **_request_data,
-            }
+    await track_audit_task(
+        asyncio.create_task(
+            _insert_audit_logs(
+                AuditLogRepository(prisma_client).table.create(data={**encoded.model_dump(exclude_none=True)}),
+                "audit log",
+            ),
+            name=_audit_task_name(encoded, "the database"),
         )
-    except Exception as e:
-        # [Non-Blocking Exception. Do not allow blocking LLM API call]
-        verbose_proxy_logger.error("Failed Creating audit log %s", e)
+    )
+
+
+async def create_audit_logs_for_updates(rows: Sequence[LiteLLM_AuditLogs]) -> None:
+    """Create audit logs for many objects with one insert."""
+    if not rows or not is_audit_logging_enabled():
+        return
+
+    from litellm.proxy.proxy_server import premium_user, prisma_client
+
+    if premium_user is not True:
+        return
+
+    encoded: Final = tuple(_json_encoded(row) for row in rows)
+    for row in encoded:
+        await _dispatch_audit_log_to_callbacks(row)
+
+    if prisma_client is None:
+        verbose_proxy_logger.error("prisma_client is None, cannot write audit log to DB")
+        return
+
+    await track_audit_task(
+        asyncio.create_task(
+            _insert_audit_logs(
+                AuditLogRepository(prisma_client).table.create_many(
+                    data=tuple(row.model_dump(exclude_none=True) for row in encoded)
+                ),
+                f"{len(encoded)} audit logs",
+            ),
+            name=f"{len(encoded)} audit logs to the database",
+        )
+    )

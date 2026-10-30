@@ -18,7 +18,7 @@ export default function RouterSettingsSummary({
   emptyText = "No router settings configured",
 }: RouterSettingsSummaryProps) {
   if (!hasRouterSettings(routerSettings)) {
-    return <div className="text-gray-400">{emptyText}</div>;
+    return <div className="text-muted-foreground">{emptyText}</div>;
   }
 
   const settings = routerSettings as Record<string, unknown>;
@@ -42,9 +42,9 @@ export default function RouterSettingsSummary({
           <div>Fallbacks:</div>
           <div className="mt-1 space-y-1">
             {fallbacks.map(([model, targets]) => (
-              <div key={model} className="text-xs text-gray-600">
+              <div key={model} className="text-xs text-muted-foreground">
                 <span className="font-medium">{model}</span>
-                <span className="mx-1 text-gray-400">-&gt;</span>
+                <span className="mx-1 text-muted-foreground">-&gt;</span>
                 {Array.isArray(targets) ? targets.join(", ") : String(targets)}
               </div>
             ))}
