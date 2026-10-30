@@ -109,6 +109,10 @@ from litellm.litellm_core_utils.mock_functions import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response as get_content_from_model_response,  # noqa: PLC0414  # public re-export
 )
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    messages_have_pdf_file_part,
+    messages_without_pdf_file_parts,
+)
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
@@ -156,6 +160,7 @@ from litellm.types.litellm_params import ControlOptions, RetryStrategy
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    AgenticLoopParams,
     BaseUrlRoutingHint,
     CustomPricingLiteLLMParams,
     ModelResponseStream,
@@ -191,11 +196,13 @@ from litellm.utils import (
     get_requester_metadata,
     get_secret,
     get_standard_openai_params,
+    is_explicitly_disabled_factory,
     mock_completion_streaming_obj,
     pre_process_non_default_params,
     read_config_args,
     should_run_mock_completion,
     supports_httpx_timeout,
+    supports_pdf_input,
     validate_and_fix_openai_messages,
     validate_and_fix_openai_tools,
     validate_and_fix_thinking_param,
@@ -235,6 +242,7 @@ from .litellm_core_utils.streaming_chunk_builder_utils import (
     ChunkProcessor as ChunkProcessor,  # noqa: PLC0414  # public re-export
 )
 from .llms.anthropic.chat import AnthropicChatCompletion
+from .llms.anthropic.common_utils import is_claude_tool_target
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
@@ -390,6 +398,125 @@ def _resolve_control_options(kwargs: Mapping[str, object], model: str) -> Contro
             raise litellm.BadRequestError(message=message, model=model, llm_provider=None, body={"param": param})
         case _:
             return assert_never(control)
+
+
+PROVIDERS_WITHOUT_DOCUMENT_INPUT: Final = frozenset({"ollama", "ollama_chat"})
+PROVIDERS_DROPPING_UNDECLARED_PDF_INPUT: Final = frozenset({"azure_ai"})
+
+
+def _cost_map_pdf_input_support(model: str, custom_llm_provider: str) -> bool | None:
+    if custom_llm_provider in PROVIDERS_WITHOUT_DOCUMENT_INPUT or is_explicitly_disabled_factory(
+        model, custom_llm_provider, "supports_pdf_input"
+    ):
+        return False
+    if supports_pdf_input(model, custom_llm_provider):
+        return True
+    return None
+
+
+def _deployment_pdf_input_support(model: str, base_model: str, custom_llm_provider: str) -> bool | None:
+    supports: Final = (
+        _cost_map_pdf_input_support(model, custom_llm_provider),
+        _cost_map_pdf_input_support(base_model, custom_llm_provider),
+    )
+    if False in supports:
+        return False
+    if True in supports:
+        return True
+    return None
+
+
+def _declared_pdf_input_support(
+    model: str, custom_llm_provider: str, model_info: Mapping[str, object] | None, base_model: str | None
+) -> bool | None:
+    match model_info:
+        case {"supports_pdf_input": bool() as declared}:
+            return declared
+        case _ if base_model:
+            return _deployment_pdf_input_support(model, base_model, custom_llm_provider)
+        case _:
+            return _cost_map_pdf_input_support(model, custom_llm_provider)
+
+
+def _pdf_input_unreadable(
+    model: str,
+    custom_llm_provider: str,
+    model_info: Mapping[str, object] | None,
+    base_model: str | None,
+    drop_params: bool,
+) -> bool:
+    match _declared_pdf_input_support(model, custom_llm_provider, model_info, base_model):
+        case False:
+            return True
+        case None:
+            return drop_params and custom_llm_provider in PROVIDERS_DROPPING_UNDECLARED_PDF_INPUT
+        case True:
+            return False
+
+
+def _messages_without_unreadable_pdfs(
+    messages: Sequence[AllMessageValues],
+    model: str,
+    custom_llm_provider: str,
+    model_info: Mapping[str, object] | None,
+    base_model: str | None,
+    drop_params: bool,
+) -> tuple[AllMessageValues, ...] | None:
+    if not messages_have_pdf_file_part(messages) or not _pdf_input_unreadable(
+        model, custom_llm_provider, model_info, base_model, drop_params
+    ):
+        return None
+    if not drop_params:
+        raise litellm.BadRequestError(
+            message=(
+                f"{custom_llm_provider}/{model} does not accept PDF input. "
+                "Remove the PDF, or set drop_params=True to send the request without it"
+            ),
+            model=model,
+            llm_provider=custom_llm_provider,
+        )
+    readable_messages: Final = messages_without_pdf_file_parts(messages)
+    if not any(message["role"] == "user" for message in readable_messages):
+        raise litellm.BadRequestError(
+            message=(
+                f"{custom_llm_provider}/{model} does not accept PDF input, "
+                "and no user message is left once the PDF is dropped"
+            ),
+            model=model,
+            llm_provider=custom_llm_provider,
+        )
+    return readable_messages
+
+
+def _messages_readable_by_model(
+    messages: Sequence[AllMessageValues],
+    model: str,
+    custom_llm_provider: str,
+    model_info: Mapping[str, object] | None,
+    base_model: str | None,
+    drop_params: bool,
+    ensure_alternating_roles: bool | None,
+    user_continue_message: ChatCompletionUserMessage | None,
+    assistant_continue_message: ChatCompletionAssistantMessage | None,
+) -> tuple[AllMessageValues, ...] | None:
+    pdf_free_messages: Final = _messages_without_unreadable_pdfs(
+        messages=messages,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        model_info=model_info,
+        base_model=base_model,
+        drop_params=drop_params,
+    )
+    if pdf_free_messages is None:
+        return None
+    return tuple(
+        get_completion_messages(
+            messages=list(pdf_free_messages),
+            ensure_alternating_roles=ensure_alternating_roles or False,
+            user_continue_message=user_continue_message,
+            assistant_continue_message=assistant_continue_message,
+        )
+    )
 
 
 ####### COMPLETION ENDPOINTS ################
@@ -1136,17 +1263,6 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
 _ANTHROPIC_ONLY_TOOL_KEYS: Final = frozenset({"input_examples", "eager_input_streaming"})
 
 
-def _is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
-    if custom_llm_provider == "anthropic":
-        return True
-    model_lower: Final = model.lower()
-    if custom_llm_provider == "bedrock":
-        return "claude" in model_lower or ("arn:" in model_lower and ":bedrock:" in model_lower)
-    if custom_llm_provider == "azure_ai" or custom_llm_provider == "vertex_ai":
-        return "claude" in model_lower
-    return False
-
-
 def _history_without_unanswered_tool_search_calls(
     messages: Sequence[object], custom_llm_provider: str | None, provider_config: BaseConfig
 ) -> tuple[object, ...] | None:
@@ -1281,6 +1397,16 @@ def _get_router_deployment_id(kwargs: dict) -> str | None:
         if deployment_id is not None:
             return str(deployment_id)
     return None
+
+
+def _record_agentic_loop_params(
+    logging_obj: object, requested_model: str, custom_llm_provider: str, owns_agentic_loop: bool
+) -> None:
+    if not owns_agentic_loop or not isinstance(logging_obj, LiteLLMLoggingObj):
+        return
+    logging_obj.record_agentic_loop_params(
+        AgenticLoopParams(model=requested_model, custom_llm_provider=custom_llm_provider)
+    )
 
 
 def _register_custom_pricing_for_request(
@@ -2673,10 +2799,13 @@ def _complete_custom_openai(
 
     # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
     api_base = _resolve_openai_api_base(api_base)
+    if custom_llm_provider == "bigmodel" and not api_key:
+        raise litellm.AuthenticationError(
+            message="Set BIGMODEL_API_KEY or pass api_key", llm_provider="bigmodel", model=model
+        )
     organization = (
         organization
-        or litellm.organization
-        or get_secret("OPENAI_ORGANIZATION")
+        or (None if custom_llm_provider == "bigmodel" else litellm.organization or get_secret("OPENAI_ORGANIZATION"))
         or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
     )
     openai.organization = organization
@@ -5555,9 +5684,15 @@ def completion(
     )
     headers = kwargs.get("headers", None) or extra_headers
 
-    ensure_alternating_roles: Final[bool | None] = kwargs.get("ensure_alternating_roles", None)
-    user_continue_message: Final[ChatCompletionUserMessage | None] = kwargs.get("user_continue_message", None)
-    assistant_continue_message: ChatCompletionAssistantMessage | None = kwargs.get("assistant_continue_message", None)
+    ensure_alternating_roles: Final = cast(  # cast-ok: read from untyped kwargs
+        bool | None, kwargs.get("ensure_alternating_roles", None)
+    )
+    user_continue_message: Final = cast(  # cast-ok: read from untyped kwargs
+        ChatCompletionUserMessage | None, kwargs.get("user_continue_message", None)
+    )
+    assistant_continue_message: Final = cast(  # cast-ok: read from untyped kwargs
+        ChatCompletionAssistantMessage | None, kwargs.get("assistant_continue_message", None)
+    )
     headers = {} if headers is None else dict(headers)
     if extra_headers is not None:
         headers.update(extra_headers)
@@ -5699,6 +5834,7 @@ def completion(
             **{k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS | {"provider_specific_header"} if k in kwargs},
             "extra_headers": extra_headers,
         }
+        requested_model: Final = model
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -5710,16 +5846,23 @@ def completion(
                 else None
             ),
         )
+        _record_agentic_loop_params(
+            logging_obj=logging,
+            requested_model=requested_model,
+            custom_llm_provider=custom_llm_provider,
+            owns_agentic_loop=not skip_responses_api_bridge,
+        )
 
+        deployment_model_info: Final = str_keyed_mapping(
+            cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
+        )
         ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
         responses_api_model_info, model = responses_api_bridge_check(
             model=model,
             custom_llm_provider=custom_llm_provider,
             web_search_options=web_search_options,
             api_base=api_base,
-            deployment_model_info=str_keyed_mapping(
-                cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
-            ),
+            deployment_model_info=deployment_model_info,
         )
         routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
         drop_unsupported_reasoning: Final = (
@@ -5750,7 +5893,7 @@ def completion(
             }
         )
 
-        if not _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
+        if not is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
             tools = _drop_anthropic_only_tool_keys(tools=tools)
 
         if provider_specific_header is not None:
@@ -5816,7 +5959,15 @@ def completion(
             )
 
         if provider_config is not None:
-            translated_messages: Final = provider_config.translate_developer_role_to_system_role(messages=messages)
+            translated_messages: Final = list(
+                provider_config.translate_developer_role_to_system_role(
+                    messages=messages,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    api_base=api_base,
+                    model_info=deployment_model_info,
+                )
+            )
             history_for_route: Final = _history_without_unanswered_tool_search_calls(
                 translated_messages, custom_llm_provider, provider_config
             )
@@ -5909,15 +6060,17 @@ def completion(
         def optional_params_for_model_info(deployment_info: Mapping[str, object] | None) -> dict[str, object]:
             return get_optional_params(**mapping_args, model_info=deployment_info, **mapping_special_params)
 
-        optional_params = optional_params_for_model_info(
+        validated_model_info: Final = (
             _MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None
         )
+        deployment_base_model: Final = base_model if isinstance(base_model, str) else None
+        optional_params = optional_params_for_model_info(validated_model_info)
         fakes_stream: Final = partial(
             _completion_fakes_stream,
             model,
             custom_llm_provider,
             provider_config,
-            base_model=base_model if isinstance(base_model, str) else None,
+            base_model=deployment_base_model,
             bridges_to_responses_api=bridges_to_responses_api is True,
         )
         resolve_timeout: Final = partial(
@@ -5955,15 +6108,28 @@ def completion(
             functions_unsupported_model: Final[list[object]] = TypeAdapter(list[object]).validate_python(
                 optional_params.pop("functions_unsupported_model")
             )
-            request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
             messages = function_call_prompt(
                 messages=messages,
                 functions=functions_unsupported_model,
                 model=model,
                 llm_provider=custom_llm_provider,
-                drop_params=litellm.drop_params is True
-                or normalize_drop_params(request_kwargs.get("drop_params")) is True,
+                drop_params=drop_unsupported_reasoning,
             )
+
+        readable_messages: Final = _messages_readable_by_model(
+            messages=cast(list[AllMessageValues], messages),  # cast-ok: completion types messages as a bare List
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            model_info=validated_model_info,
+            base_model=deployment_base_model,
+            drop_params=drop_unsupported_reasoning,
+            ensure_alternating_roles=ensure_alternating_roles,
+            user_continue_message=user_continue_message,
+            assistant_continue_message=assistant_continue_message,
+        )
+        messages = (  # rebind-ok: completion() rewrites messages step by step
+            messages if readable_messages is None else list(readable_messages)
+        )
 
         # For logging - save the values of the litellm-specific params passed in
         requested_litellm_params: Final = get_litellm_params(
@@ -6035,6 +6201,7 @@ def completion(
                     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
                     "fireworks_forward_user_id",
                     "responses_api_version",
+                    "allowed_openai_params",
                 )
                 if key in kwargs
             },
@@ -6102,6 +6269,9 @@ def completion(
         # reasoningSummary/reasoning_summary without tools (AI SDK) that the first
         # (early) check doesn't cover.
         _reasoning_summary_for_bridge: Final = peek_reasoning_summary_aliases(optional_params)
+        typed_deployment_model_info: Final = str_keyed_mapping(
+            cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
+        )
         if responses_api_model_info.get("mode") != "responses":
             responses_api_model_info, model = responses_api_bridge_check(
                 model=model,
@@ -6111,9 +6281,7 @@ def completion(
                 reasoning_effort=bridge_reasoning_effort(resolved_reasoning_effort, optional_params.get("extra_body")),
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
-                deployment_model_info=str_keyed_mapping(
-                    cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
-                ),
+                deployment_model_info=typed_deployment_model_info,
             )
 
         # Use base_model (the true underlying model) for Azure model-type
@@ -6125,19 +6293,28 @@ def completion(
 
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
 
-            if custom_llm_provider == "openai" and isinstance(resolved_reasoning_effort, dict):
-                from litellm.responses.utils import openai_bridge_reasoning
+            if isinstance(resolved_reasoning_effort, dict):
+                from litellm.responses.utils import (
+                    RefusedReasoningFields,
+                    bridge_reasoning,
+                    raise_refused_reasoning_fields,
+                )
 
-                optional_params["reasoning_effort"] = openai_bridge_reasoning(
+                bridged_reasoning: Final = bridge_reasoning(
                     requested=resolved_reasoning_effort,
                     effort_kept="reasoning_effort" in optional_params,
                     summary_alias=rs_val,
                     model=model,
+                    base_model=base_model if isinstance(base_model, str) else None,
+                    custom_llm_provider=custom_llm_provider,
+                    api_base=api_base,
+                    deployment_model_info=typed_deployment_model_info,
                     drop_params=drop_unsupported_reasoning,
                     additional_drop_params=routing_kwargs.get("additional_drop_params"),
                 )
-            elif isinstance(resolved_reasoning_effort, dict) and "summary" in resolved_reasoning_effort:
-                optional_params["reasoning_effort"] = resolved_reasoning_effort
+                if isinstance(bridged_reasoning, RefusedReasoningFields):
+                    raise_refused_reasoning_fields(bridged_reasoning, model, custom_llm_provider)
+                optional_params["reasoning_effort"] = bridged_reasoning
             elif rs_val is not None:
                 eff: Final = optional_params.get("reasoning_effort", resolved_reasoning_effort)
                 if isinstance(eff, dict):
@@ -6300,6 +6477,7 @@ def completion(
             or custom_llm_provider == "nebius"
             or custom_llm_provider == "wandb"
             or custom_llm_provider == "clarifai"
+            or custom_llm_provider == "bigmodel"
             or custom_llm_provider in litellm.openai_compatible_providers
             or JSONProviderRegistry.exists(custom_llm_provider)  # JSON-configured providers
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
@@ -7810,6 +7988,8 @@ async def atext_completion(*args, **kwargs) -> TextCompletionResponse | TextComp
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 stream_options=kwargs.get("stream_options"),
+                usage_injected_by_proxy="_litellm_strip_stream_usage" in kwargs
+                and kwargs["_litellm_strip_stream_usage"] is True,
             )
         else:
             ## OpenAI / Azure Text Completion Returns here
@@ -8659,8 +8839,9 @@ def speech(
     extra_headers: Final = kwargs.get("extra_headers", None)
     model_info: Final = kwargs.get("model_info", None)
     shared_session: Final = kwargs.get("shared_session", None)
+    caller_api_base: Final = api_base or base_url
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
-        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base or base_url
+        model=model, custom_llm_provider=custom_llm_provider, api_base=caller_api_base
     )
     kwargs.pop("tags", [])
 
@@ -8715,13 +8896,13 @@ def speech(
         custom_llm_provider=custom_llm_provider,
     )
     response: HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent] | None = None
-    if custom_llm_provider == "edenai":
-        litellm_params_dict["api_base"] = api_base
+    if custom_llm_provider in ("edenai", "dashscope") and text_to_speech_provider_config is not None:
+        litellm_params_dict["api_base"] = caller_api_base if custom_llm_provider == "dashscope" else api_base
         response = base_llm_http_handler.text_to_speech_handler(
             model=model,
             input=input,
             voice=voice if isinstance(voice, str) else None,
-            text_to_speech_provider_config=text_to_speech_provider_config or litellm.EdenAITextToSpeechConfig(),
+            text_to_speech_provider_config=text_to_speech_provider_config,
             text_to_speech_optional_params=optional_params,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params_dict,

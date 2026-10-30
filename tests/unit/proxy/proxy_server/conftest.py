@@ -19,6 +19,8 @@ import pytest
 if TYPE_CHECKING:
     from litellm import Router
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 # Repo root, anchored to this file (not CWD) so the path is correct no
 # matter where pytest is invoked from. With the project installed via
 # uv this is defensive — `litellm` already resolves through site-packages
@@ -421,7 +423,7 @@ def mock_router() -> MagicMock:
     ]
     router.model_names = ["gpt-4", "claude-sonnet", "bedrock-claude"]
     router.get_model_list = MagicMock(return_value=router.model_list)
-    return router
+    return route_entry_points_to_stubs(router)
 
 
 # ---------------------------------------------------------------------------
