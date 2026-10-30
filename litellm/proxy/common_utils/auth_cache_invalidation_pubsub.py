@@ -1,15 +1,9 @@
 import asyncio
-import json
-from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
-from types import MappingProxyType
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Final
-
-from pydantic import TypeAdapter
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy.common_utils.config_sync_pubsub import (  # noqa: F401  # legacy module exports
     ConfigSyncPubSub,
     _ConfigSyncPubSub,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -18,6 +12,12 @@ from litellm.proxy.common_utils.config_sync_pubsub import (  # noqa: F401  # leg
     pubsub_capable_client,
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
+from litellm.redis.stores.auth_cache_invalidation import (
+    AUTH_CACHE_INVALIDATION_CHANNEL,
+    CacheInvalidation,
+    decode_cache_invalidation,
+    encode_cache_invalidation,
+)
 
 if TYPE_CHECKING:
     from litellm.caching.dual_cache import DualCache
@@ -25,7 +25,6 @@ if TYPE_CHECKING:
     from litellm.caching.redis_cache import RedisCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
-AUTH_CACHE_INVALIDATION_CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
 _POLL_TIMEOUT_SECONDS: Final = 1.0
 _MAX_PENDING_PUBLISHES: Final = 1024
 _MAX_IN_FLIGHT_PUBLISHES: Final = 16
@@ -34,7 +33,6 @@ _pending_publishes: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: strong
 _in_flight_publishes: Final = asyncio.Semaphore(_MAX_IN_FLIGHT_PUBLISHES)
 _BACKOFF_INITIAL_SECONDS: Final = 5.0
 _BACKOFF_MAX_SECONDS: Final = 60.0
-_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def auth_cache_invalidation_channel(redis_cache: "RedisCache") -> str:
@@ -43,45 +41,8 @@ def auth_cache_invalidation_channel(redis_cache: "RedisCache") -> str:
     return f"{redis_cache.namespace}:{AUTH_CACHE_INVALIDATION_CHANNEL}"
 
 
-@dataclass(frozen=True, slots=True)
-class _CacheInvalidationMessage:
-    cache_key: str
-    new_value: float | None = None
-    ttl: float | None = None
-
-
 def _cache_invalidation_message_json(cache_key: str, new_value: float | None = None, ttl: float | None = None) -> str:
-    message: Final[Mapping[str, object]] = MappingProxyType(
-        asdict(_CacheInvalidationMessage(cache_key=cache_key, new_value=new_value, ttl=ttl))
-    )
-    return json.dumps({field: value for field, value in message.items() if value is not None})
-
-
-def _finite_number_or_none(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    return float(value)
-
-
-def _message_from_data(data: object) -> _CacheInvalidationMessage | None:
-    if isinstance(data, bytes):
-        data = data.decode("utf-8", errors="replace")  # rebind-ok: normalizing the wire payload to str
-    if not isinstance(data, str):
-        return None
-    try:
-        parsed: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(data)))
-    except json.JSONDecodeError:
-        return None
-    if parsed is None:
-        return None
-    cache_key: Final = parsed.get("cache_key")
-    if not isinstance(cache_key, str):
-        return None
-    return _CacheInvalidationMessage(
-        cache_key=cache_key,
-        new_value=_finite_number_or_none(parsed.get("new_value")),
-        ttl=_finite_number_or_none(parsed.get("ttl")),
-    )
+    return encode_cache_invalidation(CacheInvalidation(cache_key=cache_key, new_value=new_value, ttl=ttl))
 
 
 async def _publish_to_redis(redis_cache: "RedisCache", cache_key: str, message: str) -> None:
@@ -294,7 +255,7 @@ class AuthCacheInvalidationSubscriber:
     @with_service_target(AUTH_OBJECTS_TARGET)
     def _apply_message(self, message: object) -> None:
         data: Final = message.get("data") if isinstance(message, dict) else None
-        parsed: Final = _message_from_data(data)
+        parsed: Final = decode_cache_invalidation(data)
         if parsed is None:
             return
         if parsed.new_value is not None:
