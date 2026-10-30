@@ -22,7 +22,7 @@ from litellm.router_api import RouterRegistry
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
 from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import CustomPricingLiteLLMParams, LlmProviders
 from litellm.utils import ProviderConfigManager, get_valid_models
 
 LLM_PROVIDER_PREFIXES: Final = frozenset(llm_provider.value for llm_provider in LlmProviders)
@@ -620,25 +620,45 @@ def wildcard_deployment_priced_model(
     candidates: Final = registry.names(
         served_name, kind="route_candidates", team_id=deployment.team_id or caller_aliases.team_id
     )
-    if deployment.model_id in candidates or _every_candidate_runs(registry, candidates, routed_name, priced):
+    wildcard_run: Final = (priced, _pricing_overrides(_router_deployment(registry, deployment.model_id)))
+    if deployment.model_id in candidates or _every_candidate_runs(registry, candidates, routed_name, wildcard_run):
         return priced
     return ROUTED_ELSEWHERE
 
 
-def _every_candidate_runs(registry: RouterRegistry, candidates: frozenset[str], routed_name: str, model: str) -> bool:
+_PRICING_FIELDS: Final = frozenset((*CustomPricingLiteLLMParams.model_fields, "base_model"))
+
+
+def _every_candidate_runs(
+    registry: RouterRegistry, candidates: frozenset[str], routed_name: str, run: tuple[object, Mapping[str, object]]
+) -> bool:
     return bool(candidates) and all(
-        _model_run_by(_router_deployment(registry, candidate), routed_name) == model for candidate in candidates
+        _run_of(_router_deployment(registry, candidate), routed_name) == run for candidate in candidates
     )
 
 
-def _model_run_by(deployment: Mapping[str, object] | None, routed_name: str) -> object:
+def _run_of(deployment: Mapping[str, object] | None, routed_name: str) -> tuple[object, Mapping[str, object]] | None:
     if deployment is None:
         return None
     model_name: Final = deployment.get("model_name")
     litellm_model: Final = _litellm_model(deployment)
-    if not isinstance(model_name, str) or not isinstance(litellm_model, str):
-        return litellm_model
-    return wildcard_listed_priced_model(model_name, litellm_model, routed_name)
+    model: Final = (
+        wildcard_listed_priced_model(model_name, litellm_model, routed_name)
+        if isinstance(model_name, str) and isinstance(litellm_model, str)
+        else litellm_model
+    )
+    return (model, _pricing_overrides(deployment))
+
+
+def _pricing_overrides(deployment: Mapping[str, object] | None) -> Mapping[str, object]:
+    blobs: Final = () if deployment is None else (deployment.get("model_info"), deployment.get("litellm_params"))
+    return MappingProxyType(dict(itertools.chain.from_iterable(_pricing_items(blob) for blob in blobs)))
+
+
+def _pricing_items(blob: object) -> tuple[tuple[str, object], ...]:
+    if not is_str_keyed_mapping(blob):
+        return ()
+    return tuple((key, value) for key, value in blob.items() if key in _PRICING_FIELDS and value is not None)
 
 
 def _without_deleted_team_targets(caller_aliases: CallerAliases, registry: RouterRegistry) -> CallerAliases:

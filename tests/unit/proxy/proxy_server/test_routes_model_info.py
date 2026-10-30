@@ -1136,7 +1136,7 @@ def test_model_info_keeps_the_price_of_a_wildcard_row_another_deployment_of_the_
 ) -> None:
     """A deployment pinned to one model a wildcard lists takes that name's calls but runs the model the wildcard
     would run, so the wildcard's row keeps the price those calls bill, and saving that row back stores none of it.
-    A name pinned to another model shows no price."""
+    A name pinned to another model, or to the same model at custom rates, shows no price."""
     from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
     from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment
 
@@ -1157,6 +1157,16 @@ def test_model_info_keeps_the_price_of_a_wildcard_row_another_deployment_of_the_
                 "model_name": "my-fw/acme-pro",
                 "litellm_params": {"model": "deepseek/acme-lite", "api_key": "x"},
                 "model_info": {"id": "pinned-acme-pro"},
+            },
+            {
+                "model_name": "my-fw/acme-max",
+                "litellm_params": {
+                    "model": "fireworks_ai/accounts/fireworks/models/acme-max",
+                    "api_key": "x",
+                    "input_cost_per_token": 2e-06,
+                    "output_cost_per_token": 3e-06,
+                },
+                "model_info": {"id": "pinned-acme-max"},
             },
         ]
     )
@@ -1191,6 +1201,16 @@ def test_model_info_keeps_the_price_of_a_wildcard_row_another_deployment_of_the_
     assert stored["access_groups"] == ["prod"]
     assert set(stored).isdisjoint(set(shown) - set(router.registry().deployment_dict("fireworks-wildcard")["model_info"]))
     assert rows["my-fw/acme-pro"].get("input_cost_per_token") is None
+    custom_rate_call: Final = router.completion(
+        model="my-fw/acme-max", messages=[{"role": "user", "content": "hi"}], mock_response="hello there"
+    )
+    assert custom_rate_call._hidden_params["response_cost"] == pytest.approx(
+        2e-06 * custom_rate_call.usage.prompt_tokens + 3e-06 * custom_rate_call.usage.completion_tokens
+    )
+    assert (rows["my-fw/acme-max"].get("input_cost_per_token"), rows["my-fw/acme-max"].get("litellm_provider")) == (
+        None,
+        None,
+    )
     _invalidate_model_cost_lowercase_map()
 
 
