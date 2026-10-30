@@ -494,6 +494,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.FalAI]: "fal_ai/fal-ai/flux-pro/v1.1-ultra",
   [Providers.Google_AI_Studio]: "gemini-pro",
   [Providers.JinaAI]: "jina_ai/",
+  [Providers.META]: "meta/muse-spark-1.1",
   [Providers.MICROSOFT_365_COPILOT]: "microsoft_365_copilot/chat",
   [Providers.NVIDIA_RIVA]: "nvidia_riva/nvidia/parakeet-ctc-1_1b-asr",
   [Providers.Oracle]: "oci/xai.grok-4",

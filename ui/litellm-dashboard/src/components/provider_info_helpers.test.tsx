@@ -22,6 +22,7 @@ const BUNDLED_MODEL_MAP: Record<string, { litellm_provider?: string }> = JSON.pa
 describe("provider_info_helpers", () => {
   it("resolves Meta Model API separately from Meta Llama and isolates their bundled models", () => {
     expect(resolveLitellmProviderSlug("META")).toBe("meta");
+    expect(getPlaceholder(Providers.META)).toBe("meta/muse-spark-1.1");
     expect(getProviderLogoAndName("meta").displayName).toBe("Meta Model API");
     const metaModels = Object.keys(BUNDLED_MODEL_MAP).filter(
       (key) => BUNDLED_MODEL_MAP[key]?.litellm_provider === "meta",
