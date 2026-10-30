@@ -1,9 +1,11 @@
 import asyncio
+import datetime
 import json
+import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Generator, Mapping
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -11,6 +13,7 @@ import pytest
 import respx
 
 import litellm
+from litellm._internal_context import in_mirrored_call
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.router import Router, _has_mcp_tool, _is_silent_experiment_marker
@@ -22,9 +25,48 @@ class _RecordingLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.success_kwargs: list[dict[str, object]] = []
+        self.failure_kwargs: list[dict[str, object]] = []
+        self._logged: Final = threading.Condition()
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        self.success_kwargs.append(kwargs)
+    def _record(self, outcome: Literal["success", "failure"], kwargs: dict[str, object]) -> None:
+        with self._logged:
+            match outcome:
+                case "success":
+                    self.success_kwargs.append(kwargs)
+                case "failure":
+                    self.failure_kwargs.append(kwargs)
+            self._logged.notify_all()
+
+    async def async_log_success_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self._record("success", kwargs)
+
+    async def async_log_failure_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self._record("failure", kwargs)
+
+    def wait_until(self, logged_enough: Callable[[], bool], timeout: float = 30.0) -> None:
+        with self._logged:
+            self._logged.wait_for(logged_enough, timeout=timeout)
+
+    def judge_flags(self) -> dict[str, object]:
+        return {
+            call["litellm_params"]["metadata"]["judge_of"]: call["standard_logging_object"]["metadata"].get(
+                "is_silent_experiment"
+            )
+            for call in self.success_kwargs
+            if "judge_of" in call["litellm_params"]["metadata"]
+        }
 
     def shadow_successes(self) -> list[dict[str, object]]:
         return [
@@ -34,6 +76,17 @@ class _RecordingLogger(CustomLogger):
         ]
 
 
+class _SyncAndAsyncRecordingLogger(_RecordingLogger):
+    def log_success_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self._record("success", kwargs)
+
+
 async def _settle_shared_logging_worker() -> None:
     try:
         await GLOBAL_LOGGING_WORKER.flush()
@@ -41,15 +94,46 @@ async def _settle_shared_logging_worker() -> None:
         await GLOBAL_LOGGING_WORKER.stop()
 
 
-@pytest.fixture
-def recording_logger():
+class _JudgingLogger(_RecordingLogger):
+    async def _judge(self, kwargs: Mapping[str, object]) -> None:
+        metadata: Final = kwargs["litellm_params"]["metadata"]
+        if "judge_of" in metadata:
+            return
+        await litellm.acompletion(
+            model="openai/gpt-5.4-nano",
+            api_key="fake-key",
+            messages=[{"role": "user", "content": "score it"}],
+            mock_response="ok",
+            metadata={"judge_of": metadata["model_group"]},
+        )
+
+    async def async_log_success_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        await super().async_log_success_event(kwargs, response_obj, start_time, end_time)
+        await self._judge(kwargs)
+
+    async def async_log_failure_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        await self._judge(kwargs)
+
+
+def _installed(logger: _RecordingLogger) -> Generator[_RecordingLogger]:
     settle_loop: Final = asyncio.new_event_loop()
     try:
         settle_loop.run_until_complete(_settle_shared_logging_worker())
     finally:
         settle_loop.close()
     original_callbacks: Final = litellm.callbacks
-    logger: Final = _RecordingLogger()
     litellm.callbacks = [logger]
     try:
         yield logger
@@ -57,22 +141,44 @@ def recording_logger():
         litellm.callbacks = original_callbacks
 
 
-async def _wait_for_shadow_successes(logger: _RecordingLogger, expected: int, timeout: float = 5.0) -> None:
-    deadline: Final = time.monotonic() + timeout
-    while len(logger.shadow_successes()) < expected and time.monotonic() < deadline:
-        await asyncio.sleep(0.05)
+@pytest.fixture
+def recording_logger():
+    yield from _installed(_RecordingLogger())
 
 
-async def _wait_for_all_successes(logger: _RecordingLogger, expected: int, timeout: float = 5.0) -> None:
-    deadline: Final = time.monotonic() + timeout
-    while len(logger.success_kwargs) < expected and time.monotonic() < deadline:
-        await asyncio.sleep(0.05)
+@pytest.fixture
+def sync_and_async_recording_logger():
+    yield from _installed(_SyncAndAsyncRecordingLogger())
 
 
-def _wait_for_shadow_successes_sync(logger: _RecordingLogger, expected: int, timeout: float = 5.0) -> None:
-    deadline: Final = time.monotonic() + timeout
-    while len(logger.shadow_successes()) < expected and time.monotonic() < deadline:
-        time.sleep(0.05)
+@pytest.fixture
+def judging_logger():
+    yield from _installed(_JudgingLogger())
+
+
+async def _wait_for_shadow_successes(logger: _RecordingLogger, expected: int, timeout: float = 30.0) -> None:
+    await asyncio.to_thread(logger.wait_until, lambda: len(logger.shadow_successes()) >= expected, timeout)
+
+
+async def _wait_for_all_successes(logger: _RecordingLogger, expected: int) -> None:
+    await asyncio.to_thread(logger.wait_until, lambda: len(logger.success_kwargs) >= expected)
+
+
+async def _wait_for_judges(logger: _RecordingLogger, judged: set[str]) -> None:
+    await asyncio.to_thread(logger.wait_until, lambda: judged <= logger.judge_flags().keys())
+
+
+def _silent_flag_by_group(logger: _RecordingLogger) -> dict[str, object]:
+    return {
+        call["standard_logging_object"]["model_group"]: call["standard_logging_object"]["metadata"].get(
+            "is_silent_experiment"
+        )
+        for call in logger.success_kwargs
+    }
+
+
+def _wait_for_shadow_successes_sync(logger: _RecordingLogger, expected: int) -> None:
+    logger.wait_until(lambda: len(logger.shadow_successes()) >= expected)
 
 
 def _streaming_model_list(silent_model: object) -> list[dict[str, object]]:
@@ -261,6 +367,197 @@ async def test_multiple_shadow_targets_fan_out_async(recording_logger):
     primary_successes = [call for call in recording_logger.success_kwargs if call not in shadow_successes]
     assert len(primary_successes) == 1
     assert primary_successes[0]["litellm_params"]["metadata"]["model_group"] == "primary-model"
+
+
+@pytest.mark.asyncio
+async def test_standard_logging_payload_marks_only_the_mirrored_calls_as_silent_experiments(
+    recording_logger: _RecordingLogger,
+) -> None:
+    router: Final = Router(model_list=_streaming_model_list(["shadow-a", "shadow-b"]))
+    response: Final = await router.acompletion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="pong",
+    )
+    assert response.choices[0].message.content == "pong"
+    await _wait_for_all_successes(recording_logger, expected=3)
+
+    payloads: Final = [call["standard_logging_object"] for call in recording_logger.success_kwargs]
+    assert sorted(payload["model_group"] for payload in payloads) == ["primary-model", "shadow-a", "shadow-b"]
+    metadata_by_group: Final = {payload["model_group"]: payload["metadata"] for payload in payloads}
+    assert metadata_by_group["shadow-a"]["is_silent_experiment"] is True
+    assert metadata_by_group["shadow-b"]["is_silent_experiment"] is True
+    assert "is_silent_experiment" not in metadata_by_group["primary-model"]
+
+
+def test_standard_logging_payload_marks_only_the_mirrored_calls_on_the_sync_path(
+    sync_and_async_recording_logger: _SyncAndAsyncRecordingLogger,
+) -> None:
+    router: Final = Router(model_list=_streaming_model_list(["shadow-a", "shadow-b"]))
+    response: Final = router.completion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="pong",
+    )
+    assert response.choices[0].message.content == "pong"
+    sync_and_async_recording_logger.wait_until(
+        lambda: (
+            _silent_flag_by_group(sync_and_async_recording_logger).keys() >= {"primary-model", "shadow-a", "shadow-b"}
+        )
+    )
+
+    assert _silent_flag_by_group(sync_and_async_recording_logger) == {
+        "primary-model": None,
+        "shadow-a": True,
+        "shadow-b": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_failed_mirrored_call_reaches_failure_callbacks_marked_as_mirrored(
+    recording_logger: _RecordingLogger,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary-model",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "fake-key",
+                    "silent_model": "shadow-a",
+                    "mock_response": "pong",
+                },
+            },
+            {
+                "model_name": "shadow-a",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-nano",
+                    "api_key": "fake-key",
+                    "mock_response": "litellm.InternalServerError",
+                },
+            },
+        ]
+    )
+    await router.acompletion(model="primary-model", messages=[{"role": "user", "content": "hi"}])
+    await asyncio.to_thread(recording_logger.wait_until, lambda: len(recording_logger.failure_kwargs) >= 1)
+
+    assert {
+        (
+            call["standard_logging_object"]["model_group"],
+            call["standard_logging_object"]["metadata"].get("is_silent_experiment"),
+        )
+        for call in recording_logger.failure_kwargs
+    } == {("shadow-a", True)}
+
+
+_SPEND_ROW_TIME: Final = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+
+
+def _spend_row_is_silent_experiment(call: Mapping[str, object]) -> object:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    row: Final = get_logging_payload(
+        kwargs=dict(call),
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),
+        start_time=_SPEND_ROW_TIME,
+        end_time=_SPEND_ROW_TIME,
+    )
+    return json.loads(row["metadata"]).get("is_silent_experiment")
+
+
+def _through_the_spend_collector(call: Mapping[str, object]) -> Mapping[str, object]:
+    from litellm.proxy.spend_tracking.spend_event import (
+        SpendEvent,
+        build_spend_event,
+        decode_spend_event,
+        spend_event_callback_args,
+    )
+
+    line: Final = build_spend_event(
+        call,
+        litellm.ModelResponse(id="chatcmpl-test", choices=[]),
+        _SPEND_ROW_TIME,
+        _SPEND_ROW_TIME,
+        store_bodies=False,
+    )
+    assert isinstance(line, bytes)
+    event: Final = decode_spend_event(line)
+    assert isinstance(event, SpendEvent)
+    return spend_event_callback_args(event).kwargs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "spend_kwargs",
+    [pytest.param(lambda call: call, id="in_process"), pytest.param(_through_the_spend_collector, id="collector")],
+)
+async def test_spend_rows_mark_only_the_mirrored_calls_when_the_caller_sends_litellm_metadata(
+    recording_logger: _RecordingLogger,
+    spend_kwargs: Callable[[Mapping[str, object]], Mapping[str, object]],
+) -> None:
+    router: Final = Router(model_list=_streaming_model_list(["shadow-a", "shadow-b"]))
+    await router.acompletion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="pong",
+        litellm_metadata={"user_api_key": "test-key"},
+    )
+    await _wait_for_all_successes(recording_logger, expected=3)
+
+    silent_by_group: Final = {
+        call["standard_logging_object"]["model_group"]: _spend_row_is_silent_experiment(spend_kwargs(call))
+        for call in recording_logger.success_kwargs
+    }
+    assert silent_by_group == {"primary-model": None, "shadow-a": True, "shadow-b": True}
+
+
+@pytest.mark.asyncio
+async def test_router_counts_a_mirrored_call_once_against_its_target_rate_limits(
+    recording_logger: _RecordingLogger,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary-model",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake-key", "silent_model": "shadow-b"},
+            },
+            {
+                "model_name": "shadow-b",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "fake-key", "rpm": 100, "tpm": 100000},
+            },
+        ]
+    )
+    await router.acompletion(model="primary-model", messages=[{"role": "user", "content": "hi"}], mock_response="pong")
+    await _wait_for_shadow_successes(recording_logger, expected=1)
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    shadow_tokens: Final = recording_logger.shadow_successes()[0]["standard_logging_object"]["total_tokens"]
+    assert await router.get_model_group_usage("shadow-b") == (shadow_tokens, 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("bucket", "planted"),
+    [
+        ("metadata", {"is_silent_experiment": True}),
+        ("litellm_metadata", {"is_silent_experiment": True}),
+    ],
+)
+async def test_a_caller_sent_silent_experiment_flag_does_not_mark_a_real_call_as_mirrored(
+    recording_logger: _RecordingLogger, bucket: str, planted: dict[str, object]
+) -> None:
+    router: Final = Router(model_list=_streaming_model_list(["shadow-a", "shadow-b"]))
+    await router.acompletion(
+        model="shadow-b",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="pong",
+        **{bucket: planted},
+    )
+    await _wait_for_all_successes(recording_logger, expected=1)
+
+    call: Final = recording_logger.success_kwargs[0]
+    assert "is_silent_experiment" not in call["standard_logging_object"]["metadata"]
+    assert _spend_row_is_silent_experiment(call) is None
 
 
 def test_multiple_shadow_targets_fan_out_sync(recording_logger):
@@ -969,10 +1266,19 @@ async def test_generic_primary_attempt_rejects_missing_provider_response(call_ty
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("call_type", ["aresponses", "anthropic_messages"])
-async def test_generic_mirroring_fans_out_to_each_configured_target(call_type):
-    provider: Final = AsyncMock(return_value="provider-result")
+@pytest.mark.parametrize("fail_mirror", [False, True])
+async def test_generic_mirroring_fans_out_to_each_configured_target(call_type: str, fail_mirror: bool) -> None:
+    observed: Final[asyncio.Queue[tuple[object, bool]]] = asyncio.Queue()
+
+    async def provider_call(**kwargs: object) -> str:
+        observed.put_nowait((kwargs["model"], in_mirrored_call()))
+        if fail_mirror and kwargs["model"] != "openai/gpt-5.4-mini":
+            raise RuntimeError("mirror provider unavailable")
+        return "provider-result"
+
+    provider: Final = AsyncMock(side_effect=provider_call)
     provider.__name__ = call_type
-    router: Final = Router(model_list=_streaming_model_list(["shadow-a", "shadow-b"]))
+    router: Final = Router(model_list=_streaming_model_list(["shadow-a", "shadow-b"]), num_retries=0)
     endpoint: Final = router.factory_function(provider, call_type=call_type)
 
     result: Final = await endpoint(model="primary-model", input="hi", metadata={"trace": "original"})
@@ -983,6 +1289,12 @@ async def test_generic_mirroring_fans_out_to_each_configured_target(call_type):
 
     assert result == "provider-result"
     assert provider.await_count == 3
+    assert {observed.get_nowait() for _ in range(3)} == {
+        ("openai/gpt-5.4-mini", False),
+        ("openai/gpt-5.4-nano", True),
+        ("anthropic/claude-haiku-4-5", True),
+    }
+    assert not in_mirrored_call()
     assert {call.kwargs["litellm_metadata"]["model_group"] for call in provider.await_args_list} == {
         "primary-model",
         "shadow-a",
@@ -1009,3 +1321,63 @@ async def test_generic_mirror_does_not_reuse_primary_attempt_callback():
     primary_attempt.assert_not_awaited()
     provider.assert_awaited_once()
     assert provider.await_args.kwargs["model"] == "openai/gpt-4o"
+
+
+def _judged_router(shadow_outcome: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "primary-model",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "fake-key",
+                    "silent_model": "shadow-a",
+                    "mock_response": "pong",
+                },
+            },
+            {
+                "model_name": "shadow-a",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-nano",
+                    "api_key": "fake-key",
+                    "mock_response": shadow_outcome,
+                },
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shadow_outcome", ["pong", "litellm.InternalServerError"])
+async def test_calls_a_callback_starts_while_logging_a_mirrored_call_are_not_marked_as_mirrored(
+    judging_logger: _JudgingLogger, shadow_outcome: str
+) -> None:
+    router: Final = _judged_router(shadow_outcome)
+    await router.acompletion(model="primary-model", messages=[{"role": "user", "content": "hi"}])
+    await _wait_for_judges(judging_logger, {"primary-model", "shadow-a"})
+
+    assert judging_logger.judge_flags() == {"primary-model": None, "shadow-a": None}
+
+
+def _start_judge_call(
+    kwargs: Mapping[str, object], completion_response: object, start_time: object, end_time: object
+) -> None:
+    litellm.completion(
+        model="openai/gpt-5.4-nano",
+        api_key="fake-key",
+        messages=[{"role": "user", "content": "score it"}],
+        mock_response="ok",
+        metadata={"judge_of": kwargs["litellm_params"]["metadata"]["model_group"]},
+    )
+
+
+@pytest.mark.asyncio
+async def test_calls_a_failure_function_callback_starts_for_a_mirrored_call_are_not_marked_as_mirrored(
+    sync_and_async_recording_logger: _SyncAndAsyncRecordingLogger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "failure_callback", [_start_judge_call])
+    router: Final = _judged_router("litellm.InternalServerError")
+    await router.acompletion(model="primary-model", messages=[{"role": "user", "content": "hi"}])
+    await _wait_for_judges(sync_and_async_recording_logger, {"shadow-a"})
+
+    assert sync_and_async_recording_logger.judge_flags() == {"shadow-a": None}
