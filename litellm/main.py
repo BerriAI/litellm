@@ -6273,6 +6273,26 @@ def completion(
                 ),
             )
 
+        if bridges_to_interactions_api:
+            return dispatch_interactions_bridge(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
+                model=model,
+                messages=messages,  # pyright: ignore[reportUnknownArgumentType]  # untyped messages local
+                headers=headers,  # pyright: ignore[reportUnknownArgumentType]  # untyped headers local
+                model_response=model_response,
+                api_key=api_key,  # pyright: ignore[reportUnknownArgumentType]  # untyped api_key local
+                api_base=api_base,  # pyright: ignore[reportUnknownArgumentType]  # untyped api_base local
+                acompletion=acompletion,  # pyright: ignore[reportUnknownArgumentType]  # untyped acompletion local
+                logging_obj=logging,  # pyright: ignore[reportUnknownArgumentType]  # untyped logging local
+                processed_params=processed_non_default_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped params local
+                stream_options=stream_options,  # pyright: ignore[reportUnknownArgumentType]  # untyped stream_options local
+                litellm_params=litellm_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped litellm_params local
+                raw_kwargs=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped kwargs local
+                timeout=timeout,
+                client=client,  # pyright: ignore[reportUnknownArgumentType]  # untyped client local
+                custom_llm_provider=custom_llm_provider,
+                stream=stream,  # pyright: ignore[reportUnknownArgumentType]  # untyped stream local
+            )
+
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
         # Only run the second bridge check if the first one didn't already
         # detect responses mode (e.g. via the "responses/" prefix).  The second
@@ -6361,25 +6381,6 @@ def completion(
             and litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(_azure_detection_model)
         ):
             optional_params, _ = strip_reasoning_summary_aliases_from_optional_params(optional_params)
-        elif bridges_to_interactions_api:
-            return dispatch_interactions_bridge(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
-                model=model,
-                messages=messages,  # pyright: ignore[reportUnknownArgumentType]  # untyped messages local
-                headers=headers,  # pyright: ignore[reportUnknownArgumentType]  # untyped headers local
-                model_response=model_response,
-                api_key=api_key,  # pyright: ignore[reportUnknownArgumentType]  # untyped api_key local
-                api_base=api_base,  # pyright: ignore[reportUnknownArgumentType]  # untyped api_base local
-                acompletion=acompletion,  # pyright: ignore[reportUnknownArgumentType]  # untyped acompletion local
-                logging_obj=logging,  # pyright: ignore[reportUnknownArgumentType]  # untyped logging local
-                processed_params=processed_non_default_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped params local
-                stream_options=stream_options,  # pyright: ignore[reportUnknownArgumentType]  # untyped stream_options local
-                litellm_params=litellm_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped litellm_params local
-                raw_kwargs=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped kwargs local
-                timeout=timeout,
-                client=client,  # pyright: ignore[reportUnknownArgumentType]  # untyped client local
-                custom_llm_provider=custom_llm_provider,
-                stream=stream,  # pyright: ignore[reportUnknownArgumentType]  # untyped stream local
-            )
 
         _dispatch_ctx: Final = CompletionDispatchContext(
             _azure_detection_model=_azure_detection_model,

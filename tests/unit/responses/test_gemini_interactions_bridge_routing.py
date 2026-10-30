@@ -13,7 +13,7 @@ from litellm.completion_extras.litellm_interactions_transformation import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.interactions.transformation import VertexAIInteractionsConfig
-from litellm.responses.bridge_check import should_route_to_interactions_api
+from litellm.responses.bridge_check import keep_registered_mode, should_route_to_interactions_api
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.utils import Choices, ModelResponse
 
@@ -167,14 +167,14 @@ async def test_vertex_completion_and_acompletion_forward_credentials_project_and
 ) -> None:
     monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", True)
     seen_mints: Final[list[tuple[VERTEX_CREDENTIALS_TYPES | None, str | None]]] = []  # mutable-ok: minter spy
-    seen_urls: Final[list[str]] = []  # mutable-ok: transport spy
+    seen_requests: Final[list[tuple[str, str]]] = []  # mutable-ok: transport spy
 
     def minter(creds: VERTEX_CREDENTIALS_TYPES | None, project_id: str | None) -> tuple[str, str]:
         seen_mints.append((creds, project_id))
-        return "vertex-minted-token", project_id or "missing-project"
+        return f"vertex-minted-{project_id}", project_id or "missing-project"
 
     def responder(req: httpx.Request) -> httpx.Response:
-        seen_urls.append(str(req.url))
+        seen_requests.append((str(req.url), req.headers.get("authorization", "")))
         return httpx.Response(
             200,
             json={
@@ -215,15 +215,18 @@ async def test_vertex_completion_and_acompletion_forward_credentials_project_and
 
     assert isinstance(sync_resp, ModelResponse)
     assert isinstance(async_resp, ModelResponse)
-    assert seen_mints == [
-        (sync_creds, "sync-proj"),
-        (sync_creds, "sync-proj"),
-        (async_creds, "async-proj"),
-        (async_creds, "async-proj"),
-    ]
-    assert seen_urls == [
-        "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/sync-proj/locations/us-central1/interactions",
-        "https://europe-west4-aiplatform.googleapis.com/v1beta1/projects/async-proj/locations/europe-west4/interactions",
+    assert (sync_creds, "sync-proj") in seen_mints
+    assert (async_creds, "async-proj") in seen_mints
+    assert all(creds is not None for creds, _ in seen_mints)
+    assert seen_requests == [
+        (
+            "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/sync-proj/locations/us-central1/interactions",
+            "Bearer vertex-minted-sync-proj",
+        ),
+        (
+            "https://europe-west4-aiplatform.googleapis.com/v1beta1/projects/async-proj/locations/europe-west4/interactions",
+            "Bearer vertex-minted-async-proj",
+        ),
     ]
 
 
@@ -360,3 +363,24 @@ def test_interactions_native_tool_choice_and_wav_audio_bypass_legacy_gemini_vali
         "input": [{"type": "user_input", "content": [{"type": "text", "text": "test"}]}],
         **expected_fields,
     }
+
+
+def test_runtime_false_toggle_overrides_env_and_interactions_mode_does_not_leak_to_unregistered_cost_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_ROUTE_ALL_CHAT_GEMINI_TO_INTERACTIONS", "true")
+    monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", False)
+
+    assert should_route_to_interactions_api(model="gemini-3-flash-preview", custom_llm_provider="gemini") is False
+
+    registered_row: Final = keep_registered_mode(
+        "gemini/gemini-3.1-flash-lite-preview",
+        {"litellm_provider": "gemini", "mode": "interactions", "input_cost_per_token": 1e-7},
+    )
+    assert registered_row == {"litellm_provider": "gemini", "mode": "chat", "input_cost_per_token": 1e-7}
+
+    unregistered_endpoint_row: Final = keep_registered_mode(
+        "vertex_ai/endpoints/1234567890",
+        {"litellm_provider": "vertex_ai", "mode": "interactions", "input_cost_per_token": 1e-7},
+    )
+    assert unregistered_endpoint_row == {"litellm_provider": "vertex_ai", "input_cost_per_token": 1e-7}

@@ -1,4 +1,3 @@
-import os
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # moved unchanged from litellm/main.py
@@ -91,7 +90,7 @@ def keep_registered_mode(backend_key: str, shared_model_info: Mapping[str, objec
         deployment_mode not in ROUTABLE_MODES or backend_key.split("/", 1)[0] in RESPONSES_ONLY_PROVIDERS
     ):
         return shared_model_info
-    if registered_mode is None and deployment_mode == "chat":
+    if registered_mode is None and deployment_mode in ("chat", "interactions"):
         return without_mode
     if registered_mode is None:
         return shared_model_info
@@ -400,8 +399,7 @@ def should_route_to_interactions_api(
     if _shared_routing_mode(model, custom_llm_provider) == "interactions":
         return True
 
-    env_flag: Final = os.getenv("LITELLM_ROUTE_ALL_CHAT_GEMINI_TO_INTERACTIONS", "").lower() in ("1", "true")
-    return bool(litellm.route_all_chat_gemini_to_interactions or env_flag)
+    return bool(litellm.route_all_chat_gemini_to_interactions)
 
 
 def resolve_bridge_allowed_openai_params(
