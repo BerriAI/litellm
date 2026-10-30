@@ -4,6 +4,7 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
+import re
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import (
@@ -64,6 +65,10 @@ from .utils import (
 )
 
 AllowedModelRegion: TypeAlias = Literal["eu", "us"]
+
+
+class SilentExperimentFlag(TypedDict, total=False):
+    is_silent_experiment: ReadOnly[bool]
 
 
 class FallbackSkipReason(str, enum.Enum):
@@ -265,6 +270,7 @@ def _whole_float_as_int(value: object) -> object:
 
 
 class ModelInfo(MirroredPricingParams):
+    enforce_supported_endpoints: bool | None = None
     id: str | None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
     updated_at: datetime.datetime | None = None
@@ -518,6 +524,19 @@ def holds_secret_pointer(param_name: str) -> bool:
 _RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})
 
 
+_DAILY_RESET_TIME_PATTERN: Final = re.compile(r"\d{2}:\d{2}")
+
+
+def parse_daily_reset_time(value: str | None) -> datetime.timedelta:
+    """`daily_reset_time` is "HH:MM" in UTC, when the rpd/tpd window starts over; unset means midnight UTC."""
+    if value is None:
+        return datetime.timedelta(0)
+    if _DAILY_RESET_TIME_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"daily_reset_time must be HH:MM in UTC, got {value!r}")
+    parsed: Final = datetime.time.fromisoformat(value)
+    return datetime.timedelta(hours=parsed.hour, minutes=parsed.minute)
+
+
 class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     """
     LiteLLM Params without 'model' arg (used across completion / assistants api)
@@ -535,6 +554,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     otpm: int | None = None
     tpd: int | None = None
     rpd: int | None = None
+    daily_reset_time: str | None = None
     timeout: float | str | httpx.Timeout | SDKTimeout | None = None  # if str, pass in as os.environ/
     # read timeout of a live stream, a faked stream takes the longer of this and timeout. If str, pass in as os.environ/
     stream_timeout: float | str | None = None
@@ -625,6 +645,13 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     valkey_ssl: bool | None = None
     valkey_text_field: str | None = None
     valkey_embedding_field: str | None = None
+
+    @field_validator("daily_reset_time")
+    @classmethod
+    def _daily_reset_time_is_utc_hh_mm(cls, value: str | None) -> str | None:
+        if value is not None:
+            parse_daily_reset_time(value)
+        return value
 
     @field_validator("timeout")
     @classmethod
@@ -742,6 +769,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     otpm: int | None
     tpd: ReadOnly[int | None]
     rpd: ReadOnly[int | None]
+    daily_reset_time: ReadOnly[str | None]
     order: int | None
     weight: int | None
     max_parallel_requests: int | None

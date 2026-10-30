@@ -709,6 +709,12 @@ class BedrockGuardrailStreamingParams(LiteLLMBaseModel):
         "and release the withheld chunks once the scan passes, instead of holding everything to end of stream. "
         "Flagged content is never released. Ignored when streaming_end_of_stream_only is true.",
     )
+    streaming_scan_in_background: bool = Field(
+        default=False,
+        description="When not buffering and not end-of-stream-only, run each sampled ApplyGuardrail scan in the "
+        "background so the sampled chunk and the ones after it stream while the scan runs. One scan runs at a time. "
+        "A flagged scan ends the stream before the next chunk, so content streamed while it ran reaches the client.",
+    )
 
     @classmethod
     def from_extras(cls, extras: Mapping[str, object] | None) -> "BedrockGuardrailStreamingParams":
@@ -732,9 +738,10 @@ class LakeraV2GuardrailConfigModel(LiteLLMBaseModel):
         default=True,
         description="Whether to include developer information in the response",
     )
-    on_flagged: Literal["block", "monitor", "inject_system_message"] | None = Field(
+    on_flagged: Literal["block", "mask", "monitor", "inject_system_message"] | None = Field(
         default="block",
-        description="Action to take when content is flagged: 'block' (raise exception), 'monitor' (log only), "
+        description="Action to take when content is flagged: 'block' (raise exception), 'mask' (mask PII-only "
+        "detections and allow, block anything else), 'monitor' (log only), "
         "or 'inject_system_message' (append an advisory system message and let the LLM decide)",
     )
     advisory_system_message: str | None = Field(

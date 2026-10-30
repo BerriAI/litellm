@@ -158,7 +158,7 @@ DEFAULT_REPLICATE_POLLING_DELAY_SECONDS: Final = get_env_int("DEFAULT_REPLICATE_
 DEFAULT_IMAGE_TOKEN_COUNT: Final = get_env_int("DEFAULT_IMAGE_TOKEN_COUNT", 250)
 HF_CONFIG_FETCH_TIMEOUT_SECONDS: Final = 10.0
 HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS: Final = get_env_int_in_range(
-    "HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS", 300, 1, 86400
+    "HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS", 60, 1, 86400
 )
 
 # Maximum wall-clock seconds a streaming response is allowed to run.
@@ -627,6 +627,7 @@ STS_CREDENTIAL_EXPIRY_SAFETY_MARGIN_SECONDS: Final = 60
 BEDROCK_MIN_THINKING_BUDGET_TOKENS: Final = get_env_int("BEDROCK_MIN_THINKING_BUDGET_TOKENS", 1024)
 # Anthropic's Messages API rejects thinking.budget_tokens < 1024.
 ANTHROPIC_MIN_THINKING_BUDGET_TOKENS: Final = 1024
+ANTHROPIC_BILLING_METADATA_PREFIX: Final = "x-anthropic-billing-header:"
 REPLICATE_POLLING_DELAY_SECONDS: Final = get_env_float("REPLICATE_POLLING_DELAY_SECONDS", 0.5)
 DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS: Final = get_env_int("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", 128000)
 DEFAULT_OCI_CHAT_MAX_TOKENS: Final = 4096
@@ -1064,6 +1065,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.reka.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
     "https://api.openinfer.ai/v1",
+    "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
 ]
 
 
@@ -1145,6 +1147,7 @@ openai_compatible_providers: Final[list[str]] = [
     "prism",
     "sail",
     "reka",
+    "streamlake",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
