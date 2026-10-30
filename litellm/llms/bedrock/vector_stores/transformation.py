@@ -1,11 +1,14 @@
 from collections.abc import Mapping
 from copy import deepcopy
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -21,6 +24,9 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
     VECTOR_STORE_OPENAI_PARAMS,
     BaseVectorStoreAuthCredentials,
+    OpenAIComparisonFilter,
+    OpenAICompoundFilter,
+    OpenAIVectorStoreFilter,
     VectorStoreIndexEndpoints,
     VectorStoreResultContent,
     VectorStoreSearchOptionalRequestParams,
@@ -32,6 +38,39 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_AWS_COMPARISON_OPERATORS: Final = MappingProxyType(
+    {
+        "eq": "equals",
+        "ne": "notEquals",
+        "gt": "greaterThan",
+        "gte": "greaterThanOrEquals",
+        "lt": "lessThan",
+        "lte": "lessThanOrEquals",
+        "in": "in",
+        "nin": "notIn",
+    }
+)
+_AWS_LOGICAL_OPERATORS: Final = MappingProxyType({"and": "andAll", "or": "orAll"})
+_OPENAI_FILTER: Final[TypeAdapter[OpenAIComparisonFilter | OpenAICompoundFilter]] = TypeAdapter(OpenAIVectorStoreFilter)
+
+
+def _aws_retrieval_filter(openai_filter: OpenAIComparisonFilter | OpenAICompoundFilter) -> Mapping[str, object]:
+    if isinstance(openai_filter, OpenAIComparisonFilter):
+        value: Final = list(openai_filter.value) if isinstance(openai_filter.value, tuple) else openai_filter.value
+        return {_AWS_COMPARISON_OPERATORS[openai_filter.type]: {"key": openai_filter.key, "value": value}}
+    if len(openai_filter.filters) == 1:
+        return _aws_retrieval_filter(openai_filter.filters[0])
+    return {
+        _AWS_LOGICAL_OPERATORS[openai_filter.type]: [_aws_retrieval_filter(member) for member in openai_filter.filters]
+    }
+
+
+def _validation_reason(error: ValidationError) -> str:
+    return "; ".join(
+        ".".join(("filters", *(str(part) for part in detail["loc"]))) + f": {detail['msg']}"
+        for detail in error.errors()
+    )
 
 
 class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
@@ -62,34 +101,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         return ["filters", "max_num_results", "ranking_options"]
 
     def _map_operator_to_aws(self, operator: str) -> str:
-        """
-        Map OpenAI-style operators to AWS Bedrock operator names.
-
-        OpenAI uses: eq, ne, gt, gte, lt, lte, in, nin
-        AWS uses: equals, notEquals, greaterThan, greaterThanOrEquals, lessThan, lessThanOrEquals, in, notIn, startsWith, listContains, stringContains
-        """
-        operator_mapping: Final = {
-            "eq": "equals",
-            "ne": "notEquals",
-            "gt": "greaterThan",
-            "gte": "greaterThanOrEquals",
-            "lt": "lessThan",
-            "lte": "lessThanOrEquals",
-            "in": "in",
-            "nin": "notIn",
-            # AWS-specific operators (pass through)
-            "equals": "equals",
-            "notEquals": "notEquals",
-            "greaterThan": "greaterThan",
-            "greaterThanOrEquals": "greaterThanOrEquals",
-            "lessThan": "lessThan",
-            "lessThanOrEquals": "lessThanOrEquals",
-            "notIn": "notIn",
-            "startsWith": "startsWith",
-            "listContains": "listContains",
-            "stringContains": "stringContains",
-        }
-        return operator_mapping.get(operator, operator)
+        return _AWS_COMPARISON_OPERATORS.get(operator, operator)
 
     def _map_operator_filter(self, filter_dict: dict) -> dict:
         """
@@ -154,7 +166,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         drop_params: bool,
     ) -> dict:
@@ -162,26 +174,34 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             if param == "max_num_results":
                 optional_params["numberOfResults"] = value
             elif param == "filters" and value is not None:
-                # map the openai filters to the aws kb filters format
-                # openai filters = {"key": <key>, "value": <value>, "operator": <operator>} OR {"and" | "or": [{"key": <key>, "value": <value>, "operator": <operator>}]}
-                # aws kb filters = {"operator": {"<key>": <value>}} OR {"andAll | orAll": [{"operator": {"<key>": <value>}}]}
-                # 1. check if filter is in openai format
-                # 2. if it is, map it to the aws kb filters format
-                # 3. if it is not, assume it is in aws kb filters format and add it to the optional_params
-                aws_filters: dict | None = None
-
-                if isinstance(value, dict):
-                    if "operator" in value:
-                        # Single operator - map directly (no wrapping needed)
-                        aws_filters = self._map_operator_filter(value)
-                    elif "and" in value or "or" in value:
-                        aws_filters = self._map_and_or_filters(value)
-                    else:
-                        # Assume it's already in AWS KB format
-                        aws_filters = value
-                optional_params["filters"] = aws_filters
+                optional_params["filters"] = self._aws_filters(value, drop_params=drop_params)
 
         return optional_params
+
+    def _aws_filters(self, filters: object, drop_params: bool) -> Mapping[str, object] | None:
+        if not isinstance(filters, dict):
+            return self._invalid_filters(f"filters must be an object, got {type(filters).__name__}", drop_params)
+        if "type" in filters:
+            try:
+                return _aws_retrieval_filter(_OPENAI_FILTER.validate_python(filters))
+            except ValidationError as error:
+                return self._invalid_filters(_validation_reason(error), drop_params)
+        if "operator" in filters:
+            return self._map_operator_filter(filters)
+        if "and" in filters or "or" in filters:
+            return self._map_and_or_filters(filters)
+        return filters
+
+    @staticmethod
+    def _invalid_filters(reason: str, drop_params: bool) -> None:
+        if not drop_params:
+            raise BadRequestError(
+                message=f"Invalid filters for the Bedrock vector store: {reason}. "
+                "Fix the filter, or set drop_params to drop it.",
+                model=None,
+                llm_provider="bedrock",
+            )
+        verbose_logger.debug("Dropping invalid Bedrock vector store filters under drop_params: %s", reason)
 
     def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
         headers = headers or {}

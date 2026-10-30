@@ -375,3 +375,220 @@ async def test_bedrock_search_with_credentials_managed_registry(
 
     assert search_response["data"][0]["score"] == 0.9
     assert search_response["data"][0]["content"][0]["text"] == "Mock search result"
+
+
+async def _search_with_filters(respx_mock: respx.MockRouter, filters: object, **kwargs: object) -> respx.Route:
+    import litellm
+
+    retrieve_route: Final = respx_mock.post(BEDROCK_RETRIEVE_URL).mock(
+        return_value=httpx.Response(200, json=BEDROCK_RETRIEVE_RESPONSE)
+    )
+    await litellm.vector_stores.asearch(
+        vector_store_id="T37J8R4WTM",
+        query="vacation policy",
+        filters=filters,
+        custom_llm_provider="bedrock",
+        aws_access_key_id="test_access_key",
+        aws_secret_access_key="test_secret_key",
+        aws_region_name="us-east-1",
+        **kwargs,
+    )
+    return retrieve_route
+
+
+def _sent_filter(retrieve_route: respx.Route) -> object:
+    body: Final = json.loads(retrieve_route.calls.last.request.read())
+    return body.get("retrievalConfiguration", {}).get("vectorSearchConfiguration", {}).get("filter")
+
+
+@pytest.mark.parametrize(
+    ("openai_filter", "aws_filter"),
+    [
+        pytest.param(
+            {"type": "eq", "key": "department", "value": "hr"},
+            {"equals": {"key": "department", "value": "hr"}},
+            id="eq",
+        ),
+        pytest.param(
+            {"type": "ne", "key": "archived", "value": True},
+            {"notEquals": {"key": "archived", "value": True}},
+            id="ne-bool",
+        ),
+        pytest.param(
+            {"type": "gt", "key": "year", "value": 2022},
+            {"greaterThan": {"key": "year", "value": 2022}},
+            id="gt-int",
+        ),
+        pytest.param(
+            {"type": "gte", "key": "score", "value": 0.5},
+            {"greaterThanOrEquals": {"key": "score", "value": 0.5}},
+            id="gte-float",
+        ),
+        pytest.param(
+            {"type": "lt", "key": "year", "value": 2024},
+            {"lessThan": {"key": "year", "value": 2024}},
+            id="lt",
+        ),
+        pytest.param(
+            {"type": "lte", "key": "year", "value": 2024},
+            {"lessThanOrEquals": {"key": "year", "value": 2024}},
+            id="lte",
+        ),
+        pytest.param(
+            {"type": "in", "key": "department", "value": ["hr", "sales"]},
+            {"in": {"key": "department", "value": ["hr", "sales"]}},
+            id="in",
+        ),
+        pytest.param(
+            {"type": "nin", "key": "year", "value": [2022, 2023]},
+            {"notIn": {"key": "year", "value": [2022, 2023]}},
+            id="nin",
+        ),
+        pytest.param(
+            {
+                "type": "and",
+                "filters": [
+                    {"type": "eq", "key": "department", "value": "hr"},
+                    {"type": "gte", "key": "year", "value": 2024},
+                ],
+            },
+            {
+                "andAll": [
+                    {"equals": {"key": "department", "value": "hr"}},
+                    {"greaterThanOrEquals": {"key": "year", "value": 2024}},
+                ]
+            },
+            id="and",
+        ),
+        pytest.param(
+            {
+                "type": "or",
+                "filters": [
+                    {"type": "eq", "key": "department", "value": "sales"},
+                    {
+                        "type": "and",
+                        "filters": [
+                            {"type": "eq", "key": "department", "value": "hr"},
+                            {"type": "lt", "key": "year", "value": 2024},
+                        ],
+                    },
+                ],
+            },
+            {
+                "orAll": [
+                    {"equals": {"key": "department", "value": "sales"}},
+                    {
+                        "andAll": [
+                            {"equals": {"key": "department", "value": "hr"}},
+                            {"lessThan": {"key": "year", "value": 2024}},
+                        ]
+                    },
+                ]
+            },
+            id="or-with-nested-and",
+        ),
+        pytest.param(
+            {"type": "or", "filters": [{"type": "eq", "key": "department", "value": "hr"}]},
+            {"equals": {"key": "department", "value": "hr"}},
+            id="one-member-compound-unwrapped",
+        ),
+        pytest.param(
+            {"andAll": [{"equals": {"key": "a", "value": 1}}, {"startsWith": {"key": "b", "value": "x"}}]},
+            {"andAll": [{"equals": {"key": "a", "value": 1}}, {"startsWith": {"key": "b", "value": "x"}}]},
+            id="aws-native-unchanged",
+        ),
+        pytest.param(
+            {"key": "department", "value": "hr", "operator": "ne"},
+            {"notEquals": {"key": "department", "value": "hr"}},
+            id="operator-shape-still-mapped",
+        ),
+        pytest.param(
+            {
+                "and": [
+                    {"key": "department", "value": "hr", "operator": "eq"},
+                    {"key": "year", "value": 2024, "operator": "gte"},
+                ]
+            },
+            {
+                "andAll": [
+                    {"equals": {"key": "department", "value": "hr"}},
+                    {"greaterThanOrEquals": {"key": "year", "value": 2024}},
+                ]
+            },
+            id="and-list-shape-still-mapped",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_search_sends_openai_filters_as_aws_retrieval_filters(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    openai_filter: dict[str, object],
+    aws_filter: dict[str, object],
+):
+    import litellm
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    retrieve_route: Final = await _search_with_filters(respx_mock, openai_filter)
+
+    assert _sent_filter(retrieve_route) == aws_filter
+
+
+INVALID_FILTERS: Final = [
+    pytest.param({"type": "regex", "key": "department", "value": "h.*"}, id="unknown-type"),
+    pytest.param({"type": "eq", "key": "department"}, id="missing-value"),
+    pytest.param({"type": "and", "filters": []}, id="empty-compound"),
+    pytest.param(
+        {"type": "and", "filters": [{"type": "eq", "key": "department", "value": "hr"}, {"key": "year"}]},
+        id="untyped-member",
+    ),
+    pytest.param([{"type": "eq", "key": "department", "value": "hr"}], id="not-an-object"),
+]
+
+
+@pytest.mark.parametrize("filters", INVALID_FILTERS)
+@pytest.mark.asyncio
+async def test_search_rejects_invalid_filters_with_400_without_calling_aws(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, filters: object
+):
+    import litellm
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "drop_params", False)
+    retrieve_route: Final = respx_mock.post(BEDROCK_RETRIEVE_URL).mock(
+        return_value=httpx.Response(200, json=BEDROCK_RETRIEVE_RESPONSE)
+    )
+
+    with pytest.raises(litellm.BadRequestError) as error:
+        await litellm.vector_stores.asearch(
+            vector_store_id="T37J8R4WTM",
+            query="vacation policy",
+            filters=filters,
+            custom_llm_provider="bedrock",
+            aws_access_key_id="test_access_key",
+            aws_secret_access_key="test_secret_key",
+            aws_region_name="us-east-1",
+        )
+
+    assert error.value.status_code == 400
+    assert "filters" in error.value.message
+    assert retrieve_route.call_count == 0
+
+
+@pytest.mark.parametrize("filters", INVALID_FILTERS)
+@pytest.mark.parametrize("drop_params_source", ["request", "global"])
+@pytest.mark.asyncio
+async def test_search_drops_invalid_filters_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, filters: object, drop_params_source: str
+):
+    import litellm
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "drop_params", drop_params_source == "global")
+    request_kwargs: Final = {"drop_params": True} if drop_params_source == "request" else {}
+
+    retrieve_route: Final = await _search_with_filters(respx_mock, filters, **request_kwargs)
+
+    assert retrieve_route.call_count == 1
+    assert _sent_filter(retrieve_route) is None
