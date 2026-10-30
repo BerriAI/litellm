@@ -1988,3 +1988,155 @@ def test_the_partial_response_billed_on_disconnect_carries_the_logging_objects_b
         partial.response.usage.input_tokens,
         partial.response.usage.output_tokens,
     ), "the bill is priced on the partial's own usage"
+
+
+def _native_mcp_chunk(
+    calls: tuple[dict[str, object], ...],
+    results: tuple[dict[str, object], ...] = (),
+    content: str | None = None,
+    finish_reason: str | None = None,
+) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="test-model",
+        choices=[
+            StreamingChoices(
+                index=0,
+                finish_reason=finish_reason,
+                delta=Delta(
+                    content=content,
+                    provider_specific_fields={"mcp_tool_uses": list(calls), "tool_results": list(results)},
+                ),
+            )
+        ],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [False, True])
+@pytest.mark.parametrize("second_result", ["completed", "failed", "missing"])
+async def test_native_mcp_stream_emits_identity_before_arguments_and_keeps_final_items(
+    sync_mode: bool, second_result: str
+) -> None:
+    first: Final = {
+        "type": "mcp_tool_use",
+        "id": "mcp_first",
+        "name": "search_code",
+        "server_name": "github",
+        "input": {},
+    }
+    first_done: Final = {**first, "input": {"query": "one"}}
+    second: Final = {
+        "type": "mcp_tool_use",
+        "id": "mcp_second",
+        "name": "fetch",
+        "server_name": "docs",
+        "input": {"path": "/two"},
+    }
+    first_result: Final = {"type": "mcp_tool_result", "tool_use_id": "mcp_first", "content": "found one"}
+    results: Final = (
+        (first_result,)
+        if second_result == "missing"
+        else (
+            first_result,
+            {
+                "type": "mcp_tool_result",
+                "tool_use_id": "mcp_second",
+                "is_error": second_result == "failed",
+                "content": "two",
+            },
+        )
+    )
+    iterator: Final = _build_iterator(
+        (
+            _native_mcp_chunk((first,)),
+            _native_mcp_chunk((first_done,), (first_result,)),
+            _chunk("").model_copy(
+                update={
+                    "choices": [
+                        StreamingChoices(
+                            index=0,
+                            delta=Delta(
+                                tool_calls=[
+                                    {
+                                        "index": 0,
+                                        "id": "client_tool",
+                                        "type": "function",
+                                        "function": {"name": "local_read", "arguments": '{"path":"file"}'},
+                                    }
+                                ]
+                            ),
+                        )
+                    ]
+                }
+            ),
+            _chunk("between"),
+            _native_mcp_chunk((first_done, second), results),
+            _native_mcp_chunk((first_done, second), results, finish_reason="stop"),
+        )
+    )
+    prefix: Final = (
+        tuple(next(iterator) for _ in range(3)) if sync_mode else tuple([await anext(iterator) for _ in range(3)])
+    )
+    named: Final = prefix[-1].model_dump(exclude_none=True)
+    assert named["type"] == "response.output_item.added"
+    assert named["item"]["id"] == first["id"]
+    assert named["item"]["name"] == first["name"]
+    assert named["item"]["server_label"] == first["server_name"]
+    assert named["item"]["arguments"] == ""
+    remaining: Final = list(iterator) if sync_mode else [event async for event in iterator]
+    events: Final = tuple(event.model_dump(exclude_none=True) for event in (*prefix, *remaining))
+    items: Final = events[-1]["response"]["output"]
+    assert [item["type"] for item in items] == ["mcp_call", "function_call", "message", "mcp_call"]
+    assert items[1]["name"] == "local_read"
+    assert json.loads(items[1]["arguments"]) == {"path": "file"}
+    native: Final = tuple(item for item in items if item["type"] == "mcp_call")
+    assert [item["id"] for item in native] == [first["id"], second["id"]]
+    assert json.loads(native[0]["arguments"]) == first_done["input"]
+    assert native[0]["output"] == first_result["content"]
+    assert native[1]["status"] == ("incomplete" if second_result == "missing" else second_result)
+    assert events[-1]["type"] == ("response.incomplete" if second_result == "missing" else "response.completed")
+    assert [event["item"]["id"] for event in events if event["type"] == "response.output_item.added"] == [
+        item["id"] for item in items
+    ]
+    arguments: Final = tuple(event for event in events if event["type"] == "response.mcp_call_arguments.done")
+    assert [event["item_id"] for event in arguments] == [first["id"], second["id"]]
+    for item in native:
+        emitted: Final = next(
+            event
+            for event in events
+            if event["type"] == "response.output_item.done" and event["item"]["id"] == item["id"]
+        )
+        assert emitted["item"] == item
+    if second_result == "failed":
+        assert native[1]["error"] == "two"
+        assert any(event["type"] == "response.mcp_call.failed" for event in events)
+
+
+@pytest.mark.parametrize("finish_reason", ["stop", "length"])
+def test_native_mcp_only_stream_does_not_create_an_empty_message(finish_reason: str) -> None:
+    call: Final = {
+        "type": "mcp_tool_use",
+        "id": "mcp_only",
+        "name": "search_code",
+        "server_name": "github",
+        "input": {},
+    }
+    iterator: Final = _build_iterator((_native_mcp_chunk((call,), finish_reason=finish_reason),))
+    events: Final = tuple(event.model_dump(exclude_none=True) for event in iterator)
+    assert [item["type"] for item in events[-1]["response"]["output"]] == ["mcp_call"]
+    assert events[-1]["response"]["output"][0]["status"] == "incomplete"
+    assert events[-1]["type"] == "response.incomplete"
+    assert not any(event["type"] == "response.mcp_call.completed" for event in events)
+
+
+def test_native_mcp_result_without_identity_cannot_reach_the_responses_stream() -> None:
+    from litellm.exceptions import APIError
+
+    result: Final = {"type": "mcp_tool_result", "tool_use_id": "missing", "content": "secret"}
+    iterator: Final = _build_iterator((_native_mcp_chunk((), (result,), content="secret"),))
+    assert next(iterator).type == "response.created"
+    assert next(iterator).type == "response.in_progress"
+    with pytest.raises(APIError, match="unknown tool call"):
+        next(iterator)

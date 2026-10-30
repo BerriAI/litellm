@@ -1,9 +1,13 @@
+import json
 import time
 import uuid
 from collections.abc import Mapping, Sequence
 from itertools import filterfalse
 from types import MappingProxyType
 from typing import Any, Final, cast
+
+from openai.types.responses.response_output_item import McpCall
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items
@@ -37,6 +41,11 @@ from litellm.types.llms.openai import (
     ContentPartDonePartOutputText,
     FunctionCallArgumentsDeltaEvent,
     FunctionCallArgumentsDoneEvent,
+    MCPCallArgumentsDeltaEvent,
+    MCPCallArgumentsDoneEvent,
+    MCPCallCompletedEvent,
+    MCPCallFailedEvent,
+    MCPCallInProgressEvent,
     OutputItemAddedEvent,
     OutputItemDoneEvent,
     OutputTextAnnotationAddedEvent,
@@ -66,6 +75,8 @@ from litellm.types.utils import (
     StreamingChoices,
     TextCompletionResponse,
 )
+
+_NATIVE_MCP_ENTRIES: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
 
 
 def _index_of_output_item_type(items: Sequence[object], item_type: str) -> int | None:
@@ -195,6 +206,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._queued_web_search_call_ids: set[str] = set()  # mutable-ok: emitted call ids
         self._tool_search = tool_search_routing(request_tools)
         self._tool_search_executions: Mapping[str, ToolSearchExecution] = MappingProxyType({})
+        self._native_mcp_calls: Mapping[str, McpCall] = MappingProxyType({})
+        self._finished_native_mcp_calls: frozenset[str] = frozenset()
 
     async def aclose(self) -> None:
         await self.litellm_custom_stream_wrapper.aclose()
@@ -387,6 +400,125 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         for event in self._pending_tool_events
                         if getattr(event, "output_index", None) != output_index
                     ]
+
+    def _queue_native_mcp_events(self) -> None:
+        fields: Final = self._accumulated_provider_specific_fields
+        for call in _NATIVE_MCP_ENTRIES.validate_python(fields.get("mcp_tool_uses", ())):
+            self._queue_native_mcp_call(call)
+        for result in _NATIVE_MCP_ENTRIES.validate_python(fields.get("tool_results", ())):
+            self._queue_native_mcp_result(result)
+
+    def _queue_native_mcp_call(self, call: Mapping[str, JsonValue]) -> None:
+        item: Final = McpCall.model_validate(
+            {
+                "type": "mcp_call",
+                "id": call.get("id"),
+                "name": call.get("name"),
+                "server_label": call.get("server_name"),
+                "arguments": json.dumps(call.get("input", {}), ensure_ascii=False),
+                "status": "in_progress",
+            }
+        )
+        if item.id in self._finished_native_mcp_calls:
+            return
+        if item.id not in self._native_mcp_calls:
+            self._queue_reasoning_done_events()
+            output_index: Final = self._get_or_assign_tool_output_index(item.id)
+            self._pending_response_events.append(
+                self._next_output_item_added(
+                    output_index,
+                    BaseLiteLLMOpenAIResponseObject(**item.model_copy(update={"arguments": ""}).model_dump()),
+                )
+            )
+            self._sequence_number += 1
+            self._pending_response_events.append(
+                MCPCallInProgressEvent(
+                    type=ResponsesAPIStreamEvents.MCP_CALL_IN_PROGRESS,
+                    sequence_number=self._sequence_number,
+                    output_index=output_index,
+                    item_id=item.id,
+                )
+            )
+        self._native_mcp_calls = MappingProxyType({**self._native_mcp_calls, item.id: item})
+
+    def _queue_native_mcp_result(self, result: Mapping[str, JsonValue]) -> None:
+        if result.get("type") != "mcp_tool_result":
+            return
+        call_id: Final = result.get("tool_use_id")
+        result_call: Final = self._native_mcp_calls.get(call_id) if isinstance(call_id, str) else None
+        if result_call is None:
+            raise litellm.APIError(
+                status_code=502,
+                message="Native MCP result references an unknown tool call",
+                model=self.model,
+                llm_provider=self.custom_llm_provider or "",
+            )
+        failed: Final = result.get("is_error") is True
+        content: Final = result.get("content", "")
+        output: Final = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+        self._finish_native_mcp_call(
+            result_call.model_copy(
+                update={
+                    "status": "failed" if failed else "completed",
+                    "error": output if failed else None,
+                    "output": None if failed else output,
+                }
+            )
+        )
+
+    def _finish_native_mcp_call(self, item: McpCall) -> None:
+        if item.id in self._finished_native_mcp_calls:
+            return
+        output_index: Final = self._get_or_assign_tool_output_index(item.id)
+        self._sequence_number += 1
+        self._pending_response_events.append(
+            MCPCallArgumentsDeltaEvent(
+                type=ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA,
+                sequence_number=self._sequence_number,
+                output_index=output_index,
+                item_id=item.id,
+                delta=item.arguments,
+            )
+        )
+        self._sequence_number += 1
+        self._pending_response_events.append(
+            MCPCallArgumentsDoneEvent(
+                type=ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DONE,
+                sequence_number=self._sequence_number,
+                output_index=output_index,
+                item_id=item.id,
+                arguments=item.arguments,
+            )
+        )
+        if item.status in ("completed", "failed"):
+            self._sequence_number += 1
+            event: Final = (
+                MCPCallFailedEvent(
+                    type=ResponsesAPIStreamEvents.MCP_CALL_FAILED,
+                    sequence_number=self._sequence_number,
+                    output_index=output_index,
+                    item_id=item.id,
+                )
+                if item.status == "failed"
+                else MCPCallCompletedEvent(
+                    type=ResponsesAPIStreamEvents.MCP_CALL_COMPLETED,
+                    sequence_number=self._sequence_number,
+                    output_index=output_index,
+                    item_id=item.id,
+                )
+            )
+            self._pending_response_events.append(event)
+        self._sequence_number += 1
+        self._pending_response_events.append(
+            OutputItemDoneEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                sequence_number=self._sequence_number,
+                output_index=output_index,
+                item=BaseLiteLLMOpenAIResponseObject(**item.model_dump()),
+            )
+        )
+        self._native_mcp_calls = MappingProxyType({**self._native_mcp_calls, item.id: item})
+        self._finished_native_mcp_calls = self._finished_native_mcp_calls | {item.id}
 
     def _tool_call_id(self, tool_call: object) -> str:
         index: Final = self._normalize_tool_call_index(tool_call)
@@ -1094,6 +1226,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if not self.litellm_model_response or isinstance(self.litellm_model_response, TextCompletionResponse):
             self.litellm_model_response = self.create_litellm_model_response()
         if self.litellm_model_response:
+            for item in self._native_mcp_calls.values():
+                self._finish_native_mcp_call(item.model_copy(update={"status": "incomplete"}))
             self._queue_compaction_item_added()
             self._queue_compaction_item_done()
             self._queue_held_annotations()
@@ -1135,6 +1269,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return
         delta: Final = chunk.choices[0].delta
         if chunk.choices[0].finish_reason is None and not _delta_carries_output(delta):
+            return
+        if self._native_mcp_calls and not _delta_carries_output(delta):
             return
 
         self._sequence_number += 1
@@ -1251,6 +1387,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             if src and isinstance(src, dict):
                                 self._merge_provider_specific_fields(src)
                                 self._reserve_web_search_indexes(src)
+                                self._queue_native_mcp_events()
                         self._ensure_output_item_for_chunk(chunk)
                         # Proceed to transformation
                         self.collected_chat_completion_chunks.append(
@@ -1309,6 +1446,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         if src and isinstance(src, dict):
                             self._merge_provider_specific_fields(src)
                             self._reserve_web_search_indexes(src)
+                            self._queue_native_mcp_events()
                     self._ensure_output_item_for_chunk(chunk)
                     # Always snapshot before returning any pending events so that
                     # finish_reason (e.g. content_filter) is captured even when
@@ -1471,7 +1609,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._cached_reasoning_item_id,
         )
         compaction_aligned: Final = _output_items_with_id(reasoning_aligned, "compaction", self._compaction_item_id)
-        streamed_items: Final = filterfalse(self._is_unstreamed_empty_message, compaction_aligned)
+        streamed_items: Final = filterfalse(
+            self._is_unstreamed_empty_message, (*compaction_aligned, *self._native_mcp_calls.values())
+        )
         return tuple(sorted(streamed_items, key=self._streamed_output_position))
 
     def _is_unstreamed_empty_message(self, item: object) -> bool:
@@ -1549,6 +1689,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 responses_api_response.id = self._cached_response_id
 
             responses_api_response.output = list(self._output_with_streamed_item_ids(responses_api_response))
+            if any(item.status == "incomplete" for item in self._native_mcp_calls.values()):
+                responses_api_response.status = "incomplete"
 
             # Encode the response ID to match non-streaming behavior
             encoded_response: Final = self._with_encoded_response_id(responses_api_response)

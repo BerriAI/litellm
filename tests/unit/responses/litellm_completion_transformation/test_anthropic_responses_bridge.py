@@ -1569,3 +1569,86 @@ async def test_previous_response_id_keeps_the_tools_an_earlier_codex_tool_search
         [("tool_result", "toolu_standup"), ("text", None)],
     ]
     assert prisma_client.db.queries == 1
+
+
+def test_native_mcp_response_stream_releases_identity_before_reading_result(respx_mock: respx.MockRouter) -> None:
+    from threading import Event
+
+    identity_released: Final = Event()
+    native_call: Final = {
+        "type": "mcp_tool_use",
+        "id": "mcp_wire",
+        "name": "search_code",
+        "server_name": "github",
+        "input": {},
+    }
+    result_content: Final = [{"type": "text", "text": "found"}]
+
+    def provider_bytes():
+        yield _anthropic_sse(
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_native_mcp",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "test-model",
+                    "content": [],
+                    "usage": {"input_tokens": 9, "output_tokens": 1},
+                },
+            },
+            {"type": "content_block_start", "index": 0, "content_block": native_call},
+        )
+        assert identity_released.is_set(), "Responses bridge consumed the result before emitting MCP identity"
+        yield _anthropic_sse(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"query":"one"}'},
+            },
+            {"type": "content_block_stop", "index": 0},
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {
+                    "type": "mcp_tool_result",
+                    "tool_use_id": native_call["id"],
+                    "content": result_content,
+                },
+            },
+            {"type": "content_block_stop", "index": 1},
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4}},
+            {"type": "message_stop"},
+        )
+
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=provider_bytes())
+    )
+    events: Final = litellm.responses(
+        model=_MODEL,
+        input="search",
+        stream=True,
+        api_key="mock_api_key",
+        tools=[
+            {
+                "type": "mcp",
+                "server_label": "github",
+                "server_url": "https://mcp.example.com/github",
+                "allowed_tools": ["search_code"],
+            }
+        ],
+    )
+    for event in events:
+        if event.type == "response.output_item.added":
+            assert event.item.type == "mcp_call"
+            assert event.item.id == native_call["id"]
+            assert event.item.server_label == native_call["server_name"]
+            assert event.item.name == native_call["name"]
+            identity_released.set()
+        if event.type == "response.completed":
+            item: Final = event.response.output[0]
+            assert item.type == "mcp_call"
+            assert json.loads(item.arguments) == {"query": "one"}
+            assert json.loads(item.output) == result_content
+    assert identity_released.is_set()
+    assert _sent(route)["mcp_servers"][0]["name"] == native_call["server_name"]
