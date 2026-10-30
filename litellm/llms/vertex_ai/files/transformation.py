@@ -826,6 +826,20 @@ def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
     return {"custom_id": str(custom_id), "request": request}
 
 
+def _with_json_schema_config_in_its_own_column(vertex_request_body: Mapping[str, object]) -> Mapping[str, object]:
+    """
+    Vertex loads a batch file into one BigQuery table, so each row's `generationConfig` gains a null for every key
+    another row sets. `response_json_schema` is a `google.protobuf.Value`, so its null counts as set and fails the
+    row. Proto JSON takes both spellings of the field, so a row with a schema uses the one no other row shares.
+    """
+    generation_config: Final = vertex_request_body.get("generationConfig")
+    if not isinstance(generation_config, Mapping) or "response_json_schema" not in generation_config:
+        return vertex_request_body
+    return {
+        ("generation_config" if key == "generationConfig" else key): value for key, value in vertex_request_body.items()
+    }
+
+
 def _openai_batch_jsonl_entry_to_vertex_rows(
     openai_entry: dict[str, Any],
     map_openai_to_vertex_params: Callable[[dict[str, object]], dict[str, object]],
@@ -889,7 +903,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
             vertex_request_body["labels"] = {}
         _set_litellm_batch_custom_id_labels(vertex_request_body["labels"], custom_id)
 
-    return ({"request": vertex_request_body},)
+    return ({"request": _with_json_schema_config_in_its_own_column(vertex_request_body)},)
 
 
 def _decode_batch_input_line(lineno: int, raw: str | bytes | bytearray) -> str:
