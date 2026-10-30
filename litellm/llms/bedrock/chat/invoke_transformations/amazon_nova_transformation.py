@@ -128,7 +128,7 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
         bedrock_invoke_nova_request: Final = self._filter_allowed_fields(_bedrock_invoke_nova_request)
         return bedrock_invoke_nova_request
 
-    def transform_response(
+    def _transform_invoke_response(
         self,
         model: str,
         raw_response: httpx.Response,

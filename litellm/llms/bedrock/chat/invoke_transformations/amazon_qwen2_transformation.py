@@ -39,7 +39,7 @@ class AmazonQwen2Config(AmazonQwen3Config):
     Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/invoke-imported-model.html
     """
 
-    def transform_response(
+    def _transform_invoke_response(
         self,
         model: str,
         raw_response: httpx.Response,

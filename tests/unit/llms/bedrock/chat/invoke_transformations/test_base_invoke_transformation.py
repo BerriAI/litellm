@@ -1,5 +1,5 @@
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -518,3 +518,117 @@ def test_imported_llama_model_arn_is_encoded_and_max_tokens_become_max_gen_len(r
     assert response.choices[0].message.content == "Here's a joke..."
     assert str(route.calls[0].request.url) == expected_url
     assert json.loads(route.calls[0].request.content) == {"prompt": "Tell me a joke", "max_gen_len": 100}
+
+
+_GUARDRAIL_BLOCKED_TEXT: Final = "Sorry, the model cannot answer this question."
+_GUARDRAIL_CASES: Final = (
+    pytest.param(MappingProxyType({"amazon-bedrock-guardrailAction": "INTERVENED"}), True, id="guardrail_intervened"),
+    pytest.param(MappingProxyType({"amazon-bedrock-guardrailAction": "NONE"}), False, id="guardrail_passed"),
+    pytest.param(MappingProxyType({}), False, id="no_guardrail"),
+)
+
+
+def _llama_invoke_body(guardrail_fields: Mapping[str, str]) -> Mapping[str, object]:
+    return {
+        "generation": _GUARDRAIL_BLOCKED_TEXT,
+        "prompt_token_count": 11,
+        "generation_token_count": 7,
+        "stop_reason": "stop",
+        **guardrail_fields,
+    }
+
+
+def _nova_invoke_body(guardrail_fields: Mapping[str, str]) -> Mapping[str, object]:
+    return {
+        "output": {"message": {"content": [{"text": _GUARDRAIL_BLOCKED_TEXT}], "role": "assistant"}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 11, "outputTokens": 7, "totalTokens": 18},
+        **guardrail_fields,
+    }
+
+
+def _kimi_invoke_body(guardrail_fields: Mapping[str, str]) -> Mapping[str, object]:
+    return {
+        "id": "bedrock-guardrails-edf866e1",
+        "object": "chat.completion",
+        "created": 1793353113,
+        "model": "moonshotai.kimi-k2.5",
+        "choices": [
+            {"index": 0, "message": {"role": "assistant", "content": _GUARDRAIL_BLOCKED_TEXT}, "finish_reason": "stop"}
+        ],
+        "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+        **guardrail_fields,
+    }
+
+
+_GUARDRAIL_FAMILIES: Final = (
+    pytest.param("bedrock/invoke/us.meta.llama4-maverick-17b-instruct-v1:0", _llama_invoke_body, id="llama"),
+    pytest.param("bedrock/invoke/us.amazon.nova-2-lite-v1:0", _nova_invoke_body, id="nova"),
+    pytest.param("bedrock/invoke/moonshotai.kimi-k2.5", _kimi_invoke_body, id="kimi"),
+)
+_GUARDRAIL_AWS_PARAMS: Final = MappingProxyType(
+    {"aws_access_key_id": "AKIAEXAMPLE", "aws_secret_access_key": "fake-secret", "aws_region_name": "us-east-1"}
+)
+
+
+@pytest.mark.parametrize(("model", "invoke_body"), _GUARDRAIL_FAMILIES)
+@pytest.mark.parametrize(("guardrail_fields", "blocked"), _GUARDRAIL_CASES)
+def test_invoke_reports_a_guardrail_block_as_content_filter(
+    model: str,
+    invoke_body: Callable[[Mapping[str, str]], Mapping[str, object]],
+    guardrail_fields: Mapping[str, str],
+    blocked: bool,
+) -> None:
+    body: Final = invoke_body(guardrail_fields)
+    client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)))
+    )
+
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "My code word is hexblade. What is 2+2?"}],
+        client=client,
+        **_GUARDRAIL_AWS_PARAMS,
+    )
+
+    assert response.choices[0].message.content == _GUARDRAIL_BLOCKED_TEXT
+    assert response.choices[0].finish_reason == ("content_filter" if blocked else "stop")
+
+
+@pytest.mark.parametrize(("guardrail_fields", "blocked"), _GUARDRAIL_CASES)
+def test_deepseek_r1_invoke_reports_a_guardrail_block_as_content_filter(
+    guardrail_fields: Mapping[str, str], blocked: bool
+) -> None:
+    body: Final = _llama_invoke_body(guardrail_fields)
+    client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)))
+    )
+
+    response: Final = litellm.completion(
+        model="bedrock/invoke/deepseek_r1/us.deepseek.r1-v1:0",
+        messages=[{"role": "user", "content": "My code word is hexblade. What is 2+2?"}],
+        client=client,
+        **_GUARDRAIL_AWS_PARAMS,
+    )
+
+    assert response.choices[0].finish_reason == ("content_filter" if blocked else "stop")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("guardrail_fields", "blocked"), _GUARDRAIL_CASES)
+async def test_invoke_messages_reports_a_guardrail_block_as_refusal(
+    guardrail_fields: Mapping[str, str], blocked: bool
+) -> None:
+    body: Final = _llama_invoke_body(guardrail_fields)
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)))
+
+    response: Final = await litellm.anthropic_messages(
+        model="bedrock/invoke/us.meta.llama4-maverick-17b-instruct-v1:0",
+        messages=[{"role": "user", "content": "My code word is hexblade. What is 2+2?"}],
+        max_tokens=64,
+        client=client,
+        **_GUARDRAIL_AWS_PARAMS,
+    )
+
+    assert [block["text"] for block in response["content"]] == [_GUARDRAIL_BLOCKED_TEXT]
+    assert response["stop_reason"] == ("refusal" if blocked else "end_turn")
