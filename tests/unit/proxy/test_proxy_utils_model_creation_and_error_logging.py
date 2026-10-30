@@ -4109,3 +4109,31 @@ def test_handle_exception_on_proxy_logs_bug_report_only_for_unmapped_500(caplog)
     assert provider_result.code == internal_result.code == "500"
     assert ISSUE_URL_BASE in caplog.text
     assert ISSUE_URL_BASE not in internal_result.message
+
+
+def test_is_client_error_exception_budget_exceeded_is_client_error():
+    from litellm.exceptions import BudgetExceededError
+    from litellm.proxy.utils import _is_client_error_exception
+
+    exc = BudgetExceededError(current_cost=100.56, max_budget=100.0)
+    assert _is_client_error_exception(exc) is True
+
+
+def test_is_client_error_exception_budget_exceeded_5xx_is_not_client_error():
+    from litellm.exceptions import BudgetExceededError
+    from litellm.proxy.utils import _is_client_error_exception
+
+    exc = BudgetExceededError(current_cost=100.56, max_budget=100.0)
+    exc.status_code = 500
+    assert _is_client_error_exception(exc) is False
+
+
+def test_is_client_error_exception_existing_behaviour_unchanged():
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.utils import _is_client_error_exception
+
+    assert _is_client_error_exception(HTTPException(status_code=400, detail="x")) is True
+    assert _is_client_error_exception(HTTPException(status_code=500, detail="x")) is False
+    assert _is_client_error_exception(ProxyException(message="x", type="x", param=None, code="429")) is True
+    assert _is_client_error_exception(ValueError("x")) is False
+
