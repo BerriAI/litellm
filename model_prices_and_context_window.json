@@ -29561,6 +29561,7 @@
         ],
         "supports_audio_input": true,
         "supports_audio_output": false,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -30167,6 +30168,7 @@
             "text"
         ],
         "supports_audio_input": true,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_native_streaming": true,
         "supports_pdf_input": true,
@@ -30210,6 +30212,7 @@
             "text"
         ],
         "supports_audio_input": true,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -30274,6 +30277,7 @@
             "text"
         ],
         "supports_audio_input": true,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -30334,6 +30338,7 @@
             "text"
         ],
         "supports_audio_input": true,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -30401,6 +30406,7 @@
             "text"
         ],
         "supports_audio_input": true,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
@@ -32405,6 +32411,7 @@
             "text"
         ],
         "supports_audio_output": false,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_native_streaming": true,
         "supports_parallel_function_calling": true,
@@ -32479,6 +32486,7 @@
         ],
         "supports_audio_output": false,
         "supports_audio_input": true,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -32543,6 +32551,7 @@
         ],
         "supports_audio_output": false,
         "supports_audio_input": true,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -32603,6 +32612,7 @@
         ],
         "supports_audio_output": false,
         "supports_audio_input": true,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -32670,6 +32680,7 @@
         ],
         "supports_audio_input": true,
         "supports_audio_output": false,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
@@ -47624,6 +47635,24 @@
         "output_cost_per_token": 0.0,
         "source": "https://cohere.com/pricing"
     },
+    "rerank-v5.0-fast": {
+        "input_cost_per_token": 2e-08,
+        "litellm_provider": "cohere",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0,
+        "source": "https://cohere.com/blog/rerank-5"
+    },
+    "rerank-v5.0-pro": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "cohere",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0,
+        "source": "https://cohere.com/blog/rerank-5"
+    },
     "nvidia_nim/nvidia/nv-rerankqa-mistral-4b-v3": {
         "input_cost_per_query": 0.0,
         "input_cost_per_token": 0.0,
@@ -52713,6 +52742,7 @@
         ],
         "supports_audio_input": true,
         "supports_audio_output": false,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -76498,6 +76528,7 @@
         ],
         "supports_audio_input": true,
         "supports_audio_output": false,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -76543,6 +76574,7 @@
         ],
         "supports_audio_input": true,
         "supports_audio_output": false,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -76654,6 +76686,7 @@
             "text"
         ],
         "supports_audio_input": true,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
