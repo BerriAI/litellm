@@ -529,8 +529,8 @@ def check_file_size_under_limit(
 
     if llm_router is not None and request_data["model"] in router_model_names:
         try:
-            deployment: Final[Deployment | None] = llm_router.get_deployment_by_model_group_name(
-                model_group_name=request_data["model"]
+            deployment: Final[Deployment | None] = llm_router.registry().deployments(
+                request_data["model"], source="first_in_group"
             )
             if (
                 deployment

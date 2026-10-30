@@ -611,7 +611,7 @@ T_ParamSpec: Final = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
 _COUNT_OFFLOAD_LIMITER: Final = anyio.lowlevel.RunVar[anyio.CapacityLimiter]("litellm_count_offload_limiter")
 _ANTHROPIC_TOOL_KEYS_MAPPED_BY_BRIDGE: Final = frozenset(
-    ("name", "input_schema", "description", "cache_control", "strict", "type", "eager_input_streaming")
+    ("name", "input_schema", "description", "cache_control", "strict", "type", "eager_input_streaming", "custom")
 )
 
 
@@ -1224,10 +1224,6 @@ def _validate_anthropic_content(content: Mapping[str, object]) -> type:
     if expected_cls is None:
         raise ValueError(f"Unknown Anthropic content type: '{content_type}'")
 
-    missing: Final = [k for k in getattr(expected_cls, "__required_keys__", set()) if k not in content]
-    if missing:
-        raise ValueError(f"Missing required fields in {content_type} block: {', '.join(missing)}")
-
     return expected_cls
 
 
@@ -1552,12 +1548,13 @@ def _format_single_function_definition(function: Mapping[str, object]) -> tuple[
 
 def _format_object_parameters(parameters, indent):
     properties: Final = parameters.get("properties")
-    if not properties:
+    if not isinstance(properties, Mapping) or not properties:
         return ""
-    required_params: Final = parameters.get("required", [])
+    required: Final = parameters.get("required")
+    required_params: Final = tuple(required) if isinstance(required, list) else ()
     lines: Final = []
     for key, props in properties.items():
-        description = props.get("description")
+        description = props.get("description") if isinstance(props, Mapping) else None
         if description:
             lines.append(f"// {description}")
         question = "?"
@@ -1568,19 +1565,21 @@ def _format_object_parameters(parameters, indent):
 
 
 def _format_type(props, indent):
+    if not isinstance(props, Mapping):
+        return "any"
     type: Final = props.get("type")
+    enum: Final = props.get("enum")
     if type == "string":
-        if "enum" in props:
-            return " | ".join([f'"{item}"' for item in props["enum"]])
+        if isinstance(enum, list):
+            return " | ".join([f'"{item}"' for item in enum])
         return "string"
     elif type == "array":
-        # items is required, OpenAI throws an error if it's missing
-        return f"{_format_type(props['items'], indent)}[]"
+        return f"{_format_type(props.get('items'), indent)}[]"
     elif type == "object":
         return f"{{\n{_format_object_parameters(props, indent + 2)}\n}}"
     elif type in ["integer", "number"]:
-        if "enum" in props:
-            return " | ".join([f'"{item}"' for item in props["enum"]])
+        if isinstance(enum, list):
+            return " | ".join([f'"{item}"' for item in enum])
         return "number"
     elif type == "boolean":
         return "boolean"

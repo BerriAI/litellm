@@ -236,6 +236,7 @@ jobs:
               tests/unit/llms/azure_ai
               tests/unit/llms/base_llm
               tests/unit/llms/baseten
+              tests/unit/llms/bigmodel
               tests/unit/llms/black_forest_labs
               tests/unit/llms/brave
               tests/unit/llms/bytez
@@ -321,6 +322,7 @@ jobs:
               tests/unit/llms/openai_like
               tests/unit/llms/opencode
               tests/unit/llms/opensandbox
+              tests/unit/llms/opensearch
               tests/unit/llms/openrouter
               tests/unit/llms/ovhcloud
               tests/unit/llms/parallel_ai
@@ -1001,9 +1003,9 @@ jobs:
         run: |
           diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
           if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils
           else
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project
             uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
             cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
             uv run --no-sync python -c "import importlib.metadata; import litellm.rust_bridge._native; print(importlib.metadata.version('litellm'))"
@@ -1449,9 +1451,9 @@ jobs:
           RUST_BRIDGE_ARTIFACT: ${{ needs.rust-bridge.outputs.artifact }}
         run: |
           if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils
           else
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project
             uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
             cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
           fi
