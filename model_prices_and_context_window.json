@@ -39432,7 +39432,7 @@
         "input_cost_per_token": 9e-08,
         "litellm_provider": "hopper",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 384000,
+        "max_output_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 8.5e-07,
         "reasoning_effort_levels": [
@@ -39456,8 +39456,8 @@
         "cache_read_input_token_cost": 3e-08,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "hopper",
-        "max_input_tokens": 393216,
-        "max_output_tokens": 384000,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
         "reasoning_effort_levels": [
