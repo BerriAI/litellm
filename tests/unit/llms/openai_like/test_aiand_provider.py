@@ -10,7 +10,8 @@ import respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.litellm_core_utils.llm_request_utils import pick_cheapest_chat_models_from_llm_provider
+from litellm.litellm_core_utils.health_check_helpers import wildcard_health_check_models
+from litellm.litellm_core_utils.model_retirement import is_past_deprecation_date
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
 from litellm.utils import ProviderConfigManager
@@ -128,7 +129,7 @@ def test_aiand_models_by_provider_leaves_out_models_retired_at_load():
     retired: Final = frozenset(
         name
         for name, row in litellm.model_cost.items()
-        if row.get("litellm_provider") == "aiand" and litellm._is_past_deprecation_date(row)
+        if row.get("litellm_provider") == "aiand" and is_past_deprecation_date(row)
     )
 
     assert retired
@@ -149,11 +150,11 @@ def test_aiand_wildcard_health_check_skips_a_model_whose_retirement_date_passes_
     monkeypatch.setitem(litellm.model_cost, model, live_row)
     try:
         litellm.add_known_models({model: live_row})
-        assert model in pick_cheapest_chat_models_from_llm_provider("aiand", n=1)
+        assert model in wildcard_health_check_models(wildcard="aiand/*", custom_llm_provider="aiand")
 
         monkeypatch.setitem(litellm.model_cost, model, {**live_row, "deprecation_date": "2000-01-01"})
 
-        assert model not in pick_cheapest_chat_models_from_llm_provider("aiand", n=3)
+        assert model not in wildcard_health_check_models(wildcard="aiand/*", custom_llm_provider="aiand")
     finally:
         litellm.aiand_models.discard(model)
         litellm.add_known_models({})

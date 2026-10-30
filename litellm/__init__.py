@@ -549,7 +549,7 @@ _key_management_system: Optional["KeyManagementSystem"] = None
 output_parse_pii: bool = False
 #############################################
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map, mark_litellm_import_complete
-from litellm.litellm_core_utils.model_retirement import is_past_deprecation_date as _is_past_deprecation_date
+from litellm.litellm_core_utils.model_retirement import is_hidden_as_retired
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
 cost_discount_config: Dict[str, float] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
@@ -863,12 +863,12 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             if "-to-" not in key and "fireworks-ai-default" not in key:
                 fireworks_ai_models.add(key)
         elif value.get("litellm_provider") == "together_ai":
-            if _is_past_deprecation_date(value):
+            if is_hidden_as_retired(value):
                 together_ai_models.discard(key)
             elif not key.startswith("together-ai-"):
                 together_ai_models.add(key)
         elif value.get("litellm_provider") == "baseten":
-            if _is_past_deprecation_date(value):
+            if is_hidden_as_retired(value):
                 baseten_models.discard(key)
             else:
                 baseten_models.add(key)
@@ -1041,7 +1041,7 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
         elif value.get("litellm_provider") == "coralbricks":
             coralbricks_models.add(key)
         elif value.get("litellm_provider") == "aiand":
-            if _is_past_deprecation_date(value):
+            if is_hidden_as_retired(value):
                 aiand_models.discard(key)
             else:
                 aiand_models.add(key)

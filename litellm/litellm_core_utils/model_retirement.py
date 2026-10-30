@@ -2,7 +2,7 @@ import datetime
 from collections.abc import Mapping
 from typing import Final
 
-PROVIDERS_HIDING_RETIRED_MODELS: Final = frozenset({"aiand", "baseten"})
+PROVIDERS_HIDING_RETIRED_MODELS: Final = frozenset({"aiand", "baseten", "together_ai"})
 
 
 def is_past_deprecation_date(value: Mapping[str, object]) -> bool:
