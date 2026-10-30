@@ -2,18 +2,20 @@
 ## Helper utilities
 import copy
 import logging
+import math
 import re
 from collections.abc import Collection, Iterable, Iterator, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import TypeIs  # noqa: TID251  # narrows a duck-typed value to the Protocol its caller reads
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import KUBERNETES_POD_ROUTING_KEY
+from litellm.litellm_core_utils.hidden_params import set_extra_attribute
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
@@ -32,6 +34,49 @@ _CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
 
 def is_codex_user_agent(user_agent: str) -> bool:
     return bool(_CODEX_CLIENT_PREFIX_RE.match(user_agent))
+
+
+def qualify_provider_stripped_model(model: str, custom_llm_provider: str) -> str:
+    """Put the provider prefix back on a provider-stripped model."""
+    if not custom_llm_provider or model.startswith(f"{custom_llm_provider}/"):
+        return model
+    if _already_routes_to(model, custom_llm_provider):
+        return model
+    return f"{custom_llm_provider}/{model}"
+
+
+def _already_routes_to(model: str, custom_llm_provider: str) -> bool:
+    from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
+
+    return _leads_with_provider(model) and inferred_provider(model) == custom_llm_provider
+
+
+def _leads_with_provider(model: str) -> bool:
+    leading_segment, separator, _ = model.partition("/")
+    return bool(separator) and names_a_provider(leading_segment)
+
+
+def names_a_provider(candidate: str) -> bool:
+    """Whether a model name's leading segment is a provider rather than part of the model."""
+    import litellm
+    from litellm.litellm_core_utils.get_llm_provider_logic import is_registered_custom_provider
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    provider_names: Final = {getattr(provider, "value", provider) for provider in litellm.provider_list}
+    return (
+        candidate in provider_names
+        or JSONProviderRegistry.exists(candidate)
+        or is_registered_custom_provider(candidate)
+    )
+
+
+def qualify_agentic_followup_model(patch_model: str | None, model: str, custom_llm_provider: str) -> str:
+    """Resolve the model an agentic follow-up re-dispatches, keeping a hook's own provider."""
+    if not patch_model or patch_model == model:
+        return qualify_provider_stripped_model(model, custom_llm_provider)
+    if _leads_with_provider(patch_model):
+        return patch_model
+    return qualify_provider_stripped_model(patch_model, custom_llm_provider)
 
 
 def safe_divide_seconds(seconds: float, denominator: float, default: float | None = None) -> float | None:
@@ -666,9 +711,9 @@ def preserve_upstream_non_openai_attributes(
     _assign_attributes(model_response, original_chunk.model_dump(include=frozenset(candidate_keys)).items())
 
 
-def _assign_attributes(target: object, values: Iterable[tuple[str, object]]) -> None:
+def _assign_attributes(target: BaseModel, values: Iterable[tuple[str, object]]) -> None:
     for key, value in values:
-        setattr(target, key, value)
+        set_extra_attribute(target, key, value)
 
 
 def safe_deep_copy(data):
@@ -938,25 +983,36 @@ def _usage_field(usage: object, name: str) -> object:
     return getattr(usage, name, None)
 
 
-def _cost_number(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, int | float):
+def finite_cost(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
         return None
     return float(value)
+
+
+def single_log_line(value: object) -> str:
+    return str(value).replace("\r", "").replace("\n", "")
+
+
+def finite_reported_cost(value: object) -> float | None:
+    cost: Final = finite_cost(value)
+    if cost is None and isinstance(value, float):
+        verbose_logger.warning("Ignoring a non-finite provider-reported cost %s", value)
+    return cost
 
 
 def _reported_cost_value(value: object) -> float | None:
     """A reported cost is a number, or a breakdown whose total lives under ``total_cost``."""
     raw: Final[object] = value
     if isinstance(value, Mapping):
-        return _cost_number(_usage_field(raw, "total_cost"))
-    return _cost_number(value)
+        return finite_reported_cost(_usage_field(raw, "total_cost"))
+    return finite_reported_cost(value)
 
 
 def response_cost_in_hidden_params(response: _CarriesHiddenParams) -> float | None:
     additional_headers: Final[object] = response.hidden_params.get("additional_headers")
     if not isinstance(additional_headers, Mapping):
         return None
-    return _cost_number(_USAGE_BLOCK_ADAPTER.validate_python(additional_headers).get(RESPONSE_COST_HEADER))
+    return finite_reported_cost(_USAGE_BLOCK_ADAPTER.validate_python(additional_headers).get(RESPONSE_COST_HEADER))
 
 
 def override_stamped_response_cost(response: _CarriesHiddenParams, cost: float) -> None:
@@ -971,6 +1027,47 @@ def chunk_usage(chunk: object) -> object:
     if isinstance(chunk, Mapping):
         return _USAGE_BLOCK_ADAPTER.validate_python(chunk).get("usage")
     return getattr(chunk, "usage", None)
+
+
+PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS: Final = frozenset({"xai", "perplexity", "opencode_go"})
+
+
+UPSTREAM_USAGE_COST: Final = "upstream_usage_cost"
+
+
+def _numeric(value: object) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def stamp_litellm_bill_on_usage(response: object, usage: object, bill: float) -> None:
+    """Writes litellm's bill into ``usage.cost`` and the hidden ``response_cost`` cache, keeping the upstream's own
+    ``usage.cost`` under ``upstream_usage_cost`` so a later pricing pass still bills the upstream's charge instead of
+    reading litellm's bill back as if the upstream had reported it."""
+    hidden: Final[object] = getattr(response, "_hidden_params", None)
+    if isinstance(hidden, dict):
+        hidden_params: Final = cast(dict[str, object], hidden)  # cast-ok: hidden params ride on the response as a dict
+        upstream: Final = (
+            hidden_params[UPSTREAM_USAGE_COST]
+            if UPSTREAM_USAGE_COST in hidden_params
+            else _numeric(getattr(usage, "cost", None))
+        )
+        hidden_params.update({"response_cost": bill, UPSTREAM_USAGE_COST: upstream})
+    setattr(usage, "cost", bill)
+
+
+def billed_usage_cost(response: object, custom_llm_provider: str | None) -> float | None:
+    """The charge an OpenAI-compatible upstream reports in ``usage.cost``, skipped for providers billed from their own
+    usage fields. Once litellm wrote its own bill into ``usage.cost`` (the stream builder and the Responses terminal
+    event do), the upstream's figure is read from ``upstream_usage_cost`` instead."""
+    if custom_llm_provider in PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS:
+        return None
+    hidden: Final = as_str_mapping(getattr(response, "_hidden_params", None))
+    cost: Final = (
+        _numeric(hidden[UPSTREAM_USAGE_COST])
+        if hidden is not None and UPSTREAM_USAGE_COST in hidden
+        else provider_reported_usage_cost(_usage_field(response, "usage"), custom_llm_provider)
+    )
+    return cost if cost is not None and math.isfinite(cost) and cost >= 0 else None
 
 
 _MESSAGES_REPORTED_COST_PROVIDERS: Final = frozenset({"opencode_go"})

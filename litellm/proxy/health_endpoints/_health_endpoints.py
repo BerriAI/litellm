@@ -7,13 +7,15 @@ import secrets
 import time
 import traceback
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import Final, Literal, TypedDict
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -31,7 +33,9 @@ from litellm.proxy._types import (
     CallInfo,
     EnterpriseLicenseData,
     Litellm_EntityType,
+    LiteLLM_UserTable,
     LitellmUserRoles,
+    ModelAccessDeniedProxyException,
     ProxyException,
     SpecialModelNames,
     UserAPIKeyAuth,
@@ -39,13 +43,28 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import (
     _resolve_key_models_for_auth_check,  # pyright: ignore[reportPrivateUsage]  # the auth layer's sentinel resolution, reused so /health scopes exactly like a request
+    agent_model_grants,
+    can_agent_call_model,
+    can_key_call_resolved_model,
+    can_user_call_model,
+    get_user_object,
+    key_model_aliases_for_auth_check,
+    model_matches_any_wildcard_pattern_in_list,
+    team_model_aliases_for_auth_check,
+)
+from litellm.proxy.auth.auth_exception_handler import (
+    _as_proxy_exception,  # pyright: ignore[reportPrivateUsage]  # one auth-failure mapping, shared with user_api_key_auth
 )
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
 )
-from litellm.proxy.auth.model_checks import get_key_models
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils import http_parsing_utils
+from litellm.proxy.common_utils.model_listing_utils import (
+    CallerAliases,
+    dispatched_model,
+    requestable_alias_names,
+)
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -74,10 +93,12 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
 )
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 from litellm.router import Router
+from litellm.router_api import deployment_usable_by_team
 from litellm.router_utils.clientside_credential_handler import (
     _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the router path
     clientside_credential_keys,
 )
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 from litellm.types.router import reject_server_owned_wif_fields
@@ -252,6 +273,28 @@ def get_callback_identifier(callback):
 
 router: Final = APIRouter()
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_OBJECTS: Final = TypeAdapter(tuple[object, ...])
+_DEPLOYMENTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+class _ModelGrants(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    models: tuple[object, ...] = ()
+
+
+class _ModelInfoAccessGroups(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    access_groups: tuple[object, ...]
+
+
+class _DeploymentAccessGroups(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model_info: _ModelInfoAccessGroups
+
+
 services = (
     Literal[
         "slack_budget_alerts",
@@ -1044,42 +1087,339 @@ def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     return out
 
 
-def _health_accessible_model_names(
-    user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None
-) -> frozenset[str] | None:
-    """Model names the caller may health-check, or None when the key is unrestricted."""
+def _key_models_unrestricted(user_api_key_dict: UserAPIKeyAuth) -> bool:
     granted_models: Final = _resolve_key_models_for_auth_check(user_api_key_dict)
-    if not granted_models or SpecialModelNames.all_proxy_models.value in granted_models:
+    return not granted_models or SpecialModelNames.all_proxy_models.value in granted_models
+
+
+def _own_team_names(deployment: object, team_id: str | None) -> tuple[str, str] | None:
+    match deployment:
+        case {
+            "model_name": str(internal_name),
+            "model_info": {"team_id": str(owner_team_id), "team_public_model_name": str(public_name)},
+        } if owner_team_id == team_id:
+            return (internal_name, public_name)
+        case _:
+            return None
+
+
+def _names_caller_may_request(deployment: object, team_id: str | None) -> frozenset[str]:
+    team_names: Final = _own_team_names(deployment, team_id)
+    if team_names is not None:
+        return frozenset(team_names)
+    match deployment:
+        case {"model_name": str(name)}:
+            return frozenset((name,))
+        case _:
+            return frozenset()
+
+
+def _public_names_by_internal_name(llm_model_list: Sequence[object], team_id: str | None) -> Mapping[str, str]:
+    team_names: Final = (_own_team_names(deployment, team_id) for deployment in llm_model_list)
+    return MappingProxyType(dict(names for names in team_names if names is not None))
+
+
+async def _key_owner(user_api_key_dict: UserAPIKeyAuth) -> LiteLLM_UserTable | None:
+    if user_api_key_dict.team_id is not None or user_api_key_dict.user_id is None:
         return None
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    try:
+        return await get_user_object(
+            user_id=user_api_key_dict.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception:  # noqa: BLE001  # auth reads an unloadable user as no user limit, so /health does too
+        return None
+
+
+async def _key_may_call_model(
+    model_name: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    owner: LiteLLM_UserTable | None,
+    llm_router: Router | None,
+) -> bool:
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    await asyncio.sleep(0)
+    try:
+        await can_key_call_resolved_model(
+            model=model_name, llm_model_list=None, valid_token=user_api_key_dict, llm_router=llm_router
+        )
+        await can_agent_call_model(
+            model=model_name,
+            valid_token=user_api_key_dict,
+            llm_router=llm_router,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        await can_user_call_model(
+            model=model_name,
+            llm_router=llm_router,
+            user_object=owner,
+            key_model_aliases=key_model_aliases_for_auth_check(user_api_key_dict),
+        )
+    except ModelAccessDeniedProxyException:
+        return False
+    except ProxyException:
+        raise
+    except Exception as failure:
+        if isinstance(failure, HTTPException) and failure.status_code == status.HTTP_403_FORBIDDEN:
+            return False
+        raise _as_proxy_exception(failure) from failure
+    return True
+
+
+async def _caller_aliases(user_api_key_dict: UserAPIKeyAuth) -> CallerAliases:
+    from litellm.proxy.proxy_server import prisma_client, proxy_config, proxy_logging_obj
+
+    router_settings: Final = await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict, prisma_client, proxy_logging_obj
+    )
+    return CallerAliases(
+        team_model_aliases_for_auth_check(user_api_key_dict),
+        key_model_aliases_for_auth_check(user_api_key_dict),
+        router_settings.get("model_group_alias") if router_settings is not None else None,
+    )
+
+
+def _model_auth_checks(model_name: str, aliases: CallerAliases) -> str:
+    return resolve_model_group_alias(aliases.router, model_name) or model_name
+
+
+def _deployment_id(deployment: object) -> str | None:
+    match deployment:
+        case {"model_info": {"id": str(model_id)}}:
+            return model_id
+        case _:
+            return None
+
+
+def _granted_names(user_api_key_dict: UserAPIKeyAuth) -> frozenset[str]:
+    grants: Final = (
+        *_ModelGrants.model_validate(user_api_key_dict).models,
+        *_OBJECTS.validate_python(user_api_key_dict.team_models),
+    )
+    return frozenset(name for name in grants if isinstance(name, str))
+
+
+async def _names_any_limit_grants(user_api_key_dict: UserAPIKeyAuth, owner: LiteLLM_UserTable | None) -> frozenset[str]:
+    owner_grants: Final = _ModelGrants.model_validate(owner).models if owner is not None else ()
+    return (
+        _granted_names(user_api_key_dict)
+        | frozenset(name for name in owner_grants if isinstance(name, str))
+        | await agent_model_grants(user_api_key_dict)
+    )
+
+
+def _alias_names_caller_may_request(aliases: CallerAliases, llm_router: Router | None) -> frozenset[str]:
+    router_aliases: Final = frozenset(llm_router.registry().aliases()) if llm_router is not None else frozenset[str]()
+    return requestable_alias_names(aliases) | router_aliases
+
+
+def _served_group(model_name: str, aliases: CallerAliases, llm_router: Router | None) -> str:
+    dispatched: Final = dispatched_model(model_name, aliases)
+    return llm_router.registry().resolve(dispatched) if llm_router is not None else dispatched
+
+
+def _name_id_pairs(deployment: object, team_id: str | None) -> tuple[tuple[str, str], ...]:
+    model_id: Final = _deployment_id(deployment)
+    if model_id is None:
+        return ()
+    return tuple((name, model_id) for name in _names_caller_may_request(deployment, team_id) | {model_id})
+
+
+def _ids_by_requested_name(llm_model_list: Sequence[object], team_id: str | None) -> Mapping[str, frozenset[str]]:
+    pairs: Final = sorted(chain.from_iterable(_name_id_pairs(deployment, team_id) for deployment in llm_model_list))
+    return MappingProxyType(
+        {name: frozenset(model_id for _, model_id in group) for name, group in groupby(pairs, key=lambda pair: pair[0])}
+    )
+
+
+def _ids_of(deployments: Iterable[object]) -> frozenset[str]:
+    return frozenset(model_id for model_id in map(_deployment_id, deployments) if model_id is not None)
+
+
+def _access_groups_of(deployment: object) -> frozenset[str]:
+    match deployment:
+        case {"model_info": {"access_groups": list()}}:
+            access_groups: Final = _DeploymentAccessGroups.model_validate(deployment).model_info.access_groups
+            return frozenset(access_group for access_group in access_groups if isinstance(access_group, str))
+        case _:
+            return frozenset()
+
+
+@dataclass(frozen=True, slots=True)
+class _AccessGroupGrants:
+    granted_names: frozenset[str]
+    ids_in_granted_groups: frozenset[str]
+
+    def requested_name(self, name: str, public_names: Mapping[str, str], admitted_names: frozenset[str]) -> str:
+        public_name: Final = public_names.get(name)
+        if public_name is None or public_name not in admitted_names or self._grants(name):
+            return name
+        return public_name
+
+    def _grants(self, name: str) -> bool:
+        return name in self.granted_names or model_matches_any_wildcard_pattern_in_list(name, tuple(self.granted_names))
+
+    def narrow(self, serving_ids: frozenset[str], served_names: frozenset[str]) -> frozenset[str]:
+        in_granted_groups: Final = serving_ids & self.ids_in_granted_groups
+        granted_directly: Final = not self.granted_names.isdisjoint(served_names)
+        return serving_ids if granted_directly or not in_granted_groups else in_granted_groups
+
+
+def _access_group_grants(llm_model_list: Sequence[object], user_api_key_dict: UserAPIKeyAuth) -> _AccessGroupGrants:
+    granted: Final = _granted_names(user_api_key_dict)
+    in_granted_groups: Final = (
+        deployment for deployment in llm_model_list if not granted.isdisjoint(_access_groups_of(deployment))
+    )
+    return _AccessGroupGrants(granted, _ids_of(in_granted_groups))
+
+
+def _ids_serving_group(
+    group: str,
+    ids_by_name: Mapping[str, frozenset[str]],
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Router | None,
+    access_group_grants: _AccessGroupGrants,
+) -> frozenset[str]:
+    named: Final = ids_by_name.get(group)
+    if named is not None:
+        return access_group_grants.narrow(named, frozenset((group,)))
     if llm_router is None:
-        return frozenset(granted_models)
+        return frozenset()
+    team_id: Final = user_api_key_dict.team_id
+    wildcard_served: Final = llm_router.registry().deployments(group, source="wildcard", team_id=team_id)
+    served_names: Final = frozenset((group,)).union(
+        *(_names_caller_may_request(deployment, team_id) for deployment in wildcard_served)
+    )
+    return access_group_grants.narrow(_ids_of(wildcard_served), served_names)
+
+
+async def _names_key_may_request(
+    names: Iterable[str],
+    aliases: CallerAliases,
+    user_api_key_dict: UserAPIKeyAuth,
+    owner: LiteLLM_UserTable | None,
+    llm_router: Router | None,
+) -> frozenset[str]:
     return frozenset(
-        get_key_models(
-            user_api_key_dict=user_api_key_dict,
-            proxy_model_list=llm_router.get_model_names(team_id=user_api_key_dict.team_id),
-            model_access_groups=llm_router.get_model_access_groups(),
+        [
+            name
+            for name in names
+            if await _key_may_call_model(_model_auth_checks(name, aliases), user_api_key_dict, owner, llm_router)
+        ]
+    )
+
+
+def _ids_serving(
+    groups: Iterable[str],
+    ids_by_name: Mapping[str, frozenset[str]],
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Router | None,
+    access_group_grants: _AccessGroupGrants,
+) -> frozenset[str]:
+    return frozenset[str]().union(
+        *(
+            _ids_serving_group(group, ids_by_name, user_api_key_dict, llm_router, access_group_grants)
+            for group in groups
         )
     )
 
 
-def _caller_may_probe_deployment(
-    deployment: Mapping[str, object],
-    allowed_models: frozenset[str] | None,
+def _shadowed_ids(
+    llm_model_list: Sequence[object], admitted_names: frozenset[str], reached_ids: frozenset[str], team_id: str | None
+) -> frozenset[str]:
+    ids_of_admitted_names: Final = (
+        _deployment_id(deployment)
+        for deployment in llm_model_list
+        if not admitted_names.isdisjoint(_names_caller_may_request(deployment, team_id))
+    )
+    return frozenset(model_id for model_id in ids_of_admitted_names if model_id is not None) - reached_ids
+
+
+@dataclass(frozen=True, slots=True)
+class _ReachableDeployments:
+    model_ids: frozenset[str]
+    groups: frozenset[str]
+
+    def include(self, deployment: object, team_id: str | None) -> bool:
+        model_id: Final = _deployment_id(deployment)
+        if model_id is None:
+            return not self.groups.isdisjoint(_names_caller_may_request(deployment, team_id))
+        return model_id in self.model_ids
+
+
+_NOTHING_REACHABLE: Final = _ReachableDeployments(frozenset(), frozenset())
+
+
+async def _deployments_key_may_reach(
+    llm_model_list: Sequence[object],
+    aliases: CallerAliases,
+    user_api_key_dict: UserAPIKeyAuth,
+    owner: LiteLLM_UserTable | None,
     llm_router: Router | None,
+) -> _ReachableDeployments:
+    candidate_names: Final = (await _names_any_limit_grants(user_api_key_dict, owner)).union(
+        _alias_names_caller_may_request(aliases, llm_router),
+        *(_names_caller_may_request(deployment, user_api_key_dict.team_id) for deployment in llm_model_list),
+    )
+    admitted_names: Final = await _names_key_may_request(candidate_names, aliases, user_api_key_dict, owner, llm_router)
+    access_group_grants: Final = _access_group_grants(llm_model_list, user_api_key_dict)
+    public_names: Final = _public_names_by_internal_name(llm_model_list, user_api_key_dict.team_id)
+    groups: Final = frozenset(
+        _served_group(access_group_grants.requested_name(name, public_names, admitted_names), aliases, llm_router)
+        for name in admitted_names
+    )
+    ids_by_name: Final = _ids_by_requested_name(llm_model_list, user_api_key_dict.team_id)
+    reached_ids: Final = _ids_serving(groups, ids_by_name, user_api_key_dict, llm_router, access_group_grants)
+    admitted_ids: Final = await _names_key_may_request(
+        _shadowed_ids(llm_model_list, admitted_names, reached_ids, user_api_key_dict.team_id),
+        aliases,
+        user_api_key_dict,
+        owner,
+        llm_router,
+    )
+    id_groups: Final = frozenset(_served_group(model_id, aliases, llm_router) for model_id in admitted_ids)
+    return _ReachableDeployments(
+        reached_ids | _ids_serving(id_groups, ids_by_name, user_api_key_dict, llm_router, access_group_grants), groups
+    )
+
+
+def _model_param_target(
+    model: str,
+    aliases: CallerAliases,
+    llm_model_list: Sequence[Mapping[str, object]],
     team_id: str | None,
-    caller_is_admin: bool,
+    llm_router: Router | None,
+) -> str:
+    group: Final = _served_group(model, aliases, llm_router)
+    if llm_router is None or deployments_targeted_by_name(llm_model_list, group, team_id):
+        return group
+    patterns: Final = frozenset(
+        deployment.get("model_name")
+        for deployment in llm_router.registry().deployments(group, source="wildcard", team_id=team_id)
+    )
+    match tuple(patterns):
+        case (str(pattern),):
+            return pattern
+        case _:
+            return group
+
+
+def _caller_may_probe_deployment(
+    deployment: Mapping[str, object], reachable: _ReachableDeployments, team_id: str | None, caller_is_admin: bool
 ) -> bool:
     """Same deployment visibility rule as routing: another team's deployment is never in scope, team-less callers included."""
-    if not caller_is_admin and not Router.deployment_usable_by_team(deployment, team_id):
+    if not caller_is_admin and not deployment_usable_by_team(deployment, team_id):
         return False
-    if allowed_models is None:
-        return True
-    if llm_router is None:
-        return deployment.get("model_name") in allowed_models
-    model: Final = dict(deployment)
-    return any(
-        llm_router.should_include_deployment(model_name=name, model=model, team_id=team_id) for name in allowed_models
-    )
+    return reachable.include(deployment, team_id)
 
 
 def _resolve_targeted_model_ids(
@@ -1136,6 +1476,7 @@ def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: 
 async def _perform_health_check_and_save(
     model_list,
     target_model,
+    recorded_model_name: str | None,
     cli_model,
     details,
     prisma_client,
@@ -1158,8 +1499,7 @@ async def _perform_health_check_and_save(
 
     # Optionally save health check result to database (non-blocking)
     if prisma_client is not None:
-        # For CLI model, use cli_model name; for router models, use target_model
-        model_name_for_db: Final = cli_model if cli_model is not None else target_model
+        model_name_for_db: Final = cli_model if cli_model is not None else recorded_model_name
         if model_name_for_db is not None:
             asyncio.create_task(
                 _save_health_check_to_db(
@@ -1184,7 +1524,7 @@ async def _perform_health_check_and_save(
 def _health_endpoint_resolve_target_model_name(
     model: str | None,
     model_id: str | None,
-    llm_router,
+    llm_router: Router | None,
 ) -> str | None:
     """Map ``model_id`` to its deployment's ``model_name`` for live health checks.
 
@@ -1199,7 +1539,7 @@ def _health_endpoint_resolve_target_model_name(
             detail={"error": f"Model with ID {model_id} not found"},
         )
     try:
-        deployment: Final = llm_router.get_deployment(model_id=model_id)
+        deployment: Final = llm_router.registry().deployment(model_id)
     except Exception as e:
         verbose_proxy_logger.error("Error getting deployment for model_id %s: %s", model_id, e)
         raise HTTPException(
@@ -1289,6 +1629,7 @@ async def health_endpoint(
                 cli_result: Final = await _perform_health_check_and_save(
                     model_list=[],
                     target_model=None,
+                    recorded_model_name=None,
                     cli_model=user_model,
                     details=health_check_details,
                     prisma_client=prisma_client,
@@ -1303,15 +1644,39 @@ async def health_endpoint(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "Model list not initialized"},
             )
-        allowed_models: Final = _health_accessible_model_names(user_api_key_dict, llm_router)
-        restrict_to_allowed_models: Final = not is_admin or allowed_models is not None
+        restrict_to_allowed_models: Final = not is_admin or not _key_models_unrestricted(user_api_key_dict)
+        aliases: Final = await _caller_aliases(user_api_key_dict) if restrict_to_allowed_models else None
+        reachable: Final = (
+            await _deployments_key_may_reach(
+                _OBJECTS.validate_python(llm_model_list),
+                aliases,
+                user_api_key_dict,
+                await _key_owner(user_api_key_dict),
+                llm_router,
+            )
+            if aliases is not None
+            else _NOTHING_REACHABLE
+        )
+        requested_model: Final = (
+            _model_param_target(
+                model,
+                aliases,
+                _DEPLOYMENTS.validate_python(llm_model_list),
+                user_api_key_dict.team_id,
+                llm_router,
+            )
+            if model is not None and aliases is not None
+            else model
+        )
         _llm_model_list: Final = [
             m
             for m in copy.deepcopy(llm_model_list)
             if not restrict_to_allowed_models
-            or _caller_may_probe_deployment(m, allowed_models, llm_router, user_api_key_dict.team_id, is_admin)
+            or _caller_may_probe_deployment(m, reachable, user_api_key_dict.team_id, is_admin)
         ]
-        targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, model, model_id, user_api_key_dict.team_id)
+        targeted_ids: Final = _resolve_targeted_model_ids(
+            _llm_model_list, requested_model, model_id, user_api_key_dict.team_id
+        )
         if restrict_to_allowed_models and targeted_ids is not None and not targeted_ids:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -1369,7 +1734,8 @@ async def health_endpoint(
         else:
             router_result: Final = await _perform_health_check_and_save(
                 model_list=_llm_model_list,
-                target_model=target_model,
+                target_model=target_model if model_id else requested_model,
+                recorded_model_name=target_model,
                 cli_model=None,
                 details=health_check_details,
                 prisma_client=prisma_client,
@@ -1769,7 +2135,9 @@ async def no_redis_on_multiple_workers() -> bool:
 def _redis_configured() -> bool:
     from litellm.proxy.proxy_server import llm_router, redis_usage_cache
 
-    return redis_usage_cache is not None or (llm_router is not None and llm_router.cache.redis_cache is not None)
+    return redis_usage_cache is not None or (
+        llm_router is not None and llm_router.health().store.redis_cache is not None
+    )
 
 
 def no_redis_warning_disabled_by_env() -> bool:
@@ -2259,7 +2627,7 @@ async def test_model_connection(
             request_model_id: Final = request_model_info.get("id")
             try:
                 if request_model_id:
-                    deployment_by_id = llm_router.get_deployment(model_id=request_model_id)
+                    deployment_by_id = llm_router.registry().deployment(request_model_id)
 
                 if deployment_by_id is not None:
                     config_litellm_params = deployment_by_id.litellm_params.model_dump(exclude_none=True)
@@ -2268,12 +2636,12 @@ async def test_model_connection(
                     # Fall back to model_name lookup for callers (e.g. the
                     # "Add Model" wizard, or curl) that don't supply an id.
                     # First try to find by proxy model_name (e.g., "gpt-4o")
-                    deployments = llm_router.get_model_list(model_name=model_name)
+                    deployments = llm_router.registry().deployments(model_name)
 
                     # If not found, try to find by litellm model name
                     # (e.g., "azure/gpt-4o")
                     if not deployments or len(deployments) == 0:
-                        all_deployments: Final = llm_router.get_model_list(model_name=None)
+                        all_deployments: Final = llm_router.registry().deployments(None)
                         if all_deployments:
                             for deployment in all_deployments:
                                 if deployment.get("litellm_params", {}).get("model") == model_name:
