@@ -15,6 +15,7 @@ import time
 from http.cookies import SimpleCookie
 
 import pytest
+import fakeredis
 from fastapi import HTTPException, Request
 
 pytest.importorskip("onelogin", reason="python3-saml (saml extra) is required for SAML SSO tests")
@@ -29,8 +30,6 @@ from onelogin.saml2.utils import OneLogin_Saml2_Utils
 from starlette.datastructures import URL
 
 from litellm.caching.dual_cache import DualCache
-from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache
 from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.management_endpoints.sso.saml_sso import (
     _SAML_AUTHN_REQUEST_CACHE_PREFIX,
@@ -42,14 +41,11 @@ from litellm.proxy.management_endpoints.sso.saml_sso import (
 )
 from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import SSOIdentityAssertion
+from tests._support.fake_redis import fake_redis_cache
 
 
-def _shared_cache(store: InMemoryCache | None = None) -> DualCache:
-    """A DualCache whose replay guard is backed by a shared, atomic store.
-
-    An InMemoryCache instance stands in for Redis; passing the same instance to
-    two DualCaches simulates two workers sharing one atomic backend."""
-    return DualCache(redis_cache=cast(RedisCache, store or InMemoryCache()))
+def _shared_cache(store: fakeredis.FakeServer | None = None) -> DualCache:
+    return DualCache(redis_cache=fake_redis_cache(store or fakeredis.FakeServer()))
 
 
 IDP_ENTITY = "https://idp.example.com/metadata"
@@ -689,7 +685,7 @@ async def test_idp_initiated_rejected_without_shared_cache(saml_env_idp_initiate
 @pytest.mark.asyncio
 async def test_idp_initiated_replay_rejected_across_workers(saml_env_idp_initiated):
     key_pem, cert_pem = saml_env_idp_initiated
-    shared_store = InMemoryCache()
+    shared_store = fakeredis.FakeServer()
     worker_one = _shared_cache(shared_store)
     worker_two = _shared_cache(shared_store)
     resp = _build_signed_response(key_pem, cert_pem, email="bob@example.com")
@@ -708,7 +704,7 @@ async def test_sp_initiated_login_endpoint_ticket_is_accepted_by_another_worker(
     from litellm.proxy.management_endpoints.ui_sso import saml_login
 
     key_pem, cert_pem = saml_env
-    shared_store = InMemoryCache()
+    shared_store = fakeredis.FakeServer()
     monkeypatch.setattr(proxy_server, "saml_sso_cache", _shared_cache(shared_store))
 
     redirect = await saml_login(_fake_request())

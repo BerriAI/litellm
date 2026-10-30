@@ -23,21 +23,22 @@ error instead of breaking proxy startup.
 # pyright: reportConstantRedefinition=false
 
 import asyncio
-import hashlib
 import os
 import secrets
 import time
 from collections.abc import Mapping
+from datetime import timedelta
 from typing import Final, cast
 from urllib.parse import parse_qsl
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import RedirectResponse
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.redis_batch import active_request_redis_batch
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.management_endpoints.sso_helper_utils import SSO_SESSIONS_TARGET
 from litellm.proxy.management_endpoints.types import CustomOpenID, get_litellm_user_role
@@ -46,6 +47,8 @@ from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
     assertion_from_saml_login,
 )
 from litellm.proxy.utils import get_custom_url
+from litellm.redis.stores.saml_metadata import SAMLMetadataStore, TransportSAMLMetadataStore, saml_metadata_key
+from litellm.redis.transport.contract import RedisFailure
 
 try:
     from onelogin.saml2.auth import OneLogin_Saml2_Auth
@@ -62,7 +65,6 @@ SAML_CALLBACK_ROUTE: Final = "sso/saml/callback"
 SAML_METADATA_ROUTE: Final = "sso/saml/metadata"
 
 _SAML_AUTHN_STATE_COOKIE: Final = "litellm_saml_authn"
-_SAML_IDP_SETTINGS_CACHE_PREFIX: Final = "saml_idp_settings"
 _SAML_AUTHN_REQUEST_CACHE_PREFIX: Final = "saml_authn_request"
 _SAML_CONSUMED_ASSERTION_CACHE_PREFIX: Final = "saml_consumed_assertion"
 SAML_AUTHN_REQUEST_TTL_SECONDS: Final = 600
@@ -165,8 +167,7 @@ class SAMLAuthHandler:
                 detail="SAML SSO is not configured. Set SAML_IDP_METADATA_URL or SAML_IDP_METADATA_XML.",
             )
 
-        cache_key: Final = f"{_SAML_IDP_SETTINGS_CACHE_PREFIX}:{hashlib.sha256(source.encode()).hexdigest()}"
-        cached: Final = await cache.async_get_cache(key=cache_key)
+        cached: Final = await SAMLAuthHandler._cached_idp_settings(cache, source)
         if isinstance(cached, dict):
             return cast(dict[str, object], cached)  # cast-ok: untyped python3-saml
 
@@ -186,8 +187,31 @@ class SAMLAuthHandler:
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Could not parse an IdP entityID/SSO URL/certificate from the SAML metadata.",
             )
-        await cache.async_set_cache(key=cache_key, value=idp_settings, ttl=_SAML_IDP_METADATA_TTL_SECONDS)
+        await cache.async_set_cache(
+            key=saml_metadata_key(source), value=idp_settings, ttl=_SAML_IDP_METADATA_TTL_SECONDS, local_only=True
+        )
+        if cache.redis_cache is not None:
+            store: Final[SAMLMetadataStore] = TransportSAMLMetadataStore(cache.redis_cache.transport())
+            await store.put(source, idp_settings, ttl=timedelta(seconds=_SAML_IDP_METADATA_TTL_SECONDS))
         return idp_settings
+
+    @staticmethod
+    async def _cached_idp_settings(cache: DualCache, source: str) -> object:
+        local: Final = TypeAdapter(object).validate_python(
+            await cache.async_get_cache(key=saml_metadata_key(source), local_only=True)
+        )
+        if local is not None or cache.redis_cache is None:
+            return local
+        request_batch: Final = active_request_redis_batch(cache.redis_cache)
+        if request_batch is not None and request_batch.read_as_missing(saml_metadata_key(source)):
+            return None
+        store: Final[SAMLMetadataStore] = TransportSAMLMetadataStore(cache.redis_cache.transport())
+        result: Final = await store.get(source)
+        if isinstance(result, RedisFailure):
+            return None
+        if result is not None:
+            await cache.async_set_cache(key=saml_metadata_key(source), value=result, local_only=True)
+        return result
 
     @staticmethod
     def _build_settings(request: Request, idp_settings: dict[str, object]) -> dict[str, object]:
