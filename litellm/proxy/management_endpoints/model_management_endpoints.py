@@ -63,6 +63,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY
 from litellm.proxy.auth.model_checks import (
     model_info_cost_map_entry,
+    routed_model_name,
     routes_through_deployment,
     wildcard_listed_priced_model,
 )
@@ -1275,15 +1276,14 @@ def _live_cost_map_model(db_model: Deployment, listed_name: str | None, llm_rout
     if stored_model is None or listed_name is None:
         return stored_model
     model_id: Final = db_model.model_info.id
-    priced_as: Final = wildcard_listed_priced_model(
+    return wildcard_listed_priced_model(
         db_model.model_name,
         stored_model,
-        listed_name,
+        listed_name if llm_router is None else routed_model_name(llm_router, listed_name),
         routes_through_wildcard=llm_router is None
         or model_id is None
         or routes_through_deployment(llm_router, model_id, listed_name, db_model.model_info.team_id),
     )
-    return listed_name if priced_as is None else priced_as
 
 
 def _cost_map_entry(

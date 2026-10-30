@@ -582,25 +582,29 @@ def wildcard_row_priced_model(row: Mapping[str, object], llm_router: Router | No
     return wildcard_listed_priced_model(
         source_pattern,
         source_model,
-        listed_name,
+        routed_model_name(llm_router, listed_name),
         routes_through_wildcard=routes_through_deployment(llm_router, model_id, listed_name, _deployment_team_id(row)),
     )
 
 
 def wildcard_listed_priced_model(
-    model_name_pattern: str, wildcard_model: str, listed_name: str, routes_through_wildcard: bool
-) -> str | None:
+    model_name_pattern: str, wildcard_model: str, routed_name: str, routes_through_wildcard: bool
+) -> str:
     if not routes_through_wildcard:
         return wildcard_model
-    filled: Final = wildcard_filled_model(model_name_pattern, wildcard_model, listed_name)
+    filled: Final = wildcard_filled_model(model_name_pattern, wildcard_model, routed_name)
     if filled is None:
         return wildcard_model
-    return None if _repeats_listed_provider_prefix(filled, listed_name) else filled
+    return routed_name if _repeats_provider_prefix(filled, routed_name) else filled
 
 
-def _repeats_listed_provider_prefix(filled_model: str, listed_name: str) -> bool:
-    listed_provider, separator, _ = listed_name.partition("/")
-    return separator != "" and filled_model == f"{listed_provider}/{listed_name}"
+def _repeats_provider_prefix(filled_model: str, routed_name: str) -> bool:
+    provider, separator, _ = routed_name.partition("/")
+    return separator != "" and filled_model == f"{provider}/{routed_name}"
+
+
+def routed_model_name(llm_router: Router, listed_name: str) -> str:
+    return llm_router.registry().resolve(listed_name, kind="alias") or listed_name
 
 
 def routes_through_deployment(llm_router: Router, model_id: str, listed_name: str, team_id: str | None) -> bool:

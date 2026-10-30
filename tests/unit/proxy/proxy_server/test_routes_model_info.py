@@ -904,6 +904,18 @@ def _catch_all_and_shadowed_wildcard_router(monkeypatch: pytest.MonkeyPatch) -> 
             "litellm_provider": "fireworks_ai",
             "mode": "chat",
         },
+        "fireworks_ai/accounts/fireworks/models/acme-max": {
+            "input_cost_per_token": 9e-07,
+            "output_cost_per_token": 9.5e-07,
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+        },
+        "fireworks_ai/accounts/fireworks/models/acme-mini": {
+            "input_cost_per_token": 5e-08,
+            "output_cost_per_token": 6e-08,
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+        },
         "deepseek/acme-lite": {
             "input_cost_per_token": 7e-07,
             "output_cost_per_token": 8e-07,
@@ -918,7 +930,11 @@ def _catch_all_and_shadowed_wildcard_router(monkeypatch: pytest.MonkeyPatch) -> 
         "get_provider_models",
         lambda provider, litellm_params=None: {
             "openai": ["gpt-5.6-acme"],
-            "fireworks_ai": ["fireworks_ai/accounts/fireworks/models/acme-pro"],
+            "fireworks_ai": [
+                "fireworks_ai/accounts/fireworks/models/acme-pro",
+                "fireworks_ai/accounts/fireworks/models/acme-max",
+                "fireworks_ai/accounts/fireworks/models/acme-mini",
+            ],
         }.get(provider, []),
     )
     router: Final = litellm.Router(
@@ -939,7 +955,7 @@ def _catch_all_and_shadowed_wildcard_router(monkeypatch: pytest.MonkeyPatch) -> 
                 "model_info": {"id": "deepseek-acme-lite"},
             },
         ],
-        model_group_alias={"my-fw/acme-pro": "acme-lite"},
+        model_group_alias={"my-fw/acme-pro": "acme-lite", "my-fw/acme-max": "my-fw/acme-mini"},
     )
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
@@ -983,6 +999,30 @@ def test_model_info_prices_a_catch_all_row_named_with_its_provider_as_the_listed
     _invalidate_model_cost_lowercase_map()
 
 
+def test_model_info_prices_a_wildcard_row_aliased_to_a_sibling_name_as_the_alias_target(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """An alias from ``my-fw/acme-max`` to ``my-fw/acme-mini`` still reaches the same wildcard, but calls run
+    ``acme-mini``, so the ``my-fw/acme-max`` row must show the price those calls are billed at."""
+    router: Final = _catch_all_and_shadowed_wildcard_router(monkeypatch)
+
+    with auth_as():
+        rows: Final = _expanded_wildcard_rows(client)
+
+    shown: Final = rows["my-fw/acme-max"]["model_info"]
+    call: Final = router.completion(
+        model="my-fw/acme-max", messages=[{"role": "user", "content": "hi"}], mock_response="hello there"
+    )
+    assert call._hidden_params["response_cost"] == pytest.approx(
+        shown["input_cost_per_token"] * call.usage.prompt_tokens
+        + shown["output_cost_per_token"] * call.usage.completion_tokens
+    )
+    _invalidate_model_cost_lowercase_map()
+
+
 def test_saving_a_replayed_model_info_wildcard_row_stores_none_of_its_shown_metadata(
     client: TestClient,
     auth_as: Callable[[], AbstractContextManager[object]],
@@ -991,7 +1031,7 @@ def test_saving_a_replayed_model_info_wildcard_row_stores_none_of_its_shown_meta
 ) -> None:
     """An API client that saves a ``/model/info`` row back unchanged, apart from one edit, must not pin the
     cost-map metadata the row showed onto the wildcard, whether the row is a catch-all name carrying its
-    provider or a name an alias sends to another deployment."""
+    provider, a name an alias sends to another deployment, or a name an alias sends to a sibling name."""
     from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
     from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment
 
@@ -999,7 +1039,7 @@ def test_saving_a_replayed_model_info_wildcard_row_stores_none_of_its_shown_meta
     with auth_as():
         rows: Final = _expanded_wildcard_rows(client)
 
-    assert sorted(rows) == ["my-fw/acme-pro", "openai/gpt-5.6-acme"]
+    assert sorted(rows) == ["my-fw/acme-max", "my-fw/acme-mini", "my-fw/acme-pro", "openai/gpt-5.6-acme"]
     sources: Final = {
         deployment["model_info"]["id"]: deployment for deployment in router.get_model_list() or []
     }
@@ -1023,14 +1063,8 @@ def test_saving_a_replayed_model_info_wildcard_row_stores_none_of_its_shown_meta
         name: set(row["model_info"]) - set(sources[row["model_info"]["id"]]["model_info"]) for name, row in rows.items()
     }
     assert all(shown_metadata.values()), shown_metadata
-    assert {name: info["access_groups"] for name, info in stored.items()} == {
-        "my-fw/acme-pro": ["prod"],
-        "openai/gpt-5.6-acme": ["prod"],
-    }
-    assert {name: shown_metadata[name] & set(info) for name, info in stored.items()} == {
-        "my-fw/acme-pro": set(),
-        "openai/gpt-5.6-acme": set(),
-    }
+    assert {name: info["access_groups"] for name, info in stored.items()} == dict.fromkeys(rows, ["prod"])
+    assert {name: shown_metadata[name] & set(info) for name, info in stored.items()} == dict.fromkeys(rows, set())
     _invalidate_model_cost_lowercase_map()
 
 
