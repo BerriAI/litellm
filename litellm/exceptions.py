@@ -148,7 +148,7 @@ def error_response_without_credentials(status_code: int, upstream: object, fallb
     return response
 
 
-_NO_UPSTREAM_REQUEST_URL: Final = " https://cloud.google.com/vertex-ai/"
+_NO_UPSTREAM_REQUEST_URL: Final = "https://cloud.google.com/vertex-ai/"
 
 
 _MINIMAL_ERROR_RESPONSE: httpx.Response | None = None

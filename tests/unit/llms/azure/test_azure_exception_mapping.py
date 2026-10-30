@@ -12,6 +12,7 @@ import respx
 import litellm
 from litellm.exceptions import BadRequestError, ContentPolicyViolationError, ContextWindowExceededError
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+from litellm.llms.azure.common_utils import AzureOpenAIError
 
 
 @respx.mock
@@ -739,3 +740,24 @@ def test_azure_client_side_missing_key_error_keeps_the_empty_placeholder_respons
 
     assert raised.value.response.status_code == 401
     assert raised.value.response.text == ""
+
+
+@pytest.mark.parametrize(
+    ("status_code", "message", "mapped_error"),
+    (
+        (500, "azure_client is not an instance of AzureOpenAI or OpenAI", litellm.APIError),
+        (408, "the deployment did not answer in time", litellm.Timeout),
+        (504, "the deployment did not answer in time", litellm.Timeout),
+    ),
+)
+def test_azure_error_litellm_raises_itself_has_no_upstream_response(
+    status_code: int, message: str, mapped_error: type[Exception]
+) -> None:
+    with pytest.raises(mapped_error) as raised:
+        exception_type(
+            model="azure/gpt-4.1-mini",
+            original_exception=AzureOpenAIError(status_code=status_code, message=message),
+            custom_llm_provider="azure",
+        )
+
+    assert getattr(raised.value, "response", None) is None

@@ -312,6 +312,10 @@ def _without_credentials(response: httpx.Response | None) -> httpx.Response | No
     return error_response_without_credentials(response.status_code, response, "https://docs.litellm.ai/docs")
 
 
+def _upstream_reply(response: httpx.Response | None) -> httpx.Response | None:
+    return response if response is not None and (response.headers or response.content) else None
+
+
 def _map_openai_exception(
     *,
     model: str,
@@ -519,7 +523,7 @@ def _map_openai_exception(
                 model=model,
                 llm_provider=custom_llm_provider,
                 litellm_debug_info=extra_information,
-                response=response,
+                response=_upstream_reply(response),
             )
         elif original_exception.status_code == 422:
             raise BadRequestError(
@@ -571,7 +575,7 @@ def _map_openai_exception(
                 llm_provider=custom_llm_provider,
                 litellm_debug_info=extra_information,
                 exception_status_code=original_exception.status_code,
-                response=response,
+                response=_upstream_reply(response),
             )
         else:
             raise APIError(
@@ -581,7 +585,7 @@ def _map_openai_exception(
                 model=model,
                 request=getattr(original_exception, "request", None),
                 litellm_debug_info=extra_information,
-                response=response,
+                response=_upstream_reply(response),
             )
     else:
         # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
@@ -2176,7 +2180,7 @@ def _map_azure_exception(
                 model=model,
                 litellm_debug_info=extra_information,
                 llm_provider="azure",
-                response=response,
+                response=_upstream_reply(response),
             )
         elif original_exception.status_code == 422:
             raise BadRequestError(
@@ -2217,7 +2221,7 @@ def _map_azure_exception(
                 litellm_debug_info=extra_information,
                 llm_provider="azure",
                 exception_status_code=original_exception.status_code,
-                response=response,
+                response=_upstream_reply(response),
             )
         else:
             raise APIError(
@@ -2227,7 +2231,7 @@ def _map_azure_exception(
                 litellm_debug_info=extra_information,
                 model=model,
                 request=httpx.Request(method="POST", url="https://openai.com/"),
-                response=response,
+                response=_upstream_reply(response),
             )
     else:
         # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
@@ -2603,7 +2607,9 @@ def exception_type(
                     model=model,
                     llm_provider=custom_llm_provider,
                     litellm_debug_info=extra_information,
-                    response=_without_credentials(_litellm_proxy_response(mappable_exception, custom_llm_provider)),
+                    response=_upstream_reply(
+                        _without_credentials(_litellm_proxy_response(mappable_exception, custom_llm_provider))
+                    ),
                 )
 
             if (

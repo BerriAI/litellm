@@ -596,6 +596,57 @@ def test_mapped_error_keeps_the_upstream_body_without_the_provider_credentials(
         assert exposed.content == b""
 
 
+def _time_out(request: httpx.Request) -> httpx.Response:
+    raise httpx.ReadTimeout("no reply", request=request)
+
+
+async def _sync_completion_timing_out(provider: str) -> None:
+    litellm.completion(
+        model=f"{provider}/gpt-5.6",
+        messages=_MESSAGES,
+        client=OpenAI(
+            api_key=_PROVIDER_KEY,
+            base_url=_UPSTREAM_BASE,
+            max_retries=0,
+            http_client=httpx.Client(transport=httpx.MockTransport(_time_out)),
+        ),
+        api_base=_UPSTREAM_BASE,
+        api_key=_PROVIDER_KEY,
+        num_retries=0,
+    )
+
+
+async def _async_stream_timing_out(provider: str) -> None:
+    stream: Final = await litellm.acompletion(
+        model=f"{provider}/gpt-5.6",
+        messages=_MESSAGES,
+        stream=True,
+        client=AsyncOpenAI(
+            api_key=_PROVIDER_KEY,
+            base_url=_UPSTREAM_BASE,
+            max_retries=0,
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(_time_out)),
+        ),
+        api_base=_UPSTREAM_BASE,
+        api_key=_PROVIDER_KEY,
+        num_retries=0,
+    )
+    async for _ in stream:
+        pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ("openai", "litellm_proxy"))
+@pytest.mark.parametrize("call", (_sync_completion_timing_out, _async_stream_timing_out))
+async def test_timeout_before_any_reply_has_no_upstream_response(
+    provider: str, call: Callable[[str], Awaitable[None]]
+) -> None:
+    with pytest.raises(litellm.Timeout) as raised:
+        await call(provider)
+
+    assert getattr(raised.value, "response", None) is None
+
+
 @pytest.mark.asyncio
 async def test_acompletion_streams_text_deltas_over_injected_transport(
     http_backend: ModuleType, sdk_provider: str, monkeypatch: pytest.MonkeyPatch
