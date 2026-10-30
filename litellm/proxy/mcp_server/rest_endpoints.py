@@ -777,6 +777,7 @@ if MCP_AVAILABLE:
         extra_headers: dict[str, str] | None = None,
         apply_tool_filters: bool = True,
         client_ip: str | None = None,
+        preserve_tool_names: bool = False,
     ):
         """Helper function to get tools for a single server.
 
@@ -828,11 +829,16 @@ if MCP_AVAILABLE:
 
         from litellm.proxy.mcp_server.code_execution import settings as code_mode_settings
 
+        code_mode_enabled: Final = code_mode_settings().enabled
         code_tools: Final = (
-            [_code_mode_rest_tool(tool, server) for tool in served_tools]
-            if code_mode_settings().enabled
-            else served_tools
+            [_code_mode_rest_tool(tool, server) for tool in served_tools] if code_mode_enabled else served_tools
         )
+        if code_mode_enabled and preserve_tool_names:
+            scoped_tools: Final = [
+                annotated.model_copy(update={"name": original.name})
+                for annotated, original in zip(with_code_tool(code_tools, first_page=False), served_tools, strict=True)
+            ]
+            return _create_tool_response_objects(scoped_tools, server)
         return _create_tool_response_objects(code_tools, server)
 
     def _code_mode_rest_tool(tool: MCPTool, server: MCPServer) -> MCPTool:
@@ -966,6 +972,7 @@ if MCP_AVAILABLE:
                 extra_headers=user_oauth_extra_headers,
                 apply_tool_filters=apply_tool_filters,
                 client_ip=rest_client_ip,
+                preserve_tool_names=True,
             )
         except MCPUpstreamAuthError:
             # Surface the upstream 401/403 to the caller so it can emit the
@@ -992,7 +999,7 @@ if MCP_AVAILABLE:
                 "message": f"Failed to get tools from server {server.name}: {e}",
             }
         return {
-            "tools": with_code_tool(list_tools_result, first_page=False),
+            "tools": list_tools_result,
             "error": None,
             "message": "Successfully retrieved tools",
         }

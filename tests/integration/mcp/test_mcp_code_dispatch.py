@@ -98,18 +98,38 @@ def test_code_timeout_returns_error_and_releases_caller_slot(code_gateway: Gatew
 
 def test_rest_server_id_preserves_upstream_reserved_name(code_gateway: Gateway) -> None:
     with scripted_peer(echo_tool("litellm_execute_code")) as peer, code_gateway.scenario() as scenario:
-        identity: Final = register_mcp(scenario, peer, "reserved" + uuid.uuid4().hex[:8])
+        alias: Final = "reserved" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias)
         key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        caller: Final = McpCaller(code_gateway, key, "rest")
+        scoped: Final = caller.list_tools(identity)
+        assert scoped.ok and scoped.tools == ("litellm_execute_code",), scoped.raw
+        aggregate: Final = caller.list_tools()
+        assert aggregate.ok and set(aggregate.tools) == {"litellm_execute_code", f"{alias}-litellm_execute_code"}, (
+            aggregate.raw
+        )
+        scoped_tools: Final = SEARCH_RESULTS.validate_python(JSON_OBJECT.validate_json(scoped.raw)["tools"])
+        aggregate_tools: Final = SEARCH_RESULTS.validate_python(JSON_OBJECT.validate_json(aggregate.raw)["tools"])
+        upstream_tool: Final = next(tool for tool in aggregate_tools if tool["name"] != "litellm_execute_code")
+        support: Final = object_value(object_value(scoped_tools[0]["_meta"])["litellm.ai/code_mode"])
+        assert support["status"] == "unsupported"
+        assert scoped_tools[0]["_meta"] == upstream_tool["_meta"]
         arguments: Final = {"code": "qa_upstream_marker"}
         peer.drain()
-        upstream: Final = McpCaller(code_gateway, key, "rest").call("litellm_execute_code", arguments, identity)
+        upstream: Final = caller.call(scoped.tools[0], arguments, identity)
         assert upstream.ok and upstream.text is not None, upstream
         assert JSON_OBJECT.validate_json(upstream.text) == arguments
+        aggregate_name: Final = upstream_tool["name"]
+        assert isinstance(aggregate_name, str)
+        aggregate_upstream: Final = caller.call(aggregate_name, arguments, identity)
+        assert aggregate_upstream.ok and aggregate_upstream.text is not None, aggregate_upstream
+        assert JSON_OBJECT.validate_json(aggregate_upstream.text) == arguments
         observed: Final = tool_calls(peer.drain())
-        assert len(observed) == 1
-        request: Final = JSON_OBJECT.validate_python(observed[0]["body"])
-        assert object_value(request["params"])["arguments"] == arguments
-        gateway_code: Final = McpCaller(code_gateway, key, "rest").call("litellm_execute_code", {"code": "text(42)"})
+        assert len(observed) == 2
+        for request in (JSON_OBJECT.validate_python(call["body"]) for call in observed):
+            assert object_value(request["params"])["arguments"] == arguments
+            assert object_value(request["params"])["name"] == "litellm_execute_code"
+        gateway_code: Final = caller.call("litellm_execute_code", {"code": "text(42)"})
         assert gateway_code.ok and gateway_code.text is not None, gateway_code
         assert JSON_OBJECT.validate_json(gateway_code.text)["output"] == [42]
         assert tool_calls(peer.drain()) == ()
