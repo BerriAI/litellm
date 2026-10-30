@@ -1,8 +1,9 @@
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Final, Literal, Protocol, TypeAlias
+from uuid import uuid4
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
@@ -40,6 +41,55 @@ class NativeMCPDenial:
 
 NativeMCPExtraction: TypeAlias = tuple[NativeMCPAccess, ...] | NativeMCPDenial
 NativeMCPResolution: TypeAlias = NativeMCPPolicy | NativeMCPDenial | None
+
+
+@dataclass(frozen=True, slots=True)
+class NativeMCPRequestContext:
+    attempt_id: str
+    accesses: tuple[NativeMCPAccess, ...]
+
+
+_REQUEST_CONTEXT: Final = TypeAdapter(NativeMCPRequestContext)
+_CONTEXT_KEY: Final = "native_mcp_request_context"
+
+
+def native_mcp_request_context(response: object) -> NativeMCPRequestContext | None:
+    from litellm.litellm_core_utils.hidden_params import get_hidden_params
+
+    hidden: Final = get_hidden_params(response)
+    raw: Final = hidden.get(_CONTEXT_KEY) if hidden is not None else None
+    if raw is None:
+        return None
+    return _REQUEST_CONTEXT.validate_python(raw)
+
+
+def native_mcp_deployment_validator(
+    identity: NativeMCPIdentity,
+) -> Callable[[Mapping[str, object]], Callable[[object], object]] | None:
+    policy: Final = resolve_native_mcp_policy(identity)
+    if policy is None:
+        return None
+
+    def validate(data: Mapping[str, object]) -> Callable[[object], object]:
+        from litellm.proxy.guardrails.tool_name_extraction import extract_request_mcp_accesses
+
+        accesses: Final = extract_request_mcp_accesses(data)
+        raise_native_mcp_denial(evaluate_native_mcp_policy(policy, accesses))
+        assert not isinstance(accesses, NativeMCPDenial)
+        context: Final = NativeMCPRequestContext(str(uuid4()), accesses)
+
+        def bind(response: object) -> object:
+            from litellm.litellm_core_utils.hidden_params import set_hidden_param
+            from litellm.router_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
+
+            prepared: Final = prepare_response_for_header_attachment(response)
+            if prepared is not None:
+                set_hidden_param(prepared, _CONTEXT_KEY, _REQUEST_CONTEXT.dump_python(context, mode="json"))
+            return prepared
+
+        return bind
+
+    return validate
 
 
 def is_gateway_only(accesses: tuple[NativeMCPAccess, ...]) -> bool:

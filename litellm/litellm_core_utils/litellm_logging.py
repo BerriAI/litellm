@@ -650,6 +650,7 @@ class Logging(LiteLLMLoggingBaseClass):
     bridged_model_response: ModelResponse | None = None
     classifier_input: Mapping[str, JsonValue] | None = None
     baseline_cache_context: "BaselineCacheContext | None" = None
+    deployment_request_validator: Callable[[Mapping[str, object]], Callable[[object], object]] | None = None
     baseline_observation: "CapturedBaselineObservation | None" = None
     _on_failure_payload_built: "Callable[[], None] | None" = None
 

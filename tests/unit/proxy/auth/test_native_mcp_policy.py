@@ -202,3 +202,30 @@ def test_mixed_gateway_and_native_attachments_are_rejected_only_with_active_poli
     assert check_native_mcp_request(UserAPIKeyAuth(), mixed) is None
     with pytest.raises(ProxyException, match="Mixing provider-native MCP"):
         check_native_mcp_request(identity(), mixed)
+
+
+def test_deployment_validation_binds_each_attempt_independently() -> None:
+    from litellm.proxy.auth.native_mcp_policy import native_mcp_deployment_validator, native_mcp_request_context
+
+    validate: Final = native_mcp_deployment_validator(identity())
+    assert validate is not None
+    first: Final = validate(request())
+    second: Final = validate({})
+    later_result: Final = second({"output": []})
+    first_result: Final = first({"output": []})
+    first_context: Final = native_mcp_request_context(first_result)
+    later_context: Final = native_mcp_request_context(later_result)
+    assert first_context is not None and later_context is not None
+    assert first_context.attempt_id != later_context.attempt_id
+    assert first_context.accesses == (NativeMCPAccess("github", URL, ("search_code",)),)
+    assert later_context.accesses == ()
+
+
+def test_deployment_validation_rejects_final_configured_tools() -> None:
+    from litellm.proxy.auth.native_mcp_policy import native_mcp_deployment_validator
+
+    validate: Final = native_mcp_deployment_validator(UserAPIKeyAuth(metadata={"native_mcp_policy": {}}))
+    assert validate is not None
+    with pytest.raises(ProxyException, match="no grant"):
+        validate(request())
+    assert native_mcp_deployment_validator(UserAPIKeyAuth()) is None

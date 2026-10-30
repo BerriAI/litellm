@@ -2574,6 +2574,9 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         self.data["litellm_logging_obj"] = logging_obj
+        from litellm.proxy.auth.native_mcp_policy import native_mcp_deployment_validator
+
+        logging_obj.deployment_request_validator = native_mcp_deployment_validator(user_api_key_dict)
 
         # Merge model-level guardrails before pre_call_hook so DB/UI-configured
         # guardrails actually execute on pre_call. Without this, guardrails set

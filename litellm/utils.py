@@ -2325,6 +2325,12 @@ def client(original_function):
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
 
+            bind_validated_request: Final = (
+                logging_obj.deployment_request_validator(kwargs)
+                if logging_obj.deployment_request_validator is not None
+                else None
+            )
+
             # Sync logging_obj.stream after deployment hooks (they may convert it).
             _hook_stream: Final = kwargs.get("stream")
             if (
@@ -2372,7 +2378,11 @@ def client(original_function):
                     if _is_converted_stream_result(_caching_handler_response.cached_result):
                         logging_obj.stream = True
                         logging_obj.model_call_details["stream"] = True
-                    return _caching_handler_response.cached_result
+                    return (
+                        bind_validated_request(_caching_handler_response.cached_result)
+                        if bind_validated_request is not None
+                        else _caching_handler_response.cached_result
+                    )
 
                 elif _caching_handler_response.embedding_all_elements_cache_hit is True:
                     return _caching_handler_response.final_embedding_cached_response
@@ -2422,6 +2432,8 @@ def client(original_function):
             )
             try:
                 result = await original_function(*args, **call_kwargs)
+                if bind_validated_request is not None:
+                    result = bind_validated_request(result)
             except Exception as deployment_error:
                 _deployment_call_end_time = datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
                 try:
