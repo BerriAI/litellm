@@ -144,10 +144,25 @@ ENCRYPTED_REASONING_RESPONSE: Final[Mapping[str, JsonValue]] = MappingProxyType(
     }
 )
 
+REASONING_AND_COMPACTION_RESPONSE: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        **TEXT_RESPONSE,
+        "output": [
+            {"id": "rs_0a1b2c3d4e5f", "type": "reasoning", "summary": []},
+            {"id": "cmp_0a1b2c3d4e5f", "type": "compaction", "encrypted_content": ""},
+            dict(TEXT_MESSAGE),
+        ],
+    }
+)
+
+ENCODED_REASONING_ID: Final = ResponsesAPIRequestUtils._build_encrypted_item_id(  # pyright: ignore[reportPrivateUsage]  # legacy item ID format shared by Python and Rust
+    "deploy-1", "rs_0a1b2c3d4e5f"
+)
+
 AFFINITY_REPLAY_INPUT: Final[list[JsonValue]] = [
     {
         "type": "reasoning",
-        "id": ResponsesAPIRequestUtils._build_encrypted_item_id("deploy-1", "rs_0a1b2c3d4e5f"),  # pyright: ignore[reportPrivateUsage]  # the encoder Python applies on the way out
+        "id": ENCODED_REASONING_ID,
         "summary": [],
         "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
             "gAAAAB0a1b2c3d", "deploy-1"
@@ -231,6 +246,34 @@ CASES: Final = (
     Case(
         "affinity_encoded_reasoning_replay",
         {"input": AFFINITY_REPLAY_INPUT, "litellm_metadata": dict(DEPLOYMENT_METADATA)},
+        upstream=ENCRYPTED_REASONING_RESPONSE,
+    ),
+    Case(
+        "affinity_without_encrypted_content",
+        {"input": "hi", "litellm_metadata": dict(DEPLOYMENT_METADATA)},
+        upstream=REASONING_AND_COMPACTION_RESPONSE,
+    ),
+    Case(
+        "affinity_id_only_replay",
+        {
+            "input": [{"type": "item_reference", "id": ENCODED_REASONING_ID}],
+            "litellm_metadata": dict(DEPLOYMENT_METADATA),
+        },
+        upstream=ENCRYPTED_REASONING_RESPONSE,
+    ),
+    Case(
+        "function_tool_with_affinity",
+        {"input": "Weather in Paris?", "tools": [dict(WEATHER_TOOL)], "litellm_metadata": dict(DEPLOYMENT_METADATA)},
+        upstream=FUNCTION_CALL_RESPONSE,
+    ),
+    Case(
+        "affinity_disabled",
+        {"input": "hi", "litellm_metadata": {**DEPLOYMENT_METADATA, "encrypted_content_affinity_enabled": False}},
+        upstream=ENCRYPTED_REASONING_RESPONSE,
+    ),
+    Case(
+        "affinity_without_model_id",
+        {"input": "hi", "litellm_metadata": {"encrypted_content_affinity_enabled": True}},
         upstream=ENCRYPTED_REASONING_RESPONSE,
     ),
     Case(

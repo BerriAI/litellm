@@ -47,6 +47,9 @@ from litellm.types.utils import (
     text_tokens_without_nested_reasoning,
 )
 
+_ResponseEventT = TypeVar("_ResponseEventT")
+
+
 _PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
     TypeAdapter[ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None]
 ] = TypeAdapter(ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None)
@@ -570,62 +573,101 @@ class ResponsesAPIRequestUtils:
     _unwrap_encrypted_content_with_model_id = unwrap_encrypted_content_with_model_id
 
     @staticmethod
+    def _response_field(value: object, name: str) -> object:
+        fields: Final = as_str_mapping(value)
+        return fields.get(name) if fields is not None else attribute_or_none(value, name)
+
+    @staticmethod
+    def _with_response_fields(value: _ResponseEventT, fields: Mapping[str, object]) -> _ResponseEventT:
+        if not fields:
+            return value
+        if isinstance(value, BaseModel):
+            return cast(_ResponseEventT, value.model_copy(update=fields))  # cast-ok: same model class
+        if _is_object_dict(value):
+            return cast(_ResponseEventT, {**value, **fields})  # cast-ok: validated wire dict keeps its event shape
+        return value
+
+    @staticmethod
+    def _affinity_item_id(item_id: str, model_id: str) -> str:
+        if ResponsesAPIRequestUtils.decode_encrypted_item_id(item_id) is not None:
+            return item_id
+        return ResponsesAPIRequestUtils._build_encrypted_item_id(model_id, item_id)
+
+    @staticmethod
+    def _affinity_item_fields(item: object, model_id: str) -> Mapping[str, object]:
+        item_type: Final = ResponsesAPIRequestUtils._response_field(item, "type")
+        item_id: Final = ResponsesAPIRequestUtils._response_field(item, "id")
+        content: Final = ResponsesAPIRequestUtils._response_field(item, "encrypted_content")
+        has_content: Final = isinstance(content, str) and bool(content)
+        id_fields: Final = (
+            {"id": ResponsesAPIRequestUtils._affinity_item_id(item_id, model_id)}
+            if isinstance(item_id, str) and item_id and (item_type in ("reasoning", "compaction") or has_content)
+            else {}
+        )
+        content_fields: Final = (
+            {"encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(content, model_id)}
+            if isinstance(content, str)
+            and content
+            and ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(content)[1] == content
+            else {}
+        )
+        return {**id_fields, **content_fields}
+
+    @staticmethod
+    def update_response_stream_event_with_affinity(
+        event: _ResponseEventT,
+        litellm_metadata: Mapping[str, object] | None,
+    ) -> _ResponseEventT:
+        if not litellm_metadata or not litellm_metadata.get("encrypted_content_affinity_enabled"):
+            return event
+        model_info: Final = as_str_mapping(litellm_metadata.get("model_info"))
+        model_id: Final = model_info.get("id") if model_info is not None else None
+        if not isinstance(model_id, str) or not model_id:
+            return event
+        item: Final = ResponsesAPIRequestUtils._response_field(event, "item")
+        item_fields: Final = ResponsesAPIRequestUtils._affinity_item_fields(item, model_id)
+        output_fields: Final = (
+            {"item": ResponsesAPIRequestUtils._with_response_fields(item, item_fields)} if item_fields else {}
+        )
+        event_type: Final = ResponsesAPIRequestUtils._response_field(event, "type")
+        part: Final = ResponsesAPIRequestUtils._response_field(event, "part")
+        is_reasoning_reference: Final = isinstance(event_type, str) and (
+            event_type.startswith(("response.reasoning_", "response.compaction."))
+            or (
+                event_type in ("response.content_part.added", "response.content_part.done")
+                and ResponsesAPIRequestUtils._response_field(part, "type") == "reasoning_text"
+            )
+        )
+        item_id: Final = ResponsesAPIRequestUtils._response_field(event, "item_id")
+        reference_fields: Final = (
+            {"item_id": ResponsesAPIRequestUtils._affinity_item_id(item_id, model_id)}
+            if is_reasoning_reference and isinstance(item_id, str) and item_id
+            else {}
+        )
+        return ResponsesAPIRequestUtils._with_response_fields(event, {**output_fields, **reference_fields})
+
+    @staticmethod
     def _update_encrypted_content_item_ids_in_response(
         response: Union["ResponsesAPIResponse", dict[str, object]],
         model_id: str | None,
     ) -> Union["ResponsesAPIResponse", dict[str, object]]:
-        """Rewrite item IDs for output items that contain ``encrypted_content``.
-
-        Encodes ``model_id`` into the item ID so that follow-up requests can be
-        routed back to the originating deployment without any cache lookup.
-
-        For items without an ID (e.g., from Codex), encodes model_id directly
-        into the encrypted_content itself.
-        """
+        """Encode reasoning and compaction IDs before encrypted content is available."""
         if not model_id:
             return response
-
-        output: object = None
-        if isinstance(response, dict):
-            output = response.get("output")
-        else:
-            output = getattr(response, "output", None)
-
-        if not isinstance(output, list):
+        output: Final = ResponsesAPIRequestUtils._response_field(response, "output")
+        if not _is_object_sequence(output):
             return response
-
         for item in output:
-            if isinstance(item, dict):
-                item_id = item.get("id")
-                encrypted_content = item.get("encrypted_content")
-
-                if encrypted_content and isinstance(encrypted_content, str):
-                    # Always wrap encrypted_content with model_id for redundancy
-                    item["encrypted_content"] = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
-                        encrypted_content, model_id
-                    )
-                    # Also encode the ID if present
-                    if item_id and isinstance(item_id, str):
-                        item["id"] = ResponsesAPIRequestUtils._build_encrypted_item_id(model_id, item_id)
+            if not (fields := ResponsesAPIRequestUtils._affinity_item_fields(item, model_id)):
+                continue
+            if _is_object_dict(item):
+                item.update(fields)
             else:
-                item_id = getattr(item, "id", None)
-                encrypted_content = getattr(item, "encrypted_content", None)
-
-                if encrypted_content and isinstance(encrypted_content, str):
-                    # Always wrap encrypted_content with model_id for redundancy
+                for name, value in fields.items():
                     try:
-                        item.encrypted_content = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
-                            encrypted_content, model_id
-                        )
+                        setattr(item, name, value)
                     except AttributeError:
                         pass
-                    # Also encode the ID if present
-                    if item_id and isinstance(item_id, str):
-                        try:
-                            item.id = ResponsesAPIRequestUtils._build_encrypted_item_id(model_id, item_id)
-                        except AttributeError:
-                            pass
-
         return response
 
     @staticmethod

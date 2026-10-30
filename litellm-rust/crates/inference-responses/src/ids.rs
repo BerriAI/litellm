@@ -11,7 +11,7 @@
 //! | Id | Applied to | Decoded plaintext |
 //! |---|---|---|
 //! | `resp_<b64>` | the response `id` | `litellm:custom_llm_provider:{provider};model_id:{model_id};response_id:{id}` |
-//! | `encitem_<b64>` | the `id` of an output item with `encrypted_content` | `litellm:model_id:{model_id};item_id:{id}` |
+//! | `encitem_<b64>` | reasoning, compaction and other output items with `encrypted_content` | `litellm:model_id:{model_id};item_id:{id}` |
 //! | `litellm_enc:<b64>;{content}` | that item's `encrypted_content` | `<b64>` is `model_id:{model_id}`, and the original content follows the `;` unencoded |
 //! | `cntr_<b64>` | `container_id` on output items, `code_interpreter_call`, and message annotations | `litellm:custom_llm_provider:{provider};model_id:{model_id};container_id:{id}` |
 //!
@@ -25,7 +25,8 @@
 //! - `encitem_` and `litellm_enc:` carry encrypted-content affinity: encrypted reasoning only
 //!   decrypts under the API key that produced it, so the router pins replays to that deployment.
 //!   They are stamped only when the router sets `encrypted_content_affinity_enabled` and a
-//!   deployment `model_id` is known (see [`IdScope`]). Items without an `id`, such as Codex's,
+//!   deployment `model_id` is known (see [`IdScope`]). Reasoning and compaction ids are stamped
+//!   even before content arrives, so streaming ids stay stable. Items without an `id`, such as Codex's,
 //!   carry the deployment in the wrapped content alone.
 //! - `cntr_` lets container calls find the provider and deployment that own a container. A
 //!   container id that already names a provider is left as it is.
@@ -211,15 +212,26 @@ pub fn decode_container_id(id: &str) -> DecodedContainerId {
 }
 
 fn encode_encrypted_item(item: &mut Map<String, Value>, model_id: &str) {
-    let Some(Value::String(content)) = item.get_mut("encrypted_content") else {
-        return;
-    };
-    if content.is_empty() {
+    let has_content = item
+        .get("encrypted_content")
+        .and_then(Value::as_str)
+        .is_some_and(|content| !content.is_empty());
+    if !matches!(
+        item.get("type").and_then(Value::as_str),
+        Some("reasoning" | "compaction")
+    ) && !has_content
+    {
         return;
     }
-    *content = wrap_encrypted_content(content, model_id);
+    if let Some(Value::String(content)) = item.get_mut("encrypted_content")
+        && !content.is_empty()
+        && unwrap_encrypted_content(content).is_none()
+    {
+        *content = wrap_encrypted_content(content, model_id);
+    }
     if let Some(Value::String(id)) = item.get_mut("id")
         && !id.is_empty()
+        && decode_encrypted_item_id(id).is_none()
     {
         *id = encrypted_item_id(model_id, id);
     }
@@ -421,13 +433,14 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn encodes_response_items_under_affinity() {
         let mut encoded = response(
             "resp_1",
             json!([
                 {"type": "reasoning", "id": "rs_0a1b", "encrypted_content": "gAAAA", "summary": []},
                 {"type": "reasoning", "encrypted_content": "gBBBB", "summary": []},
+                {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "weather", "arguments": "{}"},
                 {"type": "code_interpreter_call", "id": "ci_1", "container_id": "cntr_abc"},
                 {"type": "message", "id": "msg_1", "content": [{"type": "output_text", "text": "", "annotations": [
                     {"type": "container_file_citation", "container_id": "cntr_abc"}
@@ -448,6 +461,7 @@ mod tests {
                     "summary": []
                 },
                 {"type": "reasoning", "encrypted_content": "litellm_enc:bW9kZWxfaWQ6ZGVwbG95LTE=;gBBBB", "summary": []},
+                {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "weather", "arguments": "{}"},
                 {"type": "code_interpreter_call", "id": "ci_1", "container_id": container},
                 {"type": "message", "id": "msg_1", "content": [{"type": "output_text", "text": "", "annotations": [
                     {"type": "container_file_citation", "container_id": container}
@@ -457,13 +471,60 @@ mod tests {
     }
 
     #[rstest]
+    #[case::reasoning_without_content(json!({"type": "reasoning", "id": "item_1"}), json!({"type": "reasoning"}))]
+    #[case::reasoning_empty_content(json!({"type": "reasoning", "id": "item_1", "encrypted_content": ""}), json!({"type": "reasoning", "encrypted_content": ""}))]
+    #[case::compaction_without_content(json!({"type": "compaction", "id": "item_1"}), json!({"type": "compaction"}))]
+    #[case::compaction_empty_content(json!({"type": "compaction", "id": "item_1", "encrypted_content": ""}), json!({"type": "compaction", "encrypted_content": ""}))]
+    fn encodes_item_ids_before_encrypted_content_arrives(
+        #[case] item: Value,
+        #[case] expected_fields: Value,
+    ) {
+        let mut encoded = response("resp_1", json!([item]));
+        encode_response(&mut encoded, &scope(Some("openai"), Some("deploy-1"), true));
+        let mut expected = expected_fields;
+        expected["id"] = json!(encrypted_item_id("deploy-1", "item_1"));
+        assert_eq!(Value::Array(encoded.output), json!([expected]));
+    }
+
+    #[rstest]
     #[case::affinity_disabled(scope(Some("openai"), Some("deploy-1"), false))]
     #[case::no_model_id(scope(Some("openai"), None, true))]
+    #[case::empty_model_id(scope(Some("openai"), Some(""), true))]
     fn leaves_encrypted_items_without_affinity(#[case] scope: IdScope) {
-        let output = json!([{"type": "reasoning", "id": "rs_1", "encrypted_content": "gAAAA", "summary": []}]);
+        let output = json!([
+            {"type": "reasoning", "id": "rs_1", "encrypted_content": "gAAAA", "summary": []},
+            {"type": "reasoning", "id": "rs_2", "summary": []},
+            {"type": "compaction", "id": "cmp_1", "encrypted_content": ""}
+        ]);
         let mut encoded = response("resp_1", output.clone());
         encode_response(&mut encoded, &scope);
         assert_eq!(Value::Array(encoded.output), output);
+    }
+
+    #[rstest]
+    #[case::encrypted_reasoning(json!({"type": "reasoning", "id": "rs_1", "encrypted_content": "gAAAA"}))]
+    #[case::plaintext_reasoning(json!({"type": "reasoning", "id": "rs_1"}))]
+    #[case::compaction(json!({"type": "compaction", "id": "cmp_1", "encrypted_content": ""}))]
+    #[case::other_encrypted_item(json!({"type": "custom", "id": "custom_1", "encrypted_content": "gAAAA"}))]
+    fn repeated_item_normalization_preserves_replay(#[case] item: Value) {
+        let scope = scope(Some("openai"), Some("deploy-1"), true);
+        let original = json!([item]);
+        let mut first = response("resp_1", original.clone());
+        encode_response(&mut first, &scope);
+        assert_eq!(
+            decode_encrypted_item_id(first.output[0]["id"].as_str().unwrap()),
+            Some((
+                "deploy-1".to_owned(),
+                original[0]["id"].as_str().unwrap().to_owned()
+            ))
+        );
+        let expected = Value::Array(first.output);
+        let mut repeated = response("resp_2", expected.clone());
+        encode_response(&mut repeated, &scope);
+        assert_eq!(Value::Array(repeated.output.clone()), expected);
+        let mut restored = Value::Array(repeated.output);
+        restore_input(&mut restored);
+        assert_eq!(restored, original);
     }
 
     #[test]
@@ -476,7 +537,7 @@ mod tests {
         assert_eq!((encoded.id, Value::Array(encoded.output)), (id, output));
     }
 
-    #[test]
+    #[rstest]
     fn restores_encrypted_items_in_input() {
         let mut input = json!([
             {
@@ -485,6 +546,7 @@ mod tests {
                 "encrypted_content": "litellm_enc:bW9kZWxfaWQ6ZGVwbG95LTE=;gAAAA",
                 "summary": []
             },
+            {"type": "item_reference", "id": "encitem_bGl0ZWxsbTptb2RlbF9pZDpkZXBsb3ktMTtpdGVtX2lkOnJzXzBhMWI="},
             {"role": "user", "content": "hi"}
         ]);
         restore_input(&mut input);
@@ -492,6 +554,7 @@ mod tests {
             input,
             json!([
                 {"type": "reasoning", "id": "rs_0a1b", "encrypted_content": "gAAAA", "summary": []},
+                {"type": "item_reference", "id": "rs_0a1b"},
                 {"role": "user", "content": "hi"}
             ])
         );

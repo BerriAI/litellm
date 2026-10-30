@@ -21,6 +21,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import Message, ModelResponse
 from tests.unit.proxy.conftest import httpx_transport
@@ -649,8 +650,10 @@ def test_responses_over_anthropic_return_the_compaction_block_and_send_it_back(
     assert _sent_assistant_content(route) == [_COMPACTION_BLOCK, {"type": "text", "text": "The."}]
 
 
+@pytest.mark.parametrize("affinity_enabled", [False, True])
 def test_streamed_responses_over_anthropic_emit_the_compaction_item_and_send_it_back(
     respx_mock: respx.MockRouter,
+    affinity_enabled: bool,
 ) -> None:
     route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
         side_effect=[
@@ -698,6 +701,7 @@ def test_streamed_responses_over_anthropic_emit_the_compaction_item_and_send_it_
             context_management=list(_COMPACT_AT_50K),
             stream=True,
             api_key="mock_api_key",
+            litellm_metadata={"encrypted_content_affinity_enabled": affinity_enabled, "model_info": {"id": "bridge"}},
         )
     )
     item_events: Final = tuple(
@@ -722,6 +726,9 @@ def test_streamed_responses_over_anthropic_emit_the_compaction_item_and_send_it_
         ("compaction", item_events[2].item.encrypted_content)
     ]
     assert completed.output[0].id == item_events[2].item.id
+    assert (ResponsesAPIRequestUtils.decode_encrypted_item_id(completed.output[0].id) is not None) == affinity_enabled
+    assert completed.output[1].id == item_events[1].item.id == item_events[3].item.id
+    assert ResponsesAPIRequestUtils.decode_encrypted_item_id(completed.output[1].id) is None
     assert _sent_assistant_content(route) == [_COMPACTION_BLOCK, {"type": "text", "text": "The."}]
 
 
@@ -770,7 +777,12 @@ def test_streamed_responses_over_anthropic_answer_after_a_failed_compaction(resp
 
 
 @pytest.mark.asyncio
-async def test_async_streamed_compaction_item_is_done_before_the_reasoning_that_follows_it() -> None:
+@pytest.mark.parametrize("affinity_enabled", [False, True])
+@pytest.mark.parametrize("stop_reason", ["end_turn", "max_tokens"])
+async def test_async_streamed_compaction_item_is_done_before_the_reasoning_that_follows_it(
+    affinity_enabled: bool,
+    stop_reason: str,
+) -> None:
     anthropic: Final = httpx.MockTransport(
         lambda _request: httpx.Response(
             200,
@@ -801,7 +813,7 @@ async def test_async_streamed_compaction_item_is_done_before_the_reasoning_that_
                 {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}},
                 {"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": "The."}},
                 {"type": "content_block_stop", "index": 2},
-                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4}},
+                {"type": "message_delta", "delta": {"stop_reason": stop_reason}, "usage": {"output_tokens": 4}},
                 {"type": "message_stop"},
             ),
         )
@@ -814,6 +826,7 @@ async def test_async_streamed_compaction_item_is_done_before_the_reasoning_that_
         stream=True,
         api_key="mock_api_key",
         client=AsyncHTTPHandler(transport=anthropic),
+        litellm_metadata={"encrypted_content_affinity_enabled": affinity_enabled, "model_info": {"id": "bridge"}},
     )
     events: Final = [event async for event in stream]
     done_items: Final = [
@@ -833,6 +846,37 @@ async def test_async_streamed_compaction_item_is_done_before_the_reasoning_that_
     assert done_items == [(0, "compaction"), (1, "reasoning"), (2, "message")]
     assert [item.type for item in events[-1].response.output] == ["compaction", "reasoning", "message"]
     assert sequence_numbers == sorted(set(sequence_numbers))
+
+    completed: Final = events[-1].response
+    assert completed.status == ("completed" if stop_reason == "end_turn" else "incomplete")
+    expected_ids: Final = {index: item.id for index, item in enumerate(completed.output)}
+    assert {
+        event.output_index: event.item.id
+        for event in events
+        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    } == expected_ids
+    assert {
+        event.output_index: event.item.id for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+    } == expected_ids
+    assert all(
+        event.item_id == expected_ids[event.output_index]
+        for event in events
+        if getattr(event, "item_id", None) is not None
+    )
+    assert {event.item_id for event in events if event.type.startswith("response.reasoning_")} == {expected_ids[1]}
+    assert tuple(
+        ResponsesAPIRequestUtils.decode_encrypted_item_id(item.id) is not None for item in completed.output
+    ) == (
+        affinity_enabled,
+        affinity_enabled,
+        False,
+    )
+    compaction_done: Final = next(
+        event.item
+        for event in events
+        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and event.item.type == "compaction"
+    )
+    assert compaction_done.encrypted_content == completed.output[0].encrypted_content
 
 
 def _compaction_stream_events(*summaries: str) -> tuple[Mapping[str, object], ...]:
