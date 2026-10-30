@@ -74,7 +74,7 @@ def _assert_sync_batch_used_blocking_client(dual_cache: DualCache, mock_redis: M
     assert result == ["redis_value"]
     mock_redis.batch_get_cache.assert_called_once_with(key_list=["lit6729_key"], parent_otel_span=None)
     mock_redis.async_batch_get_cache.assert_not_called()
-    mock_redis.init_async_client.assert_not_called()
+    mock_redis._init_async_client.assert_not_called()
     assert dual_cache.in_memory_cache.get_cache("lit6729_key") == "redis_value"
 
 

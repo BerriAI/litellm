@@ -1236,7 +1236,7 @@ def test_caching_with_reasoning_content(monkeypatch: pytest.MonkeyPatch) -> None
 def test_custom_redis_cache_params(redis_client_without_network: None) -> None:
     cache: Final = Cache(type=LiteLLMCacheType.REDIS, host="127.0.0.1", port="6379", db=4)
 
-    assert cache.cache.redis_client.connection_pool.connection_kwargs["db"] == 4
+    assert cache.cache._redis_client.connection_pool.connection_kwargs["db"] == 4
 
 
 def test_redis_cache_ignores_a_leftover_disk_cache_dir(
@@ -1530,7 +1530,7 @@ def test_redis_caching_llm_caching_ttl(monkeypatch: pytest.MonkeyPatch, redis_cl
     monkeypatch.setattr(litellm, "default_redis_ttl", 120)
     cache: Final = RedisCache(host="127.0.0.1", port="6379")
     set_cache: Final = MagicMock()
-    monkeypatch.setattr(cache.redis_client, "set", set_cache)
+    monkeypatch.setattr(cache._redis_client, "set", set_cache)
 
     cache.set_cache(key="cache-key", value="cache-value")
 

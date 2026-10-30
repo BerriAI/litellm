@@ -38,7 +38,7 @@ async def test_router_uses_correct_redis_db():
     try:
         if router.cache.redis_cache:
             # Check connection kwargs or internal client db
-            cache_client = router.cache.redis_cache.redis_client
+            cache_client = router.cache.redis_cache._redis_client
             # Redis client stores connection args in connection_pool.connection_kwargs
             conn_kwargs = cache_client.connection_pool.connection_kwargs
 

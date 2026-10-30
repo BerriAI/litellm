@@ -2575,7 +2575,7 @@ async def test_refresh_cached_team_flushes_redis_set_before_broadcast(monkeypatc
             )
             self.default_ttl: Final[int | None] = None
 
-        def init_async_client(
+        def _init_async_client(
             self,
         ) -> RecordingRedisClient:  # pyright: ignore[reportIncompatibleMethodOverride]  # in-memory Redis client
             return self.client
@@ -10265,8 +10265,11 @@ class _BroadcastRecordingRedis:
         self.broadcast_keys: list[str] = []
         self._round_trip_seconds = round_trip_seconds
 
-    def init_pubsub_client(self) -> "_BroadcastRecordingRedis":
+    def _init_pubsub_client(self) -> "_BroadcastRecordingRedis":
         return self
+
+    def _pubsub_client(self) -> "_BroadcastRecordingRedis":
+        return self._init_pubsub_client()
 
     async def send(self, messages: Sequence[str]) -> None:
         if self._round_trip_seconds:

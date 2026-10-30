@@ -582,8 +582,11 @@ class _PubSubRedisCache:
     def __init__(self, client: "_SlowPublishRedisClient | _WedgedPublishRedisClient") -> None:
         self._client = client
 
-    def init_pubsub_client(self) -> "_SlowPublishRedisClient | _WedgedPublishRedisClient":
+    def _init_pubsub_client(self) -> "_SlowPublishRedisClient | _WedgedPublishRedisClient":
         return self._client
+
+    def _pubsub_client(self) -> "_SlowPublishRedisClient | _WedgedPublishRedisClient":
+        return self._init_pubsub_client()
 
 
 async def _until_reached_or_done(signal: asyncio.Event, sync: "asyncio.Task[object]") -> None:

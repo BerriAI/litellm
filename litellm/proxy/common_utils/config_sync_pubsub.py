@@ -99,7 +99,7 @@ def config_sync_channel(redis_cache: "RedisCache") -> str:
 def pubsub_capable_client(redis_cache: "RedisCache") -> _ConfigSyncPubSubClient:
     return cast(  # cast-ok: protocol view of the pub/sub-capable async redis client
         _ConfigSyncPubSubClient,
-        redis_cache.init_pubsub_client(),  # pyright: ignore[reportUnknownMemberType]  # redis generics
+        redis_cache._pubsub_client(),  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # raw redis-py client, no typed alternative yet
     )
 
 

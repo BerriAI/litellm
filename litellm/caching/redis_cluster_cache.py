@@ -130,13 +130,13 @@ class RedisClusterCache(RedisCache):
         """
         Overrides `_run_redis_mget_operation` in redis_cache.py
         """
-        return self.redis_client.mget_nonatomic(keys=keys)
+        return self._redis_client.mget_nonatomic(keys=keys)
 
     async def _async_run_redis_mget_operation(self, keys: list[str]) -> Sequence[bytes | str | None]:
         """
         Overrides `_async_run_redis_mget_operation` in redis_cache.py
         """
-        async_redis_cluster_client: Final = self.init_async_client()
+        async_redis_cluster_client: Final = self._async_client()
         return await async_redis_cluster_client.mget_nonatomic(keys=keys)
 
     async def test_connection(self) -> dict:

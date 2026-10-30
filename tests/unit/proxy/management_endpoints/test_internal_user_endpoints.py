@@ -2539,8 +2539,11 @@ async def test_user_update_reaches_cached_user_on_every_worker(
     class _FakeRedisCache:
         namespace: str | None = None
 
-        def init_pubsub_client(self) -> _RecordingRedisClient:
+        def _init_pubsub_client(self) -> _RecordingRedisClient:
             return _RecordingRedisClient()
+
+        def _pubsub_client(self) -> _RecordingRedisClient:
+            return self._init_pubsub_client()
 
     class _UserTableMocks:
         def __init__(

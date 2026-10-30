@@ -15678,8 +15678,11 @@ async def test_auth_cache_invalidation_subscriber_evicts_byok_credentials_cached
         def __init__(self, client: object) -> None:
             self._client = client
 
-        def init_pubsub_client(self) -> object:
+        def _init_pubsub_client(self) -> object:
             return self._client
+
+        def _pubsub_client(self) -> object:
+            return self._init_pubsub_client()
 
     byok_credential_cache.flush_cache()
     cache_byok_credential("mallory", "srv-byok", "sk-revoked-elsewhere")

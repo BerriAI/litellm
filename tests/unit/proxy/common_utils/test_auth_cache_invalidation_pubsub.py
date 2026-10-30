@@ -141,7 +141,7 @@ class _FakeRedisCache:
         self._client = client
         self.namespace = namespace
 
-    def init_pubsub_client(self) -> object:
+    def _pubsub_client(self) -> object:
         return self._client
 
 

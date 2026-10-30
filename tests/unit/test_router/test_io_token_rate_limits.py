@@ -1734,7 +1734,7 @@ class _RedisCacheOnFakeServer(RedisCache):
         super().__init__(host="io-token-turn-redis", connection_pool=FakeRedis(server=server).connection_pool)
         self._fake_async_client: Final = FakeAsyncRedis(server=server)
 
-    def init_async_client(self) -> FakeAsyncRedis:
+    def _init_async_client(self) -> FakeAsyncRedis:
         return self._fake_async_client
 
 
