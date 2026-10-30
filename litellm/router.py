@@ -6231,9 +6231,10 @@ class Router(DeprecatedRouterMembers):
             self._update_kwargs_with_default_litellm_params(
                 kwargs=kwargs, deployment_params=_LITELLM_PARAMS_ADAPTER.validate_python(data)
             )
+            provider_kwargs: Final = {key: value for key, value in kwargs.items() if key != "model"}
 
             return litellm.text_completion(
-                **{**data, "prompt": prompt, "caching": self._core_cache_responses, **kwargs}
+                **{**data, "prompt": prompt, "caching": self._core_cache_responses, **provider_kwargs}
             )
         except Exception as e:
             raise e

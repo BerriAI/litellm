@@ -334,6 +334,38 @@ def test_text_completion_sends_the_deployment_value_over_a_conflicting_router_de
     assert provider_call.call_args.kwargs["vertex_location"] == sent_location
 
 
+def test_text_completion_calls_the_provider_with_the_deployment_model_not_the_group_name() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "text-group",
+                "litellm_params": {
+                    "model": "text-completion-openai/unit-text-model",
+                    "api_base": "https://sync-text-group.invalid/v1",
+                    "api_key": "unit-provider-key",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+    with respx.mock(assert_all_called=False) as upstream:
+        provider: Final = upstream.post("https://sync-text-group.invalid/v1/completions").respond(
+            200,
+            json={
+                "id": "cmpl-unit",
+                "object": "text_completion",
+                "created": 1,
+                "model": "unit-text-model",
+                "choices": [{"text": "provider called", "index": 0, "finish_reason": "stop", "logprobs": None}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+        response: Final = router.text_completion(model="text-group", prompt="Say hi")
+
+    assert response.choices[0].text == "provider called"
+    assert json.loads(provider.calls.last.request.content)["model"] == "unit-text-model"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("deployment_location", "sent_location"),
