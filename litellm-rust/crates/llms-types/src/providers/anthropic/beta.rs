@@ -317,37 +317,6 @@ impl AnthropicBeta {
                 BetaProvider::VertexAi,
                 BetaProvider::Databricks,
             ],
-            Self::AgentMemory20260722
-            | Self::Bash20241022
-            | Self::Bash20250124
-            | Self::DevFullThinking20250514
-            | Self::McpServers20251204
-            | Self::StructuredOutput20240301
-            | Self::TextEditor20241022
-            | Self::TextEditor20250124 => BetaProvider::VARIANTS,
-            Self::AnalyticsUsageCost20260824
-            | Self::CacheDiagnosis20260407
-            | Self::CodeExecution20250522
-            | Self::CodeExecution20250825
-            | Self::ComputerUse20241022
-            | Self::FastMode20260201
-            | Self::FilesApi20250414
-            | Self::McpClient20250404
-            | Self::McpClient20251120
-            | Self::McpClient20260915
-            | Self::MessageBatches20240924
-            | Self::MessageThreads20260812
-            | Self::Output300k20260324
-            | Self::ServerSideFallback20260701
-            | Self::Skills20251002
-            | Self::WebFetch20250910
-            | Self::Webhooks20261007 => &[
-                BetaProvider::BedrockConverse,
-                BetaProvider::Bedrock,
-                BetaProvider::BedrockMantle,
-                BetaProvider::VertexAi,
-                BetaProvider::Databricks,
-            ],
             Self::AfkMode20260131
             | Self::CePlugins20260901
             | Self::CeUserManagement20260713
@@ -382,6 +351,37 @@ impl AnthropicBeta {
                 BetaProvider::BedrockMantle,
                 BetaProvider::Databricks,
             ],
+            Self::AgentMemory20260722
+            | Self::Bash20241022
+            | Self::Bash20250124
+            | Self::DevFullThinking20250514
+            | Self::McpServers20251204
+            | Self::StructuredOutput20240301
+            | Self::TextEditor20241022
+            | Self::TextEditor20250124 => BetaProvider::VARIANTS,
+            Self::AnalyticsUsageCost20260824
+            | Self::CacheDiagnosis20260407
+            | Self::CodeExecution20250522
+            | Self::CodeExecution20250825
+            | Self::ComputerUse20241022
+            | Self::FastMode20260201
+            | Self::FilesApi20250414
+            | Self::McpClient20250404
+            | Self::McpClient20251120
+            | Self::McpClient20260915
+            | Self::MessageBatches20240924
+            | Self::MessageThreads20260812
+            | Self::Output300k20260324
+            | Self::ServerSideFallback20260701
+            | Self::Skills20251002
+            | Self::WebFetch20250910
+            | Self::Webhooks20261007 => &[
+                BetaProvider::BedrockConverse,
+                BetaProvider::Bedrock,
+                BetaProvider::BedrockMantle,
+                BetaProvider::VertexAi,
+                BetaProvider::Databricks,
+            ],
             Self::ClaudeCode20250219
             | Self::PerTurnControl20260701
             | Self::ToolExamples20251029 => &[
@@ -396,7 +396,8 @@ impl AnthropicBeta {
             Self::Context1m20250807
             | Self::Effort20251124
             | Self::FineGrainedToolStreaming20250514
-            | Self::ThinkingBindingControls20260801 => &[],
+            | Self::ThinkingBindingControls20260801
+            | Self::ThinkingDisplayUpdates20260818 => &[],
             Self::InterleavedThinking20250514
             | Self::Output128k20250219
             | Self::TokenEfficientTools20250219
@@ -408,7 +409,6 @@ impl AnthropicBeta {
                 BetaProvider::Databricks,
             ],
             Self::StructuredOutputs20251113 => &[BetaProvider::Bedrock],
-            Self::ThinkingDisplayUpdates20260818 => &[BetaProvider::Databricks],
             Self::Other(_) => BetaProvider::VARIANTS,
         }
     }
@@ -640,7 +640,7 @@ mod tests {
         let config = beta_headers_config();
         let config_columns: Vec<String> = config
             .keys()
-            .filter(|column| column.as_str() != "description")
+            .filter(|column| column.as_str() != "description" && !column.ends_with("_header_only"))
             .cloned()
             .collect();
         let beta_provider_columns: Vec<String> = BetaProvider::VARIANTS
@@ -659,12 +659,16 @@ mod tests {
         let config = beta_headers_config();
         for provider in BetaProvider::VARIANTS {
             for beta in &AnthropicBeta::KNOWN {
-                let expected = config
-                    .get(provider.as_ref())
-                    .and_then(serde_json::Value::as_object)
-                    .and_then(|column| column.get(beta.as_str()))
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_string);
+                let cell = |column: &str| {
+                    config
+                        .get(column)
+                        .and_then(serde_json::Value::as_object)
+                        .and_then(|values| values.get(beta.as_str()))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                };
+                let expected =
+                    cell(&format!("{provider}_header_only")).or_else(|| cell(provider.as_ref()));
                 let actual = beta.on(*provider).map(|name| name.to_string());
                 assert_eq!(actual, expected, "provider {provider}, beta {beta}");
                 if matches!(beta, AnthropicBeta::AdvancedToolUse20251120)

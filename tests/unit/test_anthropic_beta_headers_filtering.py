@@ -58,21 +58,24 @@ class TestAnthropicBetaHeadersFiltering:
         """Get all beta headers from the anthropic provider config."""
         return list(self.config.get("anthropic", {}).keys())
 
+    def get_header_column(self, provider: str) -> Dict[str, str | None]:
+        return {**self.config.get(provider, {}), **self.config.get(f"{provider}_header_only", {})}
+
     def get_supported_headers(self, provider: str) -> List[str]:
         """Get headers with non-null values for a provider."""
-        provider_config = self.config.get(provider, {})
+        provider_config = self.get_header_column(provider)
         return [
             header for header, value in provider_config.items() if value is not None
         ]
 
     def get_unsupported_headers(self, provider: str) -> List[str]:
         """Get headers with null values for a provider."""
-        provider_config = self.config.get(provider, {})
+        provider_config = self.get_header_column(provider)
         return [header for header, value in provider_config.items() if value is None]
 
     def get_mapped_headers(self, provider: str) -> Dict[str, str]:
         """Get mapping of input headers to provider-specific headers."""
-        provider_config = self.config.get(provider, {})
+        provider_config = self.get_header_column(provider)
         return {
             header: value
             for header, value in provider_config.items()
@@ -94,6 +97,7 @@ class TestAnthropicBetaHeadersFiltering:
             beta_headers=all_headers, provider=provider
         )
         assert ("compact-2026-09-04" in filtered) is (provider in ("anthropic", "azure_ai", "vertex_ai"))
+        assert ("mid-conversation-tool-changes-2026-07-01" in filtered) is (provider != "bedrock_converse")
 
         for header in unsupported_headers:
             assert (
@@ -414,15 +418,57 @@ class TestAnthropicBetaHeadersFiltering:
                 test_case["expected"] in filtered
             ), f"Header '{test_case['input']}' should be mapped to '{test_case['expected']}' for {test_case['provider']}, but got: {filtered}"
 
-    def test_filter_and_transform_beta_headers_vertex_ai_keeps_compact(self):
-        """Vertex AI supports compact context edits, so the compact beta header
-        must be forwarded instead of stripped (it was previously mapped to null,
-        which broke compact_20260112 context edits over /v1/messages)."""
-        filtered = filter_and_transform_beta_headers(
-            beta_headers=["compact-2026-01-12"], provider="vertex_ai"
+    @pytest.mark.parametrize(
+        "beta",
+        [
+            "compact-2026-09-04",
+            "inline-tools-2026-09-15",
+            "prompt-caching-scope-2026-01-05",
+            "redact-thinking-2026-02-12",
+        ],
+    )
+    def test_vertex_ai_header_only_beta_is_forwarded_as_the_header_and_dropped_from_the_body(
+        self, beta: str
+    ) -> None:
+        headers, body = update_request_with_filtered_beta(
+            headers={"anthropic-beta": f"{beta},context-1m-2025-08-07"},
+            request_data={"anthropic_beta": [beta, "context-1m-2025-08-07"]},
+            provider="vertex_ai",
         )
 
-        assert filtered == ["compact-2026-01-12"]
+        assert set(headers["anthropic-beta"].split(",")) == {beta, "context-1m-2025-08-07"}
+        assert body["anthropic_beta"] == ["context-1m-2025-08-07"]
+
+    def test_header_only_betas_stay_out_of_the_provider_columns_older_proxies_read(self) -> None:
+        """Proxies released before header-only columns existed fetch this map from main, read only the
+        provider column, and copy its betas into the body field too, where Vertex answers 400. So a
+        header-only beta may sit in its provider column only if older proxies already forwarded it."""
+        header_only_columns: Final = {
+            column.removesuffix("_header_only"): betas
+            for column, betas in self.config.items()
+            if column.endswith("_header_only")
+        }
+        forwarded_by_older_proxies: Final = {
+            provider: {beta for beta in betas if self.config[provider].get(beta) is not None}
+            for provider, betas in header_only_columns.items()
+        }
+
+        assert "vertex_ai" in header_only_columns
+        assert {provider: betas for provider, betas in forwarded_by_older_proxies.items() if betas} == {
+            "vertex_ai": {"inline-tools-2026-09-15"}
+        }
+
+    def test_filter_and_transform_beta_headers_vertex_ai_keeps_compact(self):
+        """Vertex AI serves both compaction betas (threshold compaction behind compact-2026-01-12
+        and on-demand compaction behind compact-2026-09-04, Google Cloud: beta on
+        https://platform.claude.com/docs/en/build-with-claude/compaction-on-demand, read 2026-10-05),
+        so the Vertex filter forwards both instead of stripping them: a dropped header makes
+        Vertex answer 400 "compaction: Extra inputs are not permitted"."""
+        filtered = filter_and_transform_beta_headers(
+            beta_headers=["compact-2026-01-12", "compact-2026-09-04"], provider="vertex_ai"
+        )
+
+        assert filtered == ["compact-2026-01-12", "compact-2026-09-04"]
 
     @pytest.mark.parametrize("provider", ["bedrock_converse", "bedrock"])
     def test_fine_grained_tool_streaming_forwarded_for_bedrock(self, provider):
@@ -503,7 +549,7 @@ class TestAnthropicBetaHeadersFiltering:
     @pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "vertex_ai"])
     def test_claude_code_betas_reach_the_probed_platforms(self, provider: str) -> None:
         """Claude Code 2.1.299 sends these betas outside the anthropic SDK's list, and live probes on
-        2026-10-28 found Anthropic, Vertex, and Azure AI Foundry accept each of them."""
+        2026-10-28 found Anthropic, Vertex, and Azure AI Foundry accept each of them as the anthropic-beta header."""
         claude_code_betas: Final = frozenset(
             ("afk-mode-2026-01-31", "redact-thinking-2026-02-12", "structured-outputs-2025-12-15")
         )

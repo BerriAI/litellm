@@ -26,6 +26,8 @@ from pydantic import ValidationError
 
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 
 class TestResponsePollingHandler:
     """Test cases for ResponsePollingHandler"""
@@ -1010,7 +1012,7 @@ class TestPollingConditionChecks:
         )
 
         # Create mock router
-        mock_router = Mock()
+        mock_router = route_entry_points_to_stubs(Mock())
         mock_router.deployments_named.side_effect = {
             "gpt-5": ({"model_name": "gpt-5", "litellm_params": {"model": "openai/gpt-5"}},)
         }.get
@@ -1031,7 +1033,7 @@ class TestPollingConditionChecks:
             should_use_polling_for_request,
         )
 
-        mock_router = Mock()
+        mock_router = route_entry_points_to_stubs(Mock())
         mock_router.deployments_named.side_effect = {
             "claude-3": (
                 {
@@ -1182,7 +1184,7 @@ class TestPollingConditionChecks:
             should_use_polling_for_request,
         )
 
-        mock_router = Mock()
+        mock_router = route_entry_points_to_stubs(Mock())
         mock_router.deployments_named.side_effect = {
             "deep-research": (
                 {

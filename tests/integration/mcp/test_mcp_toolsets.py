@@ -538,7 +538,6 @@ def test_owned_proxy_loss_retains_exit_status_and_first_http_failure(gateway: Ga
 
 _PROBE: Final = "catalog-probe"
 _ECHO: Final = "catalog-echo"
-_UNLISTED: Final = ""
 _GUARDRAIL_CODE: Final = (
     "def apply_guardrail(inputs, request_data, input_type):\n"
     f'    if "{_PROBE}" not in list(inputs.get("texts") or []):\n'
@@ -574,9 +573,21 @@ def _echoed_description(outcome: Outcome) -> str:
     return found.group(1)
 
 
+def _fetched(described: str) -> re.Pattern[str]:
+    return re.compile(rf"{re.escape(described)} [0-9a-f]{{32}}")
+
+
+def _listed_description(listing: Outcome, described: str) -> str:
+    found: Final = _fetched(described).search(listing.raw)
+    assert found is not None, listing.raw
+    return found.group(0)
+
+
 def test_a_team_keys_toolset_route_listing_feeds_its_own_calls_but_not_a_team_mates(echo_rig: Gateway) -> None:
     described: Final = "Adds for the team " + uuid.uuid4().hex[:8]
-    tool: Final = ScriptedTool("add", lambda _: text_result("9"), description=described)
+    tool: Final = ScriptedTool(
+        "add", lambda _: text_result("9"), description=lambda _: f"{described} {uuid.uuid4().hex}"
+    )
     with scripted_peer(tool) as peer, echo_rig.scenario() as scenario:
         alias: Final = "lit6029echo" + uuid.uuid4().hex[:6]
         server_id: Final = register_mcp(scenario, peer, alias)
@@ -587,10 +598,14 @@ def test_a_team_keys_toolset_route_listing_feeds_its_own_calls_but_not_a_team_ma
         _assert_team_grants_only(echo_rig, team_id, key, granted_id)
         listed: Final = _toolset_rpc(echo_rig, _bearer(key), granted_name, "tools/list", {})
         assert listed.ok and listed.tools == (f"{alias}-add",), listed.raw
+        served: Final = _listed_description(listed, described)
         probe: Final[dict[str, object]] = {"name": f"{alias}-add", "arguments": {"probe": _PROBE}}
         own: Final = _echoed_description(_toolset_rpc(echo_rig, _bearer(key), granted_name, "tools/call", probe))
         mate: Final = _echoed_description(_toolset_rpc(echo_rig, _bearer(team_mate), granted_name, "tools/call", probe))
-        assert (own, mate) == (described, _UNLISTED), (
-            "the slot is keyed by the hashed key, so a team-mate that never listed is handed nothing"
+        assert own == served, (own, served)
+        assert _fetched(described).fullmatch(mate) and mate != served, (
+            "the slot is keyed by the hashed key, so a team-mate that never listed is not handed the key's listing",
+            mate,
+            served,
         )
         assert tool_calls(peer.drain()) == (), "a blocked probe reached the peer"

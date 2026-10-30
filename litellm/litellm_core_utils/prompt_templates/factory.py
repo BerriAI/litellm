@@ -912,9 +912,9 @@ def create_anthropic_image_param(
     image_url_input: str | dict,
     format: str | None = None,
     is_bedrock_invoke: bool = False,
-) -> AnthropicMessagesImageParam:
+) -> AnthropicMessagesImageParam | AnthropicMessagesDocumentParam:
     """
-    Create an AnthropicMessagesImageParam from an image URL input.
+    Create an Anthropic content block from an image URL input.
 
     Supports both URL references (for HTTP/HTTPS URLs) and base64 encoding.
     """
@@ -933,14 +933,7 @@ def create_anthropic_image_param(
         if is_bedrock_invoke or image_url.startswith("http://"):
             base64_url: Final = convert_url_to_base64(url=image_url)
             image_chunk = convert_to_anthropic_image_obj(openai_image_url=base64_url, format=format)
-            return AnthropicMessagesImageParam(
-                type="image",
-                source=AnthropicContentParamSource(
-                    type="base64",
-                    media_type=image_chunk["media_type"],
-                    data=image_chunk["data"],
-                ),
-            )
+            return _anthropic_content_element_factory(image_chunk)
         else:
             # HTTPS URL - pass directly for regular Anthropic
             return AnthropicMessagesImageParam(
@@ -953,14 +946,7 @@ def create_anthropic_image_param(
     else:
         # Convert to base64 for data URIs or other formats
         image_chunk = convert_to_anthropic_image_obj(openai_image_url=image_url, format=format)
-        return AnthropicMessagesImageParam(
-            type="image",
-            source=AnthropicContentParamSource(
-                type="base64",
-                media_type=image_chunk["media_type"],
-                data=image_chunk["data"],
-            ),
-        )
+        return _anthropic_content_element_factory(image_chunk)
 
 
 # The following XML functions will be deprecated once JSON schema support is available on Bedrock and Vertex
@@ -1910,7 +1896,12 @@ def convert_to_anthropic_tool_result(
                         anthropic_content_element=_anthropic_image_param,
                         original_content_element=content,
                     )
-                    anthropic_content_list.append(cast(AnthropicMessagesImageParam, _anthropic_image_param))
+                    anthropic_content_list.append(
+                        cast(
+                            AnthropicMessagesImageParam | AnthropicMessagesDocumentParam,
+                            _anthropic_image_param,
+                        )
+                    )
             elif content["type"] == "tool_reference":
                 anthropic_content_list.append(ToolReference(type="tool_reference", tool_name=content["tool_name"]))
             elif content["type"] == "file":
@@ -5878,38 +5869,36 @@ def function_call_prompt(
     ]
 
 
-def response_schema_prompt(model: str, response_schema: dict, llm_provider: str) -> str:
+def response_schema_prompt(model: str, response_schema: Mapping[str, object], llm_provider: str) -> str:
     """
     Decides if a user-defined custom prompt or default needs to be used
 
     Returns the prompt str that's passed to the model as a user message
     """
-    custom_prompt_details: dict | None = None
-    response_schema_as_message: Final = [{"role": "user", "content": f"{response_schema}"}]
-    if f"{model}/response_schema_prompt" in litellm.custom_prompt_dict:
-        custom_prompt_details = litellm.custom_prompt_dict[
-            f"{model}/response_schema_prompt"
-        ]  # allow user to define custom response schema prompt by model
-    elif "response_schema_prompt" in litellm.custom_prompt_dict:
-        custom_prompt_details = litellm.custom_prompt_dict["response_schema_prompt"]
-
-    if custom_prompt_details is not None:
-        return render_custom_prompt_template(
-            template=custom_prompt_details, messages=response_schema_as_message, model=model, llm_provider=llm_provider
-        )
-    else:
+    prompts: Final[Mapping[str, Mapping[str, object]]] = litellm.custom_prompt_dict
+    model_prompt_key: Final = f"{model}/response_schema_prompt"
+    custom_prompt_details: Final = prompts.get(
+        model_prompt_key if model_prompt_key in prompts else "response_schema_prompt"
+    )
+    if custom_prompt_details is None:
         return default_response_schema_prompt(response_schema=response_schema)
+    return render_custom_prompt_template(
+        template=custom_prompt_details,
+        messages=[{"role": "user", "content": f"{response_schema}"}],
+        model=model,
+        llm_provider=llm_provider,
+    )
 
 
-def default_response_schema_prompt(response_schema: dict) -> str:
+def default_response_schema_prompt(response_schema: Mapping[str, object]) -> str:
     """
     Used if provider/model doesn't support 'response_schema' param.
 
     This is the default prompt. Allow user to override this with a custom_prompt.
     """
     prompt_str: Final = f"""Use this JSON schema: 
-    ```json 
-    {response_schema}
+    ```json
+    {json.dumps(response_schema, default=str)}
     ```"""
     return prompt_str
 
