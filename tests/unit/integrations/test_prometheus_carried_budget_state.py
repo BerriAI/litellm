@@ -26,6 +26,7 @@ from litellm.proxy.spend_tracking.carried_budget_state import (
 )
 from litellm.types.proxy.carried_budget_state import (
     KeyBudgetSnapshot,
+    LiveBudgetSpend,
     TeamBudgetSnapshot,
     UserBudgetSnapshot,
 )
@@ -196,6 +197,28 @@ async def test_authed_request_sets_every_gauge_without_any_object_getter(prometh
     prometheus_logger.litellm_api_key_budget_remaining_hours_metric.labels().set.assert_called_once()
     prometheus_logger.litellm_team_budget_remaining_hours_metric.labels().set.assert_called_once()
     prometheus_logger.litellm_user_budget_remaining_hours_metric.labels().set.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_gauges_subtract_the_live_spend_auth_carried_instead_of_the_cached_spend(prometheus_logger, getters):
+    _stub_gauges(prometheus_logger)
+    token = _authed_token()
+    token.live_budget_spend = LiveBudgetSpend(key=3.0, team=30.0, user=8.0, org=60.0)
+
+    await _emit(prometheus_logger, _request_metadata(token))
+
+    remaining = {
+        "key": prometheus_logger.litellm_remaining_api_key_budget_metric.labels().set.call_args[0][0],
+        "team": prometheus_logger.litellm_remaining_team_budget_metric.labels().set.call_args[0][0],
+        "user": prometheus_logger.litellm_remaining_user_budget_metric.labels().set.call_args[0][0],
+        "org": prometheus_logger.litellm_remaining_org_budget_metric.labels().set.call_args[0][0],
+    }
+    assert remaining == {
+        "key": pytest.approx(5.0),
+        "team": pytest.approx(268.0),
+        "user": pytest.approx(40.0),
+        "org": pytest.approx(438.0),
+    }
 
 
 @pytest.mark.asyncio

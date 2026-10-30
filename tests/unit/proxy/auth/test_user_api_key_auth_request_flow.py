@@ -5081,12 +5081,17 @@ async def test_centralized_common_checks_carries_team_and_user_budget_state_on_t
         "user_api_key_user_budget_reset_at": None,
         "user_api_key_user_table_max_budget": None,
         "user_api_key_user_alias": "Alice",
+        "user_api_key_live_spend": None,
+        "user_api_key_team_live_spend": 0.0,
+        "user_api_key_user_live_spend": None,
+        "user_api_key_org_live_spend": None,
+        "user_api_key_end_user_live_spend": None,
     }
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model_input_cost", [None, 0.0], ids=["priced_model_reserves_budget", "zero_cost_model"])
-async def test_centralized_common_checks_carry_live_key_and_team_spend_on_a_token_with_stale_cached_spend(
+async def test_centralized_common_checks_carry_live_budget_spend_beside_the_stale_cached_spend(
     model_input_cost: float | None,
 ):
     import litellm.proxy.proxy_server as _proxy_server_mod
@@ -5143,7 +5148,9 @@ async def test_centralized_common_checks_carry_live_key_and_team_spend_on_a_toke
         for attribute, value in originals.items():
             setattr(_proxy_server_mod, attribute, value)
 
-    assert (token.spend, token.team_spend) == (0.37, 1.25)
+    assert token.live_budget_spend is not None
+    assert (token.live_budget_spend.key, token.live_budget_spend.team) == (0.37, 1.25)
+    assert (token.spend, token.team_spend) == (0.0, 0.0)
 
 
 def _end_user_budget_row(budget_id: str, max_budget: float) -> MagicMock:

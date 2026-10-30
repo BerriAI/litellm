@@ -77,6 +77,7 @@ from litellm.types.integrations.prometheus import (
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.carried_budget_state import (
     KeyBudgetSnapshot,
+    LiveBudgetSpend,
     OrgBudgetSnapshot,
     TeamBudgetSnapshot,
     UserBudgetSnapshot,
@@ -2221,6 +2222,8 @@ class PrometheusLogger(CustomLogger):
         _user_max_budget: Final = _metadata.get("user_api_key_user_max_budget", None)
         _user_email: Final = _metadata.get("user_api_key_user_email", None)
         _org_alias: Final = _metadata.get("user_api_key_org_alias", None)
+        _carried_metadata: Final = _REQUEST_METADATA_ADAPTER.validate_python(_metadata)
+        _live_spend: Final = LiveBudgetSpend.from_metadata(_carried_metadata) or LiveBudgetSpend()
 
         # Bound the per-request budget-metric emission so that slow Redis/DB
         # lookups under load cannot consume the whole LoggingWorker watchdog
@@ -2236,34 +2239,36 @@ class PrometheusLogger(CustomLogger):
                 user_api_key_alias=user_api_key_alias,
                 response_cost=response_cost,
                 key_max_budget=_api_key_max_budget,
-                key_spend=_api_key_spend,
-                carried=KeyBudgetSnapshot.from_metadata(_metadata),
+                key_spend=_api_key_spend if _live_spend.key is None else _live_spend.key,
+                carried=KeyBudgetSnapshot.from_metadata(_carried_metadata),
             ),
             self._set_team_budget_metrics_after_api_request(
                 user_api_team=user_api_team,
                 user_api_team_alias=user_api_team_alias,
-                team_spend=_team_spend,
+                team_spend=_team_spend if _live_spend.team is None else _live_spend.team,
                 team_max_budget=_team_max_budget,
                 response_cost=response_cost,
-                carried=TeamBudgetSnapshot.from_metadata(_metadata),
+                carried=TeamBudgetSnapshot.from_metadata(_carried_metadata),
             ),
             self._set_user_budget_metrics_after_api_request(
                 user_id=user_id,
-                user_spend=_user_spend,
+                user_spend=_user_spend if _live_spend.user is None else _live_spend.user,
                 user_max_budget=_user_max_budget,
                 response_cost=response_cost,
-                carried=UserBudgetSnapshot.from_metadata(_metadata),
+                carried=UserBudgetSnapshot.from_metadata(_carried_metadata),
                 user_email=_user_email if isinstance(_user_email, str) else None,
             ),
             self._set_org_budget_metrics_after_api_request(
                 org_id=user_api_key_org_id,
                 response_cost=response_cost,
-                carried=OrgBudgetSnapshot.from_metadata(_metadata),
+                carried=OrgBudgetSnapshot.from_metadata(_carried_metadata),
                 org_alias=_org_alias if isinstance(_org_alias, str) else None,
+                live_spend=_live_spend.org,
             ),
             self._set_customer_budget_metrics_after_api_request(
                 end_user_id=end_user_id,
                 response_cost=response_cost,
+                live_spend=_live_spend.end_user,
             ),
             return_exceptions=True,
         )
@@ -4483,6 +4488,7 @@ class PrometheusLogger(CustomLogger):
         response_cost: float,
         carried: OrgBudgetSnapshot | None = None,
         org_alias: str | None = None,
+        live_spend: float | None = None,
     ):
         """
         Set org budget metrics after an LLM API request
@@ -4500,7 +4506,7 @@ class PrometheusLogger(CustomLogger):
             self._set_org_budget_metrics(
                 org_id=org_id,
                 org_alias=org_alias or "",
-                spend=carried.spend + response_cost,
+                spend=(carried.spend if live_spend is None else live_spend) + response_cost,
                 max_budget=carried.max_budget,
                 budget_reset_at=None,
             )
@@ -4593,6 +4599,7 @@ class PrometheusLogger(CustomLogger):
         self,
         end_user_id: str | None,
         response_cost: float,
+        live_spend: float | None = None,
     ):
         if self._customer_budget_gauges_are_noop() or not _customer_budget_metrics_enabled():
             return
@@ -4618,7 +4625,7 @@ class PrometheusLogger(CustomLogger):
         budget_table: Final = cached_customer.litellm_budget_table
         self._set_customer_budget_metrics(
             end_user_id=end_user_id,
-            spend=cached_customer.spend + response_cost,
+            spend=(cached_customer.spend if live_spend is None else live_spend) + response_cost,
             max_budget=budget_table.max_budget if budget_table is not None else None,
             budget_reset_at=None,
         )

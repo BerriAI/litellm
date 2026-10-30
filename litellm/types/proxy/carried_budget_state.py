@@ -64,3 +64,32 @@ class OrgBudgetSnapshot(_BudgetSnapshot):
     max_budget: float | None = Field(
         validation_alias="user_api_key_org_max_budget", serialization_alias="user_api_key_org_max_budget"
     )
+
+
+class LiveBudgetSpend(_BudgetSnapshot):
+    """The cross-replica spend counters the budget check compares, in-flight reservations included, read
+    only by the remaining budget gauges. ``None`` for an entity without a max budget."""
+
+    key: float | None = Field(
+        default=None, validation_alias="user_api_key_live_spend", serialization_alias="user_api_key_live_spend"
+    )
+    team: float | None = Field(
+        default=None,
+        validation_alias="user_api_key_team_live_spend",
+        serialization_alias="user_api_key_team_live_spend",
+    )
+    user: float | None = Field(
+        default=None,
+        validation_alias="user_api_key_user_live_spend",
+        serialization_alias="user_api_key_user_live_spend",
+    )
+    org: float | None = Field(
+        default=None,
+        validation_alias="user_api_key_org_live_spend",
+        serialization_alias="user_api_key_org_live_spend",
+    )
+    end_user: float | None = Field(
+        default=None,
+        validation_alias="user_api_key_end_user_live_spend",
+        serialization_alias="user_api_key_end_user_live_spend",
+    )

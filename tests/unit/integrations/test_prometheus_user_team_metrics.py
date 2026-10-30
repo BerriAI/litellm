@@ -1066,6 +1066,37 @@ async def test_set_customer_budget_metrics_after_api_request_uses_cached_default
 
 
 @pytest.mark.asyncio
+async def test_customer_gauge_subtracts_the_live_spend_auth_carried(prometheus_logger, customer_metrics_enabled):
+    import sys
+
+    from litellm.models.budget import LiteLLM_BudgetTable
+    from litellm.models.end_user import LiteLLM_EndUserTable
+
+    mock_proxy_server = MagicMock()
+    mock_proxy_server.user_api_key_cache.async_get_cache = AsyncMock(
+        return_value=LiteLLM_EndUserTable(
+            user_id="cust-live",
+            blocked=False,
+            spend=0.5,
+            litellm_budget_table=LiteLLM_BudgetTable(budget_id="b", max_budget=3.0),
+        )
+    )
+
+    with patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}):
+        await prometheus_logger._increment_remaining_budget_metrics(
+            user_api_team=None,
+            user_api_team_alias=None,
+            user_api_key=None,
+            user_api_key_alias=None,
+            litellm_params={"metadata": {"user_api_key_end_user_live_spend": 1.5}},
+            response_cost=0.5,
+            end_user_id="cust-live",
+        )
+
+    assert _customer_sample("litellm_remaining_customer_budget_metric", "cust-live") == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
 async def test_set_customer_budget_metrics_after_api_request_without_budget_only_emits_remaining(
     prometheus_logger, customer_metrics_enabled
 ):
