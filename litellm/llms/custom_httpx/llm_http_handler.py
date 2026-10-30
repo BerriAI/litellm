@@ -142,6 +142,7 @@ from litellm.types.decisions import DecisionsIRRequest, DecisionsIRResponse
 from litellm.types.extraction import ExtractionResponse
 from litellm.types.files import StreamingMediaUploadConfig, TwoStepFileUploadConfig
 from litellm.types.integrations.custom_logger import (
+    CHAT_COMPLETION_AGENTIC_SURFACE,
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
@@ -3359,6 +3360,8 @@ class BaseLLMHTTPHandler:
         )
 
         agentic_kwargs: Final = dict(litellm_params)
+        if agentic_kwargs.get("_agentic_loop_api_surface") == CHAT_COMPLETION_AGENTIC_SURFACE:
+            return initial_response
         final_response: Final = await self._call_agentic_completion_hooks(
             response=initial_response,
             model=model,

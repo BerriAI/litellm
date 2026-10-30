@@ -953,3 +953,73 @@ async def test_openai_chat_completion_stops_searching_at_the_agentic_loop_cap(
     assert openai_route.call_count == loops_allowed + 1
     assert perplexity_search.call_count == loops_allowed
     assert {call.request.headers["authorization"] for call in openai_route.calls} == {"Bearer sk-test"}
+
+
+def _responses_reply_asking_for_another_search_until_enough_results(request: httpx.Request) -> httpx.Response:
+    request_input: Final = json.loads(request.content)["input"]
+    searches_done: Final = sum(1 for item in request_input if item.get("type") == "function_call_output")
+    output_item: Final = (
+        {
+            "type": "message",
+            "id": f"msg_{searches_done}",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Argentina won the 2022 World Cup.", "annotations": []}],
+        }
+        if searches_done >= SEARCHES_THE_MODEL_ASKS_FOR
+        else {
+            "type": "function_call",
+            "id": f"fc_{searches_done}",
+            "call_id": f"call_{searches_done}",
+            "name": INTERNAL_TOOL_NAME,
+            "arguments": json.dumps({"query": f"world cup winner, source {searches_done}"}),
+            "status": "completed",
+        }
+    )
+    return httpx.Response(
+        200,
+        json={
+            "id": f"resp_{searches_done}",
+            "object": "response",
+            "created_at": 0,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "output": [output_item],
+            "parallel_tool_calls": True,
+            "tool_choice": "auto",
+            "tools": [],
+            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_cap", "loops_allowed"),
+    [({"max_agentic_loops": 1}, 1), ({}, DEFAULT_MAX_AGENTIC_LOOPS)],
+    ids=["max_agentic_loops=1", "default cap"],
+)
+async def test_openai_chat_completion_bridged_to_the_responses_api_stops_searching_at_the_agentic_loop_cap(
+    request_cap: dict[str, int],
+    loops_allowed: int,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    responses_route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        side_effect=_responses_reply_asking_for_another_search_until_enough_results
+    )
+
+    await litellm.acompletion(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        tools=[{"type": "web_search"}],
+        api_key="sk-test",
+        **request_cap,
+    )
+
+    assert responses_route.call_count == loops_allowed + 1
+    assert perplexity_search.call_count == loops_allowed
+    assert all("_agentic_loop_api_surface" not in json.loads(call.request.content) for call in responses_route.calls)
