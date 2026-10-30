@@ -1715,42 +1715,6 @@ def _later_turns_admitted_through(dual_cache: "DualCache") -> "ResponsesWsTurnAd
     return partial(async_admit_io_token_turn, dual_cache, _WS_DEPLOYMENT, _TURNED_AT)
 
 
-def _connection_settling_turns_through(
-    rate_limits: "ModelRateLimitingCheck", opened_with: Mapping[str, object]
-) -> "Logging":
-    import time
-
-    from litellm.cost_calculator import ResponsesWebSocketTokenUsageProcessor
-    from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.types.utils import CallTypes
-
-    class _TurnsSettledByRateLimits(Logging):
-        async def dispatch_success_handlers(self, result: object = None, **kwargs: object) -> None:
-            await rate_limits.async_log_success_event(
-                self.model_call_details,
-                ResponsesWebSocketTokenUsageProcessor.create_logging_object(result),
-                None,
-                None,
-            )
-
-        async def dispatch_failure_handlers(
-            self, exception: Exception, traceback_exception: str, **kwargs: object
-        ) -> None:
-            await rate_limits.async_log_failure_event(self.model_call_details, None, None, None)
-
-    connection: Final = _TurnsSettledByRateLimits(
-        model="gpt-5-mini",
-        messages=[],
-        stream=True,
-        call_type=CallTypes.aresponses_websocket.value,
-        start_time=time.time(),
-        litellm_call_id="connection-call",
-        function_id="connection-call",
-    )
-    connection.litellm_params = {"metadata": dict(opened_with), "litellm_metadata": dict(opened_with)}
-    return connection
-
-
 _ITPM_OPENED_ON: Final = "global_router:ws-dep:openai/gpt-5-mini:itpm:12-34"
 _ITPM_DEPLOYMENT: Final = {
     "litellm_params": {"model": "openai/gpt-5-mini", "itpm": 40_000},
@@ -1793,6 +1757,7 @@ def _connection_logged_through(rate_limits: "ModelRateLimitingCheck", opened_wit
         litellm_call_id="connection-call",
         function_id="connection-call",
         dynamic_async_success_callbacks=[rate_limits],
+        dynamic_async_failure_callbacks=[rate_limits],
     )
     connection.update_environment_variables(
         litellm_params={"metadata": dict(opened_with), CallTypes.aresponses_websocket.value: True},
@@ -2023,7 +1988,7 @@ class TestWebSocketTurnAdmission:
             websocket=_ClientSocket(second, third),
             backend_ws=backend_ws,
             request_data={},
-            logging_obj=_connection_settling_turns_through(ModelRateLimitingCheck(dual_cache), opened_with),
+            logging_obj=_connection_logged_through(ModelRateLimitingCheck(dual_cache), opened_with),
             first_message=first,
             turn_admission=_later_turns_admitted_through(dual_cache),
         )
