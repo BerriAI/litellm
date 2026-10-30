@@ -47,6 +47,7 @@ from litellm.proxy.auth.auth_checks import (
     can_object_call_model,
     _can_object_call_vector_stores,
     _check_agent_access_group_model_access,
+    agent_model_grants,
     check_end_user_budget,
     _check_team_member_budget,
     personal_key_owner_teams,
@@ -11292,6 +11293,15 @@ async def test_agent_access_groups_naming_no_model_deny_every_model():
         await _check_agent_access_group_model_access("gpt-5", agent_key, None, resolve)
 
     assert exc_info.value.type == ProxyErrorTypes.agent_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_agent_model_grants_names_every_model_the_agents_access_groups_allow():
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=[])
+    resolve, asked = _agent_model_ceiling_resolver(frozenset({"gpt-5", "openai/gpt-5.6"}))
+
+    assert await agent_model_grants(agent_key, resolve) == frozenset({"gpt-5", "openai/gpt-5.6"})
+    assert asked == ["agent-1"]
 
 
 @pytest.mark.asyncio
