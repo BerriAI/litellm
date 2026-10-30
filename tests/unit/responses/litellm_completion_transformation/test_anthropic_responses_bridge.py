@@ -1646,9 +1646,8 @@ def test_native_mcp_response_stream_releases_identity_before_reading_result(resp
             assert event.item.name == native_call["name"]
             identity_released.set()
         if event.type == "response.completed":
-            item: Final = event.response.output[0]
-            assert item.type == "mcp_call"
-            assert json.loads(item.arguments) == {"query": "one"}
-            assert json.loads(item.output) == result_content
+            assert event.response.output[0].type == "mcp_call"
+            assert json.loads(event.response.output[0].arguments) == {"query": "one"}
+            assert json.loads(event.response.output[0].output) == result_content
     assert identity_released.is_set()
     assert _sent(route)["mcp_servers"][0]["name"] == native_call["server_name"]

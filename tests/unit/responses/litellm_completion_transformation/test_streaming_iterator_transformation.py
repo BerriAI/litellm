@@ -2102,13 +2102,12 @@ async def test_native_mcp_stream_emits_identity_before_arguments_and_keeps_final
     ]
     arguments: Final = tuple(event for event in events if event["type"] == "response.mcp_call_arguments.done")
     assert [event["item_id"] for event in arguments] == [first["id"], second["id"]]
-    for item in native:
-        emitted: Final = next(
-            event
-            for event in events
-            if event["type"] == "response.output_item.done" and event["item"]["id"] == item["id"]
-        )
-        assert emitted["item"] == item
+    emitted: Final = tuple(
+        event["item"]
+        for event in events
+        if event["type"] == "response.output_item.done" and event["item"]["type"] == "mcp_call"
+    )
+    assert emitted == native
     if second_result == "failed":
         assert native[1]["error"] == "two"
         assert any(event["type"] == "response.mcp_call.failed" for event in events)
