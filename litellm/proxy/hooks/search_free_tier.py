@@ -1,8 +1,8 @@
 from collections.abc import MutableMapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import Final
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -12,16 +12,14 @@ from litellm.litellm_core_utils.duration_parser import get_next_standardized_res
 from litellm.litellm_core_utils.llm_cost_calc.finalization import finalize_cost
 from litellm.litellm_core_utils.llm_cost_calc.utils import get_web_search_requests_from_usage
 from litellm.llms.gemini.cost_calculator import cost_per_web_search_request
+from litellm.redis.stores.search_free_tier import SearchFreeTierStore, allocation_key
+from litellm.redis.transport.contract import RedisFailure
 from litellm.types.utils import ModelInfo, SearchFreeRequests, StandardLoggingPayload, Usage
 
 _PERIOD_DURATION: Final = MappingProxyType({"day": "1d", "month": "1mo"})
 _PERIOD_STAMP: Final = MappingProxyType({"day": "%Y-%m-%d", "month": "%Y-%m"})
 _TTL_GRACE_SECONDS: Final = 3600
 _COUNTED_KWARG: Final = "search_free_tier_counted"
-
-
-class SharedCounter(Protocol):
-    async def async_increment(self, key: str, value: float, ttl: int | None = None) -> float: ...
 
 
 class _UsageCarrier(BaseModel):
@@ -37,7 +35,7 @@ def freed_units(allowance: int, units: int, total_after: int) -> int:
 
 def search_free_tier_key(provider: str, allowance: SearchFreeRequests, now: datetime) -> str:
     period_stamp: Final = now.strftime(_PERIOD_STAMP[allowance["period"]])
-    return f"litellm:search_free_tier:{provider}:{allowance['shared_group']}:{period_stamp}"
+    return allocation_key(provider, allowance["shared_group"], period_stamp)
 
 
 def search_free_tier_ttl(allowance: SearchFreeRequests, now: datetime) -> int:
@@ -91,7 +89,7 @@ async def apply_search_free_tier(
     sl_object: StandardLoggingPayload,
     response_cost: float,
     completion_response: object,
-    counter: SharedCounter | None,
+    counter: SearchFreeTierStore | None,
     now: datetime,
 ) -> float:
     """Zero the grounding queries that landed under the model's shared free allowance, everything else is unchanged."""
@@ -109,7 +107,7 @@ async def allocate_search_free_tier(
     sl_object: StandardLoggingPayload,
     response_cost: float,
     completion_response: object,
-    counter: SharedCounter | None,
+    counter: SearchFreeTierStore | None,
     now: datetime,
 ) -> SearchAllowanceAllocation | None:
     model_info: Final = sl_object["model_map_information"]["model_map_value"]
@@ -126,14 +124,15 @@ async def allocate_search_free_tier(
         )
         return None
     provider: Final = sl_object["custom_llm_provider"] or model_info["litellm_provider"]
-    key: Final = search_free_tier_key(provider, allowance, now)
-    try:
-        total_after: Final = await counter.async_increment(key, units, ttl=search_free_tier_ttl(allowance, now))
-    except Exception:  # noqa: BLE001  # any counter failure means full price, never a lost spend row
-        verbose_proxy_logger.warning(
-            "search free tier counter %s is unavailable, grounding is billed at full price", key
-        )
+    total_after: Final = await counter.allocate_units(
+        provider,
+        allowance["shared_group"],
+        now.strftime(_PERIOD_STAMP[allowance["period"]]),
+        units,
+        ttl=timedelta(seconds=search_free_tier_ttl(allowance, now)),
+    )
+    if isinstance(total_after, RedisFailure):
         return None
     freed: Final = freed_units(allowance["count"], units, int(total_after))
     freed_cost: Final = min(response_cost, cost_per_web_search_request(usage, model_info) * freed / units)
-    return SearchAllowanceAllocation(key, units, freed, freed_cost)
+    return SearchAllowanceAllocation(search_free_tier_key(provider, allowance, now), units, freed, freed_cost)

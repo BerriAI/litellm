@@ -1,7 +1,11 @@
 from datetime import datetime, timedelta, timezone
 from typing import Final
+from unittest.mock import patch
 
+import fakeredis
 import pytest
+import pytest_asyncio
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 from litellm.proxy.hooks.search_free_tier import (
     apply_search_free_tier,
@@ -9,29 +13,34 @@ from litellm.proxy.hooks.search_free_tier import (
     search_free_tier_key,
     search_free_tier_ttl,
 )
-from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.redis.stores.search_free_tier import TransportSearchFreeTierStore
+from litellm.types.utils import CostBreakdown, ModelResponse, PromptTokensDetailsWrapper, StandardLoggingPayload, Usage
+from tests._support.fake_redis import (
+    fake_redis_cache,
+    keys_matching,
+    set_reply_callback,
+)
 
 NOW: Final = datetime(2026, 10, 20, 12, 30, tzinfo=timezone.utc)
 RATE: Final = 0.01
 
 
-class _Counter:
-    def __init__(self) -> None:
-        self.totals: dict[str, float] = {}
-        self.ttls: dict[str, int | None] = {}
-
-    async def async_increment(self, key: str, value: float, ttl: int | None = None) -> float:
-        self.totals[key] = self.totals.get(key, 0) + value
-        self.ttls[key] = ttl
-        return self.totals[key]
+@pytest.fixture
+def server() -> fakeredis.FakeServer:
+    return fakeredis.FakeServer()
 
 
-class _BrokenCounter:
-    async def async_increment(self, key: str, value: float, ttl: int | None = None) -> float:
-        raise ConnectionError("redis is down")
+@pytest.fixture
+def raw(server: fakeredis.FakeServer) -> fakeredis.FakeAsyncRedis:
+    return fakeredis.FakeAsyncRedis(server=server)
 
 
-def _model_info(billing_unit: str, count: int, period: str = "month", provider: str = "vertex_ai") -> dict:
+@pytest_asyncio.fixture(loop_scope="function")
+async def counter(server: fakeredis.FakeServer) -> TransportSearchFreeTierStore:
+    return TransportSearchFreeTierStore(fake_redis_cache(server, namespace="search-test").transport())
+
+
+def _model_info(billing_unit: str, count: int, period: str = "month", provider: str = "vertex_ai") -> dict[str, object]:
     return {
         "litellm_provider": provider,
         "mode": "chat",
@@ -48,8 +57,16 @@ def _response(queries: int | None) -> ModelResponse:
     )
 
 
-def _call(model_info: dict, response_cost: float, cache_hit: bool | None = None) -> tuple[dict, dict]:
-    sl_object = {
+def _breakdown(sl_object: StandardLoggingPayload) -> CostBreakdown:
+    breakdown: Final = sl_object["cost_breakdown"]
+    assert breakdown is not None
+    return breakdown
+
+
+def _call(
+    model_info: dict[str, object], response_cost: float, cache_hit: bool | None = None
+) -> tuple[dict[str, object], StandardLoggingPayload]:
+    sl_object: StandardLoggingPayload = {  # pyright: ignore[reportAssignmentType]  # the discount path reads only these keys
         "response_cost": response_cost,
         "cache_hit": cache_hit,
         "custom_llm_provider": model_info["litellm_provider"],
@@ -93,8 +110,31 @@ def test_counter_ttl_outlives_the_period_boundary_by_under_two_hours(period, bou
 
 
 @pytest.mark.asyncio
-async def test_per_query_allowance_is_shared_across_calls_and_split_on_the_crossing_call():
-    counter = _Counter()
+async def test_search_discount_works_without_lua_millisecond_or_transaction_permissions(
+    counter: TransportSearchFreeTierStore, raw: fakeredis.FakeAsyncRedis
+) -> None:
+    await raw.acl_setuser(
+        "default",
+        enabled=True,
+        nopass=True,
+        reset=True,
+        keys=["*"],
+        commands=["+incrbyfloat", "+ttl", "+expire", "+get", "+pttl", "+ping", "+info", "+client"],
+    )
+    kwargs, sl_object = _call(_model_info("per_query", count=7), response_cost=1.0)
+    key: Final = "search-test:litellm:search_free_tier:vertex_ai:test-group:2026-10"
+
+    with patch("time.time", return_value=NOW.timestamp()):
+        cost: Final = await apply_search_free_tier(kwargs, sl_object, 1.0, _response(5), counter, NOW)
+        assert cost == kwargs["response_cost"] == sl_object["response_cost"] == 0.95
+        assert await raw.get(key) == b"5"
+        assert await raw.pttl(key) == 995_400_000
+
+
+@pytest.mark.asyncio
+async def test_per_query_allowance_is_shared_across_calls_and_split_on_the_crossing_call(
+    counter: TransportSearchFreeTierStore, raw: fakeredis.FakeAsyncRedis
+):
     model_info = _model_info("per_query", count=7)
     reduced = []
     for _ in range(3):
@@ -108,13 +148,12 @@ async def test_per_query_allowance_is_shared_across_calls_and_split_on_the_cross
     assert c2 == k2 == s2 == pytest.approx(1.0 - 2 * RATE)
     assert b2["discount_amount"] == pytest.approx(2 * RATE)
     assert c3 == k3 == s3 == 1.0 and "discount_amount" not in b3
-    assert counter.totals == {"litellm:search_free_tier:vertex_ai:test-group:2026-10": 15}
-    assert counter.ttls["litellm:search_free_tier:vertex_ai:test-group:2026-10"] > 0
+    assert await raw.get("search-test:litellm:search_free_tier:vertex_ai:test-group:2026-10") == b"15"
+    assert await raw.pttl("search-test:litellm:search_free_tier:vertex_ai:test-group:2026-10") > 0
 
 
 @pytest.mark.asyncio
-async def test_gemini_api_and_vertex_ai_grounding_draw_on_separate_allowances():
-    counter = _Counter()
+async def test_gemini_api_and_vertex_ai_grounding_draw_on_separate_allowances(counter: TransportSearchFreeTierStore):
     gemini_api = _model_info("per_query", count=3, provider="gemini")
     vertex_ai = _model_info("per_query", count=3, provider="vertex_ai")
     kwargs, sl_object = _call(gemini_api, response_cost=1.0)
@@ -128,8 +167,9 @@ async def test_gemini_api_and_vertex_ai_grounding_draw_on_separate_allowances():
 
 
 @pytest.mark.asyncio
-async def test_per_prompt_allowance_counts_a_grounded_prompt_once_whatever_the_query_count():
-    counter = _Counter()
+async def test_per_prompt_allowance_counts_a_grounded_prompt_once_whatever_the_query_count(
+    counter: TransportSearchFreeTierStore, raw: fakeredis.FakeAsyncRedis
+):
     model_info = _model_info("per_prompt", count=1, period="day")
     kwargs, sl_object = _call(model_info, response_cost=1.0)
     first = await apply_search_free_tier(kwargs, sl_object, 1.0, _response(5), counter, NOW)
@@ -137,12 +177,11 @@ async def test_per_prompt_allowance_counts_a_grounded_prompt_once_whatever_the_q
     second = await apply_search_free_tier(kwargs, sl_object, 1.0, _response(5), counter, NOW)
     assert first == pytest.approx(1.0 - RATE)
     assert second == 1.0
-    assert counter.totals == {"litellm:search_free_tier:vertex_ai:test-group:2026-10-20": 2}
+    assert await raw.get("search-test:litellm:search_free_tier:vertex_ai:test-group:2026-10-20") == b"2"
 
 
 @pytest.mark.asyncio
-async def test_sidecar_shaped_response_mapping_is_counted_like_a_model_response():
-    counter = _Counter()
+async def test_sidecar_shaped_response_mapping_is_counted_like_a_model_response(counter: TransportSearchFreeTierStore):
     kwargs, sl_object = _call(_model_info("per_query", count=100), response_cost=1.0)
     response = {
         "usage": {
@@ -156,55 +195,112 @@ async def test_sidecar_shaped_response_mapping_is_counted_like_a_model_response(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("counter", [None, _BrokenCounter()])
-async def test_full_price_when_no_counter_is_available(counter):
+@pytest.mark.parametrize("connected", [True, False])
+async def test_full_price_when_no_counter_is_available(
+    counter: TransportSearchFreeTierStore, server: fakeredis.FakeServer, connected: bool
+):
+    server.connected = connected
     kwargs, sl_object = _call(_model_info("per_query", count=100), response_cost=1.0)
-    assert await apply_search_free_tier(kwargs, sl_object, 1.0, _response(5), counter, NOW) == 1.0
-    assert kwargs["response_cost"] == 1.0 and "discount_amount" not in sl_object["cost_breakdown"]
+    assert (
+        await apply_search_free_tier(kwargs, sl_object, 1.0, _response(5), None if connected else counter, NOW) == 1.0
+    )
+    assert kwargs["response_cost"] == 1.0 and "discount_amount" not in _breakdown(sl_object)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("response", [_response(0), _response(None), ModelResponse()])
-async def test_requests_without_grounding_never_touch_the_counter(response):
-    counter = _Counter()
+async def test_requests_without_grounding_never_touch_the_counter(
+    response, counter: TransportSearchFreeTierStore, raw: fakeredis.FakeAsyncRedis
+):
     kwargs, sl_object = _call(_model_info("per_query", count=100), response_cost=1.0)
     assert await apply_search_free_tier(kwargs, sl_object, 1.0, response, counter, NOW) == 1.0
-    assert counter.totals == {}
+    assert await keys_matching(raw, "*") == ()
 
 
 @pytest.mark.asyncio
-async def test_models_without_an_allowance_never_touch_the_counter():
-    counter = _Counter()
+async def test_models_without_an_allowance_never_touch_the_counter(
+    counter: TransportSearchFreeTierStore, raw: fakeredis.FakeAsyncRedis
+):
     model_info = {k: v for k, v in _model_info("per_query", count=100).items() if k != "search_free_requests"}
     kwargs, sl_object = _call(model_info, response_cost=1.0)
     assert await apply_search_free_tier(kwargs, sl_object, 1.0, _response(5), counter, NOW) == 1.0
-    assert counter.totals == {}
+    assert await keys_matching(raw, "*") == ()
 
 
 @pytest.mark.asyncio
-async def test_a_second_callback_run_on_the_same_request_counts_it_once():
-    counter = _Counter()
+async def test_a_second_callback_run_on_the_same_request_counts_it_once(
+    counter: TransportSearchFreeTierStore, raw: fakeredis.FakeAsyncRedis
+):
     kwargs, sl_object = _call(_model_info("per_query", count=100), response_cost=1.0)
     first = await apply_search_free_tier(kwargs, sl_object, 1.0, _response(5), counter, NOW)
     second = await apply_search_free_tier(kwargs, sl_object, first, _response(5), counter, NOW)
     assert first == second == pytest.approx(1.0 - 5 * RATE)
-    assert counter.totals == {"litellm:search_free_tier:vertex_ai:test-group:2026-10": 5}
+    assert await raw.get("search-test:litellm:search_free_tier:vertex_ai:test-group:2026-10") == b"5"
 
 
 @pytest.mark.asyncio
-async def test_a_cache_hit_with_grounded_usage_is_not_counted_and_stays_at_zero():
-    counter = _Counter()
+async def test_lost_increment_reply_keeps_full_price_and_only_recounts_on_an_explicit_callback_retry(
+    server: fakeredis.FakeServer, raw: fakeredis.FakeAsyncRedis
+) -> None:
+    cache: Final = fake_redis_cache(server, namespace="search-test")
+    store: Final = TransportSearchFreeTierStore(cache.transport())
+    kwargs, sl_object = _call(_model_info("per_query", count=7), response_cost=1.0)
+
+    def lost_reply(_: object) -> None:
+        raise RedisConnectionError("reply lost after allocation")
+
+    set_reply_callback(cache, "INCRBYFLOAT", lost_reply)
+    assert await apply_search_free_tier(kwargs, sl_object, 1.0, _response(5), store, NOW) == 1.0
+    assert kwargs["response_cost"] == sl_object["response_cost"] == 1.0
+    assert not kwargs.get("search_free_tier_counted", False)
+    assert await raw.get("search-test:litellm:search_free_tier:vertex_ai:test-group:2026-10") == b"5"
+
+    set_reply_callback(cache, "INCRBYFLOAT", float)
+    assert await apply_search_free_tier(kwargs, sl_object, 1.0, _response(5), store, NOW) == pytest.approx(0.98)
+    assert kwargs["search_free_tier_counted"] is True
+    assert await raw.get("search-test:litellm:search_free_tier:vertex_ai:test-group:2026-10") == b"10"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("period", "stamp", "boundary"),
+    [
+        ("month", "2026-10", datetime(2026, 11, 1, tzinfo=timezone.utc)),
+        ("day", "2026-10-20", datetime(2026, 10, 21, tzinfo=timezone.utc)),
+    ],
+)
+async def test_caller_places_expiry_at_period_boundary_plus_one_hour(
+    server: fakeredis.FakeServer,
+    raw: fakeredis.FakeAsyncRedis,
+    period: str,
+    stamp: str,
+    boundary: datetime,
+) -> None:
+    store: Final = TransportSearchFreeTierStore(fake_redis_cache(server, namespace="search-test").transport())
+    kwargs, sl_object = _call(_model_info("per_query", count=7, period=period), response_cost=1.0)
+    with patch("time.time", return_value=NOW.timestamp()):
+        assert await apply_search_free_tier(kwargs, sl_object, 1.0, _response(5), store, NOW) == pytest.approx(0.95)  # pyright: ignore[reportUnknownMemberType]  # pytest.approx is untyped
+        assert await raw.pttl(f"search-test:litellm:search_free_tier:vertex_ai:test-group:{stamp}") == (
+            (boundary - NOW + timedelta(hours=1)) // timedelta(milliseconds=1)
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_cache_hit_with_grounded_usage_is_not_counted_and_stays_at_zero(
+    counter: TransportSearchFreeTierStore, raw: fakeredis.FakeAsyncRedis
+):
     kwargs, sl_object = _call(_model_info("per_query", count=100), response_cost=0.0, cache_hit=True)
     assert await apply_search_free_tier(kwargs, sl_object, 0.0, _response(2), counter, NOW) == 0.0
-    assert counter.totals == {}
-    assert "discount_amount" not in sl_object["cost_breakdown"]
+    assert await keys_matching(raw, "*") == ()
+    assert "discount_amount" not in _breakdown(sl_object)
 
 
 @pytest.mark.asyncio
-async def test_freed_cost_never_exceeds_the_billed_cost():
-    counter = _Counter()
+async def test_freed_cost_never_exceeds_the_billed_cost(
+    counter: TransportSearchFreeTierStore, raw: fakeredis.FakeAsyncRedis
+):
     billed = 3 * RATE
     kwargs, sl_object = _call(_model_info("per_query", count=100), response_cost=billed)
     assert await apply_search_free_tier(kwargs, sl_object, billed, _response(5), counter, NOW) == 0.0
-    assert sl_object["cost_breakdown"]["discount_amount"] == pytest.approx(billed)
-    assert counter.totals == {"litellm:search_free_tier:vertex_ai:test-group:2026-10": 5}
+    assert _breakdown(sl_object).get("discount_amount") == pytest.approx(billed)  # pyright: ignore[reportUnknownMemberType]  # pytest.approx is untyped
+    assert await raw.get("search-test:litellm:search_free_tier:vertex_ai:test-group:2026-10") == b"5"
