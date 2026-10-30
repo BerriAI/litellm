@@ -188,8 +188,8 @@ export default function CategoryROI({
             </table>
           </section>
           <p className="text-xs text-muted-foreground">
-            Classification updates in the background. Discovery samples remain unclassified. Analysis calls are excluded
-            from task spend. This view attributes cost; it does not estimate business returns.
+            Classification updates in the background. Discovery samples remain unclassified. ROI analysis calls are
+            excluded from task spend. This view attributes cost; it does not estimate business returns.
           </p>
         </>
       )}

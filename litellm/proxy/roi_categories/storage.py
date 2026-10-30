@@ -14,6 +14,8 @@ _ELIGIBLE: Final = """
     AND start_time < fromUnixTimestamp64Milli({end:Int64})
     AND ({team:String} = '' OR team_id = {team:String})
     AND NOT has(request_tags, 'litellm-roi-analysis')
+"""
+_CLASSIFIABLE: Final = """
     AND NOT has(request_tags, 'litellm-internal')
     AND JSONExtractString(metadata, 'internal_call_origin') = ''
 """
@@ -79,6 +81,7 @@ class CategoryStorage:
         return await self.rows(
             "SELECT request_id, substringUTF8(messages, 1, 2000) AS excerpt FROM spend_logs FINAL WHERE "
             + _ELIGIBLE
+            + _CLASSIFIABLE
             + " AND messages NOT IN ('', '{}', '[]', 'null') "
             "ORDER BY start_time, request_id LIMIT {limit:UInt32}",
             {**self.parameters(settings, settings.started_at, now), "limit": settings.sample_size},
@@ -92,6 +95,7 @@ class CategoryStorage:
             + _JOIN
             + " WHERE "
             + _ELIGIBLE
+            + _CLASSIFIABLE
             + " AND messages NOT IN ('', '{}', '[]', 'null') AND a.completed = false AND a.attempts < 3 "
             "ORDER BY start_time, request_id LIMIT 5",
             self.parameters(settings, settings.activated_at or settings.started_at, now),
