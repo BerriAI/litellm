@@ -1621,7 +1621,9 @@ def bedrock_model_is_unknown(model: str) -> bool:
 def _names_no_invoke_provider(model: str) -> bool:
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
-    return bool(_bedrock_model_id_without_region(model)) and BaseAWSLLM.get_bedrock_invoke_provider(model) is None
+    model_id: Final = _bedrock_model_id_without_region(model)
+    names_one_model: Final = bool(model_id) and ("/" not in model_id or model_id.startswith("arn:"))
+    return names_one_model and BaseAWSLLM.get_bedrock_invoke_provider(model) is None
 
 
 def bedrock_model_reaches_converse_by_default(model: str) -> bool:

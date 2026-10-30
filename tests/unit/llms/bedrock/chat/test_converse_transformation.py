@@ -9323,8 +9323,10 @@ def test_not_found_error(model, path, monkeypatch):
     assert [request.url.raw_path for request in sent] == [path]
 
 
-@pytest.mark.parametrize("model", ["bedrock/", "bedrock/us-east-1/"])
-def test_an_empty_model_id_fails_locally_without_calling_aws(model):
+@pytest.mark.parametrize(
+    "model", ["bedrock/", "bedrock/us-east-1/", "bedrock/../../converse", "bedrock/xx-fake-1/us.xai.grok-4.7"]
+)
+def test_a_model_id_that_is_empty_or_a_path_fails_locally_without_calling_aws(model):
     sent: Final[list[httpx.Request]] = []
 
     with pytest.raises(litellm.NotFoundError):
