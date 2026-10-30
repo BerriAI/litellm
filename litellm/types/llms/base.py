@@ -32,16 +32,16 @@ class BaseLiteLLMOpenAIResponseObject(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
     def __getitem__(self, key):
-        return self.__dict__[key]
+        return dict(iter(self))[key]
 
     def get(self, key, default=None):
-        return self.__dict__.get(key, default)
+        return dict(iter(self)).get(key, default)
 
     def __contains__(self, key) -> bool:
-        return key in self.__dict__
+        return key in dict(iter(self))
 
     def items(self):
-        return self.__dict__.items()
+        return dict(iter(self)).items()
 
 
 class HiddenParams(OpenAIObject):

@@ -9,7 +9,7 @@ from typing import Final
 import pytest
 from pydantic import ConfigDict, create_model
 
-from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject, LiteLLMBaseModel
 
 _PROBE: Final = """
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -142,3 +142,30 @@ def test_concurrent_first_use_of_a_deferred_subclass_always_builds_that_subclass
             assert _concurrent_first_use_outcomes(child) == {child.__name__}, f"round {round_id}"
     finally:
         sys.setswitchinterval(previous_switch_interval)
+
+
+class _ResponseEvent(BaseLiteLLMOpenAIResponseObject):
+    type: str
+
+
+def test_response_object_answers_dict_reads_for_undeclared_fields():
+    event: Final = _ResponseEvent(type="response.created", sequence_number=3)
+
+    assert event["type"] == "response.created"
+    assert event["sequence_number"] == 3
+    assert event.get("sequence_number") == 3
+    assert "sequence_number" in event
+    assert dict(event.items()) == {"type": "response.created", "sequence_number": 3}
+
+
+def test_response_object_answers_dict_reads_for_an_undeclared_field_named_keys():
+    assert _ResponseEvent(type="response.created", keys="value")["keys"] == "value"
+
+
+def test_response_object_dict_reads_still_miss_absent_keys():
+    event: Final = _ResponseEvent(type="response.created")
+
+    assert event.get("sequence_number", "fallback") == "fallback"
+    assert "sequence_number" not in event
+    with pytest.raises(KeyError):
+        event["sequence_number"]

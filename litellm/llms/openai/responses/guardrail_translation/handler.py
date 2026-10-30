@@ -1974,7 +1974,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             "annotations": (),
             "logprobs": None,
         }
-        return (
+        events: Final = (
             *_open_item_closing_events(responses_so_far),
             OutputItemAddedEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
@@ -2018,6 +2018,10 @@ class OpenAIResponsesHandler(BaseTranslation):
                 type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
                 response=_blocked_response(exc, response_id=response_id, model=model, output_item=item),
             ),
+        )
+        return tuple(
+            event.model_copy(update={"sequence_number": number})
+            for number, event in enumerate(events, start=_next_stream_sequence_number(responses_so_far))
         )
 
 

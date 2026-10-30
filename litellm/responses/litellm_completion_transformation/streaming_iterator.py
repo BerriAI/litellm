@@ -849,7 +849,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             "type": "response.reasoning_summary_text.done",
             "item_id": "rs_0c5dae30e53172980069708ba2f59c8197b71ca9820edad07c",
             "output_index": 0,
-            "sequence_number": 97,
             "summary_index": 0,
             "text": "**Clarifying the first humans**\n\nThe  I'm addressing the user's specific interest."
         }
@@ -880,7 +879,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 "type": "summary_text",
                 "text": "**Clarifying the first humans**\n\nThe  earlier hominins. It feels important to ensure I'm addressing the user's specific interest."
             },
-            "sequence_number": 98,
             "summary_index": 0
         }
         """
@@ -981,7 +979,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         {
             "type": "response.output_item.done",
             "output_index": 0,
-            "sequence_number": 99,
             "item": {
                 "id": "rs_0c5dae30e53172980069708ba2f59c8197b71ca9820edad07c",
                 "type": "reasoning",

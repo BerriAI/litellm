@@ -2019,3 +2019,12 @@ async def test_every_event_serializes_its_position_in_the_stream_from_zero(strea
     events: Final = list(iterator) if sync_mode else [event async for event in iterator]
 
     assert _serialized_sequence_numbers(events) == list(range(len(events)))
+
+
+def test_bridged_events_answer_dict_reads_of_their_number():
+    events: Final = list(_build_iterator((_chunk("Hello"), _chunk("!", finish_reason="stop"))))
+    positions: Final = list(range(len(events)))
+
+    assert [event["sequence_number"] for event in events] == positions
+    assert [event.get("sequence_number") for event in events] == positions
+    assert all("sequence_number" in event for event in events)
