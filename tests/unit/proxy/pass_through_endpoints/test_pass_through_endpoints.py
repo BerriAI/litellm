@@ -2216,7 +2216,6 @@ async def test_pass_through_request_streaming_marks_logging_obj_as_stream():
                 mock_chunk_processor.return_value = _empty_chunks()
 
                 mock_request = MagicMock(spec=Request)
-                mock_request.scope = {}
                 mock_request.method = "POST"
                 mock_request.url = httpx.URL("http://test-proxy.com/v1/messages")
                 mock_request.body = AsyncMock(return_value=b'{"model": "claude-3", "stream": true}')
@@ -2496,7 +2495,6 @@ async def test_pass_through_request_sse_response_marks_logging_obj_as_stream():
                 mock_chunk_processor.return_value = _empty_chunks()
 
                 mock_request = MagicMock(spec=Request)
-                mock_request.scope = {}
                 mock_request.method = "POST"
                 mock_request.url = httpx.URL("http://test-proxy.com/v1/messages")
                 mock_request.body = AsyncMock(return_value=b'{"model": "claude-3"}')
@@ -3427,7 +3425,6 @@ async def test_pass_through_request_query_params_forwarding():
 
                         # Create mock request with query parameters (Azure API version)
                         mock_request = MagicMock(spec=Request)
-                        mock_request.scope = {}
                         mock_request.method = "POST"
                         mock_request.url = httpx.URL("http://localhost:4000/azure-assistant/openai/assistants")
                         mock_request.body = AsyncMock(return_value=json.dumps(test_body).encode())
@@ -6602,18 +6599,6 @@ async def test_pass_through_body_stays_byte_identical_outside_the_opt_in(
     assert "x-litellm-call-id" in response.headers
 
 
-def _client_messages_body(stream: bool) -> Mapping[str, object]:
-    return MappingProxyType(
-        {
-            "model": "claude-sonnet-4-5",
-            "max_tokens": 16,
-            "messages": [{"role": "user", "content": "hi"}],
-            "metadata": {"user_id": "user-1"},
-            **({"stream": True} if stream else {}),
-        }
-    )
-
-
 def _echo_upstream_body(upstream_request: httpx.Request) -> httpx.Response:
     return httpx.Response(
         200, content=upstream_request.content, headers={"content-type": "application/json"}, request=upstream_request
@@ -6626,25 +6611,12 @@ async def _relayed_body(response: Response) -> bytes:
     return bytes(response.body)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
-@pytest.mark.parametrize(
-    "path, uses_custom_body, forwards_client_metadata",
-    [
-        ("/anthropic/v1/messages", False, True),
-        ("/anthropic/v1/messages", True, False),
-        ("/gemini/v1beta/models/gemini-2.5-flash:generateContent", False, False),
-    ],
-    ids=["provider-metadata-route", "custom-body", "litellm-metadata-route"],
-)
-async def test_pass_through_forwards_only_the_metadata_the_client_sent(
-    stream: bool, path: str, uses_custom_body: bool, forwards_client_metadata: bool
-) -> None:
-    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
-
-    client_body: Final = _client_messages_body(stream)
-    body_without_metadata: Final = MappingProxyType({k: v for k, v in client_body.items() if k != "metadata"})
-
+async def _relay_through_pass_through(
+    client_body: Mapping[str, object],
+    target: str,
+    guardrails_config: dict[str, object] | None,
+    custom_body: dict[str, object] | None = None,
+) -> Mapping[str, object]:
     async def receive() -> Mapping[str, object]:
         return {"type": "http.request", "body": json.dumps(dict(client_body)).encode()}
 
@@ -6662,13 +6634,12 @@ async def test_pass_through_forwards_only_the_metadata_the_client_sent(
         {
             "type": "http",
             "method": "POST",
-            "path": path,
+            "path": "/my-claude-route",
             "query_string": b"",
             "headers": [(b"content-type", b"application/json")],
         },
         receive,
     )
-    _ = await read_request_body(request)
     fake_client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(_echo_upstream_body), timeout=None)
     try:
         with ExitStack() as stack:
@@ -6677,11 +6648,11 @@ async def test_pass_through_forwards_only_the_metadata_the_client_sent(
             mock_proxy_logging.post_call_success_hook = AsyncMock(side_effect=return_hook_response)
             response: Final = await pass_through_request(
                 request=request,
-                target="http://upstream.test/v1/messages",
+                target=target,
                 custom_headers={},
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
-                custom_body=dict(body_without_metadata) if uses_custom_body else None,
-                guardrails_config={"pii-guard": {}},
+                custom_body=custom_body,
+                guardrails_config=guardrails_config,
             )
             relayed: Final = await _relayed_body(response)
     finally:
@@ -6689,7 +6660,88 @@ async def test_pass_through_forwards_only_the_metadata_the_client_sent(
         await fake_client.aclose()
 
     assert response.status_code == 200
-    assert json.loads(relayed) == (client_body if forwards_client_metadata else body_without_metadata)
+    return MappingProxyType(json.loads(relayed))
+
+
+_MESSAGES_BODY: Final = MappingProxyType(
+    {"model": "claude-sonnet-4-5", "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]}
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
+@pytest.mark.parametrize(
+    "client_metadata, target, forwarded_metadata",
+    [
+        ({"user_id": "user-1"}, "http://upstream.test/v1/messages", {"user_id": "user-1"}),
+        ({"user_id": "user-1"}, "http://upstream.test/v1/messages/", {"user_id": "user-1"}),
+        ({"user_id": "user-1"}, "http://upstream.test/v1/messages?beta=true", {"user_id": "user-1"}),
+        (
+            {"user_id": "user-1", "tags": ["a"], "trace_id": "t", "generation_name": "g", "foo": "bar"},
+            "http://upstream.test/v1/messages",
+            {"user_id": "user-1"},
+        ),
+        ({"tags": ["a"], "foo": "bar"}, "http://upstream.test/v1/messages", None),
+        ({"user_id": "a@example.com"}, "http://upstream.test/v1/messages", None),
+        ({"user_id": "reach me at a@example.com today"}, "http://upstream.test/v1/messages", None),
+        ({"user_id": 42}, "http://upstream.test/v1/messages", None),
+        ({"user_id": "user-1"}, "http://upstream.test/v1/messages/count_tokens", None),
+        ({"user_id": "user-1"}, "http://upstream.test/v1/messages/batches", None),
+        ({"user_id": "user-1"}, "https://api.anthropic.com/v1/models", None),
+        ({"user_id": "user-1"}, "http://upstream.test/v1/responses", None),
+        ({"user_id": "user-1"}, "http://upstream.test/v1/chat/completions", None),
+    ],
+    ids=[
+        "messages",
+        "messages-trailing-slash",
+        "messages-with-query",
+        "user-id-beside-litellm-and-unknown-keys",
+        "no-user-id",
+        "email-user-id",
+        "email-inside-user-id",
+        "integer-user-id",
+        "count-tokens",
+        "batches",
+        "other-anthropic-path",
+        "responses",
+        "chat-completions",
+    ],
+)
+async def test_pass_through_forwards_only_a_valid_user_id_to_the_messages_endpoint(
+    stream: bool, client_metadata: object, target: str, forwarded_metadata: Mapping[str, object] | None
+) -> None:
+    client_body: Final = MappingProxyType(
+        {**_MESSAGES_BODY, "metadata": client_metadata, **({"stream": True} if stream else {})}
+    )
+    body_without_metadata: Final = {k: v for k, v in client_body.items() if k != "metadata"}
+
+    relayed: Final = await _relay_through_pass_through(client_body, target, guardrails_config={"pii-guard": {}})
+
+    assert relayed == (
+        body_without_metadata if forwarded_metadata is None else {**body_without_metadata, "metadata": forwarded_metadata}
+    )
+
+
+@pytest.mark.asyncio
+async def test_pass_through_drops_metadata_that_is_not_an_object() -> None:
+    client_body: Final = MappingProxyType({**_MESSAGES_BODY, "metadata": "user-1"})
+
+    relayed: Final = await _relay_through_pass_through(
+        client_body, "http://upstream.test/v1/messages", guardrails_config=None
+    )
+
+    assert relayed == _MESSAGES_BODY
+
+
+@pytest.mark.asyncio
+async def test_pass_through_custom_body_replaces_the_client_user_id() -> None:
+    client_body: Final = MappingProxyType({**_MESSAGES_BODY, "metadata": {"user_id": "user-1"}})
+
+    relayed: Final = await _relay_through_pass_through(
+        client_body, "http://upstream.test/v1/messages", guardrails_config=None, custom_body=dict(_MESSAGES_BODY)
+    )
+
+    assert relayed == _MESSAGES_BODY
 
 
 _PARTIAL_RELAY_WARNING_MARKER = "ended before upstream body was fully relayed"
@@ -7997,7 +8049,6 @@ async def _drive_streaming_pass_through(upstream_content_type, chunk_delay_secon
         mock_chunk_processor.return_value = _slow_first_chunk()
 
         mock_request = MagicMock(spec=Request)
-        mock_request.scope = {}
         mock_request.method = "POST"
         mock_request.url = httpx.URL("http://test-proxy.com/v1/messages")
         mock_request.body = AsyncMock(

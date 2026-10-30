@@ -68,7 +68,11 @@ from litellm.litellm_core_utils.litellm_logging import get_masked_values
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.llms.anthropic.common_utils import is_anthropic_messages_url
+from litellm.llms.anthropic.common_utils import (
+    anthropic_user_id_from_body,
+    is_anthropic_messages_create_url,
+    is_anthropic_messages_url,
+)
 from litellm.llms.base_llm.managed_resources.utils import (
     resolve_passthrough_managed_id_provider,
 )
@@ -103,7 +107,6 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
     safe_get_request_headers,
-    with_client_metadata,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
@@ -121,7 +124,6 @@ from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy modul
     _key_or_team_allows_client_pricing_override,  # pyright: ignore[reportPrivateUsage]  # reuse the proxy's pricing trust policy
     _strip_client_pricing_overrides,  # pyright: ignore[reportPrivateUsage]  # sanitize before trusted hooks add guardrail costs
     get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
-    get_metadata_variable_name,
     redact_credential_headers,
     strip_client_guardrail_information,
 )
@@ -1132,6 +1134,14 @@ def _unfiltered_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     return headers
 
 
+def _with_anthropic_user_id(
+    body: Mapping[str, object] | None, user_id: str | None, url: str
+) -> Mapping[str, object] | None:
+    if body is None or user_id is None or not is_anthropic_messages_create_url(url):
+        return body
+    return {**body, "metadata": {"user_id": user_id}}
+
+
 async def pass_through_request(
     request: Request,
     target: str,
@@ -1346,6 +1356,8 @@ async def pass_through_request(
             request_method=getattr(request, "method", None),
             cost_per_request=cost_per_request,
         )
+        hooked_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
+        client_user_id: Final = anthropic_user_id_from_body(hooked_body)
         kwargs = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(  # rebind-ok: pre-existing rebinding on a rename-only line
             user_api_key_dict=user_api_key_dict,
             _parsed_body=_parsed_body,
@@ -1513,14 +1525,8 @@ async def pass_through_request(
             else:
                 logging_url = str(url) + "?" + requested_query_params_str
 
-        validated_body: Final = (
-            None if _parsed_body is None else TypeAdapter(dict[str, object]).validate_python(_parsed_body)
-        )
-        upstream_body: Final = (
-            with_client_metadata(request, validated_body or {})
-            if not custom_body and get_metadata_variable_name(request) == "litellm_metadata"
-            else validated_body
-        )
+        outgoing_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
+        upstream_body: Final = _with_anthropic_user_id(outgoing_body, client_user_id, str(url))
         logging_obj.pre_call(
             input=[{"role": "user", "content": safe_dumps(_parsed_body)}],
             api_key="",

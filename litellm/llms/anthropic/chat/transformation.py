@@ -123,6 +123,7 @@ from ..common_utils import (
     AnthropicError,
     AnthropicModelInfo,
     eager_input_streaming_flag,
+    is_valid_anthropic_user_id,
     process_anthropic_headers,
     refusal_provider_specific_fields,
     requires_native_compaction_beta,
@@ -1897,7 +1898,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 param == "user"
                 and value is not None
                 and isinstance(value, str)
-                and _valid_user_id(value)  # anthropic fails on emails
+                and is_valid_anthropic_user_id(value)  # anthropic fails on emails
             ):
                 optional_params["metadata"] = {"user_id": value}
             elif param == "thinking":
@@ -2401,7 +2402,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             and isinstance(_litellm_metadata, dict)
             and "user_id" in _litellm_metadata
             and _litellm_metadata["user_id"] is not None
-            and _valid_user_id(_litellm_metadata["user_id"])
+            and is_valid_anthropic_user_id(_litellm_metadata["user_id"])
         ):
             optional_params["metadata"] = {"user_id": _litellm_metadata["user_id"]}
 
@@ -3230,21 +3231,3 @@ class JsonModeRequest(BaseModel):
             return None
         json_tool: Final = next((tool for tool in tools if tool.get("name") == RESPONSE_FORMAT_TOOL_NAME), None)
         return None if json_tool is None else response_format_schema(json_tool.get("input_schema"))
-
-
-def _valid_user_id(user_id: object) -> bool:
-    """
-    Validate that user_id is a string and not an email or phone number.
-    Returns: bool: True if valid (string, not email or phone), False otherwise
-    """
-    if not isinstance(user_id, str):
-        return False
-    email_pattern: Final = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
-    phone_pattern: Final = r"^\+?[\d\s\(\)-]{7,}$"
-
-    if re.match(email_pattern, user_id):
-        return False
-    if re.match(phone_pattern, user_id):
-        return False
-
-    return True

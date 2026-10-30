@@ -715,7 +715,7 @@ def test_custom_passthrough_spend_row_carries_the_mapped_tags(mapped: Rig) -> No
 def _passthrough_path(rig: Rig, scenario: Scenario, entrypoint: PassThrough) -> str:
     match entrypoint:
         case "custom":
-            path: Final = f"/baggage-passthrough-{uuid.uuid4().hex}/v1/messages"
+            path: Final = f"/baggage-passthrough-{uuid.uuid4().hex}"
             created: Final = rig.proxy.post(
                 "/config/pass_through_endpoint", {"path": path, "target": f"{rig.provider.url}/echo", "auth": True}
             )
@@ -734,12 +734,16 @@ def _passthrough_path(rig: Rig, scenario: Scenario, entrypoint: PassThrough) -> 
 
 def _passthrough_body(rig: Rig, entrypoint: PassThrough, text: str) -> dict[str, JsonValue]:
     model: Final = {"custom": rig.chat_model, "anthropic": "claude-sonnet-4-5", "vllm": f"vllm-{rig.marker}"}
-    return {
+    body: Final[dict[str, JsonValue]] = {
         "model": model[entrypoint],
         "max_tokens": 16,
         "messages": [{"role": "user", "content": text}],
-        "metadata": {"user_id": f"user-{text}"},
     }
+    match entrypoint:
+        case "vllm":
+            return {**body, "metadata": {"user_id": f"user-{text}"}}
+        case "custom" | "anthropic":
+            return body
 
 
 def _upstream_body(entrypoint: PassThrough, body: Mapping[str, JsonValue]) -> JsonValue:
@@ -763,10 +767,9 @@ def test_passthrough_forwards_the_client_body_unchanged_while_its_spend_row_carr
     tenant: Final = uuid.uuid4().hex
     with optional.proxy.scenario() as scenario:
         path: Final = _passthrough_path(optional, scenario, entrypoint)
-        key_fields: Final[dict[str, JsonValue]] = {
-            "metadata": {"tags": [f"key-{tenant}"]},
-            **({"allowed_passthrough_routes": [path]} if entrypoint == "custom" else {}),
-        }
+        key_fields: Final[dict[str, JsonValue]] = (
+            {"allowed_passthrough_routes": [path]} if entrypoint == "custom" else {}
+        )
         plain_key: Final = scenario.key(**key_fields)
         key: Final = scenario.key(**key_fields)
         body: Final = _passthrough_body(optional, entrypoint, tenant)

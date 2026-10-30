@@ -169,10 +169,40 @@ def tools_without_custom_field(tools: Sequence[object], hoist_defer_loading: boo
     return [_tool_without_custom_field(tool, hoist_defer_loading, drop_custom) for tool in tools]
 
 
+def is_anthropic_messages_create_url(url: str) -> bool:
+    return urlparse(url).path.removesuffix("/").endswith("/v1/messages")
+
+
 def is_anthropic_messages_url(url: str) -> bool:
     """Check whether a URL addresses Anthropic's Messages API."""
-    parsed_url: Final = urlparse(url)
-    return parsed_url.hostname == "api.anthropic.com" or parsed_url.path.removesuffix("/").endswith("/v1/messages")
+    return urlparse(url).hostname == "api.anthropic.com" or is_anthropic_messages_create_url(url)
+
+
+def is_valid_anthropic_user_id(user_id: object) -> bool:
+    """
+    Validate that user_id is a string with no email in it and is not a phone number.
+    Returns: bool: True if valid (string, no email, not a phone number), False otherwise
+    """
+    if not isinstance(user_id, str):
+        return False
+    email_pattern: Final = r"[^\s@]@[^\s@]+\.[^\s@]"
+    phone_pattern: Final = r"^\+?[\d\s\(\)-]{7,}$"
+
+    if re.search(email_pattern, user_id):
+        return False
+    if re.match(phone_pattern, user_id):
+        return False
+
+    return True
+
+
+def _json_object(value: object) -> Mapping[str, object]:
+    return TypeAdapter(Mapping[str, object]).validate_python(value if isinstance(value, Mapping) else {})
+
+
+def anthropic_user_id_from_body(body: object) -> str | None:
+    user_id: Final = _json_object(_json_object(body).get("metadata")).get("user_id")
+    return user_id if isinstance(user_id, str) and is_valid_anthropic_user_id(user_id) else None
 
 
 def requires_native_compaction_beta(

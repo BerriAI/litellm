@@ -430,7 +430,6 @@ BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY: Final = "litellm.bedrock_realtime.
 BEDROCK_REALTIME_SDK_DISTRIBUTION: Final = "aws-sdk-bedrock-runtime"
 BEDROCK_REALTIME_SDK_SUPPORTED_RANGE: Final = ">=0.10.0,<0.12.0"
 CLIENT_REQUESTED_MODEL_SCOPE_KEY: Final = "litellm.client_requested_model"
-CLIENT_METADATA_SCOPE_KEY: Final = "litellm.client_metadata"
 MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY: Final = "litellm.model_group_alias_resolved"
 MCP_PEEKED_BODY_SCOPE_KEY: Final = "litellm_mcp_peeked_body"
 MCP_ADMISSION_BODY_PEEK_TIMEOUT_SECONDS: Final = 5.0

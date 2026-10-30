@@ -1,8 +1,6 @@
-import copy
 import json
 import re
 from collections.abc import Collection, Mapping
-from dataclasses import dataclass
 from types import MappingProxyType, UnionType
 from typing import Annotated, Any, Final, Literal, Union, get_args, get_origin
 
@@ -17,7 +15,6 @@ from typing_extensions import NotRequired, ReadOnly, Required, assert_never
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX,
-    CLIENT_METADATA_SCOPE_KEY,
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     LITELLM_CLIENT_DISCONNECT_DETAIL,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
@@ -320,7 +317,6 @@ async def read_request_body(request: Request | None) -> dict:
                             param="request_body",
                             code=status.HTTP_400_BAD_REQUEST,
                         )
-            _remember_client_metadata(request, parsed_body)
 
         # Cache the parsed result
         safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
@@ -396,25 +392,6 @@ async def read_raw_json_body(request: Request | None) -> bytes | None:
         return await request.body()
     except RuntimeError:
         return None
-
-
-@dataclass(frozen=True, slots=True)
-class _ClientMetadata:
-    value: object
-
-
-def _remember_client_metadata(request: Request, parsed_body: Mapping[str, object]) -> None:
-    if "metadata" in parsed_body:
-        snapshot: Final = _ClientMetadata(copy.deepcopy(parsed_body["metadata"]))
-        request.scope[CLIENT_METADATA_SCOPE_KEY] = snapshot  # rebind-ok: per-request state lives on the ASGI scope
-
-
-def with_client_metadata(request: Request, body: Mapping[str, object]) -> Mapping[str, object]:
-    snapshot: Final[object] = request.scope.get(CLIENT_METADATA_SCOPE_KEY)
-    body_without_metadata: Final = {k: v for k, v in body.items() if k != "metadata"}
-    if not isinstance(snapshot, _ClientMetadata):
-        return body_without_metadata
-    return {**body_without_metadata, "metadata": snapshot.value}
 
 
 def _safe_get_request_parsed_body(request: Request | None) -> dict | None:
