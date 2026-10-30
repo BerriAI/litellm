@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any, Literal, TypeAlias
 
 from typing_extensions import ReadOnly, TypedDict
@@ -6,15 +7,17 @@ from typing_extensions import ReadOnly, TypedDict
 class BedrockKBLocation(TypedDict, total=False):
     """Location information for a retrieved document."""
 
-    type: str
-    s3Location: dict | None
-    webLocation: dict | None
-    kendraDocumentLocation: dict | None
-    salesforceLocation: dict | None
-    sharePointLocation: dict | None
-    confluenceLocation: dict | None
-    customDocumentLocation: dict | None
-    sqlLocation: dict | None
+    type: ReadOnly[str]
+    s3Location: ReadOnly[Mapping[str, str] | None]
+    webLocation: ReadOnly[Mapping[str, str] | None]
+    kendraDocumentLocation: ReadOnly[Mapping[str, str] | None]
+    salesforceLocation: ReadOnly[Mapping[str, str] | None]
+    sharePointLocation: ReadOnly[Mapping[str, str] | None]
+    confluenceLocation: ReadOnly[Mapping[str, str] | None]
+    googleDriveLocation: ReadOnly[Mapping[str, str] | None]
+    oneDriveLocation: ReadOnly[Mapping[str, str] | None]
+    customDocumentLocation: ReadOnly[Mapping[str, str] | None]
+    sqlLocation: ReadOnly[Mapping[str, str] | None]
 
 
 class BedrockKBRowValue(TypedDict):
