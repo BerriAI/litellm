@@ -719,7 +719,7 @@ def _ran_or_runs_outside_pipelines(
         callback.pre_call_hook_ran_or_raised(data)
         or callback.deployment_hook_ran(data)
         or any(
-            callback._event_hook_is_event_type(hook)  # pyright: ignore[reportPrivateUsage]  # the only check of a guardrail's hooks
+            callback._event_hook_is_event_type(hook)  # pyright: ignore[reportPrivateUsage]  # no public hook check
             for hook in GuardrailEventHooks
             if hook.value not in pipeline_modes
         )

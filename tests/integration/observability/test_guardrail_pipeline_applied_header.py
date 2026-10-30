@@ -975,7 +975,7 @@ def _agent_card(name: str, url: str) -> dict[str, object]:
     }
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def agent(rig: _Rig) -> Iterator[str]:
     name: Final = f"pipeline-agent-{uuid.uuid4().hex}"
 
