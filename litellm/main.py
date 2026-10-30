@@ -6199,6 +6199,7 @@ def completion(
                     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
                     "fireworks_forward_user_id",
                     "responses_api_version",
+                    "allowed_openai_params",
                 )
                 if key in kwargs
             },
@@ -6266,6 +6267,9 @@ def completion(
         # reasoningSummary/reasoning_summary without tools (AI SDK) that the first
         # (early) check doesn't cover.
         _reasoning_summary_for_bridge: Final = peek_reasoning_summary_aliases(optional_params)
+        typed_deployment_model_info: Final = str_keyed_mapping(
+            cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
+        )
         if responses_api_model_info.get("mode") != "responses":
             responses_api_model_info, model = responses_api_bridge_check(
                 model=model,
@@ -6275,9 +6279,7 @@ def completion(
                 reasoning_effort=bridge_reasoning_effort(resolved_reasoning_effort, optional_params.get("extra_body")),
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
-                deployment_model_info=str_keyed_mapping(
-                    cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
-                ),
+                deployment_model_info=typed_deployment_model_info,
             )
 
         # Use base_model (the true underlying model) for Azure model-type
@@ -6289,19 +6291,28 @@ def completion(
 
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
 
-            if custom_llm_provider == "openai" and isinstance(resolved_reasoning_effort, dict):
-                from litellm.responses.utils import openai_bridge_reasoning
+            if isinstance(resolved_reasoning_effort, dict):
+                from litellm.responses.utils import (
+                    RefusedReasoningFields,
+                    bridge_reasoning,
+                    raise_refused_reasoning_fields,
+                )
 
-                optional_params["reasoning_effort"] = openai_bridge_reasoning(
+                bridged_reasoning: Final = bridge_reasoning(
                     requested=resolved_reasoning_effort,
                     effort_kept="reasoning_effort" in optional_params,
                     summary_alias=rs_val,
                     model=model,
+                    base_model=base_model if isinstance(base_model, str) else None,
+                    custom_llm_provider=custom_llm_provider,
+                    api_base=api_base,
+                    deployment_model_info=typed_deployment_model_info,
                     drop_params=drop_unsupported_reasoning,
                     additional_drop_params=routing_kwargs.get("additional_drop_params"),
                 )
-            elif isinstance(resolved_reasoning_effort, dict) and "summary" in resolved_reasoning_effort:
-                optional_params["reasoning_effort"] = resolved_reasoning_effort
+                if isinstance(bridged_reasoning, RefusedReasoningFields):
+                    raise_refused_reasoning_fields(bridged_reasoning, model, custom_llm_provider)
+                optional_params["reasoning_effort"] = bridged_reasoning
             elif rs_val is not None:
                 eff: Final = optional_params.get("reasoning_effort", resolved_reasoning_effort)
                 if isinstance(eff, dict):
@@ -7975,6 +7986,8 @@ async def atext_completion(*args, **kwargs) -> TextCompletionResponse | TextComp
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 stream_options=kwargs.get("stream_options"),
+                usage_injected_by_proxy="_litellm_strip_stream_usage" in kwargs
+                and kwargs["_litellm_strip_stream_usage"] is True,
             )
         else:
             ## OpenAI / Azure Text Completion Returns here
@@ -8824,8 +8837,9 @@ def speech(
     extra_headers: Final = kwargs.get("extra_headers", None)
     model_info: Final = kwargs.get("model_info", None)
     shared_session: Final = kwargs.get("shared_session", None)
+    caller_api_base: Final = api_base or base_url
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
-        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base or base_url
+        model=model, custom_llm_provider=custom_llm_provider, api_base=caller_api_base
     )
     kwargs.pop("tags", [])
 
@@ -8880,13 +8894,13 @@ def speech(
         custom_llm_provider=custom_llm_provider,
     )
     response: HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent] | None = None
-    if custom_llm_provider == "edenai":
-        litellm_params_dict["api_base"] = api_base
+    if custom_llm_provider in ("edenai", "dashscope") and text_to_speech_provider_config is not None:
+        litellm_params_dict["api_base"] = caller_api_base if custom_llm_provider == "dashscope" else api_base
         response = base_llm_http_handler.text_to_speech_handler(
             model=model,
             input=input,
             voice=voice if isinstance(voice, str) else None,
-            text_to_speech_provider_config=text_to_speech_provider_config or litellm.EdenAITextToSpeechConfig(),
+            text_to_speech_provider_config=text_to_speech_provider_config,
             text_to_speech_optional_params=optional_params,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params_dict,

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -201,11 +202,23 @@ class BaseAnthropicMessagesConfig(ABC):
             anthropic_request_errors_on_thinking_binding_mismatch,
             is_anthropic_invalid_thinking_block_error,
             is_anthropic_thinking_binding_mismatch_error,
+            is_claude_strict_tools_rejection,
+            tools_without_strict,
+            validated_object_mapping,
         )
 
         if e.response.status_code != 400:
             return False
         error_text: Final[str] = e.response.text
+        body: Final = validated_object_mapping(request_body)
+        drops_rejected_strict_tools: Final = (
+            drops_unsupported_params(litellm_params.get("drop_params"))
+            and is_claude_strict_tools_rejection(e.response.status_code, error_text)
+            and body is not None
+            and tools_without_strict(body.get("tools")) is not None
+        )
+        if drops_rejected_strict_tools:
+            return True
         caller_asked_for_this_error: Final = anthropic_request_errors_on_thinking_binding_mismatch(
             request_body
         ) and is_anthropic_thinking_binding_mismatch_error(error_text)
@@ -219,11 +232,22 @@ class BaseAnthropicMessagesConfig(ABC):
         """
         from litellm.llms.anthropic.common_utils import (
             is_anthropic_invalid_thinking_block_error,
+            is_claude_strict_tools_rejection,
             strip_thinking_blocks_from_anthropic_messages_request_dict,
+            tools_without_strict,
+            warn_claude_strict_tools_dropped,
         )
 
         if e.response.status_code == 400 and is_anthropic_invalid_thinking_block_error(e.response.text):
             strip_thinking_blocks_from_anthropic_messages_request_dict(request_data)
+        without_strict: Final = (
+            tools_without_strict(request_data.get("tools"))
+            if is_claude_strict_tools_rejection(e.response.status_code, e.response.text)
+            else None
+        )
+        if without_strict is not None:
+            warn_claude_strict_tools_dropped(without_strict.dropped_count)
+            request_data["tools"] = list(without_strict.tools)  # rebind-ok: the retry loop re-signs this same dict
         return request_data
 
     def native_output_fallback_litellm_params(

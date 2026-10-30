@@ -1085,7 +1085,8 @@ def test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls(gateway:
         mcp_peer() as peer,
         candidate.scenario() as scenario,
     ):
-        identity = register_mcp(scenario, peer, "guardrail" + uuid.uuid4().hex)
+        server = "guardrail" + uuid.uuid4().hex
+        identity = register_mcp(scenario, peer, server)
         permission = {"mcp_servers": [identity], "mcp_tool_search_enabled": True}
         key = scenario.key(object_permission=permission)
         key_selected = scenario.key(object_permission=permission, guardrails=[guardrail])
@@ -1116,8 +1117,10 @@ def test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls(gateway:
                 )
                 calls = tuple(item for item in peer.drain() if item["body"].get("method") == "tools/call")
                 if expected is None:
-                    assert response.status_code == 400, response.text
-                    assert "integration resolved add denied" in response.text, response.text
+                    assert response.status_code == 403, response.text
+                    assert response.json() == {
+                        "detail": {"error": f"Tool add is unavailable after MCP guardrail checks for server {server}."}
+                    }, response.text
                     assert calls == (), "pre-call denial must prevent upstream execution"
                 else:
                     assert response.status_code == 200, response.text

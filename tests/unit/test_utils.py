@@ -4391,7 +4391,7 @@ class TestBedrockBaseModelLabelKeepsTools:
         from litellm.utils import get_optional_params
 
         result = get_optional_params(
-            model="eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
             custom_llm_provider="bedrock",
             base_model="claude-haiku-4-5",
             tools=self.TOOLS,
@@ -8964,7 +8964,7 @@ async def test_nested_wrapper_exits_schedule_one_async_success_log(monkeypatch: 
     from litellm.litellm_core_utils import litellm_logging
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-    from litellm.utils import _dispatch_success_logging
+    from litellm.utils import dispatch_success_logging
 
     class CountingLogger(CustomLogger):
         def __init__(self) -> None:
@@ -9003,7 +9003,7 @@ async def test_nested_wrapper_exits_schedule_one_async_success_log(monkeypatch: 
     now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
     for result in (inner_result, outer_result):
-        _dispatch_success_logging(
+        dispatch_success_logging(
             logging_obj=logging_obj,
             result=result,
             start_time=now,
