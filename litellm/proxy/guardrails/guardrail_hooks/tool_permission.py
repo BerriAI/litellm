@@ -4,11 +4,16 @@ from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
 from typing import Any, Final, Literal, TypedDict
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, Required
 
 from litellm import ChatCompletionToolParam
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.completion_extras.litellm_responses_transformation.transformation import (
+    replayed_tool_search_tools,
+    without_tool_search_items_loading,
+)
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -31,6 +36,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
 )
 from litellm.types.utils import (
     CallTypesLiteral,
+    ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
     Choices,
     Function,
@@ -40,6 +46,8 @@ from litellm.types.utils import (
 )
 
 GUARDRAIL_NAME: Final = "tool_permission"
+_DECODED_ARGUMENTS: Final = TypeAdapter(object)
+_REQUEST_DATA: Final = TypeAdapter(object)
 
 
 def _object_mapping(value: object) -> Mapping[str, object] | None:
@@ -50,6 +58,12 @@ def _object_mapping(value: object) -> Mapping[str, object] | None:
 def _object_list(value: object) -> Sequence[object] | None:
     """Return ``value`` as an opaque sequence when it is a list."""
     return value if isinstance(value, list) else None
+
+
+def _function_tool_name(tool: object) -> str | None:
+    fields: Final = _object_mapping(tool)
+    name: Final = fields.get("name") if fields is not None and fields.get("type") == "function" else None
+    return name if isinstance(name, str) else None
 
 
 class _ToolPermissionRuleFields(TypedDict, total=False):
@@ -314,7 +328,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         parsed_arguments: object = {}
         try:
             if isinstance(arguments, str):
-                parsed_arguments = json.loads(arguments)
+                parsed_arguments = _DECODED_ARGUMENTS.validate_python(json.loads(arguments))
             elif isinstance(arguments, dict):
                 parsed_arguments = arguments
             else:
@@ -653,6 +667,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
             if forced_tool_name is not None:
                 request_tools.append((forced_tool_name, "function"))
 
+        replayed: Final = map(_function_tool_name, replayed_tool_search_tools(_REQUEST_DATA.validate_python(data)))
+        request_tools.extend((name, "function") for name in replayed if name is not None)
+
         return request_tools
 
     def _modify_request_with_permission_errors(
@@ -701,6 +718,12 @@ class ToolPermissionGuardrail(CustomGuardrail):
         if named_function_call in error_tool_names:
             data["function_call"] = "none"
 
+        messages: Final = without_tool_search_items_loading(
+            _REQUEST_DATA.validate_python(data), frozenset(denied_tool_names)
+        )
+        if messages is not None:
+            data["messages"] = messages  # rebind-ok: rewrite mode edits the request in place
+
         return data
 
     def _create_permission_error_result(
@@ -722,6 +745,14 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         return ToolResult(tool_use_id=tool_call.id, content=error_message, is_error=True)
 
+    @staticmethod
+    def _judged_tool_call(
+        tool_call: ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall,
+    ) -> tuple[str | None, ...]:
+        if isinstance(tool_call, ChatCompletionMessageCustomToolCall):
+            return (tool_call.id, tool_call.type, tool_call.custom.name, tool_call.custom.input)
+        return (tool_call.id, tool_call.type, tool_call.function.name, tool_call.function.arguments)
+
     def _modify_response_with_permission_errors(
         self,
         response: ModelResponse,
@@ -739,11 +770,10 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         verbose_proxy_logger.info("Blocking %s unauthorized tool uses", len(denied_tools))
 
-        # Create a mapping of tool_use_id to error result
-        error_results: Final = {}
-        for tool_use, error in denied_tools:
-            error_result = self._create_permission_error_result(tool_use, error)
-            error_results[tool_use.id] = error_result
+        error_results: Final = {
+            self._judged_tool_call(tool_use): self._create_permission_error_result(tool_use, error)
+            for tool_use, error in denied_tools
+        }
 
         # Modify the response content
         for choice_index, choice in enumerate(response.choices):
@@ -753,9 +783,8 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
                 # Rewrite tool_calls
                 for tool_call in choice.message.tool_calls or []:
-                    tool_call_id = tool_call.id
-                    if tool_call_id in error_results:
-                        error_result = error_results[tool_call_id]
+                    error_result = error_results.get(self._judged_tool_call(tool_call))
+                    if error_result is not None:
                         error_messages.append(error_result.content)
                     else:
                         filtered_tool_calls.append(tool_call)
@@ -766,7 +795,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
                     getattr(choice.message, "function_call", None), choice_index
                 )
                 if legacy_tool_call is not None:
-                    legacy_error_result = error_results.get(legacy_tool_call.id)
+                    legacy_error_result = error_results.get(self._judged_tool_call(legacy_tool_call))
                     if legacy_error_result is not None:
                         choice.message.function_call = None
                         error_messages.append(legacy_error_result.content)
@@ -949,7 +978,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             return
 
         self._modify_response_with_permission_errors(anthropic_response, anthropic_denials)
-        for sse_chunk in anthropic_sse_chunks_from_response(anthropic_response):
+        for sse_chunk in anthropic_sse_chunks_from_response(anthropic_response, all_chunks, keep_explanations=True):
             yield sse_chunk
 
     def _check_assembled_stream(

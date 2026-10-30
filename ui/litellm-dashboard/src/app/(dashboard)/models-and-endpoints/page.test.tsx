@@ -1,9 +1,14 @@
 /* @vitest-environment jsdom */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { renderWithProviders } from "../../../../tests/test-utils";
+import { recordUiEvent } from "@/lib/telemetry/uiEvents";
 import ModelsAndEndpointsPage from "./page";
+
+vi.mock("@/lib/telemetry/uiEvents", () => ({ recordUiEvent: vi.fn(() => Promise.resolve()) }));
+vi.mock("next/navigation", () => ({ usePathname: () => "/ui/models-and-endpoints" }));
 
 vi.mock("./panels/AllModelsPanel", () => ({ default: () => <div data-testid="panel-all-models" /> }));
 vi.mock("./panels/AddModelPanel", () => ({ default: () => <div data-testid="panel-add" /> }));
@@ -61,14 +66,13 @@ const NON_ADMIN = {
 // A proxy_admin_viewer session: effectiveSessionRole masquerades the role as "Admin".
 const VIEW_ONLY_ADMIN = { ...ADMIN, isViewOnly: true };
 
-const renderPage = () => {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <ModelsAndEndpointsPage />
-    </QueryClientProvider>,
-  );
-};
+const renderPage = (options?: { searchParams?: string; onUrlUpdate?: OnUrlUpdateFunction }) =>
+  renderWithProviders(<ModelsAndEndpointsPage />, options);
+
+const lastUrlParams = (onUrlUpdate: Mock<OnUrlUpdateFunction>): URLSearchParams | undefined =>
+  onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
+
+const ADD_MODEL_PREFILL_LINK = "?tab=add&provider=typesafe&litellm_model=typesafe%2Fjev-latest";
 
 describe("ModelsAndEndpointsPage", () => {
   beforeEach(() => {
@@ -222,6 +226,71 @@ describe("ModelsAndEndpointsPage", () => {
       renderPage();
 
       expect(screen.queryByRole("tab", { name: /Auto-Routers/ })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("tab from the URL", () => {
+    it("opens the Add Model tab from ?tab=add for an admin", () => {
+      renderPage({ searchParams: "?tab=add" });
+
+      expect(screen.getByRole("tab", { name: "Add Model" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByTestId("panel-add")).toBeInTheDocument();
+      expect(screen.queryByTestId("panel-all-models")).not.toBeInTheDocument();
+    });
+
+    it("falls back to Deployed Models on ?tab=add for a view-only admin, who has no Add Model tab", () => {
+      mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
+      renderPage({ searchParams: "?tab=add" });
+
+      expect(screen.getByRole("tab", { name: "Deployed Models" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByTestId("panel-all-models")).toBeInTheDocument();
+      expect(screen.queryByTestId("panel-add")).not.toBeInTheDocument();
+    });
+
+    it("falls back to Deployed Models on an unknown ?tab", () => {
+      renderPage({ searchParams: "?tab=nope" });
+
+      expect(screen.getByRole("tab", { name: "Deployed Models" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByTestId("panel-all-models")).toBeInTheDocument();
+    });
+
+    it("records a UI event for each tab the user clicks", async () => {
+      const user = userEvent.setup();
+      renderPage();
+
+      await user.click(screen.getByRole("tab", { name: "Health Status" }));
+
+      expect(recordUiEvent).toHaveBeenCalledWith({
+        page: "models-and-endpoints",
+        action: "click",
+        target: "tab=health",
+      });
+    });
+
+    it("writes the clicked tab to the URL and clears it for Deployed Models", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderPage({ onUrlUpdate });
+
+      await user.click(screen.getByRole("tab", { name: "Health Status" }));
+      await waitFor(() => expect(lastUrlParams(onUrlUpdate)?.get("tab")).toBe("health"));
+      expect(screen.getByTestId("panel-health")).toBeInTheDocument();
+
+      await user.click(screen.getByRole("tab", { name: "Deployed Models" }));
+      await waitFor(() => expect(lastUrlParams(onUrlUpdate)?.get("tab")).toBeNull());
+      expect(screen.getByTestId("panel-all-models")).toBeInTheDocument();
+    });
+
+    it("drops the Add Model prefill params when the user leaves the tab", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderPage({ searchParams: ADD_MODEL_PREFILL_LINK, onUrlUpdate });
+
+      await user.click(screen.getByRole("tab", { name: "Deployed Models" }));
+
+      await waitFor(() => expect(lastUrlParams(onUrlUpdate)?.get("tab")).toBeNull());
+      expect(lastUrlParams(onUrlUpdate)?.get("provider")).toBeNull();
+      expect(lastUrlParams(onUrlUpdate)?.get("litellm_model")).toBeNull();
     });
   });
 });

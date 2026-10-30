@@ -21,6 +21,7 @@ from typing_extensions import ReadOnly, Required, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS, AGENT_HEALTH_CHECK_TIMEOUT_SECONDS
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -226,10 +227,6 @@ def _check_agent_management_permission(user_api_key_dict: UserAPIKeyAuth) -> Non
                 "error": f"Only proxy admins can create, update, or delete agents. Your role={user_api_key_dict.user_role}"
             },
         )
-
-
-AGENT_HEALTH_CHECK_TIMEOUT_SECONDS: Final = float(os.environ.get("LITELLM_AGENT_HEALTH_CHECK_TIMEOUT", "5.0"))
-AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS = float(os.environ.get("LITELLM_AGENT_HEALTH_CHECK_GATHER_TIMEOUT", "30.0"))
 
 
 class _AgentHealthResult(TypedDict, total=False):

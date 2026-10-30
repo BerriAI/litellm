@@ -67,7 +67,7 @@ def fallback_rig(
         owned: Final = stack.enter_context(
             owned_proxy_process(rig_gateway, directory, environment, config=config, workers=2)
         )
-        yield Rig(owned.gateway, owned.log, groups, wires)
+        yield Rig(owned.gateway, owned, groups, wires)
 
 
 @pytest.fixture(scope="module")
@@ -185,7 +185,7 @@ def test_database_setting_survives_a_restart_and_refuses_per_model_overflow(tmp_
         )
         listed: Final = listed_setting(restarted.gateway)
         assert [(entry["field_value"], entry["stored_in_db"]) for entry in listed] == [(True, True)], listed
-        rig: Final = Rig(restarted.gateway, restarted.log, groups, wires)
+        rig: Final = Rig(restarted.gateway, restarted, groups, wires)
         rig.traffic()
         key: Final = string_value(rig.gateway.post("/key/generate", {"model_rpm_limit": {groups.primary: 1}})["key"])
         first, second = new_marker(), new_marker()

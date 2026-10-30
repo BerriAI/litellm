@@ -169,7 +169,7 @@ describe("CredentialsTable", () => {
     expect(within(rows[1]).getByText("zulu")).toBeInTheDocument();
   });
 
-  it("should badge a config credential and block editing and deleting it", async () => {
+  it("should show each credential's source in its own column and block editing a config one", async () => {
     const user = userEvent.setup();
     const credentials: CredentialItem[] = [
       { credential_name: "from-config", source: "config", credential_values: {}, credential_info: {} },
@@ -177,8 +177,12 @@ describe("CredentialsTable", () => {
     ];
     render(<CredentialsTable {...defaultProps} credentials={credentials} />);
 
-    expect(within(screen.getByRole("row", { name: /from-config/ })).getByText("Config")).toBeInTheDocument();
-    expect(within(screen.getByRole("row", { name: /from-db/ })).queryByText("Config")).not.toBeInTheDocument();
+    const sourceColumn = screen.getAllByRole("columnheader").findIndex((header) => header.textContent === "Source");
+    const sourceCell = (name: RegExp) => within(screen.getByRole("row", { name })).getAllByRole("cell")[sourceColumn];
+    expect(sourceColumn).toBeGreaterThan(-1);
+    expect(sourceCell(/from-config/)).toHaveTextContent(/^Config$/);
+    expect(sourceCell(/from-db/)).toHaveTextContent(/^DB$/);
+    expect(within(screen.getByRole("row", { name: /from-config/ })).getAllByText("Config")).toHaveLength(1);
 
     await user.click(screen.getByTestId("credential-actions-from-config"));
     expect(await screen.findByTestId("credential-config-owned-hint")).toBeInTheDocument();

@@ -130,17 +130,18 @@ class LicenseCheck:
         except Exception:
             return False
 
+    def user_seat_limit(self) -> int | None:
+        if self.airgapped_license_data is None:
+            return None
+        max_users: Final = self.airgapped_license_data.get("max_users")
+        return max_users if isinstance(max_users, int) else None
+
     def is_over_limit(self, total_users: int) -> bool:
         """
         Check if the license is over the limit
         """
-        if self.airgapped_license_data is None:
-            return False
-        if "max_users" not in self.airgapped_license_data or not isinstance(
-            self.airgapped_license_data["max_users"], int
-        ):
-            return False
-        return total_users > self.airgapped_license_data["max_users"]
+        seat_limit: Final = self.user_seat_limit()
+        return seat_limit is not None and total_users > seat_limit
 
     def is_team_count_over_limit(self, team_count: int) -> bool:
         """

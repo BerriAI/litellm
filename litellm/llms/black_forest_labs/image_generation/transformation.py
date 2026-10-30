@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -39,6 +40,7 @@ else:
     LiteLLMLoggingObj = Any
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
@@ -202,11 +204,10 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         """
         Get the complete URL for the Black Forest Labs API request.
         """
-        base_url: str = api_base or get_secret_str("BFL_API_BASE") or DEFAULT_API_BASE
-        base_url = base_url.rstrip("/")
+        base_url: Final = api_base or get_secret_str("BFL_API_BASE") or DEFAULT_API_BASE
 
         endpoint: Final = self._get_model_endpoint(model)
-        return f"{base_url}{endpoint}"
+        return join_api_base(base_url, endpoint)
 
     def transform_image_generation_request(
         self,
@@ -272,7 +273,7 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         The response contains: {"status": "Ready", "result": {"sample": "https://..."}}
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=raw_response.status_code,
