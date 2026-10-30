@@ -9711,6 +9711,40 @@ async def test_saved_weights_override_caller_input_and_preserve_key_precedence(
     assert logging.pre_call_hook.call_args.kwargs["data"].get("_router_weights") == expected
 
 
+def _hook_data(**kwargs: object) -> object:
+    return kwargs["data"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prompt, proxy_field, client_field", [
+    ({"input": "hi"}, "litellm_metadata", "metadata"),
+    ({"messages": [{"role": "user", "content": "hi"}]}, "metadata", "litellm_metadata"),
+])
+async def test_cursor_route_writes_proxy_fields_only_to_the_field_its_body_shape_picks(
+    prompt: dict[str, str | list[dict[str, str]]],
+    proxy_field: str,
+    client_field: str,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    logging: Final = MagicMock(spec=ProxyLogging)
+    logging.pre_call_hook = AsyncMock(side_effect=_hook_data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data={"model": "gpt-x", "metadata": {"client": "cursor"}, **prompt})
+    data, _ = await processor.common_processing_pre_call_logic(
+        request=Request({"type": "http", "method": "POST", "path": "/cursor/chat/completions", "headers": []}),
+        general_settings={},
+        user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash"),
+        proxy_logging_obj=logging,
+        proxy_config=proxy_server.ProxyConfig(),
+        route_type="acompletion",
+        logging_auth=ProxyUserAPIKeyAuth(api_key="logging-hash", key_alias="logging-alias"),
+    )
+    assert data[proxy_field]["user_api_key_alias"] == "logging-alias"
+    assert "queue_time_seconds" in data[proxy_field]
+    assert "user_api_key_alias" not in data.get(client_field, {})
+    assert "queue_time_seconds" not in data.get(client_field, {})
+    assert data["metadata"]["client"] == "cursor"
+
 class TestPerRequestModelGroupAlias:
     """``router_settings.model_group_alias`` on a key or team has to be resolved
     by the proxy: the Router resolves aliases from its own shared instance
