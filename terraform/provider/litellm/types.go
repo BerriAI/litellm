@@ -76,8 +76,12 @@ type TeamResponse struct {
 	TeamMemberBudgetTable    *TeamMemberBudgetTable `json:"team_member_budget_table,omitempty"`
 }
 
-// TeamMemberBudgetTable is the team's default member budget row, the only place /team/info returns team_member_model_max_budget.
+// TeamMemberBudgetTable is the team's default member budget row, the only place /team/info returns the team_member_* budget and limits.
 type TeamMemberBudgetTable struct {
+	MaxBudget      *float64               `json:"max_budget,omitempty"`
+	BudgetDuration string                 `json:"budget_duration,omitempty"`
+	RPMLimit       *int                   `json:"rpm_limit,omitempty"`
+	TPMLimit       *int                   `json:"tpm_limit,omitempty"`
 	ModelMaxBudget map[string]interface{} `json:"model_max_budget,omitempty"`
 }
 

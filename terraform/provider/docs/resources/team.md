@@ -160,7 +160,7 @@ The following arguments are supported:
 
 * `team_member_budget` - (Optional) Budget (in USD) applied to each individual team member.
 
-* `team_member_budget_duration` - (Optional) Reset cycle for the per-member budget (e.g. `30d`, `1mo`).
+* `team_member_budget_duration` - (Optional) Reset cycle for the per-member budget (e.g. `30d`, `1mo`). When it is not set, the proxy uses the team's `budget_duration`, and that value is read back into state without planning a change.
 
 * `team_member_rpm_limit` - (Optional) Requests per minute limit applied to each individual team member.
 
@@ -174,7 +174,7 @@ The following arguments are supported:
 
 * `model_tpm_limit` - (Optional) Map of model name to tokens per minute limit for that model.
 
-* `allowed_passthrough_routes` - (Optional) List of pass-through routes this team is allowed to call.
+* `allowed_passthrough_routes` - (Optional) List of pass-through routes this team is allowed to call. Requires a LiteLLM Enterprise license on the proxy.
 
 * `rpm_limit_type` - (Optional) How the RPM limit is enforced: `guaranteed_throughput` or `best_effort_throughput`. Changing this forces a new team to be created.
 
