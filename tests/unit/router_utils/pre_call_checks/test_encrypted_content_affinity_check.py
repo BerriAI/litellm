@@ -192,6 +192,8 @@ class TestRestoreDropsDuplicateReplayedCopies:
             {"role": "user", "content": "again"},
         ]
         result = ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(request_input)
+        assert result is not request_input
+        assert len(request_input) == 4
         reasoning = [i for i in result if isinstance(i, dict) and i.get("type") == "reasoning"]
         assert len(reasoning) == 1
         assert reasoning[0]["id"] == "rs_dup"
@@ -515,7 +517,9 @@ async def test_encrypted_content_affinity_bypasses_rpm_limits():
 
         # Extract the replayable item from the first response output
         replayed_item = _extract_encrypted_item(first_response)
-        assert replayed_item["id"] == "rs_encrypted_must_pin", f"Expected the provider's item ID, got {replayed_item['id']!r}"
+        assert replayed_item["id"] == "rs_encrypted_must_pin", (
+            f"Expected the provider's item ID, got {replayed_item['id']!r}"
+        )
         assert replayed_item["encrypted_content"].startswith("litellm_enc:")
 
         # Follow-up replaying the wrapped item — should pin to same deployment
