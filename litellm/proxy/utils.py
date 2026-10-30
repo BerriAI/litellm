@@ -4236,12 +4236,16 @@ class ProxyLogging:
             raise e
         policy_data: Final = TypeAdapter(Mapping[str, object]).validate_python(data)
         policy_logging: Final = policy_data.get("litellm_logging_obj")
+        policy_call_type: Final = (
+            TypeAdapter[str | None](str | None).validate_python(getattr(policy_logging, "call_type", None))
+            if isinstance(policy_logging, Logging)
+            else None
+        )
         check_native_mcp_response(
             user_api_key_dict,
             policy_data,
             response,
-            is_retrieval=isinstance(policy_logging, Logging)
-            and TypeAdapter(str | None).validate_python(getattr(policy_logging, "call_type", None)) == "aget_responses",
+            is_retrieval=policy_call_type == "aget_responses",
             validated_context=validated_mcp_context,
         )
         return response
