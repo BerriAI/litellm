@@ -15325,12 +15325,15 @@ def _responses_routing_kwargs(responses_request: Mapping[str, object] | None) ->
     return {"previous_response_id": previous_response_id} if isinstance(previous_response_id, str) else {}
 
 
+def _inference_params(
+    litellm_params: Mapping[str, object], responses_request: Mapping[str, object]
+) -> Mapping[str, object]:
+    return {**litellm_params, **_router_default_litellm_params(llm_router), **responses_request}
+
+
 def _count_drop_policy(deployment: Mapping[str, object] | None, responses_request: Mapping[str, object]) -> DropPolicy:
     litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {}
-    router_defaults: Final[Mapping[str, object]] = (
-        {} if llm_router is None else _router_default_litellm_params(llm_router)
-    )
-    return drop_policy({**litellm_params, **router_defaults, **responses_request})
+    return drop_policy(_inference_params(litellm_params, responses_request))
 
 
 def _native_responses_count(
@@ -15369,20 +15372,27 @@ def _deployment_provider(deployment: _TokenCountDeployment, request_model: str) 
         return None
 
 
-def _serves_native_responses(deployment: _TokenCountDeployment, request_model: str) -> bool:
+def _serves_native_responses(
+    deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object]
+) -> bool:
     params: Final = deployment.get("litellm_params", {})
     try:
         return provider_stores_the_conversation(
             _non_empty_str(params.get("model")) or request_model,
             _non_empty_str(params.get("custom_llm_provider")),
             {
-                "use_chat_completions_api": params.get("use_chat_completions_api"),
+                "use_chat_completions_api": _inference_params(params, responses_request).get(
+                    "use_chat_completions_api"
+                ),
                 "model_info": dict(deployment.get("model_info", {})),
                 "api_base": _deployment_api_base(deployment),
             },
         )
     except litellm.BadRequestError:
         return False
+
+
+_AZURE_PROVIDERS: Final = frozenset((litellm.LlmProviders.AZURE.value, litellm.LlmProviders.AZURE_AI.value))
 
 
 def _with_strict_by_default(tools: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
@@ -15636,7 +15646,9 @@ async def _count_request_tokens(
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)
     )
-    native_responses: Final = responses_request is not None and _serves_native_responses(deployment_view, request.model)
+    native_responses: Final = responses_request is not None and _serves_native_responses(
+        deployment_view, request.model, responses_request
+    )
     sent_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
         list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
     )
@@ -15644,7 +15656,7 @@ async def _count_request_tokens(
         cast(list[ChatCompletionToolParam], list(_with_strict_by_default(sent_tools)))  # cast-ok: strict added
         if sent_tools is not None
         and native_responses
-        and _deployment_provider(deployment_view, request.model) == litellm.LlmProviders.AZURE_AI.value
+        and _deployment_provider(deployment_view, request.model) in _AZURE_PROVIDERS
         else sent_tools
     )
     framing: Final = (

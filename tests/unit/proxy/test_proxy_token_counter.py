@@ -2978,7 +2978,8 @@ async def test_a_custom_deployment_name_counts_like_the_base_model_it_names(
 
 
 # usage.input_tokens that POST /v1/responses billed through Azure AI Foundry grok-4-1-fast-reasoning on 2026-10-29 for
-# the input "What is the weather in Paris?" with these function tools, strict left unset or sent as false or null
+# the input "What is the weather in Paris?" with these function tools, strict left unset or sent as false or null,
+# the same on the .services.ai.azure.com and .openai.azure.com hosts
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("tools", "strict", "billed_prompt_tokens"),
@@ -2993,15 +2994,25 @@ async def test_a_custom_deployment_name_counts_like_the_base_model_it_names(
         (_get_weather_copies(10), {"strict": None}, 535),
     ],
 )
+@pytest.mark.parametrize(
+    ("litellm_params", "model_info"),
+    [
+        ({"model": _AZURE_GROK_4_1, "api_base": _NATIVE_RESPONSES_BASE[_AZURE_GROK_4_1]}, {}),
+        (
+            {"model": "azure/grok-4-1-fast-reasoning", "api_base": "https://unused.openai.azure.com/openai/v1"},
+            {"base_model": _AZURE_GROK_4_1},
+        ),
+    ],
+)
 async def test_azure_responses_estimate_stays_at_or_just_over_the_billed_prompt_as_function_tools_are_added(
     monkeypatch: pytest.MonkeyPatch,
     tools: tuple[dict[str, object], ...],
     strict: dict[str, bool | None],
     billed_prompt_tokens: int,
+    litellm_params: dict[str, object],
+    model_info: dict[str, object],
 ):
-    router: Final = _single_deployment_router(
-        {"model": _AZURE_GROK_4_1, "api_base": _NATIVE_RESPONSES_BASE[_AZURE_GROK_4_1]}, {}
-    )
+    router: Final = _single_deployment_router(litellm_params, model_info)
 
     counted: Final = await _count_with_router(
         monkeypatch, router, tuple(_responses_function(tool, **strict) for tool in tools), responses=True
@@ -3058,6 +3069,43 @@ async def test_a_responses_count_the_proxy_bridges_to_chat_completions_frames_li
 
     assert await _count_with_router(monkeypatch, bridged, tools, responses=True) == chat_count
     assert await _count_with_router(monkeypatch, native, tools, responses=True) != chat_count
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("from_router_defaults", [False, True])
+async def test_a_responses_count_that_asks_for_the_chat_completions_bridge_frames_like_the_chat_count(
+    monkeypatch: pytest.MonkeyPatch, from_router_defaults: bool
+):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "counted",
+                "litellm_params": {
+                    "api_key": "unused",
+                    "model": _AZURE_GROK_4_1,
+                    "api_base": _NATIVE_RESPONSES_BASE[_AZURE_GROK_4_1],
+                },
+                "model_info": {},
+            }
+        ],
+        default_litellm_params={"use_chat_completions_api": True} if from_router_defaults else None,
+    )
+    chat_count: Final = await _count_with_router(monkeypatch, router, (_GET_WEATHER,), responses=False)
+
+    counted: Final = await count_request_tokens(
+        request=TokenCountRequest(
+            model="counted",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=[_GET_WEATHER],
+        ),
+        responses_request={
+            "model": "counted",
+            "input": "What is the weather in Paris?",
+            **({} if from_router_defaults else {"use_chat_completions_api": True}),
+        },
+    )
+
+    assert counted.total_tokens == chat_count
 
 
 _KIMI_WEATHER: Final = {
