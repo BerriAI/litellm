@@ -6226,6 +6226,35 @@ def test_model_info_v1_list_skips_fastapi_jsonable_encoder(monkeypatch):
     assert encoder_spy.call_count == 0
 
 
+
+@pytest.mark.parametrize("route", ("/model/info", "/v1/model/info"))
+def test_model_info_exposes_continuation_and_deployment_override(
+    route: str, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deployments: Final = [
+        {"model_name": "default", "litellm_params": {"model": "gemini/gemini-4-argon"}},
+        {
+            "model_name": "override",
+            "litellm_params": {"model": "vertex_ai/gemini-4-argon"},
+            "model_info": {"supports_continuation": False},
+        },
+    ]
+    router: Final = litellm.Router(model_list=deployments)
+    monkeypatch.setattr(proxy_server_module, "llm_router", router)
+    monkeypatch.setattr(proxy_server_module, "llm_model_list", router.model_list)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", None)
+    monkeypatch.setattr(proxy_server_module, "general_settings", {"infer_model_from_keys": False})
+    monkeypatch.setattr(proxy_server_module, "user_model", None)
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        user_api_key_auth,
+        lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key=MASTER_KEY, models=[], team_models=[]),
+    )
+    response: Final = TestClient(app).get(route)
+    assert response.status_code == 200
+    flags: Final = {row["model_name"]: row["model_info"]["supports_continuation"] for row in response.json()["data"]}
+    assert flags == {"default": True, "override": False}
+
 def test_model_info_v1_cli_model_returns_single_deployment_as_json(monkeypatch):
     """
     A proxy started with `litellm --model <name>` answers /model/info with one deployment

@@ -476,6 +476,20 @@ def test_supports_video_input_reads_its_own_cost_map_flag(
     assert litellm.get_model_info(model)["supports_video_input"] is video_input
 
 
+
+@pytest.mark.parametrize("declared", (True, False, None))
+def test_continuation_capability_reads_declared_model_info(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, declared: bool | None
+) -> None:
+    model: Final = "openai/continuation-capability-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"litellm_provider": "openai", "mode": "chat", "supports_continuation": declared},
+    )
+    assert litellm.get_model_info(model)["supports_continuation"] is declared
+    assert litellm.supports_continuation(model) is (declared is True)
+
 def test_get_optional_params_image_gen():
     from litellm.llms.azure.image_generation import AzureGPTImageGenerationConfig
 
@@ -1175,6 +1189,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_tool_search": {"type": "boolean"},
             "supports_video_input": {"type": "boolean"},
             "supports_box_questions": {"type": "boolean"},
+            "supports_continuation": {"type": "boolean"},
             "supports_vision": {"type": "boolean"},
             "supports_web_search": {"type": "boolean"},
             "token_count_framing": {"type": "integer"},

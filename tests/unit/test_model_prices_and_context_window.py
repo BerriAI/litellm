@@ -44,6 +44,16 @@ def test_azure_audio_snapshot_capabilities_match_declared_modalities(model: str,
     assert (litellm.supports_audio_input(model), litellm.supports_audio_output(model)) == expected
 
 
+
+@pytest.mark.parametrize("model", ("gemini/gemini-4-argon", "vertex_ai/gemini-4-argon"))
+def test_gemini_long_decode_capability_is_exposed(model: str, local_model_cost_map: None) -> None:
+    # Google long decode documentation, verified 2026-10-30: https://ai.google.dev/gemini-api/docs/generate-content/long-decode
+    catalog: Final = TypeAdapter(dict[str, JsonValue]).validate_json(PRICES_PATH.read_bytes())
+    backup: Final = TypeAdapter(dict[str, JsonValue]).validate_json(BACKUP_PRICES_PATH.read_bytes())
+    assert catalog[model] == backup[model]
+    assert litellm.get_model_info(model)["supports_continuation"] is True
+    assert litellm.supports_continuation(model) is True
+
 class _CopilotEndpointRow(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 

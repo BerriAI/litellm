@@ -3458,6 +3458,11 @@ def is_explicitly_disabled_factory(model: str, custom_llm_provider: str | None, 
         return False
 
 
+def supports_continuation(model: str, custom_llm_provider: str | None = None) -> bool:
+    """Check if the model declares support for long-decode continuation."""
+    return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_continuation")
+
+
 def supports_audio_input(model: str, custom_llm_provider: str | None = None) -> bool:
     """Check if a given model supports audio input in a chat completion call"""
     return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_audio_input")
@@ -7343,6 +7348,7 @@ def get_model_info_helper(
                 supports_audio_input=_model_info.get("supports_audio_input", None),
                 supports_video_input=_model_info.get("supports_video_input", None),
                 supports_box_questions=_model_info.get("supports_box_questions", None),
+                supports_continuation=_model_info.get("supports_continuation", None),
                 supports_audio_output=_model_info.get("supports_audio_output", None),
                 supports_pdf_input=_model_info.get("supports_pdf_input", None),
                 supports_embedding_image_input=_model_info.get("supports_embedding_image_input", None),
@@ -7505,6 +7511,7 @@ def get_model_info(
             supports_audio_input: Optional[bool]
             supports_video_input: Optional[bool]
             supports_box_questions: Optional[bool]
+            supports_continuation: Optional[bool]
             supports_audio_output: Optional[bool]
             supports_pdf_input: Optional[bool]
             supports_web_search: Optional[bool]
