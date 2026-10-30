@@ -78,7 +78,7 @@ def test_routes_on_litellm_proxy():
                 base_path in _all_routes
             ), f"Wildcard pattern {route} requires base path {base_path} to exist"
         else:
-            assert route in _all_routes
+            assert route.replace(":path", "") in _all_routes
 
 
 @pytest.mark.parametrize(

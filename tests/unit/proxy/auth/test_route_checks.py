@@ -5055,3 +5055,47 @@ def test_every_dashboard_role_can_send_telemetry_ui_events(
         )
     except HTTPException as exc:
         pytest.fail(f"{user_role.value} was denied {method} {route}: {exc.detail}")
+
+
+_PROVIDER_PREFIXED_BATCH_AND_FILE_CALLS: Final = (
+    ("POST", "/litellm_proxy/v1/batches"),
+    ("GET", "/hosted_vllm/v1/batches/batch_qa"),
+    ("POST", "/xai/v1/batches/batch_qa/cancel"),
+    ("POST", "/hosted_vllm/v1/files"),
+    ("GET", "/deepseek/v1/files/file-qa"),
+    ("GET", "/manus/v1/files/file-qa/content"),
+    ("DELETE", "/hosted_vllm/v1/files/file-qa"),
+)
+
+
+@pytest.mark.parametrize(("method", "route"), _PROVIDER_PREFIXED_BATCH_AND_FILE_CALLS)
+def test_a_plain_virtual_key_can_call_provider_prefixed_batch_and_file_routes(method: str, route: str) -> None:
+    request: Final = Request({"type": "http", "method": method, "query_string": b""})
+
+    assert _is_api_route_allowed(
+        route=route, request=request, request_data={}, valid_token=UserAPIKeyAuth(token="plain-key")
+    )
+
+
+@pytest.mark.parametrize("allowed_route", ["llm_api_routes", "llm_api_routes_without_mcp", "openai_routes"])
+@pytest.mark.parametrize(("method", "route"), _PROVIDER_PREFIXED_BATCH_AND_FILE_CALLS)
+def test_an_llm_api_key_can_call_provider_prefixed_batch_and_file_routes(
+    method: str, route: str, allowed_route: str
+) -> None:
+    valid_token: Final = UserAPIKeyAuth(token="llm-api-key", allowed_routes=[allowed_route])
+
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(
+        route=route, valid_token=valid_token, request=_mock_request(method)
+    )
+
+
+@pytest.mark.parametrize(
+    "route", ["/hosted_vllm/nested/v1/batches", "/hosted_vllm/v1/batches_extra", "/hosted_vllm/v2/files"]
+)
+def test_paths_beside_the_provider_prefixed_batch_and_file_routes_stay_admin_only(route: str) -> None:
+    request: Final = Request({"type": "http", "method": "POST", "query_string": b""})
+
+    with pytest.raises(Exception, match="Only proxy admin can be used"):
+        _is_api_route_allowed(
+            route=route, request=request, request_data={}, valid_token=UserAPIKeyAuth(token="plain-key")
+        )

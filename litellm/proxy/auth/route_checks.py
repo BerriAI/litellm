@@ -24,8 +24,6 @@ from .auth_checks_organization import (  # noqa: F401  # legacy module exports
     user_is_org_admin,
 )
 
-_PROVIDER_PREFIXED_BATCH_OR_FILE_ROUTE: Final = re.compile(r"/[^/]+/v1/(?:batches|files)(?:/.*)?")
-
 # Management write routes denied to PROXY_ADMIN_VIEW_ONLY. Adding a new write
 # endpoint to a management router REQUIRES adding it here too — the surrounding
 # check falls through to "allow" if the route is not matched, which previously
@@ -112,12 +110,6 @@ _TOKEN_COUNTING_ACTION: Final = "countTokens"
 
 
 class RouteChecks:
-    @staticmethod
-    def is_llm_handler_route(route: str) -> bool:
-        return RouteChecks.is_llm_api_route(route=route) or (
-            _PROVIDER_PREFIXED_BATCH_OR_FILE_ROUTE.fullmatch(route) is not None
-        )
-
     @staticmethod
     def check_route_enabled(route: str) -> None:
         try:

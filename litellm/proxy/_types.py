@@ -283,6 +283,9 @@ class LiteLLMRoutes(enum.Enum):
         "/batches/{batch_id}",
         "/v1/batches/{batch_id}/cancel",
         "/batches/{batch_id}/cancel",
+        "/{provider}/v1/batches",
+        "/{provider}/v1/batches/{batch_id:path}",
+        "/{provider}/v1/batches/{batch_id:path}/cancel",
         # files
         "/v1/files",
         "/files",
@@ -290,6 +293,9 @@ class LiteLLMRoutes(enum.Enum):
         "/files/{file_id}",
         "/v1/files/{file_id}/content",
         "/files/{file_id}/content",
+        "/{provider}/v1/files",
+        "/{provider}/v1/files/{file_id:path}",
+        "/{provider}/v1/files/{file_id:path}/content",
         # fine_tuning
         "/fine_tuning/jobs",
         "/v1/fine_tuning/jobs",

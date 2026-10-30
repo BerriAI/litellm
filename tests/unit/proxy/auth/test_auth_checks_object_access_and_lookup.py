@@ -62,6 +62,8 @@ from litellm.proxy.auth.auth_checks import (
     team_member_max_budget_alert_check,
     virtual_key_max_budget_alert_check,
     _check_agent_caller_model_access,
+    _enforce_user_param_check,
+    _reject_clientside_metadata_tags_check,
     virtual_key_max_budget_check,
     virtual_key_soft_budget_check,
     common_checks,
@@ -11211,6 +11213,36 @@ def test_provider_prefixed_batch_and_file_routes_keep_budget_checks(route: str) 
 @pytest.mark.parametrize("route", ["/hosted_vllm/nested/v1/batches", "/hosted_vllm/v1/batches_extra"])
 def test_routes_outside_the_batch_and_file_handlers_still_skip_budget_checks(route: str) -> None:
     assert route_skips_budget_checks(route=route) is True
+
+
+_BARE_AND_PROVIDER_PREFIXED_BATCH_AND_FILE_ROUTES: Final = (
+    "/v1/batches",
+    "/litellm_proxy/v1/batches",
+    "/xai/v1/batches/batch_qa/cancel",
+    "/v1/files",
+    "/hosted_vllm/v1/files",
+)
+
+
+@pytest.mark.parametrize("route", _BARE_AND_PROVIDER_PREFIXED_BATCH_AND_FILE_ROUTES)
+def test_reject_clientside_metadata_tags_applies_to_provider_prefixed_batch_and_file_routes(route: str) -> None:
+    with pytest.raises(ProxyException, match=r"Client-side 'metadata\.tags' not allowed"):
+        _reject_clientside_metadata_tags_check(
+            general_settings={"reject_clientside_metadata_tags": True},
+            request_body={"metadata": {"tags": ["team:qa"]}},
+            route=route,
+        )
+
+
+@pytest.mark.parametrize("route", _BARE_AND_PROVIDER_PREFIXED_BATCH_AND_FILE_ROUTES)
+def test_enforce_user_param_applies_to_provider_prefixed_batch_and_file_routes(route: str) -> None:
+    with pytest.raises(Exception, match="'user' param not passed in"):
+        _enforce_user_param_check(
+            general_settings={"enforce_user_param": True},
+            request=Request({"type": "http", "method": "POST", "query_string": b"", "headers": []}),
+            request_body={"input_file_id": "file-qa"},
+            route=route,
+        )
 
 
 def test_request_skips_budget_checks_extends_route_rule_with_zero_cost_models() -> None:

@@ -3144,7 +3144,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                 )
 
                 # Check 5. Token Spend is under budget
-                if RouteChecks.is_llm_handler_route(route):
+                if RouteChecks.is_llm_api_route(route=route):
                     await virtual_key_max_budget_check(
                         valid_token=valid_token,
                         proxy_logging_obj=proxy_logging_obj,

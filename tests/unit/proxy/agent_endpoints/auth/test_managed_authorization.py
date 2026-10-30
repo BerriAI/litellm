@@ -582,7 +582,9 @@ async def test_ordinary_agent_admission_preserves_legacy_authentication(
 def test_registered_inference_routes_have_an_explicit_managed_access_decision(route: str) -> None:
     from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_route_allowed
 
-    normalized: Final = route.removeprefix("/openai").removeprefix("/v1beta").removeprefix("/v1")
+    normalized: Final = (
+        route.removeprefix("/{provider}").removeprefix("/openai").removeprefix("/v1beta").removeprefix("/v1")
+    )
     unsupported: Final = normalized.startswith((
         "/videos", "/batches", "/files", "/fine_tuning", "/assistants", "/threads", "/utils/",
         "/vector_stores", "/vector_store/", "/search", "/containers", "/skills", "/claude-code/",
