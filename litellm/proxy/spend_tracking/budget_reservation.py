@@ -4,7 +4,7 @@ import asyncio
 import json
 import math
 import time
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import chain, product
@@ -1730,69 +1730,39 @@ def _requested_output_counts(
     llm_router: Router | None,
 ) -> tuple[object, ...]:
     if not RouteChecks.is_generate_content_route(route):
-        n: Final = request_body.get("n")
-        dropped: Final = n is not None and _every_deployment(_drops_n, _deployment_params(model, llm_router))
-        return (None if dropped else n, request_body.get("best_of"))
+        return (request_body.get("n"), request_body.get("best_of"))
     candidate_counts: Final = _gemini_candidate_counts(request_body)
     if all(count is None for count in candidate_counts):
         return ()
-    generated: Final = _every_deployment(_serves_generate_content_natively, _deployment_params(model, llm_router))
-    return candidate_counts if generated else ()
+    return candidate_counts if _takes_candidate_count(model=model, llm_router=llm_router) else ()
 
 
-def _deployment_params(model: str, llm_router: Router | None) -> tuple[Mapping[str, object], ...]:
-    if llm_router is None:
-        return ({"model": model},)
-    deployments: Final = llm_router.registry().deployments(model) or ()
-    return tuple(
+def _takes_candidate_count(model: str, llm_router: Router | None) -> bool:
+    deployments: Final = (llm_router.registry().deployments(model) if llm_router is not None else None) or ()
+    deployment_params: Final = tuple(
         params for deployment in deployments if (params := as_str_mapping(_get_value(deployment, "litellm_params")))
     )
+    return any(_serves_generate_content_natively(params) for params in deployment_params or ({"model": model},))
 
 
-def _every_deployment(
-    check: Callable[[Mapping[str, object]], bool], deployment_params: tuple[Mapping[str, object], ...]
-) -> bool:
-    return bool(deployment_params) and all(map(check, deployment_params))
-
-
-def _resolved_provider(litellm_params: Mapping[str, object]) -> tuple[str, str] | None:
+def _serves_generate_content_natively(litellm_params: Mapping[str, object]) -> bool:
     model: Final = litellm_params.get("model")
     custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
     if not isinstance(model, str):
-        return None
+        return True
     try:
         backend_model, provider, _, _ = litellm.get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
         )
-    except litellm.BadRequestError:
-        return None
-    return backend_model, provider
-
-
-def _serves_generate_content_natively(litellm_params: Mapping[str, object]) -> bool:
-    resolved: Final = _resolved_provider(litellm_params)
-    if resolved is None:
-        return False
-    backend_model, provider = resolved
-    try:
         native_config: Final = ProviderConfigManager.get_provider_google_genai_generate_content_config(
             model=backend_model,
             provider=litellm.LlmProviders(provider),
             litellm_params={key: litellm_params[key] for key in ("base_model", "api_base") if key in litellm_params},
         )
-    except ValueError:
-        return False
+    except (litellm.BadRequestError, ValueError):
+        return True
     return native_config is not None
-
-
-def _drops_n(litellm_params: Mapping[str, object]) -> bool:
-    resolved: Final = _resolved_provider(litellm_params)
-    if resolved is None:
-        return False
-    backend_model, provider = resolved
-    supported_params: Final = litellm.get_supported_openai_params(model=backend_model, custom_llm_provider=provider)
-    return supported_params is not None and "n" not in supported_params
 
 
 def _get_output_multiplier(requested_counts: tuple[object, ...]) -> int:
