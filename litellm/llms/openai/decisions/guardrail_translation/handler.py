@@ -1,9 +1,10 @@
 import json
 import re
 from collections.abc import Iterator, Mapping
+from difflib import SequenceMatcher
 from itertools import chain, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, Final, TypeVar
+from typing import TYPE_CHECKING, ClassVar, Final
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
@@ -21,8 +22,10 @@ if TYPE_CHECKING:
 _JSON_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _KEY_ADAPTER: Final[TypeAdapter[str]] = TypeAdapter(str)
 _JSON_KEY_PREFIX: Final = re.compile(r'("(?:[^"\\\x00-\x1f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"): ')
+_JSON_ESCAPE: Final = re.compile(r"(\\(?:[bfnrt]|u[0-9a-fA-F]{4}))|\\.")
+_MARKED_JSON_ESCAPE: Final = re.compile(r"(\\(?:[bfnrt]|u[0-9a-fA-F]{4}))~|\\.")
+_TOKEN: Final = re.compile(r"\s+|\S+")
 _DESCRIBED_ITEM_KEYS: Final = ("choices", "levels")
-_Field: Final = TypeVar("_Field", bound=JsonValue)
 _QUESTION_LIST_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, JsonValue], ...]]] = TypeAdapter(
     tuple[Mapping[str, JsonValue], ...]
 )
@@ -81,8 +84,16 @@ def _guardrailed_input(decision_input: JsonValue, guardrailed: Mapping[str, str]
     return [_guardrailed_message(message, guardrailed) for message in decision_input]
 
 
+def _marked_escape(escape: re.Match[str]) -> str:
+    return f"{escape.group()}~" if escape.group(1) else escape.group()
+
+
+def _unmarked_escape(escape: re.Match[str]) -> str:
+    return escape.group(1) or escape.group()
+
+
 def _entry_text(key: str, value: str | float | None) -> str:
-    return json.dumps({key: value}, ensure_ascii=False)[1:-1]
+    return _JSON_ESCAPE.sub(_marked_escape, json.dumps({key: value}, ensure_ascii=False)[1:-1])
 
 
 def _escaped_texts(text: str, key: str, item: JsonValue) -> tuple[str, ...]:
@@ -164,18 +175,57 @@ def _rewritten_value(text: str) -> JsonValue:
 
 
 def _rewritten_entry(rewritten: str, guardrail_name: str | None) -> tuple[str, JsonValue]:
-    key: Final = _JSON_KEY_PREFIX.match(rewritten)
+    unmarked: Final = _MARKED_JSON_ESCAPE.sub(_unmarked_escape, rewritten)
+    key: Final = _JSON_KEY_PREFIX.match(unmarked)
     if key is None:
         raise unappliable_request_rewrite(guardrail_name)
-    return _KEY_ADAPTER.validate_json(key.group(1)), _rewritten_value(rewritten[key.end() :])
+    return _KEY_ADAPTER.validate_json(key.group(1)), _rewritten_value(unmarked[key.end() :])
 
 
 def _decoded_text(text: str, form: str, guardrailed: Mapping[str, str]) -> str:
     return form if form in text else guardrailed.get(form, form)
 
 
-def _merged_field(original: _Field, rewritten: _Field, decoded: _Field) -> _Field:
-    return rewritten if decoded == original else decoded
+def _tokens(text: str) -> tuple[str, ...]:
+    return tuple(_TOKEN.findall(text))
+
+
+def _edits(original: tuple[str, ...], rewritten: tuple[str, ...]) -> frozenset[tuple[int, int, str]]:
+    opcodes: Final = SequenceMatcher(None, original, rewritten, autojunk=False).get_opcodes()
+    return frozenset(
+        (start, end, "".join(rewritten[low:high])) for tag, start, end, low, high in opcodes if tag != "equal"
+    )
+
+
+def _covered(edit: tuple[int, int, str], edits: frozenset[tuple[int, int, str]]) -> bool:
+    start, end, _ = edit
+    return any(other[0] <= start and end <= other[1] and other[1] - other[0] > end - start for other in edits)
+
+
+def _merged_text(original: str, rewritten: str, decoded: str, guardrail_name: str | None) -> str:
+    if decoded in (original, rewritten):
+        return rewritten
+    if rewritten == original:
+        return decoded
+    tokens: Final = _tokens(original)
+    edits: Final = _edits(tokens, _tokens(rewritten)) | _edits(tokens, _tokens(decoded))
+    kept: Final = tuple(sorted(edit for edit in edits if not _covered(edit, edits)))
+    if any(later[0] < earlier[1] for earlier, later in zip(kept, kept[1:])):
+        raise unappliable_request_rewrite(guardrail_name)
+    kept_starts: Final = (0, *(end for _, end, _ in kept))
+    kept_ends: Final = (*(start for start, _, _ in kept), len(tokens))
+    replacements: Final = (*(text for _, _, text in kept), "")
+    return "".join(
+        "".join(tokens[start:end]) + text for start, end, text in zip(kept_starts, kept_ends, replacements, strict=True)
+    )
+
+
+def _merged_value(original: str, rewritten: JsonValue, decoded: str, guardrail_name: str | None) -> JsonValue:
+    if decoded == original:
+        return rewritten
+    if isinstance(rewritten, str):
+        return _merged_text(original, rewritten, decoded, guardrail_name)
+    raise unappliable_request_rewrite(guardrail_name)
 
 
 def _guardrailed_entry(
@@ -186,11 +236,10 @@ def _guardrailed_entry(
     text: Final = _entry_text(key, item)
     rewritten: Final = guardrailed.get(text, text)
     entry: Final = (key, item) if rewritten == text else _rewritten_entry(rewritten, guardrail_name)
-    decoded_item: Final = _decoded_text(text, item, guardrailed) if isinstance(item, str) else item
-    return (
-        _merged_field(key, entry[0], _decoded_text(text, key, guardrailed)),
-        _merged_field(item, entry[1], decoded_item),
-    )
+    merged_key: Final = _merged_text(key, entry[0], _decoded_text(text, key, guardrailed), guardrail_name)
+    if not isinstance(item, str):
+        return merged_key, entry[1]
+    return merged_key, _merged_value(item, entry[1], _decoded_text(text, item, guardrailed), guardrail_name)
 
 
 def _instruction_texts(question: Mapping[str, JsonValue]) -> tuple[str, ...]:

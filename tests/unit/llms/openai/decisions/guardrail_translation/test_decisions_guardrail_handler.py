@@ -1,7 +1,9 @@
+import re
 from functools import reduce
 from typing import Final, Literal
 
 import pytest
+from litellm_enterprise.enterprise_callbacks.secret_detection import _ENTERPRISE_SecretDetection
 from pydantic import JsonValue
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -61,6 +63,32 @@ class _DropsQuotes(CustomGuardrail):
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
         return GenericGuardrailAPIInputs(texts=[text.replace('"', "") for text in inputs.get("texts", [])])
+
+
+class _MasksOverlappingPairs(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return GenericGuardrailAPIInputs(
+            texts=[text.replace("b\nc", "[BC]").replace("a b", "[AB]") for text in inputs.get("texts", [])]
+        )
+
+
+class _NullsAMaskedValue(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return GenericGuardrailAPIInputs(
+            texts=[re.sub(r'": ".*"$', '": null', text).replace("b", "[B]") for text in inputs.get("texts", [])]
+        )
 
 
 class _ReturnsNoTexts(CustomGuardrail):
@@ -234,29 +262,42 @@ async def test_systemone_masks_a_card_number_that_json_escaping_splits() -> None
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("pattern_name", "state", "masked"),
+    ("pattern_names", "state", "masked"),
     (
         pytest.param(
-            "visa",
+            ("visa",),
             {"4111111111111111": "4111\t1111\t1111\t1111"},
             {"[VISA_REDACTED]": "[VISA_REDACTED]"},
             id="key-and-escaped-value",
         ),
         pytest.param(
-            "email",
+            ("email",),
             {"note": "Please call me back.\ndana.quill@example.com"},
             {"note": "Please call me back.\n[EMAIL_REDACTED]"},
             id="match-after-an-escape",
         ),
+        pytest.param(
+            ("au_tfn", "email"),
+            {"TFN": "123456789 contact dana@example.com\n"},
+            {"TFN": "[AU_TFN_REDACTED] contact [EMAIL_REDACTED]\n"},
+            id="key-context-match-in-an-escaped-value",
+        ),
+        pytest.param(
+            ("au_tfn", "visa"),
+            {"TFN": "123456789\n4111\t1111\t1111\t1111"},
+            {"TFN": "[AU_TFN_REDACTED]\n[VISA_REDACTED]"},
+            id="key-context-match-beside-a-split-match",
+        ),
     ),
 )
 async def test_systemone_masks_findings_on_both_sides_of_a_json_escape(
-    pattern_name: str, state: dict[str, JsonValue], masked: dict[str, JsonValue]
+    pattern_names: tuple[str, ...], state: dict[str, JsonValue], masked: dict[str, JsonValue]
 ) -> None:
     guardrail: Final = ContentFilterGuardrail(
         guardrail_name="mask",
         patterns=[
-            ContentFilterPattern(pattern_type="prebuilt", pattern_name=pattern_name, action=ContentFilterAction.MASK)
+            ContentFilterPattern(pattern_type="prebuilt", pattern_name=name, action=ContentFilterAction.MASK)
+            for name in pattern_names
         ],
     )
     data: Final = {"model": "judge", "state": state, "questions": {"q": {"type": "noul", "criteria": {}}}}
@@ -264,6 +305,38 @@ async def test_systemone_masks_findings_on_both_sides_of_a_json_escape(
     result: Final = await SystemOneHandler().process_input_messages(data, guardrail)
 
     assert result["state"] == masked
+
+
+@pytest.mark.asyncio
+async def test_systemone_keeps_a_secret_mask_that_covers_an_escaped_value() -> None:
+    data: Final = {
+        "model": "judge",
+        "state": {"password": "hunter2\nAKIAIOSFODNN7EXAMPLE"},
+        "questions": {"q": {"type": "noul", "criteria": {}}},
+    }
+
+    result: Final = await SystemOneHandler().process_input_messages(
+        data, _ENTERPRISE_SecretDetection(guardrail_name="hide-secrets")
+    )
+
+    assert result["state"] == {"password": "[REDACTED]"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("guardrail", "note"),
+    (
+        pytest.param(_MasksOverlappingPairs(guardrail_name="pairs"), "a b\nc", id="partly-overlapping-masks"),
+        pytest.param(_NullsAMaskedValue(guardrail_name="nulls"), "a\nb", id="value-turned-into-null"),
+    ),
+)
+async def test_systemone_rejects_an_escaped_entry_whose_two_rewrites_cannot_merge(
+    guardrail: CustomGuardrail, note: str
+) -> None:
+    data: Final = {"model": "judge", "state": {"note": note}, "questions": {"q": {"type": "noul", "criteria": {}}}}
+
+    with pytest.raises(UnappliableRequestRewrite):
+        await SystemOneHandler().process_input_messages(data, guardrail)
 
 
 @pytest.mark.asyncio
