@@ -3,7 +3,7 @@
 import importlib
 import os
 import time
-from typing import Any, List, Optional, Tuple
+from typing import Any, Final, List, Literal, Optional, Tuple
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -16,6 +16,33 @@ from litellm import completion
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.guardrails import BaseLitellmParams, LitellmParams
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+
+
+def test_on_mcp_block_defaults_to_tool_error_without_changing_partial_updates() -> None:
+    params: Final = LitellmParams(guardrail="litellm_content_filter", mode="pre_mcp_call")
+    assert params.on_mcp_block == "tool_error"
+    assert params.model_dump()["on_mcp_block"] == "tool_error"
+    assert BaseLitellmParams(default_on=True).model_dump(exclude_unset=True) == {"default_on": True}
+
+
+@pytest.mark.parametrize("action", ["raise", "tool_error"])
+def test_on_mcp_block_survives_config_and_partial_update_serialization(action: Literal["raise", "tool_error"]) -> None:
+    params: Final = LitellmParams.model_validate(
+        {"guardrail": "litellm_content_filter", "mode": "pre_mcp_call", "on_mcp_block": action}
+    )
+    assert LitellmParams.model_validate_json(params.model_dump_json()).on_mcp_block == action
+    assert BaseLitellmParams(on_mcp_block=action).model_dump(exclude_unset=True) == {"on_mcp_block": action}
+
+
+@pytest.mark.parametrize("action", ["abort", 400, None])
+@pytest.mark.parametrize("params_type", [BaseLitellmParams, LitellmParams])
+def test_on_mcp_block_rejects_invalid_config_and_partial_updates(
+    action: object, params_type: type[BaseLitellmParams]
+) -> None:
+    with pytest.raises(ValidationError, match="on_mcp_block"):
+        params_type.model_validate(
+            {"guardrail": "litellm_content_filter", "mode": "pre_mcp_call", "on_mcp_block": action}
+        )
 
 
 class CustomLoggingIntegration(CustomLogger):

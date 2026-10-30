@@ -1,6 +1,6 @@
 import json
 from collections.abc import Iterable, Iterator
-from typing import ClassVar, Final
+from typing import ClassVar, Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,6 +15,51 @@ from litellm.proxy.guardrails.guardrail_registry import (
 )
 from litellm.types.guardrails import Guardrail, GuardrailEventHooks, LitellmParams, LoggingOnlyScope, Mode
 from litellm.types.utils import GenericGuardrailAPIInputs
+
+
+@pytest.mark.parametrize("provider", ["litellm_content_filter", "custom_code"])
+@pytest.mark.parametrize("action", [None, "raise", "tool_error"])
+def test_mcp_block_policy_reaches_provider_callback_and_refreshes(
+    provider: str, action: Literal["raise", "tool_error"] | None
+) -> None:
+    handler: Final = InMemoryGuardrailHandler()
+    guardrail_id: Final = f"mcp-block-policy-{provider}"
+    params: Final = LitellmParams.model_validate(
+        {
+            "guardrail": provider,
+            "mode": "pre_mcp_call",
+            **({"on_mcp_block": action} if action is not None else {}),
+            **(
+                {"blocked_words": [{"keyword": "blocked", "action": "BLOCK"}]}
+                if provider == "litellm_content_filter"
+                else {"custom_code": "def apply_guardrail(inputs, request_data, input_type):\n    return allow()"}
+            ),
+        }
+    )
+    try:
+        handler.initialize_guardrail(
+            Guardrail(guardrail_id=guardrail_id, guardrail_name=guardrail_id, litellm_params=params)
+        )
+        callback: Final = handler.guardrail_id_to_custom_guardrail[guardrail_id]
+        assert callback is not None
+        assert callback.on_mcp_block == (action or "tool_error")
+        assert CustomGuardrail().on_mcp_block == "tool_error"
+
+        updated_action: Final = "tool_error" if action == "raise" else "raise"
+        handler.reinitialize_guardrail(
+            Guardrail(
+                guardrail_id=guardrail_id,
+                guardrail_name=guardrail_id,
+                litellm_params=params.model_copy(update={"on_mcp_block": updated_action}),
+            ),
+            source="db",
+        )
+        refreshed: Final = handler.guardrail_id_to_custom_guardrail[guardrail_id]
+        assert refreshed is not None
+        assert refreshed.on_mcp_block == updated_action
+        assert CustomGuardrail().on_mcp_block == "tool_error"
+    finally:
+        handler.delete_in_memory_guardrail(guardrail_id)
 
 
 def test_get_guardrail_initializer_from_hooks():

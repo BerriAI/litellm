@@ -27187,6 +27187,13 @@ export interface components {
              */
             num_retries?: number | null;
             /**
+             * On Mcp Block
+             * @description Action when a pre_mcp_call or during_mcp_call guardrail blocks a tool call. 'tool_error' returns the refusal as a tool result so the LLM can continue. 'raise' ends the non-streaming managed request with HTTP 400.
+             * @default tool_error
+             * @enum {string}
+             */
+            on_mcp_block: "raise" | "tool_error";
+            /**
              * On Sensitive Data
              * @description Action to take when sensitive data is detected. 'block' raises an exception (default behavior). 'route' reroutes the request to the model specified in sensitive_data_route_to_model.
              */
@@ -37016,6 +37023,13 @@ export interface components {
              * @default monitor
              */
             on_flagged_action: string | null;
+            /**
+             * On Mcp Block
+             * @description Action when a pre_mcp_call or during_mcp_call guardrail blocks a tool call. 'tool_error' returns the refusal as a tool result so the LLM can continue. 'raise' ends the non-streaming managed request with HTTP 400.
+             * @default tool_error
+             * @enum {string}
+             */
+            on_mcp_block: "raise" | "tool_error";
             /**
              * On Sensitive Data
              * @description Action to take when sensitive data is detected. 'block' raises an exception (default behavior). 'route' reroutes the request to the model specified in sensitive_data_route_to_model.

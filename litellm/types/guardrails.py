@@ -1042,6 +1042,14 @@ GuardrailNumRetries: TypeAlias = Annotated[
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
     api_key: str | None = Field(default=None, description="API key for the guardrail service")
     api_base: str | None = Field(default=None, description="Base URL for the guardrail service API")
+    on_mcp_block: Literal["raise", "tool_error"] = Field(
+        default="tool_error",
+        description=(
+            "Action when a pre_mcp_call or during_mcp_call guardrail blocks a tool call. "
+            "'tool_error' returns the refusal as a tool result so the LLM can continue. "
+            "'raise' ends the non-streaming managed request with HTTP 400."
+        ),
+    )
 
     experimental_use_latest_role_message_only: bool | None = Field(
         default=False,

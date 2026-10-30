@@ -231,6 +231,7 @@ class CustomGuardrail(CustomLogger):
 
     stream_scope_default: GuardrailStreamScope = DEFAULT_GUARDRAIL_STREAM_SCOPE
     stream_scope_by_hook: tuple[tuple[str, GuardrailStreamScope], ...] = ()
+    on_mcp_block: Literal["raise", "tool_error"] = "tool_error"
 
     timeout: float | httpx.Timeout | None = None
 
@@ -1166,6 +1167,9 @@ class CustomGuardrail(CustomLogger):
         )
 
         return name in suppressed_compression_guardrails()
+
+    def apply_mcp_block_policy(self, on_mcp_block: Literal["raise", "tool_error"]) -> None:
+        self.on_mcp_block = on_mcp_block
 
     def apply_stream_scope(self, stream_scope: object) -> None:
         default, by_hook = runtime_stream_scope(stream_scope)
