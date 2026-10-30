@@ -17,7 +17,8 @@ const (
 
 type KeyBlockInfoResponse struct {
 	Info struct {
-		Blocked *bool `json:"blocked"`
+		Status  string `json:"status"`
+		Blocked *bool  `json:"blocked"`
 	} `json:"info"`
 }
 
@@ -96,6 +97,12 @@ func resourceLiteLLMKeyBlockRead(d *schema.ResourceData, m interface{}) error {
 	var infoResp KeyBlockInfoResponse
 	if err := json.NewDecoder(resp.Body).Decode(&infoResp); err != nil {
 		return fmt.Errorf("error decoding key info response: %w", err)
+	}
+
+	if infoResp.Info.Status == keyStatusDeleted {
+		log.Printf("[WARN] Key was deleted, removing key block from state")
+		d.SetId("")
+		return nil
 	}
 
 	if infoResp.Info.Blocked == nil || !*infoResp.Info.Blocked {

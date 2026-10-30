@@ -530,9 +530,11 @@ func mergeKeyMetadata(server, oldDeclared, newDeclared map[string]interface{}) m
 func resourceKeyDelete(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
 	c := m.(*Client)
 
-	err := c.DeleteKey(d.Id())
-	if err != nil {
-		return diag.FromErr(fmt.Errorf("error deleting key: %s", err))
+	if err := c.DeleteKey(d.Id()); err != nil {
+		if !keyIsGone(c, d.Id(), err) {
+			return diag.FromErr(fmt.Errorf("error deleting key: %s", err))
+		}
+		log.Printf("[WARN] Key %q was already deleted outside Terraform, removing from state", d.Id())
 	}
 
 	d.SetId("")
