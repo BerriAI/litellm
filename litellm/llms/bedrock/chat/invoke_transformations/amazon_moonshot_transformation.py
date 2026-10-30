@@ -187,7 +187,7 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
 
         return None, content
 
-    def transform_response(
+    def _transform_invoke_response(
         self,
         model: str,
         raw_response: httpx.Response,
