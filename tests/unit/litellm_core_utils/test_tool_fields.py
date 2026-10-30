@@ -7,6 +7,7 @@ import pytest
 import litellm
 from litellm import Router
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp, tools_without_hosted_mcp
 from litellm.utils import async_pre_call_deployment_hook
 
 _GOOD_TOOL: Final = {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}
@@ -185,3 +186,51 @@ async def test_tools_core_accepts_reach_the_deployment(tools: object) -> None:
     sent: Final = await async_pre_call_deployment_hook(dict(_proxy_request("keeps", tools=tools)), "acompletion")
 
     assert sent["tools"] is tools
+
+
+def test_a_hosted_mcp_error_names_every_server_and_marks_an_unlabeled_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        tools_without_hosted_mcp(
+            tools=[
+                {"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"},
+                {"type": "mcp", "server_url": "https://mcp.example.com/mcp"},
+            ],
+            model="gemini-3.8-flash",
+            route="gemini",
+            drop_params=False,
+        )
+    assert "the hosted MCP tool `deepwiki`, `unlabeled` " in str(raised.value)
+
+
+_HOSTED_MCP_TOOL: Final = {"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"}
+
+
+def test_dropping_a_hosted_mcp_tool_keeps_the_other_tool_params_and_leaves_the_caller_dict_alone() -> None:
+    tool_choice: Final = {"type": "function", "function": {"name": "get_weather"}}
+    sent: Final = {
+        "tools": [_HOSTED_MCP_TOOL, _GOOD_TOOL],
+        "tool_choice": tool_choice,
+        "parallel_tool_calls": False,
+        "temperature": 0.2,
+    }
+    params: Final = tool_params_without_hosted_mcp(sent, model="deepseek-v4-flash", route="deepseek", drop_params=True)
+
+    assert params == {
+        "tools": [_GOOD_TOOL],
+        "tool_choice": tool_choice,
+        "parallel_tool_calls": False,
+        "temperature": 0.2,
+    }
+    assert sent["tools"] == [_HOSTED_MCP_TOOL, _GOOD_TOOL]
+
+
+def test_dropping_every_hosted_mcp_tool_clears_the_tool_selection_params() -> None:
+    params: Final = tool_params_without_hosted_mcp(
+        {"tools": [_HOSTED_MCP_TOOL], "tool_choice": "required", "parallel_tool_calls": True, "temperature": 0.2},
+        model="deepseek-v4-flash",
+        route="deepseek",
+        drop_params=True,
+    )
+
+    assert params == {"temperature": 0.2}
