@@ -9,6 +9,7 @@ from typing import Any, Final, ParamSpec, Protocol, TypeVar
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, TypeAdapter
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -791,6 +792,10 @@ def _caller_auth(endpoint_kwargs: Mapping[str, object]) -> UserAPIKeyAuth:
     return caller if isinstance(caller, UserAPIKeyAuth) else UserAPIKeyAuth()
 
 
+def _proxy_exception_handler_ends_server_span(exception: Exception) -> bool:
+    return not isinstance(exception, StarletteHTTPException)
+
+
 def _wrap_management_endpoint(
     endpoint: Callable[_P, Awaitable[_R]], *, log_payload: bool
 ) -> Callable[_P, Awaitable[_R]]:
@@ -835,7 +840,7 @@ def _wrap_management_endpoint(
 
             user_api_key_dict: UserAPIKeyAuth = _caller_auth(kwargs)
             parent_otel_span = getattr(user_api_key_dict, "parent_otel_span", None)
-            if parent_otel_span is not None:
+            if parent_otel_span is not None and (log_payload or not _proxy_exception_handler_ends_server_span(e)):
                 try:
                     await _emit_management_endpoint_otel_span(
                         func=endpoint,
