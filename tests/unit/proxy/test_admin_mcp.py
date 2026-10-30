@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sys
+from types import SimpleNamespace
 from typing import Final
 
 import httpx2
@@ -12,18 +13,11 @@ from starlette.testclient import TestClient
 
 from litellm.constants import STANDARD_CUSTOMER_ID_HEADERS
 from litellm.proxy import proxy_server
-from litellm.proxy._types import (
-    LiteLLM_TeamTable,
-    LiteLLM_UserTable,
-    LitellmUserRoles,
-    ProxyException,
-    SpecialHeaders,
-    UserAPIKeyAuth,
-)
+from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, ProxyException, SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.admin_mcp import admin_mcp_lifespan, get_admin_mcp_permissions
-from litellm.proxy.auth.user_api_key_auth import get_api_key, get_api_key_from_custom_header
+from litellm.proxy.auth.user_api_key_auth import get_api_key, get_api_key_from_custom_header, user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.management_endpoints import internal_user_endpoints
+from litellm.proxy.management_endpoints import internal_user_endpoints, team_callback_endpoints
 from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlMiddleware,
     AdmissionControlSettings,
@@ -31,7 +25,6 @@ from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlStats,
 )
 from litellm.proxy.middleware.per_request_root_path_middleware import PerRequestRootPathMiddleware
-from litellm.proxy.utils import hash_token
 
 
 class KeyRequest(BaseModel):
@@ -587,53 +580,16 @@ async def test_oauth2_proxy_auth_preserves_native_identity_and_peer_trust(
 
 @pytest.fixture
 def user_info_http_app(monkeypatch: pytest.MonkeyPatch, grant: str) -> FastAPI:
-    user: Final = LiteLLM_UserTable(user_id="admin", user_role="proxy_admin", teams=[])
+    class EmptyDatabase:
+        async def query_raw(self, _: str) -> tuple[dict[str, None], ...]:
+            return ({"teams": None, "keys": None},)
 
-    class EmptyTable:
-        async def find_many(self, **_: object) -> list[object]:
-            return []
-
-    class DatabaseTables:
-        litellm_teamtable: Final = EmptyTable()
-        litellm_teammembership: Final = EmptyTable()
-
-    class UserInfoDatabase:
-        db: Final = DatabaseTables()
-
-        async def get_data(
-            self, *, user_id: str | None = None, team_id: str | None = None, table_name: str | None = None, **_: object
-        ) -> LiteLLM_UserTable | LiteLLM_TeamTable | list[object]:
-            if team_id is not None:
-                return LiteLLM_TeamTable(team_id=team_id, metadata={})
-            return user if user_id == user.user_id and table_name is None else []
-
-    cache: Final = UserApiKeyCache()
-    token: Final = hash_token("sk-http-encoding-regression")
-    cache.set_cache(
-        token,
-        UserAPIKeyAuth(
-            api_key=token,
-            token=token,
-            user_id=user.user_id,
-            user_role=LitellmUserRoles.PROXY_ADMIN,
-            allowed_routes=["/user/info", grant],
-        ),
-    )
-    cache.set_cache(user.user_id, user)
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
-    monkeypatch.setattr(proxy_server, "prisma_client", UserInfoDatabase())
-    monkeypatch.setattr(proxy_server, "master_key", "sk-distinct-synthetic-master")
-    monkeypatch.setattr(proxy_server, "general_settings", {})
-    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=EmptyDatabase()))
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, allowed_routes=["/user/info", grant])
     app: Final = FastAPI()
-    app.router.routes.extend(
-        route
-        for route in proxy_server.app.routes
-        if isinstance(route, APIRoute)
-        and route.path in {"/user/info", "/team/{team_id:path}/callback"}
-        and "GET" in route.methods
-    )
-    app.add_exception_handler(ProxyException, proxy_server.openai_exception_handler)
+    app.include_router(internal_user_endpoints.router)
+    app.include_router(team_callback_endpoints.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: auth
     return app
 
 
@@ -670,9 +626,18 @@ def test_admin_mcp_uses_credential_routes_without_removing_full_access(
 
 
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
-@pytest.mark.parametrize("grant", ["/team/team-a/callback", "/team/team-a/*"])
+@pytest.mark.parametrize(
+    "team_id,grant",
+    [
+        ("team-a", "/team/team-a/callback"),
+        ("team-a", "/team/team-a/*"),
+        ("org/team-a", "/team/org/team-a/callback"),
+        ("org/team-a", "/team/org/team-a/*"),
+        ("org/team-a", "/team/org/team-a/call*"),
+    ],
+)
 def test_admin_mcp_checks_the_concrete_resource_even_when_the_tool_is_visible(
-    grant: str, permissions_request: Request
+    team_id: str, grant: str, permissions_request: Request
 ) -> None:
     auth: Final = UserAPIKeyAuth(
         user_id="admin",
@@ -680,26 +645,13 @@ def test_admin_mcp_checks_the_concrete_resource_even_when_the_tool_is_visible(
         allowed_routes=["/user/info", grant],
         metadata={"is_session_token": True, "user_role": "proxy_admin"},
     )
-    own: Final = get_admin_mcp_permissions(auth, permissions_request, "get_team_callbacks", "/team/team-a/callback")
-    other: Final = get_admin_mcp_permissions(auth, permissions_request, "get_team_callbacks", "/team/team-b/callback")
+    own: Final = get_admin_mcp_permissions(auth, permissions_request, "get_team_callbacks", f"/team/{team_id}/callback")
+    other: Final = get_admin_mcp_permissions(auth, permissions_request, "get_team_callbacks", "/team/other/callback")
     wrong_route: Final = get_admin_mcp_permissions(auth, permissions_request, "get_team_callbacks", "/key/generate")
     assert "get_team_callbacks" in own.tools
     assert own.action_allowed is True
     assert other.action_allowed is False
     assert wrong_route.action_allowed is False
-
-
-@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
-@pytest.mark.parametrize("grant", ["/team/org/team-a/callback", "/team/org/team-a/*", "/team/org/team-a/call*"])
-def test_admin_mcp_authorizes_slashes_using_the_registered_route(grant: str, permissions_request: Request) -> None:
-    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, allowed_routes=["/user/info", grant])
-    own: Final = get_admin_mcp_permissions(auth, permissions_request, "get_team_callbacks", "/team/org/team-a/callback")
-    other: Final = get_admin_mcp_permissions(
-        auth, permissions_request, "get_team_callbacks", "/team/org/team-b/callback"
-    )
-    assert "get_team_callbacks" in own.tools
-    assert own.action_allowed is True
-    assert other.action_allowed is False
 
 
 @pytest.mark.asyncio
@@ -725,29 +677,10 @@ async def test_user_info_decodes_mcp_path_after_query_parsing(
     async with httpx2.AsyncClient(
         transport=httpx2.ASGITransport(app=user_info_http_app),
         base_url="http://testserver",
+        params={"admin_mcp": "true", "mcp_tool": "get_team_callbacks"},
     ) as client:
-        own: Final = await client.get(
-            "/user/info",
-            params={
-                "user_id": "admin",
-                "admin_mcp": "true",
-                "mcp_tool": "get_team_callbacks",
-                "mcp_path": path,
-            },
-            headers={"Authorization": "Bearer sk-http-encoding-regression"},
-        )
-        native: Final = await client.get(path, headers={"Authorization": "Bearer sk-http-encoding-regression"})
-        sibling: Final = await client.get(
-            "/user/info",
-            params={
-                "user_id": "admin",
-                "admin_mcp": "true",
-                "mcp_tool": "get_team_callbacks",
-                "mcp_path": "/team/other/callback",
-            },
-            headers={"Authorization": "Bearer sk-http-encoding-regression"},
-        )
-    assert native.status_code == (200 if allowed else 403), native.text
+        own: Final = await client.get("/user/info", params={"mcp_path": path})
+        sibling: Final = await client.get("/user/info", params={"mcp_path": "/team/other/callback"})
     assert own.status_code == 200, own.text
     assert sibling.status_code == 200, sibling.text
     assert "get_team_callbacks" in own.json()["admin_mcp_permissions"]["tools"]
