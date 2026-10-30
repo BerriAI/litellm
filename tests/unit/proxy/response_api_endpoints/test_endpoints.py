@@ -2577,11 +2577,15 @@ class TestResponsesWSFirstFrameModelAuth:
 
     @pytest.mark.asyncio
     async def test_frame_guard_forwards_string_metadata_named_like_a_pick_without_running_it(self):
+        from litellm.proxy._types import LiteLLM_TeamTable
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
 
         key_required = _FrameGuardrail("key-required")
         frame_pick = _FrameGuardrail("frame-pick")
         metadata = {"guardrails": "frame-pick", "guardrail_config": "strict", "trace": "t1"}
+
+        async def locked_team(user_api_key_dict: UserAPIKeyAuth) -> LiteLLM_TeamTable:
+            return LiteLLM_TeamTable(team_id="team-1", metadata={"guardrails": {"modify_guardrails": False}})
 
         with _guardrails_on(key_required, frame_pick) as proxy_logging_obj:
             guard = _responses_ws_frame_guard(
@@ -2589,6 +2593,7 @@ class TestResponsesWSFirstFrameModelAuth:
                 _key(),
                 proxy_logging_obj,
                 MagicMock(),
+                team_object=locked_team,
             )
             guarded = await guard(json.dumps({"type": "response.create", "input": "hi", "metadata": metadata}))
 
@@ -2983,12 +2988,22 @@ class TestResponsesWSFirstFrameModelAuth:
             {"type": "response.create", "input": "hi", "guardrails": ["frame-pick"]},
             {"type": "response.create", "input": "hi", "metadata": {"guardrails": ["frame-pick"]}},
             {"type": "response.create", "input": "hi", "metadata": {"disable_global_guardrails": True}},
+            {"type": "response.create", "input": "hi", "metadata": {"disable_global_guardrails": "true"}},
             {"type": "response.create", "response": {"input": "hi", "guardrails": ["frame-pick"]}},
             {"type": "response.create", "litellm_metadata": {"guardrails": ["frame-pick"]}, "response": {"input": "hi"}},
             {"type": "response.create", "input": "hi", "policies": ["frame-policy"]},
             {"type": "response.create", "response": {"input": "hi", "policies": ["frame-policy"]}},
         ],
-        ids=["top-level", "metadata", "global-toggle", "nested", "beside-nested", "policies", "nested-policies"],
+        ids=[
+            "top-level",
+            "metadata",
+            "global-toggle",
+            "string-global-toggle",
+            "nested",
+            "beside-nested",
+            "policies",
+            "nested-policies",
+        ],
     )
     async def test_frame_guard_refuses_guardrail_and_policy_picks_from_a_team_without_permission(self, frame: dict[str, object]):
         from litellm.proxy._types import LiteLLM_TeamTable

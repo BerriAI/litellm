@@ -2331,8 +2331,15 @@ async def _check_frame_may_modify_guardrails(
     team_object: Callable[[UserAPIKeyAuth], Awaitable[LiteLLM_TeamTable | None]],
 ) -> None:
     """A frame that picks guardrails or policies needs the team's permission to modify guardrails"""
-    if any("policies" in source or requests_guardrail_modification(source) for source in sources):
+    if any(
+        "policies" in source or requests_guardrail_modification(_without_client_metadata(source)) for source in sources
+    ):
         require_guardrail_modification_permission(await team_object(user_api_key_dict))
+
+
+def _without_client_metadata(source: Mapping[str, object]) -> Mapping[str, object]:
+    metadata: Final = source.get("metadata")
+    return {**source, "metadata": _metadata_picks("metadata", metadata)} if isinstance(metadata, dict) else source
 
 
 def _forwarded_frame_fields(source: Mapping[str, object]) -> dict[str, object]:
@@ -2422,7 +2429,11 @@ def _metadata_picks(key: str, metadata: object) -> Mapping[str, object]:
     validated: Final = _WS_FRAME.validate_python(metadata)
     if key != "metadata":
         return validated
-    return {name: item for name, item in validated.items() if not isinstance(item, str)}
+    return {
+        name: item
+        for name, item in validated.items()
+        if name not in _METADATA_GUARDRAIL_SELECTORS or not isinstance(item, str)
+    }
 
 
 def _frame_guardrail_selection(
