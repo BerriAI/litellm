@@ -1053,7 +1053,7 @@ def test_azure_ai_non_claude_web_search_keeps_generic_fallback() -> None:
     assert get_cost_for_web_search_request(custom_llm_provider="azure_ai", usage=usage, model_info=model_info) is None
 
 
-def _register_priced_vertex_deployment(
+def _register_priced_deployment(
     model: str, search_cost_per_query: float | None, deployment_id: str | None = None
 ) -> str:
     from litellm import Router
@@ -1073,8 +1073,8 @@ def _register_priced_vertex_deployment(
     router: Final = Router(
         model_list=[
             {
-                "model_name": "priced-vertex-deployment",
-                "litellm_params": {"model": model, "vertex_project": "p", "vertex_location": "global"},
+                "model_name": "priced-deployment",
+                "litellm_params": {"model": model, "api_key": "k", "vertex_project": "p", "vertex_location": "global"},
                 "model_info": {**token_rates, **search_rates, **({} if deployment_id is None else {"id": deployment_id})},
             }
         ]
@@ -1082,7 +1082,7 @@ def _register_priced_vertex_deployment(
     return router.model_list[0]["model_info"]["id"]
 
 
-def _vertex_claude_chat_response(
+def _claude_chat_response(
     web_search_requests: int, model: str = "claude-sonnet-5-5"
 ) -> tuple[object, Usage | None]:
     usage: Final = Usage(
@@ -1094,7 +1094,7 @@ def _vertex_claude_chat_response(
     return ModelResponse(model=model, usage=usage), usage
 
 
-def _vertex_claude_messages_response(
+def _claude_messages_response(
     web_search_requests: int, model: str = "claude-sonnet-5-5"
 ) -> tuple[object, Usage | None]:
     return {
@@ -1111,7 +1111,7 @@ def _vertex_claude_messages_response(
     }, None
 
 
-@pytest.mark.parametrize("build_response", [_vertex_claude_chat_response, _vertex_claude_messages_response])
+@pytest.mark.parametrize("build_response", [_claude_chat_response, _claude_messages_response])
 @pytest.mark.parametrize(("web_search_requests", "search_cost_per_query"), [(2, 0.01), (3, 0.01), (2, 0.0)])
 def test_vertex_claude_deployment_priced_web_search_billed_per_request(
     local_model_cost_map: None,
@@ -1119,7 +1119,7 @@ def test_vertex_claude_deployment_priced_web_search_billed_per_request(
     web_search_requests: int,
     search_cost_per_query: float,
 ) -> None:
-    deployment_id: Final = _register_priced_vertex_deployment("vertex_ai/claude-sonnet-5-5", search_cost_per_query)
+    deployment_id: Final = _register_priced_deployment("vertex_ai/claude-sonnet-5-5", search_cost_per_query)
     response_object, usage = build_response(web_search_requests)
 
     cost: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
@@ -1133,37 +1133,40 @@ def test_vertex_claude_deployment_priced_web_search_billed_per_request(
     assert cost == pytest.approx(web_search_requests * search_cost_per_query)
 
 
-@pytest.mark.parametrize("build_response", [_vertex_claude_chat_response, _vertex_claude_messages_response])
+@pytest.mark.parametrize("build_response", [_claude_chat_response, _claude_messages_response])
 @pytest.mark.parametrize(
-    ("deployment_model", "served_model"),
+    ("deployment_model", "served_model", "custom_llm_provider"),
     # Google bills Claude web search on Sonnet 4.5 and Haiku 4.5 too:
     # https://cloud.google.com/model-garden/partner-models/pricing (read 2026-10-30)
     [
-        ("vertex_ai/claude-sonnet-5-5", "claude-sonnet-5-5"),
-        ("vertex_ai/claude-sonnet-4-5@20250929", "claude-sonnet-4-5-20250929"),
-        ("vertex_ai/claude-haiku-4-5@20251001", "claude-haiku-4-5-20251001"),
+        ("vertex_ai/claude-sonnet-5-5", "claude-sonnet-5-5", "vertex_ai"),
+        ("vertex_ai/claude-sonnet-4-5@20250929", "claude-sonnet-4-5-20250929", "vertex_ai"),
+        ("vertex_ai/claude-haiku-4-5@20251001", "claude-haiku-4-5-20251001", "vertex_ai"),
+        ("anthropic/claude-sonnet-5-5", "claude-sonnet-5-5", "anthropic"),
+        ("azure_ai/claude-sonnet-5-5", "claude-sonnet-5-5", "azure_ai"),
     ],
 )
-@pytest.mark.parametrize("deployment_id", [None, "vertex-claude-token-priced"], ids=["hashed_id", "claude_in_id"])
-def test_vertex_claude_deployment_with_token_rates_only_bills_served_model_search_price(
+@pytest.mark.parametrize("deployment_id", [None, "claude-token-priced"], ids=["hashed_id", "claude_in_id"])
+def test_claude_deployment_with_token_rates_only_bills_served_model_search_price(
     local_model_cost_map: None,
     build_response: Callable[[int, str], tuple[object, Usage | None]],
     deployment_model: str,
     served_model: str,
+    custom_llm_provider: str,
     deployment_id: str | None,
 ) -> None:
     served_search_pricing: Final = (
         litellm.get_model_info(model=deployment_model).get("search_context_cost_per_query") or {}
     )
     served_search_price: Final = served_search_pricing.get("search_context_size_medium") or 0.0
-    registered_id: Final = _register_priced_vertex_deployment(deployment_model, None, deployment_id)
+    registered_id: Final = _register_priced_deployment(deployment_model, None, deployment_id)
     response_object, usage = build_response(2, served_model)
 
     cost: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
         model=registered_id,
         response_object=response_object,
         usage=usage,
-        custom_llm_provider="vertex_ai",
+        custom_llm_provider=custom_llm_provider,
         standard_built_in_tools_params=None,
     )
 
@@ -1174,7 +1177,7 @@ def test_vertex_claude_deployment_with_token_rates_only_bills_served_model_searc
 def test_vertex_claude_deployment_with_token_rates_only_and_unmapped_served_model_bills_no_search(
     local_model_cost_map: None,
 ) -> None:
-    deployment_id: Final = _register_priced_vertex_deployment("vertex_ai/claude-sonnet-5-5", None)
+    deployment_id: Final = _register_priced_deployment("vertex_ai/claude-sonnet-5-5", None)
     usage: Final = Usage(
         prompt_tokens=1840,
         completion_tokens=412,
@@ -1193,9 +1196,14 @@ def test_vertex_claude_deployment_with_token_rates_only_and_unmapped_served_mode
     assert cost == 0.0
 
 
-def test_vertex_gemini_deployment_priced_web_search_stays_per_prompt(local_model_cost_map: None) -> None:
+@pytest.mark.parametrize("deployment_id", [None, "claude-code-gemini"], ids=["hashed_id", "claude_in_id"])
+def test_vertex_gemini_deployment_priced_web_search_stays_per_prompt(
+    local_model_cost_map: None, deployment_id: str | None
+) -> None:
     search_cost_per_prompt: Final = 0.03
-    deployment_id: Final = _register_priced_vertex_deployment("vertex_ai/gemini-2.5-flash", search_cost_per_prompt)
+    registered_id: Final = _register_priced_deployment(
+        "vertex_ai/gemini-2.5-flash", search_cost_per_prompt, deployment_id
+    )
     usage: Final = Usage(
         prompt_tokens=1840,
         completion_tokens=412,
@@ -1204,7 +1212,7 @@ def test_vertex_gemini_deployment_priced_web_search_stays_per_prompt(local_model
     )
 
     cost: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
-        model=deployment_id,
+        model=registered_id,
         response_object=ModelResponse(model="gemini-2.5-flash", usage=usage),
         usage=usage,
         custom_llm_provider="vertex_ai",
