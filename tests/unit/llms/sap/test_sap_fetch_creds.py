@@ -172,3 +172,17 @@ def test_vcap_services_that_is_not_an_object_is_rejected(monkeypatch, vcap_servi
         match=f"^'{type(vcap_services).__name__}' object has no attribute 'values'$",
     ):
         sap_credentials.fetch_credentials()
+
+
+@pytest.mark.parametrize(
+    "expires_in, expected_token_requests",
+    [(43200, 1), (3000, 3)],
+    ids=["reused-while-valid", "refreshed-inside-60-minute-buffer"],
+)
+def test_token_is_shared_across_token_creators_until_refresh_buffer(aicore, expires_in, expected_token_requests):
+    aicore.token.respond(json={"access_token": "mock-token", "expires_in": expires_in})
+
+    tokens = tuple(sap_credentials.get_token_creator()[0]() for _ in range(3))
+
+    assert tokens == ("Bearer mock-token",) * 3
+    assert aicore.token.call_count == expected_token_requests
