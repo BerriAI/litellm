@@ -1915,6 +1915,9 @@ def test_managed_mcp_block_policy_and_paid_round(
             assert len(rows) == 1, rows
             assert (rows[0]["prompt_tokens"], rows[0]["completion_tokens"]) == FIRST_ROUND, rows
             assert float(str(rows[0]["spend"])) == pytest.approx(_price(FIRST_ROUND)), rows
+            assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(
+                float(str(rows[0]["spend"]))
+            ), response.text
         else:
             assert "MCP argument denied" in json.dumps(requests[-1]), requests[-1]
             assert rig.final_text(response.json()) == ANSWER, response.text
