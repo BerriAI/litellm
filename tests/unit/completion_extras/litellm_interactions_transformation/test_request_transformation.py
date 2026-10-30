@@ -522,3 +522,88 @@ def test_drop_params_omits_unsupported_sampling_params_and_normalizes_builtin_to
             custom_llm_provider="vertex_ai",
         )
     assert getattr(vertex_exc.value, "llm_provider", None) == "vertex_ai"
+
+
+def test_vertex_mixed_preamble_and_tool_call_replay_defaults_store_false_while_preserving_turn1_and_gemini() -> None:
+    encoded_id: Final = encode_tool_call_id_with_signature("call_ls", "sig_vtx_1")
+    mixed_messages: Final = [
+        {"role": "user", "content": "Inspect repo"},
+        {
+            "role": "assistant",
+            "content": "Checking directory contents.",
+            "thinking_blocks": [{"type": "thinking", "thinking": "", "signature": "sig_vtx_1"}],
+            "tool_calls": [
+                {
+                    "id": encoded_id,
+                    "type": "function",
+                    "function": {"name": "bash", "arguments": '{"cmd": "ls"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": encoded_id, "content": "README.md\n"},
+    ]
+    tool_only_messages: Final = [
+        {"role": "user", "content": "Inspect repo"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [{"type": "thinking", "thinking": "", "signature": "sig_vtx_1"}],
+            "tool_calls": [
+                {
+                    "id": encoded_id,
+                    "type": "function",
+                    "function": {"name": "bash", "arguments": '{"cmd": "ls"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": encoded_id, "content": "README.md\n"},
+    ]
+
+    vertex_turn1: Final = transform_chat_to_interactions_request(
+        messages=[{"role": "user", "content": "Inspect repo"}],
+        model="gemini-4-argon",
+        optional_params={},
+        litellm_params={},
+        custom_llm_provider="vertex_ai",
+    )
+    vertex_tool_only: Final = transform_chat_to_interactions_request(
+        messages=tool_only_messages,
+        model="gemini-4-argon",
+        optional_params={},
+        litellm_params={},
+        custom_llm_provider="vertex_ai",
+    )
+    vertex_mixed: Final = transform_chat_to_interactions_request(
+        messages=mixed_messages,
+        model="gemini-4-argon",
+        optional_params={},
+        litellm_params={},
+        custom_llm_provider="vertex_ai",
+    )
+    gemini_mixed: Final = transform_chat_to_interactions_request(
+        messages=mixed_messages,
+        model="gemini-4-argon",
+        optional_params={},
+        litellm_params={},
+        custom_llm_provider="gemini",
+    )
+    vertex_explicit_store_true: Final = transform_chat_to_interactions_request(
+        messages=mixed_messages,
+        model="gemini-4-argon",
+        optional_params={"store": True},
+        litellm_params={},
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert "store" not in vertex_turn1.optional_params
+    assert "store" not in vertex_tool_only.optional_params
+    assert vertex_mixed.optional_params == {"store": False}
+    assert [step["type"] for step in vertex_mixed.input_steps if isinstance(step, dict)] == [
+        "user_input",
+        "thought",
+        "model_output",
+        "function_call",
+        "function_result",
+    ]
+    assert "store" not in gemini_mixed.optional_params
+    assert vertex_explicit_store_true.optional_params == {"store": True}

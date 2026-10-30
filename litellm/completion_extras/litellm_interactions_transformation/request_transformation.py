@@ -929,6 +929,29 @@ def _build_generation_config(params: JsonMapping, model: str, model_info: object
     return _JSON_VALUE.validate_python(merged) if merged else None
 
 
+def _advance_mixed_turn_scan(saw_output: bool, step: bool | JsonValue) -> bool:
+    if isinstance(step, bool):
+        return step
+    if not isinstance(step, dict):
+        return saw_output
+    match step.get("type"):
+        case "model_output":
+            return True
+        case "user_input" | "function_result":
+            return False
+        case _:
+            return saw_output
+
+
+def _replays_model_output_before_function_call(steps: JsonSequence) -> bool:
+    seeded: Final[tuple[bool | JsonValue, ...]] = (False, *steps)
+    saw_before_each: Final = tuple(accumulate(seeded, _advance_mixed_turn_scan))
+    return any(
+        isinstance(step, dict) and step.get("type") == "function_call" and saw_output
+        for step, saw_output in zip(steps, saw_before_each)
+    )
+
+
 def transform_chat_to_interactions_request(
     *,
     messages: Sequence[object],
@@ -972,10 +995,25 @@ def transform_chat_to_interactions_request(
         model=model,
         model_info=litellm_params.get("model_info"),
     )
+    explicit_store: Final = normalized_params.get("store")
+    effective_store: Final = (
+        explicit_store
+        if explicit_store is not None
+        else (
+            False
+            if custom_llm_provider in ("vertex_ai", "vertex_ai_beta")
+            and normalized_params.get("previous_interaction_id") is None
+            and _replays_model_output_before_function_call(steps)
+            else None
+        )
+    )
     passthrough_entries: Final = {
-        key: normalized_params[key]
-        for key in ("store", "previous_interaction_id", "background", "environment", "response_modalities")
-        if normalized_params.get(key) is not None
+        **({"store": effective_store} if effective_store is not None else {}),
+        **{
+            key: normalized_params[key]
+            for key in ("previous_interaction_id", "background", "environment", "response_modalities")
+            if normalized_params.get(key) is not None
+        },
     }
     interactions_params: Final = {
         **({"system_instruction": system_instruction} if system_instruction is not None else {}),
