@@ -48636,6 +48636,7 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/deepseek-ai/DeepSeek-V3": {
+        "deprecation_date": "2026-05-14",
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 65536,
@@ -48665,6 +48666,7 @@
         "supports_tool_choice": true
     },
     "together_ai/moonshotai/Kimi-K2-Instruct": {
+        "deprecation_date": "2026-03-06",
         "input_cost_per_token": 1e-06,
         "litellm_provider": "together_ai",
         "metadata": {
@@ -48693,6 +48695,7 @@
         "supports_tool_choice": true
     },
     "together_ai/togethercomputer/CodeLlama-34b-Instruct": {
+        "deprecation_date": "2024-08-22",
         "litellm_provider": "together_ai",
         "mode": "chat",
         "supports_function_calling": true,

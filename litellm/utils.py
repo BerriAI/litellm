@@ -8102,7 +8102,7 @@ def validate_environment(
             else:
                 missing_keys.append("AI21_API_KEY")
         ## together_ai
-        elif model in litellm.together_ai_models:
+        elif f"together_ai/{model}" in litellm.together_ai_models:
             if "TOGETHERAI_API_KEY" in os.environ:
                 keys_in_environment = True
             else:

@@ -9346,6 +9346,49 @@ def test_validate_environment_ollama_failed():
         assert kv["missing_keys"] == ["OLLAMA_API_BASE"]
 
 
+def _live_together_ai_cost_map_rows() -> frozenset[str]:
+    return frozenset(
+        key
+        for key, value in litellm.model_cost.items()
+        if value.get("litellm_provider") == "together_ai" and not litellm._is_past_deprecation_date(value)
+    )
+
+
+def _resolves_to_a_provider(model: str) -> bool:
+    try:
+        litellm.get_llm_provider(model=model)
+    except litellm.BadRequestError:
+        return False
+    return True
+
+
+def test_validate_environment_asks_for_the_together_ai_key_for_bare_together_ai_model_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    claimed_by_other_providers: Final = frozenset(
+        itertools.chain.from_iterable(
+            models for provider, models in litellm.models_by_provider.items() if provider != "together_ai"
+        )
+    )
+    bare_ids: Final = frozenset(
+        key.removeprefix("together_ai/") for key in _live_together_ai_cost_map_rows() if key.startswith("together_ai/")
+    )
+    unresolved_bare_ids: Final = tuple(
+        sorted(bare_id for bare_id in bare_ids - claimed_by_other_providers if not _resolves_to_a_provider(bare_id))
+    )
+
+    monkeypatch.delenv("TOGETHERAI_API_KEY", raising=False)
+    without_key: Final = {bare_id: validate_environment(model=bare_id) for bare_id in unresolved_bare_ids}
+    monkeypatch.setenv("TOGETHERAI_API_KEY", "together-test-key")
+    with_key: Final = {bare_id: validate_environment(model=bare_id) for bare_id in unresolved_bare_ids}
+
+    assert unresolved_bare_ids
+    assert without_key == dict.fromkeys(
+        unresolved_bare_ids, {"keys_in_environment": False, "missing_keys": ["TOGETHERAI_API_KEY"]}
+    )
+    assert with_key == dict.fromkeys(unresolved_bare_ids, {"keys_in_environment": True, "missing_keys": []})
+
+
 def test_get_supported_openai_params() -> None:
     assert isinstance(get_supported_openai_params("gpt-4"), list)
 
@@ -10735,6 +10778,16 @@ def test_get_valid_models_returns_static_fireworks_models_without_endpoint_check
     assert set(actual_models) == expected_models
     assert actual_models
     assert expected_models <= set(env_inferred_models)
+
+
+def test_get_valid_models_lists_each_live_together_ai_model_once_under_its_cost_map_key() -> None:
+    listed: Final = get_valid_models(check_provider_endpoint=False, custom_llm_provider="together_ai")
+    listed_bare_ids: Final = {model.removeprefix("together_ai/") for model in listed}
+    live_rows: Final = {key for key in _live_together_ai_cost_map_rows() if key.startswith("together_ai/")}
+
+    assert listed
+    assert len(listed_bare_ids) == len(listed)
+    assert set(listed) == live_rows
 
 
 def test_get_valid_models_uses_the_litellm_params_anthropic_api_key() -> None:

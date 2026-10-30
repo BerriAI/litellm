@@ -1278,40 +1278,6 @@ empower_models: Final = set(
     ]
 )
 
-together_ai_models: Final[set[str]] = set(
-    [
-        # llama llms - chat
-        "togethercomputer/llama-2-70b-chat",
-        # llama llms - language / instruct
-        "togethercomputer/llama-2-70b",
-        "togethercomputer/LLaMA-2-7B-32K",
-        "togethercomputer/Llama-2-7B-32K-Instruct",
-        "togethercomputer/llama-2-7b",
-        # falcon llms
-        "togethercomputer/falcon-40b-instruct",
-        "togethercomputer/falcon-7b-instruct",
-        # alpaca
-        "togethercomputer/alpaca-7b",
-        # chat llms
-        "HuggingFaceH4/starchat-alpha",
-        # code llms
-        "togethercomputer/CodeLlama-34b",
-        "togethercomputer/CodeLlama-34b-Instruct",
-        "togethercomputer/CodeLlama-34b-Python",
-        "defog/sqlcoder",
-        "NumbersStation/nsql-llama-2-7B",
-        "WizardLM/WizardCoder-15B-V1.0",
-        "WizardLM/WizardCoder-Python-34B-V1.0",
-        # language llms
-        "NousResearch/Nous-Hermes-Llama2-13b",
-        "Austism/chronos-hermes-13b",
-        "upstage/SOLAR-0-70b-16bit",
-        "WizardLM/WizardLM-70B-V1.0",
-    ]
-)
-# supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
-
-
 featherless_ai_models: Final[set] = set(
     [
         "featherless-ai/Qwerky-72B",
