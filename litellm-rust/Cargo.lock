@@ -3405,6 +3405,7 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.19",
  "tokio",
+ "url",
  "veil",
 ]
 
@@ -3704,6 +3705,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tracing",
  "tracing-subscriber",
+ "veil",
 ]
 
 [[package]]
@@ -3816,6 +3818,7 @@ dependencies = [
  "litellm-inference",
  "litellm-llms",
  "litellm-redis-client",
+ "litellm-redis-connect",
  "litellm-redis-testing",
  "litellm-secrets",
  "litellm-tracing",
@@ -4332,6 +4335,7 @@ dependencies = [
  "litellm-cache-redis",
  "litellm-cache-response",
  "litellm-callbacks-legacy-python",
+ "litellm-circuit-breaker",
  "litellm-core-utils",
  "litellm-error",
  "litellm-host",
@@ -4346,6 +4350,7 @@ dependencies = [
  "litellm-llms",
  "litellm-llms-types",
  "litellm-model-catalog",
+ "litellm-redis-client",
  "litellm-router-types",
  "litellm-secrets",
  "litellm-secrets-aws",
@@ -4396,16 +4401,46 @@ dependencies = [
  "futures-util",
  "litellm-circuit-breaker",
  "litellm-redis-testing",
+ "pem",
  "redis",
  "rstest",
+ "rustls-native-certs",
+ "socket2 0.6.5",
  "thiserror 2.0.19",
  "tokio",
+ "veil",
+]
+
+[[package]]
+name = "litellm-redis-connect"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-auth-aws",
+ "litellm-auth-azure",
+ "litellm-auth-gcp",
+ "litellm-auth-types",
+ "litellm-circuit-breaker",
+ "litellm-config",
+ "litellm-http",
+ "litellm-redis-client",
+ "litellm-redis-testing",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]
 name = "litellm-redis-testing"
 version = "0.1.0"
 dependencies = [
+ "rcgen",
+ "tempfile",
  "testcontainers-modules",
  "thiserror 2.0.19",
  "tokio",

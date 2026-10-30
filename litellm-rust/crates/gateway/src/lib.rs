@@ -68,15 +68,23 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
     Ok(Arc::new(Gateway::new(resources, http, secrets, router)?))
 }
 
-pub async fn build_redis(config: &Config) -> Result<RedisClients, Error> {
-    let environment = secrets::environment_values(&config.environment_variables)?;
-    let lookup = |name: &str| {
+pub async fn build_redis(
+    config: &Config,
+    pool: &HttpClientPool,
+    http: &litellm_http::HttpClientConfig,
+) -> Result<RedisClients, Error> {
+    let environment = Arc::new(secrets::environment_values(&config.environment_variables)?);
+    let lookup: litellm_config::SharedLookup = Arc::new(move |name: &str| {
         environment
             .get(name)
             .map(|value| value.expose().to_owned())
             .or_else(|| std::env::var(name).ok())
+    });
+    let resources = redis::Resources {
+        http: pool.client(http, ClientVariant::Provider)?,
+        lookup: lookup.clone(),
     };
-    redis::connect(config, &lookup).await
+    redis::connect(config, &*lookup, &resources).await
 }
 
 pub async fn build_mcp(

@@ -8,10 +8,21 @@ repository.workspace = true
 [dependencies]
 litellm-circuit-breaker.workspace = true
 futures-util.workspace = true
-redis = { workspace = true, features = ["cluster-async", "connection-manager", "tokio-rustls-comp"] }
+redis = { workspace = true, features = [
+    "cluster-async",
+    "connection-manager",
+    "sentinel",
+    "tls-rustls-insecure",
+    "token-based-authentication",
+    "tokio-rustls-comp",
+] }
+pem = "4.0.0"
+rustls-native-certs.workspace = true
+socket2 = "0.6.5"
 thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+veil.workspace = true
 
 [dev-dependencies]
 litellm-redis-testing.workspace = true
 rstest.workspace = true
-tokio.workspace = true

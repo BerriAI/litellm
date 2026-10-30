@@ -1,16 +1,19 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
-use litellm_circuit_breaker::{Breaker, Config as BreakerConfig, State};
+use litellm_circuit_breaker::Config as BreakerConfig;
 use litellm_config::{
-    CacheSettings, Config, Lookup, RedisEndpoint, RedisSettings, ResolvedRedis, Value,
-    environment_has_target,
+    CacheSettings, Config, Expected, Lookup, RedisError, RedisSettings, ResolvedRedis, SharedLookup, Value,
+    environment_has_target, parse_seconds,
 };
-use litellm_redis_client::{
-    ClusterEndpoint, ClusterNode, DEFAULT_TIMEOUT, Endpoint, HostEndpoint, Namespace, RedisClient,
-    RedisConfig,
-};
+use litellm_redis_client::{RedisClient, RedisEvents};
+use litellm_redis_connect::{HostServices, TracingEvents};
 
 use crate::Error;
+
+pub(crate) struct Resources {
+    pub(crate) http: litellm_http::Client,
+    pub(crate) lookup: SharedLookup,
+}
 
 const ENVIRONMENT_PING_TIMEOUT: Duration = Duration::from_secs(2);
 type Params = ResolvedRedis;
@@ -57,9 +60,22 @@ pub(crate) fn plan(config: &Config, lookup: Lookup<'_>) -> Result<Plan, Error> {
     })
 }
 
-pub async fn connect(config: &Config, lookup: Lookup<'_>) -> Result<RedisClients, Error> {
+pub(crate) async fn connect(config: &Config, lookup: Lookup<'_>, resources: &Resources) -> Result<RedisClients, Error> {
     let plan = plan(config, lookup)?;
     let breaker = breaker_config(lookup)?;
+    let events: Arc<dyn RedisEvents> = Arc::new(TracingEvents::new(lookup));
+    let client = |params: Params, breaker: Option<BreakerConfig>| -> Result<RedisClient, Error> {
+        Ok(litellm_redis_connect::connect(
+            params,
+            HostServices {
+                credential_provider: None,
+                events: Some(events.clone()),
+                breaker,
+                http: resources.http.clone(),
+                lookup: resources.lookup.clone(),
+            },
+        )?)
+    };
     let coordination = match plan.coordination {
         Some(Target::Configured(params)) => Some(client(params, breaker)?),
         Some(Target::Environment(params)) => match client(params, breaker) {
@@ -149,57 +165,6 @@ async fn reachable(client: RedisClient) -> Option<RedisClient> {
     }
 }
 
-fn client(params: Params, breaker: Option<BreakerConfig>) -> Result<RedisClient, Error> {
-    tracing::info!(endpoint = ?params.endpoint, namespace = ?params.namespace, "redis client configured");
-    let endpoint = match params.endpoint {
-        RedisEndpoint::Url(url) => Endpoint::Url(url.expose().to_owned()),
-        RedisEndpoint::Host(host) => Endpoint::Host(HostEndpoint {
-            host: host.host,
-            port: host.port,
-            username: host.username.map(|value| value.expose().to_owned()),
-            password: host.password.map(|value| value.expose().to_owned()),
-            tls: host.tls,
-            db: host.db,
-        }),
-        RedisEndpoint::Cluster(cluster) => Endpoint::Cluster(ClusterEndpoint {
-            nodes: cluster
-                .nodes
-                .into_iter()
-                .map(|node| ClusterNode {
-                    host: node.host,
-                    port: node.port,
-                })
-                .collect(),
-            username: cluster.username.map(|value| value.expose().to_owned()),
-            password: cluster.password.map(|value| value.expose().to_owned()),
-            tls: cluster.tls,
-        }),
-    };
-    Ok(RedisClient::new(RedisConfig {
-        endpoint,
-        namespace: params.namespace.map(Namespace::new).unwrap_or_default(),
-        timeout: params.timeout.unwrap_or(DEFAULT_TIMEOUT),
-        breaker: breaker.map(|config| Breaker::new(config, Box::new(log_transition))),
-    })?)
-}
-
-fn log_transition(transition: &litellm_circuit_breaker::Transition<State>) {
-    match transition.to {
-        State::Open { .. } => tracing::warn!(
-            generation = transition.generation,
-            "redis circuit breaker opened, fast-failing redis calls"
-        ),
-        State::HalfOpen => tracing::info!(
-            generation = transition.generation,
-            "redis circuit breaker half open, probing redis"
-        ),
-        State::Closed { .. } => tracing::info!(
-            generation = transition.generation,
-            "redis circuit breaker closed, redis recovered"
-        ),
-    }
-}
-
 fn breaker_config(lookup: Lookup<'_>) -> Result<Option<BreakerConfig>, Error> {
     let enabled = lookup("REDIS_CIRCUIT_BREAKER_ENABLED")
         .is_none_or(|value| value.eq_ignore_ascii_case("true"));
@@ -207,50 +172,58 @@ fn breaker_config(lookup: Lookup<'_>) -> Result<Option<BreakerConfig>, Error> {
         return Ok(None);
     }
     let defaults = BreakerConfig::default();
-    let seconds = |name: &'static str, default: Duration| -> Result<Duration, Error> {
-        lookup(name)
-            .map(|value| {
-                value
-                    .parse::<f64>()
-                    .ok()
-                    .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
-                    .ok_or(Error::RedisInvalid {
-                        setting: name,
-                        reason: "must be a non-negative number of seconds",
-                    })
-            })
-            .unwrap_or(Ok(default))
-    };
-    let failure_threshold = lookup("REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD")
+    Ok(Some(BreakerConfig {
+        failure_threshold: environment_value(
+            lookup,
+            "REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD",
+            Expected::Integer,
+            |text| text.parse().ok(),
+        )?
+        .unwrap_or(defaults.failure_threshold),
+        recovery_timeout: environment_value(
+            lookup,
+            "REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT",
+            Expected::Seconds,
+            parse_seconds,
+        )?
+        .unwrap_or(defaults.recovery_timeout),
+        timeout_min_duration: environment_value(
+            lookup,
+            "REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION",
+            Expected::Seconds,
+            parse_seconds,
+        )?
+        .unwrap_or(defaults.timeout_min_duration),
+    }))
+}
+
+fn environment_value<T>(
+    lookup: Lookup<'_>,
+    name: &str,
+    expected: Expected,
+    parse: impl Fn(&str) -> Option<T>,
+) -> Result<Option<T>, RedisError> {
+    lookup(name)
         .map(|value| {
-            value.parse().map_err(|_| Error::RedisInvalid {
-                setting: "REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD",
-                reason: "must be an integer",
+            parse(&value).ok_or_else(|| RedisError::Invalid {
+                setting: name.to_owned(),
+                expected,
             })
         })
-        .unwrap_or(Ok(defaults.failure_threshold))?;
-    Ok(Some(BreakerConfig {
-        failure_threshold,
-        recovery_timeout: seconds(
-            "REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT",
-            defaults.recovery_timeout,
-        )?,
-        timeout_min_duration: seconds(
-            "REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION",
-            defaults.timeout_min_duration,
-        )?,
-    }))
+        .transpose()
 }
 
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, time::Duration};
 
-    use litellm_config::{Config, RedisEndpoint, RedisHost};
+    use litellm_config::{Config, Expected, RedisAuth, RedisEndpoint, RedisError, RedisHost};
     use litellm_redis_testing::RedisServer;
     use rstest::rstest;
 
-    use super::{Params, Plan, Target, connect, plan};
+    use std::sync::Arc;
+
+    use super::{Params, Plan, Resources, Target, plan};
     use crate::Error;
 
     fn host(name: &str, port: u16) -> Params {
@@ -258,14 +231,28 @@ mod tests {
             endpoint: RedisEndpoint::Host(RedisHost {
                 host: name.to_owned(),
                 port,
-                username: None,
-                password: None,
-                tls: false,
+                tls: None,
                 db: 0,
             }),
+            auth: RedisAuth::Static {
+                username: None,
+                password: None,
+            },
             namespace: None,
             timeout: None,
+            connect_timeout: None,
         }
+    }
+
+    async fn connect(
+        config: &Config,
+        lookup: litellm_config::Lookup<'_>,
+    ) -> Result<super::RedisClients, Error> {
+        let resources = Resources {
+            http: litellm_http::Client::for_test(),
+            lookup: Arc::new(|_| None),
+        };
+        super::connect(config, lookup, &resources).await
     }
 
     fn resolved(yaml: &str, environment: &[(&str, &str)]) -> Result<Plan, Error> {
@@ -422,10 +409,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            Error::Config(litellm_config::Error::RedisInvalid {
-                setting: "port",
-                ..
-            })
+            Error::Redis(RedisError::Invalid { setting, expected: Expected::Integer }) if setting == "port"
         ));
     }
 
@@ -439,10 +423,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            Error::Config(litellm_config::Error::RedisInvalid {
-                setting: "port",
-                ..
-            })
+            Error::Redis(RedisError::Invalid { setting, expected: Expected::Integer }) if setting == "REDIS_PORT"
         ));
     }
 
@@ -456,10 +437,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            Error::Config(litellm_config::Error::RedisInvalid {
-                setting: "port",
-                ..
-            })
+            Error::Redis(RedisError::Invalid { setting, expected: Expected::Integer }) if setting == "port"
         ));
     }
 

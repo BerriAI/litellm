@@ -1,0 +1,6 @@
+- Turns a `litellm_config::ResolvedRedis` into a `RedisClient`, the same way for rust-proxy and `python-bridge`. `redis-client` stays cloud-agnostic, so TLS files, credential providers and cloud token sources are built here
+- The host passes only what it alone can build in `HostServices`: a `credential_provider` adapter (python-bridge only), the event sink, the breaker config, the HTTP client and the environment lookup. A host without a `credential_provider` adapter fails at connect with an error naming the key
+- Every expiring credential goes through the one refresh loop in `refresh.rs`. A cloud source only fetches. Never add a second loop or let a source sleep
+- The loop starts on the first `subscribe()`, which redis-rs calls inside its runtime, so `connect` is safe off a runtime (python-bridge under `release_gil`)
+- A token-only credential (Azure without `REDIS_USERNAME`, GCP) is sent as `AUTH default <token>`, because redis-rs always sends a username with a credentials provider. On Redis 6+ that is the same as Python's `AUTH <token>`
+- Tests for the refresh loop use a fake source and real Redis ACL users. Cloud sources are proven against the live service, unit tests only pin request shapes we own
