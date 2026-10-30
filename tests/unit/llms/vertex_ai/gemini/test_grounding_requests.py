@@ -1,6 +1,7 @@
 from litellm.llms.vertex_ai.gemini.grounding_requests import (
     GroundingRequests,
     calculate_grounding_requests,
+    web_search_queries_from_server_side_invocations,
 )
 
 
@@ -100,3 +101,71 @@ def test_has_billable_grounding():
     assert GroundingRequests(web_search_requests=None, google_maps_grounding_requests=1).has_billable_grounding()
     assert GroundingRequests(web_search_requests=1, google_maps_grounding_requests=None).has_billable_grounding()
     assert not GroundingRequests(web_search_requests=None, google_maps_grounding_requests=None).has_billable_grounding()
+
+
+def test_web_search_queries_from_server_side_invocations_queries_list():
+    invocations = [
+        {
+            "tool_type": "GOOGLE_SEARCH_WEB",
+            "id": "call_1",
+            "args": {"queries": ["top news headlines today"]},
+        },
+        {
+            "tool_type": "GOOGLE_SEARCH_WEB",
+            "id": "call_2",
+            "args": {
+                "queries": [
+                    '"MV Odyssey" suspended voyage fuel costs CBS News',
+                    "Cambodia US Cruise Ship MV Odyssey fuel costs",
+                    "top news headlines today",  # duplicate across calls
+                ]
+            },
+        },
+        {
+            # function tool — must be ignored
+            "tool_type": "FUNCTION",
+            "args": {"queries": ["should not count"]},
+        },
+        {
+            "tool_type": "google_search",
+            "args": {"query": "single query form"},
+        },
+        {"tool_type": "GOOGLE_SEARCH_WEB", "args": {"queries": ["", "kept"]}},
+    ]
+
+    result = web_search_queries_from_server_side_invocations(invocations)
+    assert result == frozenset(
+        {
+            "top news headlines today",
+            '"MV Odyssey" suspended voyage fuel costs CBS News',
+            "Cambodia US Cruise Ship MV Odyssey fuel costs",
+            "single query form",
+            "kept",
+        }
+    )
+
+
+def test_calculate_grounding_requests_unions_invocation_queries():
+    result = calculate_grounding_requests(
+        [{"webSearchQueries": ["from metadata", "shared"]}],
+        server_side_invocations=[
+            {
+                "tool_type": "GOOGLE_SEARCH_WEB",
+                "args": {"queries": ["shared", "from invocation"]},
+            }
+        ],
+    )
+    assert result == GroundingRequests(web_search_requests=3, google_maps_grounding_requests=None)
+
+
+def test_calculate_grounding_requests_invocations_only():
+    result = calculate_grounding_requests(
+        [],
+        server_side_invocations=[
+            {
+                "tool_type": "GOOGLE_SEARCH_WEB",
+                "args": {"queries": ["a", "b", "a"]},
+            }
+        ],
+    )
+    assert result == GroundingRequests(web_search_requests=2, google_maps_grounding_requests=None)
