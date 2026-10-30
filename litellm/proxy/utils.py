@@ -4137,6 +4137,15 @@ class ProxyLogging:
         from litellm.proxy.proxy_server import llm_router
         from litellm.types.guardrails import GuardrailEventHooks
 
+        from litellm.proxy.auth.native_mcp_policy import (
+            check_native_mcp_response,
+            native_mcp_request_context,
+            resolve_native_mcp_policy,
+        )
+
+        validated_mcp_context: Final = (
+            native_mcp_request_context(response) if resolve_native_mcp_policy(user_api_key_dict) is not None else None
+        )
         pipeline_response: Final = await self._run_post_call_pipelines(
             data=data,
             user_api_key_dict=user_api_key_dict,
@@ -4225,8 +4234,6 @@ class ProxyLogging:
                     response = callback_response
         except Exception as e:
             raise e
-        from litellm.proxy.auth.native_mcp_policy import check_native_mcp_response
-
         policy_data: Final = TypeAdapter(Mapping[str, object]).validate_python(data)
         policy_logging: Final = policy_data.get("litellm_logging_obj")
         check_native_mcp_response(
@@ -4234,6 +4241,7 @@ class ProxyLogging:
             policy_data,
             response,
             is_retrieval=isinstance(policy_logging, Logging) and policy_logging.call_type == "aget_responses",
+            validated_context=validated_mcp_context,
         )
         return response
 

@@ -196,6 +196,7 @@ def check_native_mcp_response(
     response: object,
     *,
     is_retrieval: bool = False,
+    validated_context: NativeMCPRequestContext | None = None,
 ) -> None:
     policy: Final = resolve_native_mcp_policy(identity)
     if policy is None:
@@ -209,7 +210,7 @@ def check_native_mcp_response(
     # must remain bound to the request validated before dispatch.
     response_fields: Final = as_str_mapping(response.model_dump() if isinstance(response, BaseModel) else response)
     binding: Final = {"tools": response_fields.get("tools")} if is_retrieval and response_fields is not None else data
-    context: Final = None if is_retrieval else native_mcp_request_context(response)
+    context: Final = None if is_retrieval else validated_context or native_mcp_request_context(response)
     request_accesses: Final = context.accesses if context is not None else extract_request_mcp_accesses(binding)
     raise_native_mcp_denial(evaluate_native_mcp_policy(policy, request_accesses))
     if isinstance(request_accesses, NativeMCPDenial) or is_gateway_only(request_accesses):

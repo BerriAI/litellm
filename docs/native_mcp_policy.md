@@ -62,7 +62,9 @@ The proxy checks every offered native MCP server and tool. Any denial rejects th
 
 ## Response enforcement
 
-Native MCP call records in non-streaming responses are checked against the same policy before returning the response. Response server labels are bound to the URLs from the validated request. A call with an unknown server or unreadable tool name is rejected.
+Native MCP call records in non-streaming responses are checked against the same policy before returning the response. Response server labels are bound to the URLs validated for the selected deployment, including model-configured attachments. Retries and fallback attempts carry their own binding. A call with an unknown server or unreadable tool name is rejected.
+
+Normal provider GET `/v1/responses/{response_id}` retrieval checks the stored attachment URLs returned by the provider against the caller’s current policy, then checks the returned tool calls. Creation responses cannot use this retrieval fallback.
 
 Streaming response enforcement is added in the dependent change.
 
@@ -70,6 +72,6 @@ Response enforcement cannot undo a tool the provider already executed. Request-s
 
 ## Scope
 
-This policy covers `/v1/chat/completions`, `/v1/responses`, and `/v1/messages`, including their existing aliases. It does not add enforcement to direct provider passthrough routes such as `/bedrock/...`, stored-response retrieval, or SDK-only calls.
+This policy covers `/v1/chat/completions`, `/v1/responses`, and `/v1/messages`, including their existing aliases. It does not add enforcement to direct provider passthrough routes such as `/bedrock/...`, or SDK-only calls.
 
 Ordinary function tools, provider built-ins, and local tools named `mcp__server__tool` keep their existing controls. The existing `metadata.allowed_tools` list remains independent and still applies when configured. Requests containing only `litellm_proxy` MCP attachments keep the existing MCP gateway permissions and response handling. When a native policy is active, mixing gateway and provider-native attachments in one request returns HTTP 400. Use separate requests for the two execution paths. Registries, reusable named policies, and a management UI are outside this version.
