@@ -3388,8 +3388,6 @@ VERTEX_AI_CLAUDE_HAIKU_5_5_BRIDGE_PAIRS: Final = bridge_pairs(
 )
 
 
-
-# vertex_ai/claude-sonnet-5-5 deployment priced in its model_info, so it bills under the deployment's own id
 VERTEX_AI_CLAUDE_DEPLOYMENT_RATES: Final = Deployment(
     input_cost_per_token=1e-06, output_cost_per_token=5e-06, search_cost_per_query=0.01
 )
@@ -3515,6 +3513,20 @@ VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_MESSAGES_WEB_SEARCH_ZERO_RATE: Final = (
         _vertex_claude_web_search_message(2),
         0.0,
         Deployment(input_cost_per_token=1e-06, output_cost_per_token=5e-06, search_cost_per_query=0.0),
+    )
+)
+VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_MESSAGES_WEB_SEARCH_TOKEN_RATES_ONLY: Final = (
+    _vertex_claude_deployment_web_search_case(
+        "vertex_ai/claude-sonnet-5-5-deployment_token_rates_only_messages_web_search_two_requests",
+        "/v1/messages",
+        {
+            "max_tokens": 412,
+            "messages": [{"role": "user", "content": "vertex claude deployment token rates only messages web search"}],
+            "tools": [VERTEX_AI_CLAUDE_WEB_SEARCH_TOOL],
+        },
+        _vertex_claude_web_search_message(2),
+        0.034,
+        Deployment(input_cost_per_token=1e-06, output_cost_per_token=5e-06),
     )
 )
 VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_CHAT_WEB_SEARCH: Final = _vertex_claude_deployment_web_search_case(
@@ -3943,6 +3955,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_MESSAGES_WEB_SEARCH,
     VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_MESSAGES_WEB_SEARCH_STREAM,
     VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_MESSAGES_WEB_SEARCH_ZERO_RATE,
+    VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_MESSAGES_WEB_SEARCH_TOKEN_RATES_ONLY,
     VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_CHAT_WEB_SEARCH,
     VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_CHAT_WEB_SEARCH_STREAM,
     VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_RESPONSES_WEB_SEARCH,

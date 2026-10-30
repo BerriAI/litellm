@@ -1053,23 +1053,27 @@ def test_azure_ai_non_claude_web_search_keeps_generic_fallback() -> None:
     assert get_cost_for_web_search_request(custom_llm_provider="azure_ai", usage=usage, model_info=model_info) is None
 
 
-def _register_priced_vertex_deployment(model: str, search_cost_per_query: float) -> str:
+def _register_priced_vertex_deployment(model: str, search_cost_per_query: float | None) -> str:
     from litellm import Router
 
+    token_rates: Final = {"input_cost_per_token": 3e-6, "output_cost_per_token": 1.5e-5}
+    search_rates: Final = (
+        {}
+        if search_cost_per_query is None
+        else {
+            "search_context_cost_per_query": {
+                "search_context_size_low": search_cost_per_query,
+                "search_context_size_medium": search_cost_per_query,
+                "search_context_size_high": search_cost_per_query,
+            }
+        }
+    )
     router: Final = Router(
         model_list=[
             {
                 "model_name": "priced-vertex-deployment",
                 "litellm_params": {"model": model, "vertex_project": "p", "vertex_location": "global"},
-                "model_info": {
-                    "input_cost_per_token": 3e-6,
-                    "output_cost_per_token": 1.5e-5,
-                    "search_context_cost_per_query": {
-                        "search_context_size_low": search_cost_per_query,
-                        "search_context_size_medium": search_cost_per_query,
-                        "search_context_size_high": search_cost_per_query,
-                    },
-                },
+                "model_info": {**token_rates, **search_rates},
             }
         ]
     )
@@ -1121,6 +1125,52 @@ def test_vertex_claude_deployment_priced_web_search_billed_per_request(
     )
 
     assert cost == pytest.approx(web_search_requests * search_cost_per_query)
+
+
+@pytest.mark.parametrize("build_response", [_vertex_claude_chat_response, _vertex_claude_messages_response])
+def test_vertex_claude_deployment_with_token_rates_only_bills_served_model_search_price(
+    local_model_cost_map: None,
+    build_response: Callable[[int], tuple[object, Usage | None]],
+) -> None:
+    served_search_pricing: Final = (
+        litellm.get_model_info(model="vertex_ai/claude-sonnet-5-5").get("search_context_cost_per_query") or {}
+    )
+    served_search_price: Final = served_search_pricing.get("search_context_size_medium") or 0.0
+    deployment_id: Final = _register_priced_vertex_deployment("vertex_ai/claude-sonnet-5-5", None)
+    response_object, usage = build_response(2)
+
+    cost: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=deployment_id,
+        response_object=response_object,
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert served_search_price > 0
+    assert cost == pytest.approx(2 * served_search_price)
+
+
+def test_vertex_claude_deployment_with_token_rates_only_and_unmapped_served_model_bills_no_search(
+    local_model_cost_map: None,
+) -> None:
+    deployment_id: Final = _register_priced_vertex_deployment("vertex_ai/claude-sonnet-5-5", None)
+    usage: Final = Usage(
+        prompt_tokens=1840,
+        completion_tokens=412,
+        total_tokens=2252,
+        server_tool_use=ServerToolUse(web_search_requests=2),
+    )
+
+    cost: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=deployment_id,
+        response_object=ModelResponse(model="claude-unmapped-preview", usage=usage),
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == 0.0
 
 
 def test_vertex_gemini_deployment_priced_web_search_stays_per_prompt(local_model_cost_map: None) -> None:

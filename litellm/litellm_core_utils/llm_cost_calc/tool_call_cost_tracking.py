@@ -215,6 +215,7 @@ class StandardBuiltInToolCostTracking:
                 usage=resolved_usage,
                 model_info=model_info,
                 response_model=response_model if isinstance(response_model, str) else None,
+                lookup_model_info=StandardBuiltInToolCostTracking._safe_get_model_info,
             )
             if result is not None:
                 return result
