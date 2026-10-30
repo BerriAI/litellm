@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
+import fakeredis
 import httpx
 import pytest
 from fastapi import HTTPException
@@ -40,6 +41,7 @@ from litellm.proxy.utils import (
 )
 from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
+from tests._support.fake_redis import fake_redis_cache
 
 
 @pytest.mark.asyncio
@@ -3435,14 +3437,6 @@ async def test_track_cost_callback_enqueue_emits_no_service_span():  # test-qual
     assert update_database.await_count == 1, "the spend enqueue itself must still run"
     assert success_hook.await_count == 0, [call.kwargs for call in success_hook.await_args_list]
 
-class _SharedCounter:
-    def __init__(self) -> None:
-        self.totals: dict[str, float] = {}
-
-    async def async_increment(self, key: str, value: float, ttl: int | None = None) -> float:
-        self.totals[key] = self.totals.get(key, 0) + value
-        return self.totals[key]
-
 
 def _grounded_gemini_kwargs(response_cost: float) -> dict:
     return {
@@ -3478,9 +3472,13 @@ def _grounded_gemini_kwargs(response_cost: float) -> dict:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("opted_in", "finalized"), [(True, False), (False, False), (True, True)])
-async def test_track_cost_callback_frees_grounding_under_the_allowance_only_when_opted_in(monkeypatch, opted_in, finalized):
+async def test_track_cost_callback_frees_grounding_under_the_allowance_only_when_opted_in(
+    monkeypatch, opted_in, finalized
+):
     monkeypatch.setattr(litellm, "apply_search_free_tier", opted_in, raising=False)
-    counter = _SharedCounter()
+    server: Final = fakeredis.FakeServer()
+    counter: Final = fake_redis_cache(server, namespace="search-callback")
+    raw: Final = fakeredis.FakeAsyncRedis(server=server)
     kwargs = _grounded_gemini_kwargs(response_cost=1.0)
     kwargs["standard_logging_object"]["cost_finalized"] = finalized
     response = ModelResponse(
@@ -3520,10 +3518,12 @@ async def test_track_cost_callback_frees_grounding_under_the_allowance_only_when
     if opted_in and not finalized:
         assert kwargs["response_cost"] == pytest.approx(1.0 - 5 * 0.1)
         assert breakdown["original_cost"] == 1.0 and breakdown["discount_amount"] == pytest.approx(5 * 0.1)
-        assert sum(counter.totals.values()) == 5
+        keys: Final = await raw.keys("search-callback:litellm:search_free_tier:*")
+        assert len(keys) == 1
+        assert await raw.get(keys[0]) == b"5"
     else:
         assert kwargs["response_cost"] == 1.0 and "discount_amount" not in breakdown
-        assert counter.totals == {}
+        assert await raw.keys("*") == []
 
     written_cost = mock_proxy_logging.db_spend_update_writer.update_database.await_args.kwargs["response_cost"]
     assert written_cost == pytest.approx(kwargs["standard_logging_object"]["response_cost"])
@@ -3603,7 +3603,9 @@ async def test_batch_accounting_does_not_retry_after_a_search_allowance_update(m
     from litellm.proxy.hooks.proxy_track_cost_callback import track_batch_accounting
 
     monkeypatch.setattr(litellm, "apply_search_free_tier", True)
-    counter: Final = _SharedCounter()
+    server: Final = fakeredis.FakeServer()
+    counter: Final = fake_redis_cache(server, namespace="search-callback")
+    raw: Final = fakeredis.FakeAsyncRedis(server=server)
     dependency: Final = SimpleNamespace(
         failed_tracking_alert=AsyncMock(),
         internal_usage_cache=SimpleNamespace(dual_cache=SimpleNamespace(redis_cache=counter)),
@@ -3621,7 +3623,9 @@ async def test_batch_accounting_does_not_retry_after_a_search_allowance_update(m
         with track_batch_accounting("grounded-batch") as outcome:
             await ProxyDBLogger().async_log_success_event(kwargs, response, _CALL_START, _CALL_START)
 
-    assert sum(counter.totals.values()) == 5
+    keys: Final = await raw.keys("search-callback:litellm:search_free_tier:*")
+    assert len(keys) == 1
+    assert await raw.get(keys[0]) == b"5"
     assert outcome.failed is True
     assert outcome.retryable_failure is False
 

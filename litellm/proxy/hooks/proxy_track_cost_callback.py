@@ -68,6 +68,7 @@ from litellm.proxy.utils import (
     BilledFailedAttempt,
     ProxyUpdateSpend,
 )
+from litellm.redis.stores.search_free_tier import TransportSearchFreeTierStore
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     CallTypes,
@@ -711,7 +712,11 @@ class _ProxyDBLogger(CustomLogger):
                     sl_object=sl_object,  # pyright: ignore[reportUnknownArgumentType]  # payload carries untyped lists
                     response_cost=priced_cost,
                     completion_response=completion_response,
-                    counter=proxy_logging_obj.internal_usage_cache.dual_cache.redis_cache,
+                    counter=(
+                        TransportSearchFreeTierStore(search_redis.transport())
+                        if (search_redis := proxy_logging_obj.internal_usage_cache.dual_cache.redis_cache) is not None
+                        else None
+                    ),
                     now=datetime.now(timezone.utc),
                 )
                 if litellm.apply_search_free_tier

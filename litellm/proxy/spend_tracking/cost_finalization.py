@@ -7,7 +7,8 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_cost_calc.finalization import FinalizedCost, PreparedCost, finalize_cost
-from litellm.proxy.hooks.search_free_tier import SharedCounter, allocate_search_free_tier
+from litellm.proxy.hooks.search_free_tier import allocate_search_free_tier
+from litellm.redis.stores.search_free_tier import SearchFreeTierStore, TransportSearchFreeTierStore
 from litellm.types.utils import CostBreakdown, StandardLoggingPayload
 
 
@@ -22,7 +23,7 @@ def prepare_response_cost(logging_obj: Logging, response: object, now: datetime)
 async def finalize_response_cost(
     logging_obj: Logging,
     response: object,
-    counter: SharedCounter | None,
+    counter: SearchFreeTierStore | None,
     now: datetime,
     guardrail_cost: float | None = None,
 ) -> FinalizedCost | None:
@@ -40,7 +41,7 @@ async def finalize_response_cost(
 async def _finalize_response_cost(
     logging_obj: Logging,
     response: object,
-    counter: SharedCounter | None,
+    counter: SearchFreeTierStore | None,
     now: datetime,
     guardrail_cost: float | None,
 ) -> FinalizedCost | None:
@@ -80,7 +81,7 @@ async def _finish_finalization(
     payload: StandardLoggingPayload,
     amount: float,
     breakdown: CostBreakdown | None,
-    counter: SharedCounter | None,
+    counter: SearchFreeTierStore | None,
     now: datetime,
 ) -> FinalizedCost:
     if logging_obj.cost_allowance_discount is None:
@@ -102,10 +103,11 @@ async def finalize_proxy_response_cost(
 ) -> FinalizedCost | None:
     from litellm.proxy.proxy_server import proxy_logging_obj
 
+    redis_cache: Final = proxy_logging_obj.internal_usage_cache.dual_cache.redis_cache
     return await finalize_response_cost(
         logging_obj,
         response,
-        proxy_logging_obj.internal_usage_cache.dual_cache.redis_cache,
+        TransportSearchFreeTierStore(redis_cache.transport()) if redis_cache is not None else None,
         datetime.now(timezone.utc),
         guardrail_cost,
     )
