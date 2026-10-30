@@ -484,21 +484,12 @@ class ModelRateLimitingCheck(CustomLogger):
 
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
-
-            # IO token reconciliation works purely from the cache keys stashed in
-            # kwargs/metadata, so it must run before the model_id guard below
-            # (which only the TPM-tracking path needs). Otherwise a request whose
-            # standard_logging_object lacks model_id would never return its
-            # reservation, leaving the counter elevated until the TTL expires.
             await async_io_token_reconcile_success(
                 self.dual_cache,
                 kwargs,
                 response_obj,
                 parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
             )
-            # Fall through: a deployment can also configure tpm/rpm alongside
-            # itpm/otpm, and that path's pre-call check reads the tpm_key
-            # counter tracked below, so it must still be incremented here.
 
             if standard_logging_object is None:
                 return
@@ -553,14 +544,7 @@ class ModelRateLimitingCheck(CustomLogger):
         """
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
-            io_token_reconcile_success(
-                self.dual_cache,
-                kwargs,
-                response_obj,
-            )
-            # Fall through: a deployment can also configure tpm/rpm alongside
-            # itpm/otpm, and that path's pre-call check reads the tpm_key
-            # counter tracked below, so it must still be incremented here.
+            io_token_reconcile_success(self.dual_cache, kwargs, response_obj)
 
             if standard_logging_object is None:
                 return

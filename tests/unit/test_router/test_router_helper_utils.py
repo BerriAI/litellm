@@ -856,19 +856,26 @@ async def test_messages_call_reserves_max_tokens_against_deployment_otpm_whateve
         await _kwargs_routed_to(router, "ws-io", "anthropic_messages", max_tokens=3_000, **body)
 
 
-async def _realtime_open_refusal(**socket: object) -> str:
-    with pytest.raises(litellm.RateLimitError) as refused:
-        await _kwargs_routed_to(_io_limited_router("otpm", otpm=50), "ws-io", "_arealtime", **socket)
-    return str(refused.value)
+async def _realtime_opens_until_refused(monkeypatch: pytest.MonkeyPatch, **socket: object) -> tuple[int, str]:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    router: Final = _io_limited_router("otpm", otpm=50)
+    for opened in range(51):
+        try:
+            await _kwargs_routed_to(router, "ws-io", "_arealtime", **socket)
+        except litellm.RateLimitError as refused:
+            return opened, str(refused)
+    pytest.fail("realtime opens never reached the deployment's otpm")
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("router_minute_pinned")
-async def test_realtime_open_reserves_and_is_refused_at_deployment_otpm_like_an_open_without_a_socket():
-    with_socket: Final = await _realtime_open_refusal(websocket=object())
+async def test_realtime_open_reserves_and_is_refused_at_deployment_otpm_like_an_open_without_a_socket(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with_socket: Final = await _realtime_opens_until_refused(monkeypatch, websocket=object())
 
-    assert "OTPM limit=50, current usage=" in with_socket
-    assert with_socket == await _realtime_open_refusal()
+    assert "OTPM limit=50, current usage=" in with_socket[1]
+    assert with_socket == await _realtime_opens_until_refused(monkeypatch)
 
 
 @pytest.mark.asyncio

@@ -157,6 +157,16 @@ SelectKind: TypeAlias = Literal["pick", "healthy", "pass_through"]
 UsageKind: TypeAlias = Literal["current", "remaining"]
 
 
+def deployment_usable_by_team(deployment: "Mapping[str, object] | Deployment", team_id: str | None) -> bool:
+    """
+    Whether ``team_id`` may use ``deployment``: a team-scoped deployment (``model_info.team_id``
+    set) only by that team, any other deployment by everyone. Needs no router instance.
+    """
+    from litellm.router import Router
+
+    return Router._core_deployment_usable_by_team(deployment, team_id)
+
+
 def deployment_id(model_group: str, litellm_params: Mapping[str, object]) -> str:
     """
     The stable id of a deployment that has no ``model_info.id``: a sha256 over the model group and
@@ -409,7 +419,7 @@ class RouterRegistry:
         if source == "named":
             return r._core_deployments_named(model_name)
         if source == "routed_group":
-            return r._core_get_model_list_of_routed_group(model_name)
+            return r._core_get_model_list_of_routed_group(model_name, team_id)
         if source == "wildcard":
             return r._core_wildcard_route_deployments(model_name, team_id)
         if source == "routable":

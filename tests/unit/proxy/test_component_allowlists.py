@@ -397,6 +397,22 @@ def test_gateway_keeps_memory_summary_and_trims_the_other_debug_routes():
         assert not _is_gateway_route(debug_memory_routes[path]), f"{path} must not be served by the gateway"
 
 
+@pytest.mark.parametrize(
+    ("path", "served"),
+    [
+        ("/eu_jev/v1/systemone", True),
+        ("/eu_jev/v1/systemone2", False),
+        ("/eu_jev/v1/systemone/{subpath:path}", False),
+        ("/eu_jev/custom", False),
+    ],
+)
+def test_gateway_serves_the_eu_jev_decision_route_and_no_other_eu_jev_path(path: str, served: bool) -> None:
+    async def endpoint() -> None:
+        return None
+
+    assert _is_gateway_route(Route(path, endpoint, methods=["POST"])) is served
+
+
 def test_every_app_mount_is_assigned_to_a_component():
     """Every Mount on the proxy app must be consciously assigned to a component.
 
@@ -452,7 +468,10 @@ def test_admin_mcp_survives_only_management_component_lifespans(
 
     @application.get("/user/info")
     async def user_info() -> dict[str, object]:
-        return {"user_id": "admin", "user_info": {"user_id": "admin", "user_role": "proxy_admin"}}
+        return {
+            "user_id": "admin", "user_info": {"user_id": "admin", "user_role": "proxy_admin"},
+            "admin_mcp_permissions": {"tools": ["list_teams"], "action_allowed": True},
+        }
 
     if component_lifespan is not None:
         application.router.lifespan_context = partial(component_lifespan, lifespan=application.router.lifespan_context)
