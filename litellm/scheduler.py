@@ -3,7 +3,8 @@ import enum
 import heapq
 import time
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Final, TypeAlias
+from datetime import timedelta
+from typing import Final
 
 from pydantic import TypeAdapter
 
@@ -12,15 +13,24 @@ from litellm._internal_context import with_service_target
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.constants import DEFAULT_IN_MEMORY_TTL, DEFAULT_POLLING_INTERVAL
 from litellm.exceptions import Timeout
+from litellm.redis.stores.scheduler_queue import (
+    QUEUE_PREFIX,
+    InvalidQueue,
+    QueueEntry,
+    SchedulerQueueStore,
+    TransportSchedulerQueueStore,
+    queue_entries,
+    queue_key,
+)
+from litellm.redis.transport.contract import RedisFailure
 from litellm.types.llms.base import LiteLLMBaseModel
 
 SCHEDULER_QUEUE_TARGET: Final = "scheduler_queue"
-QueueEntry: TypeAlias = tuple[int, str]
-_QUEUE_ENTRIES: Final = TypeAdapter(list[QueueEntry])
+_OBJECT: Final = TypeAdapter(object)
 
 
 class SchedulerCacheKeys(enum.Enum):
-    queue = "scheduler:queue"
+    queue = QUEUE_PREFIX
     default_in_memory_ttl = DEFAULT_IN_MEMORY_TTL  # cache queue in-memory for 5s when redis cache available
 
 
@@ -152,12 +162,29 @@ class Scheduler:
         (priority, request_id) tuple the heap operations compare against.
         """
         if self.cache is not None:
-            _cache_key: Final = f"{SchedulerCacheKeys.queue.value}:{model_name}"
-            response: Final = await self.cache.async_get_cache(key=_cache_key)
-            if not isinstance(response, list):
+            key: Final = queue_key(model_name)
+            local: Final = _OBJECT.validate_python(await self.cache.async_get_cache(key=key, local_only=True))
+            if isinstance(local, InvalidQueue):
+                raise local.error
+            if local is not None:
+                return list(queue_entries(local))
+            redis: Final = self.cache.redis_cache
+            if redis is None:
                 return []
-            return _QUEUE_ENTRIES.validate_python(response)
+            store: Final[SchedulerQueueStore] = TransportSchedulerQueueStore(redis.transport())
+            response: Final = await store.read_queue(model_name)
+            if isinstance(response, InvalidQueue):
+                await self._save_local_queue(response, model_name)
+                raise response.error
+            if response is None or isinstance(response, RedisFailure):
+                return []
+            await self._save_local_queue(response, model_name)
+            return list(response)
         return self.queue
+
+    async def _save_local_queue(self, queue: Sequence[QueueEntry] | InvalidQueue, model_name: str) -> None:
+        value: Final = queue if isinstance(queue, InvalidQueue) else list(queue)
+        await self.cache.async_set_cache(key=queue_key(model_name), value=value, local_only=True)
 
     @with_service_target(SCHEDULER_QUEUE_TARGET)
     async def save_queue(self, queue: list[QueueEntry], model_name: str) -> None:
@@ -165,5 +192,13 @@ class Scheduler:
         Save the updated queue of the model group
         """
         if self.cache is not None:
-            _cache_key: Final = f"{SchedulerCacheKeys.queue.value}:{model_name}"
-            await self.cache.async_set_cache(key=_cache_key, value=queue)
+            await self._save_local_queue(queue, model_name)
+            redis: Final = self.cache.redis_cache
+            if redis is not None:
+                ttl: Final = (
+                    int(self.cache.default_in_memory_ttl)
+                    if self.cache.default_in_memory_ttl is not None
+                    else redis.default_ttl
+                )
+                store: Final[SchedulerQueueStore] = TransportSchedulerQueueStore(redis.transport())
+                await store.replace_queue(model_name, queue, ttl=timedelta(seconds=ttl))
