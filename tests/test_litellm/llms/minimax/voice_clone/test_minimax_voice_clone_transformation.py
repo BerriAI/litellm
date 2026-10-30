@@ -37,6 +37,14 @@ def test_prompt_audio_purpose_is_supported() -> None:
     assert data == {"purpose": "prompt_audio"}
 
 
+def test_invalid_operation_and_upload_purpose_are_rejected() -> None:
+    with pytest.raises(ValueError, match="operation must be"):
+        MinimaxVoiceCloneConfig.get_complete_url(operation="invalid")
+
+    with pytest.raises(ValueError, match="file upload purpose"):
+        MinimaxVoiceCloneConfig.transform_upload_request(("sample.wav", b"audio"), "invalid")
+
+
 def test_upload_response_extracts_nested_file_id() -> None:
     file_id = MinimaxVoiceCloneConfig.transform_upload_response(
         response({"file": {"file_id": "file-123"}, "base_resp": {"status_code": 0}})
