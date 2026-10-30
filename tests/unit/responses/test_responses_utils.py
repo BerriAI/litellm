@@ -1038,3 +1038,24 @@ def test_the_chat_bridge_drops_a_reasoning_value_no_openai_row_declares_under_dr
 
     assert bridged(True) == {"effort": "high", "summary": "auto"}
     assert bridged(False) == requested
+
+def test_the_chat_bridge_keeps_only_effort_for_a_catalog_model_that_does_not_reason(local_model_cost_map):
+    non_reasoning_model: Final = next(
+        name
+        for name, row in litellm.model_cost.items()
+        if row.get("litellm_provider") == "openai"
+        and row.get("mode") == "chat"
+        and row.get("supports_reasoning") is False
+        and OpenAIGPTConfig.is_openai_catalog_model(name)
+    )
+
+    bridged: Final = openai_bridge_reasoning(
+        requested={"effort": "low", "summary": "auto", "mode": "standard"},
+        effort_kept=True,
+        summary_alias=None,
+        model=non_reasoning_model,
+        drop_params=True,
+        additional_drop_params=None,
+    )
+
+    assert bridged == {"effort": "low"}

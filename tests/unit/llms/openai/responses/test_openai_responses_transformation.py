@@ -3306,6 +3306,9 @@ class TestReasoningFollowsModelSupport:
 
 
 _WEATHER_TOOL: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}}
+_SQL_TOOL: Final = {"type": "custom", "name": "run_sql"}
+_DOCS_MCP_TOOL: Final = {"type": "mcp", "server_label": "docs", "server_url": "https://example.com/mcp"}
+_WEATHER_NAMESPACE: Final = {"type": "namespace", "name": "weather", "description": "Weather", "tools": [_WEATHER_TOOL]}
 
 
 class TestMalformedParamsFollowDropParams:
@@ -3320,6 +3323,24 @@ class TestMalformedParamsFollowDropParams:
             pytest.param({"tool_choice": "required"}, id="required-without-tools"),
             pytest.param({"tool_choice": "required", "tools": []}, id="required-with-empty-tools"),
             pytest.param({"tool_choice": {"type": "function", "name": "get_weather"}}, id="function-without-tools"),
+            pytest.param(
+                {"tool_choice": {"type": "function", "name": "get_time"}, "tools": [_WEATHER_TOOL]},
+                id="function-naming-a-tool-not-sent",
+            ),
+            pytest.param({"tool_choice": {"type": "custom", "name": "run_sql"}, "tools": [_WEATHER_TOOL]}, id="custom"),
+            pytest.param({"tool_choice": {"type": "mcp", "server_label": "wiki"}, "tools": [_DOCS_MCP_TOOL]}, id="mcp"),
+            pytest.param({"tool_choice": {"type": "file_search"}, "tools": [_WEATHER_TOOL]}, id="hosted-tool-not-sent"),
+            pytest.param(
+                {
+                    "tool_choice": {
+                        "type": "allowed_tools",
+                        "mode": "auto",
+                        "tools": [{"type": "function", "name": "get_time"}],
+                    },
+                    "tools": [_WEATHER_TOOL],
+                },
+                id="allowed-tools-naming-a-tool-not-sent",
+            ),
             pytest.param({"parallel_tool_calls": "true"}, id="parallel-tool-calls-string"),
             pytest.param({"previous_response_id": 12}, id="previous-response-id-int"),
             pytest.param({"previous_response_id": ""}, id="previous-response-id-empty"),
@@ -3363,9 +3384,48 @@ class TestMalformedParamsFollowDropParams:
             pytest.param({"parallel_tool_calls": None}, id="parallel-tool-calls-null"),
             pytest.param({"previous_response_id": "resp_abc"}, id="previous-response-id-string"),
             pytest.param({"tool_choice": "required", "prompt": {"id": "pmpt_abc"}}, id="required-with-stored-prompt"),
+            pytest.param(
+                {"tool_choice": {"type": "function", "name": "get_weather"}, "tools": [_WEATHER_NAMESPACE]},
+                id="function-in-a-namespace",
+            ),
+            pytest.param(
+                {"tool_choice": {"type": "custom", "name": "other"}, "tools": [_SQL_TOOL]},
+                id="custom-with-a-custom-tool",
+            ),
+            pytest.param(
+                {"tool_choice": {"type": "mcp", "server_label": "docs"}, "tools": [_DOCS_MCP_TOOL]}, id="mcp-label-sent"
+            ),
+            pytest.param(
+                {"tool_choice": {"type": "computer_use"}, "tools": [{"type": "computer"}]},
+                id="hosted-alias-of-a-sent-tool",
+            ),
+            pytest.param(
+                {
+                    "tool_choice": {
+                        "type": "allowed_tools",
+                        "mode": "required",
+                        "tools": [{"type": "function", "name": "get_weather"}, {"type": "mcp", "server_label": "docs"}],
+                    },
+                    "tools": [_WEATHER_TOOL, _DOCS_MCP_TOOL],
+                },
+                id="allowed-tools-all-sent",
+            ),
         ],
     )
     def test_a_well_formed_value_is_kept_under_drop_params(self, local_model_cost_map, params):
+        assert OpenAIResponsesAPIConfig().map_openai_params(dict(params), "gpt-6.1-sol", True) == params
+
+    @pytest.mark.parametrize(
+        "params",
+        [
+            pytest.param({"tool_choice": {"name": "get_time"}, "tools": [_WEATHER_TOOL]}, id="choice-without-a-type"),
+            pytest.param({"tool_choice": ["get_time"], "tools": [_WEATHER_TOOL]}, id="choice-not-an-object"),
+            pytest.param(
+                {"tool_choice": {"type": "function", "name": "get_time"}, "tools": _WEATHER_TOOL}, id="tools-not-a-list"
+            ),
+        ],
+    )
+    def test_a_tool_choice_the_check_cannot_read_is_kept_under_drop_params(self, local_model_cost_map, params):
         assert OpenAIResponsesAPIConfig().map_openai_params(dict(params), "gpt-6.1-sol", True) == params
 
     def test_providers_outside_openai_and_azure_keep_these_values_as_sent(self, local_model_cost_map):
@@ -3439,8 +3499,12 @@ class TestMalformedParamsFollowDropParams:
 
     @pytest.mark.parametrize(
         ("config", "model"),
-        [(OpenAIResponsesAPIConfig(), "gpt-6.1-sol"), (AzureOpenAIResponsesAPIConfig(), "gpt-6.1-sol")],
-        ids=["openai", "azure"],
+        [
+            (OpenAIResponsesAPIConfig(), "gpt-6.1-sol"),
+            (AzureOpenAIResponsesAPIConfig(), "gpt-6.1-sol"),
+            (AzureOpenAIOSeriesResponsesAPIConfig(), "o_series/gpt-6.1-sol"),
+        ],
+        ids=["openai", "azure", "azure-o-series"],
     )
     def test_an_effort_outside_the_known_levels_is_dropped_unless_the_deployment_declares_it(
         self, local_model_cost_map, monkeypatch, config, model
@@ -3450,8 +3514,12 @@ class TestMalformedParamsFollowDropParams:
 
         dropped: Final = config.map_openai_params({"reasoning": dict(reasoning)}, model, True)
         sent: Final = config.map_openai_params({"reasoning": dict(reasoning)}, model, False)
-        declared: Final = config.map_openai_params_for_deployment(
-            {"reasoning": dict(reasoning)}, model, True, declared_reasoning_efforts=("not-an-effort",)
+        declared: Final = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+            model=model,
+            responses_api_provider_config=config,
+            response_api_optional_params={"reasoning": dict(reasoning)},
+            drop_params=True,
+            declared_reasoning_efforts=("not-an-effort",),
         )
 
         assert dropped["reasoning"] == {"summary": "auto"}

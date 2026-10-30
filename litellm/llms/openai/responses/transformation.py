@@ -1,6 +1,7 @@
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, cast, get_args, get_type_hints
 
@@ -325,13 +326,50 @@ _PROVIDERS_CHECKED_FOR_MALFORMED_VALUES: Final = (LlmProviders.OPENAI, LlmProvid
 _REASONING_EFFORTS: Final = frozenset(get_args(REASONING_EFFORT))
 
 
+_NON_HOSTED_TOOL_TYPES: Final = frozenset({"function", "custom", "mcp", "namespace"})
+
+
+def _tool_mappings(tools: object) -> tuple[Mapping[str, object], ...]:
+    return tuple(mapping for mapping in map(as_str_mapping, _json_array_or_empty(tools)) if mapping is not None)
+
+
+def _sent_tools(tools: object) -> tuple[Mapping[str, object], ...]:
+    top_level: Final = _tool_mappings(tools)
+    namespaced: Final = (_tool_mappings(tool.get("tools")) for tool in top_level if tool.get("type") == "namespace")
+    return top_level + tuple(chain.from_iterable(namespaced))
+
+
+def _names_a_sent_tool(tool_choice: object, tools: tuple[Mapping[str, object], ...]) -> bool:
+    choice: Final = as_str_mapping(tool_choice)
+    if choice is None:
+        return True
+    match choice.get("type"):
+        case "allowed_tools":
+            allowed: Final = choice.get("tools")
+            entries: Final = _json_array_or_empty(allowed)
+            return not isinstance(allowed, list | tuple) or all(_names_a_sent_tool(entry, tools) for entry in entries)
+        case "function":
+            return any(tool.get("type") == "function" and tool.get("name") == choice.get("name") for tool in tools)
+        case "custom":
+            return any(tool.get("type") == "custom" for tool in tools)
+        case "mcp":
+            return any(
+                tool.get("type") == "mcp" and tool.get("server_label") == choice.get("server_label") for tool in tools
+            )
+        case str():
+            return any(tool.get("type") not in _NON_HOSTED_TOOL_TYPES for tool in tools)
+        case _:
+            return True
+
+
 def _accepts_tool_choice(tool_choice: object, params: Mapping[str, object]) -> bool:
     if tool_choice is None or params.get("prompt") is not None:
         return True
     tools: Final = params.get("tools")
     if isinstance(tool_choice, str):
         return tool_choice in _TOOL_CHOICES_WITHOUT_TOOLS or (tool_choice == "required" and bool(tools))
-    return bool(tools)
+    listed: Final = _json_array_or_empty(tools)
+    return bool(tools) and (not isinstance(tools, list | tuple) or _names_a_sent_tool(tool_choice, _sent_tools(listed)))
 
 
 def _is_well_formed(name: str, value: object, params: Mapping[str, object]) -> bool:

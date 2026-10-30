@@ -8,6 +8,7 @@ Translations handled by LiteLLM:
 - Other parameters follow base Azure OpenAI Responses API behavior
 """
 
+from collections.abc import Collection, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
@@ -51,12 +52,14 @@ class AzureOpenAIOSeriesResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
 
         return o_series_supported_params
 
-    def map_openai_params(
+    def map_openai_params_for_deployment(
         self,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+        *,
+        declared_reasoning_efforts: Collection[str] | None,
+    ) -> Mapping[str, object]:
         """
         Map OpenAI parameters for Azure OpenAI O-series Responses API.
 
@@ -65,12 +68,19 @@ class AzureOpenAIOSeriesResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
         """
         if not drop_params:
             return dict(response_api_optional_params)
-        kept: Final = self._well_formed_params(response_api_optional_params)
+        kept: Final = self.params_dropped_for_deployment(
+            response_api_optional_params, model, declared_reasoning_efforts=declared_reasoning_efforts
+        )
         if "temperature" in kept:
             verbose_logger.debug(
                 "Dropping unsupported parameter 'temperature' for Azure OpenAI O-series responses API model %s", model
             )
         return {name: value for name, value in kept.items() if name != "temperature"}
+
+    def _reasoning_refusal(
+        self, reasoning: object, model: str, declared_reasoning_efforts: Collection[str] | None
+    ) -> None:
+        return None
 
     def is_o_series_model(self, model: str) -> bool:
         """
