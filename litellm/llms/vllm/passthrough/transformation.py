@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Final
 
 from httpx import Response
 
+from litellm.constants import PLACEHOLDER_API_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 from litellm.llms.openai_like.passthrough.transformation import (
@@ -13,7 +14,7 @@ from litellm.llms.openai_like.passthrough.transformation import (
     relays_text_completion,
 )
 
-from ..common_utils import VLLMModelInfo
+from ..common_utils import VLLMModelInfo, endpoint_under_api_base
 
 if TYPE_CHECKING:
     from httpx import URL
@@ -21,14 +22,10 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.passthrough.transformation import LoggedRelayResponse
 
 
-def _endpoint_under_api_base(endpoint: str, api_base: str) -> str:
-    return endpoint.lstrip("/").removeprefix("v1/") if api_base.rstrip("/").endswith("/v1") else endpoint
-
-
 class VLLMPassthroughConfig(VLLMModelInfo, BasePassthroughConfig):
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
-        return api_key
+        return None if api_key == PLACEHOLDER_API_KEY else api_key
 
     def upstream_auth_headers(self, api_key: str) -> Mapping[str, str]:
         return {"Authorization": f"Bearer {api_key}"}
@@ -51,7 +48,7 @@ class VLLMPassthroughConfig(VLLMModelInfo, BasePassthroughConfig):
             raise Exception("VLLM api base not found")
 
         return (
-            self.format_url(_endpoint_under_api_base(endpoint, base_target_url), base_target_url, request_query_params),
+            self.format_url(endpoint_under_api_base(endpoint, base_target_url), base_target_url, request_query_params),
             base_target_url,
         )
 

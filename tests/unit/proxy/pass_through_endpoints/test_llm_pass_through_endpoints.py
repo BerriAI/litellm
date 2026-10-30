@@ -2757,10 +2757,13 @@ class TestVLLMProxyRoute:
         mock_factory_route.assert_awaited_once()
 
 
-def test_vllm_provider_route_sends_its_key_as_a_bearer(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("vllm_api_base", ["http://vllm-upstream.test:8090", "http://vllm-upstream.test:8090/v1"])
+def test_vllm_provider_route_reaches_v1_paths_with_its_key_as_a_bearer(
+    monkeypatch: pytest.MonkeyPatch, vllm_api_base: str
+) -> None:
     from litellm.proxy import proxy_server
 
-    monkeypatch.setenv("VLLM_API_BASE", "http://vllm-upstream.test:8090")
+    monkeypatch.setenv("VLLM_API_BASE", vllm_api_base)
     monkeypatch.setenv("VLLM_API_KEY", "sk-vllm-upstream")
     monkeypatch.setattr(proxy_server, "llm_router", None)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)

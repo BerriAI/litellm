@@ -11,6 +11,14 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import add_path_to_api_base
 
 
+def endpoint_under_api_base(endpoint: str, api_base: str | None) -> str:
+    return (
+        endpoint.lstrip("/").removeprefix("v1/")
+        if api_base is not None and api_base.rstrip("/").endswith("/v1")
+        else endpoint
+    )
+
+
 class VLLMError(BaseLLMException):
     def __init__(
         self,

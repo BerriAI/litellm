@@ -93,10 +93,11 @@ async def test_allm_passthrough_route_hosted_vllm_reaches_v1_paths_under_an_api_
 
 
 @pytest.mark.asyncio
-async def test_allm_passthrough_route_hosted_vllm_keeps_the_vllm_route_key_off_router_deployments(
+async def test_allm_passthrough_route_hosted_vllm_sends_no_auth_for_a_keyless_deployment(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("VLLM_API_KEY", "sk-vllm-route-only")
+    monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
     route: Final = respx_mock.post(f"{_API_BASE}/v1/chat/completions").mock(
         return_value=httpx.Response(200, json={"ok": True})
     )
@@ -109,4 +110,5 @@ async def test_allm_passthrough_route_hosted_vllm_keeps_the_vllm_route_key_off_r
         client=AsyncHTTPHandler(),
     )
     assert response.status_code == 200
-    assert "sk-vllm-route-only" not in str(route.calls[0].request.headers)
+    assert "authorization" not in route.calls[0].request.headers
+    assert "x-api-key" not in route.calls[0].request.headers
