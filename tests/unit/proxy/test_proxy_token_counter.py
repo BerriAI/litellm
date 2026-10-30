@@ -4188,6 +4188,28 @@ def test_utils_token_counter_without_messages_logs_the_400_it_answers(
     )
 
 
+@pytest.mark.parametrize("nested", [False, True], ids=["user-content", "tool-result"])
+def test_utils_token_counter_answers_400_naming_a_content_block_the_local_counter_cannot_read(
+    monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]], nested: bool
+) -> None:
+    block: Final[JsonValue] = {"type": "future_block", "data": "opaque"}
+    content: Final[JsonValue] = (
+        [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [block]}] if nested else [block]
+    )
+
+    response: Final = _utils_token_counter(
+        monkeypatch,
+        {"model": "count-log-gpt", "messages": [{"role": "user", "content": content}]},
+        {"x-litellm-call-id": "count-log-utils-unreadable"},
+    )
+
+    assert response.status_code == 400, response.text
+    error: Final = response.json()["error"]
+    assert (error["type"], error["param"], error["code"]) == ("invalid_request_error", "messages", "400"), error
+    assert "Invalid content item type: future_block" in error["message"], error
+    assert [line["status_code"] for line in token_count_log_lines()] == [400]
+
+
 def test_utils_token_counter_failed_count_logs_its_status_in_place_of_a_count(
     monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
 ) -> None:

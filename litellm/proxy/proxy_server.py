@@ -15428,14 +15428,14 @@ async def count_request_tokens(
         client_oauth_token=client_oauth_token,
     )
     return await logged_token_count(
-        _with_anthropic_content_errors(count) if messages_format == "anthropic" else count,
+        _with_content_errors(count),
         litellm_call_id=call_id,
         request_model=request.model,
         model_id=deployment_model_id(routed),
     )
 
 
-async def _with_anthropic_content_errors(count: Awaitable[TokenCountResponse]) -> TokenCountResponse:
+async def _with_content_errors(count: Awaitable[TokenCountResponse]) -> TokenCountResponse:
     try:
         return await count
     except UnsupportedContentTypeError as e:
