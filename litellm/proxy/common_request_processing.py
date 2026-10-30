@@ -46,6 +46,7 @@ from litellm.constants import (
     MAX_LITELLM_CALL_ID_LENGTH,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     NON_INFERENCE_CALL_TYPES,
+    REDACTED_BY_LITELLM,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_DATA_PREFIX,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
@@ -130,6 +131,8 @@ from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _ar
 from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.route_llm_request import (
+    RouteType,
+    UnroutableModelProbe,
     endpoint_unsupported_by_model,
     route_request,
 )
@@ -2083,12 +2086,46 @@ class _ClientStreamFailureReport:
             )
 
 
+_SYSTEM_INSTRUCTION_KEYS: Final = ("systemInstruction", "system_instruction")
+
+
+def _without_unscanned_content(request: Mapping[str, object]) -> Mapping[str, object]:
+    """Every request field a pre-call guardrail can rewrite, each replaced with a redaction marker."""
+    system_instruction: Final = {"parts": [{"text": REDACTED_BY_LITELLM}]}
+    redactions: Final[Mapping[str, object]] = {
+        "messages": [{"role": "user", "content": REDACTED_BY_LITELLM}],
+        "contents": [{"role": "user", "parts": [{"text": REDACTED_BY_LITELLM}]}],
+        "prompt": "",
+        "input": "",
+        "tools": [],
+        "system": REDACTED_BY_LITELLM,
+        "instructions": REDACTED_BY_LITELLM,
+        **{key: system_instruction for key in _SYSTEM_INSTRUCTION_KEYS},
+    }
+    config: Final = request.get("config")
+    config_fields: Final = _REQUEST_FIELDS.validate_python(config) if isinstance(config, Mapping) else None
+    return {
+        **{key: value for key, value in redactions.items() if key in request},
+        **(
+            {}
+            if config_fields is None
+            else {
+                "config": {
+                    **config_fields,
+                    **{key: system_instruction for key in _SYSTEM_INSTRUCTION_KEYS if key in config_fields},
+                }
+            }
+        ),
+    }
+
+
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict, served_model: str | None = None):
         self.data = data
         self.served_model = served_model
         self._tags_before_guardrails: frozenset[str] | None = None
         self.route_type: str | None = None
+        self._routing_probe: UnroutableModelProbe | None = None
 
     @property
     def litellm_call_id(self) -> str | None:
@@ -2382,6 +2419,7 @@ class ProxyBaseLLMRequestProcessing:
         rate_limited_model: str | None = None,
         skip_guardrails: bool = False,
         logging_auth: UserAPIKeyAuth | None = None,
+        dispatch_route_type: RouteType | None = None,
     ) -> tuple[dict, LiteLLMLoggingObj]:
         start_time: Final = datetime.now()  # start before calling guardrail hooks
 
@@ -2587,12 +2625,29 @@ class ProxyBaseLLMRequestProcessing:
         prefetch_model = self.data.get("model")
         if llm_router is not None and isinstance(prefetch_model, str):
             RoutingContext(llm_router).arm_read_prefetch(prefetch_model, self.data)
-        self.data = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            data=self.data,
-            call_type=route_type,
-            skip_guardrails=skip_guardrails,
+        routing_probe: Final = (
+            None
+            if dispatch_route_type is None
+            else UnroutableModelProbe(
+                llm_router=llm_router,
+                user_model=user_model,
+                route_type=dispatch_route_type,
+                user_api_key_dict=user_api_key_dict,
+            )
         )
+        self._routing_probe = routing_probe
+        try:
+            self.data = await proxy_logging_obj.pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                data=self.data,
+                call_type=route_type,
+                skip_guardrails=skip_guardrails,
+                routing_probe=routing_probe,
+            )
+        except Exception:
+            if routing_probe is not None and routing_probe.refusal is not None:
+                self._redact_request_its_skipped_guardrails_never_scanned()
+            raise
         await _enforce_guardrail_added_tag_budgets(
             data=self.data,
             tags_before_guardrails=self._tags_before_guardrails,
@@ -2628,6 +2683,13 @@ class ProxyBaseLLMRequestProcessing:
 
         return self.data, logging_obj
 
+    def _redact_request_its_skipped_guardrails_never_scanned(self) -> None:
+        """Redact the request body and its logged snapshot, so failure callbacks never see content a skipped
+        masking guardrail would have rewritten.
+        """
+        self.data.update(_without_unscanned_content(self.data))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # self.data is the untyped request dict
+        refresh_proxy_server_request_body_snapshot(self.data)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # self.data is the untyped request dict
+
     async def _pre_call_with_fallbacks(
         self,
         request: Request,
@@ -2644,6 +2706,7 @@ class ProxyBaseLLMRequestProcessing:
         model: str | None,
         route_type: str,
         llm_router: Router | None,
+        dispatch_route_type: RouteType | None = None,
     ) -> tuple[dict, LiteLLMLoggingObj]:
         from litellm.proxy.common_utils.proxy_rate_limit_error import (
             PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS,
@@ -2684,6 +2747,7 @@ class ProxyBaseLLMRequestProcessing:
                 model=model,
                 route_type=route_type,
                 llm_router=llm_router,
+                dispatch_route_type=dispatch_route_type,
             )
         except ProxyRateLimitError as original_exc:
             rate_limited_data: Final = self.data
@@ -2758,6 +2822,7 @@ class ProxyBaseLLMRequestProcessing:
                             route_type=route_type,
                             llm_router=llm_router,
                             rate_limited_model=original_model,
+                            dispatch_route_type=dispatch_route_type,
                         )
                     except ProxyRateLimitError as fallback_exc:
                         if is_hard_per_model_limit(fallback_exc):
@@ -3016,8 +3081,13 @@ class ProxyBaseLLMRequestProcessing:
                 model=model,
                 route_type=route_type,
                 llm_router=llm_router,
+                dispatch_route_type=route_type,
             )
             phase_event("litellm.request.pre_call_completed")
+            refusal: Final = None if self._routing_probe is None else self._routing_probe.refusal
+            if refusal is not None:
+                self._redact_request_its_skipped_guardrails_never_scanned()
+                raise refusal
 
         _post_call_guardrails_active: Final = self._has_post_call_guardrails()
 

@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import gc
+import inspect
 import threading
 import weakref
 import httpx
@@ -30,6 +31,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.route_llm_request import (
     JSON_OBJECT_ADAPTER,
     ProxyModelNotFoundError,
+    UnroutableModelProbe,
     UserConfigRouters,
     endpoint_unsupported_by_model,
     route_request,
@@ -3061,3 +3063,135 @@ def test_fallback_probe_skips_only_a_loaded_model_that_refuses_the_route() -> No
     assert skipped("embed-only") is True
     assert skipped("chat-fallback") is False
     assert skipped("added-on-another-worker") is False
+
+
+@pytest.mark.asyncio
+async def test_route_request_without_a_model_sends_to_the_team_deployment_by_its_public_name():
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "internal-team-gpt",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": "from-team"},
+                "model_info": {"id": "team-gpt-1", "team_id": "team-a", "team_public_model_name": "team-gpt"},
+            }
+        ]
+    )
+    data = {
+        "model": None,
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"user_api_key_team_id": "team-a"},
+    }
+
+    llm_call = await route_request(data=data, llm_router=router, user_model=None, route_type="acompletion")
+    response = await llm_call
+
+    assert response.choices[0].message.content == "from-team"
+    assert data["model"] == "team-gpt"
+
+
+@pytest.mark.asyncio
+async def test_route_request_read_through_sends_through_the_router_it_built(monkeypatch):
+    """With no router loaded yet, a model the read-through finds is sent through the router the read-through built."""
+    import litellm
+    from litellm.proxy import proxy_server
+
+    model_name = "e2e-first-db-model"
+    built_router = litellm.Router(
+        model_list=[
+            {
+                "model_name": model_name,
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "fake",
+                    "mock_response": "hello-from-new-router",
+                },
+            }
+        ]
+    )
+    fake_prisma, _ = _fake_prisma_client_with_models([_db_model_row(model_name, "unused")])
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+
+    async def build_router_from_db(prisma_client, proxy_logging_obj):
+        monkeypatch.setattr(proxy_server, "llm_router", built_router)
+
+    monkeypatch.setattr(proxy_server.proxy_config, "add_deployment", build_router_from_db)
+
+    llm_call = await route_request(
+        data={"model": model_name, "messages": [{"role": "user", "content": "hi"}]},
+        llm_router=None,
+        user_model=None,
+        route_type="acompletion",
+    )
+    response = await llm_call
+
+    assert response.choices[0].message.content == "hello-from-new-router"
+
+
+def _probe(llm_router: litellm.Router | None = None) -> UnroutableModelProbe:
+    return UnroutableModelProbe(
+        llm_router=llm_router, user_model=None, route_type="acompletion", user_api_key_dict=None
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("routing_error", "refused"),
+    [
+        pytest.param(ProxyModelNotFoundError(route="/chat/completions", model_name="typo"), True, id="model-not-found"),
+        pytest.param(HTTPException(status_code=403, detail="model blocked for this key"), False, id="blocked-model"),
+        pytest.param(ValueError("malformed body"), False, id="other-error"),
+    ],
+)
+async def test_unroutable_model_probe_refuses_only_a_model_not_found(monkeypatch, routing_error, refused):
+    async def failing_route_request(**kwargs):
+        raise routing_error
+
+    monkeypatch.setattr("litellm.proxy.route_llm_request.route_request", failing_route_request)
+    probe: Final = _probe()
+
+    assert await probe.refuses({"model": "typo"}) is refused
+    assert probe.refusal is (routing_error if refused else None)
+
+
+@pytest.mark.asyncio
+async def test_unroutable_model_probe_closes_the_call_and_routes_each_model_once(monkeypatch):
+    routed: Final[list[str]] = []
+    calls: Final[list[Coroutine[object, object, None]]] = []
+
+    async def provider_call() -> None:
+        return None
+
+    async def routing_route_request(*, data, **kwargs):
+        routed.append(data["model"])
+        data["model"] = "rewritten-by-routing"
+        calls.append(provider_call())
+        return calls[-1]
+
+    monkeypatch.setattr("litellm.proxy.route_llm_request.route_request", routing_route_request)
+    probe: Final = _probe()
+    request: Final = {"model": "virtual-model"}
+
+    assert [await probe.refuses(request), await probe.refuses(request)] == [False, False]
+    assert routed == ["virtual-model"]
+    assert request == {"model": "virtual-model"}
+    assert inspect.getcoroutinestate(calls[0]) == inspect.CORO_CLOSED
+
+
+@pytest.mark.asyncio
+async def test_unroutable_model_probe_does_not_route_a_loaded_model(monkeypatch):
+    routed: Final[list[object]] = []
+
+    async def recording_route_request(*, data, **kwargs):
+        routed.append(data["model"])
+
+    monkeypatch.setattr("litellm.proxy.route_llm_request.route_request", recording_route_request)
+    router: Final = litellm.Router(
+        model_list=[{"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}}]
+    )
+
+    assert await _probe(router).refuses({"model": "gpt-4o"}) is False
+    assert routed == []

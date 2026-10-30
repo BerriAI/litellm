@@ -310,6 +310,7 @@ if TYPE_CHECKING:
     from litellm.proxy.db.baseline_accounting import BaselineAccountingRecord
     from litellm.proxy.db.model_usage_rollup import ModelUsageTransaction
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
+    from litellm.proxy.route_llm_request import UnroutableModelProbe
     from litellm.repositories.prisma_protocols import TableActions
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
@@ -1658,6 +1659,8 @@ class _CallbackCapabilities:
     # every string entry in ``litellm.callbacks``.
     resolved_callbacks: tuple[object, ...] = field(default_factory=tuple)
     listed_models_filters: tuple[CustomLogger, ...] = field(default_factory=tuple)
+    last_custom_pre_call_hook: int = -1
+    routes_on_sensitive_data: bool = False
 
 
 def _overrides_hook(callback: CustomLogger, hook_name: str) -> bool:
@@ -1667,6 +1670,29 @@ def _overrides_hook(callback: CustomLogger, hook_name: str) -> bool:
 
 def _overrides_moderation_hook(callback: CustomLogger) -> bool:
     return _overrides_hook(callback, "async_moderation_hook")
+
+
+_LITELLM_PACKAGES: Final = frozenset({"litellm", "litellm_enterprise", "enterprise"})
+
+
+def _is_custom_pre_call_hook(callback: CustomLogger) -> bool:
+    return (
+        "async_pre_call_hook" in type(callback).__dict__
+        and type(callback).__module__.partition(".")[0] not in _LITELLM_PACKAGES
+    )
+
+
+async def _skipped_for_unroutable_model(
+    guardrail: CustomGuardrail,
+    data: Mapping[str, object],
+    probe: "UnroutableModelProbe | None",
+) -> bool:
+    return (
+        probe is not None
+        and not _is_custom_pre_call_hook(guardrail)
+        and guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call)  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
+        and await probe.refuses(data)
+    )
 
 
 _LISTED_MODEL_NAMES: Final = TypeAdapter(tuple[str, ...])
@@ -2910,6 +2936,7 @@ class ProxyLogging:
         guardrails_only: bool = False,
         skip_guardrails: bool = False,
         endpoint_type: EndpointType = EndpointType.GENERIC,
+        routing_probe: "UnroutableModelProbe | None" = None,
     ) -> None:
         pass
 
@@ -2922,6 +2949,7 @@ class ProxyLogging:
         guardrails_only: bool = False,
         skip_guardrails: bool = False,
         endpoint_type: EndpointType = EndpointType.GENERIC,
+        routing_probe: "UnroutableModelProbe | None" = None,
     ) -> dict:
         pass
 
@@ -2933,6 +2961,7 @@ class ProxyLogging:
         guardrails_only: bool = False,
         skip_guardrails: bool = False,
         endpoint_type: EndpointType = EndpointType.GENERIC,
+        routing_probe: "UnroutableModelProbe | None" = None,
     ) -> dict | None:
         """
         Allows users to modify/reject the incoming request to the proxy, without having to deal with parsing Request body.
@@ -2945,6 +2974,10 @@ class ProxyLogging:
         With ``guardrails_only`` the walk is limited to guardrails and guardrail pipelines: rate
         limiting, budget accounting, prompt templates and hanging-request alerting are skipped.
         Use it to scan a payload that is not itself a request, such as one record of a batch file.
+
+        With ``routing_probe``, a pre-call guardrail litellm ships is not called for a model ``route_request``
+        refuses, when only litellm's own guardrails and hooks come after it and no guardrail reroutes on
+        sensitive data.
         """
         verbose_proxy_logger.debug("Inside Proxy Logging Pre-call hook!")
 
@@ -3012,6 +3045,7 @@ class ProxyLogging:
             )
 
             caps: Final = ProxyLogging.callback_capabilities()
+            probe: Final = None if caps.routes_on_sensitive_data else routing_probe
             # Skip the per-request callback walk entirely when nothing in
             # ``litellm.callbacks`` overrides ``async_pre_call_hook`` and no
             # CustomGuardrail is configured. Saves the loop overhead +
@@ -3039,7 +3073,7 @@ class ProxyLogging:
             )
 
             deferred_route_exc: SensitiveDataRouteException | None = None
-            for _callback in caps.resolved_callbacks:
+            for position, _callback in enumerate(caps.resolved_callbacks):
                 start_time = time.time()
                 try:
                     if isinstance(_callback, CustomGuardrail) and data is not None:
@@ -3051,6 +3085,13 @@ class ProxyLogging:
                             continue
 
                         if getattr(_callback, "run_in_parallel", False):
+                            continue
+
+                        if position > caps.last_custom_pre_call_hook and await _skipped_for_unroutable_model(
+                            _callback,
+                            data,  # pyright: ignore[reportUnknownArgumentType]  # data is the untyped request dict
+                            probe,
+                        ):
                             continue
 
                         data = await self._run_sequential_guardrail_callback(
@@ -3119,7 +3160,17 @@ class ProxyLogging:
 
             if parallel_guardrails and data is not None:
                 await self._run_parallel_pre_call_guardrails(
-                    guardrails=parallel_guardrails,
+                    guardrails=tuple(
+                        [
+                            guardrail
+                            for guardrail in parallel_guardrails
+                            if not await _skipped_for_unroutable_model(
+                                guardrail,
+                                data,  # pyright: ignore[reportUnknownArgumentType]  # data is the untyped request dict
+                                probe,
+                            )
+                        ]
+                    ),
                     data=data,
                     raw_request_snapshot=raw_request_snapshot,
                     user_api_key_dict=user_api_key_dict,
@@ -3442,6 +3493,14 @@ class ProxyLogging:
             resolved_callbacks=tuple(resolved_callbacks),
             listed_models_filters=tuple(
                 callback for callback in resolved_callbacks if _overrides_hook(callback, "async_filter_listed_models")
+            ),
+            last_custom_pre_call_hook=max(
+                (position for position, callback in enumerate(resolved_callbacks) if _is_custom_pre_call_hook(callback)),
+                default=-1,
+            ),
+            routes_on_sensitive_data=any(
+                isinstance(callback, CustomGuardrail) and callback.should_route_on_sensitive_data()
+                for callback in resolved_callbacks
             ),
         )
         # Limit cache to handle test churn without leaking; production
