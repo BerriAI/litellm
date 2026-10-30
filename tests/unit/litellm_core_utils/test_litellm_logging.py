@@ -8515,6 +8515,15 @@ class _HangingSyncMaskingGuardrail(_NameMaskingGuardrail):
         return self._mask(kwargs), result
 
 
+class _AsyncOnlyNameMaskingGuardrail(CustomGuardrail):
+    masks_logged_request: ClassVar[bool] = True
+
+    async def async_logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
+        return await _NameMaskingGuardrail().async_logging_hook(kwargs, result, call_type)
+
+
 class _FailureLogRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -8662,26 +8671,68 @@ async def test_sync_failure_log_is_redacted_when_the_mask_outlasts_its_time_boun
     assert recorder.logged == [(_REDACTED_LOG, _REDACTED_LOG)]
 
 
-@pytest.mark.usefixtures("no_global_callbacks")
-def test_sync_failure_is_logged_redacted_when_the_logging_executor_drops_the_mask() -> None:
-    recorder: Final = _FailureLogRecorder()
+def _sync_failure_logging(call_id: str, guardrail: CustomGuardrail, recorder: _FailureLogRecorder) -> LitellmLogging:
     logging_obj: Final = LitellmLogging(
         model="gpt-4o-mini",
         messages=copy.deepcopy(_RAW_LOG),
         stream=False,
         call_type="completion",
         start_time=datetime.datetime.now(),
-        litellm_call_id="full-executor-failure",
-        function_id="full-executor-failure",
-        dynamic_failure_callbacks=[_NameMaskingGuardrail(), recorder],
+        litellm_call_id=call_id,
+        function_id=call_id,
+        dynamic_failure_callbacks=[guardrail, recorder],
     )
     logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+    return logging_obj
+
+
+@pytest.mark.usefixtures("no_global_callbacks")
+def test_sync_failure_is_logged_redacted_when_the_logging_executor_drops_the_mask() -> None:
+    recorder: Final = _FailureLogRecorder()
+    logging_obj: Final = _sync_failure_logging("full-executor-failure", _NameMaskingGuardrail(), recorder)
 
     logging_obj.mask_failure_log_request(
         mask_executor=BoundedLoggingThreadPoolExecutor(max_workers=1, max_pending_tasks=0)
     )
     logging_obj.failure_handler(litellm.ServiceUnavailableError("503", "openai", "gpt-4o-mini"), "tb")
 
+    assert recorder.logged == [(_REDACTED_LOG, _REDACTED_LOG)]
+
+
+@pytest.mark.usefixtures("no_global_callbacks")
+def test_sync_failure_is_logged_redacted_when_the_masking_guardrail_has_only_an_async_hook() -> None:
+    recorder: Final = _FailureLogRecorder()
+    logging_obj: Final = _sync_failure_logging(
+        "async-only-mask-failure",
+        _AsyncOnlyNameMaskingGuardrail(
+            guardrail_name="async-only-name-masker", event_hook=GuardrailEventHooks.logging_only
+        ),
+        recorder,
+    )
+
+    logging_obj.mask_failure_log_request()
+    logging_obj.failure_handler(litellm.ServiceUnavailableError("503", "openai", "gpt-4o-mini"), "tb")
+
+    assert recorder.logged == [(_REDACTED_LOG, _REDACTED_LOG)]
+
+
+@pytest.mark.usefixtures("no_global_callbacks")
+def test_sync_failure_mask_still_queued_at_its_time_bound_never_runs() -> None:
+    guardrail: Final = _NameMaskingGuardrail()
+    recorder: Final = _FailureLogRecorder()
+    logging_obj: Final = _sync_failure_logging("queued-mask-failure", guardrail, recorder)
+    mask_executor: Final = BoundedLoggingThreadPoolExecutor(max_workers=1, max_pending_tasks=2)
+    busy_worker_released: Final = threading.Event()
+    _ = mask_executor.submit(busy_worker_released.wait, 30)
+
+    try:
+        logging_obj.mask_failure_log_request(mask_executor=mask_executor)
+    finally:
+        busy_worker_released.set()
+        mask_executor.shutdown(wait=True)
+    logging_obj.failure_handler(litellm.ServiceUnavailableError("503", "openai", "gpt-4o-mini"), "tb")
+
+    assert guardrail.scans == 0
     assert recorder.logged == [(_REDACTED_LOG, _REDACTED_LOG)]
 
 

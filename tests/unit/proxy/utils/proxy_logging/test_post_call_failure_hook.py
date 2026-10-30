@@ -608,6 +608,75 @@ async def test_failure_hooks_get_the_request_body_with_the_prompt_the_failure_lo
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("maskers", "logged_content"),
+    [((), "My name is John Smith"), ((_PromptMaskingGuardrail(),), "My name is <PERSON>")],
+    ids=["without_a_masker", "with_a_masker"],
+)
+async def test_failure_hooks_get_the_request_body_the_failure_log_carried_after_the_router_retried_the_call(
+    proxy_logging: ProxyLogging, monkeypatch: pytest.MonkeyPatch, maskers: tuple[CustomGuardrail, ...], logged_content: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    received_bodies: Final[list[object]] = []
+
+    class _SpendLogLikeHook(CustomLogger):
+        async def async_post_call_failure_hook(
+            self,
+            request_data: dict[str, object],
+            original_exception: Exception,
+            user_api_key_dict: UserAPIKeyAuth,
+            traceback_str: str | None = None,
+        ) -> None:
+            received_bodies.append(request_data["proxy_server_request"])
+
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm, "callbacks", [*maskers, _SpendLogLikeHook()])
+    proxy_logging.alert_types = []
+    messages: Final = [{"role": "user", "content": "My name is John Smith"}]
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "internal-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4.1",
+                    "api_key": "sk-test",
+                    "mock_response": "litellm.RateLimitError",
+                },
+            }
+        ],
+        num_retries=1,
+        retry_after=0,
+    )
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="internal-model",
+        messages=messages,
+        litellm_call_id="retried-call",
+    )
+    with pytest.raises(litellm.RateLimitError):
+        await router.acompletion(model="internal-model", messages=messages, litellm_logging_obj=logging_obj)
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={
+            "model": "internal-model",
+            "messages": messages,
+            "litellm_logging_obj": logging_obj,
+            "proxy_server_request": {"body": {"model": "internal-model", "messages": messages}},
+        },
+        original_exception=HTTPException(status_code=429, detail="Rate limit exceeded"),
+        user_api_key_dict=UserAPIKeyAuth(request_route="/chat/completions"),
+        route="/chat/completions",
+    )
+
+    assert received_bodies == [
+        {"body": {"model": "internal-model", "messages": [{"role": "user", "content": logged_content}]}}
+    ]
+
+
+@pytest.mark.asyncio
 async def test_post_call_failure_hook_attribution_does_not_count_against_the_deployment(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):

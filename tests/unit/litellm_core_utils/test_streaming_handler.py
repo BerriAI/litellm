@@ -9,7 +9,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import CodeType, FrameType, MappingProxyType
-from typing import AsyncIterator, Callable, Final, Iterator, Literal, NoReturn, Optional, cast
+from typing import AsyncIterator, Callable, ClassVar, Final, Iterator, Literal, NoReturn, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
@@ -20,7 +20,9 @@ from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm import verbose_logger
 from litellm._logging import session_id_var, trace_id_var
+from litellm.constants import FAILURE_LOG_MASK_TIMEOUT_SECONDS
 from litellm.exceptions import MidStreamFallbackError
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -32,6 +34,7 @@ from litellm.litellm_core_utils.streaming_handler import (
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
 from litellm.responses.mcp.chat_completions_handler import _add_mcp_metadata_to_response
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     Delta,
@@ -3124,7 +3127,9 @@ def _stuck_stream_wrapper(
     provider_stream: Iterator[ModelResponseStream] | AsyncIterator[ModelResponseStream],
     call_type: Literal["completion", "acompletion"],
     recorder: _StuckStreamFailureRecorder,
+    masker: CustomGuardrail | None = None,
 ) -> CustomStreamWrapper:
+    failure_callbacks: Final[list[CustomLogger]] = [recorder] if masker is None else [masker, recorder]
     logging_obj: Final = Logging(
         model="test-model",
         messages=[{"role": "user", "content": "hi"}],
@@ -3133,8 +3138,8 @@ def _stuck_stream_wrapper(
         start_time=datetime.datetime(2026, 1, 1),
         litellm_call_id=f"stuck-stream-{call_type}",
         function_id=f"stuck-stream-{call_type}",
-        dynamic_failure_callbacks=[recorder],
-        dynamic_async_failure_callbacks=[recorder],
+        dynamic_failure_callbacks=failure_callbacks,
+        dynamic_async_failure_callbacks=failure_callbacks,
     )
     logging_obj.update_environment_variables(
         model="test-model",
@@ -3147,6 +3152,53 @@ def _stuck_stream_wrapper(
         logging_obj=logging_obj,
         custom_llm_provider="openai",
     )
+
+
+class _BlockedStuckStreamFailureRecorder(_StuckStreamFailureRecorder):
+    def __init__(self, release: asyncio.Event) -> None:
+        super().__init__()
+        self.release = release
+
+    async def async_log_failure_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        await self.release.wait()
+        await super().async_log_failure_event(kwargs, response_obj, start_time, end_time)
+
+
+class _FailureLogMasker(CustomGuardrail):
+    masks_logged_request: ClassVar[bool] = True
+
+    async def async_logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
+        return kwargs, result
+
+
+async def _seconds_waited_for_a_blocked_failure_log(masker: CustomGuardrail | None) -> float:
+    release: Final = asyncio.Event()
+    wrapper: Final = _stuck_stream_wrapper(
+        _StuckProvider().async_stream(), "acompletion", _BlockedStuckStreamFailureRecorder(release), masker
+    )
+    with pytest.raises(Exception, match="repeating the same chunk"):
+        async for _ in wrapper:
+            pass
+    started: Final = time.monotonic()
+    await wrapper.wait_for_failure_logging(timeout=0.1)
+    waited: Final = time.monotonic() - started
+    release.set()
+    await wrapper.wait_for_failure_logging(timeout=None)
+    return waited
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_failure_wait_extends_by_the_mask_time_only_when_the_failure_log_is_masked() -> None:
+    _ = await _seconds_waited_for_a_blocked_failure_log(None)
+
+    assert await _seconds_waited_for_a_blocked_failure_log(None) < FAILURE_LOG_MASK_TIMEOUT_SECONDS
+    assert await _seconds_waited_for_a_blocked_failure_log(
+        _FailureLogMasker(guardrail_name="failure-log-masker", event_hook=GuardrailEventHooks.logging_only)
+    ) >= FAILURE_LOG_MASK_TIMEOUT_SECONDS
 
 
 @pytest.mark.asyncio

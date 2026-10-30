@@ -139,7 +139,7 @@ from litellm.litellm_core_utils.served_output_texts import (
     SERVED_OUTPUT_TEXTS_KEY,
     overlay_served_output_texts,
 )
-from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.litellm_core_utils.thread_pool_executor import executor, failure_log_mask_executor
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
@@ -676,6 +676,10 @@ def _timestamp_seconds(moment: object) -> float | None:
     return None
 
 
+def _masks_synchronously(guardrail: CustomGuardrail) -> bool:
+    return next(cls for cls in type(guardrail).__mro__ if "logging_hook" in vars(cls)) is not CustomLogger
+
+
 def _runs_on_logging_only(guardrail: CustomGuardrail, data: Mapping[str, object]) -> bool:
     return guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.logging_only) is True
 
@@ -710,6 +714,7 @@ class Logging(LiteLLMLoggingBaseClass):
     _on_failure_payload_built: "Callable[[], None] | None" = None
     _failure_log_masked: bool = False
     _unmasked_messages: object = None
+    _failure_logged_messages: object = None
 
     @property
     def _defer_async_logging(self) -> bool:
@@ -4335,7 +4340,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if not self._failure_log_masked:
             return proxy_server_request
         return _with_prompt_copy_replaced(
-            proxy_server_request, ("body", "messages"), self._unmasked_messages, self.model_call_details.get("messages")
+            proxy_server_request, ("body", "messages"), self._unmasked_messages, self._failure_logged_messages
         )
 
     def _claim_failure_log_mask(self) -> bool:
@@ -4343,18 +4348,24 @@ class Logging(LiteLLMLoggingBaseClass):
             return False
         self._failure_log_masked = True
         self._unmasked_messages = self.model_call_details.get("messages")
+        self._failure_logged_messages = self._unmasked_messages
         return True
 
+    def _set_failure_log_details(self, details: Mapping[str, object]) -> None:
+        self.model_call_details = _with_prompt_copies_replaced(details, self._unmasked_messages)
+        self._failure_logged_messages = self.model_call_details.get("messages")
+
     def _redact_failure_log_request(self) -> None:
-        self.model_call_details = _with_prompt_copies_replaced(
-            {**self.model_call_details, **redacted_request_entries(self.model_call_details)}, self._unmasked_messages
+        self._set_failure_log_details({**self.model_call_details, **redacted_request_entries(self.model_call_details)})
+
+    @property
+    def masks_failure_log(self) -> bool:
+        return any(
+            _runs_on_logging_only(guardrail, self.model_call_details) for guardrail in self._failure_log_maskers()
         )
 
     def redact_failure_log_request(self) -> None:
-        masks_this_request: Final = any(
-            _runs_on_logging_only(guardrail, self.model_call_details) for guardrail in self._failure_log_maskers()
-        )
-        if masks_this_request and self._claim_failure_log_mask():
+        if self.masks_failure_log and self._claim_failure_log_mask():
             self._redact_failure_log_request()
 
     def _report_failure_log_mask_error(self, guardrail: CustomGuardrail) -> None:
@@ -4393,7 +4404,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 self._report_failure_log_mask_error(guardrail)
                 self._redact_failure_log_request()
                 return
-        self.model_call_details = _with_prompt_copies_replaced(self.model_call_details, self._unmasked_messages)
+        self._set_failure_log_details(self.model_call_details)
 
     async def async_mask_failure_log_request(
         self,
@@ -4416,7 +4427,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 mask.add_done_callback(lambda _: _keep_alive_until_done(asyncio.ensure_future(on_cancelled_async())))
             raise
 
-    def mask_failure_log_request(self, mask_executor: concurrent.futures.Executor = executor) -> None:
+    def mask_failure_log_request(self, mask_executor: concurrent.futures.Executor = failure_log_mask_executor) -> None:
         if is_event_loop_running() or not self._claim_failure_log_mask():
             return
         maskers: Final = self._failure_log_maskers()
@@ -4428,6 +4439,7 @@ class Logging(LiteLLMLoggingBaseClass):
         try:
             masked: Final = masking.result(timeout=FAILURE_LOG_MASK_TIMEOUT_SECONDS)
         except concurrent.futures.TimeoutError:
+            _ = masking.cancel()
             self._redact_failure_log_request_after_timeout()
             return
         except concurrent.futures.CancelledError:
@@ -4436,13 +4448,15 @@ class Logging(LiteLLMLoggingBaseClass):
         if masked is None:
             self._redact_failure_log_request()
             return
-        self.model_call_details = _with_prompt_copies_replaced(masked, self._unmasked_messages)
+        self._set_failure_log_details(masked)
 
     def _sync_failure_log_mask_step(
         self, details: Mapping[str, object] | None, guardrail: CustomGuardrail
     ) -> Mapping[str, object] | None:
         if details is None or not _runs_on_logging_only(guardrail, details):
             return details
+        if not _masks_synchronously(guardrail):
+            return None
         try:
             hooked: Final = guardrail.logging_hook(
                 kwargs=_failure_log_hook_kwargs(details), result=None, call_type=self._logging_hook_call_type
