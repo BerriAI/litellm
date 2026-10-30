@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 import json
-from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable, Mapping, Sequence
+from collections.abc import Coroutine, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
@@ -81,7 +81,7 @@ from litellm.types.llms.openai import (
 
 # Handle ResponseText import with fallback
 if TYPE_CHECKING:
-    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard
+    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard, ResponsesWsTurnAdmission
     from litellm.types.llms.openai import ResponseText
 else:
     ResponseText = str  # Fallback for ResponseText import
@@ -2867,7 +2867,7 @@ async def _aresponses_websocket(
     api_base: str | None = None,
     api_key: str | None = None,
     timeout: float | None = None,
-    turn_admission: Callable[[], Awaitable[None]] | None = None,
+    turn_admission: "ResponsesWsTurnAdmission | None" = None,
     responses_ws_frame_guard: "ResponsesWsFrameGuard | None" = None,
     **kwargs,
 ) -> Exception | None:
