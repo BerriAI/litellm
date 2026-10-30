@@ -633,6 +633,7 @@ fireworks_ai_models: Set = set()
 baseten_models: Set[str] = set()
 fireworks_ai_embedding_models: Set = set()
 deepinfra_models: Set = set()
+clf_ai_gateway_models: set[str] = set()  # mutable-ok: filled at import like sibling sets
 perplexity_models: Set = set()
 watsonx_models: Set = set()
 gemini_models: Set = set()
@@ -860,6 +861,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             bedrock_converse_models.add(key)
         elif value.get("litellm_provider") == "deepinfra":
             deepinfra_models.add(key)
+        elif value.get("litellm_provider") == "clf_ai_gateway":  # pyright: ignore[reportUnknownMemberType]  # raw cost map
+            clf_ai_gateway_models.add(key)  # pyright: ignore[reportUnknownArgumentType]  # raw cost map key
         elif value.get("litellm_provider") == "perplexity":
             perplexity_models.add(key)
         elif value.get("litellm_provider") == "watsonx":
@@ -1113,6 +1116,7 @@ model_list = list(
     | set(ollama_models)
     | bedrock_models
     | deepinfra_models
+    | clf_ai_gateway_models
     | perplexity_models
     | set(maritalk_models)
     | runwayml_models
@@ -1239,6 +1243,7 @@ def _build_models_by_provider() -> dict:
         "ollama": ollama_models,
         "ollama_chat": ollama_models,
         "deepinfra": deepinfra_models,
+        "clf_ai_gateway": clf_ai_gateway_models,
         "perplexity": perplexity_models,
         "maritalk": maritalk_models,
         "watsonx": watsonx_models,
@@ -1788,6 +1793,9 @@ if TYPE_CHECKING:
     from .llms.bespoke.decisions.transformation import (
         BespokeDecisionsConfig as BespokeDecisionsConfig,
     )
+    from .llms.eu_jev.decisions.transformation import (
+        EuJevDecisionsConfig as EuJevDecisionsConfig,
+    )
     from .llms.openai.decisions.transformation import (
         OpenAIDecisionsConfig as OpenAIDecisionsConfig,
     )
@@ -2113,6 +2121,9 @@ if TYPE_CHECKING:
         LiteLLMProxyChatConfig as _LiteLLMProxyChatConfig,
     )
     from .llms.deepinfra.chat.transformation import DeepInfraConfig as _DeepInfraConfig
+    from .llms.clf_ai_gateway.chat.transformation import (
+        ClfAiGatewayConfig as _ClfAiGatewayConfig,
+    )
     from .llms.llamafile.chat.transformation import (
         LlamafileChatConfig as _LlamafileChatConfig,
     )
@@ -2142,6 +2153,7 @@ if TYPE_CHECKING:
     IBMWatsonXAIConfig: Type[_IBMWatsonXAIConfig]
     LiteLLMProxyChatConfig: Type[_LiteLLMProxyChatConfig]
     DeepInfraConfig: Type[_DeepInfraConfig]
+    ClfAiGatewayConfig: type[_ClfAiGatewayConfig]
     LlamafileChatConfig: Type[_LlamafileChatConfig]
     LMStudioChatConfig: Type[_LMStudioChatConfig]
     LmStudioEmbeddingConfig: Type[_LmStudioEmbeddingConfig]
