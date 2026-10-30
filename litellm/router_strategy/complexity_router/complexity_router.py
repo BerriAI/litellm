@@ -17,7 +17,6 @@ Inspired by ClawRouter: https://github.com/BlockRunAI/ClawRouter
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import random
 import re
@@ -36,7 +35,11 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
-from litellm.caching.affinity_cache import ROUTER_SESSION_PINS_TARGET, claim_affinity_pin, set_local_affinity_pin
+from litellm.caching.affinity_cache import (
+    ROUTER_SESSION_PINS_TARGET,
+    claim_affinity_pin_in_memory,
+    set_local_affinity_pin,
+)
 from litellm.caching.redis_batch import active_request_redis_batch
 from litellm.constants import (
     COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY,
@@ -76,6 +79,18 @@ from litellm.redis.stores.complexity_session_affinity import (
 from litellm.redis.stores.complexity_session_affinity import (
     pin_value as session_pin_value,
 )
+from litellm.redis.stores.complexity_tier_model_affinity import (
+    ComplexityTierModelAffinityStore,
+    TierModelIdentity,
+    TierModelPin,
+    TransportComplexityTierModelAffinityStore,
+    UnconfirmedTierModelPin,
+    configuration_fingerprint,
+)
+from litellm.redis.stores.complexity_tier_model_affinity import (
+    affinity_key as tier_model_affinity_key,
+)
+from litellm.redis.transport.contract import RedisFailure
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
 from litellm.router_strategy.complexity_router.tier_predictor import (
@@ -1515,9 +1530,9 @@ class ComplexityRouter(CustomLogger):
             case _:
                 self._jev_client: JevClassifierClient | None = jev_client_result
 
-        self._tier_affinity_config = hashlib.sha256(
-            self.config.model_dump_json(include=MappingProxyType({"tiers": True, "tier_model_configs": True})).encode()
-        ).hexdigest()
+        self._tier_affinity_config = configuration_fingerprint(
+            self.config.model_dump_json(include=MappingProxyType({"tiers": True, "tier_model_configs": True}))
+        )
 
         # Checked here rather than on the config model because the deployment's
         # complexity_router_default_model arrives outside complexity_router_config and is
@@ -3125,26 +3140,43 @@ class ComplexityRouter(CustomLogger):
         if session_id is None:
             return model
         caller: Final = DeploymentAffinityCheck.get_user_key_from_request_kwargs(request_kwargs)
-        identity: Final = (self.model_name, self._tier_affinity_config, caller, session_id, _tier_name(tier))
-        cache_identity: Final = (
-            (*identity, ("replay_fallback", retained_model)) if retained_model is not None else identity
+        identity: Final = TierModelIdentity(
+            self.model_name, self._tier_affinity_config, caller, session_id, _tier_name(tier), retained_model
         )
-        cache_key: Final = (
-            "complexity_router_tier_model_affinity:v1:"
-            + hashlib.sha256(json.dumps(cache_identity).encode()).hexdigest()
-        )
-        winner: Final = await claim_affinity_pin(
-            self.litellm_router_instance.cache,
-            cache_key,
-            MappingProxyType({"model": model}),
-            self.config.session_affinity_ttl_seconds,
-            eligible_values=tuple(MappingProxyType({"model": candidate}) for candidate in candidates),
-        )
+        winner: Final = await self._claim_tier_model_pin(identity, model, candidates)
         pinned: Final[object] = winner.get("model") if isinstance(winner, Mapping) else None
         if not isinstance(pinned, str) or pinned not in candidates:
             return model
         self._restamp_adaptive_choice(request_kwargs, model, pinned)
         return pinned
+
+    async def _claim_tier_model_pin(
+        self, identity: TierModelIdentity, model: str, candidates: tuple[str, ...]
+    ) -> object:
+        cache: Final = self.litellm_router_instance.cache
+        cache_key: Final = tier_model_affinity_key(identity)
+        ttl: Final = self.config.session_affinity_ttl_seconds
+        redis_cache: Final = cache.redis_cache
+        if redis_cache is not None:
+            store: Final[ComplexityTierModelAffinityStore] = TransportComplexityTierModelAffinityStore(
+                redis_cache.transport()
+            )
+            result: Final = await store.claim(identity, model, candidates, ttl_seconds=ttl)
+            match result:
+                case TierModelPin(value=value):
+                    set_local_affinity_pin(cache, cache_key, value, ttl)
+                    return value
+                case UnconfirmedTierModelPin():
+                    return MappingProxyType({"model": model})
+                case RedisFailure():
+                    pass
+        return claim_affinity_pin_in_memory(
+            cache,
+            cache_key,
+            MappingProxyType({"model": model}),
+            ttl,
+            eligible_values=tuple(MappingProxyType({"model": candidate}) for candidate in candidates),
+        )
 
     async def _pick_model_for_tier(
         self,
