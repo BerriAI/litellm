@@ -13,11 +13,19 @@ from typing_extensions import ReadOnly, Required
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import (
-    USAGE_COST_BILLED_PROVIDERS,
+    PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS,
+    UPSTREAM_USAGE_COST,
     chunk_usage,
+    finite_cost,
     provider_reported_usage_cost,
+    stamp_litellm_bill_on_usage,
 )
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
+from litellm.litellm_core_utils.hidden_params import (
+    HIDDEN_PARAMS_ATTR,
+    get_hidden_params,
+    set_hidden_param,
+    set_hidden_params,
+)
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import BEDROCK_TRACE_FIELDS, object_items, object_mapping
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import partition_annotations
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -1013,7 +1021,9 @@ class ChunkProcessor:
                     prompt_tokens_details, cache_creation_token_details
                 )
 
-                if usage_chunk_dict["cost"] is not None:
+                if Usage.dropped_non_finite_cost(usage_chunk):
+                    cost = None
+                elif usage_chunk_dict["cost"] is not None:
                     cost = usage_chunk_dict["cost"]
 
         prompt_tokens_details = attach_cache_creation_token_details(prompt_tokens_details, cache_creation_token_details)
@@ -1380,18 +1390,11 @@ def stream_chunk_builder_text_completion(
     return TextCompletionResponse(**response)
 
 
-_CALCULATOR_PRICED_REPORTED_COST_PROVIDERS: Final = frozenset({LlmProviders.XAI.value}) | USAGE_COST_BILLED_PROVIDERS
-
-
 def _logged_provider(logging_obj: Optional["Logging"]) -> object:
     if logging_obj is None:
         return None
     provider: Final[object] = logging_obj.model_call_details.get("custom_llm_provider")
     return provider
-
-
-def _reported_cost_is_priced_by_calculator(logging_obj: Optional["Logging"]) -> bool:
-    return _logged_provider(logging_obj) in _CALCULATOR_PRICED_REPORTED_COST_PROVIDERS
 
 
 def _stream_builder_response_cost(
@@ -1404,9 +1407,6 @@ def _stream_builder_response_cost(
             for chunk in reversed(chunks)
         )
         return next((cost for cost in reported if cost is not None), None)
-    usage_cost: Final = getattr(getattr(response, "usage", None), "cost", None)
-    if isinstance(usage_cost, (int, float)) and not _reported_cost_is_priced_by_calculator(logging_obj):
-        return float(usage_cost)
     if logging_obj is not None:
         return None
     provider_hint: Final = response._hidden_params.get(  # pyright: ignore[reportPrivateUsage]  # no public accessor
@@ -1450,16 +1450,26 @@ def _set_stream_builder_response_cost(
     _set_hidden_response_cost(response, response_cost)
 
 
+def _carry_upstream_usage_cost(response: ModelResponse, chunks: Sequence[object]) -> None:
+    chunk_hidden_params: Final = (get_hidden_params(chunk) for chunk in reversed(chunks))
+    stamped: Final = (hidden for hidden in chunk_hidden_params if hidden is not None and UPSTREAM_USAGE_COST in hidden)
+    for hidden in stamped:
+        set_hidden_param(response, UPSTREAM_USAGE_COST, hidden[UPSTREAM_USAGE_COST])
+        return
+
+
 def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
     if logging_obj is None:
         return
-    if isinstance(getattr(usage, "cost", None), (int, float)):
+    if _logged_provider(logging_obj) in PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS and (
+        finite_cost(getattr(usage, "cost", None)) is not None
+    ):
         return
     computed_cost: Final = logging_obj.response_cost_calculator(result=response)
-    if not isinstance(computed_cost, (int, float)) or computed_cost <= 0:
+    if isinstance(computed_cost, bool) or not isinstance(computed_cost, (int, float)) or computed_cost < 0:
         return
-    setattr(usage, "cost", computed_cost)
-    _set_hidden_response_cost(response, float(computed_cost))
+    if computed_cost > 0 or isinstance(getattr(usage, "cost", None), (int, float)):
+        stamp_litellm_bill_on_usage(response, usage, float(computed_cost))
 
 
 def _field_of(value: object, name: str) -> object:
@@ -1798,6 +1808,7 @@ def stream_chunk_builder(
                 response,
                 logging_obj,
             )
+            _carry_upstream_usage_cost(response, chunks)  # pyright: ignore[reportUnknownArgumentType]  # chunks is an untyped list param
             _stamp_streaming_usage_cost(usage, response, logging_obj)
             _set_stream_builder_response_cost(
                 response,
@@ -1840,6 +1851,7 @@ def stream_chunk_builder(
                 )
                 break
 
+        _carry_upstream_usage_cost(response, chunks)  # pyright: ignore[reportUnknownArgumentType]  # chunks is an untyped list param
         _stamp_streaming_usage_cost(usage, response, logging_obj)
         _set_stream_builder_response_cost(
             response,

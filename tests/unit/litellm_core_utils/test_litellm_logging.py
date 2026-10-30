@@ -6308,6 +6308,60 @@ def test_standard_logging_payload_resolves_kubernetes_pod_routing_from_metadata_
     assert payload["metadata"][KUBERNETES_POD_ROUTING_KEY] == expected
 
 
+@pytest.mark.parametrize("response_cost", [float("nan"), float("inf"), float("-inf")])
+def test_get_standard_logging_object_payload_logs_a_non_finite_response_cost_as_zero(
+    logging_obj: LitellmLogging, response_cost: float
+) -> None:
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    now: Final = datetime(2026, 1, 1)
+    payload: Final = get_standard_logging_object_payload(
+        kwargs={"model": "gpt-4o", "messages": [], "litellm_params": {}, "response_cost": response_cost},
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["response_cost"] == 0
+
+
+def test_an_overflowing_custom_price_records_a_zero_response_cost(caplog: pytest.LogCaptureFixture) -> None:
+    messages: Final = [{"role": "user", "content": "hello world"}]
+    start_time: Final = datetime.datetime.now()
+    logging_obj: Final = Logging(
+        model="gpt-4o",
+        messages=messages,
+        stream=False,
+        call_type="completion",
+        start_time=start_time,
+        litellm_call_id="overflow\nforged log line",
+        function_id="overflow",
+    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        response: Final = litellm.completion(
+            model="gpt-4o",
+            mock_response="hi there",
+            messages=messages,
+            input_cost_per_token=1e308,
+            output_cost_per_token=1e308,
+            litellm_logging_obj=logging_obj,
+        )
+    logging_obj._process_hidden_params_and_response_cost(
+        response, start_time=start_time, end_time=datetime.datetime.now()
+    )
+
+    assert response._hidden_params["response_cost"] == 0.0
+    payload: Final = logging_obj.model_call_details["standard_logging_object"]
+    assert json.loads(json.dumps(payload, allow_nan=False, default=str))["response_cost"] == 0.0
+    warnings: Final = [r.getMessage() for r in caplog.records if "non-finite response_cost" in r.getMessage()]
+    assert warnings == ["Recording a non-finite response_cost as 0 for litellm_call_id=overflowforged log line"]
+
+
 def test_get_standard_logging_object_payload_carries_matched_access_groups(logging_obj):
     """Access groups stamped at auth time reach the logging payload, so integrations see what a request billed."""
     from datetime import datetime
@@ -6900,6 +6954,95 @@ def test_handle_anthropic_messages_response_logging_reparses_the_served_body_wit
     assert isinstance(logged, ModelResponse)
     assert logged.id == "msg_native"
     assert logged.usage.completion_tokens == 7  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "compaction_block",
+    [
+        {"type": "compaction", "content": "Summary of the chat so far.", "signature": "sig-abc"},
+        {"type": "compaction", "signature": "sig-abc"},
+    ],
+    ids=["with_summary", "without_content"],
+)
+def test_handle_anthropic_messages_response_logging_reparses_a_served_compaction_response(
+    compaction_block: dict[str, str],
+):
+    logging_obj = _anthropic_messages_logging_obj()
+    logging_obj.optional_params = {}
+
+    logged = logging_obj._handle_anthropic_messages_response_logging(
+        result={
+            "id": "msg_compacted",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5-5",
+            "content": [compaction_block],
+            "stop_reason": "compaction",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 410, "output_tokens": 95},
+        }
+    )
+
+    assert isinstance(logged, ModelResponse)
+    assert logged.id == "msg_compacted"
+    assert logged.usage.prompt_tokens == 410
+    assert logged.usage.completion_tokens == 95
+    assert logged.choices[0].message.provider_specific_fields["compaction_blocks"] == [compaction_block]
+
+
+_WEB_SEARCH_REPLY: Final = (
+    {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {"query": "weather"}},
+    {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu_1",
+        "content": [{"type": "web_search_result", "url": "https://example.com", "title": "Weather"}],
+    },
+    {"type": "text", "text": "It is sunny."},
+)
+
+
+@pytest.mark.parametrize(
+    ("content", "stop_reason"),
+    [
+        (list(_WEB_SEARCH_REPLY), "end_turn"),
+        (list(_WEB_SEARCH_REPLY), "pause_turn"),
+        ([{"type": "text", "text": "The context window is full."}], "model_context_window_exceeded"),
+        (
+            [
+                {"type": "mcp_tool_use", "id": "mcptoolu_1", "name": "lookup", "server_name": "docs", "input": {}},
+                {"type": "mcp_tool_result", "tool_use_id": "mcptoolu_1", "is_error": False, "content": [{"type": "text", "text": "ok"}]},
+                {"type": "text", "text": "Found it."},
+            ],
+            "end_turn",
+        ),
+        ([{"type": "container_upload", "file_id": "file_1"}, {"type": "text", "text": "Uploaded."}], "end_turn"),
+    ],
+    ids=["web_search", "pause_turn", "model_context_window_exceeded", "mcp_tool_use", "container_upload"],
+)
+def test_handle_anthropic_messages_response_logging_bills_a_served_server_tool_response(
+    content: list[dict[str, object]], stop_reason: str
+):
+    logging_obj = _anthropic_messages_logging_obj()
+    logging_obj.optional_params = {}
+
+    logged = logging_obj._handle_anthropic_messages_response_logging(
+        result={
+            "id": "msg_server_tools",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5-5",
+            "content": content,
+            "stop_reason": stop_reason,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1200, "output_tokens": 80},
+        }
+    )
+
+    assert isinstance(logged, ModelResponse)
+    assert logged.id == "msg_server_tools"
+    assert logged.usage.prompt_tokens == 1200
+    assert logged.usage.completion_tokens == 80
+    assert logged.choices[0].message.content == content[-1]["text"]
 
 
 def test_handle_anthropic_messages_response_logging_passes_model_response_through():
