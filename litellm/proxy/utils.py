@@ -1672,6 +1672,7 @@ def _overrides_moderation_hook(callback: CustomLogger) -> bool:
 
 _LISTED_MODEL_NAMES: Final = TypeAdapter(tuple[str, ...])
 _MCP_TOOL_DESCRIPTION: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
+_GUARDRAIL_HOOK_RESPONSE: Final = TypeAdapter(object)
 _MCP_TOOL_INPUT_SCHEMA: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 
@@ -2393,14 +2394,16 @@ class ProxyLogging:
 
         with mcp_guardrail_block_context(callback.guardrail_name, callback.on_mcp_block, call_type, hook_type):
             if hook_type == "pre_call":
-                hook_response: Final = await target.async_pre_call_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    cache=self.call_details["user_api_key_cache"],
-                    data=data,
-                    call_type=call_type,
+                hook_response: Final = _GUARDRAIL_HOOK_RESPONSE.validate_python(
+                    await target.async_pre_call_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        cache=self.call_details["user_api_key_cache"],
+                        data=data,
+                        call_type=call_type,
+                    )
                 )
                 if call_type == "call_mcp_tool" and isinstance(hook_response, (Exception, str)):
-                    return await self.process_pre_call_hook_response(
+                    await self.process_pre_call_hook_response(
                         response=hook_response, data=data, call_type=call_type
                     )
                 return hook_response
