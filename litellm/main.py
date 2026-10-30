@@ -4360,6 +4360,7 @@ _ADDITIONAL_DROP_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
 _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OLLAMA_EMBEDDING_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
 _OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
@@ -5593,7 +5594,9 @@ def completion(
     if model is None:
         raise ValueError("model param not passed in.")
     # validate messages
-    messages = validate_and_fix_openai_messages(messages=messages, model=model, request_kwargs=kwargs)
+    messages = validate_and_fix_openai_messages(
+        messages=messages, model=model, request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
+    )
     tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice, model=model)

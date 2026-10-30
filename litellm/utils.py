@@ -9240,8 +9240,6 @@ def validate_and_fix_openai_messages(
     for message in messages:
         if message.get("tool_calls"):
             message["tool_calls"] = jsonify_tools(tools=message["tool_calls"])
-        if not message.get("role") and (message.get("tool_calls") or message.get("function_call")):
-            message["role"] = "assistant"
 
         convert_msg_to_dict = cast(  # cast-ok: message dicts satisfy the TypedDict shape
             AllMessageValues,
@@ -9250,6 +9248,10 @@ def validate_and_fix_openai_messages(
             ),
         )
         cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
+        if not cleaned_message.get("role") and (
+            cleaned_message.get("tool_calls") or cleaned_message.get("function_call")
+        ):
+            cleaned_message["role"] = "assistant"
         new_messages.append(cleaned_message)
     return validate_chat_completion_user_messages(messages=new_messages, model=model, request_kwargs=request_kwargs)
 
