@@ -103,19 +103,20 @@ const fallbackCopyToClipboard = (text: string, messageText: string): boolean => 
     textArea.setAttribute("readonly", "");
 
     document.body.appendChild(textArea);
-    textArea.focus();
-    textArea.select();
+    try {
+      textArea.focus();
+      textArea.select();
 
-    const successful = document.execCommand("copy");
-    document.body.removeChild(textArea);
-    if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
-
-    if (successful) {
-      toast.success(messageText);
-      return true;
-    } else {
-      throw new Error("execCommand failed");
+      if (document.execCommand("copy")) {
+        toast.success(messageText);
+        return true;
+      }
+    } finally {
+      textArea.remove();
+      if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
     }
+    toast.fromError("Failed to copy to clipboard");
+    return false;
   } catch (err) {
     toast.fromError("Failed to copy to clipboard");
     console.error("Failed to copy: ", err);

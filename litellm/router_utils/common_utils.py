@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeVar
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIFileObject
@@ -16,6 +16,7 @@ from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
+from litellm.llms.sagemaker.common_utils import deployment_inference_component
 from litellm.types.router import (
     CredentialLiteLLMParams,
     Deployment,
@@ -23,17 +24,67 @@ from litellm.types.router import (
     LiteLLM_Params,
     SkippedFallbackTarget,
 )
-from litellm.types.utils import LlmProviders, ProviderSpecificModelInfo
+from litellm.types.utils import (
+    AdminApiKeySecretReference,
+    LlmProviders,
+    ProviderSpecificModelInfo,
+    admin_api_key_secret_reference,
+)
 
 _V = TypeVar("_V")
 
 MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
 ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors", MID_STREAM_CONTINUATION_KWARG})
 _OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
+_DEPLOYMENT_ROWS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
+    tuple[Mapping[str, object], ...]
+)
+_DEPLOYMENT_IDS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+_FALLBACK_ENTRIES_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
+    tuple[Mapping[str, object], ...]
+)
+
+
+def with_admin_api_key_secret_reference(deployment: Deployment) -> Deployment:
+    if deployment.model_info.get("team_id") is not None or isinstance(
+        deployment.litellm_params.api_key, AdminApiKeySecretReference
+    ):
+        return deployment
+    params: Final = admin_api_key_secret_reference(deployment.litellm_params.model_dump(exclude_none=True))
+    if not isinstance(params.get("api_key"), AdminApiKeySecretReference):
+        return deployment
+    return deployment.model_copy(
+        update={"litellm_params": deployment.litellm_params.model_copy(update={"api_key": params["api_key"]})}
+    )
 
 
 def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:
     return {key: value for key, value in kwargs.items() if key not in ROUTER_ONLY_CALL_KWARGS}
+
+
+def as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
+    if not isinstance(value, tuple):
+        return ()
+    items: Final[tuple[object, ...]] = value
+    return tuple(item for item in items if isinstance(item, str))
+
+
+def as_excluded_deployment_ids(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    try:
+        return _DEPLOYMENT_IDS_ADAPTER.validate_python(value)
+    except ValidationError:
+        return ()
+
+
+def deployment_ids_failed_in_request(request_kwargs: Mapping[str, object]) -> frozenset[str]:
+    return frozenset(
+        (
+            *as_excluded_deployment_ids(request_kwargs.get("_excluded_deployment_ids")),
+            *as_retry_skipped_deployment_ids(request_kwargs.get("_retry_skipped_deployment_ids")),
+        )
+    )
 
 
 def request_user_api_key_auth(request_kwargs: Mapping[str, object]) -> object:
@@ -209,6 +260,40 @@ def format_fallback_outcome_message(
     return f"{lead} Fallback model group(s) configured: {targets}."
 
 
+def format_content_policy_fallback_hint(
+    model_group: str | None, content_policy_fallbacks: object, fallbacks: object
+) -> str:
+    return (
+        f"model={model_group}. content_policy_fallback={mask_sensitive_structure(content_policy_fallbacks)}. "
+        f"fallbacks={mask_sensitive_structure(fallbacks)}.\n\nSet 'content_policy_fallback' - "
+        "https://docs.litellm.ai/docs/routing#fallbacks"
+    )
+
+
+def _as_fallback_entries(fallbacks: object) -> tuple[Mapping[str, object], ...] | None:
+    try:
+        return _FALLBACK_ENTRIES_ADAPTER.validate_python(fallbacks)
+    except ValidationError:
+        return None
+
+
+def format_content_policy_no_fallback_note(
+    model_group: str,
+    lookup_groups: tuple[str, ...],
+    content_policy_fallbacks: object,
+    fallbacks: object,
+    nested_fallback_hop: bool,
+) -> str:
+    outcome: Final = "" if nested_fallback_hop else format_fallback_outcome_message(model_group, None, "")
+    if content_policy_fallbacks is not None:
+        return outcome
+    hint: Final = f"\n{format_content_policy_fallback_hint(model_group, content_policy_fallbacks, fallbacks)}"
+    fallback_entries: Final = _as_fallback_entries(fallbacks) if fallbacks is not None else None
+    if fallback_entries is None or not lookup_groups or nested_fallback_hop:
+        return hint + outcome
+    return hint + format_no_fallback_group_message(lookup_groups, fallback_entries)
+
+
 def get_litellm_params_sensitive_credential_hash(litellm_params: dict) -> str:
     """
     Hash of the credential params, used for mapping the file id to the right model
@@ -307,6 +392,20 @@ def filter_team_based_models(
         for deployment in healthy_deployments
         if deployment.get("model_info", {}).get("id") not in ids_to_remove
     ]
+
+
+def deployments_the_caller_may_use(
+    deployments: Sequence[Mapping[str, object]], request_kwargs: Mapping[str, object] | None
+) -> tuple[Mapping[str, object], ...]:
+    try:
+        return _DEPLOYMENT_ROWS_ADAPTER.validate_python(
+            filter_team_based_models(
+                [dict(deployment) for deployment in deployments],
+                None if request_kwargs is None else dict(request_kwargs),
+            )
+        )
+    except BadRequestError:
+        return ()
 
 
 _WEB_SEARCH_TOOL_TYPES: Final = frozenset({"web_search", "web_search_preview"})
@@ -422,6 +521,16 @@ PROVIDER_SPECIFIC_CAPABILITY_FIELDS: Final = frozenset(ProviderSpecificModelInfo
 
 
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def deployment_model_id_pin(deployment_litellm_params: Mapping[str, object]) -> object | None:
+    clientside_params: Final = deployment_litellm_params.get("configurable_clientside_auth_params")
+    if isinstance(clientside_params, list | tuple) and "model_id" in clientside_params:
+        return None
+    own_model_id: Final = deployment_litellm_params.get("model_id")
+    if own_model_id is not None:
+        return own_model_id
+    return deployment_inference_component(deployment_litellm_params)
 
 
 def is_model_capability_field(name: str) -> bool:

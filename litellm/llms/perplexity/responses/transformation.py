@@ -9,17 +9,26 @@ The only provider quirks:
 Ref: https://docs.perplexity.ai/api-reference/responses-post
 """
 
+from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.base_llm.responses.transformation import STANDARD_MODE_REASONING_FIELD_VALUES, ReasoningFieldValues
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig, drops_params
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+
+_DECODED_JSON: Final = TypeAdapter(object)
+PERPLEXITY_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = MappingProxyType(
+    {**STANDARD_MODE_REASONING_FIELD_VALUES, "context": frozenset({"auto", "current_turn", "all_turns"})}
+)
 
 
 class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
@@ -51,7 +60,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
 
     def get_complete_url(self, api_base: str | None, litellm_params: dict) -> str:
         api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"
-        return f"{api_base.rstrip('/')}/v1/responses"
+        return join_api_base(api_base, "v1/responses")
 
     def _ensure_message_type(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
         """Ensure list input items have type='message' (required by Perplexity)."""
@@ -80,7 +89,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
         """Handle preset/ model prefix: send as {"preset": name} instead of {"model": name}."""
         input = self._ensure_message_type(input)
         if model.startswith("preset/"):
-            input = self._validate_input_param(input)
+            input = self._validate_input_param(input, drops_set_created_by=drops_params(litellm_params))
             data: Final[dict] = {
                 "preset": model[len("preset/") :],
                 "input": input,
@@ -103,7 +112,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
     ) -> ResponsesAPIResponse:
         """Check for Perplexity's status:'failed' on HTTP 200 before delegating to base."""
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raw_response_json = None
 
@@ -123,3 +132,9 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
     def supports_native_websocket(self) -> bool:
         """Perplexity does not support native WebSocket for Responses API"""
         return False
+
+    def reasoning_field_values(self) -> ReasoningFieldValues:
+        return PERPLEXITY_REASONING_FIELD_VALUES
+
+    def ignores_unsupported_reasoning_fields(self) -> bool:
+        return True

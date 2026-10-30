@@ -1,18 +1,32 @@
 import base64
+import os
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from functools import reduce
-from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
+from types import MappingProxyType
+from typing import Any, Final, NoReturn, Optional, TypeVar, Union, cast, get_type_hints, overload
 
 from pydantic import BaseModel, TypeAdapter
+from typing_extensions import TypedDict as ExtraItemsTypedDict
 from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire payloads without a runtime conversion
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, iter_items
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
-from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig, ReasoningSummaryLevel
+from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
+from litellm.llms.base_llm.responses.transformation import (
+    ANY_REASONING_FIELD_VALUES,
+    REASONING_SUMMARY_VALUES,
+    BaseResponsesAPIConfig,
+    ReasoningFieldValues,
+    ReasoningSummaryLevel,
+)
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
+    InputTokensDetails,
     OutputTokensDetails,
     ResponseAPIUsage,
     ResponseInputParam,
@@ -23,12 +37,23 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.responses.main import DecodedResponseId
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     CompletionTokensDetailsWrapper,
+    ModelInfo,
     PromptTokensDetailsWrapper,
+    ProviderSpecificHeader,
     SpecialEnums,
     Usage,
     text_tokens_without_nested_reasoning,
 )
+
+_PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
+    TypeAdapter[ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None]
+] = TypeAdapter(ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None)
+
+
+class _UsageExtraFields(ExtraItemsTypedDict, total=False, extra_items=object):
+    pass
 
 
 def _apply_nested_drop_params(params: dict[str, object], additional_drop_params: list[str] | None) -> dict[str, object]:
@@ -41,6 +66,17 @@ def _output_token_detail(details: object, field: str) -> int | None:
     return value if isinstance(value, int) else None
 
 
+def _cache_write_lifetimes(cache_write_tokens_details: object) -> CacheCreationTokenDetails | None:
+    """OpenAI Responses splits `cache_write_tokens` into `ttl_30m_tokens` and `ttl_12h_tokens`."""
+    ttl_30m_tokens: Final = _output_token_detail(cache_write_tokens_details, "ttl_30m_tokens")
+    ttl_12h_tokens: Final = _output_token_detail(cache_write_tokens_details, "ttl_12h_tokens")
+    if ttl_30m_tokens is None and ttl_12h_tokens is None:
+        return None
+    return CacheCreationTokenDetails(
+        ephemeral_30m_input_tokens=ttl_30m_tokens, ephemeral_12h_input_tokens=ttl_12h_tokens
+    )
+
+
 def _is_object_sequence(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: a list is a Sequence of anything
     return isinstance(value, list)
 
@@ -49,6 +85,28 @@ def _is_object_dict(
     value: object,
 ) -> TypeIs[dict[str, object]]:  # guard-ok: wire dicts have str keys  # mutable-ok: callers rewrite ids in place
     return isinstance(value, dict)
+
+
+def _prompt_tokens_details_wrapper(details: object) -> PromptTokensDetailsWrapper:
+    if _is_object_dict(details):
+        input_details: Final = InputTokensDetails.model_validate(details)
+        return PromptTokensDetailsWrapper(
+            **input_details.model_dump(exclude={"cache_write_tokens_details"}),
+            cache_creation_token_details=_cache_write_lifetimes(input_details.cache_write_tokens_details),
+        )
+    return PromptTokensDetailsWrapper(
+        cached_tokens=getattr(details, "cached_tokens", None),
+        audio_tokens=getattr(details, "audio_tokens", None),
+        text_tokens=getattr(details, "text_tokens", None),
+        image_tokens=getattr(details, "image_tokens", None),
+        cached_tokens_details=getattr(details, "cached_tokens_details", None),
+        video_tokens=getattr(details, "video_tokens", None),
+        cache_write_tokens=getattr(details, "cache_write_tokens", None),
+        cache_creation_token_details=_cache_write_lifetimes(getattr(details, "cache_write_tokens_details", None)),
+        cache_type=getattr(details, "cache_type", None),
+        web_search_requests=getattr(details, "web_search_requests", None),
+        google_maps_grounding_requests=getattr(details, "google_maps_grounding_requests", None),
+    )
 
 
 def normalize_responses_api_stream_options(
@@ -73,6 +131,26 @@ def _as_input_text_part(part: object) -> object:
 
 
 _RequestInputT: Final = TypeVar("_RequestInputT")
+
+
+def _provider_mapped_params(
+    config: BaseResponsesAPIConfig,
+    params: ResponsesAPIOptionalRequestParams,
+    model: str,
+    drop_params: bool,
+    declared_reasoning_efforts: Collection[str] | None,
+) -> Mapping[str, object]:
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+
+    if (
+        declared_reasoning_efforts is not None
+        and isinstance(config, OpenAIResponsesAPIConfig)
+        and config.honors_declared_reasoning_efforts()
+    ):
+        return config.map_openai_params_for_deployment(
+            params, model, drop_params, declared_reasoning_efforts=declared_reasoning_efforts
+        )
+    return config.map_openai_params(response_api_optional_params=params, model=model, drop_params=drop_params)
 
 
 class ResponsesAPIRequestUtils:
@@ -173,6 +251,20 @@ class ResponsesAPIRequestUtils:
         }
 
     @staticmethod
+    def merge_provider_specific_headers(
+        extra_headers: Mapping[str, object] | None,
+        provider_specific_header: object,
+        custom_llm_provider: str | None,
+    ) -> dict[str, object] | None:  # mutable-ok: legacy Responses request fields require a dict
+        scoped_headers: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header=_PROVIDER_SPECIFIC_HEADER_ADAPTER.validate_python(provider_specific_header),
+            custom_llm_provider=custom_llm_provider,
+        )
+        if extra_headers is None and not scoped_headers:
+            return None
+        return {**(extra_headers or {}), **scoped_headers}
+
+    @staticmethod
     def _check_valid_arg(
         supported_params: list[str] | None,
         non_default_params: dict,
@@ -202,6 +294,7 @@ class ResponsesAPIRequestUtils:
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         allowed_openai_params: list[str] | None = None,
         drop_params: bool | None = None,
+        declared_reasoning_efforts: Collection[str] | None = None,
     ) -> dict:
         """
         Get optional parameters for the responses API.
@@ -234,10 +327,12 @@ class ResponsesAPIRequestUtils:
 
         # Map parameters to provider-specific format
         mapped_params: Final[dict[str, object]] = TypeAdapter(dict[str, object]).validate_python(
-            responses_api_provider_config.map_openai_params(
-                response_api_optional_params=response_api_optional_params,
-                model=model,
-                drop_params=should_drop_params,
+            _provider_mapped_params(
+                responses_api_provider_config,
+                response_api_optional_params,
+                model,
+                should_drop_params,
+                declared_reasoning_efforts,
             ),
             strict=True,
         )
@@ -315,7 +410,7 @@ class ResponsesAPIRequestUtils:
     def update_responses_api_response_id_with_model_id(
         responses_api_response: ResponsesAPIResponse,
         custom_llm_provider: str | None,
-        litellm_metadata: dict[str, object] | None = None,
+        litellm_metadata: Mapping[str, object] | None = None,
     ) -> ResponsesAPIResponse: 
         ...
 
@@ -324,7 +419,7 @@ class ResponsesAPIRequestUtils:
     def update_responses_api_response_id_with_model_id(
         responses_api_response: dict[str, object],
         custom_llm_provider: str | None,
-        litellm_metadata: dict[str, object] | None = None,
+        litellm_metadata: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
         ...
 
@@ -334,7 +429,7 @@ class ResponsesAPIRequestUtils:
     def update_responses_api_response_id_with_model_id(
         responses_api_response: ResponsesAPIResponse | dict[str, Any],
         custom_llm_provider: str | None,
-        litellm_metadata: dict[str, Any] | None = None,
+        litellm_metadata: Mapping[str, Any] | None = None,
     ) -> ResponsesAPIResponse | dict[str, object]:
         """Update the responses_api_response_id with model_id and custom_llm_provider.
 
@@ -677,6 +772,12 @@ class ResponsesAPIRequestUtils:
                 custom_llm_provider=custom_llm_provider,
                 model_id=model_id,
                 response_id=decoded_response_id,
+            )
+        except ValueError:
+            return DecodedResponseId(
+                custom_llm_provider=None,
+                model_id=None,
+                response_id=response_id,
             )
         except Exception as e:
             verbose_logger.debug("Error decoding response_id '%s': %s", response_id, e)
@@ -1024,9 +1125,9 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def _update_container_ids_in_response(
-        responses_api_response: ResponsesAPIResponse | dict[str, Any],
+        responses_api_response: ResponsesAPIResponse | dict[str, object],
         custom_llm_provider: str | None,
-        litellm_metadata: dict[str, Any] | None = None,
+        litellm_metadata: Mapping[str, Any] | None = None,
     ) -> ResponsesAPIResponse | dict[str, object]:
         """Encode container IDs in the response output with provider/model info.
 
@@ -1038,15 +1139,16 @@ class ResponsesAPIRequestUtils:
         model_id: Final = model_info.get("id")
 
         # Get the output list
-        if isinstance(responses_api_response, dict):
-            output = responses_api_response.get("output", [])
-        else:
-            output = getattr(responses_api_response, "output", [])
+        output: Final = (
+            responses_api_response.get("output", [])
+            if isinstance(responses_api_response, dict)
+            else attribute_or_none(responses_api_response, "output")
+        )
 
         if not output:
             return responses_api_response
 
-        for item in output:
+        for item in iter_items(output):
             ResponsesAPIRequestUtils.encode_container_id_on_output_item(
                 item=item,
                 custom_llm_provider=custom_llm_provider,
@@ -1105,7 +1207,7 @@ class ResponsesAPIRequestUtils:
         """
         from starlette.datastructures import Headers
 
-        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
         )
 
@@ -1221,26 +1323,11 @@ class ResponseAPILoggingUtils:
             response_api_usage = usage_input
         prompt_tokens: Final[int] = response_api_usage.input_tokens or 0
         completion_tokens: Final[int] = response_api_usage.output_tokens or 0
-        prompt_tokens_details: PromptTokensDetailsWrapper | None = None
-        if response_api_usage.input_tokens_details:
-            if isinstance(response_api_usage.input_tokens_details, dict):
-                prompt_tokens_details = PromptTokensDetailsWrapper(**response_api_usage.input_tokens_details)
-            else:
-                prompt_tokens_details = PromptTokensDetailsWrapper(
-                    cached_tokens=getattr(response_api_usage.input_tokens_details, "cached_tokens", None),
-                    audio_tokens=getattr(response_api_usage.input_tokens_details, "audio_tokens", None),
-                    text_tokens=getattr(response_api_usage.input_tokens_details, "text_tokens", None),
-                    image_tokens=getattr(response_api_usage.input_tokens_details, "image_tokens", None),
-                    cached_tokens_details=getattr(
-                        response_api_usage.input_tokens_details, "cached_tokens_details", None
-                    ),
-                    video_tokens=getattr(response_api_usage.input_tokens_details, "video_tokens", None),
-                    cache_write_tokens=getattr(response_api_usage.input_tokens_details, "cache_write_tokens", None),
-                    web_search_requests=getattr(response_api_usage.input_tokens_details, "web_search_requests", None),
-                    google_maps_grounding_requests=getattr(
-                        response_api_usage.input_tokens_details, "google_maps_grounding_requests", None
-                    ),
-                )
+        prompt_tokens_details: Final = (
+            _prompt_tokens_details_wrapper(response_api_usage.input_tokens_details)
+            if response_api_usage.input_tokens_details
+            else None
+        )
         completion_tokens_details: CompletionTokensDetailsWrapper | None = None
         output_tokens_details: Final[OutputTokensDetails | None] = getattr(
             response_api_usage, "output_tokens_details", None
@@ -1264,20 +1351,22 @@ class ResponseAPILoggingUtils:
                 audio_tokens=audio_tokens,
             )
 
-        extra_usage_fields: Final = {
-            key: value
-            for key, value in (response_api_usage.model_extra or {}).items()
-            if key
-            not in (
-                "input_token_details",
-                "output_token_details",
-                "prompt_tokens",
-                "completion_tokens",
-                "total_tokens",
-                "prompt_tokens_details",
-                "completion_tokens_details",
-            )
-        }
+        extra_usage_fields: Final = _UsageExtraFields(
+            **{
+                key: value
+                for key, value in (as_str_mapping(response_api_usage.model_extra) or {}).items()
+                if key
+                not in (
+                    "input_token_details",
+                    "output_token_details",
+                    "prompt_tokens",
+                    "completion_tokens",
+                    "total_tokens",
+                    "prompt_tokens_details",
+                    "completion_tokens_details",
+                )
+            }
+        )
         chat_usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -1310,3 +1399,223 @@ def auto_reasoning_summary(model: str, custom_llm_provider: object) -> Reasoning
         provider, model.removeprefix(f"{provider}/")
     )
     return "detailed" if responses_config is None else responses_config.auto_reasoning_summary()
+
+
+def opt_in_auto_reasoning_summary(model: str | None, custom_llm_provider: object) -> ReasoningSummaryLevel | None:
+    if not (litellm.reasoning_auto_summary or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"):
+        return None
+    return "detailed" if model is None else auto_reasoning_summary(model, custom_llm_provider)
+
+
+def reasoning_with_summary_default(
+    reasoning: Mapping[str, object], summary_alias: object, model: str, custom_llm_provider: object
+) -> Mapping[str, object]:
+    if "summary" in reasoning:
+        return {**reasoning}
+    summary: Final = (
+        summary_alias if summary_alias is not None else opt_in_auto_reasoning_summary(model, custom_llm_provider)
+    )
+    return {**reasoning} if summary is None else {**reasoning, "summary": summary}
+
+
+def _openai_model_info(model: str) -> ModelInfo | None:
+    from litellm.utils import ModelInfoLookupMiss, lookup_model_info_for_registration
+
+    model_info: Final = lookup_model_info_for_registration(model.removeprefix("responses/"), "openai")
+    return None if isinstance(model_info, ModelInfoLookupMiss) else model_info
+
+
+def _declared_values(values: Sequence[str] | None) -> frozenset[str | None] | None:
+    return None if values is None else frozenset(values)
+
+
+_REFUSABLE_REASONING_FIELDS: Final = frozenset({"mode", "context"})
+
+
+def _openai_reasoning_field_values(model: str) -> ReasoningFieldValues:
+    model_info: Final = _openai_model_info(model)
+    if model_info is None:
+        return ANY_REASONING_FIELD_VALUES
+    if not model_info.get("supports_reasoning"):
+        return MappingProxyType({})
+    return MappingProxyType(
+        {
+            "summary": REASONING_SUMMARY_VALUES,
+            "mode": _declared_values(model_info.get("reasoning_modes")),
+            "context": _declared_values(model_info.get("reasoning_contexts")),
+        }
+    )
+
+
+_CATALOG_REASONING_FIELDS: Final = (("mode", "reasoning_modes"), ("context", "reasoning_contexts"))
+
+
+def _catalog_values(values: object) -> frozenset[str | None]:
+    return frozenset(value for value in iter_items(values) if isinstance(value, str))
+
+
+def _declared_reasoning_values(row: Mapping[str, object] | None) -> Mapping[str, frozenset[str | None]]:
+    if row is None:
+        return {}
+    return {
+        field: _catalog_values(row[key]) for field, key in _CATALOG_REASONING_FIELDS if isinstance(row.get(key), list)
+    }
+
+
+def _with_declared_reasoning_values(
+    defaults: ReasoningFieldValues | None,
+    model: str,
+    custom_llm_provider: str,
+    deployment_model_info: Mapping[str, object] | None,
+) -> ReasoningFieldValues | None:
+    catalog: Final = cast(Mapping[str, object], litellm.model_cost)  # cast-ok: read-only view of the legacy registry
+    catalog_row: Final = as_str_mapping(catalog.get(f"{custom_llm_provider}/{model.removeprefix('responses/')}"))
+    overrides: Final = {
+        **_declared_reasoning_values(catalog_row),
+        **_declared_reasoning_values(deployment_model_info),
+    }
+    if not overrides:
+        return defaults
+    return MappingProxyType({**(ANY_REASONING_FIELD_VALUES if defaults is None else defaults), **overrides})
+
+
+def _is_version_number(part: str) -> bool:
+    return part.isdigit() and len(part) <= 2
+
+
+def _splits_a_version(parts: Sequence[str], end: int) -> bool:
+    return end < len(parts) and _is_version_number(parts[end - 1]) and _is_version_number(parts[end])
+
+
+def _hyphen_runs_longest_first(name: str) -> Iterator[str]:
+    parts: Final = name.rsplit("/", 1)[-1].split("-")
+    for length in range(len(parts), 0, -1):
+        yield from (
+            "-".join(parts[start : start + length])
+            for start in range(len(parts) - length + 1)
+            if not _splits_a_version(parts, start + length)
+        )
+
+
+def _openai_catalog_family(name: str) -> str | None:
+    runs: Final = _hyphen_runs_longest_first(name)
+    return next((run for run in runs if OpenAIGPTConfig.is_openai_catalog_model(run)), None)
+
+
+def _openai_catalog_name(name: str) -> str | None:
+    last_segment: Final = name.rsplit("/", 1)[-1]
+    return last_segment if OpenAIGPTConfig.is_openai_catalog_model(last_segment) else None
+
+
+def _openai_catalog_model(model: str, base_model: str | None, names_wrap_models: bool) -> str | None:
+    find: Final = _openai_catalog_family if names_wrap_models else _openai_catalog_name
+    families: Final = (find(name) for name in (base_model, model) if name)
+    return next((family for family in families if family is not None), None)
+
+
+def _default_reasoning_field_values(
+    model: str, base_model: str | None, responses_config: BaseResponsesAPIConfig | None
+) -> ReasoningFieldValues | None:
+    declared: Final = None if responses_config is None else responses_config.reasoning_field_values()
+    if declared is not None:
+        return declared
+    names_wrap_models: Final = responses_config is not None and responses_config.deployment_names_wrap_openai_models()
+    catalog_model: Final = _openai_catalog_model(model, base_model, names_wrap_models)
+    if catalog_model is not None:
+        return _openai_reasoning_field_values(catalog_model)
+    return None if responses_config is None else responses_config.unresolved_model_reasoning_field_values(model)
+
+
+def _reasoning_field_values(
+    model: str,
+    base_model: str | None,
+    custom_llm_provider: str,
+    responses_config: BaseResponsesAPIConfig | None,
+    deployment_model_info: Mapping[str, object] | None,
+) -> ReasoningFieldValues | None:
+    defaults: Final = _default_reasoning_field_values(model, base_model, responses_config)
+    return _with_declared_reasoning_values(defaults, model, custom_llm_provider, deployment_model_info)
+
+
+def _accepts_reasoning_field(key: str, value: object, values_by_field: ReasoningFieldValues) -> bool:
+    if key == "effort":
+        return True
+    if key not in values_by_field:
+        return False
+    allowed: Final = values_by_field[key]
+    return allowed is None or (isinstance(value, str | None) and value in allowed)
+
+
+def _accepted_reasoning(reasoning: Mapping[str, object], values_by_field: ReasoningFieldValues) -> Mapping[str, object]:
+    return {key: value for key, value in reasoning.items() if _accepts_reasoning_field(key, value, values_by_field)}
+
+
+def _additional_drop_paths(additional_drop_params: object) -> tuple[str, ...]:
+    if additional_drop_params.__class__ is not list:
+        return ()
+    return tuple(path for path in iter_items(additional_drop_params) if isinstance(path, str))
+
+
+@dataclass(frozen=True, slots=True)
+class RefusedReasoningFields:
+    refused: tuple[str, ...]
+
+
+def raise_refused_reasoning_fields(refusal: RefusedReasoningFields, model: str, custom_llm_provider: str) -> NoReturn:
+    raise litellm.UnsupportedParamsError(
+        message=(
+            f"{custom_llm_provider} does not support parameters: "
+            f"{[f'reasoning_effort.{key}' for key in refusal.refused]}, for model={model}. "
+            "To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+        ),
+        llm_provider=custom_llm_provider,
+        model=model,
+    )
+
+
+def bridge_reasoning(
+    *,
+    requested: Mapping[str, object],
+    effort_kept: bool,
+    summary_alias: object,
+    model: str,
+    base_model: str | None,
+    custom_llm_provider: str,
+    api_base: str | None,
+    deployment_model_info: Mapping[str, object] | None,
+    drop_params: bool,
+    additional_drop_params: object,
+) -> Mapping[str, object] | RefusedReasoningFields | None:
+    from litellm.utils import ProviderConfigManager
+
+    drop_paths: Final = _additional_drop_paths(additional_drop_params)
+    if "reasoning_effort" in drop_paths:
+        return None
+    kept: Final = requested if effort_kept else {key: value for key, value in requested.items() if key != "effort"}
+    with_summary: Final = reasoning_with_summary_default(kept, summary_alias, model, custom_llm_provider)
+    sent: Final = (
+        as_str_mapping(
+            _apply_nested_drop_params({"reasoning_effort": {**with_summary}}, list(drop_paths)).get("reasoning_effort")
+        )
+        or {}
+    )
+    responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(
+        custom_llm_provider, model, api_base
+    )
+    values_by_field: Final = _reasoning_field_values(
+        model, base_model, custom_llm_provider, responses_config, deployment_model_info
+    )
+    accepted: Final = sent if values_by_field is None else _accepted_reasoning(sent, values_by_field)
+    refused: Final = tuple(
+        key
+        for key, value in sent.items()
+        if key in _REFUSABLE_REASONING_FIELDS and key not in accepted and value is not None
+    )
+    if (
+        refused
+        and not drop_params
+        and responses_config is not None
+        and responses_config.ignores_unsupported_reasoning_fields()
+    ):
+        return RefusedReasoningFields(refused)
+    return (accepted if drop_params else sent) or None

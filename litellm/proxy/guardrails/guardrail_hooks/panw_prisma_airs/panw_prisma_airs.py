@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import HTTPException
 from pydantic import ConfigDict, TypeAdapter, ValidationError, field_validator
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -29,6 +30,7 @@ from litellm.integrations.custom_guardrail import (
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
+    effective_skip_tool_message_for_guardrail,
     role_out_of_guardrail_scope,
 )
 from litellm.llms.custom_httpx.http_handler import (
@@ -36,12 +38,16 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.llms.openai.responses.guardrail_translation.handler import scannable_instructions
+from litellm.llms.openai.responses.guardrail_translation.handler import (
+    scannable_instructions,
+    tool_output_texts,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_scan_id,
     add_guardrail_to_applied_guardrails_header,
 )
+from litellm.responses.litellm_completion_transformation.transformation import TOOL_CALL_OUTPUT_ITEM_TYPES
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
@@ -111,12 +117,16 @@ class _ResponsesInputItem(LiteLLMBaseModel):
     type: str | None = None
     role: str | None = None
     content: str | tuple[_ResponsesContentPart, ...] | None = None
+    output: object = None
+    call_id: object = None
 
-    def text_count(self, *, skip_system: bool) -> int:
-        if role_out_of_guardrail_scope(
-            (self.role or "").lower(), skip_system_message=skip_system, skip_tool_message=False
-        ):
+    def text_count(self, *, skip_system: bool, skip_tool: bool) -> int:
+        is_tool_output: Final = self.type in TOOL_CALL_OUTPUT_ITEM_TYPES
+        role: Final = "tool" if is_tool_output else (self.role or "").lower()
+        if role_out_of_guardrail_scope(role, skip_system_message=skip_system, skip_tool_message=skip_tool):
             return 0
+        if is_tool_output:
+            return len(tool_output_texts(self))
         if isinstance(self.content, str):
             return 1
         if self.content is None:
@@ -129,9 +139,38 @@ _RESPONSES_INPUT: Final[TypeAdapter[_ResponsesInput]] = TypeAdapter(_ResponsesIn
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
 
 
+class _AirsToolEvent(TypedDict):
+    metadata: ReadOnly[Mapping[str, object]]
+    input: NotRequired[ReadOnly[str]]
+
+
+def _mcp_tool_input(mcp_arguments: object) -> str | None:
+    if mcp_arguments is not None and mcp_arguments != "":
+        serialized_args: Final = (
+            json.dumps(mcp_arguments) if isinstance(mcp_arguments, (dict, list)) else str(mcp_arguments)
+        )
+        if serialized_args.strip():
+            return serialized_args
+    return None
+
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
+
+def _parse_bool_setting(name: str, value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, str):
+        from litellm.secret_managers.main import str_to_bool
+
+        parsed: Final = str_to_bool(value)
+        if parsed is not None:
+            return parsed
+    raise ValueError(f"PANW Prisma AIRS: {name} must be true or false, got {value!r}")
 
 
 class PanwPrismaAirsHandler(CustomGuardrail):
@@ -160,6 +199,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     #: back would hand the caller exactly the text the operator declined to deliver.
     #: ``prompt_masked_data`` is deliberately NOT withheld: it is the caller's own input,
     #: and it is one of the fields the ticket asks for.
+    #: The ``include_masked_response_on_block`` config opt-in lifts the withholding.
     _CLIENT_HIDDEN_SCAN_FIELDS: Final = frozenset({"response_masked_data"})
 
     def __init__(
@@ -172,6 +212,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         mask_on_block: bool = False,
         mask_request_content: bool = False,
         mask_response_content: bool = False,
+        include_masked_response_on_block: object = False,
         app_name: str | None = None,
         fallback_on_error: Literal["block", "allow"] = "block",
         timeout: float = 10.0,
@@ -226,6 +267,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         self.http_client = http_client
         self.fallback_on_error = fallback_on_error
+        # The dashboard persists some fields as strings and Pydantic extras pass
+        # them through unvalidated, so a bare "false" must not be treated as truthy.
+        self.include_masked_response_on_block: Final[bool] = _parse_bool_setting(
+            "include_masked_response_on_block", include_masked_response_on_block
+        )
         # Coerce defensively. The dashboard UI persists this field as a JSON
         # string, and Pydantic extras (the path that splats model_dump into
         # this handler) preserve whatever type the user supplied. A string
@@ -339,7 +385,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         is_response: bool = False,
         metadata: Mapping[str, object] | None = None,
         call_id: object = None,
-        tool_event: dict[str, Any] | None = None,
+        tool_event: _AirsToolEvent | None = None,
     ) -> dict[str, object]:
         """Call PANW Prisma AIRS API to scan content or a tool_event."""
 
@@ -561,7 +607,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         if request_data.get("server_name"):
             return request_data["server_name"]
         try:
-            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            from litellm.proxy.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
 
@@ -744,12 +790,15 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             },
         )
 
+        hidden_fields: Final = (
+            frozenset[str]() if self.include_masked_response_on_block else self._CLIENT_HIDDEN_SCAN_FIELDS
+        )
         return {
             "error": {
                 **{
                     key: value
                     for key, value in scan_result.items()
-                    if not key.startswith("_") and key not in self._CLIENT_HIDDEN_SCAN_FIELDS
+                    if not key.startswith("_") and key not in hidden_fields
                 },
                 "message": error_msg,
                 "type": "guardrail_violation",
@@ -894,7 +943,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             if not line.startswith("data: "):
                 continue
             try:
-                data = json.loads(line[6:])
+                data = _DECODED_ARGUMENTS.validate_python(json.loads(line[6:]))
             except (json.JSONDecodeError, ValueError):
                 continue
             if not isinstance(data, dict):
@@ -1544,9 +1593,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             else:
                 # Tool calls now go out as ordinary prompt/response text, so a
                 # response-side scan reports the model's arguments under
-                # response_masked_data, which _CLIENT_HIDDEN_SCAN_FIELDS already
-                # withholds. prompt_masked_data is the caller's own input again and
-                # must keep reaching them -- it is one of the fields LIT-5638 asks for.
+                # response_masked_data, which _CLIENT_HIDDEN_SCAN_FIELDS withholds
+                # unless include_masked_response_on_block is on. prompt_masked_data is
+                # the caller's own input again and must keep reaching them -- it is one
+                # of the fields LIT-5638 asks for.
                 error_detail = self._build_error_detail(scan_result, is_response=is_response)
                 raise HTTPException(status_code=400, detail=error_detail)
 
@@ -1676,13 +1726,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         request_data: Mapping[str, object],
         *,
         skip_system: bool,
+        skip_tool: bool,
     ) -> frozenset[int] | None:
         """Return the ``texts`` indices flattened from Responses ``reasoning`` input items.
 
         The Responses translation handler gives those model-authored items the default
         ``user`` role, so the latest-turn selection must not mistake one for a human turn.
         Empty for requests without a Responses ``input`` item list; None when the raw items
-        (after the leading ``instructions`` text, both minus whatever ``skip_system`` drops)
+        (after the leading ``instructions`` text, both minus whatever ``skip_system`` and ``skip_tool`` drop)
         do not account for every entry of ``texts``.
         """
         try:
@@ -1692,7 +1743,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         if not isinstance(raw_input, tuple):
             return frozenset()
         offset: Final = 0 if scannable_instructions(request_data, skip_system=skip_system) is None else 1
-        counts: Final = tuple(item.text_count(skip_system=skip_system) for item in raw_input)
+        counts: Final = tuple(item.text_count(skip_system=skip_system, skip_tool=skip_tool) for item in raw_input)
         if offset + sum(counts) != len(texts):
             return None
         starts: Final = itertools.accumulate(counts, initial=offset)
@@ -1722,7 +1773,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         if sources is None:
             return None
         reasoning: Final = self._reasoning_item_text_indices(
-            texts, request_data, skip_system=effective_skip_system_message_for_guardrail(self)
+            texts,
+            request_data,
+            skip_system=effective_skip_system_message_for_guardrail(self),
+            skip_tool=effective_skip_tool_message_for_guardrail(self),
         )
         if reasoning is None:
             return None
@@ -1742,6 +1796,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         return frozenset(text_idx for text_idx, source in enumerate(sources) if source == latest_human)
 
     def supports_scan_only_tool_results(self) -> bool:
+        return False
+
+    def supports_structured_messages(self) -> bool:
         return False
 
     @classmethod
@@ -1951,24 +2008,21 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         # "mcp_tool_name"/"mcp_arguments". Check canonical first, then fallback.
         mcp_tool_name: Final = request_data.get("mcp_tool_name") or self._mcp_name_fallback(request_data)
         if mcp_tool_name and input_type == "request":
-            mcp_tool_event: Final[dict[str, object]] = {
-                "metadata": {
-                    "ecosystem": "mcp",
-                    "method": "tools/call",
-                    "server_name": self._get_mcp_server_name(request_data, mcp_tool_name),
-                    "tool_invoked": mcp_tool_name,
-                },
+            mcp_tool_metadata: Final = {
+                "ecosystem": "mcp",
+                "method": "tools/call",
+                "server_name": self._get_mcp_server_name(request_data, mcp_tool_name),
+                "tool_invoked": mcp_tool_name,
             }
             mcp_arguments = request_data.get("mcp_arguments")
             if mcp_arguments is None:
                 mcp_arguments = request_data.get("arguments")
-            if mcp_arguments is not None and mcp_arguments != "":
-                if isinstance(mcp_arguments, (dict, list)):
-                    serialized_args = json.dumps(mcp_arguments)
-                else:
-                    serialized_args = str(mcp_arguments)
-                if serialized_args.strip():
-                    mcp_tool_event["input"] = serialized_args
+            mcp_tool_input: Final = _mcp_tool_input(mcp_arguments)
+            mcp_tool_event: Final[_AirsToolEvent] = (
+                {"metadata": mcp_tool_metadata}
+                if mcp_tool_input is None
+                else {"metadata": mcp_tool_metadata, "input": mcp_tool_input}
+            )
 
             mcp_scan_result: Final = await self._call_panw_api(
                 tool_event=mcp_tool_event,

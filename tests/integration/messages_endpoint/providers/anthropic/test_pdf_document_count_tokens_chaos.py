@@ -25,6 +25,8 @@ from integration._support.wire import Reply, Request, wire_server
 from integration.providers._cache_control_marks_support import anthropic_peer, owned_config
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 _MODEL: Final = "burst-claude"
 _PROVIDER_KEY: Final = "synthetic-provider-key"

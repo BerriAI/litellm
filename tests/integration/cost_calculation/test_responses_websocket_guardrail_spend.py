@@ -21,7 +21,7 @@ from integration._support.responses_ws_peer import PROVIDER_MODEL, USAGE, create
 from integration._support.tls import write_self_signed_cert
 from pydantic import JsonValue
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 _INPUT_COST_PER_TOKEN: Final = 0.002
 _OUTPUT_COST_PER_TOKEN: Final = 0.004

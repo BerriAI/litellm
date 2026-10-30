@@ -11,7 +11,7 @@ from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     independent_snapshot,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
@@ -50,6 +51,8 @@ try:
     from fastapi.exceptions import HTTPException
 except ImportError:
     HTTPException = None
+
+_LEGACY_HOOK_REPLACEMENT: Final = TypeAdapter(object)
 
 
 class UndeliverableStreamRewrite(Exception):
@@ -95,15 +98,11 @@ def _count_change(sent: tuple[object, ...] | None, returned: tuple[object, ...] 
     return (len(sent), len(returned))
 
 
-def _tool_call_mismatch_reason(
-    sent: tuple[tuple[object, object], ...] | None, returned: tuple[tuple[object, object], ...] | None
-) -> str | None:
-    if sent == returned:
-        return None
+def _tool_call_count_mismatch_reason(sent: Sequence[object] | None, returned: Sequence[object] | None) -> str | None:
     sent_count: Final = len(sent or ())
     returned_count: Final = len(returned or ())
     if sent_count == returned_count:
-        return "the legacy hook changed a tool call's name or arguments, which this path cannot write back"
+        return None
     return f"the legacy hook returned {returned_count} tool calls for a stream that carried {sent_count}"
 
 
@@ -202,11 +201,10 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
     non-streaming hooks, an exception it raises ends the stream through the executor's
     fail/error classification, and the response it hands back, or the one it changed in place
     and returned ``None`` for, is re-scanned by the same translation so its texts reach the
-    client through the translation's ended-stream write-back. A
-    replacement whose scanned texts do not line up with the originals, or whose tool calls
-    differ from them, is undeliverable, so the executor releases the original chunks. A stream
-    that carried no text to scan, such as a tool-only Anthropic message, stays deliverable as
-    long as the hook left the tool calls alone."""
+    client through the translation's ended-stream write-back. Tool calls the hook rewrote go to the translation's
+    tool-call write-back like a unified guardrail's. A replacement whose scanned texts or tool
+    calls do not line up with the originals by count is undeliverable, so the executor releases
+    the original chunks."""
 
     def __init__(
         self,
@@ -231,10 +229,12 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
         hooked: Final = self.endpoint_translation.post_call_hook_response(request_data.get("response"))
-        replacement: Final = await self.inner.async_post_call_success_hook(
-            data=request_data,
-            user_api_key_dict=self.user_api_key_dict,
-            response=hooked,
+        replacement: Final = _LEGACY_HOOK_REPLACEMENT.validate_python(
+            await self.inner.async_post_call_success_hook(
+                data=request_data,
+                user_api_key_dict=self.user_api_key_dict,
+                response=hooked,
+            )
         )
         rewrite: Final = hooked if replacement is None else replacement
         if rewrite is None:
@@ -253,14 +253,19 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
                 guardrail_name,
                 f"the legacy hook returned {returned_text_count} texts for a stream that carried {sent_text_count}",
             )
-        tool_call_mismatch: Final = _tool_call_mismatch_reason(
-            _tool_call_shapes(inputs.get("tool_calls")), _tool_call_shapes(rescanned.get("tool_calls"))
+        sent_tool_calls: Final = inputs.get("tool_calls")
+        rewritten_tool_calls: Final = rescanned.get("tool_calls")
+        tool_call_count_mismatch: Final = _tool_call_count_mismatch_reason(sent_tool_calls, rewritten_tool_calls)
+        if tool_call_count_mismatch is not None:
+            raise UndeliverableStreamRewrite(guardrail_name, tool_call_count_mismatch)
+        texts_update: Final[GenericGuardrailAPIInputs] = {"texts": rewritten} if rewritten else {}
+        tool_calls_update: Final[GenericGuardrailAPIInputs] = (
+            {"tool_calls": rewritten_tool_calls}
+            if rewritten_tool_calls is not None
+            and _rewrote(_tool_call_shapes(sent_tool_calls), _tool_call_shapes(rewritten_tool_calls))
+            else {}
         )
-        if tool_call_mismatch is not None:
-            raise UndeliverableStreamRewrite(guardrail_name, tool_call_mismatch)
-        if not rewritten:
-            return inputs
-        rewritten_inputs: Final[GenericGuardrailAPIInputs] = {**inputs, "texts": rewritten}
+        rewritten_inputs: Final[GenericGuardrailAPIInputs] = {**inputs, **texts_update, **tool_calls_update}
         return rewritten_inputs
 
     async def _rescan(
@@ -410,7 +415,7 @@ class PipelineExecutor:
 
             duration = time.perf_counter() - start_time
 
-            action = _pipeline_action_for_outcome(step, outcome)
+            action = _pipeline_action_for_step(step, outcome, original_exception)
 
             step_result = PipelineStepResult(
                 guardrail_name=step.guardrail,
@@ -746,6 +751,17 @@ def _carry_working_guardrail_information(
     if recorded is existing:
         return
     _append_guardrail_information(request_data=request_data, entries=[e for e in recorded if e not in existing])
+
+
+def _pipeline_action_for_step(step: PipelineStep, outcome: str, original_exception: Exception | None) -> str:
+    """
+    The action a step takes: block when its guardrail returned a rewrite the endpoint
+    cannot apply, whatever on_fail and on_error say, else the action configured for
+    the outcome.
+    """
+    if isinstance(original_exception, UnappliableRequestRewrite):
+        return "block"
+    return _pipeline_action_for_outcome(step, outcome)
 
 
 def _pipeline_action_for_outcome(step: PipelineStep, outcome: str) -> str:

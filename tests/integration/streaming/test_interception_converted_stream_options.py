@@ -36,7 +36,7 @@ from openai.types.responses import ResponseCompletedEvent, ResponseTextDeltaEven
 from pydantic import JsonValue
 
 _CELL_SECONDS: Final = 2 * graceful_stop_seconds() + 120
-pytestmark: Final = pytest.mark.timeout(_CELL_SECONDS)
+pytestmark: Final = [pytest.mark.timeout(_CELL_SECONDS), pytest.mark.shares_worker_state]
 
 _PROXY_CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
 _NO_CACHE: Final[Mapping[str, JsonValue]] = MappingProxyType({"cache": {"no-cache": True}})
