@@ -445,6 +445,10 @@ mod tests {
 
     #[rstest]
     #[case::clean(format!(r#"{{{RULES},"m":{{"litellm_provider":"test"}}}}"#), vec![])]
+    #[case::thinking_on_by_default(
+        format!(r#"{{{RULES},"m":{{"litellm_provider":"test","thinking_on_by_default":true}}}}"#),
+        vec![]
+    )]
     #[case::not_json("{".to_owned(), vec![("", "json")])]
     #[case::row_error(format!(r#"{{{RULES},"m":{{}}}}"#), vec![("/m/litellm_provider", "missing_provider")])]
     #[case::unread_key(
