@@ -8,6 +8,7 @@ import copy
 import json
 import logging
 import pickle
+from itertools import chain
 from typing import Literal
 from unittest.mock import MagicMock
 
@@ -1902,6 +1903,37 @@ def _streamed_block_deltas(chunks, index, field):
     )
 
 
+def _streamed_web_search_results(chunks):
+    events = (
+        json.loads(line[len("data: ") :])
+        for line in b"".join(chunks).decode().splitlines()
+        if line.startswith("data: ")
+    )
+    result_blocks = (
+        event["content_block"]
+        for event in events
+        if event["type"] == "content_block_start" and event["content_block"]["type"] == "web_search_tool_result"
+    )
+    return list(chain.from_iterable(block["content"] for block in result_blocks))
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_delivers_a_legacy_hook_mask_of_web_search_result_titles(monkeypatch, caplog):
+    chunks = _anthropic_web_search_stream()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await _run_legacy_streaming_step(
+            monkeypatch, _AnthropicMaskingLegacyGuardrail(), chunks, translation=AnthropicMessagesHandler()
+        )
+
+    assert [step.outcome for step in result.step_results] == ["pass"]
+    assert [(item["title"], item["url"]) for item in _streamed_web_search_results(chunks)] == [
+        ("[MASKED]", "https://example.test/a")
+    ]
+    assert _streamed_block_deltas(chunks, 2, "text") == "[MASKED] world"
+    assert not any("discarded" in record.getMessage() for record in caplog.records)
+
+
 class _AnthropicMaskingLegacyGuardrail(_LegacyHookGuardrail):
     async def async_post_call_success_hook(self, data, user_api_key_dict, response):
         for block in response["content"]:
@@ -1909,6 +1941,8 @@ class _AnthropicMaskingLegacyGuardrail(_LegacyHookGuardrail):
                 block["text"] = block["text"].replace("hello", "[MASKED]")
             if block["type"] == "tool_use":
                 block["input"] = {key: "[MASKED]" for key in block["input"]}
+            if block["type"] == "web_search_tool_result":
+                block["content"] = [{**result, "title": "[MASKED]"} for result in block["content"]]
 
 
 @pytest.mark.parametrize(
@@ -1935,9 +1969,7 @@ async def test_streaming_step_delivers_a_legacy_hook_mask_of_a_streamed_tool_inp
 
 
 @pytest.mark.asyncio
-async def test_streaming_step_delivers_a_legacy_text_rewrite_past_web_search_results_its_hook_cannot_see(
-    monkeypatch, caplog
-):
+async def test_streaming_step_delivers_a_legacy_text_rewrite_on_a_web_search_stream(monkeypatch, caplog):
     guardrail = _AnthropicTextRewritingLegacyGuardrail()
     chunks = _anthropic_web_search_stream()
 

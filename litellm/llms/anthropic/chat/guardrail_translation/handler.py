@@ -204,6 +204,19 @@ class _WebSearchString:
     value: str
 
 
+def _streamed_web_search_result_blocks(response: ModelResponse) -> tuple[Mapping[str, object], ...]:
+    choice: Final = response.choices[0] if response.choices else None
+    fields: Final = as_str_mapping(choice.message.provider_specific_fields) if isinstance(choice, Choices) else None
+    blocks: Final = (
+        (as_str_mapping(item) for item in iter_items(fields.get("web_search_results")))
+        if fields is not None and isinstance(fields.get("web_search_results"), list)
+        else ()
+    )
+    return tuple(
+        deepcopy(block) for block in blocks if block is not None and block.get("type") == "web_search_tool_result"
+    )
+
+
 def _web_search_results(block: Mapping[str, object]) -> Iterable[object]:
     return iter_items(block.get("content")) if isinstance(block.get("content"), list) else ()
 
@@ -488,7 +501,12 @@ class AnthropicMessagesHandler(BaseTranslation):
     def post_call_hook_response(self, response: object) -> object:
         if not isinstance(response, ModelResponse):
             return response
-        return self.adapter.translate_openai_response_to_anthropic(response)
+        translated: Final = self.adapter.translate_openai_response_to_anthropic(response)
+        result_blocks: Final = _streamed_web_search_result_blocks(response)
+        if not result_blocks:
+            return translated
+        content: Final = translated.get("content") or ()
+        return {**translated, "content": [*result_blocks, *content]}
 
     @staticmethod
     def _build_streaming_usage_response(

@@ -84,16 +84,6 @@ def _scanned_texts(texts: Sequence[str] | None) -> tuple[str, ...]:
     return tuple(texts or ())
 
 
-def _texts_outside_hook_view(sent: tuple[str, ...], hook_view: GenericGuardrailAPIInputs | None) -> tuple[str, ...]:
-    if hook_view is None:
-        return ()
-    seen: Final = _scanned_texts(hook_view.get("texts"))
-    unseen_count: Final = len(sent) - len(seen)
-    if unseen_count <= 0 or sent[unseen_count:] != seen:
-        return ()
-    return sent[:unseen_count]
-
-
 def _tool_call_shapes(tool_calls: Sequence[object] | None) -> tuple[tuple[object, object], ...] | None:
     return None if tool_calls is None else tuple(_tool_call_shape(tool_call) for tool_call in tool_calls)
 
@@ -211,9 +201,7 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
     non-streaming hooks, an exception it raises ends the stream through the executor's
     fail/error classification, and the response it hands back, or the one it changed in place
     and returned ``None`` for, is re-scanned by the same translation so its texts reach the
-    client through the translation's ended-stream write-back. Leading texts the translation scans
-    but the hook's response shape does not carry, such as an Anthropic stream's web search
-    results, pass through unchanged. Tool calls the hook rewrote in place go to the translation's
+    client through the translation's ended-stream write-back. Tool calls the hook rewrote go to the translation's
     tool-call write-back like a unified guardrail's. A replacement whose scanned texts or tool
     calls do not line up with the originals by count is undeliverable, so the executor releases
     the original chunks."""
@@ -241,9 +229,6 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
         hooked: Final = self.endpoint_translation.post_call_hook_response(request_data.get("response"))
-        unseen_texts: Final = _texts_outside_hook_view(
-            _scanned_texts(inputs.get("texts")), await self._rescan(hooked, logging_obj)
-        )
         replacement: Final = _LEGACY_HOOK_REPLACEMENT.validate_python(
             await self.inner.async_post_call_success_hook(
                 data=request_data,
@@ -262,7 +247,7 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
             )
         rewritten: Final = rescanned.get("texts")
         returned_text_count: Final = len(_scanned_texts(rewritten))
-        sent_text_count: Final = len(_scanned_texts(inputs.get("texts"))) - len(unseen_texts)
+        sent_text_count: Final = len(_scanned_texts(inputs.get("texts")))
         if returned_text_count != sent_text_count:
             raise UndeliverableStreamRewrite(
                 guardrail_name,
@@ -273,7 +258,7 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
         tool_call_count_mismatch: Final = _tool_call_count_mismatch_reason(sent_tool_calls, rewritten_tool_calls)
         if tool_call_count_mismatch is not None:
             raise UndeliverableStreamRewrite(guardrail_name, tool_call_count_mismatch)
-        texts_update: Final[GenericGuardrailAPIInputs] = {"texts": [*unseen_texts, *rewritten]} if rewritten else {}
+        texts_update: Final[GenericGuardrailAPIInputs] = {"texts": rewritten} if rewritten else {}
         tool_calls_update: Final[GenericGuardrailAPIInputs] = (
             {"tool_calls": rewritten_tool_calls}
             if rewritten_tool_calls is not None
