@@ -11356,3 +11356,39 @@ async def test_bedrock_strict_tools_limit_rejection_is_not_sent_again_when_no_to
 
     assert error is not None and "Too many strict tools" in str(error)
     assert len(sent) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("privacy", [False, True])
+async def test_async_streaming_keeps_chunks_without_rendering_private_content(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], privacy: bool
+) -> None:
+    from collections.abc import AsyncIterator
+
+    class Chunk:
+        content: Final = "PRIVATE_ASYNC_STREAM_42896"
+
+        def __str__(self) -> str:
+            if privacy:
+                raise AssertionError("private chunks must not be rendered for diagnostics")
+            return self.content
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", privacy)
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    chunk: Final = Chunk()
+
+    async def upstream() -> AsyncIterator[Chunk]:
+        yield chunk
+
+    stream: Final = litellm_main._async_streaming(upstream(), "example-model", "openai", {})
+    observed: Final = tuple([item async for item in stream])
+
+    assert len(observed) == 1
+    assert observed[0] is chunk
+    assert chunk.content == "PRIVATE_ASYNC_STREAM_42896"
+    output: Final = capsys.readouterr().out
+    assert ("PRIVATE_ASYNC_STREAM_42896" in output) is not privacy
+    if privacy:
+        assert output.strip() == "redacted-by-litellm"
+    else:
+        assert "line in async streaming: PRIVATE_ASYNC_STREAM_42896" in output

@@ -635,7 +635,9 @@ class SagemakerLLM(BaseAWSLLM):
             additional_args={"complete_input_dict": data},
         )
 
-        print_verbose(f"raw model_response: {response}")
+        print_verbose(
+            "redacted-by-litellm" if litellm.redact_messages_in_debug_logs else f"raw model_response: {response}"
+        )
 
         # Transform response based on model type
         from httpx import Response as HttpxResponse

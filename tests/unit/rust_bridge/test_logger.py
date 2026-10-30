@@ -132,3 +132,14 @@ def test_missing_native_diagnostic_processor_falls_back_before_record_mutation(
 def test_unsupported_unicode_uses_safe_python_redaction(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_RUST", "1")
     assert redact_secrets("broken\ud800 api_key=secret123") == "broken\ud800 REDACTED"
+
+
+@pytest.mark.parametrize("level", (logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR))
+def test_native_diagnostics_do_not_format_or_emit_content_when_privacy_enabled(
+    level: int, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", True)
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        assert not logger.enabled(level)
+        logger.emit(level, "private response", "native.rs", 1, "litellm_http", {"body": "private prompt"}, ("", ""))
+    assert caplog.records == []

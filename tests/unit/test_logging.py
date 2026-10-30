@@ -1841,6 +1841,36 @@ def test_print_verbose_formats_args_only_when_set_verbose_is_on(monkeypatch, cap
     assert capsys.readouterr().out == "key k1 value cached-vector\n"
 
 
+@pytest.mark.parametrize("privacy", [False, True])
+@pytest.mark.parametrize("json_logs", [False, True])
+@pytest.mark.parametrize("warning", [False, True])
+@pytest.mark.parametrize("suppressed", [False, True])
+def test_startup_message_respects_diagnostic_privacy(
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+    privacy: bool,
+    json_logs: bool,
+    warning: bool,
+    suppressed: bool,
+) -> None:
+    from litellm._logging import print_startup_warning
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", privacy)
+    monkeypatch.setattr(litellm, "json_logs", json_logs)
+    monkeypatch.setattr(litellm, "suppress_startup_output", suppressed)
+    emit: Final = print_startup_warning if warning else print_startup_message
+    emit("PRIVATE_CONFIGURED_MODEL_42896")
+    out, err = capfd.readouterr()
+    assert err == ""
+    if suppressed and not warning:
+        assert out == ""
+        return
+    message: Final = json.loads(out)["message"] if json_logs else out.strip()
+    assert message == ("redacted-by-litellm" if privacy else "PRIVATE_CONFIGURED_MODEL_42896")
+    if json_logs:
+        assert json.loads(out)["level"] == ("WARNING" if warning else "INFO")
+
+
 class _CapturedStream(StringIO):
     def __init__(self, tty: bool) -> None:
         super().__init__()
@@ -2118,3 +2148,168 @@ def test_print_startup_message_blank_spacer_emits_no_json_record(
     print_startup_message("\n\033[0m\n")
 
     assert capfd.readouterr() == ("", "")
+
+
+class _UnrenderableDiagnosticPayload:
+    def __str__(self) -> str:
+        raise AssertionError("diagnostic payload was rendered")
+
+    def __repr__(self) -> str:
+        raise AssertionError("diagnostic payload was rendered")
+
+
+@pytest.mark.parametrize("level", [logging.DEBUG, logging.WARNING, logging.ERROR])
+@pytest.mark.parametrize("credential_redaction", [False, True])
+def test_message_privacy_removes_payload_before_rendering(
+    monkeypatch: pytest.MonkeyPatch, level: int, credential_redaction: bool
+) -> None:
+    import litellm._logging as logging_module
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", True)
+    monkeypatch.setattr(logging_module, "_ENABLE_SECRET_REDACTION", credential_redaction)
+    payload: Final = _UnrenderableDiagnosticPayload()
+    record: Final = logging.LogRecord("LiteLLM", level, __file__, 1, "payload=%s", (payload,), None)
+    record.exc_info = (ValueError, ValueError("PRIVATE_EXCEPTION"), None)
+    record.exc_text = "PRIVATE_CACHED_TRACEBACK"
+    record.stack_info = "PRIVATE_STACK"
+    record.payload = payload
+    record.color_message = "PRIVATE_COLOR"
+    record.message = "PRIVATE_CACHED_MESSAGE"
+    assert DiagnosticProcessingFilter().filter(record)
+    rendered: Final = JsonFormatter().format(record)
+    assert json.loads(rendered)["message"] == "redacted-by-litellm"
+    assert "PRIVATE" not in rendered
+    assert record.exc_info is None
+    assert record.args == ()
+    assert not hasattr(record, "payload")
+
+
+@pytest.mark.parametrize("spoof", [True, "safe", "redacted-by-litellm"])
+def test_message_privacy_cannot_be_disabled_by_log_extras(monkeypatch: pytest.MonkeyPatch, spoof: object) -> None:
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", True)
+    record: Final = logging.LogRecord("LiteLLM", logging.DEBUG, __file__, 1, "PRIVATE_PROMPT", (), None)
+    record.litellm_safe_diagnostic = spoof
+    assert DiagnosticProcessingFilter().filter(record)
+    assert record.getMessage() == "redacted-by-litellm"
+
+
+def test_message_privacy_disabled_preserves_record(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm._logging import MessageContentFilter
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", False)
+    payload: Final = {"messages": [{"content": "PRIVATE_PROMPT"}]}
+    record: Final = logging.LogRecord("LiteLLM", logging.DEBUG, __file__, 1, "payload=%s", (payload,), None)
+    before: Final = dict(record.__dict__)
+    assert MessageContentFilter().filter(record)
+    assert record.__dict__ == before
+    assert record.args is before["args"]
+    assert "PRIVATE_PROMPT" in record.getMessage()
+
+
+def test_message_privacy_keeps_safe_operational_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm._logging import MessageContentFilter, log_safe_diagnostic
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", True)
+    stream: Final = StringIO()
+    handler: Final = logging.StreamHandler(stream)
+    handler.setFormatter(JsonFormatter())
+    handler.addFilter(MessageContentFilter())
+    logger: Final = logging.Logger("privacy-test", level=logging.DEBUG)
+    logger.addFilter(DiagnosticProcessingFilter())
+    logger.addHandler(handler)
+    log_safe_diagnostic(logger, "retry", status_code=429, elapsed_seconds=0.25, attempt=2)
+    result: Final = json.loads(stream.getvalue())
+    assert result["message"] == "event=retry status=429 elapsed_seconds=0.25 attempt=2 content=redacted-by-litellm"
+    assert "litellm_safe_diagnostic" not in result
+
+
+def test_message_privacy_suppresses_caller_correlation_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", True)
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    trace_token: Final = set_trace_id("PRIVATE_TRACE")
+    session_token: Final = set_session_id("PRIVATE_SESSION")
+    try:
+        record: Final = logging.LogRecord("LiteLLM", logging.DEBUG, __file__, 1, "PRIVATE_PROMPT", (), None)
+        assert DiagnosticProcessingFilter().filter(record)
+        assert CorrelationContextFilter().filter(record)
+        assert "PRIVATE" not in JsonFormatter().format(record)
+    finally:
+        trace_id_var.reset(trace_token)
+        session_id_var.reset(session_token)
+
+
+def test_json_formatter_alone_obeys_message_privacy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", True)
+    record: Final = logging.LogRecord(
+        "LiteLLM.child", logging.ERROR, __file__, 1, _UnrenderableDiagnosticPayload(), (), None
+    )
+    assert json.loads(JsonFormatter().format(record))["message"] == "redacted-by-litellm"
+
+
+def test_message_privacy_precedes_custom_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", True)
+    stream: Final = StringIO()
+    handler: Final = logging.StreamHandler(stream)
+    verbose_logger.addHandler(handler)
+    try:
+        verbose_logger.warning("PRIVATE_PROMPT %s", _UnrenderableDiagnosticPayload())
+        assert stream.getvalue().strip() == "redacted-by-litellm"
+    finally:
+        verbose_logger.removeHandler(handler)
+
+
+def test_message_privacy_does_not_change_application_records(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", True)
+    record: Final = logging.LogRecord("application", logging.INFO, __file__, 1, "application says %s", ("hello",), None)
+    assert SecretRedactionFilter().filter(record)
+    assert json.loads(JsonFormatter().format(record))["message"] == "application says hello"
+
+
+def _raise_private_diagnostic_exception() -> None:
+    raise ValueError("PRIVATE_ASYNC_EXCEPTION")
+
+
+@pytest.mark.parametrize("module", ["litellm.background", "application.background"])
+def test_asyncio_message_privacy_is_scoped_to_litellm_tracebacks(monkeypatch: pytest.MonkeyPatch, module: str) -> None:
+    from types import FunctionType
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", True)
+    fail: Final = FunctionType(_raise_private_diagnostic_exception.__code__, {"__name__": module})
+    try:
+        fail()
+    except ValueError:
+        record: Final = logging.LogRecord("asyncio", logging.ERROR, __file__, 1, "PRIVATE_TASK", (), sys.exc_info())
+        assert SecretRedactionFilter().filter(record)
+        rendered: Final = JsonFormatter().format(record)
+        if module.startswith("litellm."):
+            assert "PRIVATE" not in rendered
+        else:
+            assert "PRIVATE_TASK" in rendered
+            assert "PRIVATE_ASYNC_EXCEPTION" in rendered
+
+
+def test_private_diagnostics_support_custom_formatter_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm._logging import MessageContentFilter
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", True)
+    record: Final = logging.LogRecord("LiteLLM", logging.ERROR, __file__, 1, "PRIVATE_PROMPT", (), None)
+    record.customer_metadata = "PRIVATE_METADATA"
+    assert MessageContentFilter().filter(record)
+    formatter: Final = logging.Formatter("%(levelname)s %(customer_metadata)s %(message)s", defaults={"customer_metadata": "-"})
+    assert formatter.format(record) == "ERROR - redacted-by-litellm"
+
+
+def test_private_access_logs_keep_formatter_contract_without_request_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    from uvicorn.logging import AccessFormatter
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", True)
+    record: Final = logging.LogRecord(
+        "uvicorn.access", logging.INFO, __file__, 1, "PRIVATE_TEMPLATE",
+        ("PRIVATE_CLIENT", "GET", "/v1/chat/completions?prompt=PRIVATE_PROMPT", "1.1", 200), None,
+    )
+    record.metadata = "PRIVATE_METADATA"
+    assert AccessLogRedactionFilter().filter(record)
+    formatted: Final = AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False).format(record)
+    assert "PRIVATE" not in formatted
+    assert "200" in formatted
+    assert "PRIVATE" not in JsonFormatter().format(record)

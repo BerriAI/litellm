@@ -4112,11 +4112,17 @@ def test_dispatch_petals_empty_stream_after_finish_raises(
         _run_dispatch(initialized_custom_stream_wrapper, chunk=None)
 
 
+@pytest.mark.parametrize("redact", (False, True))
 def test_dispatch_cached_response_extracts_delta(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
+    redact: bool,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """cached_response replays a stored ModelResponseStream; the dispatch lifts
     its delta content, finish_reason and id back onto the live response."""
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", redact)
+    monkeypatch.setattr(litellm, "set_verbose", True)
     initialized_custom_stream_wrapper.custom_llm_provider = "cached_response"
     chunk = ModelResponseStream(
         id="chatcmpl-cache-1",
@@ -4138,6 +4144,7 @@ def test_dispatch_cached_response_extracts_delta(
     assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
     assert model_response.id == "chatcmpl-cache-1"
     assert initialized_custom_stream_wrapper.response_id == "chatcmpl-cache-1"
+    assert ("cached text" in capsys.readouterr().out) is not redact
 
 
 def test_dispatch_cached_response_without_choices_is_an_empty_chunk(
@@ -4309,11 +4316,17 @@ def test_dispatch_custom_provider_finish_only_returns_none_early(
     assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
 
 
+@pytest.mark.parametrize("redact", (False, True))
 def test_dispatch_text_completion_codestral_parses_chunk(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
+    redact: bool,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """text-completion-codestral streams raw SSE JSON strings that the dispatch
     routes through CodestralTextCompletionConfig to extract content/finish."""
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", redact)
+    monkeypatch.setattr(litellm, "set_verbose", True)
     initialized_custom_stream_wrapper.custom_llm_provider = "text-completion-codestral"
     chunk = json.dumps(
         {"choices": [{"delta": {"content": "codestral text"}, "finish_reason": "stop"}]}
@@ -4324,6 +4337,7 @@ def test_dispatch_text_completion_codestral_parses_chunk(
     assert isinstance(result, _ProviderChunkParsed)
     assert completion_obj["content"] == "codestral text"
     assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
+    assert ("codestral text" in capsys.readouterr().out) is not redact
 
 
 def test_dispatch_text_completion_codestral_requires_string(
@@ -4337,10 +4351,16 @@ def test_dispatch_text_completion_codestral_requires_string(
         _run_dispatch(initialized_custom_stream_wrapper, {"not": "a string"})
 
 
+@pytest.mark.parametrize("redact", (False, True))
 def test_dispatch_triton_stream(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
+    redact: bool,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """triton stream chunks arrive as dicts keyed by text_output/stop_reason."""
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", redact)
+    monkeypatch.setattr(litellm, "set_verbose", True)
     initialized_custom_stream_wrapper.custom_llm_provider = "triton"
     chunk = {"text_output": "triton text", "is_finished": True, "stop_reason": "stop"}
 
@@ -4349,13 +4369,20 @@ def test_dispatch_triton_stream(
     assert isinstance(result, _ProviderChunkParsed)
     assert completion_obj["content"] == "triton text"
     assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
+    assert ("triton text" in capsys.readouterr().out) is not redact
 
 
+@pytest.mark.parametrize("redact", (False, True))
 def test_dispatch_text_completion_openai_with_usage(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
+    redact: bool,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """text-completion-openai chunks expose choices[].text and an optional usage
     block that the dispatch lifts onto the model response."""
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", redact)
+    monkeypatch.setattr(litellm, "set_verbose", True)
     initialized_custom_stream_wrapper.custom_llm_provider = "text-completion-openai"
 
     class _Choice:
@@ -4380,6 +4407,7 @@ def test_dispatch_text_completion_openai_with_usage(
     assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
     assert model_response.usage.prompt_tokens == 5
     assert model_response.usage.total_tokens == 8
+    assert ("oai text" in capsys.readouterr().out) is not redact
 
 
 @pytest.mark.parametrize("custom_llm_provider", ["text-completion-openai", "azure_text"])
@@ -8794,3 +8822,48 @@ def test_chunk_creator_usage_only_chunk_with_dict_usage_keeps_details(
     assert usage.prompt_tokens_details.cached_tokens == 80
     assert usage.completion_tokens_details is not None
     assert usage.completion_tokens_details.reasoning_tokens == 5
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_legacy_stream_verbose_output_obeys_diagnostic_privacy(monkeypatch, capsys, enabled):
+    from litellm.litellm_core_utils.streaming_handler import print_verbose
+
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", enabled)
+    print_verbose("chunk: %s", "PRIVATE_STREAM_CONTENT")
+    assert capsys.readouterr().out.strip() == ("redacted-by-litellm" if enabled else "chunk: PRIVATE_STREAM_CONTENT")
+
+
+@pytest.mark.parametrize("redact", (False, True))
+def test_predibase_stream_privacy_preserves_content_and_finish(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+    redact: bool,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", redact)
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    initialized_custom_stream_wrapper.custom_llm_provider = "predibase"
+    result, _, completion_obj = _run_dispatch(
+        initialized_custom_stream_wrapper,
+        b'data: {"token": {"text": "PRIVATE_PREDIBASE_REPLY"}, "details": {"finish_reason": "stop"}}',
+    )
+    assert isinstance(result, _ProviderChunkParsed)
+    assert completion_obj["content"] == "PRIVATE_PREDIBASE_REPLY"
+    assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
+    assert ("PRIVATE_PREDIBASE_REPLY" in capsys.readouterr().out) is not redact
+
+
+@pytest.mark.parametrize("redact", (False, True))
+def test_triton_invalid_stream_chunk_keeps_error_out_of_private_diagnostics(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+    redact: bool,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", redact)
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    initialized_custom_stream_wrapper.custom_llm_provider = "triton"
+    with pytest.raises(ValueError, match=r"Unable to parse response.*PRIVATE_TRITON_CHUNK"):
+        _run_dispatch(initialized_custom_stream_wrapper, ["PRIVATE_TRITON_CHUNK"])
+    assert ("PRIVATE_TRITON_CHUNK" in capsys.readouterr().out) is not redact

@@ -968,11 +968,16 @@ def _text_completion_response_from_cached_dict(cached_response_dict: Mapping[str
 
 async def _async_streaming(response, model, custom_llm_provider, args):
     try:
-        print_verbose(f"received response in _async_streaming: {response}")
+        print_verbose(
+            "redacted-by-litellm"
+            if litellm.redact_messages_in_debug_logs
+            else f"received response in _async_streaming: {response}"
+        )
         if asyncio.iscoroutine(response):
             response = await response
         async for line in response:
-            print_verbose(f"line in async streaming: {line}")
+            if not litellm.redact_messages_in_debug_logs:
+                print_verbose(f"line in async streaming: {line}")
             yield line
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
@@ -9436,7 +9441,7 @@ def print_verbose(print_statement: object):
     try:
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
-            print(print_statement)  # noqa: T201
+            print("redacted-by-litellm" if litellm.redact_messages_in_debug_logs else print_statement)  # noqa: T201
     except Exception:
         pass
 

@@ -1,6 +1,7 @@
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.agentic_loop_settings import validated_max_agentic_loops
@@ -150,7 +151,8 @@ async def create_mcp_list_tools_events(
         verbose_logger.error("Error creating MCP list tools events: %s", e)
         import traceback
 
-        traceback.print_exc()
+        if not litellm.redact_messages_in_debug_logs:
+            traceback.print_exc()
 
         # Emit failed event on error
         failed_event: Final = MCPListToolsFailedEvent(
@@ -816,7 +818,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             verbose_logger.error("Error creating initial response iterator: %s", e)
             import traceback
 
-            traceback.print_exc()
+            if not litellm.redact_messages_in_debug_logs:
+                traceback.print_exc()
             self.base_iterator = None
             self._initial_creation_error = e
             self._stream_error = e
@@ -976,7 +979,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             verbose_logger.error("Error in tool execution: %s", e)
             import traceback
 
-            traceback.print_exc()
+            if not litellm.redact_messages_in_debug_logs:
+                traceback.print_exc()
             self.tool_results = []
             self._tool_results_for_response = self.collected_response
 
@@ -1052,7 +1056,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             verbose_logger.error("Error creating follow-up iterator: %s", e)
             import traceback
 
-            traceback.print_exc()
+            if not litellm.redact_messages_in_debug_logs:
+                traceback.print_exc()
             self.base_iterator = None
             self._stream_error = e
 

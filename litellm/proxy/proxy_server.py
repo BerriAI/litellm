@@ -1172,13 +1172,23 @@ def _redact_worker_config_for_logging(worker_config: str | dict[str, JsonValue] 
     (`LITELLM_DISABLE_REDACT_SECRETS=true`, an older log sink, a downstream
     handler that captures records pre-filter). Redact at the source.
     """
+    if litellm.redact_messages_in_debug_logs:
+        return "redacted-by-litellm"
     if worker_config is None:
         return None
-    if isinstance(worker_config, dict):
-        return _redact_secret_values_in_obj(worker_config)
-    parsed: Final[JsonValue] = safe_json_loads(worker_config, default=None)
+    parsed: Final[JsonValue] = (
+        worker_config if isinstance(worker_config, dict) else safe_json_loads(worker_config, default=None)
+    )
     if isinstance(parsed, dict):
-        return safe_dumps(_redact_secret_values_in_obj(parsed))
+        settings: Final = parsed.get("litellm_settings")
+        if isinstance(settings, dict) and settings.get("redact_messages_in_debug_logs") is not None:
+            try:
+                if TypeAdapter(bool).validate_python(settings["redact_messages_in_debug_logs"]):
+                    return "redacted-by-litellm"
+            except ValidationError:
+                return "redacted-by-litellm"
+        redacted: Final = _redact_secret_values_in_obj(parsed)
+        return redacted if isinstance(worker_config, dict) else safe_dumps(redacted)
     return worker_config
 
 
@@ -4999,27 +5009,45 @@ def sentry_is_configured(general_settings: Mapping[str, object]) -> bool:
     )
 
 
-def _scrub_guardrail_inner(inner: dict[str, JsonValue]) -> None:
+_DbConfigWarning: TypeAlias = tuple[str, tuple[object, ...]]
+
+
+def _warn_db_config(
+    message: str, *args: object, warning_sink: Callable[[_DbConfigWarning], None] | None = None
+) -> None:
+    if warning_sink is None:
+        verbose_proxy_logger.warning(message, *args)
+    else:
+        warning_sink((message, args))
+
+
+def _scrub_guardrail_inner(
+    inner: dict[str, JsonValue], warning_sink: Callable[[_DbConfigWarning], None] | None = None
+) -> None:
     """Strip remote-URL entries from a guardrail's ``callbacks`` list
     and ``guardrail`` (v2 module-path) field. Mutates in place."""
     cbs: Final = inner.get("callbacks")
     if isinstance(cbs, list):
         cleaned: Final = [c for c in cbs if not _is_remote_module_url(c)]
         if len(cleaned) != len(cbs):
-            verbose_proxy_logger.warning(
+            _warn_db_config(
                 "Refused %d remote-URL entries from DB-overlay litellm_settings.guardrails[...].callbacks",
                 len(cbs) - len(cleaned),
+                warning_sink=warning_sink,
             )
             inner["callbacks"] = cleaned
     if _is_remote_module_url(inner.get("guardrail")):
-        verbose_proxy_logger.warning(
+        _warn_db_config(
             "Refused remote-URL guardrail module from DB-overlay litellm_settings.guardrails[...].guardrail: %r",
             inner.get("guardrail"),
+            warning_sink=warning_sink,
         )
         inner["guardrail"] = None
 
 
-def _scrub_db_overlay_remote_module_loads(section: str, db_value: object) -> object:
+def _scrub_db_overlay_remote_module_loads(
+    section: str, db_value: object, warning_sink: Callable[[_DbConfigWarning], None] | None = None
+) -> object:
     """Strip ``s3://`` / ``gcs://`` entries from the DB-overlay value for
     fields whose contents reach ``get_instance_fn``. The same scheme is
     allowed from a YAML config (the documented operator flow) but a
@@ -5035,12 +5063,13 @@ def _scrub_db_overlay_remote_module_loads(section: str, db_value: object) -> obj
     for field in str_fields:
         v = sanitized.get(field)
         if _is_remote_module_url(v):
-            verbose_proxy_logger.warning(
+            _warn_db_config(
                 "Refused remote-URL value for DB-overlay %s.%s=%r; only "
                 "config.yaml entries may reference s3:// / gcs:// modules.",
                 section,
                 field,
                 v,
+                warning_sink=warning_sink,
             )
             sanitized[field] = None
     for field in list_fields:
@@ -5048,13 +5077,14 @@ def _scrub_db_overlay_remote_module_loads(section: str, db_value: object) -> obj
         if isinstance(v, list):
             cleaned = [item for item in v if not _is_remote_module_url(item)]
             if len(cleaned) != len(v):
-                verbose_proxy_logger.warning(
+                _warn_db_config(
                     "Refused %d remote-URL entries from DB-overlay %s.%s; "
                     "only config.yaml entries may reference s3:// / gcs:// "
                     "modules.",
                     len(v) - len(cleaned),
                     section,
                     field,
+                    warning_sink=warning_sink,
                 )
                 sanitized[field] = cleaned
     # ``custom_provider_map`` is a list of dicts with ``custom_handler`` —
@@ -5064,9 +5094,10 @@ def _scrub_db_overlay_remote_module_loads(section: str, db_value: object) -> obj
         if isinstance(cpm, list):
             for item in cpm:
                 if isinstance(item, dict) and _is_remote_module_url(item.get("custom_handler")):
-                    verbose_proxy_logger.warning(
+                    _warn_db_config(
                         "Refused remote-URL custom_handler from DB-overlay litellm_settings.custom_provider_map: %r",
                         item.get("custom_handler"),
+                        warning_sink=warning_sink,
                     )
                     item["custom_handler"] = None
     # ``litellm_settings.guardrails`` is a list of single-key dicts in
@@ -5084,19 +5115,20 @@ def _scrub_db_overlay_remote_module_loads(section: str, db_value: object) -> obj
                 for inner in entry.values():
                     if not isinstance(inner, dict):
                         continue
-                    _scrub_guardrail_inner(inner)
+                    _scrub_guardrail_inner(inner, warning_sink=warning_sink)
                 lp = entry.get("litellm_params")
                 if isinstance(lp, dict):
-                    _scrub_guardrail_inner(lp)
+                    _scrub_guardrail_inner(lp, warning_sink=warning_sink)
 
     # ``general_settings.litellm_jwtauth.custom_validate`` is a nested
     # string field.
     if section == "general_settings":
         jwt: Final = sanitized.get("litellm_jwtauth")
         if isinstance(jwt, dict) and _is_remote_module_url(jwt.get("custom_validate")):
-            verbose_proxy_logger.warning(
+            _warn_db_config(
                 "Refused remote-URL custom_validate from DB-overlay general_settings.litellm_jwtauth: %r",
                 jwt.get("custom_validate"),
+                warning_sink=warning_sink,
             )
             jwt["custom_validate"] = None
         # ``pass_through_endpoints`` is a list of dicts whose ``target``
@@ -5108,12 +5140,13 @@ def _scrub_db_overlay_remote_module_loads(section: str, db_value: object) -> obj
         if isinstance(pte, list):
             for entry in pte:
                 if isinstance(entry, dict) and _is_remote_module_url(entry.get("target")):
-                    verbose_proxy_logger.warning(
+                    _warn_db_config(
                         "Refused remote-URL target from DB-overlay "
                         "general_settings.pass_through_endpoints "
                         "(path=%r): %r",
                         entry.get("path"),
                         entry.get("target"),
+                        warning_sink=warning_sink,
                     )
                     entry["target"] = None
     return sanitized
@@ -5803,6 +5836,11 @@ class ProxyConfig:
         }
 
     def _apply_resolved_runtime_settings(self, config: Mapping[str, object]) -> None:
+        diagnostic_settings: Final = config.get("litellm_settings")
+        if isinstance(diagnostic_settings, Mapping) and "redact_messages_in_debug_logs" in diagnostic_settings:
+            litellm.redact_messages_in_debug_logs = TypeAdapter(bool).validate_python(
+                diagnostic_settings["redact_messages_in_debug_logs"]
+            )
         for section, store in self._settings_stores.items():
             if isinstance(config.get(section), Mapping):
                 store.apply_runtime_values(_as_settings_mapping(config[section]))
@@ -6412,12 +6450,16 @@ class ProxyConfig:
 
         self._load_yaml_settings_stores(config)
 
+        pending_db_diagnostics: Final[list[tuple[str, JsonValue]]] = []  # mutable-ok: defer rows until privacy resolves
+        pending_db_warnings: Final[list[_DbConfigWarning]] = []  # mutable-ok: defer warnings until privacy resolves
         ## UPDATE CONFIG WITH DB
         if prisma_client is not None and store_model_in_db is True:
             config = await self._update_config_from_db(
                 config=config,
                 prisma_client=prisma_client,
                 store_model_in_db=store_model_in_db,
+                diagnostic_sink=pending_db_diagnostics.append,
+                warning_sink=pending_db_warnings.append,
             )
 
         config = self._config_with_resolved_settings(config)
@@ -6430,6 +6472,12 @@ class ProxyConfig:
 
         config = self._check_for_os_environ_vars(config=config)
         self._apply_resolved_runtime_settings(config)
+        for section, param_value in pending_db_diagnostics:
+            _log_db_config_param(section, param_value)
+        for message, args in pending_db_warnings:
+            verbose_proxy_logger.warning(message, *args)
+        if prisma_client is not None and store_model_in_db is True:
+            self._warn_about_shadowed_db_settings()
 
         self.update_config_state(config=config)
 
@@ -6982,6 +7030,8 @@ class ProxyConfig:
 
                     parse_budget_reset_time(value)
                     setattr(litellm, key, value)
+                elif key == "redact_messages_in_debug_logs":
+                    litellm.redact_messages_in_debug_logs = TypeAdapter(bool).validate_python(value)
                 elif key == "drop_params":
                     litellm.drop_params = drop_params_flag(value, "litellm_settings.drop_params", verbose_proxy_logger)
                 elif key == "suppress_startup_output":
@@ -8495,6 +8545,8 @@ class ProxyConfig:
         prisma_client: PrismaClient,
         config: dict,
         store_model_in_db: bool | None,
+        diagnostic_sink: Callable[[tuple[str, JsonValue]], None] | None = None,
+        warning_sink: Callable[[_DbConfigWarning], None] | None = None,
     ):
         if store_model_in_db is not True:
             verbose_proxy_logger.info("'store_model_in_db' is not True, skipping db updates")
@@ -8512,13 +8564,14 @@ class ProxyConfig:
             if param_value is None:
                 continue
 
-            verbose_proxy_logger.debug(
-                "param_name=%s, param_value=%s",
-                section,
-                _redact_config_param_value_for_logging(section, param_value),
-            )
+            if diagnostic_sink is None:
+                _log_db_config_param(section, param_value)
+            else:
+                diagnostic_sink((section, param_value))
             if section == "litellm_settings":
-                self._apply_litellm_settings_db_values(self._prepared_db_settings_values(section, param_value))
+                self._apply_litellm_settings_db_values(
+                    self._prepared_db_settings_values(section, param_value, warning_sink=warning_sink)
+                )
             elif section == "environment_variables":
                 await self._apply_db_environment_variables_row(
                     prisma_client, response, environment_before_db, environment_read
@@ -8526,10 +8579,11 @@ class ProxyConfig:
             else:
                 self._settings_stores[section].apply_db_row(
                     section,
-                    self._prepared_db_settings_values(section, param_value),
+                    self._prepared_db_settings_values(section, param_value, warning_sink=warning_sink),
                 )
 
-        self._warn_about_shadowed_db_settings()
+        if warning_sink is None:
+            self._warn_about_shadowed_db_settings()
         return self._config_with_resolved_settings(config)
 
     async def _apply_db_environment_variables_row(
@@ -8584,12 +8638,17 @@ class ProxyConfig:
         )
         for section, key in sorted(shadowed - self._warned_shadowed_keys):
             verbose_proxy_logger.warning(
-                "%s", config_ownership_message(section=section, key=key, shadows_db_value=True)
+                "%s",
+                config_ownership_message(section=section, key=key, shadows_db_value=True),
             )
         self._warned_shadowed_keys = shadowed
 
-    def _prepared_db_settings_values(self, section: Section, value: object) -> Mapping[str, SettingsJsonValue]:
-        scrubbed: Final = _scrub_db_overlay_remote_module_loads(section=section, db_value=value)
+    def _prepared_db_settings_values(
+        self, section: Section, value: object, warning_sink: Callable[[_DbConfigWarning], None] | None = None
+    ) -> Mapping[str, SettingsJsonValue]:
+        scrubbed: Final = _scrub_db_overlay_remote_module_loads(
+            section=section, db_value=value, warning_sink=warning_sink
+        )
         return _as_settings_mapping(scrubbed)
 
     def _apply_db_environment_variables(
@@ -20178,6 +20237,14 @@ def _redact_config_param_value_for_logging(param_name: str | None, param_value: 
     if isinstance(param_value, (dict, list)):
         return _redact_secret_values_in_obj(param_value)
     return param_value
+
+
+def _log_db_config_param(section: str, param_value: JsonValue) -> None:
+    verbose_proxy_logger.debug(
+        "param_name=%s, param_value=%s",
+        section,
+        _redact_config_param_value_for_logging(section, param_value),
+    )
 
 
 def _redact_general_setting_value(field_name: str, value: JsonValue, is_full_admin: bool) -> JsonValue:

@@ -14,12 +14,14 @@ if TYPE_CHECKING:
 else:
     LoggingClass = Any
 
+from litellm._logging import MessageContentFilter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import HuggingFaceError, fetch_inference_provider_mapping
 
 logger: Final = logging.getLogger(__name__)
+logger.addFilter(MessageContentFilter())
 
 BASE_URL: Final = "https://router.huggingface.co"
 

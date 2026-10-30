@@ -198,3 +198,35 @@ def test_memory_routes_count_prompt_caching_pins(
 
     assert response.status_code == 200
     assert pin_count(response.json()) == expected
+
+
+@pytest.mark.asyncio
+async def test_otel_span_debug_privacy_preserves_api_result(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from typing import Final
+
+    import litellm
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+    from litellm.proxy.common_utils.debug_utils import get_otel_spans
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", True)
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    logger: Final = OpenTelemetry(config=OpenTelemetryConfig(exporter=exporter), tracer_provider=provider)
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+    try:
+        with provider.get_tracer("privacy-test").start_as_current_span("PRIVATE_SPAN_42896") as span:
+            span.set_attribute("gen_ai.input.messages", "PRIVATE_MESSAGE_42896")
+        result: Final = await get_otel_spans()
+        output: Final = capsys.readouterr().out
+        assert result["otel_spans"] == ["PRIVATE_SPAN_42896"]
+        assert "redacted-by-litellm" in output
+        assert "PRIVATE" not in output
+    finally:
+        provider.shutdown()

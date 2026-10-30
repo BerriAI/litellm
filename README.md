@@ -141,6 +141,24 @@ response = client.chat.completions.create(
 )
 ```
 
+#### Debug logs without message content
+
+To troubleshoot with detailed logging, add these settings to your existing proxy configuration and restart with `litellm --config config.yaml --detailed_debug`
+
+```yaml
+litellm_settings:
+  redact_messages_in_debug_logs: true
+  turn_off_message_logging: true
+```
+
+`redact_messages_in_debug_logs` defaults to `false`. When enabled, LiteLLM replaces free-form diagnostic messages, payloads, and exception text with `redacted-by-litellm`, retaining selected operational events. This also applies to payload diagnostics emitted at warning or error level. Raw tracebacks and caller-supplied correlation identifiers are omitted because they can contain message content
+
+The setting affects diagnostics only. Requests sent to providers and responses returned to clients stay intact. `turn_off_message_logging` separately controls message content sent to logging integrations. Request-level callback overrides do not disable diagnostic redaction. Custom application loggers and independently configured third-party wire logging need their own privacy controls
+
+The built-in plain and JSON formatters support this mode. Custom formatters must use standard log fields or supply defaults for extra fields, which are removed to prevent content disclosure. This Python SDK/proxy setting does not configure the standalone Rust gateway
+
+Verify with a synthetic prompt: the client should receive its normal response while LiteLLM diagnostics show `redacted-by-litellm` instead of the prompt or reply. Remove the new setting or set it to `false`, then restart the proxy to restore existing diagnostics
+
 </details>
 
 <details>

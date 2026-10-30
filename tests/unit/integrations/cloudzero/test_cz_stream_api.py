@@ -1,12 +1,15 @@
+import json
 import zoneinfo
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import polars as pl
 import pytest
+import respx
 
-
+import litellm
 from litellm.integrations.cloudzero.cz_stream_api import CloudZeroStreamer
 
 
@@ -177,3 +180,64 @@ class TestCloudZeroStreamer:
         # Should avoid scientific notation
         assert "e" not in result["cost"].lower()
         assert "e" not in result["large_float"].lower()
+
+
+@pytest.mark.parametrize("redact", (False, True))
+def test_cloudzero_http_error_diagnostics_respect_privacy_without_changing_exception(
+    redact: bool, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", redact)
+    marker: Final = "synthetic-private-upstream-content"
+    streamer: Final = CloudZeroStreamer("test-key", "test-connection")
+    with respx.mock:
+        respx.post(f"{streamer.base_url}/v2/connections/billing/anycost/test-connection/billing_drops").respond(
+            status_code=400, text=marker
+        )
+        with pytest.raises(httpx.HTTPStatusError) as captured:
+            streamer._send_daily_batch("2026-01-01", pl.DataFrame({"cost/cost": [1.0]}), "replace_hourly")
+    assert captured.value.response.text == marker
+    assert (marker in capsys.readouterr().out) is not redact
+
+
+@pytest.mark.parametrize("redact", (False, True))
+def test_cloudzero_skips_invalid_timestamp_without_logging_content_when_private(
+    redact: bool, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", redact)
+    marker: Final = "synthetic-private-invalid-timestamp"
+    streamer: Final = CloudZeroStreamer("test-key", "test-connection")
+    data: Final = pl.DataFrame(
+        {"time/usage_start": [marker, "2026-01-01T00:00:00Z"], "cost/cost": [9.0, 1.0]}
+    )
+    with respx.mock:
+        route: Final = respx.post(
+            f"{streamer.base_url}/v2/connections/billing/anycost/test-connection/billing_drops"
+        ).respond(status_code=200)
+        streamer.send_batched(data)
+    assert len(route.calls) == 1
+    assert json.loads(route.calls[0].request.content) == {
+        "month": "2026-01",
+        "operation": "replace_hourly",
+        "data": [{"time/usage_start": "2026-01-01T00:00:00Z", "cost/cost": "1"}],
+    }
+    assert (marker in capsys.readouterr().out) is not redact
+
+
+@pytest.mark.parametrize("redact", (False, True))
+def test_cloudzero_network_error_preserved_without_logging_content_when_private(
+    redact: bool, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", redact)
+    marker: Final = "synthetic-private-network-error"
+    streamer: Final = CloudZeroStreamer("test-key", "test-connection")
+    failure: Final = httpx.ConnectError(marker)
+    with respx.mock:
+        respx.post(
+            f"{streamer.base_url}/v2/connections/billing/anycost/test-connection/billing_drops"
+        ).mock(side_effect=failure)
+        with pytest.raises(httpx.ConnectError) as captured:
+            streamer.send_batched(
+                pl.DataFrame({"time/usage_start": ["2026-01-01T00:00:00Z"], "cost/cost": [1.0]})
+            )
+    assert captured.value is failure
+    assert (marker in capsys.readouterr().out) is not redact

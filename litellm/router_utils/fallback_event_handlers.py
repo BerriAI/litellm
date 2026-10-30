@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -11,7 +12,7 @@ import httpx
 from pydantic import TypeAdapter
 
 import litellm
-from litellm._logging import verbose_router_logger
+from litellm._logging import log_safe_diagnostic, verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import get_router_metadata_variable_name
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, safe_deep_copy
@@ -873,7 +874,10 @@ async def run_async_fallback(
         try:
             # LOGGING
             kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
-            verbose_router_logger.info("Falling back to model_group = %s", mask_sensitive_structure(mg))
+            if litellm.redact_messages_in_debug_logs:
+                log_safe_diagnostic(verbose_router_logger, "fallback", attempt=fallback_depth + 1, level=logging.INFO)
+            else:
+                verbose_router_logger.info("Falling back to model_group = %s", mask_sensitive_structure(mg))
             kwargs.pop("_target_order", None)
             if isinstance(mg, str):
                 kwargs["model"] = mg

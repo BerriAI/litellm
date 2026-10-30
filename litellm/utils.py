@@ -588,7 +588,7 @@ def print_verbose(
         elif log_level == "ERROR":
             verbose_logger.error(print_statement)
         if litellm.set_verbose is True and logger_only is False:
-            print(print_statement)  # noqa: T201
+            print("redacted-by-litellm" if litellm.redact_messages_in_debug_logs else print_statement)  # noqa: T201
     except Exception:
         pass
 
@@ -2070,7 +2070,9 @@ def client(original_function):
 
             # [OPTIONAL] CHECK CACHE
             print_verbose(
-                f"SYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache')['no-cache']: {kwargs.get('cache', {}).get('no-cache', False)}"
+                "redacted-by-litellm"
+                if litellm.redact_messages_in_debug_logs
+                else f"SYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache')['no-cache']: {kwargs.get('cache', {}).get('no-cache', False)}"
             )
             # if caching is false or cache["no-cache"]==True, don't run this
             if (
@@ -2353,7 +2355,9 @@ def client(original_function):
             # [OPTIONAL] CHECK CACHE
             if is_debugging_on():
                 print_verbose(
-                    f"ASYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache'): {kwargs.get('cache', None)}"
+                    "redacted-by-litellm"
+                    if litellm.redact_messages_in_debug_logs
+                    else f"ASYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache'): {kwargs.get('cache', None)}"
                 )
             _caching_handler_response: CachingHandlerResponse | None = await _llm_caching_handler.async_get_cache(
                 model=model or "",
@@ -8641,7 +8645,9 @@ def trim_messages(
 
         #### Trimming messages if current_tokens > max_tokens
         print_verbose(
-            f"Need to trim input messages: {messages}, current_tokens{current_tokens}, max_tokens: {max_tokens}"
+            "redacted-by-litellm"
+            if litellm.redact_messages_in_debug_logs
+            else f"Need to trim input messages: {messages}, current_tokens{current_tokens}, max_tokens: {max_tokens}"
         )
         system_message_event: dict | None = None
         if system_message:
@@ -8948,6 +8954,9 @@ def _debug_params_repr(params: Mapping[str, object]) -> str:
 
 def print_args_passed_to_litellm(original_function, args, kwargs):
     if not is_debugging_on():
+        return
+    if litellm.redact_messages_in_debug_logs:
+        print_verbose("redacted-by-litellm")
         return
     try:
         # we've already printed this for acompletion, don't print for completion

@@ -48,3 +48,32 @@ async def test_fim_stream_keeps_unicode_line_separators_inside_a_delta(
 
     assert texts == [_LINE_SEPARATED_TEXT, None]
     assert json.loads(route.calls.last.request.content)["stream"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("privacy", [False, True])
+async def test_fim_response_content_is_preserved_when_diagnostics_are_private(
+    privacy: bool,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", privacy)
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    route: Final = respx_mock.post("https://codestral.mistral.ai/v1/fim/completions").mock(
+        return_value=httpx.Response(200, json={
+            "id": "fim-private", "object": "text_completion", "created": 1, "model": "codestral-latest",
+            "choices": [{"index": 0, "message": {"content": "PRIVATE_FIM_REPLY"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+        })
+    )
+
+    response: Final = await litellm.atext_completion(
+        model="text-completion-codestral/codestral-latest",
+        prompt="PRIVATE_FIM_PROMPT", api_key="test-codestral-key", max_retries=0,
+    )
+
+    assert response.choices[0].text == "PRIVATE_FIM_REPLY"
+    assert json.loads(route.calls.last.request.content)["prompt"] == "PRIVATE_FIM_PROMPT"
+    assert ("PRIVATE_FIM_REPLY" in capsys.readouterr().out) is not privacy

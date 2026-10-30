@@ -11365,6 +11365,39 @@ def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_
     assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
 
 
+@pytest.mark.parametrize("redact", (False, True))
+@pytest.mark.parametrize("module_name", ("litellm.utils", "litellm.main", "litellm.caching.caching", "litellm.proxy.utils"))
+def test_legacy_verbose_stdout_obeys_diagnostic_privacy(
+    redact: bool,
+    module_name: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", redact)
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    module: Final = importlib.import_module(module_name)
+    module.print_verbose("synthetic-private-prompt-42896")
+    stdout: Final = capsys.readouterr().out
+    assert ("synthetic-private-prompt-42896" in stdout) is not redact
+    assert ("redacted-by-litellm" in stdout) is redact
+
+
+def test_private_argument_diagnostic_does_not_render_request_objects(
+    capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.utils import print_args_passed_to_litellm
+
+    class UnrenderableRequest:
+        def __repr__(self) -> str:
+            raise AssertionError("diagnostic attempted to render a private request")
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", True)
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        print_args_passed_to_litellm(litellm.completion, (UnrenderableRequest(),), {"messages": UnrenderableRequest()})
+    assert capsys.readouterr().out.endswith("redacted-by-litellm\n")
+
+
 
 @pytest.mark.parametrize(
     ("provider", "expected_warnings"),

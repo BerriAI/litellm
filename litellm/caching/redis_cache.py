@@ -1266,7 +1266,9 @@ class RedisCache(BaseCache):
             async with _redis_client.pipeline(transaction=False) as pipe:
                 results: Final = await self._pipeline_helper(pipe, cache_list, ttl)
 
-            print_verbose(f"pipeline results: {results}")
+            print_verbose(
+                "redacted-by-litellm" if litellm.redact_messages_in_debug_logs else f"pipeline results: {results}"
+            )
             # Optionally, you could process 'results' to make sure that all set operations were successful.
             ## LOGGING ##
             end_time = time.time()
@@ -1870,7 +1872,9 @@ class RedisCache(BaseCache):
         start_time: Final = time.time()
         try:
             response: Final[bool] = self.redis_client.ping()
-            print_verbose(f"Redis Cache PING: {response}")
+            print_verbose(
+                "redacted-by-litellm" if litellm.redact_messages_in_debug_logs else f"Redis Cache PING: {response}"
+            )
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time

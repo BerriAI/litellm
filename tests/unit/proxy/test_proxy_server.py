@@ -4075,6 +4075,70 @@ async def test_model_list_return_wildcard_routes_defaults_to_general_setting(
     assert ("openai/*" in listed) is wildcard_listed, listed
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_yaml_config_applies_diagnostic_privacy_before_model_initialization(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, enabled: bool
+) -> None:
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", not enabled)
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text("litellm_settings:\n  redact_messages_in_debug_logs: " + str(enabled).lower() + "\n")
+    config: Final = await ProxyConfig().get_config(str(config_file))
+    assert litellm.redact_messages_in_debug_logs is enabled
+    assert config["litellm_settings"]["redact_messages_in_debug_logs"] is enabled
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_worker_config_privacy_applies_before_global_setting(
+    monkeypatch: pytest.MonkeyPatch, as_json: bool, enabled: bool
+) -> None:
+    from litellm.proxy.proxy_server import _redact_worker_config_for_logging
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", False)
+    config: Final = {
+        "litellm_settings": {"redact_messages_in_debug_logs": enabled},
+        "model_list": [{"litellm_params": {"messages": [{"content": "PRIVATE_SYSTEM_PROMPT"}]}}],
+    }
+    result: Final = _redact_worker_config_for_logging(json.dumps(config) if as_json else config)
+    if enabled:
+        assert result == "redacted-by-litellm"
+    else:
+        assert "PRIVATE_SYSTEM_PROMPT" in str(result)
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+def test_worker_config_invalid_privacy_setting_does_not_expose_content(
+    monkeypatch: pytest.MonkeyPatch, as_json: bool
+) -> None:
+    from litellm.proxy.proxy_server import _redact_worker_config_for_logging
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", False)
+    config: Final = {
+        "litellm_settings": {"redact_messages_in_debug_logs": "invalid-boolean"},
+        "model_list": [{"litellm_params": {"messages": [{"content": "PRIVATE_SYSTEM_PROMPT"}]}}],
+    }
+    original: Final = json.dumps(config)
+    result: Final = _redact_worker_config_for_logging(original if as_json else config)
+
+    assert result == "redacted-by-litellm"
+    assert json.dumps(config) == original
+    assert litellm.redact_messages_in_debug_logs is False
+
+
+@pytest.mark.parametrize("worker_config", ['{"messages": "PRIVATE_SYSTEM_PROMPT"', None])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_worker_config_global_privacy_covers_unparseable_config(
+    monkeypatch: pytest.MonkeyPatch, worker_config: str | None, enabled: bool
+) -> None:
+    from litellm.proxy.proxy_server import _redact_worker_config_for_logging
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", enabled)
+
+    assert _redact_worker_config_for_logging(worker_config) == ("redacted-by-litellm" if enabled else worker_config)
+
+
 @pytest.mark.asyncio
 async def test_queue_request_labels_an_upstream_failure_a_server_error_not_an_auth_error(
     monkeypatch: pytest.MonkeyPatch,

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from mcp.types import CallToolResult, TextContent
 
-import litellm  # noqa: F401 - ensures litellm.responses.main is registered in sys.modules
+import litellm
 from litellm.responses.mcp.mcp_streaming_iterator import (
     MCPEnhancedStreamingIterator,
 )
@@ -293,14 +293,18 @@ async def test_continuation_id_is_final_round_not_interim_tool_call(monkeypatch)
     assert completed[-1].response.id != "resp-interim"
 
 
+@pytest.mark.parametrize("redact", (False, True))
 @pytest.mark.asyncio
-async def test_follow_up_call_failure_emits_terminal_error_event(monkeypatch):
+async def test_follow_up_call_failure_emits_terminal_error_event(
+    monkeypatch: pytest.MonkeyPatch, redact: bool, capsys: pytest.CaptureFixture[str]
+) -> None:
     """
     Regression test for the silent-swallow path: when the follow-up LLM call
     raises, the stream must emit a terminal `error` event instead of ending
     silently after the tool events (which surfaced to clients as a successful
     but empty completion).
     """
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", redact)
     _mock_mcp_environment(monkeypatch)
 
     aresponses_mock = AsyncMock(side_effect=RuntimeError("boom from provider"))
@@ -319,16 +323,21 @@ async def test_follow_up_call_failure_emits_terminal_error_event(monkeypatch):
     assert len(error_events) == 1
     assert error_events[0].error.type == "mcp_gateway_error"
     assert "boom from provider" in error_events[0].error.message
+    assert ("boom from provider" in capsys.readouterr().err) is not redact
 
 
+@pytest.mark.parametrize("redact", (False, True))
 @pytest.mark.asyncio
-async def test_initial_call_failure_is_stashed_for_eager_reraise(monkeypatch):
+async def test_initial_call_failure_is_stashed_for_eager_reraise(
+    monkeypatch: pytest.MonkeyPatch, redact: bool, capsys: pytest.CaptureFixture[str]
+) -> None:
     """
     Regression test: a failing initial LLM call must be stashed as
     `_initial_creation_error` so `aresponses_api_with_mcp` can re-raise it as a
     real 4xx before any SSE bytes are written, instead of returning HTTP 200
     with an empty stream.
     """
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", redact)
     _mock_mcp_environment(monkeypatch)
 
     aresponses_mock = AsyncMock(side_effect=RuntimeError("initial boom"))
@@ -339,6 +348,7 @@ async def test_initial_call_failure_is_stashed_for_eager_reraise(monkeypatch):
 
     assert iterator._initial_creation_error is not None
     assert "initial boom" in str(iterator._initial_creation_error)
+    assert ("initial boom" in capsys.readouterr().err) is not redact
 
 
 def _reasoning_item(encrypted_content: str):
@@ -581,3 +591,40 @@ async def test_stream_without_auto_execute_is_forwarded_unchanged(monkeypatch):
     assert [c.output_index for c in chunks if hasattr(c, "output_index")] == [0, 0]
     assert [c.sequence_number for c in chunks if hasattr(c, "sequence_number")] == [0, 1, 2]
     aresponses_mock.assert_not_called()
+
+
+@pytest.mark.parametrize("redact", (False, True))
+@pytest.mark.asyncio
+async def test_malformed_provider_tool_arguments_keep_error_diagnostics_private(
+    monkeypatch: pytest.MonkeyPatch, redact: bool, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", redact)
+    response: Final = ResponsesAPIResponse(
+        id="resp-malformed-arguments",
+        created_at=0,
+        output=[
+            {
+                "type": "function_call",
+                "call_id": "call-1",
+                "name": "read_wiki_contents",
+                "arguments": {"text": "PRIVATE_TOOL_ARGUMENT"},
+            }
+        ],
+    )
+    iterator: Final = _make_iterator([])
+    iterator.collected_response = response
+
+    await iterator._generate_tool_execution_events()
+
+    assert iterator.tool_results == []
+    assert iterator._tool_results_for_response is response
+    assert iterator.collected_response.output == [
+        {
+            "type": "function_call",
+            "call_id": "call-1",
+            "name": "read_wiki_contents",
+            "arguments": {"text": "PRIVATE_TOOL_ARGUMENT"},
+        }
+    ]
+    assert [event.type for event in iterator.tool_execution_events] == [ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
+    assert ("PRIVATE_TOOL_ARGUMENT" in capsys.readouterr().err) is not redact

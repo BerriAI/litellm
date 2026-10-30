@@ -47,7 +47,7 @@ class BudgetManager:
             if litellm.set_verbose:
                 import logging
 
-                logging.info(print_statement)
+                logging.info("redacted-by-litellm" if litellm.redact_messages_in_debug_logs else print_statement)
         except Exception:
             pass
 

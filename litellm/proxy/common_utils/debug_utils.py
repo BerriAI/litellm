@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
+import litellm
 from litellm import get_secret_str
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PYTHON_GC_THRESHOLD
@@ -868,7 +869,7 @@ async def get_otel_spans():
     else:
         recorded_spans = []
 
-    print("Spans: ", recorded_spans)  # noqa: T201
+    print("Spans: ", "redacted-by-litellm" if litellm.redact_messages_in_debug_logs else recorded_spans)  # noqa: T201
 
     most_recent_parent = None
     most_recent_start_time = 1000000
@@ -963,4 +964,7 @@ def init_verbose_loggers():
     except Exception as e:
         import logging
 
-        logging.warning("Failed to init verbose loggers: %s", e)
+        logging.warning(
+            "Failed to init verbose loggers: %s",
+            "redacted-by-litellm" if litellm.redact_messages_in_debug_logs else e,
+        )

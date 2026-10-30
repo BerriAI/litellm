@@ -425,7 +425,11 @@ class RedisSemanticCache(BaseCache):
             **kwargs: Additional arguments including 'messages' for the prompt
                 and optional 'ttl' for time-to-live
         """
-        print_verbose(f"Redis semantic-cache set_cache, kwargs: {kwargs}")
+        print_verbose(
+            "redacted-by-litellm"
+            if litellm.redact_messages_in_debug_logs
+            else f"Redis semantic-cache set_cache, kwargs: {kwargs}"
+        )
 
         value_str: str | None = None
         try:
@@ -462,7 +466,11 @@ class RedisSemanticCache(BaseCache):
         Returns:
             The cached response if a semantically similar prompt is found, else None
         """
-        print_verbose(f"Redis semantic-cache get_cache, kwargs: {kwargs}")
+        print_verbose(
+            "redacted-by-litellm"
+            if litellm.redact_messages_in_debug_logs
+            else f"Redis semantic-cache get_cache, kwargs: {kwargs}"
+        )
 
         try:
             prompt: Final = self._get_prompt_from_kwargs(**kwargs)
@@ -571,7 +579,11 @@ class RedisSemanticCache(BaseCache):
             **kwargs: Additional arguments including 'messages' for the prompt
                 and optional 'ttl' for time-to-live
         """
-        print_verbose(f"Async Redis semantic-cache set_cache, kwargs: {kwargs}")
+        print_verbose(
+            "redacted-by-litellm"
+            if litellm.redact_messages_in_debug_logs
+            else f"Async Redis semantic-cache set_cache, kwargs: {kwargs}"
+        )
 
         try:
             prompt: Final = self._get_prompt_from_kwargs(**kwargs)
@@ -612,7 +624,11 @@ class RedisSemanticCache(BaseCache):
         Returns:
             The cached response if a semantically similar prompt is found, else None
         """
-        print_verbose(f"Async Redis semantic-cache get_cache, kwargs: {kwargs}")
+        print_verbose(
+            "redacted-by-litellm"
+            if litellm.redact_messages_in_debug_logs
+            else f"Async Redis semantic-cache get_cache, kwargs: {kwargs}"
+        )
 
         try:
             prompt: Final = self._get_prompt_from_kwargs(**kwargs)

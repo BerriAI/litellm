@@ -75,7 +75,7 @@ import litellm
 import litellm.litellm_core_utils.exception_mapping_utils
 from litellm import get_secret_str
 from litellm._internal_context import in_mirrored_call, mirrored_call, service_target, with_service_target
-from litellm._logging import verbose_router_logger
+from litellm._logging import log_safe_diagnostic, verbose_router_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import (
     DualCache,
@@ -7127,6 +7127,8 @@ class Router(DeprecatedRouterMembers):
                 trigger, healthy_deployments, all_deployments, initial_kwargs
             ):
                 return _StreamRetriesExhausted(last_error)
+            if litellm.redact_messages_in_debug_logs:
+                log_safe_diagnostic(verbose_router_logger, "retry", attempt=attempt + 1)
             if get_metadata_variable_name_from_kwargs(retry_kwargs) in retry_kwargs:
                 self._core_log_retry(kwargs=retry_kwargs, e=trigger)
             await asyncio.sleep(
@@ -7981,7 +7983,8 @@ class Router(DeprecatedRouterMembers):
                 except Exception as e:
                     import traceback
 
-                    traceback.print_exc()
+                    if not litellm.redact_messages_in_debug_logs:
+                        traceback.print_exc()
                     receieved_exceptions.append(e)
                     return None
 
@@ -9428,6 +9431,8 @@ class Router(DeprecatedRouterMembers):
             await asyncio.sleep(retry_after)
 
             for current_attempt in range(num_retries):
+                if litellm.redact_messages_in_debug_logs:
+                    log_safe_diagnostic(verbose_router_logger, "retry", attempt=current_attempt + 1)
                 try:
                     # Update retry tracking metadata before each retry attempt
                     _metadata["attempted_retries"] = current_attempt + 1
