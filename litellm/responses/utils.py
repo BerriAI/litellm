@@ -1479,10 +1479,22 @@ def _with_declared_reasoning_values(
     return MappingProxyType({**(ANY_REASONING_FIELD_VALUES if defaults is None else defaults), **overrides})
 
 
+def _is_version_number(part: str) -> bool:
+    return part.isdigit() and len(part) <= 2
+
+
+def _splits_a_version(parts: Sequence[str], end: int) -> bool:
+    return end < len(parts) and _is_version_number(parts[end - 1]) and _is_version_number(parts[end])
+
+
 def _hyphen_runs_longest_first(name: str) -> Iterator[str]:
     parts: Final = name.rsplit("/", 1)[-1].split("-")
     for length in range(len(parts), 0, -1):
-        yield from ("-".join(parts[start : start + length]) for start in range(len(parts) - length + 1))
+        yield from (
+            "-".join(parts[start : start + length])
+            for start in range(len(parts) - length + 1)
+            if not _splits_a_version(parts, start + length)
+        )
 
 
 def _openai_catalog_family(name: str) -> str | None:
@@ -1490,8 +1502,14 @@ def _openai_catalog_family(name: str) -> str | None:
     return next((run for run in runs if OpenAIGPTConfig.is_openai_catalog_model(run)), None)
 
 
-def _openai_catalog_model(model: str, base_model: str | None) -> str | None:
-    families: Final = (_openai_catalog_family(name) for name in (base_model, model) if name)
+def _openai_catalog_name(name: str) -> str | None:
+    last_segment: Final = name.rsplit("/", 1)[-1]
+    return last_segment if OpenAIGPTConfig.is_openai_catalog_model(last_segment) else None
+
+
+def _openai_catalog_model(model: str, base_model: str | None, names_wrap_models: bool) -> str | None:
+    find: Final = _openai_catalog_family if names_wrap_models else _openai_catalog_name
+    families: Final = (find(name) for name in (base_model, model) if name)
     return next((family for family in families if family is not None), None)
 
 
@@ -1501,7 +1519,8 @@ def _default_reasoning_field_values(
     declared: Final = None if responses_config is None else responses_config.reasoning_field_values()
     if declared is not None:
         return declared
-    catalog_model: Final = _openai_catalog_model(model, base_model)
+    names_wrap_models: Final = responses_config is not None and responses_config.deployment_names_wrap_openai_models()
+    catalog_model: Final = _openai_catalog_model(model, base_model, names_wrap_models)
     if catalog_model is not None:
         return _openai_reasoning_field_values(catalog_model)
     return None if responses_config is None else responses_config.unresolved_model_reasoning_field_values(model)

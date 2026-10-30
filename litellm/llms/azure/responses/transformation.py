@@ -93,6 +93,9 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def _effort_resolves_to_none(model: str, effort: str | None) -> bool:
         return AzureOpenAIGPT5Config.effort_resolves_to_none(model, effort)
 
+    def deployment_names_wrap_openai_models(self) -> bool:
+        return True
+
     def unresolved_model_reasoning_field_values(self, model: str) -> ReasoningFieldValues | None:
         return SUMMARY_ONLY_REASONING_FIELD_VALUES if self._is_gpt_5_model(model) else None
 

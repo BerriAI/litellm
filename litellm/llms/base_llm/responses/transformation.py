@@ -117,6 +117,9 @@ class BaseResponsesAPIConfig(ABC):
     def reasoning_field_values(self) -> ReasoningFieldValues | None:
         return None
 
+    def deployment_names_wrap_openai_models(self) -> bool:
+        return False
+
     def unresolved_model_reasoning_field_values(self, model: str) -> ReasoningFieldValues | None:
         return None
 
