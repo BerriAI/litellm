@@ -1254,16 +1254,17 @@ def unpack_defs(
     schema: dict,
     defs: dict,
     max_inlined_bytes: int | None = None,
-) -> None:
+) -> int:
     """Expand *all* ``$ref`` entries pointing into ``$defs`` / ``definitions``.
 
     This utility walks the entire schema tree (dicts and lists) so it naturally
     resolves references hidden under any keyword – ``items``, ``allOf``,
     ``anyOf``, ``oneOf``, ``additionalProperties``, etc.
 
-    It mutates *schema* in-place and does **not** return anything.  The helper
-    keeps memory overhead low by resolving nodes as it encounters them rather
-    than materialising a fully dereferenced copy first.
+    It mutates *schema* in-place and returns the JSON-byte size it inlined,
+    counted only when ``max_inlined_bytes`` is set.  The helper keeps memory
+    overhead low by resolving nodes as it encounters them rather than
+    materialising a fully dereferenced copy first.
 
     ``max_inlined_bytes`` caps the cumulative JSON-byte size of every target
     that has been inlined and is checked *before* each ``copy.deepcopy``, so
@@ -1371,6 +1372,8 @@ def unpack_defs(
             # Add all list items to queue
             for idx, item in enumerate(node):
                 queue.append((item, node, idx, active_defs, ref_chain))
+
+    return inlined_bytes
 
 
 def _has_legacy_defs(schema: object) -> bool:

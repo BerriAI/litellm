@@ -661,7 +661,7 @@ def get_gemini_url(
 _get_gemini_url = get_gemini_url
 
 
-def check_text_in_content(parts: list[PartType]) -> bool:
+def check_text_in_content(parts: Sequence[PartType]) -> bool:
     """
     check that user_content has 'text' parameter.
         - Known Vertex Error: Unable to submit request because it must have a text parameter.
@@ -833,6 +833,9 @@ def _fix_enum_types(schema, depth=0, send_integer_enums: bool = False):
                 _fix_enum_types(item, depth=depth + 1, send_integer_enums=send_integer_enums)
 
 
+VERTEX_SCHEMAS_MAX_INLINED_BYTES: Final = 1_000_000
+
+
 def build_vertex_schema(
     parameters: dict, add_property_ordering: bool = False, send_integer_enums: bool = False
 ) -> dict[str, object]:
@@ -849,15 +852,40 @@ def build_vertex_schema(
     Returns:
         parameters: dict - the input parameters, modified in place
     """
-    # Get valid fields from Schema TypedDict
-    valid_schema_fields: Final = set(get_type_hints(Schema).keys())
+    schema, _ = build_vertex_schema_within_budget(
+        parameters,
+        max_inlined_bytes=VERTEX_SCHEMAS_MAX_INLINED_BYTES,
+        schema_name="the response schema",
+        add_property_ordering=add_property_ordering,
+        send_integer_enums=send_integer_enums,
+    )
+    return schema
+
+
+def build_vertex_schema_within_budget(
+    parameters: dict[str, object],
+    max_inlined_bytes: int,
+    schema_name: str,
+    add_property_ordering: bool = False,
+    send_integer_enums: bool = False,
+) -> tuple[dict[str, object], int]:
+    valid_schema_fields: Final = frozenset(get_type_hints(Schema).keys())
 
     defs: Final = parameters.pop("$defs", {})
     # Expand $ref references in parameters using the definitions
     # Note: We don't pre-flatten defs as that causes exponential memory growth
     # with circular references (see issue #19098). unpack_defs handles nested
     # refs recursively and correctly detects/skips circular references.
-    unpack_defs(parameters, defs)
+    try:
+        inlined_bytes: Final = unpack_defs(
+            parameters, defs if isinstance(defs, dict) else {}, max_inlined_bytes=max_inlined_bytes
+        )
+    except ValueError as e:
+        raise VertexAIError(
+            status_code=400,
+            message=f"Inlining the $ref definitions of {schema_name} pushes the request's Gemini schemas past "
+            f"{VERTEX_SCHEMAS_MAX_INLINED_BYTES:,} bytes. Reference shared $defs less often or flatten the schema.",
+        ) from e
 
     _convert_schema_types(parameters)
 
@@ -879,12 +907,12 @@ def build_vertex_schema(
     # Postprocessing
     # Filter out fields that don't exist in Schema
 
-    parameters = filter_schema_fields(parameters, valid_schema_fields)
+    filtered: Final = filter_schema_fields(parameters, valid_schema_fields)
 
     if add_property_ordering:
-        set_schema_property_ordering(parameters)
+        set_schema_property_ordering(filtered)
 
-    return parameters
+    return filtered, inlined_bytes
 
 
 _build_vertex_schema = build_vertex_schema
@@ -1001,7 +1029,9 @@ def set_schema_property_ordering(schema: dict[str, object], depth: int = 0) -> d
     return schema
 
 
-def filter_schema_fields(schema_dict: dict[str, object], valid_fields: set[str], processed=None) -> dict[str, object]:
+def filter_schema_fields(
+    schema_dict: dict[str, object], valid_fields: frozenset[str], processed=None
+) -> dict[str, object]:
     """
     Recursively filter a schema dictionary to keep only valid fields.
     """

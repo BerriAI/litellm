@@ -24,7 +24,11 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_toke
 from litellm.llms.anthropic.messages.native import handler as anthropic_messages_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
-from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_CHARACTERS, VertexAIError
+from litellm.llms.vertex_ai.common_utils import (
+    GEMINI_MAX_ENUM_CHARACTERS,
+    VERTEX_SCHEMAS_MAX_INLINED_BYTES,
+    VertexAIError,
+)
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     OPENAI_TO_GEMINI_TTS_VOICES,
@@ -10777,3 +10781,70 @@ def test_grounding_support_preserves_every_web_source(chunk_indices: list[int]) 
         }
         for index, start, end in expected_sources
     ]
+
+
+def _schema_referencing_a_shared_def(def_bytes: int, references: int) -> dict[str, object]:
+    return {
+        "type": "object",
+        "properties": {f"field{index}": {"$ref": "#/$defs/Shared"} for index in range(references)},
+        "$defs": {"Shared": {"type": "string", "description": "x" * def_bytes}},
+    }
+
+
+def _function_tool(name: str, parameters: dict[str, object]) -> dict[str, object]:
+    return {"type": "function", "function": {"name": name, "parameters": parameters}}
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_gemini_tool_whose_defs_inline_past_the_budget_is_rejected_with_a_400_naming_it(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+        )
+    )
+    tool: Final = _function_tool(
+        "shared_tree", _schema_referencing_a_shared_def(VERTEX_SCHEMAS_MAX_INLINED_BYTES // 2, references=3)
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="tool 'shared_tree'"):
+        completion(
+            model="gemini/gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Say hi"}],
+            tools=[tool],
+            api_key="test-api-key",
+            client=HTTPHandler(),
+        )
+
+    assert not route.called
+
+
+def test_gemini_tools_in_one_request_share_the_inlining_budget() -> None:
+    def_bytes: Final = VERTEX_SCHEMAS_MAX_INLINED_BYTES * 3 // 5
+    first: Final = _function_tool("first", _schema_referencing_a_shared_def(def_bytes, references=1))
+    second: Final = _function_tool("second", _schema_referencing_a_shared_def(def_bytes, references=1))
+
+    alone: Final = VertexGeminiConfig()._map_function([deepcopy(first)], optional_params={})
+
+    assert alone[0]["function_declarations"][0]["parameters"]["properties"]["field0"]["description"] == "x" * def_bytes
+    with pytest.raises(VertexAIError, match="tool 'second'") as raised:
+        VertexGeminiConfig()._map_function([first, second], optional_params={})
+    assert raised.value.status_code == 400
+
+
+def test_vertex_response_schema_whose_defs_inline_past_the_budget_is_rejected_with_a_400() -> None:
+    schema: Final = _schema_referencing_a_shared_def(VERTEX_SCHEMAS_MAX_INLINED_BYTES // 2, references=3)
+
+    with pytest.raises(VertexAIError, match="the response schema") as raised:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"response_format": {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}}},
+            optional_params={},
+            model="gemini-1.5-flash",
+            drop_params=False,
+        )
+    assert raised.value.status_code == 400
