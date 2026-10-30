@@ -12,7 +12,7 @@ from uuid import uuid4
 import anyio
 from mcp.shared.exceptions import MCPError
 from mcp.types import CallToolResult, TextContent, Tool
-from pydantic import ConfigDict, JsonValue, TypeAdapter
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -273,7 +273,10 @@ async def _execute_script(arguments: Mapping[str, object], context: OperationCon
         return error_result("MCP code execution requires an authenticated caller")
     from litellm.proxy.mcp_server.code_runtime import execute_code
 
-    request: Final = CodeInput.model_validate(arguments or {})
+    try:
+        request: Final = CodeInput.model_validate(arguments or {})
+    except ValidationError:
+        return error_result("Invalid code request. Provide only a 'code' string.")
     auth, header, servers, server_headers, oauth_headers, raw_headers, client_ip = context.legacy_auth()
     forbidden: Final = {*MCP_PROXY_TOOL_NAMES, *VIRTUAL_TOOL_NAMES, CODE_TOOL_NAME}
 
@@ -335,6 +338,7 @@ async def _execute_script(arguments: Mapping[str, object], context: OperationCon
                     raw_headers=raw_headers,
                     mcp_proxy_mode=True,
                     incoming_bearer_token=context.incoming_bearer_token,
+                    resolved_tool=selected,
                 )
             except asyncio.CancelledError:
                 await cleanup_cancelled_call(
@@ -344,7 +348,7 @@ async def _execute_script(arguments: Mapping[str, object], context: OperationCon
         assert result is not None
         from litellm.proxy.mcp_server.result_conversion import INPUT_REQUIRED_UNSUPPORTED_MESSAGE
 
-        if any(
+        if result.is_error and any(
             isinstance(block, TextContent) and block.text == INPUT_REQUIRED_UNSUPPORTED_MESSAGE
             for block in result.content
         ):

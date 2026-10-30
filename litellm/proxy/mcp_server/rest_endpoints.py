@@ -992,7 +992,7 @@ if MCP_AVAILABLE:
                 "message": f"Failed to get tools from server {server.name}: {e}",
             }
         return {
-            "tools": with_code_tool(list_tools_result),
+            "tools": with_code_tool(list_tools_result, first_page=False),
             "error": None,
             "message": "Successfully retrieved tools",
         }
@@ -1357,13 +1357,11 @@ if MCP_AVAILABLE:
         toolset: Final = OPTIONAL_STRING_ADAPTER.validate_python(data.get("toolset_name"))
         auth: Final = await _resolve_acting_auth(toolset, user_api_key_dict)
         header, server_headers, raw_headers, oauth = _extract_mcp_headers_from_request(request, auth)
-        server: Final = OPTIONAL_STRING_ADAPTER.validate_python(data.get("server_id"))
         return await run_code_tool(
             arguments,
             OperationContext(
                 _caller=auth,
                 mcp_auth_header=header,
-                mcp_servers=(server,) if server is not None else None,
                 mcp_server_auth_headers=server_headers,
                 raw_headers=raw_headers,
                 oauth2_headers=oauth,
@@ -1405,7 +1403,9 @@ if MCP_AVAILABLE:
             from litellm.proxy.mcp_server.code_execution import settings as code_mode_settings
             from litellm.proxy.mcp_server.tool_search import VIRTUAL_TOOL_NAMES
 
-            if tool_name in VIRTUAL_TOOL_NAMES or (tool_name == CODE_TOOL_NAME and code_mode_settings().enabled):
+            if tool_name in VIRTUAL_TOOL_NAMES or (
+                tool_name == CODE_TOOL_NAME and code_mode_settings().enabled and data.get("server_id") is None
+            ):
                 return await _handle_virtual_mcp_tool(request, data, tool_name, user_api_key_dict)
 
             # Validate required parameters early

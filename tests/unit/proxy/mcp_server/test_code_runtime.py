@@ -7,11 +7,16 @@ import pytest
 from litellm.proxy.mcp_server.code_worker import Reply, encode_message, load_json
 
 
-def test_code_mode_rejects_archived_quickjs_package(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("ng_installed", [False, True])
+def test_code_mode_rejects_archived_quickjs_package(monkeypatch: pytest.MonkeyPatch, ng_installed: bool) -> None:
     from litellm.proxy.mcp_server import code_runtime
 
-    monkeypatch.setattr(code_runtime.metadata, "distribution", lambda name: None)
-    with pytest.raises(ValueError, match="conflicting quickjs package"):
+    def installed(name: str) -> None:
+        if name == "quickjs-ng" and not ng_installed:
+            raise code_runtime.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(code_runtime.metadata, "distribution", installed)
+    with pytest.raises(ValueError, match=r"conflicting quickjs package.*separate environment"):
         code_runtime.check_runtime()
 
 

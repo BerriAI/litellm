@@ -433,11 +433,13 @@ async def _dispatch_virtual_mcp_tool(
     raw_headers: dict[str, str] | None = None,
     mcp_proxy_mode: bool = False,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
+    resolved_tool: MCPTool | None = None,
 ) -> CallToolResult | None:
     """Handle the mcp_tool_search / mcp_tool_call virtual tools.
 
     Returns a CallToolResult when ``name`` is a virtual tool, else ``None`` so
     the caller falls through to normal tool routing.
+    ``resolved_tool`` reuses this request's authenticated lookup for nested code calls.
     """
     from litellm.llms.litellm_proxy.skills.skill_search import DEFAULT_SKILL_SEARCH_TOP_K
     from litellm.proxy.mcp_server.code_execution import CODE_TOOL_NAME, run_code_tool
@@ -488,18 +490,22 @@ async def _dispatch_virtual_mcp_tool(
         proxy_tool_id: Final = proxy_arguments.get("tool_id")
         try:
             proxy_target_tool: Final = (
-                await find_mcp_proxy_tool(
-                    tool_id=proxy_tool_id,
-                    user_api_key_auth=user_api_key_auth,
-                    mcp_servers=mcp_servers,
-                    client_ip=client_ip,
-                    mcp_auth_header=mcp_auth_header,
-                    mcp_server_auth_headers=mcp_server_auth_headers,
-                    oauth2_headers=oauth2_headers,
-                    raw_headers=raw_headers,
+                resolved_tool
+                if resolved_tool is not None
+                else (
+                    await find_mcp_proxy_tool(
+                        tool_id=proxy_tool_id,
+                        user_api_key_auth=user_api_key_auth,
+                        mcp_servers=mcp_servers,
+                        client_ip=client_ip,
+                        mcp_auth_header=mcp_auth_header,
+                        mcp_server_auth_headers=mcp_server_auth_headers,
+                        oauth2_headers=oauth2_headers,
+                        raw_headers=raw_headers,
+                    )
+                    if name == MCP_PROXY_CALL_TOOL_NAME and isinstance(proxy_tool_id, str)
+                    else None
                 )
-                if name == MCP_PROXY_CALL_TOOL_NAME and isinstance(proxy_tool_id, str)
-                else None
             )
             proxy_guardrail_auth: Final = (
                 await MCPRequestHandler.billing_auth_for_tool_call(

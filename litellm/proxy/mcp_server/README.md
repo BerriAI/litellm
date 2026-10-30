@@ -13,9 +13,9 @@ litellm_settings:
   mcp_code_mode: true
 ```
 
-Reconnect the MCP client or refresh its tool list. It should discover `litellm_execute_code` alongside its existing tools. The setting is off by default. Turning it off also rejects calls from clients that cached the code tool.
+Reconnect the MCP client or refresh its tool list. It should discover `litellm_execute_code` alongside its existing tools. Turning it off also rejects calls from clients that cached the code tool.
 
-The extra installs QuickJS-NG. Platforms without a compatible wheel need a source build and its compiler toolchain; these builds are not part of the verified platform matrix. A missing runtime produces an actionable startup error. The original `quickjs` package shares files with `quickjs-ng`; use a separate environment without that package before installing the extra. Regular proxy installations and disabled gateways do not require either runtime.
+The extra installs QuickJS-NG. Platforms without a compatible wheel need a source build and its compiler toolchain; source builds on these platforms have not been verified. A missing runtime produces an actionable startup error. The original `quickjs` package shares files with `quickjs-ng`; use a separate environment without that package before installing the extra. Regular proxy installations and disabled gateways do not require either runtime.
 
 The code tool accepts a `code` string. Discover a tool and its argument schema normally, then copy the code-mode `tool_id` from its description or `search_tools` into `tools.call_tool`. Copy that reference unchanged: clients can rename the displayed tool. Exact gateway catalog names also work. Calls return the full MCP result, including `content`, `structuredContent` when provided, and `isError`. Use `text(value)` to return a JSON value to the model. For example, after discovering a tool named `example-add` that accepts `a` and `b`:
 
@@ -33,7 +33,9 @@ if (result.isError) {
 
 Use `await` for every call, including calls grouped with `Promise.all`. Scripts run in fresh local worker processes. They have no persistent state, general network, filesystem, package imports, or shell API. The parent gateway performs tool calls using the original caller's permissions, upstream authentication, guardrails, and accounting. A worker process isolates normal runtime failures; it is not an operating-system sandbox against an exploit of the embedded JavaScript engine.
 
-The script itself and each nested tool call count toward request-rate limits. The script holds its caller's concurrency slot until it finishes; nested calls reuse overlapping concurrency slots and retain their other limits. The wrapper has no tool charge, and each upstream call retains its configured cost.
+REST clients discover the gateway code tool through `/mcp-rest/tools/list` without a `server_id` filter, and call it through `/mcp-rest/tools/call` without `server_id`. An explicit `server_id` keeps `litellm_execute_code` routed to that upstream. Per-server REST listings contain upstream tools only. Caller permissions and an optional `toolset_name` still restrict gateway code calls.
+
+The script itself and each nested tool call count toward request-rate limits. Server request limits also count tool lookups, as they do on `/mcp/proxy`. The script holds its caller's concurrency slot until it finishes; nested calls reuse overlapping concurrency slots and retain their other limits. The wrapper has no tool charge, and each upstream call retains its configured cost.
 
 ## Tool compatibility
 

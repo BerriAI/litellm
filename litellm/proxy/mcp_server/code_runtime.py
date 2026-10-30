@@ -49,17 +49,19 @@ class _Calls:
 
 def check_runtime() -> None:
     try:
+        metadata.distribution("quickjs")
+    except metadata.PackageNotFoundError:
+        pass
+    else:
+        raise ValueError(
+            "MCP code mode cannot use the conflicting quickjs package. Install the code-mode extra in a separate environment."
+        )
+    try:
         metadata.distribution("quickjs-ng")
     except metadata.PackageNotFoundError as exc:
         raise ValueError(
             "MCP code mode requires quickjs-ng. Install 'litellm[proxy,mcp-code-mode]' on a supported platform."
         ) from exc
-    try:
-        metadata.distribution("quickjs")
-    except metadata.PackageNotFoundError:
-        pass
-    else:
-        raise ValueError("MCP code mode requires removing the conflicting quickjs package and reinstalling quickjs-ng")
     if importlib.util.find_spec("_quickjs") is None:
         raise ValueError(
             "MCP code mode requires quickjs-ng. Install 'litellm[proxy,mcp-code-mode]' on a supported platform."
