@@ -5203,6 +5203,7 @@ healthcheck = [
     { name = "pyyaml" },
 ]
 proxy-dev = [
+    { name = "quickjs-ng", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'i686' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86' and sys_platform == 'win32')" },
     { name = "a2a-sdk" },
     { name = "azure-identity" },
     { name = "backports-zstd", marker = "python_full_version < '3.14'" },
@@ -5433,6 +5434,7 @@ healthcheck = [
     { name = "pyyaml", specifier = "==6.0.3" },
 ]
 proxy-dev = [
+    { name = "quickjs-ng", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'i686' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86' and sys_platform == 'win32')", specifier = ">=0.17.0.2,<0.18" },
     { name = "a2a-sdk", specifier = "==1.1.0" },
     { name = "azure-identity", specifier = "==1.25.2" },
     { name = "backports-zstd", marker = "python_full_version < '3.14'", specifier = "==1.8.0" },
