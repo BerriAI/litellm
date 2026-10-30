@@ -20,6 +20,7 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
+    from openai.types.audio.speech_create_params import SpeechCreateParams
     from opentelemetry.trace import Span as _Span
 
     from litellm import ModelResponse as _ModelResponse
@@ -311,6 +312,17 @@ def _set_duration_in_model_call_details(
             verbose_logger.debug("`logging_obj` not found - unable to track `llm_api_duration_ms")
     except Exception as e:
         verbose_logger.warning("Error setting `llm_api_duration_ms`: %s", e)
+
+
+def speech_create_params(
+    model: str, voice: str, input: str, optional_params: Mapping[str, object]
+) -> "SpeechCreateParams":
+    """The provider-mapped speech body, in the shape the OpenAI and Azure SDKs take."""
+    from openai.types.audio.speech_create_params import SpeechCreateParams
+
+    return cast(  # cast-ok: map_openai_params already mapped these to this SDK call's params
+        SpeechCreateParams, {"model": model, "voice": voice, "input": input, **optional_params}
+    )
 
 
 def speech_request_body(model: str, voice: str, optional_params: Mapping[str, object]) -> Mapping[str, object]:
