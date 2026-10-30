@@ -526,6 +526,29 @@ def test_both_compact_and_context_management_headers_added():
         )
 
 
+def test_openai_list_form_context_management_sends_the_compact_beta():
+    config: Final = VertexAIPartnerModelsAnthropicMessagesConfig()
+
+    with (
+        patch.object(config, "_ensure_access_token", return_value=("token", "test-project")),
+        patch.object(config, "get_complete_vertex_url", return_value="https://mock-url"),
+    ):
+        updated_headers, _ = config.validate_anthropic_messages_environment(
+            headers={},
+            model="claude-vertex-ai-opus-4-6",
+            messages=[],
+            optional_params={"context_management": [{"type": "compaction", "compact_threshold": 150000}]},
+            litellm_params={
+                "vertex_ai_project": "test-project",
+                "vertex_ai_location": "us-central1",
+                "vertex_credentials": "{}",
+            },
+            api_base=None,
+        )
+
+    assert updated_headers["anthropic-beta"].split(",") == [ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value]
+
+
 def test_validate_environment_always_refreshes_token_ignoring_stale_bearer():
     """Regression: stale Authorization in shared deployment extra_headers must not
     skip token refresh on /v1/messages — _ensure_access_token is always called."""
