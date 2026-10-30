@@ -8,7 +8,7 @@ import zlib
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import Mock
 
@@ -4051,12 +4051,14 @@ _THINKING_HISTORY: Final = (
 
 @dataclass(slots=True)
 class ScriptedBedrockInvoke:
-    replies: tuple[tuple[int, Mapping[str, object]], ...]
+    replies: tuple[tuple[int, Mapping[str, object] | bytes], ...]
     bodies: tuple[dict[str, object], ...] = ()
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.bodies = (*self.bodies, REASONING_BODY_ADAPTER.validate_json(request.content))
         status_code, body = self.replies[len(self.bodies) - 1]
+        if isinstance(body, bytes):
+            return httpx.Response(status_code, content=body)
         return httpx.Response(status_code, json=body)
 
 
@@ -4065,6 +4067,7 @@ async def _send_bedrock_messages(
     model_info: Mapping[str, object] | None,
     replies: Sequence[tuple[int, Mapping[str, object]]],
     messages: Sequence[Mapping[str, object]] = ({"role": "user", "content": "Summarise the weather as JSON."},),
+    extra: Mapping[str, object] = MappingProxyType({}),
 ) -> tuple[ScriptedBedrockInvoke, Exception | None]:
     bedrock: Final = ScriptedBedrockInvoke(replies=tuple(replies))
     try:
@@ -4080,6 +4083,7 @@ async def _send_bedrock_messages(
             aws_region_name="us-east-1",
             client=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock)),
             **({} if model_info is None else {"model_info": model_info}),
+            **extra,
         )
     except Exception as error:
         return bedrock, error
@@ -4168,6 +4172,158 @@ async def test_bedrock_messages_400_is_not_retried_unless_it_rejects_opt_in_nati
     bedrock, raised = await _send_bedrock_messages(model, model_info, [(400, error), (200, _ANTHROPIC_MESSAGE)])
 
     assert isinstance(raised, litellm.BadRequestError)
+    assert len(bedrock.bodies) == 1
+
+
+# Bedrock's 400 bodies for requests past Claude's strict tool limits, seen live on us.anthropic.claude-sonnet-4-6 on 2026-10-29
+_STRICT_TOOLS_REJECTIONS: Final = (
+    {
+        "message": "Too many strict tools (21). The maximum number of strict tools supported is 20. Try reducing the "
+        "number of tools marked as strict."
+    },
+    {
+        "message": "Schemas contains too many optional parameters (96), which would make grammar compilation "
+        "inefficient. Reduce the number of optional parameters in your tool schemas (limit: 24)."
+    },
+    {
+        "message": "Schemas contains too many parameters with union types (24 parameters with type arrays or anyOf). "
+        "This causes exponential compilation cost. Reduce the number of nullable or union-typed parameters (limit: 16 "
+        "parameters with unions)."
+    },
+    {
+        "message": "The compiled grammar is too large, which would cause performance issues. Simplify your tool schemas "
+        "or reduce the number of strict tools."
+    },
+)
+_LOOKUP_TOOL: Final = {
+    "name": "lookup_record",
+    "description": "Look up records",
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["query"],
+        "properties": {"query": {"type": "string"}},
+    },
+}
+_STRICT_TOOLS: Final = ({**_LOOKUP_TOOL, "strict": True}, {**_LOOKUP_TOOL, "name": "lookup_invoice", "strict": True})
+_STREAMED_MESSAGE: Final = _bedrock_event_frame(
+    {"type": "message_start", "message": {**_ANTHROPIC_MESSAGE, "content": [], "stop_reason": None}}
+) + _bedrock_event_frame({"type": "message_stop"})
+
+
+async def _send_strict_tools_to_bedrock(
+    replies: Sequence[tuple[int, Mapping[str, object] | bytes]],
+    drop_params: bool | None,
+    tools: Sequence[Mapping[str, object]] = _STRICT_TOOLS,
+    stream: bool = False,
+) -> tuple[ScriptedBedrockInvoke, object]:
+    bedrock: Final = ScriptedBedrockInvoke(replies=tuple(replies))
+    try:
+        response: Final = await litellm.anthropic_messages(
+            model="bedrock/invoke/us.anthropic.claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Use lookup_record to find invoice 42"}],
+            max_tokens=200,
+            tools=[dict(tool) for tool in tools],
+            stream=stream,
+            drop_params=drop_params,
+            aws_access_key_id="test-access-key",
+            aws_secret_access_key="test-secret-key",
+            aws_region_name="us-east-1",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock)),
+        )
+    except litellm.BadRequestError as error:
+        return bedrock, error
+    if isinstance(response, AsyncIterator):
+        return bedrock, b"".join([chunk async for chunk in response])
+    return bedrock, response
+
+
+def _assert_resent_without_strict(bedrock: ScriptedBedrockInvoke) -> None:
+    first, second = bedrock.bodies
+    first_tools: Final = TypeAdapter(list[dict[str, object]]).validate_python(first["tools"])
+    assert [tool["strict"] for tool in first_tools] == [True, True]
+    assert second == {
+        **first,
+        "tools": [{key: value for key, value in tool.items() if key != "strict"} for tool in first_tools],
+    }
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("rejection", _STRICT_TOOLS_REJECTIONS, ids=["count", "optional", "union", "grammar"])
+async def test_bedrock_messages_strict_tools_rejection_is_sent_again_without_strict_under_drop_params(
+    rejection: Mapping[str, object],
+) -> None:
+    bedrock, response = await _send_strict_tools_to_bedrock([(400, rejection), (200, _ANTHROPIC_MESSAGE)], True)
+
+    _assert_resent_without_strict(bedrock)
+    assert REASONING_BODY_ADAPTER.validate_python(response)["id"] == _ANTHROPIC_MESSAGE["id"]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_bedrock_messages_strict_tools_rejection_is_sent_again_under_global_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    bedrock, response = await _send_strict_tools_to_bedrock(
+        [(400, _STRICT_TOOLS_REJECTIONS[0]), (200, _ANTHROPIC_MESSAGE)], None
+    )
+
+    _assert_resent_without_strict(bedrock)
+    assert REASONING_BODY_ADAPTER.validate_python(response)["id"] == _ANTHROPIC_MESSAGE["id"]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_bedrock_messages_streamed_strict_tools_rejection_is_sent_again_without_strict_under_drop_params() -> (
+    None
+):
+    bedrock, streamed = await _send_strict_tools_to_bedrock(
+        [(400, _STRICT_TOOLS_REJECTIONS[0]), (200, _STREAMED_MESSAGE)], True, stream=True
+    )
+
+    _assert_resent_without_strict(bedrock)
+    assert isinstance(streamed, bytes) and b"event: message_stop" in streamed
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_bedrock_messages_body_rebuilt_without_native_output_still_drops_the_rejected_strict() -> None:
+    bedrock, error = await _send_bedrock_messages(
+        "us.anthropic.claude-opus-4-8",
+        None,
+        [(400, _STRICT_TOOLS_REJECTIONS[0]), (400, _NATIVE_OUTPUT_REJECTION), (200, _ANTHROPIC_MESSAGE)],
+        extra={"tools": [dict(tool) for tool in _STRICT_TOOLS], "drop_params": True},
+    )
+
+    assert error is None
+    first, _, rebuilt = bedrock.bodies
+    assert "format" in REASONING_BODY_ADAPTER.validate_python(first["output_config"])
+    assert "format" not in REASONING_BODY_ADAPTER.validate_python(rebuilt.get("output_config", {}))
+    assert rebuilt["tools"] == [
+        {key: value for key, value in tool.items() if key != "strict"} for tool in _STRICT_TOOLS
+    ]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("drop_params", "tools", "rejection"),
+    [
+        (None, _STRICT_TOOLS, _STRICT_TOOLS_REJECTIONS[0]),
+        (False, _STRICT_TOOLS, _STRICT_TOOLS_REJECTIONS[0]),
+        (True, _STRICT_TOOLS, {"message": "messages.0.content: Field required"}),
+        (True, (_LOOKUP_TOOL,), _STRICT_TOOLS_REJECTIONS[0]),
+        (True, ({**_LOOKUP_TOOL, "strict": False},), _STRICT_TOOLS_REJECTIONS[1]),
+    ],
+    ids=["drop_params_unset", "drop_params_off", "other_400", "no_strict_tool", "strict_false_only"],
+)
+async def test_bedrock_messages_400_reaches_the_caller_unless_drop_params_can_drop_the_rejected_strict(
+    drop_params: bool | None, tools: Sequence[Mapping[str, object]], rejection: Mapping[str, object]
+) -> None:
+    bedrock, raised = await _send_strict_tools_to_bedrock(
+        [(400, rejection), (200, _ANTHROPIC_MESSAGE)], drop_params, tools
+    )
+
+    assert isinstance(raised, litellm.BadRequestError)
+    assert str(rejection["message"]) in str(raised)
     assert len(bedrock.bodies) == 1
 
 

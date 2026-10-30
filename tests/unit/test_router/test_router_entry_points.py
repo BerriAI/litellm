@@ -592,9 +592,9 @@ FORWARDS = [
         ((), {"model_name": "gpt"}),
     ),
     (
-        lambda r: r.registry().deployments("gpt", source="routed_group"),
+        lambda r: r.registry().deployments("gpt", source="routed_group", team_id="t"),
         "_core_get_model_list_of_routed_group",
-        (("gpt",), {}),
+        (("gpt", "t"), {}),
     ),
     (
         lambda r: r.registry().deployments("gpt", source="wildcard", team_id="t"),
