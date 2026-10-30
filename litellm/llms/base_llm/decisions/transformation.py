@@ -12,6 +12,7 @@ from pydantic_core import ErrorDetails
 from typing_extensions import assert_never
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -497,16 +498,22 @@ def ir_to_systemone_response(response: DecisionsIRResponse, request: DecisionsIR
     )
 
 
-def cost_map_mode(model: str, custom_llm_provider: str) -> str | None:
+def catalog_mode(model: str, custom_llm_provider: str) -> str | None:
     try:
-        model_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-    except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model, which has no mode
+        key: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)["key"]
+    except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model, which the catalog does not list
         return None
-    return model_info.get("mode")
+    entry: Final = GetModelCostMap.loaded_model_cost_map().get(key)
+    mode: Final = entry.get("mode") if entry is not None else None
+    return mode if isinstance(mode, str) else None
 
 
 def _is_decisions_model(model: str, custom_llm_provider: str) -> bool:
-    return is_decisions_model_mode(cost_map_mode(model, custom_llm_provider))
+    try:
+        model_mode: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get("mode")
+    except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model, which has no mode
+        return False
+    return is_decisions_model_mode(model_mode)
 
 
 class BaseDecisionsConfig(ABC):

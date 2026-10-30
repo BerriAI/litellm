@@ -23,7 +23,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
     DecisionsResponseValidationError,
-    cost_map_mode,
+    catalog_mode,
     image_media_type,
     image_param,
     input_images,
@@ -280,7 +280,7 @@ class _DeploymentCapabilities(BaseModel):
     def decisions_media_flag(self, flag: bool | None, model: str, custom_llm_provider: str) -> bool | None:
         if flag is None:
             return None
-        mode: Final = self.mode if self.mode is not None else cost_map_mode(model, custom_llm_provider)
+        mode: Final = self.mode if self.mode is not None else catalog_mode(model, custom_llm_provider)
         return flag if mode is None or is_decisions_model_mode(mode) else None
 
 

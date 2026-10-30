@@ -6,11 +6,11 @@ import copy
 import json
 import re
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from concurrent.futures import wait
 from functools import partial
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeAlias
 
 import httpx
 import pytest
@@ -24,6 +24,7 @@ import litellm
 from litellm.constants import AWS_SIGNING_MAX_THREADS
 from litellm.cost_calculator import get_response_cost_from_hidden_params
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded, refetch_model_cost_map
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.azure_ai.common_utils import get_azure_ai_auth_headers
 from litellm.llms.bedrock.base_aws_llm import AWS_SIGNING_EXECUTOR
@@ -3772,15 +3773,37 @@ async def test_media_flags_on_a_deployment_whose_own_mode_is_not_decisions_never
     assert (sent["audio"], sent["videos"]) == (list(_AUDIO_CLIPS), list(_VIDEO_CLIPS))
 
 
+CatalogLoader: TypeAlias = Callable[[Mapping[str, Mapping[str, object]]], Awaitable[None]]
+
+
+@pytest.fixture
+def load_catalog_with(monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None) -> Iterator[CatalogLoader]:
+    async def load(rows: Mapping[str, Mapping[str, object]]) -> None:
+        catalog: Final = {**litellm.get_model_cost_map(url=""), **rows}
+        transport: Final = httpx.MockTransport(lambda _: httpx.Response(200, json=catalog))
+        monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP")
+        async with httpx.AsyncClient(transport=transport) as client:
+            loaded: Final = await refetch_model_cost_map(url="https://catalog.example/prices.json", client=client)
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        assert isinstance(loaded, ModelCostMapReloaded)
+        monkeypatch.setattr(litellm, "model_cost", loaded.model_cost_map)
+        litellm.get_model_info.cache_clear()
+
+    yield load
+    litellm.get_model_cost_map(url="")
+
+
 @pytest.mark.asyncio
-async def test_media_flags_on_a_deployment_without_its_own_mode_follow_the_mode_the_cost_map_lists(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+async def test_media_flags_on_a_deployment_without_its_own_mode_follow_the_mode_the_catalog_lists(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, load_catalog_with: CatalogLoader
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    for mode in ("chat", "decisions"):
-        monkeypatch.setitem(
-            litellm.model_cost, f"openrouter/example/omni-{mode}", {"litellm_provider": "openrouter", "mode": mode}
-        )
+    await load_catalog_with(
+        {
+            f"openrouter/example/omni-{mode}": {"litellm_provider": "openrouter", "mode": mode}
+            for mode in ("chat", "decisions")
+        }
+    )
     route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
     router: Final = litellm.Router(
         model_list=[
@@ -3806,6 +3829,33 @@ async def test_media_flags_on_a_deployment_without_its_own_mode_follow_the_mode_
     assert ("audio" in dropped, "videos" in dropped) == (False, False)
 
     await send(model="decisions")
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert (sent["audio"], sent["videos"]) == (list(_AUDIO_CLIPS), list(_VIDEO_CLIPS))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sibling_mode", ("responses", "embedding"))
+async def test_another_deployments_mode_never_switches_off_a_deployments_own_media_flags(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, sibling_mode: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
+    shared_params: Final = {"model": "openrouter/example/omni-shared", "api_key": "k"}
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "sibling", "litellm_params": shared_params, "model_info": {"id": "s", "mode": sibling_mode}},
+            {
+                "model_name": "flagged",
+                "litellm_params": shared_params,
+                "model_info": {"id": "f", "supports_audio_input": True, "supports_video_input": True},
+            },
+        ]
+    )
+
+    await router.adecisions(
+        model="flagged", input="review", questions=_PREDICATE_QUESTIONS, audio=_AUDIO_CLIPS, videos=_VIDEO_CLIPS
+    )
+
     sent: Final = json.loads(route.calls.last.request.content)
     assert (sent["audio"], sent["videos"]) == (list(_AUDIO_CLIPS), list(_VIDEO_CLIPS))
 
