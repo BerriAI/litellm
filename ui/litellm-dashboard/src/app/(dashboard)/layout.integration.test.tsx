@@ -18,6 +18,8 @@ vi.unmock("@/lib/toast");
 let deploymentWarnings: { warnings: { id: string; severity: string; ignore: null }[]; ignore_available: boolean };
 let plugins: { name: string; display_name: string; url: string }[];
 
+const emptyTeamsPage = { teams: [], total: 0, page: 1, page_size: 100, total_pages: 1 };
+
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
   useSearchParams: () => new URLSearchParams(),
@@ -54,7 +56,7 @@ beforeEach(() => {
         case "/api/plugins/auth-token":
           return Response.json({});
         case "/v2/team/list":
-          return Response.json({ teams: [], total: 0, page: 1, page_size: 100, total_pages: 1 });
+          return Response.json(emptyTeamsPage);
         case "/organization/list":
           return Response.json([]);
         case "/health/readiness/details":
