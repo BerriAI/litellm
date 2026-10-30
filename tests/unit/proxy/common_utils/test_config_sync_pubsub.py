@@ -5,10 +5,12 @@ from typing import Callable, Coroutine, Final, Iterable, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import fakeredis
 from pydantic import BaseModel, ConfigDict
 from redis.asyncio import Redis
 
 import litellm
+from tests._support.fake_redis import fake_redis_cache
 from litellm.proxy.common_utils.config_sync_pubsub import (
     CONFIG_SYNC_CHANNEL,
     CONFIG_SYNC_JITTER_MAX_SECONDS,
@@ -73,6 +75,9 @@ class _RecordingRedisClient(Redis):
         self.published.append((channel, message))
         return 1
 
+    async def ping(self) -> bool:
+        return True
+
 
 class _FailingPublishRedisClient(Redis):
     def __init__(self) -> None:
@@ -80,6 +85,9 @@ class _FailingPublishRedisClient(Redis):
 
     async def publish(self, channel: str, message: str) -> int:
         raise ConnectionError("redis down")
+
+    async def ping(self) -> bool:
+        return True
 
 
 class _ScriptedPubSubClient:
@@ -101,6 +109,9 @@ class _ScriptedPubSubClient:
     def pubsub(self) -> "_QueuePubSub":
         return next(self._scripted_pubsubs)
 
+    async def ping(self) -> bool:
+        return True
+
 
 class _QueuePubSub:
     def __init__(self, initial_messages: Iterable[object] = ()) -> None:
@@ -116,16 +127,21 @@ class _QueuePubSub:
     async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> Optional[object]:
         if timeout == 0:
             try:
-                return self.queue.get_nowait()
+                message = self.queue.get_nowait()
+                return _redis_delivery(message) if isinstance(message, str) else message
             except asyncio.QueueEmpty:
                 return None
         try:
-            return await asyncio.wait_for(self.queue.get(), timeout)
+            message = await asyncio.wait_for(self.queue.get(), timeout)
+            return _redis_delivery(message) if isinstance(message, str) else message
         except asyncio.TimeoutError:
             return None
 
     async def aclose(self) -> None:
         self.closed = True
+
+    async def reset(self) -> None:
+        await self.aclose()
 
 
 class _BrokenPubSub(_QueuePubSub):
@@ -177,7 +193,7 @@ class _VirtualTimePubSub(_QueuePubSub):
         if self.pending and self.pending[0][0] <= due_by:
             delivered_at, message = self.pending.pop(0)
             self._clock.now = max(self._clock.now, delivered_at)
-            return message
+            return _redis_delivery(message) if isinstance(message, str) else message
         self._clock.now = due_by
         return None
 
@@ -197,20 +213,20 @@ class _ScriptedPubSubRedisClient(Redis):
     def pubsub(self) -> _QueuePubSub:
         return next(self._scripted_pubsubs)
 
+    async def ping(self) -> bool:
+        return True
 
-class _FakeRedisCache:
-    def __init__(self, client: object, namespace: Optional[str] = None) -> None:
-        self._client = client
-        self.namespace = namespace
 
-    def init_pubsub_client(self) -> object:
-        return self._client
+def _FakeRedisCache(client: object, namespace: Optional[str] = None):
+    cache = fake_redis_cache(fakeredis.FakeServer(), namespace=namespace)
+    litellm.in_memory_llm_clients_cache.set_cache(key=cache._get_async_client_cache_key(), value=client)
+    return cache
 
 
 class _ExplodingRedisCache:
     namespace: Optional[str] = None
 
-    def init_pubsub_client(self) -> object:
+    def transport(self) -> object:
         raise ConnectionError("cannot connect")
 
 

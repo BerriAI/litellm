@@ -709,6 +709,39 @@ class _InfoClient:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_subscribe_failure_and_cancellation_release_the_connection(server, cancel):
+    cache = fake_redis_cache(server)
+    client = cache.init_async_client()
+    client.connection_pool.max_connections = 1
+    pubsub = client.pubsub()
+    subscribed = asyncio.Event()
+    original = pubsub.subscribe
+
+    async def subscribe_then_fail(*channels):
+        await original(*channels)
+        subscribed.set()
+        if cancel:
+            await asyncio.Event().wait()
+        raise ResponseError("subscribe rejected")
+
+    with (
+        patch.object(client, "pubsub", return_value=pubsub),
+        patch.object(pubsub, "subscribe", side_effect=subscribe_then_fail),
+    ):
+        task = asyncio.create_task(cache.transport().subscribe("config"))
+        await asyncio.wait_for(subscribed.wait(), timeout=2)
+        if cancel:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            failure = await task
+            assert isinstance(failure, RedisFailure) and failure.kind == "server"
+    assert await client.ping()
+
+
+@pytest.mark.asyncio
 async def test_info_returns_the_parsed_sections(raw: fakeredis.FakeAsyncRedis) -> None:
     transport = replace(fake_redis_transport(raw, failure_threshold=1), client=lambda: _InfoClient())
 

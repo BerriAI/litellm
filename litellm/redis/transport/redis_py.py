@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import timedelta
 from types import MappingProxyType
@@ -382,8 +383,12 @@ async def _publish_each(client: AsyncPubSubClient, channel: str, messages: Seque
 
 async def _subscribe(client: AsyncPubSubClient, channels: Sequence[str]) -> RedisPySubscription:
     pubsub: Final = client.pubsub()
-    await pubsub.subscribe(*channels)
-    return RedisPySubscription(pubsub)
+    subscription: Final = RedisPySubscription(pubsub)
+    async with AsyncExitStack() as cleanup:
+        cleanup.push_async_callback(subscription.close)
+        await pubsub.subscribe(*channels)
+        _ = cleanup.pop_all()
+    return subscription
 
 
 async def _scan(client: AsyncRedisCommands, match: str, limit: int) -> tuple[object, ...]:
