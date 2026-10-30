@@ -3089,7 +3089,7 @@ class LiteLLMCompletionResponsesConfig:
         return MappingProxyType(calls)
 
     @staticmethod
-    def _map_chat_completion_finish_reason_to_responses_status(
+    def map_chat_completion_finish_reason_to_responses_status(
         finish_reason: str | None,
     ) -> ResponsesAPIStatus:
         """
@@ -3291,7 +3291,7 @@ class LiteLLMCompletionResponsesConfig:
             max_output_tokens=echoed.get("max_output_tokens"),
             previous_response_id=echoed.get("previous_response_id"),
             reasoning=echoed.get("reasoning"),
-            status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+            status=LiteLLMCompletionResponsesConfig.map_chat_completion_finish_reason_to_responses_status(
                 finish_reason
             ),
             text=echoed.get("text") or {},
@@ -3438,7 +3438,7 @@ class LiteLLMCompletionResponsesConfig:
                         GenericResponseOutputItem(
                             type="reasoning",
                             id=mint_reasoning_item_id(),
-                            status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                            status=LiteLLMCompletionResponsesConfig.map_chat_completion_finish_reason_to_responses_status(
                                 choice.finish_reason
                             ),
                             role="assistant",
@@ -3568,7 +3568,7 @@ class LiteLLMCompletionResponsesConfig:
                     GenericResponseOutputItem(
                         type="message",
                         id=f"msg_{uuid.uuid4()}",
-                        status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                        status=LiteLLMCompletionResponsesConfig.map_chat_completion_finish_reason_to_responses_status(
                             choice.finish_reason
                         ),
                         role=choice.message.role,

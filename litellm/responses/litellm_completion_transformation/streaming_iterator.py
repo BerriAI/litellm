@@ -989,7 +989,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             item=BaseLiteLLMOpenAIResponseObject(
                 **{
                     "id": self._cached_item_id,
-                    "status": "completed",
+                    "status": LiteLLMCompletionResponsesConfig.map_chat_completion_finish_reason_to_responses_status(
+                        litellm_complete_object.choices[0].finish_reason
+                    ),
                     "type": "message",
                     "role": "assistant",
                     "content": [

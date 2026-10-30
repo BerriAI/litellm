@@ -1988,3 +1988,26 @@ def test_the_partial_response_billed_on_disconnect_carries_the_logging_objects_b
         partial.response.usage.input_tokens,
         partial.response.usage.output_tokens,
     ), "the bill is priced on the partial's own usage"
+
+
+@pytest.mark.parametrize(
+    ("finish_reason", "status"),
+    [("length", "incomplete"), ("content_filter", "incomplete"), ("stop", "completed")],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_streamed_message_item_done_status_agrees_with_the_terminal_response(
+    finish_reason: str, status: str, sync_mode: bool
+) -> None:
+    iterator: Final = _build_iterator([_chunk("Hello"), _chunk(" wor", finish_reason=finish_reason)])
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    message_item_done: Final = next(
+        event
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and _is_message_item(event)
+    )
+    terminal_message_statuses: Final = [item.status for item in events[-1].response.output if item.type == "message"]
+    assert terminal_message_statuses == [status]
+    assert message_item_done.item.status == status
