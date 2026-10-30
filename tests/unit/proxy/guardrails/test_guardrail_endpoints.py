@@ -2292,6 +2292,42 @@ async def test_apply_guardrail_replaces_caller_identity_with_the_authenticated_k
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_hands_the_guardrail_metadata_it_can_write_to(mocker):
+    """Guardrails such as OpenAI moderation annotate the metadata they are given, so a
+    read-only mapping turns a normal evaluation into a 500."""
+    mock_guardrail = _patch_apply_guardrail_env(
+        mocker,
+        {"texts": ["ok"]},
+        processed_data={"guardrail_name": "test-guardrail", "metadata": {"user_api_key_alias": "billing-app"}},
+    )
+
+    annotated: Final[list[object]] = []  # mutable-ok: records the metadata the guardrail was handed
+
+    async def annotating_guardrail(**kwargs):
+        kwargs["request_data"]["metadata"]["moderation_model"] = "omni-moderation-latest"
+        annotated.append(kwargs["request_data"]["metadata"])
+        return {"texts": ["ok"]}
+
+    mock_guardrail.apply_guardrail = annotating_guardrail
+
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=ApplyGuardrailRequest(
+            guardrail_name="test-guardrail", text="hello", metadata={"forbidden_topics": ["tax"]}
+        ),
+        user_api_key_dict=UserAPIKeyAuth(key_alias="billing-app"),
+    )
+
+    assert annotated == [
+        {
+            "forbidden_topics": ["tax"],
+            "user_api_key_alias": "billing-app",
+            "moderation_model": "omni-moderation-latest",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_ignores_a_caller_supplied_user_api_key(mocker):
     """The bare key field carries attribution as much as the prefixed ones, so a caller
     cannot set it either."""

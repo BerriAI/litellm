@@ -2346,14 +2346,21 @@ def _is_key_identity_field(key: str) -> bool:
     return key == "user_api_key" or key.startswith("user_api_key_")
 
 
-def _guardrail_request_metadata(caller: object, proxy: object) -> Mapping[str, object]:
+def _guardrail_request_metadata(
+    caller: object, proxy: object
+) -> dict[str, object]:  # mutable-ok: guardrails annotate the metadata they are handed
+    """Caller metadata with the identity fields taken from the authenticated key.
+
+    The result is handed to the guardrail as ``request_data["metadata"]``, which providers
+    write their own detection details into, so it cannot be a read-only mapping.
+    """
     caller_fields: Final = tuple(
         (key, value) for key, value in _metadata_fields(caller).items() if not _is_key_identity_field(key)
     )
     key_identity: Final = tuple(
         (key, value) for key, value in _metadata_fields(proxy).items() if _is_key_identity_field(key)
     )
-    return MappingProxyType(dict((*caller_fields, *key_identity)))
+    return dict((*caller_fields, *key_identity))
 
 
 def _execution_timeout_response(timeout: float) -> TestCustomCodeGuardrailResponse:
