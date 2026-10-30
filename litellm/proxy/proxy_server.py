@@ -20672,6 +20672,15 @@ async def delete_config_general_settings(
         else None
     )
 
+    if not _general_settings_row_is_readable(stored_row):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "general_settings is stored in the database as something other than a JSON object, so no "
+                "field can be removed from it"
+            },
+        )
+
     if data.field_name not in ConfigGeneralSettings.model_fields and (stored is None or data.field_name not in stored):
         raise HTTPException(
             status_code=400,
@@ -20684,14 +20693,7 @@ async def delete_config_general_settings(
     if stored is None:
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": (
-                    f"Field name={data.field_name} not in config"
-                    if _general_settings_row_is_readable(stored_row)
-                    else "general_settings is stored in the database as something other than a JSON object, so no "
-                    "field can be removed from it"
-                )
-            },
+            detail={"error": f"Field name={data.field_name} not in config"},
         )
 
     remaining: Final = {key: value for key, value in stored.items() if key != data.field_name}

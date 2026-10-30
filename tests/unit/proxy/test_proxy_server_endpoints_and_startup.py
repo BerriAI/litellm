@@ -15544,33 +15544,10 @@ async def test_delete_config_general_settings_removes_an_ignored_stored_key_the_
 
 
 @pytest.mark.asyncio
-async def test_delete_config_general_settings_refuses_an_unknown_key_when_the_stored_row_is_a_json_string(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from litellm.proxy._types import ConfigFieldDelete
-    from litellm.proxy.proxy_server import ProxyConfig, delete_config_general_settings
-
-    pc: Final = ProxyConfig()
-    pc._load_yaml_settings_stores({"general_settings": {}})
-    fake_prisma: Final = _fake_prisma_with_config('{"store_prompts_in_spend_logs": true}')
-    monkeypatch.setattr(proxy_server_module, "proxy_config", pc)
-    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
-
-    admin: Final = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
-    with pytest.raises(HTTPException) as refused:
-        await delete_config_general_settings(
-            data=ConfigFieldDelete(field_name="not_a_setting", config_type="general_settings"),
-            user_api_key_dict=admin,
-        )
-
-    assert refused.value.status_code == 400
-    fake_prisma.db.litellm_config.upsert.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("stored_row", ['{"max_request_size_mb": 42, "store_prompts_in_spend_logs": true}', "not json"])
+@pytest.mark.parametrize("stored_row", ['{"max_request_size_mb": 42, "disable_custom_api_keys": true}', "not json"])
+@pytest.mark.parametrize("field_name", ["max_request_size_mb", "disable_custom_api_keys", "not_a_setting"])
 async def test_delete_config_general_settings_leaves_a_string_row_untouched(
-    monkeypatch: pytest.MonkeyPatch, stored_row: str
+    monkeypatch: pytest.MonkeyPatch, stored_row: str, field_name: str
 ) -> None:
     from litellm.proxy._types import ConfigFieldDelete
     from litellm.proxy.proxy_server import ProxyConfig, delete_config_general_settings
@@ -15584,7 +15561,7 @@ async def test_delete_config_general_settings_leaves_a_string_row_untouched(
     admin: Final = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
     with pytest.raises(HTTPException) as refused:
         await delete_config_general_settings(
-            data=ConfigFieldDelete(field_name="max_request_size_mb", config_type="general_settings"),
+            data=ConfigFieldDelete(field_name=field_name, config_type="general_settings"),
             user_api_key_dict=admin,
         )
 
