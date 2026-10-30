@@ -292,5 +292,14 @@
       "preserve_cache_control": true
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "outrun": {
+    "base_url": "https://api.outrun.to/v1",
+    "api_key_env": "OUTRUN_API_KEY",
+    "api_base_env": "OUTRUN_API_BASE",
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses"
+    ]
   }
 }
