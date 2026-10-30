@@ -142,7 +142,7 @@ def _claude_messages_within_cache_control_cap(
         return messages
     from litellm.integrations.anthropic_cache_control_hook import messages_within_cache_control_cap
 
-    return messages_within_cache_control_cap(messages, tools)
+    return list(messages_within_cache_control_cap(messages, tools))
 
 
 def _prompt_cache_options(optional_params: Mapping[str, object]) -> object | None:
