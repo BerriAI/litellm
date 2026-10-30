@@ -310,7 +310,7 @@ def test_non_admin_keys_scoped_to_the_submission_routes_get_403_from_the_admin_c
                         f"Your user_id={_mask_user_id(user_id)}"
                     ),
                     type="auth_error",
-                    param="None",
+                    param=None,
                     code="401",
                 )
             )

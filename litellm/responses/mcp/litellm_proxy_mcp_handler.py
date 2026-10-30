@@ -35,10 +35,7 @@ from litellm.types.llms.openai import ToolParam as ResponsesToolParam
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.utils import (
     CallTypes,
-    ChatCompletionMessageCustomToolCall,
-    ChatCompletionMessageToolCall,
     Choices,
-    Message,
     ModelResponse,
     StandardLoggingMCPToolCall,
 )
@@ -588,28 +585,17 @@ class LiteLLM_Proxy_MCP_Handler:
     _extract_tool_calls_from_response = extract_tool_calls_from_response
 
     @staticmethod
+    def _continued_choice(response: ModelResponse) -> Choices | None:
+        choices: Final = tuple(choice for choice in response.choices if isinstance(choice, Choices))
+        return next((choice for choice in choices if choice.message.tool_calls), next(iter(choices), None))
+
+    @staticmethod
     def extract_tool_calls_from_chat_response(response: ModelResponse) -> list[object]:
-        """Extract tool calls from a chat completion response."""
-        tool_calls: Final[list[object]] = []
-
-        try:
-            for choice in response.choices:
-                message: Message | None = getattr(choice, "message", None)
-                if message is None:
-                    continue
-                tool_call_entries: (
-                    Sequence[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None
-                ) = getattr(message, "tool_calls", None)
-                if tool_call_entries:
-                    for tool_call in tool_call_entries:
-                        if hasattr(tool_call, "model_dump"):
-                            tool_calls.append(tool_call.model_dump())
-                        else:
-                            tool_calls.append(tool_call)
-        except Exception:
-            verbose_logger.exception("Failed to extract tool calls from chat completion response")
-
-        return tool_calls
+        """Extract the tool calls of the first choice that made any, since the follow-up turn continues it alone."""
+        continued_choice: Final = LiteLLM_Proxy_MCP_Handler._continued_choice(response)
+        if continued_choice is None:
+            return []
+        return [tool_call.model_dump() for tool_call in continued_choice.message.tool_calls or ()]
 
     _extract_tool_calls_from_chat_response = extract_tool_calls_from_chat_response
 
@@ -1018,9 +1004,9 @@ class LiteLLM_Proxy_MCP_Handler:
 
         message_to_append: dict | None = None
         try:
-            first_choice: Final = response.choices[0]
-            if isinstance(first_choice, Choices) and getattr(first_choice, "message", None):
-                message_to_append = first_choice.message.model_dump(exclude_none=True)
+            continued_choice: Final = LiteLLM_Proxy_MCP_Handler._continued_choice(response)
+            if continued_choice is not None:
+                message_to_append = continued_choice.message.model_dump(exclude_none=True)
                 # Ensure tool_calls have arguments field (required by OpenAI API)
                 if message_to_append.get("tool_calls"):
                     for tool_call in message_to_append["tool_calls"]:
