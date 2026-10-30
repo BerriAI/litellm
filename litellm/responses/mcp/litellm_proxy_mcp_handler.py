@@ -23,6 +23,7 @@ from litellm.responses.mcp.tool_precheck import (
     LITELLM_PROXY_MCP_SERVER_URL_PREFIX,
     may_name_litellm_mcp_gateway,
     names_gateway_explicitly,
+    names_whole_gateway,
     proxy_path_mcp_name,
 )
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
@@ -333,8 +334,10 @@ class LiteLLM_Proxy_MCP_Handler:
         # full union (toolset server IDs + direct server names).  Passing a name-based
         # filter here would exclude those toolset server IDs (which are UUIDs, not
         # names), so use None and let the auth object's mcp_servers do the filtering.
+        asks_whole_gateway: Final = any(map(names_whole_gateway, mcp_tools_with_litellm_proxy or ()))
+        denied_names_in_filter: Final = () if asks_whole_gateway else denied_toolset_names
         effective_server_filter: Final = (
-            None if resolved_toolset_ids else ([*resolved_mcp_servers, *denied_toolset_names] or None)
+            None if resolved_toolset_ids else ([*resolved_mcp_servers, *denied_names_in_filter] or None)
         )
 
         listing: Final = await _get_tools_from_mcp_servers(

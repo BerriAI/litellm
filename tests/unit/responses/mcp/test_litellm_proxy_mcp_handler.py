@@ -1520,6 +1520,7 @@ async def _tools_listing_kwargs_for_toolset_url(
     owner_role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER,
     requested_toolsets: tuple[str, ...] = ("team-toolset",),
     team_id: str | None = "team-1",
+    whole_gateway: bool = False,
 ) -> dict[str, object]:
     from litellm.proxy.mcp_server.ui_session_utils import granted_toolset_ids
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable
@@ -1542,7 +1543,8 @@ async def _tools_listing_kwargs_for_toolset_url(
     await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
         user_api_key_auth=team_key,
         mcp_tools_with_litellm_proxy=[
-            {"type": "mcp", "server_url": f"litellm_proxy/mcp/{name}"} for name in requested_toolsets
+            *([{"type": "mcp", "server_url": "litellm_proxy"}] if whole_gateway else []),
+            *({"type": "mcp", "server_url": f"litellm_proxy/mcp/{name}"} for name in requested_toolsets),
         ],
         granted_toolsets=granted_through_team,
     )
@@ -1612,6 +1614,17 @@ async def test_a_denied_toolset_beside_a_granted_one_adds_nothing_to_the_scoped_
     assert scoped is not None
     assert scoped.mcp_servers == ["srv-1"]
     assert scoped.mcp_tool_permissions == {"srv-1": ["add"]}
+
+
+@pytest.mark.asyncio
+async def test_a_whole_gateway_entry_beside_an_ungranted_toolset_still_lists_the_keys_own_servers(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    kwargs: Final = await _tools_listing_kwargs_for_toolset_url(
+        monkeypatch, team_toolset_id="ts-other", whole_gateway=True
+    )
+    assert kwargs["mcp_servers"] is None
+    assert kwargs["user_api_key_auth"].object_permission is None
 
 
 @pytest.mark.asyncio
