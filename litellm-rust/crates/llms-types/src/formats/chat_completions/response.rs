@@ -97,8 +97,8 @@ pub struct ChatCompletionsChoice {
 ///
 /// There is deliberately no `id`: the route mints the `chatcmpl-…` id on
 /// `ChatCompletion`, and echoing the provider's own id here would compete with
-/// it. Pinned by `response_carries_no_id` in the Anthropic chat transformation
-/// tests.
+/// it. Pinned by `response_carries_no_id_so_the_route_mints_the_chatcmpl_id`
+/// in the Anthropic chat transformation tests.
 #[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ChatCompletionsResponse {
     pub created: u64,
