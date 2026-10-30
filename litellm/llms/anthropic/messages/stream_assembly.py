@@ -428,24 +428,35 @@ _ANTHROPIC_EVENT_TYPES: Final = frozenset(
 )
 
 
+def _is_anthropic_event_type(event_type: object) -> bool:
+    return isinstance(event_type, str) and event_type in _ANTHROPIC_EVENT_TYPES
+
+
 def is_raw_sse_stream(all_chunks: Sequence[object]) -> bool:
     return any(isinstance(chunk, (str, bytes)) for chunk in all_chunks)
 
 
-def _joined_sse_stream(all_chunks: Sequence[object]) -> str | None:
-    raw: Final = b"".join(
+def _joined_sse_bytes(all_chunks: Sequence[object]) -> bytes:
+    return b"".join(
         chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
         for chunk in all_chunks
         if isinstance(chunk, (str, bytes))
     )
+
+
+def _joined_sse_stream(all_chunks: Sequence[object]) -> str | None:
     try:
-        return codecs.getincrementaldecoder("utf-8")().decode(raw, final=False)
+        return codecs.getincrementaldecoder("utf-8")().decode(_joined_sse_bytes(all_chunks), final=False)
     except UnicodeDecodeError:
         return None
 
 
 def _sse_event_data(event: str) -> Mapping[str, object] | None:
     return as_str_mapping(extract_sse_data(event))
+
+
+def _sse_frames(sse_stream: str) -> Sequence[str]:
+    return split_sse_chunk_into_events("\n".join(split_sse_lines(sse_stream)))
 
 
 def _parsed_sse_events(sse_stream: str) -> tuple[Mapping[str, object], ...]:
@@ -500,7 +511,7 @@ def is_anthropic_sse_stream(all_chunks: Sequence[object]) -> bool:
     sse_stream: Final = _joined_sse_stream(all_chunks)
     if sse_stream is None:
         return False
-    return any(event.get("type") in _ANTHROPIC_EVENT_TYPES for event in _parsed_sse_events(sse_stream))
+    return any(_is_anthropic_event_type(event.get("type")) for event in _parsed_sse_events(sse_stream))
 
 
 def _is_json_value_other_than_object_or_null(payload: str) -> bool:
@@ -514,7 +525,7 @@ def has_non_object_json_event(all_chunks: Sequence[object]) -> bool:
     """Whether a frame's data is JSON that no reader of these streams can take as an event."""
     return any(
         _is_json_value_other_than_object_or_null(_sse_data_payload(event) or "")
-        for event in split_sse_chunk_into_events(_joined_sse_stream(all_chunks) or "")
+        for event in _sse_frames(_joined_sse_bytes(all_chunks).decode("utf-8", errors="replace"))
     )
 
 
@@ -522,9 +533,10 @@ def anthropic_sse_event_type(event: str) -> object:
     return next((event_data.get("type") for event_data in _parsed_sse_events(event)), None)
 
 
-def anthropic_sse_event_types(all_chunks: Sequence[object]) -> frozenset[object]:
-    """The ``type`` of every event the stream sent."""
-    return frozenset(event.get("type") for event in _parsed_sse_events(_joined_sse_stream(all_chunks) or ""))
+def anthropic_sse_event_types(all_chunks: Sequence[object]) -> frozenset[str]:
+    """The string ``type`` of every event the stream sent."""
+    event_types: Final = (event.get("type") for event in _parsed_sse_events(_joined_sse_stream(all_chunks) or ""))
+    return frozenset(event_type for event_type in event_types if isinstance(event_type, str))
 
 
 def _is_named_error_event(event: str) -> bool:
@@ -535,8 +547,7 @@ def _is_named_error_event(event: str) -> bool:
 
 def _is_error_event(event: str) -> bool:
     event_type: Final = anthropic_sse_event_type(event)
-    data_is_another_event: Final = isinstance(event_type, str) and event_type in _ANTHROPIC_EVENT_TYPES
-    return event_type == "error" or (_is_named_error_event(event) and not data_is_another_event)
+    return event_type == "error" or (_is_named_error_event(event) and not _is_anthropic_event_type(event_type))
 
 
 def _error_events(sse_stream: str) -> tuple[str, ...]:
@@ -706,7 +717,9 @@ def is_sse_error_stream(all_chunks: Sequence[object]) -> bool:
     sse_stream: Final = _joined_sse_stream(all_chunks)
     if sse_stream is None:
         return False
-    events: Final = _parsed_sse_events(sse_stream)
+    events: Final = tuple(
+        event_data for frame in _sse_frames(sse_stream) if (event_data := _sse_event_data(frame)) is not None
+    )
     return len(events) > 0 and all(
         event.get("type") == "error" or isinstance(event.get("error"), Mapping) for event in events
     )

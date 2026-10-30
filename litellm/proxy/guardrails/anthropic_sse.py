@@ -151,7 +151,7 @@ def _text_block_left_open(rewritten_chunks: Sequence[bytes], source_chunks: Sequ
     return last_index if rewritten_blocks[last_index].get("type") == "text" else None
 
 
-def _sent_by_the_failed_upstream(chunk: bytes, block_left_open: int | None, end_events_sent: frozenset[object]) -> bool:
+def _sent_by_the_failed_upstream(chunk: bytes, block_left_open: int | None, end_events_sent: frozenset[str]) -> bool:
     event: Final = chunk.decode()
     event_type: Final = anthropic_sse_event_type(event)
     if event_type in _MESSAGE_END_EVENT_TYPES:

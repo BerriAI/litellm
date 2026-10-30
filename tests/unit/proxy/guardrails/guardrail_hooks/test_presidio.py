@@ -2658,6 +2658,60 @@ async def test_apply_to_output_streaming_non_object_line_with_no_anthropic_frame
         await anext(stream)
 
 
+def _anthropic_text_frames_without_a_message_start(text: str) -> tuple[bytes, ...]:
+    return (
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+    )
+
+
+_PING_FRAME: Final = _anthropic_sse("ping", {"type": "ping"})
+_TEXT_FRAMES: Final = _anthropic_text_frames_without_a_message_start("4111 1111 1111 1111")
+_MESSAGE_START_BESIDE_A_NON_OBJECT_LINE: Final = _anthropic_sse(
+    "message_start", {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": []}}
+).replace(b"data: {", b"data: 5\ndata: {", 1)
+STREAMS_ASSEMBLY_CANNOT_READ_WITH_A_NON_OBJECT_LINE: Final = {
+    "beside-the-message-start": (b"".join((_MESSAGE_START_BESIDE_A_NON_OBJECT_LINE, *_TEXT_FRAMES)),),
+    "after-a-ping": (_PING_FRAME, b"data: 5\n\n", *_TEXT_FRAMES),
+    "after-a-ping-in-carriage-return-frames": (_PING_FRAME, b'data: {"foo": 1}\r\rdata: 5\r\r', *_TEXT_FRAMES),
+    "beside-undecodable-bytes": (b"data: 5\n\n" + b'data: {"text": "\xff"}\n\n' + b"".join(_TEXT_FRAMES),),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "byte_chunks",
+    STREAMS_ASSEMBLY_CANNOT_READ_WITH_A_NON_OBJECT_LINE.values(),
+    ids=STREAMS_ASSEMBLY_CANNOT_READ_WITH_A_NON_OBJECT_LINE,
+)
+async def test_apply_to_output_streaming_unreadable_stream_with_a_non_object_line_is_refused(
+    byte_chunks: tuple[bytes, ...],
+):
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<CREDIT_CARD>"},
+    )
+
+    async def mock_stream() -> AsyncIterator[bytes]:
+        for chunk in byte_chunks:
+            yield chunk
+
+    stream: Final = guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"), response=mock_stream(), request_data={}
+    )
+
+    with pytest.raises(GuardrailRaisedException, match="cannot verify PII"):
+        await anext(stream)
+
+
 STREAMS_OF_UNKNOWN_SHAPE_MAIN_PASSED: Final = {
     "null-line": (b"data: null\n\n", b'data: {"foo": 1}\n\n'),
     "line-that-is-not-json": (b"data: not json\n\n", b'data: {"foo": 1}\n\n'),

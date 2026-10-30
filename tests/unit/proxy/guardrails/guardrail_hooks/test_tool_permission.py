@@ -1553,6 +1553,24 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert b"".join(out) == b"".join(chunks)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("error_type", [[], {"a": 1}], ids=["list", "dict"])
+    async def test_rewrite_keeps_an_error_frame_whose_type_is_not_a_string(self, error_type: object):
+        error_frame: Final = f"event: error\ndata: {json.dumps({'type': error_type})}\n\n".encode()
+
+        out: Final = await self._drain(self.rewriting, [*self._sse_chunks("Read")[:7], error_frame])
+
+        assert b"".join(out).endswith(error_frame)
+        assert self._tool_use_blocks(self._events(out)) == []
+
+    @pytest.mark.asyncio
+    async def test_crlf_stream_that_opens_with_an_error_is_still_blocked(self):
+        frames: Final = self._ended_by_upstream_error([])
+        chunks: Final = [frame.replace(b"\n", b"\r\n") for frame in (*frames, *self._sse_chunks("Read"))]
+
+        with pytest.raises(GuardrailRaisedException, match="could not be verified"):
+            await self._drain(self.blocking, chunks)
+
+    @pytest.mark.asyncio
     async def test_denied_tool_use_delivered_before_an_upstream_error_is_still_blocked(self):
         chunks: Final = self._ended_by_upstream_error(self._sse_chunks("Read")[:7])
 

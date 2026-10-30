@@ -1581,12 +1581,15 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if is_anthropic_sse_stream((chunk,)):
             return True
         if has_non_object_json_event((chunk,)):
-            raise GuardrailRaisedException(
-                guardrail_name=self.guardrail_name,
-                message="Presidio could not read the upstream stream; cannot verify PII when PII protection is configured",
-                should_wrap_with_default_message=False,
-            )
+            raise self._unreadable_stream_refusal()
         return False
+
+    def _unreadable_stream_refusal(self) -> GuardrailRaisedException:
+        return GuardrailRaisedException(
+            guardrail_name=self.guardrail_name,
+            message="Presidio could not read the upstream stream; cannot verify PII when PII protection is configured",
+            should_wrap_with_default_message=False,
+        )
 
     async def _mask_anthropic_sse_stream(
         self, first_chunk: bytes, rest: AsyncIterator[object], request_data: dict
@@ -1595,6 +1598,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         chunks: Final = (first_chunk, *rest_chunks)
         assembled: Final = assemble_anthropic_sse_stream(chunks, restore_identity=True, through_upstream_error=True)
         if assembled is None:
+            if has_non_object_json_event(chunks):
+                raise self._unreadable_stream_refusal()
             verbose_proxy_logger.warning(
                 "Presidio apply_to_output: raw SSE stream could not be assembled into a response. "
                 "Output PII masking was skipped for this response."
