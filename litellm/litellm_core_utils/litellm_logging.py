@@ -603,7 +603,7 @@ def _with_prompt_copy_replaced(
     details: Mapping[str, object], path: Sequence[str], raw: object, replacement: object
 ) -> Mapping[str, object]:
     containers: Final = tuple(itertools.accumulate(path, _logged_field, initial=details))
-    if containers[-1] is not raw:
+    if containers[-1] != raw:
         return details
     rebuilt: Final = functools.reduce(_with_field, reversed(tuple(zip(containers, path))), replacement)
     return cast(Mapping[str, object], rebuilt)  # cast-ok: the outermost rebuilt container is details
@@ -4330,6 +4330,13 @@ class Logging(LiteLLMLoggingBaseClass):
     @property
     def messages_sent_to_model(self) -> object:
         return self._unmasked_messages if self._failure_log_masked else self.model_call_details.get("messages")
+
+    def failure_logged_proxy_server_request(self, proxy_server_request: Mapping[str, object]) -> Mapping[str, object]:
+        if not self._failure_log_masked:
+            return proxy_server_request
+        return _with_prompt_copy_replaced(
+            proxy_server_request, ("body", "messages"), self._unmasked_messages, self.model_call_details.get("messages")
+        )
 
     def _claim_failure_log_mask(self) -> bool:
         if self._failure_log_masked:

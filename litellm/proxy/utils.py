@@ -1586,12 +1586,19 @@ def _failure_fields_to_lift(
     request_data (it is not serialisable), so the caller merges these fields
     onto request_data first: the request start and first-handoff instants for
     duration and preprocessing latency, the call type, recovered or estimated
-    usage for token counts, and the standard logging object for deployment
-    attribution on failed-request spend logs."""
+    usage for token counts, the standard logging object for deployment
+    attribution on failed-request spend logs, and the request body with the
+    prompt the failure log masked."""
     _logging_obj: Final = request_data.get("litellm_logging_obj")
     if _logging_obj is None:
         return _EMPTY_LIFT
     _model_call_details: Final = getattr(_logging_obj, "model_call_details", {})
+    _proxy_server_request: Final = request_data.get("proxy_server_request")
+    _logged_proxy_server_request: Final = (
+        _logging_obj.failure_logged_proxy_server_request(_as_str_mapping(_proxy_server_request))
+        if isinstance(_logging_obj, Logging) and isinstance(_proxy_server_request, Mapping)
+        else None
+    )
     _sent_model_call_details: Final = (
         {**_model_call_details, "messages": _logging_obj.messages_sent_to_model}
         if isinstance(_logging_obj, Logging)
@@ -1630,6 +1637,7 @@ def _failure_fields_to_lift(
         ("response_cost", None if _usage_to_lift is None else (_usage_to_lift[1] or 0.0)),
         ("standard_logging_object", _model_call_details.get("standard_logging_object")),
         ("billed_failed_attempts", _earlier_attempts or None),
+        ("proxy_server_request", _logged_proxy_server_request),
     )
     return MappingProxyType({key: value for key, value in _entries if value is not None})
 

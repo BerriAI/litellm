@@ -558,6 +558,56 @@ async def test_proxy_only_failure_log_masks_after_auth_and_redacts_before_it(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error_type", "logged_content"),
+    [(ProxyErrorTypes.auth_error, REDACTED_BY_LITELLM), (None, "My name is <PERSON>")],
+)
+async def test_failure_hooks_get_the_request_body_with_the_prompt_the_failure_log_masked(
+    proxy_logging, monkeypatch: pytest.MonkeyPatch, error_type: ProxyErrorTypes | None, logged_content: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    received_bodies: Final[list[object]] = []
+
+    class _SpendLogLikeHook(CustomLogger):
+        async def async_post_call_failure_hook(
+            self,
+            request_data: dict[str, object],
+            original_exception: Exception,
+            user_api_key_dict: UserAPIKeyAuth,
+            traceback_str: str | None = None,
+        ) -> None:
+            received_bodies.append(request_data["proxy_server_request"])
+
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm, "callbacks", [_PromptMaskingGuardrail(), _SpendLogLikeHook()])
+    proxy_logging.alert_types = []
+    messages: Final = [{"role": "user", "content": "My name is John Smith"}]
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={
+            "model": "internal-model",
+            "messages": messages,
+            "proxy_server_request": {
+                "url": "http://localhost/chat/completions",
+                "body": {"model": "internal-model", "messages": list(messages)},
+            },
+        },
+        original_exception=HTTPException(status_code=429, detail="Rate limit exceeded"),
+        user_api_key_dict=UserAPIKeyAuth(request_route="/chat/completions"),
+        error_type=error_type,
+        route="/chat/completions",
+    )
+
+    assert received_bodies == [
+        {
+            "url": "http://localhost/chat/completions",
+            "body": {"model": "internal-model", "messages": [{"role": "user", "content": logged_content}]},
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_post_call_failure_hook_attribution_does_not_count_against_the_deployment(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):
