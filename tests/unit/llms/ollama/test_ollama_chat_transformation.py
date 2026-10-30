@@ -947,9 +947,7 @@ class TestOllamaToolCallTransformation:
             headers={},
         )
 
-        assert result["messages"][0]["tool_calls"] == [
-            {"function": {"name": "read_fixture", "arguments": {}}}
-        ]
+        assert result["messages"][0]["tool_calls"] == [{"function": {"name": "read_fixture", "arguments": {}}}]
 
     def test_transform_request_preserves_tool_calls(self):
         """
