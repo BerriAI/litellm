@@ -6,7 +6,7 @@ from typing import Final
 import pytest
 import yaml
 from integration._support.client import JSON_OBJECT, Gateway, gateway_from_environment, object_value
-from integration._support.mcp import McpCaller, mcp_peer, register_mcp, tool_calls
+from integration._support.mcp import McpCaller, mcp_peer, official_client_outcomes, register_mcp, tool_calls
 from integration._support.process import owned_proxy
 
 
@@ -65,3 +65,19 @@ def test_code_calls_chain_with_caller_permissions(code_gateway: Gateway) -> None
         assert refused["isError"] is True
         assert len(tool_calls(allowed.drain())) == 2
         assert tool_calls(denied.drain()) == ()
+
+
+def test_code_timeout_returns_error_and_releases_caller_slot(code_gateway: Gateway) -> None:
+    with code_gateway.scenario() as scenario:
+        key: Final = scenario.key(max_parallel_requests=1)
+        _, result = official_client_outcomes(
+            code_gateway, key, "/mcp", "litellm_execute_code", {"code": "while (true) {}"}
+        )
+        assert result.status == 200 and not result.ok and result.text is not None, result
+        body: Final = JSON_OBJECT.validate_json(result.text)
+        error: Final = body["error"]
+        assert isinstance(error, str) and "timed out" in error, body
+        assert body["calls_started"] == 0
+        recovery: Final = McpCaller(code_gateway, key, "mcp").call("litellm_execute_code", {"code": "text(42)"})
+        assert recovery.ok and recovery.text is not None, recovery
+        assert JSON_OBJECT.validate_json(recovery.text)["output"] == [42]

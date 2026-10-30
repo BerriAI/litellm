@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
 @dataclass(frozen=True, slots=True)
 class CodeExecutionLimits:
-    timeout_seconds: float = 120
+    timeout_seconds: float = 25  # Leave response time inside the MCP bridge's 30-second header deadline.
     memory_bytes: int = 64 * 1024 * 1024
     script_bytes: int = 128 * 1024
     message_bytes: int = 2 * 1024 * 1024

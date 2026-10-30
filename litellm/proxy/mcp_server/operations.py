@@ -315,7 +315,7 @@ async def _mcp_server_rate_limit_rejection(
 
 async def prepare_virtual_mcp_call(
     name: str,
-    arguments: dict[str, object],
+    arguments: Mapping[str, object],
     user_api_key_auth: UserAPIKeyAuth,
     logging_auth: UserAPIKeyAuth | None = None,
     raw_headers: Mapping[str, str] | None = None,
@@ -365,7 +365,7 @@ async def _build_virtual_call_logging_obj(
     client_ip: str | None = None,
 ) -> LiteLLMLoggingObj | None:
     _, logging_obj = await prepare_virtual_mcp_call(
-        name, dict(arguments), user_api_key_auth, logging_auth, raw_headers, client_ip
+        name, arguments, user_api_key_auth, logging_auth, raw_headers, client_ip
     )
     return logging_obj
 

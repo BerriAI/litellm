@@ -49,7 +49,7 @@ Keep large identifiers as strings. Values crossing the JavaScript bridge must be
 
 ## Failures and cancellation
 
-Each script has a 120-second deadline, a 64 MiB JavaScript heap limit, and a maximum of 100 tool calls with eight in flight. Each proxy process admits four scripts at once; additional requests receive a busy error. Code is limited to 128 KiB, individual bridge messages to 2 MiB, and returned output to 256 KiB. Use direct calls for tools whose results or duration exceed these limits.
+Each script has a 25-second deadline, a 64 MiB JavaScript heap limit, and a maximum of 100 tool calls with eight in flight. Each proxy process admits four scripts at once; additional requests receive a busy error. Code is limited to 128 KiB, individual bridge messages to 2 MiB, and returned output to 256 KiB. The deadline leaves room for a structured error before the existing MCP transport's 30-second response limit. Authentication or hooks can still consume that transport budget. Use direct calls for tools whose results or duration exceed the code-mode limits.
 
 A script that exceeds a limit fails explicitly. The result includes `output`, `error`, and `calls_started`; the count records attempted tool calls, not confirmed upstream actions. When cancellation reaches the running request, it stops further dispatch and terminates the worker, but cannot undo a request already sent upstream. A client timeout or disconnect does not guarantee server-side cancellation; work can continue until the script deadline. A failed script can therefore have partial effects. Check the upstream state before retrying a write; the gateway does not automatically retry whole scripts.
 

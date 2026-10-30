@@ -187,3 +187,13 @@ async def test_cancelled_outer_does_not_refund_completed_child_usage() -> None:
         with pytest.raises(HTTPException, match="tokens"):
             with isolated_mcp_tool_call():
                 await admit(handler, cache, auth, "completed-child-charge-still-counts")
+
+
+def test_request_stash_preserves_existing_positional_constructor() -> None:
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitResponse
+
+    response = RateLimitResponse(overall_code="OK", statuses=[])
+    stash = RequestRateLimiterStash("original-owner", response)
+    assert stash.owner_litellm_call_id == "original-owner"
+    assert stash.rate_limit_response is response
+    assert stash.borrowed_parallel_keys == frozenset()

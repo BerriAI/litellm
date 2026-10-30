@@ -721,7 +721,6 @@ class RequestRateLimiterStash:
     """
 
     owner_litellm_call_id: str | None = None
-    borrowed_parallel_keys: frozenset[str] = frozenset()
     rate_limit_response: RateLimitResponse | None = None
     parallel_slot: ParallelSlotAcquisition | None = None
     parallel_slot_reused_at: datetime | None = None
@@ -746,6 +745,7 @@ class RequestRateLimiterStash:
     batch_tpd_refund_ops: tuple[ReservationAwareIncrementOperation, ...] = ()
     reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
+    borrowed_parallel_keys: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
