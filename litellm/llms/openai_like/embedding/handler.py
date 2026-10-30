@@ -3,6 +3,7 @@
 ## Allows jina ai embedding calls - which don't allow 'encoding_format' in payload.
 
 import json
+import re
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
@@ -23,23 +24,29 @@ from ..common_utils import OpenAILikeBase, OpenAILikeError
 _KEY_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
 _EXTRA_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TRANSPORT_HEADER_NAMES: Final = frozenset({"host", "content-length", "transfer-encoding"})
+_HEADER_NAME: Final = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
+_HEADER_VALUE: Final = re.compile(r"[\t\x20-\x7e]*")
 
 
 def _header_text(name: str, value: object) -> str | None:
-    if name.lower() in _TRANSPORT_HEADER_NAMES:
-        return None
     if isinstance(value, bool) or not isinstance(value, str | int | float):
         return None
-    return str(value)
+    text: Final = str(value)
+    if _HEADER_NAME.fullmatch(name) is None or _HEADER_VALUE.fullmatch(text) is None:
+        return None
+    return text
 
 
 def _extra_headers_as_text(extra_headers: Mapping[str, object], model: str, drop_params: bool) -> Mapping[str, str]:
-    texts: Final = MappingProxyType({name: _header_text(name, value) for name, value in extra_headers.items()})
+    caller_set: Final = {
+        name: value for name, value in extra_headers.items() if name.lower() not in _TRANSPORT_HEADER_NAMES
+    }
+    texts: Final = MappingProxyType({name: _header_text(name, value) for name, value in caller_set.items()})
     refused: Final = sorted(name for name, text in texts.items() if text is None)
     if refused and not drop_params:
         raise litellm.UnsupportedParamsError(
-            message=f"extra_headers {', '.join(refused)} cannot be sent. Values must be text or a number, "
-            "and Host, Content-Length and Transfer-Encoding come from the request. "
+            message=f"extra_headers {', '.join(map(repr, refused))} cannot be sent. A header needs a name made of "
+            "letters, digits or !#$%&'*+-.^_`|~ and a text or number value of printable ASCII on one line. "
             "To drop them from the call, set `litellm.drop_params = True`.",
             model=model,
         )

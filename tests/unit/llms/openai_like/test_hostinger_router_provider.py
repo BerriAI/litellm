@@ -304,10 +304,37 @@ TRANSPORT_EXTRA_HEADERS: Final = [("Host", "other.example"), ("content-length", 
 
 
 @pytest.mark.parametrize(("name", "configured"), TRANSPORT_EXTRA_HEADERS)
-def test_hostinger_router_embeddings_refuse_transport_extra_headers(name: str, configured: str):
+def test_hostinger_router_embeddings_ignore_transport_extra_headers(name: str, configured: str):
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
+        litellm.embedding(
+            model="hostinger_router/text-embedding-3-small",
+            input=["Say hello"],
+            api_key="hostinger-test-key",
+            extra_headers={name: configured, "X-Trace-Id": "trace-1"},
+        )
+
+    request: Final = route.calls.last.request
+    assert request.headers.get_list("host") == ["router.hostinger.com"]
+    assert request.headers.get_list("content-length") == [str(len(request.content))]
+    assert "transfer-encoding" not in request.headers
+    assert request.headers.get_list("x-trace-id") == ["trace-1"]
+
+
+MALFORMED_EXTRA_HEADERS: Final = [
+    ("Host:evil.example", "x"),
+    ("X Note", "x"),
+    ("X-Note", "a\r\nHost: evil.example"),
+    ("X-Note", "line\nbreak"),
+    ("X-Note", "caf\u00e9"),
+]
+
+
+@pytest.mark.parametrize(("name", "configured"), MALFORMED_EXTRA_HEADERS)
+def test_hostinger_router_embeddings_refuse_malformed_extra_headers(name: str, configured: str):
     with respx.mock(assert_all_called=False) as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
-        with pytest.raises(litellm.UnsupportedParamsError, match=name) as refused:
+        with pytest.raises(litellm.UnsupportedParamsError) as refused:
             litellm.embedding(
                 model="hostinger_router/text-embedding-3-small",
                 input=["Say hello"],
@@ -316,11 +343,12 @@ def test_hostinger_router_embeddings_refuse_transport_extra_headers(name: str, c
             )
 
     assert refused.value.status_code == 400
+    assert repr(name) in refused.value.message
     assert route.call_count == 0
 
 
-@pytest.mark.parametrize(("name", "configured"), TRANSPORT_EXTRA_HEADERS)
-def test_hostinger_router_embeddings_drop_transport_extra_headers_under_drop_params(name: str, configured: str):
+@pytest.mark.parametrize(("name", "configured"), MALFORMED_EXTRA_HEADERS)
+def test_hostinger_router_embeddings_drop_malformed_extra_headers_under_drop_params(name: str, configured: str):
     with respx.mock() as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         litellm.embedding(
@@ -333,9 +361,8 @@ def test_hostinger_router_embeddings_drop_transport_extra_headers_under_drop_par
 
     request: Final = route.calls.last.request
     assert request.headers.get_list("host") == ["router.hostinger.com"]
-    assert request.headers.get_list("content-length") == [str(len(request.content))]
-    assert "transfer-encoding" not in request.headers
     assert request.headers.get_list("x-trace-id") == ["trace-1"]
+    assert name not in request.headers
 
 
 def test_hostinger_router_embeddings_never_borrow_another_providers_key(monkeypatch: pytest.MonkeyPatch):
