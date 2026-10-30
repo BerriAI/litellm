@@ -79,6 +79,45 @@ async def test_fresh_user_policy_does_not_use_redis_sentinel(monkeypatch: pytest
     assert error.value.status_code == 503
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("permission_id", ["agent-policy", None])
+async def test_agent_permission_link_fills_and_hits_redis_without_reloading_agent(
+    monkeypatch: pytest.MonkeyPatch, permission_id: str | None
+) -> None:
+    server: Final = fakeredis.FakeServer()
+    redis: Final = fake_redis_cache(server, namespace="auth")
+    cache: Final = UserApiKeyCache(redis_cache=redis, default_in_memory_ttl=41)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    prisma: Final = MagicMock()
+    prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(object_permission_id=permission_id)
+    )
+    assert await MCPRequestHandler._agent_object_permission_id("link-agent", prisma) == permission_id  # pyright: ignore[reportPrivateUsage]  # resolver internals under test
+    assert await redis.async_get_cache("agent_object_permission_id:link-agent") == (
+        permission_id or "__agent_no_mcp_permission__"
+    )
+    cache.in_memory_cache.delete_cache("agent_object_permission_id:link-agent")
+    assert await MCPRequestHandler._agent_object_permission_id("link-agent", prisma) == permission_id  # pyright: ignore[reportPrivateUsage]  # resolver internals under test
+    server.connected = False
+    assert await MCPRequestHandler._agent_object_permission_id("link-agent", prisma) == permission_id  # pyright: ignore[reportPrivateUsage]  # resolver internals under test
+    prisma.db.litellm_agentstable.find_unique.assert_awaited_once_with(where={"agent_id": "link-agent"})
+
+
+@pytest.mark.asyncio
+async def test_unavailable_agent_policy_keeps_no_ceiling_without_negative_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server: Final = fakeredis.FakeServer()
+    cache: Final = UserApiKeyCache(redis_cache=fake_redis_cache(server, namespace="auth"))
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    prisma: Final = MagicMock()
+    prisma.db.litellm_agentstable.find_unique = AsyncMock(side_effect=RuntimeError("database unavailable"))
+    server.connected = False
+    assert await MCPRequestHandler._agent_object_permission_id("link-agent", prisma) is None  # pyright: ignore[reportPrivateUsage]  # resolver internals under test
+    assert await cache.async_get_cache("agent_object_permission_id:link-agent", local_only=True) is None
+    prisma.db.litellm_agentstable.find_unique.assert_awaited_once_with(where={"agent_id": "link-agent"})
+
+
 @pytest.mark.parametrize(
     "headers,expected",
     [

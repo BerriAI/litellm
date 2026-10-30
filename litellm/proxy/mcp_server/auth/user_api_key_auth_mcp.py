@@ -61,7 +61,9 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
     USER_NO_MCP_PERMISSION_SENTINEL,
+    fill_agent_permission_link,
     fill_user_permission_link,
+    get_agent_permission_link,
     get_management_object_ttl,
     get_user_permission_link,
 )
@@ -91,6 +93,7 @@ from litellm.proxy.mcp_server.utils import (
     asgi_scope_fields,
     strip_known_server_prefix,
 )
+from litellm.redis.stores.mcp_agent_permission_links import AGENT_NO_MCP_PERMISSION_SENTINEL
 from litellm.repositories.table_repositories import (
     AgentsRepository,
     MCPServerRepository,
@@ -4447,9 +4450,7 @@ class MCPRequestHandler:
             return list(end_user_tools)
         return list(set(allowed_tools) & set(end_user_tools))
 
-    # Sentinel stored in cache when an agent has no object_permission, so we
-    # don't re-query the DB on every MCP request for that agent.
-    _AGENT_NO_PERMISSION_SENTINEL = "__agent_no_mcp_permission__"
+    _AGENT_NO_PERMISSION_SENTINEL: Final = AGENT_NO_MCP_PERMISSION_SENTINEL
 
     @staticmethod
     @with_service_target(AUTH_OBJECTS_TARGET)
@@ -4462,9 +4463,8 @@ class MCPRequestHandler:
         a link we DID resolve can make the caller deny."""
         from litellm.proxy.proxy_server import user_api_key_cache
 
-        cache_key: Final = f"agent_object_permission_id:{agent_id}"
         try:
-            cached: Final = _CACHED_VALUE.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
+            cached: Final = await get_agent_permission_link(user_api_key_cache, agent_id)
             if cached == MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL:
                 return None
             if isinstance(cached, str) and cached:
@@ -4472,9 +4472,10 @@ class MCPRequestHandler:
             agent_row: Final = await AgentsRepository(prisma_client).table.find_unique(where={"agent_id": agent_id})
             linked: Final[object] = getattr(agent_row, "object_permission_id", None) if agent_row is not None else None
             object_permission_id: Final = linked if isinstance(linked, str) and linked else None
-            await user_api_key_cache.async_set_cache(
-                key=cache_key,
-                value=object_permission_id or MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL,
+            await fill_agent_permission_link(
+                user_api_key_cache,
+                agent_id,
+                object_permission_id,
                 ttl=get_management_object_ttl(user_api_key_cache),
             )
             return object_permission_id
