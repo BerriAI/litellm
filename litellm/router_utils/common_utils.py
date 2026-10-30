@@ -16,6 +16,7 @@ from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
+from litellm.llms.sagemaker.common_utils import deployment_inference_component
 from litellm.types.router import (
     CredentialLiteLLMParams,
     Deployment,
@@ -520,6 +521,16 @@ PROVIDER_SPECIFIC_CAPABILITY_FIELDS: Final = frozenset(ProviderSpecificModelInfo
 
 
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def deployment_model_id_pin(deployment_litellm_params: Mapping[str, object]) -> object | None:
+    clientside_params: Final = deployment_litellm_params.get("configurable_clientside_auth_params")
+    if isinstance(clientside_params, list | tuple) and "model_id" in clientside_params:
+        return None
+    own_model_id: Final = deployment_litellm_params.get("model_id")
+    if own_model_id is not None:
+        return own_model_id
+    return deployment_inference_component(deployment_litellm_params)
 
 
 def is_model_capability_field(name: str) -> bool:

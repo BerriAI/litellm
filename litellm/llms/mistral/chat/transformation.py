@@ -9,17 +9,23 @@ Docs - https://docs.mistral.ai/api/
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from itertools import accumulate, count
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
+from urllib.parse import urlparse
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
+import litellm
 from litellm._logging import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     strip_litellm_internal_message_fields,
     strip_none_values_from_message,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_dropped_reasoning
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
@@ -30,7 +36,15 @@ from litellm.router_utils.reasoning_effort_capability import (
     nearest_declared_reasoning_effort,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.mistral import MistralTextBlock, MistralThinkingBlock, MistralToolCallMessage
+from litellm.types.llms.mistral import (
+    MistralCacheKeyParams,
+    MistralFilePart,
+    MistralReasoningEffortParams,
+    MistralRequestRouting,
+    MistralTextBlock,
+    MistralThinkingBlock,
+    MistralToolCallMessage,
+)
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage, ChatCompletionTextObject
 from litellm.types.utils import ModelResponse, ModelResponseStream
 from litellm.utils import convert_to_model_response_object, supports_reasoning
@@ -57,6 +71,33 @@ def _accepted_reasoning_effort(model: str, requested: str, custom_llm_provider: 
 
 
 _NO_TOOL_CALL_TURN: Final[tuple[int, frozenset[str]]] = (-1, frozenset())
+_MISTRAL_REQUEST_ROUTING: Final = TypeAdapter(MistralRequestRouting)
+_MISTRAL_CACHE_KEY_PARAMS: Final = TypeAdapter(MistralCacheKeyParams)
+_MISTRAL_REASONING_EFFORT_PARAMS: Final = TypeAdapter(MistralReasoningEffortParams)
+_MISTRAL_FILE_PART: Final = TypeAdapter(MistralFilePart)
+_REASONING_PROMPT_REASON: Final = "litellm sends Magistral a reasoning system prompt instead of the requested level."
+_NON_LEVEL_EFFORT_REASON: Final = (
+    "the Mistral API takes it only as a level such as 'high', so Mistral applies its default effort."
+)
+_DOCUMENTED_MAGISTRAL_EFFORTS: Final = frozenset({"low", "medium", "high"})
+_REASONING_ON_THINKING_TYPES: Final = frozenset({"enabled", "adaptive"})
+
+
+def _reasoning_level_and_summary(reasoning_effort: object) -> tuple[object, object]:
+    requested: Final = as_str_mapping(reasoning_effort)
+    if requested is None:
+        return reasoning_effort, None
+    return requested.get("effort"), requested.get("summary")
+
+
+def _warn_unless_reasoning_prompt_honors(param: str, value: object, model: str) -> None:
+    if param == "reasoning_effort" and isinstance(value, str) and value in _DOCUMENTED_MAGISTRAL_EFFORTS:
+        return
+    thinking: Final = as_str_mapping(value)
+    thinking_type: Final = thinking.get("type") if thinking is not None else None
+    if param == "thinking" and isinstance(thinking_type, str) and thinking_type in _REASONING_ON_THINKING_TYPES:
+        return
+    warn_dropped_reasoning(param, value, model, _REASONING_PROMPT_REASON, drop_params_gated=False)
 
 
 def _is_json_array(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: a decoded JSON array is a list
@@ -87,6 +128,8 @@ class MistralConfig(OpenAIGPTConfig):
 
     - `response_format` (object or null): An object specifying the format that the model must output. Setting to { "type": "json_object" } enables JSON mode, which guarantees the message the model generates is in JSON. When using JSON mode you MUST also instruct the model to produce JSON yourself with a system or a user message.
     """
+
+    _is_base_class = False
 
     temperature: int | None = None
     top_p: int | None = None
@@ -131,6 +174,7 @@ class MistralConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:
         is_magistral: Final = "magistral" in model.lower()
         accepts_reasoning_effort: Final = self._accepts_reasoning(model)
+        accepts_prompt_cache_key: Final = self.custom_llm_provider == "mistral"
         return [
             "stream",
             "temperature",
@@ -145,6 +189,7 @@ class MistralConfig(OpenAIGPTConfig):
             "parallel_tool_calls",
             *(("thinking",) if is_magistral else ()),
             *(("reasoning_effort",) if accepts_reasoning_effort else ()),
+            *(("prompt_cache_key",) if accepts_prompt_cache_key else ()),
         ]
 
     def _map_tool_choice(self, tool_choice: str) -> str:
@@ -211,14 +256,89 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["extra_body"] = {"random_seed": value}
             if param == "response_format":
                 optional_params["response_format"] = value
-            if param == "reasoning_effort" and "magistral" not in model.lower():
-                optional_params["reasoning_effort"] = _accepted_reasoning_effort(model, value, self.custom_llm_provider)
+            if (
+                param == "reasoning_effort"
+                and "magistral" not in model.lower()
+                and (
+                    reasoning_level := self._reasoning_level_to_send(
+                        model, _MISTRAL_REASONING_EFFORT_PARAMS.validate_python(non_default_params), drop_params
+                    )
+                )
+                is not None
+            ):
+                optional_params["reasoning_effort"] = reasoning_level
             if param in ("reasoning_effort", "thinking") and "magistral" in model.lower():
                 # Flag that we need to add reasoning system prompt
                 optional_params["_add_reasoning_prompt"] = True
-            if param == "parallel_tool_calls":
-                optional_params["parallel_tool_calls"] = value
+                _warn_unless_reasoning_prompt_honors(param, OPAQUE_VALUE.validate_python(value), model)
+            if param in ("parallel_tool_calls", "prompt_cache_key"):
+                optional_params[param] = value
         return optional_params
+
+    def _reasoning_level_to_send(
+        self, model: str, requested: MistralReasoningEffortParams, drop_params: bool
+    ) -> str | None:
+        requested_effort: Final = requested.get("reasoning_effort")
+        level, summary = _reasoning_level_and_summary(requested_effort)
+        sendable: Final = (
+            _accepted_reasoning_effort(model, level, self.custom_llm_provider) if isinstance(level, str) else None
+        )
+        if sendable is not None and summary is None:
+            return sendable
+        if drop_params or litellm.drop_params is True:
+            if sendable is None and level is not None:
+                warn_dropped_reasoning(
+                    "reasoning_effort", requested_effort, model, _NON_LEVEL_EFFORT_REASON, drop_params_gated=True
+                )
+            return sendable
+        raise UnsupportedParamsError(
+            message=(
+                f"{self.custom_llm_provider} does not support parameters: ['reasoning_effort'], for model={model}, "
+                "since the Mistral API takes it only as a level such as 'high', with no reasoning summary. "
+                "To drop it, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+            ),
+            llm_provider=self.custom_llm_provider,
+            model=model,
+        )
+
+    def accepts_prompt_cache_key_at(self, api_base: str | None) -> bool:
+        resolved_api_base, _ = self._get_openai_compatible_provider_info(api_base, None)
+        hostname: Final = urlparse(resolved_api_base).hostname or ""
+        return hostname == "mistral.ai" or hostname.endswith(".mistral.ai")
+
+    @staticmethod
+    def takes_prompt_cache_key_value(prompt_cache_key: object) -> bool:
+        return isinstance(prompt_cache_key, str) and prompt_cache_key.isascii()
+
+    def _prompt_cache_key_rejection(self, prompt_cache_key: object, api_base: str | None) -> str | None:
+        if not self.accepts_prompt_cache_key_at(api_base):
+            return "since only the Mistral API (*.mistral.ai) takes it"
+        if not self.takes_prompt_cache_key_value(prompt_cache_key):
+            return "since the Mistral API takes it only as a string of ASCII characters"
+        return None
+
+    def _prompt_cache_key_withheld(self, model: str, prompt_cache_key: object, routing: MistralRequestRouting) -> bool:
+        requested_api_base: Final = routing.get("api_base")
+        api_base: Final = requested_api_base if isinstance(requested_api_base, str) else None
+        allowed_openai_params: Final = routing.get("allowed_openai_params")
+        if isinstance(allowed_openai_params, (list, tuple)) and "prompt_cache_key" in allowed_openai_params:
+            return False
+        rejection: Final = self._prompt_cache_key_rejection(prompt_cache_key, api_base)
+        if rejection is None:
+            return False
+        if litellm.drop_params is True or routing.get("drop_params") is True:
+            return True
+        requested_provider: Final = routing.get("custom_llm_provider")
+        provider: Final = requested_provider if isinstance(requested_provider, str) else self.custom_llm_provider
+        raise UnsupportedParamsError(
+            message=(
+                f"{provider} does not support parameters: ['prompt_cache_key'], for model={model}, {rejection}. "
+                "To send it anyway, pass `allowed_openai_params=['prompt_cache_key']`. To drop it, set "
+                "`litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+            ),
+            llm_provider=provider,
+            model=model,
+        )
 
     def _get_openai_compatible_provider_info(self, api_base: str | None, api_key: str | None) -> tuple[str, str | None]:
         # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai
@@ -359,24 +479,31 @@ class MistralConfig(OpenAIGPTConfig):
         messages = self._handle_message_with_file(messages)
         return messages
 
+    @staticmethod
+    def _with_mistral_file_id(block: Mapping[str, object]) -> Mapping[str, object]:
+        file_part: Final = block.get("file") if block.get("type") == "file" else None
+        file_id: Final = (
+            _MISTRAL_FILE_PART.validate_python(file_part).get("file_id") if isinstance(file_part, Mapping) else None
+        )
+        if not file_id:
+            return block
+        return {**{key: value for key, value in block.items() if key != "file"}, "file_id": file_id}
+
+    @classmethod
+    def _with_mistral_file_ids(cls, message: AllMessageValues) -> AllMessageValues:
+        content: Final = message.get("content")
+        if not isinstance(content, list):
+            return message
+        blocks: Final[tuple[Mapping[str, object], ...]] = tuple(content)
+        return cast(  # cast-ok: only file blocks change, to the file_id shape the Mistral API takes
+            AllMessageValues, {**message, "content": [cls._with_mistral_file_id(block) for block in blocks]}
+        )
+
     def _handle_message_with_file(self, messages: list[AllMessageValues]) -> list[AllMessageValues]:
         """
         Mistral API supports only 'file_id' in message content with type 'file'.
         """
-        for m in messages:
-            _content_block = m.get("content")
-            if _content_block and isinstance(_content_block, list):
-                if any(c.get("type") == "file" for c in _content_block):
-                    # If file content is present, we get file_id from 'file' attribute of content block
-                    # then replace 'file' with 'file_id' and assign the value of 'file_id' attribute to it.
-                    file_contents = [c for c in _content_block if c.get("type") == "file"]
-                    for file_content in file_contents:
-                        file_id = file_content.get("file", {}).get("file_id")
-                        if file_id:
-                            # Replace 'file' with 'file_id'
-                            file_content["file_id"] = file_id  # pyright: ignore[reportGeneralTypeIssues]  # legacy in-place rewrite of the block shape
-                            file_content.pop("file", None)
-        return messages
+        return [self._with_mistral_file_ids(m) for m in messages]
 
     def _add_reasoning_system_prompt_if_needed(
         self, messages: list[AllMessageValues], optional_params: dict
@@ -794,7 +921,16 @@ class MistralConfig(OpenAIGPTConfig):
         if "magistral" in model.lower() and optional_params.get("_add_reasoning_prompt", False):
             messages = self._add_reasoning_system_prompt_if_needed(messages, optional_params)
 
-        upstream_params: Final = {key: value for key, value in optional_params.items() if key != "client_metadata"}
+        cache_key_params: Final = _MISTRAL_CACHE_KEY_PARAMS.validate_python(optional_params)
+        withheld_params: Final = (
+            ("client_metadata", "prompt_cache_key")
+            if "prompt_cache_key" in cache_key_params
+            and self._prompt_cache_key_withheld(
+                model, cache_key_params["prompt_cache_key"], _MISTRAL_REQUEST_ROUTING.validate_python(litellm_params)
+            )
+            else ("client_metadata",)
+        )
+        upstream_params: Final = {key: value for key, value in optional_params.items() if key not in withheld_params}
 
         # Call parent transform_request which handles _transform_messages
         return super().transform_request(

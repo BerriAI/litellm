@@ -1,4 +1,6 @@
 import json
+import logging
+from collections.abc import Callable
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -8,6 +10,7 @@ import respx
 from pydantic import ValidationError
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -2358,3 +2361,119 @@ def test_global_disable_flag_with_transform_messages_helper(
     )
 
     assert json.loads(route.calls.last.request.content)["messages"] == [{"role": "user", "content": content}]
+
+
+def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and f"Dropping {param}=" in r.getMessage()
+    )
+
+
+def test_chat_template_kwargs_effort_dropped_for_non_reasoning_model_warns_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        FireworksAIConfig().map_extra_body_params(
+            {"extra_body": {"chat_template_kwargs": {"reasoning_budget": 512}}},
+            _NON_REASONING_MODEL,
+        )
+
+    warnings: Final = _warnings_naming(caplog, "chat_template_kwargs")
+    assert len(warnings) == 1
+    assert "'reasoning_budget': 512" in warnings[0]
+    assert "llama-v3-70b-instruct" in warnings[0]
+
+
+def test_chat_template_kwargs_thinking_off_for_non_reasoning_model_does_not_warn(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        FireworksAIConfig().map_extra_body_params(
+            {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
+            _NON_REASONING_MODEL,
+        )
+
+    assert _warnings_naming(caplog, "chat_template_kwargs") == ()
+
+
+_CODEX_DEVELOPER_MESSAGE_AFTER_A_USER_TURN: Final = (
+    {"role": "system", "content": "You are Codex"},
+    {"role": "user", "content": "Hi there"},
+    {"role": "developer", "content": "Answer with exactly one word."},
+    {"role": "user", "content": "What is the capital of France?"},
+)
+
+
+def test_translate_developer_role_keeps_a_later_developer_message_in_place_for_an_undeclared_fireworks_model() -> None:
+    messages: Final = FireworksAIConfig().translate_developer_role_to_system_role(
+        messages=_CODEX_DEVELOPER_MESSAGE_AFTER_A_USER_TURN,
+        model="accounts/fireworks/models/unlisted-model",
+        custom_llm_provider="fireworks_ai",
+        api_base=None,
+        model_info=None,
+    )
+
+    assert list(messages) == [
+        {"role": "system", "content": "You are Codex"},
+        {"role": "user", "content": "Hi there"},
+        {"role": "system", "content": "Answer with exactly one word."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
+
+
+def test_translate_developer_role_leaves_a_leading_system_and_developer_pair_unmerged_for_an_undeclared_model() -> None:
+    messages: Final = FireworksAIConfig().translate_developer_role_to_system_role(
+        messages=[
+            {"role": "system", "content": "You are Codex"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ],
+        model="accounts/fireworks/models/unlisted-model",
+        custom_llm_provider="fireworks_ai",
+        api_base=None,
+        model_info=None,
+    )
+
+    assert list(messages) == [
+        {"role": "system", "content": "You are Codex"},
+        {"role": "system", "content": "Answer with exactly one word."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
+
+
+@pytest.mark.parametrize("model", ["qwen3p8-max", "accounts/fireworks/models/qwen3p8-max"])
+def test_translate_developer_role_hoists_a_later_developer_message_for_the_system_first_qwen3p8_model(
+    local_model_cost_map: None, model: str
+) -> None:
+    messages: Final = FireworksAIConfig().translate_developer_role_to_system_role(
+        messages=_CODEX_DEVELOPER_MESSAGE_AFTER_A_USER_TURN,
+        model=model,
+        custom_llm_provider="fireworks_ai",
+        api_base=None,
+        model_info=None,
+    )
+
+    assert list(messages) == [
+        {"role": "system", "content": "You are Codex\n\nAnswer with exactly one word."},
+        {"role": "user", "content": "Hi there"},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("deployment_declared", "expected_roles"),
+    [(False, ["system", "user", "user"]), (True, ["system", "user", "system", "user"])],
+)
+def test_translate_developer_role_follows_the_deployment_model_info_over_the_cost_map(
+    declare_mid_conversation_system: Callable[[str, bool], None], deployment_declared: bool, expected_roles: list[str]
+) -> None:
+    declare_mid_conversation_system("fireworks_ai/accounts/fireworks/models/shared-backend", not deployment_declared)
+    messages: Final = FireworksAIConfig().translate_developer_role_to_system_role(
+        messages=_CODEX_DEVELOPER_MESSAGE_AFTER_A_USER_TURN,
+        model="accounts/fireworks/models/shared-backend",
+        custom_llm_provider="fireworks_ai",
+        api_base=None,
+        model_info={"id": "deployment-a", "supports_mid_conversation_system": deployment_declared},
+    )
+
+    assert [message["role"] for message in messages] == expected_roles

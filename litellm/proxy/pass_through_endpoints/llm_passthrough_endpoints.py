@@ -32,6 +32,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm import get_llm_provider
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
     AWS_ERROR_TYPE_HEADER,
@@ -68,9 +69,11 @@ from litellm.llms.deepgram.common_utils import (
 from litellm.llms.fal_ai.cost_calculator import fal_ai_passthrough_cost, fal_ai_queue_base
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.llms.openai.common_utils import OpenAIError as LiteLLMOpenAIError
+from litellm.llms.openai.common_utils import is_openai_agents_api_path, openai_api_resource
 from litellm.llms.openai.workload_identity import get_workload_identity_bearer_token_for_api_base
 from litellm.llms.oss_decision import OssDecisionProvider, oss_connection, validate_oss_request
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.llms.vllm.common_utils import endpoint_under_api_base
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse, is_provider_error
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import enforced_model_allowlists
@@ -90,6 +93,7 @@ from litellm.proxy.common_request_processing import (
     open_sse_before_first_byte,
     resolve_litellm_call_id,
 )
+from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -118,6 +122,7 @@ from litellm.proxy.pass_through_endpoints.injected_stream_usage import (
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
+    YieldsToConfiguredPassThroughRoute,
     create_pass_through_route,
     create_websocket_passthrough_route,
     websocket_passthrough_request,
@@ -131,6 +136,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     is_allowed_to_call_vector_store_endpoint,
 )
 from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str, str_to_bool
+from litellm.types.passthrough_endpoints.eu_jev import EuJevDecisionRequest, EuJevDecisionResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
@@ -144,7 +150,7 @@ from litellm.types.passthrough_endpoints.tinyfish import (
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from litellm.types.router import LiteLLMParamsTypedDict
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import CallTypes, LlmProviders
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
 
@@ -200,7 +206,7 @@ def _deployment_model_name(litellm_params: LiteLLMParamsTypedDict) -> str:
 
 def _models_served_by_group(llm_router: litellm.Router, model_group: str) -> frozenset[str]:
     return frozenset(
-        _deployment_model_name(row["litellm_params"]) for row in llm_router.get_model_list(model_name=model_group) or ()
+        _deployment_model_name(row["litellm_params"]) for row in llm_router.registry().deployments(model_group) or ()
     )
 
 
@@ -596,7 +602,7 @@ async def vllm_proxy_route(
         )
 
     return await llm_passthrough_factory_proxy_route(
-        endpoint=endpoint,
+        endpoint=endpoint_under_api_base(endpoint, get_secret_str("VLLM_API_BASE")),
         request=request,
         fastapi_response=fastapi_response,
         user_api_key_dict=user_api_key_dict,
@@ -711,6 +717,85 @@ def typesafe_allowlist_model_names() -> tuple[str, ...]:
         name for name in priced_names if match_routing_generalization(name) == "typesafe"
     )
     return ("typesafe/*", *jev_models_typesafe_serves)
+
+
+_EU_JEV_DECISION_REQUEST_BODY: Final = inline_request_body(
+    EuJevDecisionRequest,
+    {
+        "model": "eu-jeff-latest",
+        "state": "I was charged twice. Can I get a refund?",
+        "questions": {
+            "team": {
+                "type": "choice",
+                "instructions": "Which team should handle this?",
+                "criteria": {"billing": "Payments, invoices, and refunds", "support": "Technical issues and bugs"},
+            },
+            "is_refund_request": {"type": "noul", "instructions": "Is the customer asking for a refund?"},
+            "frustration": {
+                "type": "score",
+                "instructions": "How frustrated is the customer?",
+                "criteria": ["calm", "mildly annoyed", "angry"],
+            },
+        },
+    },
+)
+
+
+eu_jev_router: Final = APIRouter(route_class=YieldsToConfiguredPassThroughRoute)
+
+
+@eu_jev_router.post(
+    "/eu_jev/v1/systemone",
+    tags=["eu/jev Pass-through", "pass-through"],
+    responses={200: {"model": EuJevDecisionResponse}},
+    openapi_extra={"requestBody": _EU_JEV_DECISION_REQUEST_BODY},
+)
+async def eu_jev_proxy_route(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> Response:
+    """
+    Forward a request to eu/jev, an EU-hosted decision API, with `EU_JEV_API_KEY`.
+
+    `POST /eu_jev/v1/systemone` sends a `state` and one to eight named `questions` (`choice`, `noul` or `score`)
+    and returns one answer per question name, with spend booked from the reported `usage`. `custom_body` and
+    `stream` are rejected with a 400. A pass-through endpoint configured at this path keeps serving it.
+
+    [Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)
+    """
+    body: Final = TypeAdapter(dict[str, object]).validate_python(await read_request_body(request))
+    if "custom_body" in body:
+        raise HTTPException(status_code=400, detail="custom_body is not supported for eu_jev requests")
+    if body.get("stream"):
+        raise HTTPException(status_code=400, detail="Streaming is not supported for eu_jev requests")
+    eu_jev_credentials: Final = passthrough_endpoint_router.get_proxy_wide_credentials(custom_llm_provider="eu_jev")
+    if eu_jev_credentials is None:
+        raise HTTPException(status_code=503, detail="eu_jev is not configured, set EU_JEV_API_KEY on the proxy")
+    base_url: Final = httpx.URL(
+        (eu_jev_credentials.api_base or get_secret_str("EU_JEV_API_BASE") or "https://eu-jev.com")
+        .rstrip("/")
+        .removesuffix("/v1")
+    )
+    updated_url: Final = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, "/v1/systemone"),
+    )
+    endpoint_func: Final = create_pass_through_route(
+        endpoint="v1/systemone",
+        target=str(updated_url),
+        custom_headers={
+            "Authorization": f"Bearer {eu_jev_credentials.api_key}",
+            "Content-Type": "application/json",
+        },
+        custom_llm_provider="eu_jev",
+        is_streaming_request=False,
+    )
+    return TypeAdapter(Response, config=ConfigDict(arbitrary_types_allowed=True)).validate_python(
+        await endpoint_func(request, fastapi_response, user_api_key_dict)
+    )
+
+
+router.include_router(eu_jev_router)
 
 
 @router.post(
@@ -1299,7 +1384,7 @@ async def handle_bedrock_count_tokens(
         litellm_params: Final = {"user_api_key_dict": user_api_key_dict}
         resolved_model = model  # Default fallback
 
-        deployments: Final = llm_router.get_model_list(model_name=model) if llm_router else None
+        deployments: Final = llm_router.registry().deployments(model) if llm_router else None
         deployment: Final = deployments[0] if deployments else None
         if deployment is not None:
             model_litellm_params: Final = deployment.get("litellm_params", {})
@@ -1986,7 +2071,7 @@ async def transcribe_sdk_proxy_route(
     )
 
 
-def _resolve_vertex_model_from_router(
+async def _resolve_vertex_model_from_router(
     model_id: str,
     llm_router: litellm.Router | None,
     encoded_endpoint: str,
@@ -2014,7 +2099,7 @@ def _resolve_vertex_model_from_router(
         return encoded_endpoint, endpoint, vertex_project, vertex_location, None
 
     try:
-        deployment: Final = llm_router.get_available_deployment_for_pass_through(model=model_id)
+        deployment: Final = await llm_router.select(model_id, kind="pass_through")
         if not deployment:
             return encoded_endpoint, endpoint, vertex_project, vertex_location, None
 
@@ -2335,7 +2420,9 @@ async def relay_nvidia_nim_request(
     request_body: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Response:
-    model_group: Final = nvidia_nim_model_group_in_path(endpoint, llm_router.get_model_list()) if llm_router else None
+    model_group: Final = (
+        nvidia_nim_model_group_in_path(endpoint, llm_router.registry().deployments()) if llm_router else None
+    )
     if llm_router is None or model_group is None:
         rejection: Final[RelayRejection] = {
             "error": "no NVIDIA NIM model group in the path; call /nvidia_nim/{model_group}/v1/infer with a model "
@@ -3037,7 +3124,7 @@ async def _base_vertex_proxy_route(
                 vertex_project,
                 vertex_location,
                 deployment_model_info,
-            ) = _resolve_vertex_model_from_router(
+            ) = await _resolve_vertex_model_from_router(
                 model_id=model_id,
                 llm_router=llm_router,
                 encoded_endpoint=encoded_endpoint,
@@ -3530,6 +3617,10 @@ async def deepgram_listen_websocket_route(
     )
 
 
+_OPENAI_BETA_HEADER: Final = "openai-beta"
+_CLIENT_OPENAI_BETA_RESOURCES: Final = frozenset({"agents", "vaults", "chatkit"})
+
+
 class BaseOpenAIPassThroughHandler:
     @staticmethod
     async def base_openai_pass_through_handler(
@@ -3540,7 +3631,7 @@ class BaseOpenAIPassThroughHandler:
         base_target_url: str,
         api_key: str | None,
         custom_llm_provider: litellm.LlmProviders,
-        extra_headers: dict | None = None,
+        extra_headers: Mapping[str, str] | None = None,
     ):
         encoded_endpoint = httpx.URL(endpoint).path
         # Ensure endpoint starts with '/' for proper URL construction
@@ -3565,7 +3656,11 @@ class BaseOpenAIPassThroughHandler:
             endpoint=endpoint,
             target=str(updated_url),
             custom_headers=BaseOpenAIPassThroughHandler._assemble_headers(
-                api_key=api_key, request=request, extra_headers=extra_headers
+                api_key=api_key,
+                endpoint=endpoint,
+                request=request,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
             ),
             is_streaming_request=is_streaming_request,
             custom_llm_provider=(
@@ -3587,27 +3682,41 @@ class BaseOpenAIPassThroughHandler:
     _base_openai_pass_through_handler = base_openai_pass_through_handler
 
     @staticmethod
-    def _append_openai_beta_header(headers: dict, request: Request) -> dict:
-        """
-        Appends the OpenAI-Beta header to the headers if the request is an OpenAI Assistants API request
-        """
-        if RouteChecks.is_assistants_api_request(request) is True and "OpenAI-Beta" not in headers:
-            headers["OpenAI-Beta"] = "assistants=v2"
-        return headers
+    def _openai_beta(endpoint: str, request: Request, custom_llm_provider: litellm.LlmProviders) -> str | None:
+        if (
+            custom_llm_provider == litellm.LlmProviders.OPENAI
+            and openai_api_resource(endpoint) in _CLIENT_OPENAI_BETA_RESOURCES
+        ):
+            return request.headers.get(_OPENAI_BETA_HEADER) or (
+                "agents=v1" if is_openai_agents_api_path(endpoint) else None
+            )
+        return "assistants=v2" if RouteChecks.is_assistants_api_request(request) else None
 
     @staticmethod
-    def _assemble_headers(api_key: str | None, request: Request, extra_headers: dict | None = None) -> dict:
-        base_headers = {}
-        if api_key is not None:
-            base_headers = {
-                "authorization": f"Bearer {api_key}",
-                "api-key": f"{api_key}",
-            }
-        if extra_headers is not None:
-            base_headers.update(extra_headers)
+    def _append_openai_beta_header(
+        headers: Mapping[str, str], endpoint: str, request: Request, custom_llm_provider: litellm.LlmProviders
+    ) -> dict[str, str]:
+        if any(name.lower() == _OPENAI_BETA_HEADER for name in headers):
+            return {**headers}
+        openai_beta: Final = BaseOpenAIPassThroughHandler._openai_beta(endpoint, request, custom_llm_provider)
+        return {**headers} if openai_beta is None else {**headers, _OPENAI_BETA_HEADER: openai_beta}
+
+    @staticmethod
+    def _assemble_headers(
+        api_key: str | None,
+        endpoint: str,
+        request: Request,
+        custom_llm_provider: litellm.LlmProviders,
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> dict[str, str]:
+        api_key_headers: Final[Mapping[str, str]] = (
+            {} if api_key is None else {"authorization": f"Bearer {api_key}", "api-key": api_key}
+        )
         return BaseOpenAIPassThroughHandler._append_openai_beta_header(
-            headers=base_headers,
+            headers={**api_key_headers, **(extra_headers or {})},
+            endpoint=endpoint,
             request=request,
+            custom_llm_provider=custom_llm_provider,
         )
 
 
@@ -3919,7 +4028,7 @@ def _resolve_alias_to_upstream_model(setup_model: str, llm_router: Router | None
     upstream: Final = next(
         (
             deployment["litellm_params"].get("model")
-            for deployment in (llm_router.get_model_list() or ())
+            for deployment in (llm_router.registry().deployments() or ())
             if deployment.get("model_name") in candidates
         ),
         None,
@@ -3997,7 +4106,12 @@ async def vertex_ai_live_websocket_passthrough(
             await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
-                request_data={},
+                request_data={
+                    "model": model or "",
+                    "custom_llm_provider": litellm.LlmProviders.VERTEX_AI.value,
+                    "call_type": CallTypes.pass_through.value,
+                    "litellm_call_id": str(uuid.uuid4()),
+                },
             )
         if websocket.client_state != WebSocketState.DISCONNECTED:
             await websocket.close(code=1011, reason=VERTEX_LIVE_UNCONFIGURED_CLOSE_REASON)
@@ -4032,6 +4146,8 @@ async def vertex_ai_live_websocket_passthrough(
         forward_headers=False,
         endpoint="/vertex_ai/live",
         accept_websocket=False,
+        builtin_provider_route=True,
+        model=model,
         setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
             vertex_project=resolved_project,
             vertex_location=resolved_location,

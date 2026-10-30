@@ -12,6 +12,7 @@ from litellm.proxy._types import LiteLLMRoutes
 from litellm.proxy.proxy_server import app
 from litellm.types.router import DeploymentTypedDict, ModelGroupInfo
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 client = TestClient(app)
 
@@ -19,7 +20,7 @@ MODEL_HUB_PATH = "/public/v1/model_hub"
 LEGACY_MODEL_HUB_PATH = "/public/model_hub"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class _FakeRouter:
     """Stands in for the running Router: `_get_model_group_info` only ever asks it these."""
 
@@ -29,7 +30,7 @@ class _FakeRouter:
     def get_model_group_info(self, model_group: str, team_id: str | None = None) -> ModelGroupInfo | None:
         return self.infos.get(model_group)
 
-    def get_model_list_of_routed_group(self, model_group: str) -> list[DeploymentTypedDict]:
+    def get_model_list_of_routed_group(self, model_group: str, team_id: str | None = None) -> list[DeploymentTypedDict]:
         return []
 
 
@@ -47,7 +48,7 @@ def _publish(monkeypatch, infos: Sequence[ModelGroupInfo], prisma_client: object
     monkeypatch.setattr(litellm, "public_model_groups", [info.model_group for info in infos])
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.llm_router",
-        _FakeRouter(infos=MappingProxyType({info.model_group: info for info in infos})),
+        route_entry_points_to_stubs(_FakeRouter(infos=MappingProxyType({info.model_group: info for info in infos}))),
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
 
@@ -354,7 +355,7 @@ def test_an_unexpected_router_failure_answers_as_a_problem_not_the_openai_error_
             raise RuntimeError("router blew up")
 
     monkeypatch.setattr(litellm, "public_model_groups", ["boom"])
-    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _Exploding())
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", route_entry_points_to_stubs(_Exploding()))
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
 
     response = _get()

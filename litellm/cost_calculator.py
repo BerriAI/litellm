@@ -22,7 +22,7 @@ from litellm.constants import (
     OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES,
     REALTIME_METERED_USAGE_KEY,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, billed_usage_cost
 from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, is_decisions_call_type
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
@@ -50,6 +50,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     parse_prompt_tokens_details,
     select_cost_metric_for_model,
 )
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import response_ms_since_logging_start
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
 )
@@ -152,7 +153,9 @@ from litellm.utils import (
     ProviderConfigManager,
     TextCompletionResponse,
     TranscriptionResponse,
+    cached_cost_map_key,
     cached_get_model_info_helper,
+    mapped_model_fill_missing,
     model_info_with_pricing_overrides,
     runtime_model_cost_registrations,
     token_counter,
@@ -961,21 +964,17 @@ def select_model_name_for_cost_calc(
     """
     1. If custom pricing is true, return received model name
     2. If base_model is set (e.g. for azure models), return that
-    3. If completion response has model set return that
+    3. If completion response has model set return that, unless only the requested model's cost-map row has rates
     4. Check if model is passed in return that
     """
 
     return_model: str | None = None
     custom_llm_provider = _get_provider_for_cost_calc(model=model, custom_llm_provider=custom_llm_provider)
 
-    completion_response_model: str | None = None
-    if completion_response is not None:
-        if isinstance(completion_response, BaseModel):
-            completion_response_model = getattr(completion_response, "model", None)
-        elif isinstance(completion_response, dict):
-            completion_response_model = completion_response.get("model", None)
+    completion_response_model: Final = _get_response_model(completion_response)
     hidden_params: Final[dict | None] = getattr(completion_response, "_hidden_params", None)
     provider_response_model: Final = _get_hidden_str_for_cost_calc(hidden_params, "provider_response_model")
+    requested_model: Final = model or _get_hidden_str_for_cost_calc(hidden_params, "litellm_model_name")
     explicit_pricing: Final = custom_pricing is True or base_model is not None
     configured_model: Final = model or (
         completion_response_model if isinstance(completion_response_model, str) else None
@@ -1001,33 +1000,70 @@ def select_model_name_for_cost_calc(
         else:
             return_model = model
 
-    elif base_model is not None or bedrock_pricing_model is not None or provider_response_model is not None:
-        return_model = base_model if base_model is not None else bedrock_pricing_model or provider_response_model
+    elif base_model is not None or bedrock_pricing_model is not None:
+        return_model = base_model if base_model is not None else bedrock_pricing_model
+
+    elif provider_response_model is not None:
+        return _served_or_priced_requested_model(
+            provider_response_model, requested_model, custom_llm_provider, priced_region
+        )
 
     elif completion_response_model is None and hidden_params is not None:
         if hidden_params.get("model", None) is not None and len(hidden_params["model"]) > 0:
             return_model = hidden_params.get("model", model)
 
     if return_model is None and completion_response_model is not None:
-        return_model = completion_response_model
+        return _served_or_priced_requested_model(
+            completion_response_model, requested_model, custom_llm_provider, priced_region
+        )
 
     if return_model is None and model is not None:
         return_model = model
 
-    if (
-        return_model is not None
-        and custom_llm_provider is not None
-        and not _model_contains_known_llm_provider(return_model)
-    ):  # add provider prefix if not already present, to match model_cost
-        provider_prefix: Final = (
-            custom_llm_provider if priced_region is None else f"{custom_llm_provider}/{priced_region}"
-        )
-        return_model = _strip_unregistered_leading_segments(f"{provider_prefix}/{return_model}", priced_region)
-
-    return return_model
+    if return_model is None:
+        return None
+    return _cost_map_model_name(return_model, custom_llm_provider, priced_region)
 
 
 _select_model_name_for_cost_calc = select_model_name_for_cost_calc
+
+
+def _cost_map_model_name(model: str, custom_llm_provider: str | None, region_name: str | None) -> str:
+    if custom_llm_provider is None or _model_contains_known_llm_provider(model):
+        return model
+    provider_prefix: Final = custom_llm_provider if region_name is None else f"{custom_llm_provider}/{region_name}"
+    return _strip_unregistered_leading_segments(f"{provider_prefix}/{model}", region_name)
+
+
+def _rule_declares_rates(model: str, custom_llm_provider: str | None) -> bool:
+    rule_info: Final = unmapped_model_generalization(model, custom_llm_provider)
+    return rule_info is not None and _cost_map_entry_prices_anything(rule_info)
+
+
+def _resolves_to_rates(model: str, custom_llm_provider: str | None) -> bool:
+    key: Final = cached_cost_map_key(model, custom_llm_provider)
+    if key is None:
+        return False
+    entry: Final = _raw_cost_map_entry(key)
+    if entry is None:
+        return _rule_declares_rates(model, custom_llm_provider)
+    fill_missing: Final = mapped_model_fill_missing(key, entry)
+    return _cost_map_entry_prices_anything(entry if fill_missing is None else {**fill_missing, **entry})
+
+
+def _served_or_priced_requested_model(
+    served_model: str, requested_model: str | None, custom_llm_provider: str | None, priced_region: str | None
+) -> str:
+    served: Final = _cost_map_model_name(served_model, custom_llm_provider, priced_region)
+    if requested_model is None:
+        return served
+    requested: Final = _cost_map_model_name(requested_model, custom_llm_provider, None)
+    if served in (requested, requested.partition("/")[2]):
+        return served
+    pricing_provider: Final = _get_provider_for_cost_calc(requested, custom_llm_provider)
+    if _resolves_to_rates(served, pricing_provider):
+        return served
+    return requested if _resolves_to_rates(requested, pricing_provider) else served
 
 
 def _strip_unregistered_leading_segments(model: str, region_name: str | None) -> str:
@@ -1396,9 +1432,9 @@ def _apply_cost_margin(
 
 def _store_cost_breakdown_in_logging_obj(
     litellm_logging_obj: LitellmLoggingObject | None,
-    prompt_tokens_cost_usd_dollar: float,
-    completion_tokens_cost_usd_dollar: float,
-    cost_for_built_in_tools_cost_usd_dollar: float,
+    prompt_tokens_cost_usd_dollar: float | None,
+    completion_tokens_cost_usd_dollar: float | None,
+    cost_for_built_in_tools_cost_usd_dollar: float | None,
     total_cost_usd_dollar: float,
     additional_costs: dict | None = None,
     original_cost: float | None = None,
@@ -1500,9 +1536,51 @@ def _response_time_ms_for_cost(
         return float(stamped)
     if total_time:
         return total_time
-    if litellm_logging_obj is not None:
-        return litellm_logging_obj.get_response_ms()
-    return 0.0
+    if litellm_logging_obj is None:
+        return 0.0
+    reported_ms: Final = response_ms_since_logging_start(litellm_logging_obj)
+    if reported_ms is not None and litellm_logging_obj.stream is not True:
+        return reported_ms
+    return litellm_logging_obj.get_response_ms()
+
+
+def _breakdown_total(litellm_logging_obj: LitellmLoggingObject | None) -> float | None:
+    breakdown: Final = None if litellm_logging_obj is None else litellm_logging_obj.cost_breakdown
+    total: Final[object] = None if breakdown is None else breakdown.get("total_cost")
+    return float(total) if isinstance(total, (int, float)) and not isinstance(total, bool) else None
+
+
+def _adjusted_provider_billed_cost(
+    reported_cost: float,
+    custom_llm_provider: str | None,
+    model: str | None,
+    region_name: str | None,
+    litellm_logging_obj: LitellmLoggingObject | None,
+    service_tier: str | None,
+    data_residency: str | None,
+) -> float:
+    discounted_cost, discount_percent, discount_amount = _apply_cost_discount(
+        base_cost=reported_cost, custom_llm_provider=custom_llm_provider, model=model, region_name=region_name
+    )
+    adjusted_cost, margin_percent, margin_fixed_amount, margin_total_amount = _apply_cost_margin(
+        base_cost=discounted_cost, custom_llm_provider=custom_llm_provider
+    )
+    _store_cost_breakdown_in_logging_obj(
+        litellm_logging_obj=litellm_logging_obj,
+        prompt_tokens_cost_usd_dollar=0.0,
+        completion_tokens_cost_usd_dollar=adjusted_cost,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+        total_cost_usd_dollar=adjusted_cost,
+        original_cost=reported_cost,
+        discount_percent=discount_percent,
+        discount_amount=discount_amount,
+        margin_percent=margin_percent,
+        margin_fixed_amount=margin_fixed_amount,
+        margin_total_amount=margin_total_amount,
+        service_tier=service_tier,
+        data_residency=data_residency,
+    )
+    return adjusted_cost
 
 
 def completion_cost(
@@ -1616,6 +1694,9 @@ def completion_cost(
             )
 
         explicit_pricing: Final = custom_pricing is True or base_model is not None
+        caller_set_prices: Final = (
+            explicit_pricing or custom_cost_per_token is not None or custom_cost_per_second is not None
+        )
         custom_priced_request_model: Final = model if custom_pricing is True else None
         configured_cost_per_query: Final = (
             _configured_search_cost_per_query(litellm_logging_obj) if custom_pricing else None
@@ -1666,6 +1747,7 @@ def completion_cost(
             raw_candidates if custom_pricing is True else _priced_candidates_before_unpriced_rules(raw_candidates)
         )
 
+        priced_response: Final[object] = completion_response
         for idx, (candidate_model, candidate_pricing_provider) in enumerate(potential_model_names):
             model = candidate_model
             try:
@@ -1846,7 +1928,10 @@ def completion_cost(
                         video_resolution=video_resolution,
                     )
                 elif call_type in _SPEECH_CALL_TYPES:
-                    prompt_characters = litellm.utils.count_characters(text=prompt)
+                    prompt_characters = _speech_billed_characters(
+                        completion_response if isinstance(completion_response, HttpxBinaryResponseContent) else None,
+                        prompt,
+                    )
                 elif call_type in _TRANSCRIPTION_CALL_TYPES:
                     # Check _hidden_params first (duration stored there to
                     # avoid polluting the response body), then fall back to
@@ -1984,6 +2069,19 @@ def completion_cost(
                     total_time=total_time,
                 )
                 model_for_discount = custom_priced_request_model or model
+                if (
+                    not caller_set_prices
+                    and (reported_cost := billed_usage_cost(priced_response, custom_llm_provider)) is not None
+                ):
+                    return _adjusted_provider_billed_cost(
+                        reported_cost=reported_cost,
+                        custom_llm_provider=custom_llm_provider,
+                        model=model_for_discount,
+                        region_name=region_name if isinstance(region_name, str) else None,
+                        litellm_logging_obj=litellm_logging_obj,
+                        service_tier=service_tier,
+                        data_residency=data_residency,
+                    )
                 # Calculate cost based on prompt_tokens, completion_tokens
                 if (
                     "togethercomputer" in model or "together_ai" in model or custom_llm_provider == "together_ai"
@@ -2284,6 +2382,15 @@ def response_cost_calculator(
                     )
                     provider_response_cost: Final = get_response_cost_from_hidden_params(hidden_params)
                     if provider_response_cost is not None and not custom_pricing:
+                        if _breakdown_total(litellm_logging_obj) != provider_response_cost:
+                            _store_cost_breakdown_in_logging_obj(
+                                litellm_logging_obj=litellm_logging_obj,
+                                prompt_tokens_cost_usd_dollar=0.0,
+                                completion_tokens_cost_usd_dollar=provider_response_cost,
+                                cost_for_built_in_tools_cost_usd_dollar=0.0,
+                                total_cost_usd_dollar=provider_response_cost,
+                                original_cost=provider_response_cost,
+                            )
                         return provider_response_cost
 
             response_cost = completion_cost(
@@ -2310,6 +2417,11 @@ def response_cost_calculator(
         return response_cost
     except Exception as e:
         raise e
+
+
+def _speech_billed_characters(speech_response: HttpxBinaryResponseContent | None, prompt: str) -> int:
+    reported: Final = speech_response.hidden_params.get("billed_characters") if speech_response is not None else None
+    return reported if isinstance(reported, int) else litellm.utils.count_characters(text=prompt)
 
 
 def _video_input_image_cost(
@@ -3454,7 +3566,7 @@ def _cost_map_entry_declares_pricing(model_name: str, custom_llm_provider: str) 
     lookups cannot strip that prefix, so a zero-rated override read as declaring nothing, and a
     session that should bill nothing fell through to the public rates instead.
     """
-    resolved: Final = _get_model_info_or_none(model_name, custom_llm_provider)
+    resolved: Final = _cost_map_model_info(model_name, custom_llm_provider)
     entries: Final = (
         litellm.model_cost.get(resolved.get("key")) if resolved is not None else None,
         litellm.model_cost.get(model_name),
@@ -3650,9 +3762,9 @@ def handle_realtime_transcription_cost_calculation(
         return 0.0
 
     model_name: Final = _get_transcription_model_name_from_results(results) or litellm_model_name
-    model_info: Final = _get_model_info_or_none(model_name, custom_llm_provider)
+    model_info: Final = _cost_map_model_info(model_name, custom_llm_provider)
     override_info: Final = (
-        _get_model_info_or_none(custom_pricing_model, custom_llm_provider) if custom_pricing_model is not None else None
+        _cost_map_model_info(custom_pricing_model, custom_llm_provider) if custom_pricing_model is not None else None
     )
 
     total_cost = 0.0
@@ -3681,13 +3793,6 @@ def _get_transcription_model_name_from_results(
             if model:
                 return model
     return None
-
-
-def _get_model_info_or_none(model: str, custom_llm_provider: str) -> ModelInfo | None:
-    try:
-        return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-    except Exception:
-        return None
 
 
 _TranscriptionRateKey: TypeAlias = Literal[
