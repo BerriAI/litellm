@@ -408,6 +408,34 @@ def test_cognition_provider_fields():
     assert fields_by_key["api_base"]["required"] is False
 
 
+def test_zai_provider_fields():
+    from litellm.llms.zai.chat.transformation import ZAI_API_BASE
+
+    app_instance: Final = FastAPI()
+    app_instance.include_router(router)
+    test_client: Final = TestClient(app_instance)
+
+    response: Final = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers: Final = response.json()
+
+    zai: Final = next((p for p in providers if p["provider"] == "ZAI"), None)
+    assert zai is not None, "Z.AI provider entry not found"
+
+    assert zai["provider_display_name"] == "Z.AI (Zhipu AI)"
+    assert zai["litellm_provider"] == "zai"
+    assert zai["default_model_placeholder"].startswith("zai/")
+
+    fields_by_key: Final = {f["key"]: f for f in zai["credential_fields"]}
+
+    assert fields_by_key["api_key"]["required"] is True
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+    assert fields_by_key["api_base"]["required"] is False
+    assert fields_by_key["api_base"]["field_type"] == "text"
+    assert fields_by_key["api_base"]["placeholder"] == ZAI_API_BASE
+
+
 def test_zerogpu_add_model_form_defaults_resolve_to_a_priced_zerogpu_model():
     import litellm
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -611,7 +639,6 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "transcribe",
         "valkey",
         "xiaomi_mimo",
-        "zai",
     }
 )
 
