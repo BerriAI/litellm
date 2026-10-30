@@ -798,7 +798,7 @@ async def _drain_logging() -> None:
         await GLOBAL_LOGGING_WORKER.flush()
 
 
-def _batch_deployment(route: respx.Route) -> str:
+def _called_deployment(route: respx.Route) -> str:
     return route.calls.last.request.headers["authorization"].removeprefix("Bearer key-")
 
 
@@ -829,7 +829,37 @@ async def test_a_batch_create_does_not_keep_its_deployment_busy(
         )
     await _drain_logging()
 
-    assert _router_pick(router) == _batch_deployment(route)
+    assert _router_pick(router) == _called_deployment(route)
+
+
+_VECTOR_STORE: Final = {
+    "id": "vs_least_busy",
+    "object": "vector_store",
+    "created_at": 1,
+    "name": "least-busy",
+    "usage_bytes": 0,
+    "file_counts": {"in_progress": 0, "completed": 0, "failed": 0, "cancelled": 0, "total": 0},
+    "status": "completed",
+}
+_REJECTED_VECTOR_STORE: Final = {"error": {"message": "Invalid name", "type": "invalid_request_error"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider_response", [httpx.Response(200, json=_VECTOR_STORE), httpx.Response(400, json=_REJECTED_VECTOR_STORE)]
+)
+async def test_a_vector_store_create_does_not_keep_its_deployment_busy(
+    provider_response: httpx.Response, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/vector_stores").mock(return_value=provider_response)
+    router: Final = _least_busy_router()
+
+    with contextlib.suppress(openai.BadRequestError):
+        await router.avector_store_create(model=ROUTER_GROUP, name="least-busy", litellm_call_id="vector-store-call")
+    await _drain_logging()
+
+    assert _router_pick(router) == _called_deployment(route)
 
 
 @pytest.mark.asyncio
@@ -844,7 +874,7 @@ async def test_a_batch_cancel_does_not_keep_its_deployment_busy(
 
     await router.acancel_batch(model=ROUTER_GROUP, batch_id="batch_least_busy")
 
-    assert _router_pick(router) == _batch_deployment(route)
+    assert _router_pick(router) == _called_deployment(route)
 
 
 @pytest.mark.asyncio

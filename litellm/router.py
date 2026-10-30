@@ -7828,6 +7828,10 @@ class Router(DeprecatedRouterMembers):
             if model is not None:
                 self.fail_calls[model] += 1
             raise e
+        finally:
+            release_unstarted_picks(
+                self._core_least_busy_reservations, call_id_of(CALL_IDENTITY.validate_python(kwargs))
+            )
 
     def _override_vector_store_methods_for_router(self):
         """
