@@ -8056,7 +8056,7 @@ async def test_websocket_passthrough_still_bills_a_session_the_client_walked_out
         REALTIME_RESPONSE_DONE,
         json.dumps({"type": "response.output_text.delta", "delta": "too late"}),
     )
-    websocket = _client_websocket(_pending_receive)
+    websocket: Final = _client_websocket(_pending_receive)
     websocket.send_text = AsyncMock(side_effect=[None, None, WebSocketDisconnect(code=1006)])
 
     with (
@@ -8136,7 +8136,7 @@ def _turn_taking_client(
         frame: Final = next(script, None)
         return {"type": "websocket.disconnect"} if frame is None else _received_frame(frame)
 
-    websocket = _client_websocket(receive)
+    websocket: Final = _client_websocket(receive)
 
     async def send_text(text: str) -> None:
         if websocket.application_state == WebSocketState.DISCONNECTED:
@@ -8529,7 +8529,7 @@ async def test_websocket_passthrough_bills_the_turn_a_client_walked_out_of_once_
 
     client_left: Final = asyncio.Event()
     send_failed: Final = asyncio.Event()
-    client = _turn_taking_client(
+    client: Final = _turn_taking_client(
         [json.dumps({"type": "response.create", "model": "gpt-5.4"})], answered_by='"response.created"'
     )
     receive: Final = client.receive

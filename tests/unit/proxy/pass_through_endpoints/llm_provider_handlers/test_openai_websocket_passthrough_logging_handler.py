@@ -23,8 +23,7 @@ SESSION_START: Final = datetime(2026, 1, 1, 12, 0, 0)
 
 
 def _logging_obj() -> MagicMock:
-    logging_obj = MagicMock()
-    logging_obj.model_call_details = {}
+    logging_obj: Final = MagicMock(model_call_details={})
     return logging_obj
 
 
