@@ -1,7 +1,6 @@
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
-from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, cast, get_args, get_type_hints
 
@@ -47,7 +46,7 @@ from litellm.responses.litellm_completion_transformation.tool_search import (
     tools_with_anthropic_tool_search_mapped,
     tools_without_anthropic_tool_search,
 )
-from litellm.responses.utils import openai_well_formed_reasoning
+from litellm.responses.utils import openai_api_well_formed_reasoning, openai_well_formed_reasoning
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import *
@@ -333,12 +332,6 @@ def _tool_mappings(tools: object) -> tuple[Mapping[str, object], ...]:
     return tuple(mapping for mapping in map(as_str_mapping, _json_array_or_empty(tools)) if mapping is not None)
 
 
-def _sent_tools(tools: object) -> tuple[Mapping[str, object], ...]:
-    top_level: Final = _tool_mappings(tools)
-    namespaced: Final = (_tool_mappings(tool.get("tools")) for tool in top_level if tool.get("type") == "namespace")
-    return top_level + tuple(chain.from_iterable(namespaced))
-
-
 def _names_a_sent_tool(tool_choice: object, tools: tuple[Mapping[str, object], ...]) -> bool:
     choice: Final = as_str_mapping(tool_choice)
     if choice is None:
@@ -369,7 +362,9 @@ def _accepts_tool_choice(tool_choice: object, params: Mapping[str, object]) -> b
     if isinstance(tool_choice, str):
         return tool_choice in _TOOL_CHOICES_WITHOUT_TOOLS or (tool_choice == "required" and bool(tools))
     listed: Final = _json_array_or_empty(tools)
-    return bool(tools) and (not isinstance(tools, list | tuple) or _names_a_sent_tool(tool_choice, _sent_tools(listed)))
+    return bool(tools) and (
+        not isinstance(tools, list | tuple) or _names_a_sent_tool(tool_choice, _tool_mappings(listed))
+    )
 
 
 def _is_well_formed(name: str, value: object, params: Mapping[str, object]) -> bool:
@@ -539,8 +534,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return None
 
     def _accepted_reasoning(self, reasoning: Mapping[str, object], model: str) -> Mapping[str, object]:
-        if self.custom_llm_provider != LlmProviders.OPENAI or not OpenAIGPTConfig.is_openai_catalog_model(model):
+        if self.custom_llm_provider not in _PROVIDERS_CHECKED_FOR_MALFORMED_VALUES:
             return reasoning
+        if self.custom_llm_provider != LlmProviders.OPENAI or not OpenAIGPTConfig.is_openai_catalog_model(model):
+            return openai_api_well_formed_reasoning(reasoning)
         return openai_well_formed_reasoning(reasoning, model, model_reasons=self._supports_reasoning_param(model=model))
 
     def _is_well_formed_effort(self, effort: object, declared_reasoning_efforts: Collection[str] | None) -> bool:

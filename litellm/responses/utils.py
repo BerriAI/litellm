@@ -18,7 +18,6 @@ from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig, ReasoningSummaryLevel
-from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
     InputTokensDetails,
@@ -1452,14 +1451,14 @@ def _declared_values(values: Sequence[str] | None, undeclared: frozenset[str]) -
 
 
 def _openai_declared_reasoning_field_values(model_info: ModelInfo | None) -> Mapping[str, frozenset[str | None] | None]:
-    if model_info is None:
-        return MappingProxyType({"summary": _SUMMARY_VALUES, "mode": None, "context": None})
     declared_anywhere: Final = _reasoning_values_any_openai_row_declares()
+    modes: Final = None if model_info is None else model_info.get("reasoning_modes")
+    contexts: Final = None if model_info is None else model_info.get("reasoning_contexts")
     return MappingProxyType(
         {
             "summary": _SUMMARY_VALUES,
-            "mode": _declared_values(model_info.get("reasoning_modes"), declared_anywhere["mode"]),
-            "context": _declared_values(model_info.get("reasoning_contexts"), declared_anywhere["context"]),
+            "mode": _declared_values(modes, declared_anywhere["mode"]),
+            "context": _declared_values(contexts, declared_anywhere["context"]),
         }
     )
 
@@ -1494,6 +1493,10 @@ def _openai_accepted_reasoning(reasoning: Mapping[str, object], model: str) -> M
     return _reasoning_with_accepted_fields(reasoning, _openai_reasoning_field_values(model))
 
 
+def openai_api_well_formed_reasoning(reasoning: Mapping[str, object]) -> Mapping[str, object]:
+    return _reasoning_with_accepted_fields(reasoning, _openai_declared_reasoning_field_values(None))
+
+
 def openai_well_formed_reasoning(
     reasoning: Mapping[str, object], model: str, *, model_reasons: bool
 ) -> Mapping[str, object]:
@@ -1525,11 +1528,7 @@ def openai_bridge_reasoning(
         return None
     kept: Final = requested if effort_kept else {key: value for key, value in requested.items() if key != "effort"}
     with_summary: Final = reasoning_with_summary_default(kept, summary_alias, model, "openai")
-    accepted: Final = (
-        _openai_accepted_reasoning(with_summary, model)
-        if drop_params and OpenAIGPTConfig.is_openai_catalog_model(model)
-        else {**with_summary}
-    )
+    accepted: Final = _openai_accepted_reasoning(with_summary, model) if drop_params else {**with_summary}
     remaining: Final = as_str_mapping(
         _apply_nested_drop_params({"reasoning_effort": accepted}, list(drop_paths)).get("reasoning_effort")
     )

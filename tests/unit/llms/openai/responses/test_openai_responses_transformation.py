@@ -3327,6 +3327,10 @@ class TestMalformedParamsFollowDropParams:
                 {"tool_choice": {"type": "function", "name": "get_time"}, "tools": [_WEATHER_TOOL]},
                 id="function-naming-a-tool-not-sent",
             ),
+            pytest.param(
+                {"tool_choice": {"type": "function", "name": "get_weather"}, "tools": [_WEATHER_NAMESPACE]},
+                id="function-inside-a-namespace",
+            ),
             pytest.param({"tool_choice": {"type": "custom", "name": "run_sql"}, "tools": [_WEATHER_TOOL]}, id="custom"),
             pytest.param({"tool_choice": {"type": "mcp", "server_label": "wiki"}, "tools": [_DOCS_MCP_TOOL]}, id="mcp"),
             pytest.param({"tool_choice": {"type": "file_search"}, "tools": [_WEATHER_TOOL]}, id="hosted-tool-not-sent"),
@@ -3385,10 +3389,6 @@ class TestMalformedParamsFollowDropParams:
             pytest.param({"previous_response_id": "resp_abc"}, id="previous-response-id-string"),
             pytest.param({"tool_choice": "required", "prompt": {"id": "pmpt_abc"}}, id="required-with-stored-prompt"),
             pytest.param(
-                {"tool_choice": {"type": "function", "name": "get_weather"}, "tools": [_WEATHER_NAMESPACE]},
-                id="function-in-a-namespace",
-            ),
-            pytest.param(
                 {"tool_choice": {"type": "custom", "name": "other"}, "tools": [_SQL_TOOL]},
                 id="custom-with-a-custom-tool",
             ),
@@ -3429,7 +3429,12 @@ class TestMalformedParamsFollowDropParams:
         assert OpenAIResponsesAPIConfig().map_openai_params(dict(params), "gpt-6.1-sol", True) == params
 
     def test_providers_outside_openai_and_azure_keep_these_values_as_sent(self, local_model_cost_map):
-        params: Final = {"tool_choice": "required", "parallel_tool_calls": "true", "previous_response_id": 12}
+        params: Final = {
+            "tool_choice": "required",
+            "parallel_tool_calls": "true",
+            "previous_response_id": 12,
+            "reasoning": {"effort": "high", "mode": "turbo", "generate_summary": "auto"},
+        }
 
         assert HostedVLLMResponsesAPIConfig().map_openai_params(dict(params), "my-vllm-model", True) == params
 
@@ -3528,17 +3533,39 @@ class TestMalformedParamsFollowDropParams:
 
     @pytest.mark.parametrize(
         ("config", "model"),
-        [(AzureOpenAIResponsesAPIConfig(), "gpt-6.1-sol"), (OpenAIResponsesAPIConfig(), "my-fine-tuned-model")],
-        ids=["azure", "outside-openai-catalog"],
+        [
+            (AzureOpenAIResponsesAPIConfig(), "gpt-6.1-sol"),
+            (AzureOpenAIOSeriesResponsesAPIConfig(), "o_series/gpt-6.1-sol"),
+            (OpenAIResponsesAPIConfig(), "my-fine-tuned-model"),
+        ],
+        ids=["azure", "azure-o-series", "outside-openai-catalog"],
     )
-    def test_reasoning_fields_pass_through_where_the_openai_catalog_does_not_apply(
-        self, local_model_cost_map, config, model
+    def test_reasoning_values_no_openai_row_declares_are_dropped_where_the_openai_catalog_does_not_apply(
+        self, local_model_cost_map, monkeypatch, config, model
     ):
-        reasoning: Final = {"effort": "high", "mode": "turbo", "generate_summary": "auto"}
+        monkeypatch.setattr(litellm, "drop_params", False)
+        row: Final = litellm.model_cost["gpt-6.1-sol"]
+        declared: Final = {
+            "effort": "high",
+            "mode": row["reasoning_modes"][-1],
+            "context": row["reasoning_contexts"][-1],
+            "summary": "concise",
+        }
+        malformed: Final = {
+            "effort": "high",
+            "mode": "turbo",
+            "context": "forever",
+            "summary": "sometimes",
+            "generate_summary": "auto",
+        }
 
-        mapped: Final = config.map_openai_params({"reasoning": dict(reasoning)}, model, True)
+        dropped: Final = config.map_openai_params({"reasoning": dict(malformed)}, model, True)
+        kept: Final = config.map_openai_params({"reasoning": dict(declared)}, model, True)
+        sent: Final = config.map_openai_params({"reasoning": dict(malformed)}, model, False)
 
-        assert mapped["reasoning"] == reasoning
+        assert dropped["reasoning"] == {"effort": "high"}
+        assert kept["reasoning"] == declared
+        assert sent["reasoning"] == malformed
 
 
 @pytest.mark.asyncio

@@ -1039,6 +1039,26 @@ def test_the_chat_bridge_drops_a_reasoning_value_no_openai_row_declares_under_dr
     assert bridged(True) == {"effort": "high", "summary": "auto"}
     assert bridged(False) == requested
 
+def test_the_chat_bridge_drops_a_reasoning_value_no_openai_row_declares_outside_the_openai_catalog(
+    local_model_cost_map,
+):
+    declared_mode: Final = litellm.model_cost["gpt-6.1-sol"]["reasoning_modes"][-1]
+    requested: Final = {"effort": "high", "mode": declared_mode, "context": "forever", "generate_summary": "auto"}
+
+    def bridged(drop_params: bool) -> object:
+        return openai_bridge_reasoning(
+            requested=requested,
+            effort_kept=True,
+            summary_alias=None,
+            model="my-fine-tuned-model",
+            drop_params=drop_params,
+            additional_drop_params=None,
+        )
+
+    assert bridged(True) == {"effort": "high", "mode": declared_mode}
+    assert bridged(False) == requested
+
+
 def test_the_chat_bridge_keeps_only_effort_for_a_catalog_model_that_does_not_reason(local_model_cost_map):
     non_reasoning_model: Final = next(
         name
