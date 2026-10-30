@@ -6,6 +6,7 @@ from types import MappingProxyType
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 from litellm._logging import redact_internal_details_from_client_message
 from litellm._uuid import uuid
@@ -65,6 +66,20 @@ class _ErrorPayload(LiteLLMBaseModel):
 
     def error_object(self) -> Mapping[str, object]:
         return {"message": self.error} if isinstance(self.error, str) else self.error
+
+
+def _is_mapping(
+    value: object,
+) -> TypeIs[Mapping[object, object]]:  # guard-ok: isinstance decides it, keys and values stay object
+    return isinstance(value, Mapping)
+
+
+def jsonable_stream_value(value: object) -> object:
+    if _is_mapping(value):
+        return {**value}
+    if isinstance(value, BaseModel):
+        return value.model_dump()
+    return str(value)
 
 
 def sse_error_object(data: str | bytes) -> Mapping[str, object] | None:
@@ -191,7 +206,7 @@ class ResponsesStreamErrorState:
                 "sequence_number": self.sequence_number + 1,
                 "error": error,
             },
-            default=str,
+            default=jsonable_stream_value,
         )
         return f"event: error\ndata: {payload}\n\n"
 

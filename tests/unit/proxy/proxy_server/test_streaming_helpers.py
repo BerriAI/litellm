@@ -40,6 +40,7 @@ from litellm.proxy.proxy_server import (
     _apply_streaming_chunk_hooks,
     _fast_serialize_simple_model_response_stream,
     _format_fallback_metadata_sse_event,
+    _format_responses_sse_chunk,
     _format_streaming_sse_chunk,
     _get_client_requested_model_for_streaming,
     _get_streaming_fallback_metadata,
@@ -181,6 +182,42 @@ async def test_responses_stream_sends_no_failure_event_after_an_upstream_error_e
 
     assert tuple(frame.split("\n", 1)[0] for frame in frames) == ("event: response.created", "event: error")
     assert json.loads(frames[-1].split("data: ", 1)[1])["message"] == "upstream failed"
+
+
+class _HookOutputItem(BaseModel):
+    id: str
+    type: str
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        MappingProxyType({"id": "msg_nested", "type": "message"}),
+        _HookOutputItem(id="msg_nested", type="message"),
+    ],
+    ids=["mapping_proxy", "model"],
+)
+def test_responses_sse_chunk_encodes_values_nested_in_a_hook_chunk_as_json_objects(
+    item: Mapping[str, object] | BaseModel,
+) -> None:
+    frame: Final = _format_responses_sse_chunk(
+        chunk=MappingProxyType({"type": "response.output_item.added", "output_index": 0, "item": item})
+    )
+
+    assert isinstance(frame, str)
+    assert json.loads(frame.removeprefix("data: "))["item"] == {"id": "msg_nested", "type": "message"}
+
+
+def test_responses_error_event_encodes_nested_error_fields_as_json_objects() -> None:
+    frame: Final = ResponsesStreamErrorState().format_error(
+        {
+            "message": "overloaded",
+            "provider_specific_fields": MappingProxyType({"upstream": MappingProxyType({"type": "overloaded_error"})}),
+        }
+    )
+
+    payload: Final = json.loads(frame.split("data: ", 1)[1])
+    assert payload["error"]["provider_specific_fields"] == {"upstream": {"type": "overloaded_error"}}
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
