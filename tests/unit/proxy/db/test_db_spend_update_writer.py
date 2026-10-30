@@ -3281,6 +3281,44 @@ class _WindowSpendFakeDB:
         return self._batch()
 
 
+class _RefusedSpendDatabase:
+    def tx(self, timeout: timedelta | None = None) -> "_RefusedSpendDatabase":
+        return self
+
+    async def __aenter__(self) -> None:
+        raise httpx.ConnectError("database unavailable before transaction")
+
+    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_entity_spend_drained_through_transport_is_restored_after_database_refuses_connection():
+    import fakeredis
+
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+    from litellm.proxy.utils import ProxyLogging
+    from tests._support.fake_redis import fake_redis_cache
+
+    server: Final = fakeredis.FakeServer()
+    cache: Final = fake_redis_cache(server, namespace="entity-commit")
+    writer: Final = DBSpendUpdateWriter(redis_cache=cache)
+    writer.pod_lock_manager = PodLockManager(redis_cache=cache)
+    await writer.spend_update_queue.add_update(
+        {"entity_type": Litellm_EntityType.USER, "entity_id": "user", "response_cost": 1.5}
+    )
+    await writer._commit_spend_updates_to_db_with_redis(
+        prisma_client=_WindowSpendFakePrisma(_RefusedSpendDatabase()),
+        n_retry_times=0,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+    )
+    restored: Final = await writer.redis_update_buffer.get_all_update_transactions_from_redis_buffer()
+    assert restored is not None
+    assert restored["user_list_transactions"] == {"user": 1.5}
+    assert writer.spend_update_queue.update_queue.empty()
+
+
 class _WindowSpendFakePrisma:
     def __init__(self, db):
         self.db = db
