@@ -57,7 +57,7 @@ export function CategoryDrawer({
         if (!open) onClose();
       }}
     >
-      <SheetContent className="overflow-y-auto sm:max-w-xl">
+      <SheetContent className="overflow-y-auto data-[side=right]:sm:max-w-xl">
         <SheetHeader>
           <SheetTitle>{selected.name}</SheetTitle>
           <SheetDescription>{selected.description}</SheetDescription>
