@@ -50,6 +50,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
     set_callbacks,
 )
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import update_response_metadata
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.proxy._types import UserAPIKeyAuth
@@ -1118,6 +1119,115 @@ class TestZeroCostDiagnostic:
             litellm.model_cost.pop(served_model, None)
 
 
+class TestPerSecondMessagesCost:
+    DEPLOYMENT_ID: Final = "per-second-priced-deployment"
+    MODEL_GROUP: Final = "per-second-priced-claude"
+    RATE: Final = 0.00042
+    PER_SECOND_PRICING: Final = {"input_cost_per_second": RATE, "output_cost_per_second": RATE}
+    MESSAGES_RESPONSE: Final = {
+        "id": "msg_per-second-call",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-haiku-5-5",
+        "content": [{"type": "text", "text": "Hi there friend"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+
+    @pytest.fixture(autouse=True)
+    def registered_deployment(self) -> Iterator[None]:
+        litellm.register_model(model_cost={self.DEPLOYMENT_ID: self.PER_SECOND_PRICING}, persist_across_reloads=False)
+        try:
+            yield
+        finally:
+            litellm.model_cost.pop(self.DEPLOYMENT_ID, None)
+
+    def _routed_messages_call(
+        self, *, stream: bool, received_seconds_before_start: float | None = None
+    ) -> LitellmLogging:
+        started: Final = datetime.datetime.now()
+        proxy_receive_stamp: Final = (
+            {}
+            if received_seconds_before_start is None
+            else {
+                "litellm_received_at": (started - datetime.timedelta(seconds=received_seconds_before_start)).astimezone(
+                    datetime.timezone.utc
+                )
+            }
+        )
+        logging_obj: Final = LitellmLogging(
+            model=self.MODEL_GROUP,
+            messages=[{"role": "user", "content": "Say hi in three words"}],
+            stream=stream,
+            call_type="anthropic_messages",
+            start_time=started,
+            litellm_call_id="per-second-call",
+            function_id="fn",
+            kwargs={"model": self.MODEL_GROUP},
+        )
+        logging_obj.update_from_kwargs(
+            kwargs={
+                "model": "anthropic/claude-haiku-5-5",
+                "litellm_metadata": {
+                    "deployment": "anthropic/claude-haiku-5-5",
+                    "model_info": {"id": self.DEPLOYMENT_ID},
+                    **proxy_receive_stamp,
+                },
+            },
+            model="claude-haiku-5-5",
+            optional_params={"max_tokens": 32},
+            litellm_params={
+                "preset_cache_key": None,
+                "stream_response": {},
+                "model_info": None,
+                **self.PER_SECOND_PRICING,
+                "max_tokens": 32,
+            },
+            custom_llm_provider="anthropic",
+        )
+        return logging_obj
+
+    @staticmethod
+    def _response_handed_back_after(logging_obj: LitellmLogging, seconds: float) -> None:
+        started: Final = logging_obj.start_time
+        update_response_metadata(
+            result=dict(TestPerSecondMessagesCost.MESSAGES_RESPONSE),
+            logging_obj=logging_obj,
+            model="claude-haiku-5-5",
+            kwargs={},
+            start_time=started,
+            end_time=started + datetime.timedelta(seconds=seconds),
+        )
+
+    def test_messages_call_prices_the_reported_response_time_however_late_the_cost_is_read(self) -> None:
+        logging_obj: Final = self._routed_messages_call(stream=False)
+        self._response_handed_back_after(logging_obj, seconds=1.0)
+        result: Final = logging_obj._handle_anthropic_messages_response_logging(result=dict(self.MESSAGES_RESPONSE))
+        cost_for_the_response_header: Final = logging_obj._response_cost_calculator(result=result)
+        logging_obj.model_call_details["end_time"] = logging_obj.start_time + datetime.timedelta(seconds=1.5)
+        cost_for_the_spend_log: Final = logging_obj._response_cost_calculator(result=result)
+
+        assert cost_for_the_response_header == pytest.approx(self.RATE)
+        assert cost_for_the_spend_log == pytest.approx(self.RATE)
+
+    def test_messages_call_bills_from_logging_setup_not_from_proxy_receive(self) -> None:
+        logging_obj: Final = self._routed_messages_call(stream=False, received_seconds_before_start=2.0)
+        self._response_handed_back_after(logging_obj, seconds=1.0)
+        result: Final = logging_obj._handle_anthropic_messages_response_logging(result=dict(self.MESSAGES_RESPONSE))
+
+        assert logging_obj.response_timing_metrics["_response_ms"] == pytest.approx(3000)
+        assert logging_obj._response_cost_calculator(result=result) == pytest.approx(self.RATE)
+
+    def test_streamed_messages_call_bills_the_whole_stream_not_the_first_byte(self) -> None:
+        logging_obj: Final = self._routed_messages_call(stream=True)
+        self._response_handed_back_after(logging_obj, seconds=0.25)
+        logging_obj.model_call_details["end_time"] = logging_obj.start_time + datetime.timedelta(seconds=1.0)
+        result: Final = logging_obj._handle_anthropic_messages_response_logging(result=dict(self.MESSAGES_RESPONSE))
+
+        assert logging_obj._response_cost_calculator(result=result) == pytest.approx(self.RATE)
+
+
 class TestGetRouterModelId:
     """Tests for the get_router_model_id helper method."""
 
@@ -1519,22 +1629,33 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
             litellm_call_id="batch-call-2",
             function_id="f",
         )
-        obj.custom_llm_provider = "openai"
+        obj.update_environment_variables(
+            model="gpt-5.6-luna", user=None, optional_params={}, litellm_params={}, custom_llm_provider="openai"
+        )
         return obj
 
     @staticmethod
     def _batch(status: str, output_file_id: str | None):
         from litellm.types.utils import LiteLLMBatch
 
-        return LiteLLMBatch(
-            id="batch_6a9c99e185588190877d391f8b9d7f8a",
-            completion_window="24h",
-            created_at=1,
-            endpoint="/v1/chat/completions",
-            input_file_id="file-in",
-            object="batch",
-            status="validating",
-            output_file_id=output_file_id,
+        return LiteLLMBatch.model_validate(
+            {
+                "id": "batch_6a9c99e185588190877d391f8b9d7f8a",
+                "completion_window": "24h",
+                "created_at": 1,
+                "endpoint": "/v1/chat/completions",
+                "input_file_id": "file-in",
+                "object": "batch",
+                "status": "validating",
+                "output_file_id": output_file_id,
+                "usage": {
+                    "input_tokens": 29,
+                    "input_tokens_details": {"cached_tokens": 0},
+                    "output_tokens": 48,
+                    "output_tokens_details": {"reasoning_tokens": 0},
+                    "total_tokens": 77,
+                },
+            }
         ).model_copy(update={"status": status})
 
     @pytest.mark.asyncio
@@ -1548,11 +1669,12 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
         handle_completed_batch = AsyncMock()
         monkeypatch.setattr(logging_module, "handle_completed_batch", handle_completed_batch)
         batch = self._batch(status, output_file_id)
+        logging_obj = self._logging_obj()
 
-        await self._logging_obj()._async_success_handler_body(result=batch, start_time=None, end_time=None)
+        await logging_obj._async_success_handler_body(result=batch, start_time=None, end_time=None)
 
         handle_completed_batch.assert_not_awaited()
-        assert "response_cost" not in batch._hidden_params
+        assert logging_obj.model_call_details["response_cost"] == 0.0
 
     @pytest.mark.asyncio
     async def test_completed_batch_with_output_is_priced(self, monkeypatch) -> None:
@@ -1578,6 +1700,80 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
         assert batch._hidden_params["response_cost"] == 8e-06
         assert batch.usage is not None
         assert batch.usage.total_tokens == 35
+
+    @pytest.mark.parametrize("batch_ignore_default_logging", [True, False])
+    def test_sync_logger_gets_a_free_event_for_the_cost_poller_retrieve(self, batch_ignore_default_logging: bool) -> None:
+        sync_events: list[object] = []
+
+        class SyncOnlyLogger(CustomLogger):
+            def log_success_event(
+                self,
+                kwargs: dict[str, object],
+                response_obj: object,
+                start_time: dt_object,
+                end_time: dt_object,
+            ) -> None:
+                sync_events.append(kwargs["response_cost"])
+
+        logging_obj = LitellmLogging(
+            model="gpt-5.6-luna",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=False,
+            call_type="aretrieve_batch",
+            start_time=time.time(),
+            litellm_call_id="batch-call-3",
+            function_id="f",
+            dynamic_success_callbacks=[SyncOnlyLogger()],
+        )
+        logging_obj.update_environment_variables(
+            model="gpt-5.6-luna",
+            user=None,
+            optional_params={},
+            litellm_params={"litellm_metadata": {"batch_ignore_default_logging": batch_ignore_default_logging}},
+            custom_llm_provider="openai",
+        )
+
+        logging_obj.success_handler(
+            result=self._batch("completed", "file-out"),
+            start_time=dt_object.now(),
+            end_time=dt_object.now(),
+            for_async_request=True,
+        )
+
+        assert len(sync_events) == 1
+        assert isinstance(sync_events[0], float)
+        assert (sync_events[0] == 0.0) is batch_ignore_default_logging
+
+    def test_logged_usage_object_keeps_the_batch_chat_usage(self) -> None:
+        from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+        from litellm.types.utils import Usage
+
+        aggregate: Final = Usage(
+            prompt_tokens=29, completion_tokens=48, total_tokens=77, reasoning_tokens=3, cache_creation_input_tokens=300
+        )
+        billed: Final = self._batch("completed", "file-out").model_copy(update={"usage": aggregate})
+        provider_read: Final = self._batch("completed", "file-out")
+        now: Final = dt_object(2026, 1, 1, 12, 0, 0)
+
+        usage_objects: Final = tuple(
+            payload["metadata"]["usage_object"]
+            for payload in (
+                get_standard_logging_object_payload(
+                    kwargs={"litellm_params": {}},
+                    init_response_obj=batch,
+                    start_time=now,
+                    end_time=now,
+                    logging_obj=self._logging_obj(),
+                    status="success",
+                )
+                for batch in (billed, provider_read)
+            )
+            if payload is not None
+        )
+
+        assert usage_objects[0] == aggregate.model_dump()
+        assert usage_objects[1]["prompt_tokens"] == 29
+        assert "input_tokens" not in usage_objects[1]
 
 
 class TestAnthropicPassthroughCustomPricing:
@@ -3723,9 +3919,9 @@ def test_get_extra_header_tags_returns_none_for_absent_or_empty_header(
     monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["x-org-id"], raising=False)
 
     assert StandardLoggingPayloadSetup._get_extra_header_tags(proxy_server_request={"headers": {}}) is None
-    assert StandardLoggingPayloadSetup._get_extra_header_tags(
-        proxy_server_request={"headers": {"x-org-id": ""}}
-    ) is None
+    assert (
+        StandardLoggingPayloadSetup._get_extra_header_tags(proxy_server_request={"headers": {"x-org-id": ""}}) is None
+    )
 
 
 def test_get_extra_header_tags_preserves_configured_header_order(
@@ -12125,6 +12321,49 @@ def test_get_model_cost_information_custom_pricing_uses_base_model():
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+def test_get_model_cost_information_maps_requested_model_when_response_names_an_unmapped_display_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_model: Final = "fireworks_ai/accounts/fireworks/models/sol-display-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        requested_model,
+        {"litellm_provider": "fireworks_ai", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
+    )
+    response: Final = ModelResponse(model="Sol Display Max", choices=[])
+    response._hidden_params["provider_response_model"] = "Sol Display Max"
+    response._hidden_params["litellm_model_name"] = requested_model
+
+    result: Final = StandardLoggingPayloadSetup.get_model_cost_information(
+        base_model=None, custom_pricing=False, custom_llm_provider="fireworks_ai", init_response_obj=response
+    )
+
+    assert result["model_map_key"] == requested_model
+    assert result["model_map_value"] is not None
+    assert result["model_map_value"]["input_cost_per_token"] == litellm.model_cost[requested_model]["input_cost_per_token"]
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+def test_get_model_cost_information_keeps_a_priced_response_model_that_echoes_without_its_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    served_row: Final = {"litellm_provider": "mistral", "mode": "chat", "input_cost_per_token": 2e-6, "output_cost_per_token": 5e-6}
+    requested_row: Final = {"litellm_provider": "mistral", "mode": "chat", "input_cost_per_token": 9e-6, "output_cost_per_token": 9e-6}
+    monkeypatch.setitem(litellm.model_cost, "mistral/sol-snapshot-test", served_row)
+    monkeypatch.setitem(litellm.model_cost, "mistral/sol-alias-test", requested_row)
+    response: Final = ModelResponse(model="sol-snapshot-test", choices=[])
+    response._hidden_params["litellm_model_name"] = "mistral/sol-alias-test"
+
+    result: Final = StandardLoggingPayloadSetup.get_model_cost_information(
+        base_model=None, custom_pricing=False, custom_llm_provider="mistral", init_response_obj=response
+    )
+
+    assert result["model_map_key"] == "sol-snapshot-test"
+    assert result["model_map_value"] is not None
+    assert result["model_map_value"]["input_cost_per_token"] == served_row["input_cost_per_token"]
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 def test_standard_logging_payload_uses_deployment_when_no_base_model():
     """metadata["deployment"] is used for cost-map lookup when base_model is not set."""
     from datetime import datetime as datetime_standard_logging
@@ -13821,7 +14060,9 @@ def test_record_native_bedrock_guardrail_bills_each_call_its_own_trace_when_call
         )
         logging_obj.model_call_details["litellm_params"] = {"metadata": shared_metadata}
         logging_obj.record_native_bedrock_guardrail({"trace": trace})
-        recorded = logging_obj.model_call_details["litellm_params"]["metadata"]["standard_logging_guardrail_information"]
+        recorded = logging_obj.model_call_details["litellm_params"]["metadata"][
+            "standard_logging_guardrail_information"
+        ]
         costs.append(guardrail_information_cost(recorded))
 
     (first_cost, second_cost) = costs

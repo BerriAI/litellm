@@ -4292,6 +4292,34 @@ async def test_get_user_info_for_proxy_admin_validates_keys_and_teams():
     assert returned_key["models"] == []
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw_rows",
+    [
+        [{"teams": None, "keys": "sk-row-content-must-not-leak"}],
+        [{"teams": None, "keys": ["sk-row-content-must-not-leak"]}],
+    ],
+)
+async def test_get_user_info_for_proxy_admin_errors_do_not_echo_row_content(raw_rows):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from pydantic import ValidationError
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _get_user_info_for_proxy_admin,
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.query_raw = AsyncMock(return_value=raw_rows)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        with pytest.raises(ValidationError) as exc_info:
+            await _get_user_info_for_proxy_admin(user_api_key_dict=UserAPIKeyAuth(user_id=None))
+
+    assert "sk-row-content-must-not-leak" not in str(exc_info.value)
+
+
 def _object_permission_mocks(mocker, existing_object_permission_id=None):
     """Prisma double whose user row optionally already links a permission row."""
     mock_prisma_client = mocker.MagicMock()
@@ -4970,7 +4998,7 @@ _DB_OUTAGE_503_BODY: Final = {
     "error": {
         "message": "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.",
         "type": "no_db_connection",
-        "param": "None",
+        "param": None,
         "code": "503",
     }
 }

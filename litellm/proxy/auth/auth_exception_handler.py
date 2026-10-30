@@ -30,6 +30,7 @@ from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module expor
 )
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
+from litellm.proxy.common_utils.openai_error_payload import openai_error_param
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
 
@@ -61,14 +62,14 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
             message=str(e.detail),
             internal_message=e.internal_message,
             type=ProxyErrorTypes.auth_error,
-            param="None",
+            param=None,
             code=e.status_code,
         )
     if isinstance(e, HTTPException):
         return ProxyException(
             message=getattr(e, "detail", f"Authentication Error({e})"),
             type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
         )
     if isinstance(e, ProxyException):
@@ -78,7 +79,7 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
     return ProxyException(
         message="Authentication Error, " + str(e),
         type=ProxyErrorTypes.auth_error,
-        param=getattr(e, "param", "None"),
+        param=openai_error_param(e),
         code=status.HTTP_401_UNAUTHORIZED,
     )
 
