@@ -450,8 +450,9 @@ _STRUCTURAL_KEYS: Final = frozenset({"role", "type", "id", "tool_call_id", "name
 _MIN_UNQUOTED_TEXT_LENGTH: Final = 4
 # pydantic shows a long input value as its repr's first 25 and last 24 characters around "...", quotes and
 # container keys included, so each side of the cut shows at most 24 characters of a quoted text
-_CUT_ECHO_HEAD: Final = re.compile(r"(?<=['\"])[^'\"]{1,24}(?=\.\.\.)")
-_CUT_ECHO_TAIL: Final = re.compile(r"(?<=\.\.\.)[^'\"]{1,24}(?=['\"])")
+_CUT_SIDE_LENGTH: Final = 24
+_CUT_ECHO_HEAD: Final = re.compile(rf"(?<=['\"])[^'\"]{{1,{_CUT_SIDE_LENGTH}}}(?=\.\.\.)")
+_CUT_ECHO_TAIL: Final = re.compile(rf"(?<=\.\.\.)[^'\"]{{1,{_CUT_SIDE_LENGTH}}}(?=['\"])")
 _MAX_SCRUB_COMPARISONS: Final = 10_000_000
 
 
@@ -493,6 +494,15 @@ def _echo_forms(text: str) -> frozenset[str]:
     return frozenset({text, json.dumps(text)[1:-1], json.dumps(text, ensure_ascii=False)[1:-1], repr(text)[1:-1]})
 
 
+def _cut_sides(text: str) -> str:
+    """
+    The start and end of ``text`` that a pydantic cut can show, for a text too long to be quoted whole, with
+    ``text``'s quote characters between them so repr escapes the sides as it escapes the whole ``text``.
+    """
+    quotes: Final = "".join(quote for quote in "'\"" if quote in text)
+    return f"{text[:_CUT_SIDE_LENGTH]}{quotes}{text[-_CUT_SIDE_LENGTH:]}"
+
+
 def _cut_echoes(text: str, forms: Collection[str]) -> tuple[tuple[str, str], ...]:
     """
     Each side of a quoted value ``text`` cuts short with ``...`` that starts or ends one of ``forms``, as
@@ -524,9 +534,14 @@ def scrub_request_text(text: str, texts: Collection[str]) -> str:
         return text
     if len(text) * len(texts) > _MAX_SCRUB_COMPARISONS:
         return REDACTED_BY_LITELLM
-    forms: Final = frozenset(itertools.chain.from_iterable(map(_echo_forms, texts)))
+    forms: Final = frozenset(
+        itertools.chain.from_iterable(_echo_forms(each) for each in texts if len(each) <= len(text))
+    )
+    cut_forms: Final = frozenset(
+        itertools.chain.from_iterable(_echo_forms(_cut_sides(each)) for each in texts if len(each) > len(text))
+    )
     echoes: Final = sorted(
-        (*((form, _echo_pattern(form)) for form in forms if form in text), *_cut_echoes(text, forms)),
+        (*((form, _echo_pattern(form)) for form in forms if form in text), *_cut_echoes(text, forms | cut_forms)),
         key=lambda echo: len(echo[0]),
         reverse=True,
     )

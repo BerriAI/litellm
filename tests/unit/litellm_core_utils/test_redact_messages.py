@@ -11,6 +11,7 @@ import importlib
 import json
 import os
 import threading
+import tracemalloc
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
@@ -2084,6 +2085,7 @@ def test_perform_redaction_strips_the_matched_text_from_the_bedrock_guardrail_tr
 
 
 PROMPT: Final = "my ssn is 123-45-6789\nand my pin is 4321, keep both safe"
+LONG_PROMPT: Final = f"my ssn is 123-45-6789 'keep it' and \"safe\" {'and more ' * 200}until the end"
 
 
 @pytest.mark.parametrize(
@@ -2101,14 +2103,21 @@ def test_scrub_request_text_replaces_each_way_an_error_quotes_the_prompt(quoted:
 
 @pytest.mark.parametrize(
     "value",
-    [PROMPT, [PROMPT], {"content": PROMPT}, [{"content": PROMPT}]],
-    ids=["str", "list", "dict", "nested_under_12_characters"],
+    [PROMPT, [PROMPT], {"content": PROMPT}, [{"content": PROMPT}], [{"content": LONG_PROMPT}], [LONG_PROMPT]],
+    ids=[
+        "str",
+        "list",
+        "dict",
+        "nested_under_12_characters",
+        "text_longer_than_the_error",
+        "text_longer_than_the_error_cut_inside_an_escaped_quote",
+    ],
 )
 def test_scrub_request_text_replaces_both_sides_of_a_pydantic_cut_input_value(value: object) -> None:
     with pytest.raises(ValidationError, match="input_value=") as raised:
         TypeAdapter(int).validate_python(value)
 
-    scrubbed: Final = scrub_request_text(str(raised.value), request_texts(PROMPT))
+    scrubbed: Final = scrub_request_text(str(raised.value), request_texts(value))
 
     assert "my ssn" not in scrubbed and "4321" not in scrubbed
     assert "redacted-by-litellm...redacted-by-litellm" in scrubbed
@@ -2128,6 +2137,25 @@ def test_scrub_request_text_replaces_the_whole_text_when_the_search_is_too_large
     texts: Final = request_texts([f"message number {index}" for index in range(5_000)])
 
     assert scrub_request_text("x" * 5_000, texts) == "redacted-by-litellm"
+
+
+def test_scrub_request_text_never_copies_a_request_text_longer_than_the_error() -> None:
+    error: Final = "litellm.RateLimitError: rate limit reached for gpt-4o"
+    image_urls: Final = request_texts([f"data:image/png;base64,{index}{'A' * 1_000_000}" for index in range(4)])
+    already_tracing: Final = tracemalloc.is_tracing()
+    if not already_tracing:
+        tracemalloc.start()
+    tracemalloc.reset_peak()
+    baseline, _ = tracemalloc.get_traced_memory()
+    try:
+        scrubbed: Final = scrub_request_text(error, image_urls)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        if not already_tracing:
+            tracemalloc.stop()
+
+    assert scrubbed == error
+    assert peak - baseline < 1_000_000, f"scrubbing a short error allocated {peak - baseline} bytes, copying the images"
 
 
 def test_request_texts_reads_content_and_skips_structural_fields() -> None:
