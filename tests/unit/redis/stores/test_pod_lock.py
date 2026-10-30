@@ -17,6 +17,9 @@ class ExpiredLockTransport:
     async def set(self, key: str, value: Arg, *, ttl: timedelta | None, nx: bool = False) -> bool | RedisFailure:
         return not nx
 
+    async def set_seconds(self, key: str, value: Arg, *, ttl: timedelta | None, nx: bool = False) -> NoReturn:
+        raise AssertionError("unexpected set_seconds")
+
     async def mget(self, keys: Sequence[str]) -> tuple[bytes | None, ...] | RedisFailure:
         raise AssertionError("unexpected mget")
 
@@ -34,6 +37,9 @@ class ExpiredLockTransport:
 
     async def expire(self, key: str, ttl: timedelta) -> NoReturn:
         raise AssertionError("unexpected expire")
+
+    async def expire_seconds(self, key: str, ttl: timedelta) -> NoReturn:
+        raise AssertionError("unexpected expire_seconds")
 
     async def ttl(self, key: str) -> NoReturn:
         raise AssertionError("unexpected ttl")
