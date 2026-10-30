@@ -65,7 +65,7 @@ def _ui_session_route_error(user_id: str) -> dict[str, JsonValue]:
                 f"Your user_id={masked_user_id}"
             ),
             "type": "auth_error",
-            "param": "None",
+            "param": None,
             "code": "401",
         }
     }

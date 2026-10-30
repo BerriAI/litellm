@@ -75,7 +75,7 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
-from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
+from litellm.proxy.common_utils.openai_error_payload import openai_error_param, proxy_exception_for
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
@@ -4959,7 +4959,7 @@ async def info_key_fn(
         raise ProxyException(
             message="Internal server error from /key/info. Details are in the proxy server logs.",
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -8156,7 +8156,7 @@ async def key_health(
         raise ProxyException(
             message=f"Key health check failed: {e}",
             type=ProxyErrorTypes.internal_server_error,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
