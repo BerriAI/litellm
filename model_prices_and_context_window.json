@@ -59762,12 +59762,13 @@
         "cache_read_input_token_cost": 1.375e-06,
         "output_cost_per_token": 8.25e-05,
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-cyber.html",
         "use_openai_responses_path": true,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ],
         "supported_modalities": [
