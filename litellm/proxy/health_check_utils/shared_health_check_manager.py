@@ -86,7 +86,7 @@ class SharedHealthCheckManager:
             return False
 
         try:
-            acquired: Final = await self._store.acquire(self.pod_id, ttl=timedelta(seconds=self.lock_ttl))
+            acquired: Final = await self._store.acquire(self.pod_id, ttl=timedelta(seconds=int(self.lock_ttl)))
             if isinstance(acquired, RedisFailure):
                 return False
 
@@ -168,7 +168,7 @@ class SharedHealthCheckManager:
                 "checked_by": self.pod_id,
             }
 
-            written: Final = await self._store.put(cache_data, ttl=timedelta(seconds=self.health_check_ttl))
+            written: Final = await self._store.put(cache_data, ttl=timedelta(seconds=int(self.health_check_ttl)))
             if isinstance(written, RedisFailure):
                 return
 

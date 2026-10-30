@@ -1,17 +1,22 @@
+import asyncio
 import json
 import time
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
+from itertools import chain
 from typing import Final
 from unittest.mock import patch
 
 import fakeredis
 import pytest
 import pytest_asyncio
+from prometheus_client import REGISTRY
 from pydantic import TypeAdapter
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
+import litellm
 from litellm.caching.redis_cache import RedisCache
+from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
 from tests._support.fake_redis import fake_redis_cache
@@ -38,11 +43,7 @@ async def health(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[HealthRedis]:
     cache: Final = fake_redis_cache(server, namespace="shared")
     manager: Final = SharedHealthCheckManager(cache, health_check_ttl=300, lock_ttl=60)
     manager.pod_id = 'pod_雪"'
-    try:
-        yield HealthRedis(server, raw, cache, manager)
-    finally:
-        await raw.aclose()
-        await cache.init_async_client().aclose()
+    yield HealthRedis(server, raw, cache, manager)
 
 
 def test_public_key_helpers_keep_global_and_model_keys() -> None:
@@ -358,3 +359,48 @@ async def test_keys_expire_at_caller_selected_seconds(health: HealthRedis, monke
     monkeypatch.setattr(time, "time", lambda: NOW + 301)
     assert await health.manager.get_cached_health_check_results() is None
     assert await health.raw.pttl(RESULTS) == -2
+
+
+def _redis_metric(name: str) -> float:
+    samples: Final = chain.from_iterable(metric.samples for metric in REGISTRY.collect())
+    return sum(sample.value for sample in samples if sample.name == name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ttl", [1.9, 0.5, 0.9999999, 1.9999999, -0.5])
+async def test_fractional_ttl_matches_legacy_seconds(health: HealthRedis, ttl: float) -> None:
+    setattr(health.manager, "lock_ttl", ttl)
+    setattr(health.manager, "health_check_ttl", ttl)
+    assert await health.manager.acquire_health_check_lock() is (int(ttl) > 0)
+    await health.manager.cache_health_check_results([], [])
+    expected: Final = int(ttl) * 1000 if int(ttl) > 0 else -2
+    assert await health.raw.pttl(LOCK) == expected
+    assert await health.raw.pttl(RESULTS) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ttl", [0, -1])
+async def test_invalid_ttl_emits_failure_events(health: HealthRedis, monkeypatch: pytest.MonkeyPatch, ttl: int) -> None:
+    monkeypatch.setattr(litellm, "service_callback", ["prometheus_system"])
+    health.manager.lock_ttl = ttl
+    health.manager.health_check_ttl = ttl
+    pending_before: Final = asyncio.all_tasks()
+    before: Final = _redis_metric("litellm_redis_failed_requests_total")
+    breaker_before: Final = _redis_metric("litellm_redis_circuit_breaker_failures_total")
+    assert await health.manager.acquire_health_check_lock() is False
+    await health.manager.cache_health_check_results([], [])
+    await asyncio.gather(*(asyncio.all_tasks() - pending_before))
+    assert _redis_metric("litellm_redis_failed_requests_total") - before == 2
+    assert _redis_metric("litellm_redis_circuit_breaker_failures_total") == breaker_before
+
+
+@pytest.mark.asyncio
+async def test_zero_ttl_outage_still_opens_breaker(health: HealthRedis) -> None:
+    health.server.connected = False
+    health.manager.lock_ttl = 0
+    for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
+        assert await health.manager.acquire_health_check_lock() is False
+    health.server.connected = True
+    health.manager.lock_ttl = 60
+    assert await health.manager.acquire_health_check_lock() is False
+    assert await health.raw.get(LOCK) is None
