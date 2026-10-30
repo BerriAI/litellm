@@ -623,6 +623,56 @@ async def test_async_post_call_failure_hook_reads_used_client_oauth_token_from_t
     assert json.loads(payload["metadata"])["used_client_oauth_token"] is expected
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_route, body",
+    [
+        (
+            "/cursor/chat/completions",
+            {
+                "input": "Hello",
+                "metadata": {"requester_ip_address": "203.0.113.9", "user_agent": "spoofed"},
+                "litellm_metadata": {"requester_ip_address": "127.0.0.1", "user_agent": "Cursor/1.0"},
+            },
+        ),
+        (
+            "/v1/chat/completions",
+            {
+                "messages": [{"role": "user", "content": "Hello"}],
+                "metadata": {"requester_ip_address": "127.0.0.1", "user_agent": "Cursor/1.0"},
+                "litellm_metadata": {"requester_ip_address": "203.0.113.9", "user_agent": "spoofed"},
+            },
+        ),
+    ],
+)
+async def test_async_post_call_failure_hook_logs_the_proxy_stamped_ip_and_user_agent(request_route: str, body: dict):
+    request_data = {
+        "model": "gpt-4o",
+        "proxy_server_request": {"request_id": "test_request_id"},
+        **body,
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await ProxyDBLogger().async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("invalid api key"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key", request_route=request_route),
+        )
+
+    payload = get_logging_payload(
+        kwargs=mock_update_database.call_args[1]["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert payload["requester_ip_address"] == "127.0.0.1"
+    assert json.loads(payload["metadata"])["user_agent"] == "Cursor/1.0"
+
+
 @pytest.mark.asyncio
 async def test_async_post_call_failure_hook_bills_guardrail_cost_on_blocked_request():
     """LIT-5651: a request blocked by a guardrail never reaches the LLM, but the
