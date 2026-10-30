@@ -1,6 +1,6 @@
 import json
 import asyncio
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
@@ -443,3 +443,57 @@ async def test_async_invoke_status_signs_off_the_event_loop(monkeypatch):
     assert status["status"] == "InProgress"
     assert "Authorization" in route.calls.last.request.headers
     assert probe.served_during_refresh is True
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/async_invoke/amazon.nova-2-multimodal-embeddings-v1:0",
+        "bedrock/async_invoke/twelvelabs.marengo-embed-2-7-v1:0",
+    ],
+)
+async def test_router_keeps_the_invocation_arn_next_to_the_deployment_id(model):
+    from litellm import Router
+    from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "async-embeddings",
+                "litellm_params": {
+                    "model": model,
+                    "aws_region_name": "us-east-1",
+                    "api_key": "test-bearer-token-12345",
+                    "output_s3_uri": "s3://test-bucket/async-invoke-output/",
+                },
+                "model_info": {"id": "deployment-1"},
+            }
+        ]
+    )
+    client = AsyncHTTPHandler()
+    start_async_invoke = httpx.Response(
+        200, json=async_invoke_response, request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com")
+    )
+
+    with patch.object(client, "post", new=AsyncMock(return_value=start_async_invoke)):
+        response = await router.aembedding(model="async-embeddings", input=test_input, client=client)
+
+    hidden_params = get_hidden_params_dict(response)
+    assert (hidden_params.get("_invocation_arn"), hidden_params.get("model_id")) == (
+        async_invoke_response["invocationArn"],
+        "deployment-1",
+    )
+
+
+def test_generic_async_invoke_response_keeps_the_invocation_arn_in_its_dumped_hidden_params():
+    from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
+    from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+
+    response = BedrockEmbedding()._transform_response(
+        response_list=[async_invoke_response],
+        model="amazon.titan-embed-text-v2:0",
+        provider="amazon",
+        is_async_invoke=True,
+    )
+
+    assert get_hidden_params_dict(response)["_invocation_arn"] == async_invoke_response["invocationArn"]

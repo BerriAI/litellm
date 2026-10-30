@@ -13,14 +13,18 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     apply_team_provider_credentials,
     apply_unified_file_ids,
+    decode_model_from_file_id,
     get_credentials_for_model,
+    get_original_file_id,
     get_team_provider_credentials,
     is_litellm_executed_batch,
     map_raw_file_ids_to_unified,
+    with_async_invoke_batch_id,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import InternalUsageCache, handle_exception_on_proxy
-from litellm.types.utils import LiteLLMBatch
+from litellm.types.llms.base import HiddenParams
+from litellm.types.utils import Embedding, EmbeddingResponse, LiteLLMBatch
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 _RAW_MODEL_WITH_PROMPT: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
@@ -852,3 +856,53 @@ def test_a_team_keeps_its_first_config_file_openai_deployment_over_older_db_ones
 
     assert credentials is not None
     assert credentials["api_key"] == "deployment-z-key"
+
+
+_ASYNC_INVOKE_ARN: Final = "arn:aws:bedrock:us-east-1:123456789012:async-invoke/n0v4j0b1d"
+
+
+def _async_invoke_embedding(hidden_params: dict[str, object] | HiddenParams) -> EmbeddingResponse:
+    return EmbeddingResponse(
+        model="nova-async-embeddings",
+        data=[Embedding(embedding=[], index=0, object="embedding")],
+        hidden_params=hidden_params,
+    )
+
+
+@pytest.mark.parametrize(
+    "hidden_params",
+    [
+        {"_invocation_arn": _ASYNC_INVOKE_ARN, "model_id": "deployment-1"},
+        HiddenParams.model_validate({"_invocation_arn": _ASYNC_INVOKE_ARN, "model_id": "deployment-1"}),
+    ],
+)
+def test_async_invoke_embedding_gets_a_batch_id_that_routes_back_to_its_deployment(
+    hidden_params: dict[str, object] | HiddenParams,
+) -> None:
+    tagged: Final = with_async_invoke_batch_id(_async_invoke_embedding(hidden_params))
+
+    assert isinstance(tagged, EmbeddingResponse)
+    batch_id: Final = tagged.model_dump()["batch_id"]
+    assert (batch_id.startswith("batch_"), decode_model_from_file_id(batch_id), get_original_file_id(batch_id)) == (
+        True,
+        "deployment-1",
+        _ASYNC_INVOKE_ARN,
+    )
+
+
+@pytest.mark.parametrize(
+    "hidden_params",
+    [
+        {"model_id": "deployment-1"},
+        {"_invocation_arn": "", "model_id": "deployment-1"},
+        {"_invocation_arn": _ASYNC_INVOKE_ARN},
+        {"_invocation_arn": _ASYNC_INVOKE_ARN, "model_id": None},
+    ],
+)
+def test_embedding_without_an_invocation_arn_and_deployment_id_gets_no_batch_id(
+    hidden_params: dict[str, object],
+) -> None:
+    response: Final = _async_invoke_embedding(hidden_params)
+
+    assert with_async_invoke_batch_id(response) is response
+    assert "batch_id" not in response.model_dump()

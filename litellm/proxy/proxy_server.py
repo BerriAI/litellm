@@ -876,6 +876,7 @@ from litellm.proxy.middleware.security_headers_middleware import (
 )
 from litellm.proxy.moyai_endpoints import router as moyai_router
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
+from litellm.proxy.openai_files_endpoints.common_utils import with_async_invoke_batch_id
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
@@ -13217,7 +13218,7 @@ async def embeddings(
             version=version,
         )
 
-        return response
+        return with_async_invoke_batch_id(response)
     except Exception as e:
         raise await base_llm_response_processor.handle_llm_api_exception(
             e=e,

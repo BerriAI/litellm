@@ -360,8 +360,7 @@ class AmazonNovaEmbeddingConfig:
         # Create hidden params with job ID
         from litellm.types.llms.base import HiddenParams
 
-        hidden_params: Final = HiddenParams()
-        setattr(hidden_params, "_invocation_arn", invocation_arn)
+        hidden_params: Final = HiddenParams.model_validate({"_invocation_arn": invocation_arn})
 
         return EmbeddingResponse(
             data=[embedding],

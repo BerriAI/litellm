@@ -27,8 +27,9 @@ from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import (
     ManagedObjectRepository,
 )
+from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.types.llms.openai import OpenAIFilesPurpose
-from litellm.types.utils import SpecialEnums
+from litellm.types.utils import EmbeddingResponse, SpecialEnums
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -285,6 +286,19 @@ def encode_batch_response_ids(response, model: str) -> None:
                 attr,
                 encode_file_id_with_model(file_id=getattr(response, attr), model=model),
             )
+
+
+def with_async_invoke_batch_id(response: object) -> object:
+    if not isinstance(response, EmbeddingResponse):
+        return response
+    hidden_params: Final = get_hidden_params_dict(response)
+    invocation_arn: Final = hidden_params.get("_invocation_arn")
+    model_id: Final = hidden_params.get("model_id")
+    if not (isinstance(invocation_arn, str) and invocation_arn and isinstance(model_id, str) and model_id):
+        return response
+    return response.model_copy(
+        update={"batch_id": encode_file_id_with_model(file_id=invocation_arn, model=model_id, id_type="batch")}
+    )
 
 
 def decode_model_from_file_id(encoded_id: str) -> str | None:

@@ -1,15 +1,19 @@
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
 from openai.types.batch import BatchRequestCounts
 from openai.types.batch import Metadata as OpenAIBatchMetadata
+from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel
 
 from litellm.llms.bedrock.common_utils import (
     bedrock_control_plane_base_url,
     configured_bedrock_control_plane_endpoint,
 )
 from litellm.types.llms.bedrock import AwsAuthParams, AwsSessionTag
+from litellm.types.llms.openai import BatchJobStatus
 from litellm.types.utils import LiteLLMBatch
 
 if TYPE_CHECKING:
@@ -38,7 +42,39 @@ _BEDROCK_MIJ_STATUS_TO_OPENAI: Final[
     "Expired": "expired",
 }
 
+_BEDROCK_ASYNC_INVOKE_STATUS_TO_OPENAI: Final[Mapping[str, BatchJobStatus]] = MappingProxyType(
+    {
+        "InProgress": "in_progress",
+        "Completed": "completed",
+        "Failed": "failed",
+    }
+)
+
 _CANCEL_IDEMPOTENT_STATUSES: Final = frozenset({"cancelling", "cancelled", "completed", "failed", "expired"})
+
+
+class _AsyncInvokeS3OutputDataConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, alias_generator=to_camel)
+
+    s3_uri: str
+
+
+class _AsyncInvokeOutputDataConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, alias_generator=to_camel)
+
+    s3_output_data_config: _AsyncInvokeS3OutputDataConfig
+
+
+class _AsyncInvokeJob(BaseModel):
+    model_config = ConfigDict(frozen=True, alias_generator=to_camel)
+
+    invocation_arn: str
+    model_arn: str
+    status: str
+    submit_time: datetime
+    end_time: datetime | None = None
+    failure_message: str | None = None
+    output_data_config: _AsyncInvokeOutputDataConfig
 
 
 def _sigv4_config() -> "Config":
@@ -108,6 +144,36 @@ def _to_epoch(value: object) -> int | None:
     if isinstance(value, datetime):
         return int(value.timestamp())
     return None
+
+
+def async_invoke_status_to_batch(status_response: Mapping[str, object]) -> LiteLLMBatch:
+    job: Final = _AsyncInvokeJob.model_validate(status_response)
+    status: Final = _BEDROCK_ASYNC_INVOKE_STATUS_TO_OPENAI.get(job.status, "in_progress")
+    submitted_at: Final = int(job.submit_time.timestamp())
+    ended_at: Final = _to_epoch(job.end_time)
+    metadata: Final[OpenAIBatchMetadata] = {
+        "output_file_id": job.output_data_config.s3_output_data_config.s3_uri,
+        "failure_message": job.failure_message or "",
+        "model_arn": job.model_arn,
+    }
+    return LiteLLMBatch(
+        id=job.invocation_arn,
+        object="batch",
+        status=status,
+        created_at=submitted_at,
+        in_progress_at=submitted_at,
+        completed_at=ended_at if status == "completed" else None,
+        failed_at=ended_at if status == "failed" else None,
+        request_counts=BatchRequestCounts(
+            total=1,
+            completed=1 if status == "completed" else 0,
+            failed=1 if status == "failed" else 0,
+        ),
+        metadata=metadata,
+        completion_window="24h",
+        endpoint="/v1/embeddings",
+        input_file_id="",
+    )
 
 
 class BedrockBatchesHandler:
@@ -214,47 +280,14 @@ class BedrockBatchesHandler:
 
         from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
 
-        async def _async_get_status():
-            # Create embedding handler instance
-            embedding_handler: Final = BedrockEmbedding()
-
-            # Get the status of the async invoke job
-            status_response: Final = await embedding_handler.get_async_invoke_status(
+        async def _async_get_status() -> LiteLLMBatch:
+            status_response: Final = await BedrockEmbedding().get_async_invoke_status(
                 invocation_arn=batch_id,
                 aws_region_name=aws_region_name,
                 logging_obj=logging_obj,
                 **kwargs,
             )
-
-            # Transform response to a LiteLLMBatch object
-            from litellm.types.utils import LiteLLMBatch
-
-            openai_batch_metadata: Final[OpenAIBatchMetadata] = {
-                "output_file_id": status_response["outputDataConfig"]["s3OutputDataConfig"]["s3Uri"],
-                "failure_message": status_response.get("failureMessage") or "",
-                "model_arn": status_response["modelArn"],
-            }
-
-            result: Final = LiteLLMBatch(
-                id=status_response["invocationArn"],
-                object="batch",
-                status=status_response["status"],
-                created_at=status_response["submitTime"],
-                in_progress_at=status_response["lastModifiedTime"],
-                completed_at=status_response.get("endTime"),
-                failed_at=(status_response.get("endTime") if status_response["status"] == "failed" else None),
-                request_counts=BatchRequestCounts(
-                    total=1,
-                    completed=1 if status_response["status"] == "completed" else 0,
-                    failed=1 if status_response["status"] == "failed" else 0,
-                ),
-                metadata=openai_batch_metadata,
-                completion_window="24h",
-                endpoint="/v1/embeddings",
-                input_file_id="",
-            )
-
-            return result
+            return async_invoke_status_to_batch(status_response)
 
         # Since this function is called from within an async context via run_in_executor,
         # we need to create a new event loop in a thread to avoid conflicts

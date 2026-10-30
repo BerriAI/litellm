@@ -14,7 +14,7 @@ import os
 from collections.abc import Iterator, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Final
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -29,6 +29,7 @@ from litellm.llms.bedrock.batches.handler import (  # noqa: E402
     _extract_region_from_bedrock_arn,
     _predict_output_file_uri,
     _to_epoch,
+    async_invoke_status_to_batch,
 )
 
 JOB_ID = "abc1234567"
@@ -138,6 +139,109 @@ def test_predict_output_file_uri_adds_trailing_slash():
 )
 def test_predict_output_file_uri_returns_none_when_missing_input(missing_arg):
     assert _predict_output_file_uri(*missing_arg) is None
+
+
+ASYNC_INVOKE_ARN: Final = "arn:aws:bedrock:us-east-1:123456789012:async-invoke/n0v4j0b1d"
+ASYNC_INVOKE_MODEL_ARN: Final = "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-2-multimodal-embeddings-v1:0"
+ASYNC_INVOKE_OUTPUT_URI: Final = "s3://my-bucket/async-invoke-output/n0v4j0b1d"
+ASYNC_INVOKE_SUBMIT_TIME: Final = "2026-10-30T08:51:15Z"
+ASYNC_INVOKE_LAST_MODIFIED_TIME: Final = "2026-10-30T08:51:47Z"
+ASYNC_INVOKE_END_TIME: Final = "2026-10-30T08:52:40.512Z"
+
+
+def _iso_epoch(iso_time: str) -> int:
+    return int(datetime.fromisoformat(iso_time).timestamp())
+
+
+def _async_invoke_job(status: str, end_time: str | None, failure_message: str | None = None) -> Mapping[str, object]:
+    return {
+        "invocationArn": ASYNC_INVOKE_ARN,
+        "modelArn": ASYNC_INVOKE_MODEL_ARN,
+        "clientRequestToken": "client-request-token",
+        "status": status,
+        "submitTime": ASYNC_INVOKE_SUBMIT_TIME,
+        "lastModifiedTime": end_time or ASYNC_INVOKE_LAST_MODIFIED_TIME,
+        **({"endTime": end_time} if end_time else {}),
+        **({"failureMessage": failure_message} if failure_message else {}),
+        "outputDataConfig": {"s3OutputDataConfig": {"s3Uri": ASYNC_INVOKE_OUTPUT_URI}},
+    }
+
+
+@pytest.mark.parametrize(
+    ("aws_status", "end_time", "failure_message", "status", "completed_at", "failed_at", "counts"),
+    [
+        ("InProgress", None, None, "in_progress", None, None, (1, 0, 0)),
+        ("Completed", ASYNC_INVOKE_END_TIME, None, "completed", _iso_epoch(ASYNC_INVOKE_END_TIME), None, (1, 1, 0)),
+        (
+            "Failed",
+            ASYNC_INVOKE_END_TIME,
+            "ValidationException: the input file is not valid",
+            "failed",
+            None,
+            _iso_epoch(ASYNC_INVOKE_END_TIME),
+            (1, 0, 1),
+        ),
+        ("SomeFutureStatus", ASYNC_INVOKE_END_TIME, None, "in_progress", None, None, (1, 0, 0)),
+    ],
+)
+def test_async_invoke_job_maps_to_an_openai_batch(
+    aws_status: str,
+    end_time: str | None,
+    failure_message: str | None,
+    status: str,
+    completed_at: int | None,
+    failed_at: int | None,
+    counts: tuple[int, int, int],
+) -> None:
+    batch: Final = async_invoke_status_to_batch(_async_invoke_job(aws_status, end_time, failure_message))
+
+    assert (batch.id, batch.object, batch.endpoint, batch.status) == (
+        ASYNC_INVOKE_ARN,
+        "batch",
+        "/v1/embeddings",
+        status,
+    )
+    assert (batch.created_at, batch.in_progress_at, batch.completed_at, batch.failed_at) == (
+        _iso_epoch(ASYNC_INVOKE_SUBMIT_TIME),
+        _iso_epoch(ASYNC_INVOKE_SUBMIT_TIME),
+        completed_at,
+        failed_at,
+    )
+    assert batch.request_counts is not None
+    assert (batch.request_counts.total, batch.request_counts.completed, batch.request_counts.failed) == counts
+    assert batch.metadata == {
+        "output_file_id": ASYNC_INVOKE_OUTPUT_URI,
+        "failure_message": failure_message or "",
+        "model_arn": ASYNC_INVOKE_MODEL_ARN,
+    }
+
+
+def test_retrieve_batch_returns_the_mapped_async_invoke_job() -> None:
+    http_client: Final = AsyncHTTPHandler()
+    get_async_invoke_response: Final = httpx.Response(
+        status_code=200,
+        json=dict(_async_invoke_job("InProgress", end_time=None)),
+        request=httpx.Request("GET", "https://bedrock-runtime.us-east-1.amazonaws.com"),
+    )
+
+    with (
+        patch.object(http_client, "get", new=AsyncMock(return_value=get_async_invoke_response)) as get_status,
+        patch("litellm.llms.bedrock.embed.embedding.get_async_httpx_client", return_value=http_client),
+    ):
+        batch: Final = litellm.retrieve_batch(
+            batch_id=ASYNC_INVOKE_ARN,
+            custom_llm_provider="bedrock",
+            aws_region_name="us-east-1",
+            aws_access_key_id="AKIAASYNCINVOKE",
+            aws_secret_access_key="async-invoke-secret",
+        )
+
+    assert get_status.await_count == 1
+    assert (batch.id, batch.status, batch.created_at) == (
+        ASYNC_INVOKE_ARN,
+        "in_progress",
+        _iso_epoch(ASYNC_INVOKE_SUBMIT_TIME),
+    )
 
 
 def test_handle_model_invocation_job_status_completed(patched_boto3):
