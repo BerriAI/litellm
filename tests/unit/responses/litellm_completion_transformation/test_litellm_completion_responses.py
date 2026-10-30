@@ -313,7 +313,7 @@ class TestLiteLLMCompletionResponsesConfig:
         assert reasoning_item.status == "completed"
         assert reasoning_item.role == "assistant"
         assert len(reasoning_item.content) == 1
-        assert reasoning_item.content[0].type == "output_text"
+        assert reasoning_item.content[0].type == "reasoning_text"
         assert "step by step" in reasoning_item.content[0].text
         assert "42" in reasoning_item.content[0].text
 
@@ -5431,6 +5431,16 @@ class TestBridgedOutputItemIdPrefixes:
 
         assert not suffix.lstrip("-").isdigit()
         assert not suffix.startswith("-")
+
+    def test_reasoning_item_is_a_responses_reasoning_item(self):
+        """A client that validates output items (the OpenAI Agents SDK restoring a paused run)
+        rejected the bridged item: it had no ``summary`` and typed its text ``output_text``."""
+        from openai.types.responses import ResponseReasoningItem
+
+        item = ResponseReasoningItem.model_validate(self._reasoning_items()[0].model_dump())
+
+        assert item.summary == []
+        assert [(part.type, part.text) for part in item.content or []] == [("reasoning_text", "thinking about fruit")]
 
 
 class TestStreamingSnapshotItemIds:

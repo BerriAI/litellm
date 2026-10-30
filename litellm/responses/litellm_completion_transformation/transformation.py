@@ -3442,9 +3442,10 @@ class LiteLLMCompletionResponsesConfig:
                                 choice.finish_reason
                             ),
                             role="assistant",
+                            summary=[],
                             content=[
                                 OutputText(
-                                    type="output_text",
+                                    type="reasoning_text",
                                     text=text,
                                     annotations=[],
                                 )
