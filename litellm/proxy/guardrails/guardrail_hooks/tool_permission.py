@@ -60,6 +60,7 @@ _TOOL_CONFIG_KEYS: Final = ("toolConfig", "tool_config")
 _FUNCTION_CALLING_CONFIG_KEYS: Final = ("functionCallingConfig", "function_calling_config")
 _ALLOWED_FUNCTION_NAMES_KEYS: Final = ("allowedFunctionNames", "allowed_function_names")
 _FORCED_FUNCTION_CALLING_MODES: Final = frozenset({"ANY", "VALIDATED"})
+_NAME_IDENTIFIED_TYPES: Final = frozenset({"function", "custom", "namespace", *_HOSTED_SERVER_NAME_FIELDS})
 _NAMED_CHOICE_TYPES: Final = frozenset({"tool", "function", "custom", "allowed_tools", "any", "auto", "none"})
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
 _REQUEST_DATA: Final = TypeAdapter(object)
@@ -936,11 +937,16 @@ class ToolPermissionGuardrail(CustomGuardrail):
             return member_targets
         raw_type: Final = self._get_mapping_value(tool, "type")
         tool_type: Final = raw_type if isinstance(raw_type, str) else None
-        anthropic_custom: Final = tool_type == "custom" and self._get_mapping_value(tool, "input_schema") is not None
+        anthropic_custom: Final = (
+            tool_type == "custom"
+            and self._get_mapping_value(tool, "input_schema") is not None
+            and _object_mapping(self._get_mapping_value(tool, "custom")) is None
+        )
         normalized_type: Final = "function" if tool_type is None or anthropic_custom else tool_type
         names: Final = _request_tool_names(tool)
+        type_target: Final = ((None, normalized_type),) if normalized_type not in _NAME_IDENTIFIED_TYPES else ()
         if names:
-            return tuple((name, normalized_type) for name in names)
+            return tuple((name, normalized_type) for name in names) + type_target
         return ((None, tool_type),) if tool_type is not None else ()
 
     def _get_legacy_function_name(self, function: object) -> str | None:

@@ -1404,11 +1404,13 @@ class TestToolPermissionGuardrailAnthropicMessages:
             ({"format": {"type": "text"}}, r"^custom$", "responses"),
             ({"input_schema": {"type": "object", "properties": {}}}, r"^function$", "anthropic_messages"),
             ({"input_schema": {"type": "object", "properties": {}}}, r"^function$", "pass_through_endpoint"),
+            ({"custom": {"name": "apply_patch"}, "input_schema": {"type": "object"}}, r"^custom$", "acompletion"),
         ],
         ids=[
             "responses_custom_stays_custom",
             "anthropic_custom_reads_as_function",
             "anthropic_custom_reads_as_function_on_a_pass_through_route",
+            "chat_custom_with_a_stray_input_schema_stays_custom",
         ],
     )
     async def test_pre_call_tool_type_rules_follow_the_request_format(
@@ -2241,6 +2243,33 @@ class TestToolPermissionGuardrailAnthropicMessages:
 
         assert result["tools"] == [{"googleSearch": {}}]
         assert result["toolConfig"] == {"functionCallingConfig": {"mode": "NONE"}}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("on_disallowed_action", ["block", "rewrite"])
+    async def test_pre_call_judges_a_named_hosted_tool_by_its_type_as_well_as_its_name(
+        self, on_disallowed_action: Literal["block", "rewrite"]
+    ) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_weather", "tool_name": r"^get_weather$", "decision": "allow"}],
+            on_disallowed_action,
+            default_action="deny",
+        )
+        weather = {"type": "function", "function": {"name": "get_weather"}}
+        data = {
+            "model": "gemini-3",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [weather, {"type": "web_search", "name": "get_weather"}],
+        }
+
+        if on_disallowed_action == "block":
+            with pytest.raises(HTTPException) as excinfo:
+                await self._run_pre_call(guardrail, data, "acompletion")
+            assert excinfo.value.detail["detection_message"] == "Tool 'web_search' denied by default action"
+            return
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [weather]
 
     @pytest.mark.asyncio
     async def test_pre_call_blocks_a_tool_whose_type_is_not_a_string_by_its_name(self) -> None:
