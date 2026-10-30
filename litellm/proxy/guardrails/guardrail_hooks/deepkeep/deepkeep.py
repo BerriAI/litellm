@@ -253,8 +253,7 @@ class DeepKeepGuardrail(CustomGuardrail):
             getattr(logging_obj, "litellm_trace_id", None) if logging_obj else None,
             exc_info=error,
         )
-        return_inputs: Final[GenericGuardrailAPIInputs] = {}
-        return_inputs.update(inputs)
+        return_inputs: Final[GenericGuardrailAPIInputs] = {**inputs}
         return return_inputs
 
     def _handle_guardrail_request_error(

@@ -17,6 +17,7 @@ This pattern can be replicated for other message formats (e.g., Anthropic).
 import json
 import time
 import uuid
+from bisect import bisect_right
 from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
@@ -74,6 +75,13 @@ if TYPE_CHECKING:
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+
+def _tool_call_text_offsets(
+    text_task_mappings: Sequence[tuple[int, int | None]], tool_call_task_mappings: Sequence[tuple[int, int]]
+) -> tuple[int, ...]:
+    text_message_indices: Final = tuple(msg_idx for msg_idx, _ in text_task_mappings)
+    return tuple(bisect_right(text_message_indices, msg_idx) for msg_idx, _ in tool_call_task_mappings)
 
 
 class OpenAIChatCompletionsHandler(BaseTranslation):
@@ -141,7 +149,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
         if texts_to_check or tool_calls_to_check:
-            inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
+            inputs: Final = (
+                GenericGuardrailAPIInputs(
+                    texts=texts_to_check,
+                    tool_call_text_offsets=_tool_call_text_offsets(text_task_mappings, tool_call_task_mappings),
+                )
+                if tool_calls_to_check
+                else GenericGuardrailAPIInputs(texts=texts_to_check)
+            )
             if images_to_check:
                 inputs["images"] = images_to_check
             if tool_calls_to_check:
