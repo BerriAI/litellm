@@ -373,6 +373,12 @@ def _max_known_spend(first: float | None, second: float | None) -> float | None:
     return first if second is None else max(first, second)
 
 
+def _customer_spend_after_request(cached_spend: float, committed_spend: float | None, response_cost: float) -> float:
+    if committed_spend is None:
+        return cached_spend + response_cost
+    return max(committed_spend + response_cost, cached_spend)
+
+
 def _committed_spend_at_auth(metadata: Mapping[str, object]) -> CommittedBudgetSpend:
     auth: Final = metadata.get("user_api_key_auth")
     if isinstance(auth, UserAPIKeyAuth) and auth.committed_budget_spend is not None:
@@ -4707,7 +4713,9 @@ class PrometheusLogger(CustomLogger):
         budget_table: Final = cached_customer.litellm_budget_table
         self._set_customer_budget_metrics(
             end_user_id=end_user_id,
-            spend=_committed_floor(cached_customer.spend, committed_spend) + response_cost,
+            spend=_customer_spend_after_request(
+                cached_spend=cached_customer.spend, committed_spend=committed_spend, response_cost=response_cost
+            ),
             max_budget=budget_table.max_budget if budget_table is not None else None,
             budget_reset_at=None,
         )
