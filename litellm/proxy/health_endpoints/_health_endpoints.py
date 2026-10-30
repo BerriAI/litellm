@@ -57,7 +57,11 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils import http_parsing_utils
-from litellm.proxy.common_utils.model_listing_utils import CallerAliases, dispatched_model
+from litellm.proxy.common_utils.model_listing_utils import (
+    CallerAliases,
+    dispatched_model,
+    requestable_alias_names,
+)
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -1184,6 +1188,11 @@ async def _names_any_limit_grants(user_api_key_dict: UserAPIKeyAuth, owner: Lite
     )
 
 
+def _alias_names_caller_may_request(aliases: CallerAliases, llm_router: Router | None) -> frozenset[str]:
+    router_aliases: Final = frozenset(llm_router.registry().aliases()) if llm_router is not None else frozenset[str]()
+    return requestable_alias_names(aliases) | router_aliases
+
+
 def _served_group(model_name: str, aliases: CallerAliases, llm_router: Router | None) -> str:
     dispatched: Final = dispatched_model(model_name, aliases)
     return llm_router.registry().resolve(dispatched) if llm_router is not None else dispatched
@@ -1303,7 +1312,8 @@ async def _deployments_key_may_reach(
     llm_router: Router | None,
 ) -> _ReachableDeployments:
     candidate_names: Final = (await _names_any_limit_grants(user_api_key_dict, owner)).union(
-        *(_names_caller_may_request(deployment, user_api_key_dict.team_id) for deployment in llm_model_list)
+        _alias_names_caller_may_request(aliases, llm_router),
+        *(_names_caller_may_request(deployment, user_api_key_dict.team_id) for deployment in llm_model_list),
     )
     admitted_names: Final = await _names_key_may_request(candidate_names, aliases, user_api_key_dict, owner, llm_router)
     groups: Final = frozenset(_served_group(name, aliases, llm_router) for name in admitted_names)

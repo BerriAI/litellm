@@ -36,6 +36,7 @@ from litellm.proxy.health_endpoints._health_endpoints import (
     test_model_connection as health_test_model_connection,
 )
 from litellm.router import Router
+from litellm.types.router import RouterModelGroupAliasItem
 from litellm.types.utils import oauth_token_exchange_litellm_params
 from litellm.types.workload_identity import (
     ANTHROPIC_WIF_KWARGS_KEYS,
@@ -4626,6 +4627,20 @@ def _team_key(team_models: list[str], team_model_aliases: Mapping[str, str] | No
         ),
         pytest.param(
             _PROVIDER_PREFIXED_MODEL_LIST,
+            {"friendly-mini": RouterModelGroupAliasItem(model="gpt-5.4-mini", hidden=True)},
+            UserAPIKeyAuth(api_key="hashed-test-key", models=["friendly-*"]),
+            {"id-mini"},
+            id="wildcard-key-allows-hidden-router-alias",
+        ),
+        pytest.param(
+            _PROVIDER_PREFIXED_MODEL_LIST,
+            {},
+            _team_key(["friendly-*"], {"friendly-mini": "gpt-5.4-mini"}),
+            {"id-mini"},
+            id="wildcard-team-allows-team-alias",
+        ),
+        pytest.param(
+            _PROVIDER_PREFIXED_MODEL_LIST,
             {"claude-haiku-5-5": "gpt-5.4-mini"},
             UserAPIKeyAuth(api_key="hashed-test-key", models=[]),
             {"id-prefixed-nano", "id-mini", "id-haiku"},
@@ -4635,7 +4650,7 @@ def _team_key(team_models: list[str], team_model_aliases: Mapping[str, str] | No
 )
 async def test_health_endpoint_probes_every_deployment_the_callers_allowed_names_route_to(
     model_list: Sequence[Mapping[str, object]],
-    model_group_alias: Mapping[str, str],
+    model_group_alias: Mapping[str, str | RouterModelGroupAliasItem],
     caller: UserAPIKeyAuth,
     expected_ids: set[str],
 ):
@@ -4644,7 +4659,7 @@ async def test_health_endpoint_probes_every_deployment_the_callers_allowed_names
         model_group_alias=dict(model_group_alias),
     )
 
-    probed: Final = await _live_probed_model_ids(model_list, caller, llm_router=llm_router)
+    probed: Final = await _live_probed_model_ids(llm_router.get_model_list() or [], caller, llm_router=llm_router)
 
     assert probed == expected_ids
 

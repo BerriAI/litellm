@@ -292,6 +292,10 @@ def dispatched_model(model_id: str, aliases: CallerAliases) -> str:
     return target
 
 
+def requestable_alias_names(aliases: CallerAliases) -> frozenset[str]:
+    return frozenset(chain.from_iterable(layer.aliases for layer in _alias_layers(aliases)))
+
+
 def _lookup_id(name: str, lookup_by_response: Mapping[str, str], lookup_ids: Container[str]) -> str | None:
     if name in lookup_by_response:
         return lookup_by_response[name]
