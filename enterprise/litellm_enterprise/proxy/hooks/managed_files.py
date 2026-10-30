@@ -486,10 +486,9 @@ def _managed_object_table(prisma_client: _ManagedResourcePrismaClient) -> _Manag
     return prisma_client.db.litellm_managedobjecttable
 
 
-def _writer_managed_object_table(prisma_client: _ManagedResourcePrismaClient) -> _ManagedObjectTableActions:
+def _writer_database(db: _ManagedResourceDatabase) -> _ManagedResourceDatabase:
     """Reads that feed a write must see the create that just happened; a lagging read replica may not"""
-    db: Final = prisma_client.db
-    return (db.writer if isinstance(db, _WriterRoutedDatabase) else db).litellm_managedobjecttable
+    return db.writer if isinstance(db, _WriterRoutedDatabase) else db
 
 
 _JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
@@ -760,11 +759,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         It is written only in the upsert create branch.
         """
         verbose_logger.info(f"Storing LiteLLM Managed {file_purpose} object with id={unified_object_id} in cache")
-        managed_object_table: Final = _managed_object_table(self.prisma_client)
+        managed_database: Final = _managed_database(self.prisma_client)
+        managed_object_table: Final = managed_database.litellm_managedobjecttable
         preserved_model_id: Final = (
             creating_model_id
             if creating_model_id is not None or create_if_missing
-            else await _stored_model_id(_writer_managed_object_table(self.prisma_client), unified_object_id)
+            else await _stored_model_id(_writer_database(managed_database).litellm_managedobjecttable, unified_object_id)
         )
         stored_object: Final = _with_model_id(_without_model_output(file_object), preserved_model_id)
         litellm_managed_object = LiteLLM_ManagedObjectTable(
