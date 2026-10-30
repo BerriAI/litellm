@@ -4941,6 +4941,13 @@ def _team_deployment(
     }
 
 
+def _team_split_model_list(public_name: str, model: str) -> list[Mapping[str, object]]:
+    return [
+        _team_deployment("model_name_team-a_7c1e4b2a", public_name, model, "id-team-premium", ["premium"]),
+        _team_deployment("model_name_team-a_9d2f6e01", public_name, model, "id-team-standard", ["standard"]),
+    ]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("public_name", "model"),
@@ -4952,14 +4959,18 @@ def _team_deployment(
 async def test_health_endpoint_probes_only_the_access_groups_team_deployments_serving_a_name(
     public_name: str, model: str
 ) -> None:
-    model_list: Final = [
-        _team_deployment("team-premium_7c1e", public_name, model, "id-team-premium", ["premium"]),
-        _team_deployment("team-standard_9d2f", public_name, model, "id-team-standard", ["standard"]),
-    ]
-
-    probed: Final = await _live_probed_model_ids(model_list, _team_key(["premium"]))
+    probed: Final = await _live_probed_model_ids(_team_split_model_list(public_name, model), _team_key(["premium"]))
 
     assert probed == {"id-team-premium"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_probes_a_team_deployment_whose_internal_name_the_key_holds() -> None:
+    caller: Final = _team_key(["premium", "model_name_team-a_9d2f6e01"])
+
+    probed: Final = await _live_probed_model_ids(_team_split_model_list("gpt-5.4-mini", "openai/gpt-5.4-mini"), caller)
+
+    assert probed == {"id-team-premium", "id-team-standard"}
 
 
 def test_resolve_targeted_model_ids_lets_model_id_win_over_model():

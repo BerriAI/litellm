@@ -1089,17 +1089,31 @@ def _key_models_unrestricted(user_api_key_dict: UserAPIKeyAuth) -> bool:
     return not granted_models or SpecialModelNames.all_proxy_models.value in granted_models
 
 
-def _names_caller_may_request(deployment: object, team_id: str | None) -> frozenset[str]:
+def _own_team_names(deployment: object, team_id: str | None) -> tuple[str, str] | None:
     match deployment:
         case {
-            "model_name": str(name),
+            "model_name": str(internal_name),
             "model_info": {"team_id": str(owner_team_id), "team_public_model_name": str(public_name)},
         } if owner_team_id == team_id:
-            return frozenset((name, public_name))
+            return (internal_name, public_name)
+        case _:
+            return None
+
+
+def _names_caller_may_request(deployment: object, team_id: str | None) -> frozenset[str]:
+    team_names: Final = _own_team_names(deployment, team_id)
+    if team_names is not None:
+        return frozenset(team_names)
+    match deployment:
         case {"model_name": str(name)}:
             return frozenset((name,))
         case _:
             return frozenset()
+
+
+def _public_names_by_internal_name(llm_model_list: Sequence[object], team_id: str | None) -> Mapping[str, str]:
+    team_names: Final = (_own_team_names(deployment, team_id) for deployment in llm_model_list)
+    return MappingProxyType(dict(names for names in team_names if names is not None))
 
 
 async def _key_owner(user_api_key_dict: UserAPIKeyAuth) -> LiteLLM_UserTable | None:
@@ -1242,6 +1256,9 @@ class _AccessGroupGrants:
     granted_names: frozenset[str]
     ids_in_granted_groups: frozenset[str]
 
+    def requested_name(self, name: str, public_names: Mapping[str, str]) -> str:
+        return name if name in self.granted_names else public_names.get(name, name)
+
     def narrow(self, serving_ids: frozenset[str], served_names: frozenset[str]) -> frozenset[str]:
         in_granted_groups: Final = serving_ids & self.ids_in_granted_groups
         granted_directly: Final = not self.granted_names.isdisjoint(served_names)
@@ -1345,9 +1362,13 @@ async def _deployments_key_may_reach(
         *(_names_caller_may_request(deployment, user_api_key_dict.team_id) for deployment in llm_model_list),
     )
     admitted_names: Final = await _names_key_may_request(candidate_names, aliases, user_api_key_dict, owner, llm_router)
-    groups: Final = frozenset(_served_group(name, aliases, llm_router) for name in admitted_names)
-    ids_by_name: Final = _ids_by_requested_name(llm_model_list, user_api_key_dict.team_id)
     access_group_grants: Final = _access_group_grants(llm_model_list, user_api_key_dict)
+    public_names: Final = _public_names_by_internal_name(llm_model_list, user_api_key_dict.team_id)
+    groups: Final = frozenset(
+        _served_group(access_group_grants.requested_name(name, public_names), aliases, llm_router)
+        for name in admitted_names
+    )
+    ids_by_name: Final = _ids_by_requested_name(llm_model_list, user_api_key_dict.team_id)
     reached_ids: Final = _ids_serving(groups, ids_by_name, user_api_key_dict, llm_router, access_group_grants)
     admitted_ids: Final = await _names_key_may_request(
         _shadowed_ids(llm_model_list, admitted_names, reached_ids, user_api_key_dict.team_id),
