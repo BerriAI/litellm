@@ -24,14 +24,6 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import Router
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.utils import StandardLoggingRoutingDecision
-from litellm.router_utils.auto_router_model_naming import (
-    CUSTOMIZATION_CAPABILITY,
-    GATED_AUTO_ROUTER_CAPABILITIES,
-    HEURISTIC_V2_CAPABILITY,
-    count_capability_routers,
-)
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -42,7 +34,19 @@ from litellm.constants import (
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
 )
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.router import as_output_cap, stamped_client_ceiling
+from litellm.router_strategy.auto_router.auto_router_model_naming import (
+    CUSTOMIZATION_CAPABILITY,
+    GATED_AUTO_ROUTER_CAPABILITIES,
+    HEURISTIC_V2_CAPABILITY,
+    count_capability_routers,
+)
+from litellm.router_strategy.complexity_router.capability_classifier import (
+    CAPABILITY_CLASSIFIER_SYSTEM_PROMPT,
+    CapabilityClassifierVerdict,
+)
 from litellm.router_strategy.complexity_router.complexity_router import (
     _CLASSIFICATION_CURRENT_MESSAGE_ONLY,
     _CLASSIFICATION_WITH_CONVERSATION,
@@ -58,18 +62,14 @@ from litellm.router_strategy.complexity_router.complexity_router import (
     classification_system_prompt,
     custom_tier_classification_prompt,
 )
-from litellm.router_strategy.complexity_router.capability_classifier import (
-    CAPABILITY_CLASSIFIER_SYSTEM_PROMPT,
-    CapabilityClassifierVerdict,
-)
 from litellm.router_strategy.complexity_router.config import (
-    CapabilityCalibrationConfig,
-    CapabilityClassifierConfig,
     DEFAULT_CLASSIFICATION_RUBRIC,
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     DEFAULT_COMPLEXITY_CONFIG,
     DEFAULT_TECHNICAL_KEYWORDS,
     TIER_SEVERITY_ORDER,
+    CapabilityCalibrationConfig,
+    CapabilityClassifierConfig,
     ClassificationRubric,
     ClassifierLLMConfig,
     ComplexityRouterConfig,
@@ -83,10 +83,12 @@ from litellm.router_strategy.complexity_router.jev_classifier import (
     JevUsage,
 )
 from litellm.router_strategy.complexity_router.llm_v2 import LLM_V2_PROMPT_VERSION
+from litellm.router_strategy.complexity_router.request_models import RequestComplexityRouterConfig
 from litellm.router_strategy.complexity_router.tier_predictor import (
     TierGlobalStatistic,
     TrainedTierArtifact,
 )
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import (
     Deployment,
     LiteLLM_Params,
@@ -94,10 +96,7 @@ from litellm.types.router import (
     RouterErrors,
     TaggedPreRoutingStrategy,
 )
-from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.router_strategy.complexity_router.request_models import RequestComplexityRouterConfig
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
+from litellm.types.utils import StandardLoggingRoutingDecision
 
 requires_semantic_router = pytest.mark.skipif(
     sys.version_info >= (3, 14), reason="The semantic-router extra excludes Python 3.14"
@@ -7712,6 +7711,176 @@ class TestSessionAffinity:
 class _DummyPlugin:
     async def run(self, context):
         return context
+
+
+class TestChildSessionTierPins:
+    @staticmethod
+    def _router(session_affinity: bool = False) -> Router:
+        return Router(
+            model_list=[
+                {
+                    "model_name": "child-tier-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": {
+                            "tiers": {"SIMPLE": "simple", "REASONING": ["reasoning", "reasoning-peer"]},
+                            "classification_mode": "user_turn",
+                            "session_affinity": session_affinity,
+                            "keyword_tier_rules": [{"keywords": ["reason carefully"], "tier": "REASONING"}],
+                        },
+                    },
+                },
+                *[
+                    {
+                        "model_name": group,
+                        "litellm_params": {"model": "openai/test-model", "api_key": "test-only"},
+                        "model_info": {"id": f"{group}-{index}"},
+                    }
+                    for group, index in (
+                        ("simple", 0), ("simple", 1), ("reasoning", 0),
+                        ("reasoning", 1), ("reasoning-peer", 0), ("reasoning-peer", 1),
+                    )
+                ],
+            ],
+            num_retries=0,
+        )
+
+    @staticmethod
+    def _normalized_request(
+        surface: str, session_id: str | None, caller: str = "caller-a", child: bool = True
+    ) -> tuple[dict[str, object], str]:
+        from litellm.proxy.litellm_pre_call_utils import (
+            LiteLLMProxyRequestSetup,
+            metadata_variable_name_for_route,
+        )
+
+        route: Final = {
+            "chat": "/v1/chat/completions", "responses": "/v1/responses", "messages": "/v1/messages"
+        }[surface]
+        bucket: Final = metadata_variable_name_for_route(route)
+        data: Final[dict[str, object]] = {bucket: {"user_api_key_hash": caller, "user_api_key_request_route": route}}
+        LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers={
+                **({"X-Session-Id": session_id} if session_id is not None else {}),
+                **({"x-parent-session-id": "parent-session"} if child else {}),
+            },
+            data=data,
+            _metadata_variable_name=bucket,
+        )
+        return data, bucket
+
+    async def _route(
+        self, router: Router, surface: str, session_id: str | None, prompt: str | None,
+        expected_tier: str, expected_cause: str, caller: str = "caller-a", child: bool = True,
+        expected_deployment: str | None = None,
+    ) -> str:
+        from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityCheck
+
+        data, bucket = self._normalized_request(surface, session_id, caller, child)
+        turn: Final[dict[str, object]] = (
+            {"role": "user", "content": prompt} if prompt is not None else
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "done"}]}
+            if surface == "messages" else
+            {"type": "function_call_output", "call_id": "call_1", "output": "done"}
+            if surface == "responses" else
+            {"role": "tool", "tool_call_id": "call_1", "content": "done"}
+        )
+        tool_call: Final = (
+            {"type": "function_call", "call_id": "call_1", "name": "read_file", "arguments": "{}"}
+            if surface == "responses" else
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "call_1", "name": "read_file", "input": {}}]}
+            if surface == "messages" else TestClassificationMode.TOOL_CALL_1
+        )
+        turns: Final = [turn] if prompt is not None else [TestClassificationMode.SIMPLE_ASK, tool_call, turn]
+        if surface == "responses":
+            data["input"] = turns
+        selected: Final = await router.async_get_available_deployment(
+            model="child-tier-router", request_kwargs=data,
+            messages=None if surface == "responses" else turns,
+            input=turns if surface == "responses" else None,
+        )
+        metadata: Final = data[bucket]
+        assert isinstance(metadata, dict)
+        assert (metadata["session_id"], metadata["trace_id"], data["litellm_session_id"], data["litellm_trace_id"]) == (
+            "parent-session", "parent-session", "parent-session", "parent-session"
+        )
+        assert (metadata["routing_decision"]["tier"], metadata["routing_decision"]["cause"]) == (
+            expected_tier, expected_cause
+        )
+        affinity: Final = next(cb for cb in router.optional_callbacks or () if isinstance(cb, DeploymentAffinityCheck))
+        if expected_deployment is not None:
+            filtered: Final = await affinity.async_filter_deployments(
+                model=selected["model_name"], healthy_deployments=router.get_model_list(selected["model_name"]) or [],
+                messages=None, request_kwargs=data,
+            )
+            assert [deployment["model_info"]["id"] for deployment in filtered] == [expected_deployment]
+            assert selected["model_info"]["id"] == expected_deployment
+        await affinity.async_pre_call_deployment_hook(
+            kwargs={
+                **data, "model_info": selected["model_info"],
+                bucket: {**metadata, "deployment_model_name": selected["model_name"]},
+            },
+            call_type=None,
+        )
+        return str(selected["model_info"]["id"])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+    async def test_children_keep_their_tier_without_replacing_the_parent(self, surface: str) -> None:
+        router: Final = self._router()
+        try:
+            parent: Final = await self._route(
+                router, surface, "parent-session", "reason carefully", "REASONING", "literal_keyword_match", child=False
+            )
+            for session, prompt, tier, cause, caller, child in (
+                ("child-session-a", "Hello!", "SIMPLE", "heuristic_scorer", "caller-a", True),
+                ("child-session-a", None, "SIMPLE", "user_turn_continuation", "caller-a", True),
+                ("parent-session", None, "REASONING", "user_turn_continuation", "caller-a", False),
+                ("child-session-b", None, "SIMPLE", "heuristic_scorer", "caller-a", True),
+                ("child-session-b", "reason carefully", "REASONING", "literal_keyword_match", "caller-a", True),
+                ("child-session-a", None, "SIMPLE", "user_turn_continuation", "caller-a", True),
+                ("child-session-a", "reason carefully", "REASONING", "literal_keyword_match", "caller-b", True),
+                ("child-session-a", None, "SIMPLE", "user_turn_continuation", "caller-a", True),
+                (None, "Hello!", "SIMPLE", "heuristic_scorer", "caller-a", True),
+                (None, None, "SIMPLE", "heuristic_scorer", "caller-a", True),
+            ):
+                await self._route(
+                    router, surface, session, prompt, tier, cause, caller, child,
+                    expected_deployment=parent if tier == "REASONING" and caller == "caller-a" else None,
+                )
+            assert await self._route(
+                router, surface, "parent-session", None, "REASONING", "user_turn_continuation",
+                child=False, expected_deployment=parent,
+            ) == parent
+        finally:
+            router.discard()
+
+    @pytest.mark.asyncio
+    async def test_session_affinity_still_shares_the_parent_tier(self) -> None:
+        router: Final = self._router(session_affinity=True)
+        try:
+            parent: Final = await self._route(
+                router, "chat", "parent-session", "reason carefully", "REASONING", "literal_keyword_match", child=False
+            )
+            assert await self._route(
+                router, "chat", "child-session-a", "Hello!", "REASONING", "session_affinity_pin",
+                expected_deployment=parent,
+            ) == parent
+        finally:
+            router.discard()
+
+    @pytest.mark.asyncio
+    async def test_child_tier_model_affinity_keeps_using_the_parent_identity(self) -> None:
+        router: Final = self._router()
+        try:
+            strategy: Final = router.complexity_routers["child-tier-router"][0].strategy
+            parent, _ = self._normalized_request("chat", "parent-session", child=False)
+            child, _ = self._normalized_request("chat", "child-session-a")
+            candidates: Final = ("reasoning", "reasoning-peer")
+            assert await strategy._pin_model_for_tier("REASONING", "reasoning", candidates, parent) == "reasoning"
+            assert await strategy._pin_model_for_tier("REASONING", "reasoning-peer", candidates, child) == "reasoning"
+        finally:
+            router.discard()
 
 
 class TestClassificationMode:
@@ -16129,7 +16298,6 @@ class TestTierHealthFailover:
         tests can prove the probe passes a kwargs copy and forwards the prompt arguments.
         """
         import litellm as litellm_module
-
         from litellm.types.router import RouterRateLimitError
 
         probed_kwargs = []
@@ -17769,3 +17937,137 @@ class TestNonReasoningTier:
             "complex",
             "reasoning",
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "verdict, expected", [("quick", "fast"), (" CAREFUL ", "capable"), (None, "backup"), ("unknown", "backup")]
+)
+async def test_custom_classifier_infers_tiers_and_routes_fallback(verdict: str | None, expected: str) -> None:
+    router: Final = ComplexityRouter(
+        model_name="auto",
+        litellm_router_instance=litellm.Router(model_list=[]),
+        default_model="backup",
+        complexity_router_config={
+            "classifier_type": "custom",
+            "classifier_plugin": _FixedTierClassifier(verdict),
+            "classifier_fallback": "default_model",
+            "tiers": {"quick": "fast", "careful": "capable"},
+        },
+    )
+    result: Final = await router.async_pre_routing_hook(
+        model="auto", request_kwargs={}, messages=[{"role": "user", "content": "hello"}]
+    )
+    assert result is not None
+    assert result.model == expected
+
+
+@pytest.mark.asyncio
+async def test_custom_classifier_can_extend_builtin_tiers() -> None:
+    router: Final = ComplexityRouter(
+        model_name="auto",
+        litellm_router_instance=litellm.Router(model_list=[]),
+        default_model="backup",
+        complexity_router_config={
+            "classifier_type": "custom",
+            "classifier_plugin": _FixedTierClassifier("SECURITY"),
+            "classifier_fallback": "default_model",
+            "tiers": {"SIMPLE": "fast", "REASONING": "capable", "SECURITY": "security-model"},
+        },
+    )
+    result: Final = await router.async_pre_routing_hook(
+        model="auto", request_kwargs={}, messages=[{"role": "user", "content": "LITELLM ESCALATE"}]
+    )
+    assert result is not None
+    assert result.model == "security-model"
+
+
+@pytest.mark.parametrize(
+    "tiers", [{"": "fast"}, {" quick": "fast"}, {"quick": "fast", "QUICK": "capable"}, {"quick": []}]
+)
+def test_inferred_custom_tiers_reject_unusable_routes(tiers: dict[str, str | list[str]]) -> None:
+    with pytest.raises(ValidationError):
+        ComplexityRouterConfig(
+            classifier_type="custom",
+            classifier_plugin=_FixedTierClassifier("quick"),
+            classifier_fallback="default_model",
+            tiers=tiers,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_fallback", [None, "quick"])
+async def test_defined_custom_tiers_allow_default_model_fallback(explicit_fallback: str | None) -> None:
+    router: Final = ComplexityRouter(
+        model_name="auto",
+        litellm_router_instance=litellm.Router(model_list=[]),
+        default_model="backup",
+        complexity_router_config={
+            "classifier_type": "custom",
+            "classifier_plugin": _RaisingClassifier(),
+            "classifier_fallback": "default_model",
+            "tiers": {"quick": "fast", "careful": "capable"},
+            "tier_definitions": [
+                {"name": "quick", "description": "Routine work"},
+                {"name": "careful", "description": "Difficult work"},
+            ],
+            "fallback_tier": explicit_fallback,
+        },
+    )
+    result: Final = await router.async_pre_routing_hook(
+        model="auto", request_kwargs={}, messages=[{"role": "user", "content": "hello"}]
+    )
+    assert result is not None
+    assert result.model == ("fast" if explicit_fallback else "backup")
+
+
+@pytest.mark.parametrize("setting", ["adaptive", "session_affinity", "stall_escalation_enabled"])
+def test_inferred_custom_tiers_reject_order_dependent_features(setting: str) -> None:
+    with pytest.raises(ValidationError, match="severity order"):
+        ComplexityRouterConfig.model_validate(
+            {
+                "classifier_type": "custom",
+                "classifier_plugin": _FixedTierClassifier("quick"),
+                "classifier_fallback": "default_model",
+                "tiers": {"quick": "fast", "careful": "capable"},
+                setting: True,
+            }
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("defined", [False, True])
+@pytest.mark.parametrize("plan_mode", [False, True])
+@pytest.mark.parametrize(
+    "default_model,planned_model",
+    [("backup", "capable"), ("fast", "capable"), ("capable", "capable"), ("premium-model", "premium-model")],
+)
+async def test_custom_classifier_failure_preserves_plan_floor_and_direct_default(
+    defined: bool, plan_mode: bool, default_model: str, planned_model: str
+) -> None:
+    definitions: Final = (
+        [{"name": name, "description": name} for name in ("quick", "careful", "premium")] if defined else None
+    )
+    router: Final = ComplexityRouter(
+        model_name="auto",
+        litellm_router_instance=litellm.Router(model_list=[]),
+        default_model=default_model,
+        complexity_router_config={
+            "classifier_type": "custom",
+            "classifier_plugin": _RaisingClassifier(),
+            "classifier_fallback": "default_model",
+            "tiers": {"quick": "fast", "careful": "capable", "premium": "premium-model"},
+            "tier_definitions": definitions,
+            "plan_mode_min_tier": "careful",
+        },
+    )
+    prompt: Final = "<system-reminder>Plan mode is active</system-reminder> hello" if plan_mode else "hello"
+    result: Final = await router.async_pre_routing_hook(
+        model="auto", request_kwargs={}, messages=[{"role": "user", "content": prompt}]
+    )
+    assert result is not None
+    assert result.model == (planned_model if plan_mode else default_model)
+    assert result.routing_decision is not None
+    assert result.routing_decision.get("tier") == (
+        ("premium" if planned_model == "premium-model" else "careful") if plan_mode else None
+    )

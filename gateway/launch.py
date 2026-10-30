@@ -8,6 +8,11 @@ handed the loopback URL it listens on. A pre-existing ``DATABASE_URL`` wins in
 wins under token auth too, so exporting it here is enough for every worker to
 pick the pooled URL up unchanged.
 
+LiteLLM imports wait for ``main``: every uvicorn worker imports this module again
+before it can answer its first 5 s health ping, so a slow host would kill each one.
+Workers then load the gateway app through ``worker_app`` without garbage collection
+pauses, which hold the GIL long enough to miss a ping.
+
 Run with:
     python -m gateway.launch --workers 4 --host 0.0.0.0 --port 4000
 """
@@ -15,19 +20,19 @@ Run with:
 import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from uvicorn.main import main as uvicorn_main
 
-from litellm.proxy.db.db_url_settings import DatabaseURLSettings
-from litellm.proxy.db.pgbouncer import (
-    PgBouncerError,
-    PgBouncerSettings,
-    export_pooled_database_url,
-    start_in_container_pgbouncer,
-)
+from litellm_cli.main import without_gc_pauses
 
-GATEWAY_APP: Final = "gateway.main:app"
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+
+    from litellm.proxy.db.db_url_settings import DatabaseURLSettings
+    from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings
+
+GATEWAY_APP: Final = "gateway.launch:worker_app"
 KEEPALIVE_FLAG: Final = "--timeout-keep-alive"
 
 
@@ -35,21 +40,23 @@ def uvicorn_argv(argv: Sequence[str], environ: Mapping[str, str]) -> tuple[str, 
     """Honor ``KEEPALIVE_TIMEOUT`` like ``proxy_cli.py`` does, unless the flag was passed explicitly."""
     keepalive: Final = environ.get("KEEPALIVE_TIMEOUT")
     if keepalive is None or any(arg == KEEPALIVE_FLAG or arg.startswith(f"{KEEPALIVE_FLAG}=") for arg in argv):
-        return (GATEWAY_APP, *argv)
-    return (GATEWAY_APP, *argv, KEEPALIVE_FLAG, keepalive)
+        return (GATEWAY_APP, "--factory", *argv)
+    return (GATEWAY_APP, "--factory", *argv, KEEPALIVE_FLAG, keepalive)
 
 
 def pool_database_url(
-    settings: DatabaseURLSettings,
-    pgbouncer: PgBouncerSettings,
+    settings: "DatabaseURLSettings",
+    pgbouncer: "PgBouncerSettings",
     environ: Mapping[str, str],
-) -> str | PgBouncerError | None:
+) -> "str | PgBouncerError | None":
     """Start the in-container PgBouncer and return its loopback URL, or None when ``pgbouncer.enabled`` is off.
 
     The upstream URL is whatever ``apply_to_env`` assembled from the discrete
     ``DATABASE_*`` vars (or an operator-pinned ``DATABASE_URL``). Under token
     auth the pooler mints and renews the upstream token itself.
     """
+    from litellm.proxy.db.pgbouncer import PgBouncerError, start_in_container_pgbouncer
+
     if not pgbouncer.enabled:
         return None
     upstream_url: Final = environ.get("DATABASE_URL")
@@ -58,11 +65,20 @@ def pool_database_url(
     return start_in_container_pgbouncer(pgbouncer, upstream_url, token_auth=settings.token_auth())
 
 
+def worker_app() -> "FastAPI":
+    with without_gc_pauses():
+        from gateway.main import app
+    return app
+
+
 def _serve(argv: Sequence[str]) -> None:
     uvicorn_main(tuple(argv), prog_name="uvicorn")
 
 
 def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -> None:
+    from litellm.proxy.db.db_url_settings import DatabaseURLSettings
+    from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings, export_pooled_database_url
+
     settings: Final = DatabaseURLSettings.from_env()
     settings.apply_to_env()
     pooled_url: Final = pool_database_url(settings, PgBouncerSettings(), os.environ)

@@ -4,7 +4,7 @@ Never put LiteLLM tokens or API keys in `localStorage`. `localStorage` survives 
 
 When you fix lint violations that are grandfathered in `eslint-suppressions.json`, run `eslint . --prune-suppressions` and commit the updated baseline so the gate ratchets down instead of leaving a stale suppression
 
-`src/lib/http/schema.d.ts` is generated from the proxy's OpenAPI spec. Never hand-edit it. After changing a backend route or response model that the dashboard consumes, run `npm run gen:api` and commit the result (CI `lint / ui-api-types` enforces this)
+`src/lib/http/schema.d.ts` is generated from the proxy's OpenAPI spec. Never hand-edit it. After changing any backend route or request or response model, or bumping a dependency, run `npm run gen:api` and commit the result, since the spec includes every route, not only the ones the dashboard calls (CI `lint / ui-api-types` enforces this)
 
 Tests come in three tiers, named by the standard definitions. `Foo.test.tsx` is a unit test: one module, collaborators replaced by doubles, no multi-component tree, and it should run in milliseconds. `Foo.integration.test.tsx` renders a real component tree with real children and only stubs the network boundary. It costs seconds per case, so it earns its place by proving wiring that a unit test cannot reach. Browser-level tests live in `tests/e2e/ui/` as Playwright specs against a live proxy
 
@@ -32,7 +32,7 @@ Type tests are `*.test-d.ts` files run by the `types` vitest project (`npm run t
 
 <!-- BEGIN:nextjs-agent-rules -->
 
-# This is NOT the Next.js you know
+## This is NOT the Next.js you know
 
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
 

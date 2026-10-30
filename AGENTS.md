@@ -31,6 +31,8 @@ A test must only fail when litellm code changes. Never pin facts we don't own (a
 
 End-to-end tests belong in `tests/e2e/`. A rule about one directory's files, like its harness or which CI runs it, goes in that directory's `AGENTS.md`, never only in a README or here. Read a directory's `AGENTS.md` before editing files in it
 
+Before you build a new way to move data between the endpoints, the provider transformations, and cost tracking or logging, read the architecture decision records in `docs/adrs/`, which say why those layers are shaped the way they are
+
 When creating PRs, target the repository's current default branch for both internal and external / OSS contributions. Check it with `python3 scripts/default_branch.py --branch` instead of assuming a branch name or relying on cached `origin/HEAD`
 
 When writing a PR body, treat the comments and imperative instructions inside .github/PULL_REQUEST_TEMPLATE/general.md as rules to follow, not just layout. Agent harnesses may strip HTML comments from copies of that file injected into context, so read .github/PULL_REQUEST_TEMPLATE/general.md from disk before writing a PR body to make sure you see every comment rule. A section you have nothing to put in (Relevant issues, Affected release, Linear ticket, Caveats, QA runbook, and so on) is removed entirely, heading included, never left as an empty title
@@ -39,7 +41,9 @@ Same applies for filing bug reports and feature requests, with .github/ISSUE_TEM
 
 If you're resolving a linear ticket, in the "## Linear ticket" section of the PR, say "Resolves LIT-1234", replacing "LIT-1234" with the actual ticket id that you're resolving. If you don't have the ticket id, don't make one up or search for it. Just drop the section
 
-Never use `pytest` commands or the like as "Screenshots / Proof of Fix". We prefer curl'ing a live proxy instance running on localhost:4000 (I like to run it with `python litellm/proxy/proxy_cli.py --config litellm/proxy/dev_config.yaml --detailed_debug --reload --use_v2_migration_resolver 2>&1 | tee litellm.log`. The Admin UI dev server is `npm run dev` in `ui/litellm-dashboard`, served on port 3000) and showing both the command run and the output. Also, it should hit real LLM provider APIs, not mocks, and cost real $$$ because that is the most realistic test. The proof of fix should be exactly what the end user / customer would see / do. The run logs in PR #27703 is a prime example of how to do it (not a huge fan of using a python test script that future me and the team will have no visibility into. I prefer just curl commands or a short list of bash commands (e.g., using `for`)). If it's a UI thing, or the main use case runs through a headful agentic coding tool like Claude Code or Codex, drive that surface yourself and embed your own before and after screenshots of it in the PR (the Admin UI page, or what the coding tool shows), next to an ordered list of the URLs to go to (e.g., http://localhost:4000/ui/?page=logs), where to click, and what fields to fill out so a reviewer can reproduce it
+Simple PRs may skip before/after e2e when the full diff is mechanical and focused checks completely prove it, such as #49030 restoring an existing helper name. Trace affected callers and run relevant tests/static checks at the tip. For a bug fix, establish that the regression catches the original defect. Size alone never qualifies. New behavior, API/provider semantics, auth, billing, persistence, concurrency or uncertain integration risk need live e2e. In Screenshots / Proof of Fix, record `E2E exception at <tip SHA>`, scope, rationale, commands and results. Tests count as proof only for this exception. Reassess changed diffs, retain CI/bot gates, and honor explicit e2e requests (2026-10-28, unnecessary live QA for #49030)
+
+For other PRs, proof must show the end user's real flow before and after, with commands and output against a live proxy and real provider calls where applicable. Pytest alone is insufficient. For UI or interactive coding-tool flows, drive that surface and embed before/after screenshots, with URLs, clicks and input fields a reviewer can reproduce
 
 If you ever write any human-facing text (pull requests, issues, commit messages, discussion posts, github comments, release notes, docs, etc.), always follow these guidelines to sound less AI-y:
 - don't use emojis
@@ -105,6 +109,7 @@ Follow these coding conventions for new/updated code (a three-line fix in a lega
 - No file sprawl: deliberate file and folder structure
 - Standard over hand-rolled: use the official SDK or a library where one exists. Where none does, follow industry standards instead of inventing local conventions
 - API-fragmentation-aware: when logic must branch on which API surface produced or consumes data (e.g. chat completions vs Anthropic Messages vs Responses API shapes), proactively look for an existing shared helper (e.g. `litellm_core_utils/prompt_templates/factory.py`) before writing per-surface parsing in the new module. If none exists, add one there instead of duplicating the same format-detection logic in every new guardrail/integration
+- Current default for new model names: logic that picks behavior from a model-name table (tokenizer, message framing, supported params) gives a provider's model the table does not list yet that provider's current behavior, never its oldest, since providers ship names faster than any table is updated
 
 Follow conventional commits for commit names and PR titles
 
