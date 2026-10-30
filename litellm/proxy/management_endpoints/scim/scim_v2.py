@@ -2606,9 +2606,13 @@ def _apply_patch_ops(
             _handle_generic_metadata(path, op_type, value, metadata)
 
     record_teams: Final = tuple(existing_user.teams or [])
+    group_ops: Final = tuple(op for op in patch_ops.Operations if _is_group_path(op.path))
+    last_replace: Final = next((op for op in reversed(group_ops) if op.op == "replace"), None)
     final_teams: Final = _keep_record_team_order(
         record_teams,
-        reduce(_apply_group_operation, (op for op in patch_ops.Operations if _is_group_path(op.path)), record_teams),
+        _apply_group_operation(record_teams, last_replace)
+        if last_replace is not None
+        else reduce(_apply_group_operation, group_ops, record_teams),
     )
     final_metadata: Final = (
         {

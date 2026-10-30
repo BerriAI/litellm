@@ -577,8 +577,8 @@ def test_apply_patch_ops_replace_groups_empty_value_does_not_use_path_filter():
                 SCIMPatchOperation(op="add", path="groups", value=[{"value": "team-mu"}]),
                 SCIMPatchOperation(op="remove", path='groups[value eq "team-delta"]'),
             ],
-            ("team-omega", "team-beta", "team-mu"),
-            id="ops_after_a_replace_apply_to_the_replaced_list",
+            ("team-delta", "team-omega", "team-beta"),
+            id="a_replace_wins_over_later_group_ops",
         ),
         pytest.param(
             [
