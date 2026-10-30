@@ -33,6 +33,7 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
 )
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
 from litellm.proxy.common_utils.timezone_utils import (
     BudgetResetSettings,
     compute_budget_reset_at,
@@ -1462,7 +1463,7 @@ class ResetBudgetJob:
     @staticmethod
     @with_service_target(SPEND_COUNTERS_TARGET)
     async def _reset_expired_window(
-        window: dict,
+        window: dict[str, object],
         counter_key: str,
         spend_counter_cache: DualCache,
         now: datetime,
@@ -1473,19 +1474,29 @@ class ResetBudgetJob:
     ) -> bool:
         """Reset a single budget window if expired. Returns True if the window was reset."""
         reset_at_str: Final = window.get("reset_at")
-        if not reset_at_str:
+        if not isinstance(reset_at_str, str) or not reset_at_str:
             return False
         reset_at: Final = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00")).replace(tzinfo=None)
         if reset_at > now:
             return False
+        from litellm.proxy.proxy_server import SPEND_DB_FLOOR_CACHE_TTL_SECONDS
+
         new_value: Final = await ResetBudgetJob._window_carried_spend(window, counter_key, spend_counter_cache)
+        floor_key: Final = f"spend_db_floor:{counter_key}"
         spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=new_value)
+        spend_counter_cache.in_memory_cache.set_cache(
+            key=floor_key, value=new_value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS
+        )
         if spend_counter_cache.redis_cache is not None:
             try:
                 await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=new_value)
             except Exception as redis_err:
                 verbose_proxy_logger.warning("Failed to reset Redis counter %s: %s", counter_key, redis_err)
-        budget_duration: Final = window["budget_duration"]
+        await publish_auth_cache_invalidation(cache_key=counter_key, new_value=new_value)
+        await publish_auth_cache_invalidation(
+            cache_key=floor_key, new_value=new_value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS
+        )
+        budget_duration: Final = str(window["budget_duration"])
         next_reset_at: Final = compute_budget_reset_at(budget_duration=budget_duration, settings=reset_settings)
         window["reset_at"] = next_reset_at.isoformat()
         await ResetBudgetJob._roll_window_spend_row(
