@@ -1,7 +1,11 @@
+import urllib.parse
+from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
+import litellm
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.image_generation.amazon_nova_canvas_transformation import (
     AmazonNovaCanvasConfig,
@@ -14,6 +18,7 @@ from litellm.llms.bedrock.image_generation.amazon_stability3_transformation impo
 )
 from litellm.llms.bedrock.image_generation.cost_calculator import cost_calculator
 from litellm.llms.bedrock.image_generation.image_handler import BedrockImageGeneration
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import ImageObject, ImageResponse
 
 
@@ -464,3 +469,22 @@ def test_extract_headers_from_optional_params_with_guardrails():
     assert "guardrailVersion" not in optional_params
 
     assert optional_params["someOtherParam"] == "value"
+
+
+def test_a_provider_written_before_an_arn_is_left_out_of_the_image_model_id(aws_test_credentials: None) -> None:
+    arn: Final = "arn:aws:bedrock:us-east-1:000000000000:provisioned-model/abc123"
+    sent_paths: Final[list[str]] = []  # mutable-ok: the scripted upstream records each path it receives
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        sent_paths.append(request.url.raw_path.decode())
+        return httpx.Response(400, json={"message": "recorded"}, request=request)
+
+    with pytest.raises(litellm.BadRequestError):
+        litellm.image_generation(
+            model=f"bedrock/amazon/{arn}",
+            prompt="A beautiful sunset",
+            aws_region_name="us-east-1",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(refuse))),
+        )
+
+    assert sent_paths == [f"/model/{urllib.parse.quote(arn, safe='')}/invoke"]

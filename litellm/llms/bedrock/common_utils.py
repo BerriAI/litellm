@@ -1127,9 +1127,9 @@ def bedrock_arn_names_no_model(model: str) -> bool:
 def bedrock_capability_model(model: str, base_model: object) -> str:
     """The model id to look capabilities up by: the deployment's ``base_model`` for an
     application inference profile ARN on any route, or for any ARN whose resource id names
-    no model on the invoke route, else ``model``."""
+    no model under an ``invoke/`` route, else ``model``."""
     names_no_model: Final = is_bedrock_application_inference_profile_arn(model) or (
-        bedrock_arn_names_no_model(model) and BedrockModelInfo.get_bedrock_route(model) == "invoke"
+        bedrock_arn_names_no_model(model) and model.removeprefix("bedrock/").startswith("invoke/")
     )
     if isinstance(base_model, str) and base_model and names_no_model:
         return strip_bedrock_routing_prefix(base_model)
@@ -1139,7 +1139,7 @@ def bedrock_capability_model(model: str, base_model: object) -> str:
 def invoke_model_with_base_model_provider(model: str, base_model: object) -> str:
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
-    model_id: Final = strip_bedrock_routing_prefix(model)
+    model_id: Final = model.removeprefix("bedrock/").removeprefix("invoke/")
     if (
         not isinstance(base_model, str)
         or not model_id.startswith("arn:")

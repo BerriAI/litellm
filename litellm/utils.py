@@ -5298,6 +5298,14 @@ def _dropped_reasoning_warning(model: str, custom_llm_provider: str | None) -> s
     )
 
 
+def _unsupported_params_base_model_hint(model: str, base_model: str | None, custom_llm_provider: str | None) -> str:
+    from litellm.llms.bedrock.common_utils import bedrock_arn_names_no_model
+
+    if custom_llm_provider != "bedrock" or base_model or not bedrock_arn_names_no_model(model):
+        return ""
+    return " This ARN does not name its model, so set `base_model` on the deployment to the model it runs."
+
+
 def _warns_on_dropped_reasoning(value: object, model: str, custom_llm_provider: str | None) -> bool:
     return not (_turns_reasoning_off(value) and is_known_non_reasoning_model(model, custom_llm_provider))
 
@@ -5418,7 +5426,7 @@ def get_optional_params(
             else:
                 raise UnsupportedParamsError(
                     status_code=500,
-                    message=f"{custom_llm_provider} does not support parameters: {list(unsupported_params.keys())}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n. \n If you want to use these params dynamically send allowed_openai_params={list(unsupported_params.keys())} in your request.",
+                    message=f"{custom_llm_provider} does not support parameters: {list(unsupported_params.keys())}, for model={model}.{_unsupported_params_base_model_hint(model, base_model, custom_llm_provider)} To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n. \n If you want to use these params dynamically send allowed_openai_params={list(unsupported_params.keys())} in your request.",
                 )
 
     bedrock_route: Final = (
@@ -5600,11 +5608,13 @@ def get_optional_params(
             drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "bedrock":
-        from litellm.llms.bedrock.common_utils import bedrock_capability_model
+        from litellm.llms.bedrock.common_utils import bedrock_capability_model, invoke_model_with_base_model_provider
 
         bedrock_model_info: Final[type[BedrockModelInfo]] = litellm_utils.BedrockModelInfo
         bedrock_base_model: Final = bedrock_model_info.get_base_model(model)
-        capability_model: Final = bedrock_capability_model(model, base_model)
+        capability_model: Final = bedrock_capability_model(
+            invoke_model_with_base_model_provider(model, base_model) if bedrock_route == "invoke" else model, base_model
+        )
         if bedrock_route == "converse" or bedrock_route == "converse_like":
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
                 model=capability_model,

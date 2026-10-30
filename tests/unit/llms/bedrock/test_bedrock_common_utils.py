@@ -2113,14 +2113,14 @@ def test_event_decoder_reports_only_missing_aws_dependency(missing):
             "arn:aws:bedrock:us-east-1:000000000000:inference-profile/us.anthropic.claude-opus-4-8",
         ),
         (
-            "converse/arn:aws:bedrock:us-east-1:000000000000:provisioned-model/abc123",
+            "arn:aws:bedrock:us-east-1:000000000000:provisioned-model/abc123",
             "bedrock/us.anthropic.claude-opus-4-8",
-            "converse/arn:aws:bedrock:us-east-1:000000000000:provisioned-model/abc123",
+            "arn:aws:bedrock:us-east-1:000000000000:provisioned-model/abc123",
         ),
         (
-            "converse/arn:aws:bedrock:us-east-1:000000000000:custom-model-deployment/abc123",
+            "arn:aws:bedrock:us-east-1:000000000000:custom-model-deployment/abc123",
             "bedrock/us.anthropic.claude-opus-4-8",
-            "converse/arn:aws:bedrock:us-east-1:000000000000:custom-model-deployment/abc123",
+            "arn:aws:bedrock:us-east-1:000000000000:custom-model-deployment/abc123",
         ),
     ],
     ids=[
@@ -2129,8 +2129,8 @@ def test_event_decoder_reports_only_missing_aws_dependency(missing):
         "named-model-keeps-its-name",
         "provisioned-arn-with-base-model",
         "system-profile-arn-keeps-the-model-it-names",
-        "provisioned-arn-on-converse-keeps-its-params",
-        "custom-deployment-arn-on-converse-keeps-its-params",
+        "provisioned-arn-without-a-route-keeps-its-params",
+        "custom-deployment-arn-without-a-route-keeps-its-params",
     ],
 )
 def test_bedrock_capability_model_reads_base_model_only_for_arns_that_name_no_model(model, base_model, expected):

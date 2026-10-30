@@ -2283,8 +2283,9 @@ def _sent_invoke_body(model: str, deployment: Mapping[str, object]) -> object:
         f"bedrock/invoke/{_APPLICATION_PROFILE_ARN}",
         f"bedrock/invoke/anthropic/{_APPLICATION_PROFILE_ARN}",
         f"bedrock/invoke/{_ARN_ACCOUNT}:provisioned-model/nova1meta2ab",
+        f"bedrock/{_ARN_ACCOUNT}:provisioned-model/nova1meta2ab",
     ],
-    ids=["arn", "arn-under-spec", "provisioned-arn"],
+    ids=["arn", "arn-under-spec", "provisioned-arn", "provisioned-arn-without-a-route"],
 )
 def test_an_arn_with_base_model_sends_the_body_the_base_model_would_send(
     _aws_test_credentials: None, model: str
@@ -2324,3 +2325,112 @@ def test_a_provider_spec_before_an_arn_on_converse_is_left_out_of_the_model_id(_
     )
 
     assert _answer_text(response) == "hi"
+
+
+def _sent_body_before_a_refusal(model: str, deployment: Mapping[str, object], request: Mapping[str, object]) -> object:
+    sent: Final[list[object]] = []  # mutable-ok: the scripted upstream records each body it receives
+
+    def refuse(upstream_request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(upstream_request.content))
+        return httpx.Response(400, json={"message": "recorded"}, request=upstream_request)
+
+    with pytest.raises(litellm.BadRequestError):
+        litellm.completion(
+            model=model,
+            max_tokens=10,
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(refuse))),
+            **{"messages": [{"role": "user", "content": "hi"}], **deployment, **request},
+        )
+    (body,) = sent
+    return body
+
+
+_STRICT_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+            "additionalProperties": False,
+        },
+    },
+}
+_STRICT_JSON_SCHEMA: Final = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "answer",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {"a": {"type": "string"}},
+            "required": ["a"],
+            "additionalProperties": False,
+        },
+    },
+}
+_HOUR_CACHED_SYSTEM_PROMPT: Final = [
+    {
+        "role": "system",
+        "content": [{"type": "text", "text": "Be terse.", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+    },
+    {"role": "user", "content": "hi"},
+]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "resource",
+    ["provisioned-model/abc123", "imported-model/abc123", "custom-model-deployment/abc123"],
+    ids=["provisioned", "imported", "custom-deployment"],
+)
+@pytest.mark.parametrize(
+    "request_params",
+    [{"tools": [_STRICT_TOOL]}, {"response_format": _STRICT_JSON_SCHEMA}, {"messages": _HOUR_CACHED_SYSTEM_PROMPT}],
+    ids=["strict-tools", "json-schema", "hour-cache"],
+)
+def test_a_converse_arn_that_names_no_model_sends_the_same_body_with_or_without_base_model(
+    _aws_test_credentials: None, resource: str, request_params: Mapping[str, object]
+) -> None:
+    model: Final = f"bedrock/converse/{_ARN_ACCOUNT}:{resource}"
+
+    with_base_model: Final = _sent_body_before_a_refusal(
+        model, {"base_model": "bedrock/us.anthropic.claude-sonnet-4-6"}, request_params
+    )
+
+    assert with_base_model == _sent_body_before_a_refusal(model, {}, request_params)
+
+
+@pytest.mark.parametrize(
+    ("spec", "base_model"),
+    [("openai", "bedrock/meta.llama3-70b-instruct-v1:0"), ("nova", "bedrock/us.anthropic.claude-haiku-5-5")],
+)
+def test_a_provider_written_before_an_arn_wins_over_base_model(
+    _aws_test_credentials: None, spec: str, base_model: str
+) -> None:
+    model: Final = f"bedrock/invoke/{spec}/{_ARN_ACCOUNT}:imported-model/abc123"
+
+    with_base_model: Final = _sent_body_before_a_refusal(model, {"base_model": base_model}, {})
+
+    assert with_base_model == _sent_body_before_a_refusal(model, {}, {})
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "reasoning",
+    [{"reasoning_effort": "low"}, {"thinking": {"type": "enabled", "budget_tokens": 1024}}],
+    ids=["reasoning-effort", "thinking"],
+)
+def test_a_param_an_arn_without_base_model_cannot_map_names_base_model_in_the_error(
+    _aws_test_credentials: None, reasoning: Mapping[str, object]
+) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="set `base_model` on the deployment"):
+        litellm.completion(
+            model=f"bedrock/invoke/anthropic/{_APPLICATION_PROFILE_ARN}",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=2048,
+            client=HTTPHandler(client=httpx.Client(transport=_no_upstream_call())),
+            **reasoning,
+        )
