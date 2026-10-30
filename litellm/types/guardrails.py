@@ -1552,6 +1552,7 @@ class ApplyGuardrailRequest(LiteLLMBaseModel):
 
 class ApplyGuardrailResponse(LiteLLMBaseModel):
     response_text: str
+    guardrail_outputs: tuple[Mapping[str, object], ...] | None = None
 
 
 class PatchGuardrailRequest(LiteLLMBaseModel):

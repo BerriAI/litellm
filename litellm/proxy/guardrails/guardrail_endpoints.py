@@ -2428,8 +2428,8 @@ async def _emit_guardrail_success_logs(
     return response
 
 
-@router.post("/guardrails/apply_guardrail", response_model=ApplyGuardrailResponse)
-@router.post("/apply_guardrail", response_model=ApplyGuardrailResponse)
+@router.post("/guardrails/apply_guardrail", response_model=ApplyGuardrailResponse, response_model_exclude_none=True)
+@router.post("/apply_guardrail", response_model=ApplyGuardrailResponse, response_model_exclude_none=True)
 async def apply_guardrail(
     fastapi_request: Request,
     request: ApplyGuardrailRequest,
@@ -2505,7 +2505,10 @@ async def apply_guardrail(
             input_type=_input_type,
         )
         response_text: Final = guardrailed_inputs.get("texts", [])
-        response = ApplyGuardrailResponse(response_text=response_text[0] if response_text else request.text)
+        response = ApplyGuardrailResponse(
+            response_text=response_text[0] if response_text else request.text,
+            guardrail_outputs=guardrailed_inputs.get("guardrail_outputs"),
+        )
     except Exception as e:
         if litellm_logging_obj is not None and not isinstance(e, HTTPException):
             try:

@@ -15331,6 +15331,21 @@
         },
         "ApplyGuardrailResponse": {
           "properties": {
+            "guardrail_outputs": {
+              "anyOf": [
+                {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Guardrail Outputs"
+            },
             "response_text": {
               "title": "Response Text",
               "type": "string"
@@ -49305,6 +49320,14 @@
         },
         "GenericGuardrailAPIInputs": {
           "properties": {
+            "guardrail_outputs": {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "title": "Guardrail Outputs",
+              "type": "array"
+            },
             "images": {
               "items": {
                 "type": "string"

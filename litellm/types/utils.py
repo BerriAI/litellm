@@ -5185,6 +5185,9 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
     stream_holdback_chars: list[
         int
     ]  # trailing chars to withhold from streaming emission per text (word-boundary safety)
+    guardrail_outputs: ReadOnly[
+        tuple[Mapping[str, object], ...]
+    ]  # structured findings the guardrail reports back to the caller
 
 
 class ProviderRoutingHints(TypedDict, total=False):

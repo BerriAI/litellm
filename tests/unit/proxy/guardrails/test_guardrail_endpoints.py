@@ -2295,6 +2295,55 @@ async def test_apply_guardrail_forwards_explicit_empty_messages_and_metadata(moc
     )
 
 
+def _apply_guardrail_over_http(mocker, guardrail_result):
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import app
+
+    guardrail = mocker.Mock()
+    guardrail.apply_guardrail = AsyncMock(return_value=guardrail_result)
+    registry = mocker.Mock()
+    registry.get_initialized_guardrail_callback.return_value = guardrail
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", registry)
+
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-test")
+    try:
+        return TestClient(app).post(
+            "/guardrails/apply_guardrail",
+            json={"guardrail_name": "test-guardrail", "text": "Paris is the capital of France"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_apply_guardrail_returns_the_outputs_the_guardrail_reports(mocker):
+    """A guardrail that produces a verdict alongside the text, such as a grounding
+    check, must hand that verdict to the caller instead of dropping it."""
+    grounding_verdict: Final = [{"name": "grounding", "output": {"is_grounded": False}}]
+
+    response = _apply_guardrail_over_http(
+        mocker,
+        {"texts": ["Paris is the capital of France"], "guardrail_outputs": grounding_verdict},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "response_text": "Paris is the capital of France",
+        "guardrail_outputs": grounding_verdict,
+    }
+
+
+def test_apply_guardrail_body_is_unchanged_for_a_guardrail_without_outputs(mocker):
+    """Guardrails that report nothing keep the response body they had before
+    outputs existed, so existing clients see no new key."""
+    response = _apply_guardrail_over_http(mocker, {"texts": ["Paris is the capital of France"]})
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"response_text": "Paris is the capital of France"}
+
+
 @pytest.mark.asyncio
 async def test_get_guardrail_info_endpoint_config_guardrail(mocker):
     """
