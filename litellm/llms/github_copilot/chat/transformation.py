@@ -28,31 +28,29 @@ if TYPE_CHECKING:
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
-def copilot_cache_token_counts(usage: Mapping) -> tuple[int, int]:
+def _copilot_token_detail_count(entry: object, token_type: str) -> int:
+    if not isinstance(entry, Mapping):
+        return 0
+    entry_map: Mapping[str, object] = entry
+    if entry_map.get("token_type") != token_type:
+        return 0
+    token_count: Final = entry_map.get("token_count")
+    if isinstance(token_count, int) and not isinstance(token_count, bool) and token_count >= 0:
+        return token_count
+    return 0
+
+
+def copilot_cache_token_counts(usage: Mapping[str, object]) -> tuple[int, int]:
     copilot_usage: Final = usage.get("copilot_usage")
     if not isinstance(copilot_usage, Mapping):
         return 0, 0
-    token_details: Final = copilot_usage.get("token_details")
+    copilot_usage_map: Mapping[str, object] = copilot_usage
+    token_details: Final = copilot_usage_map.get("token_details")
     if not isinstance(token_details, list):
         return 0, 0
-    cache_read: Final = sum(
-        entry["token_count"]
-        for entry in token_details
-        if isinstance(entry, Mapping)
-        and entry.get("token_type") == "cache_read"
-        and isinstance(entry.get("token_count"), int)
-        and not isinstance(entry.get("token_count"), bool)
-        and entry["token_count"] >= 0
-    )
-    cache_write: Final = sum(
-        entry["token_count"]
-        for entry in token_details
-        if isinstance(entry, Mapping)
-        and entry.get("token_type") == "cache_write"
-        and isinstance(entry.get("token_count"), int)
-        and not isinstance(entry.get("token_count"), bool)
-        and entry["token_count"] >= 0
-    )
+    token_detail_entries: list[object] = token_details
+    cache_read: Final = sum(_copilot_token_detail_count(entry, "cache_read") for entry in token_detail_entries)
+    cache_write: Final = sum(_copilot_token_detail_count(entry, "cache_write") for entry in token_detail_entries)
     return cache_read, cache_write
 
 
