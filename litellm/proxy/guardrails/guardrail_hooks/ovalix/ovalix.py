@@ -265,13 +265,13 @@ class OvalixGuardrail(CustomGuardrail):
         return (
             str_or_none(metadata.get("user_api_key_user_email"))
             or str_or_none(metadata.get("user_api_key_user_id"))
-            or ""
+            or "unknown"
         )
 
     def _get_tracker_actor_id(self, data: Mapping[str, object]) -> str:
         """Normalize the actor string into a short, stable id for Tracker API payloads."""
         # NOTE: this hash is purely for normalization — it collapses an arbitrary actor
-        # string (email, user id, or empty) into a compact, fixed-length, consistent
+        # string (email, user id, or "unknown") into a compact, fixed-length, consistent
         # key. It is not a privacy/security measure and the actor value is not sensitive,
         # so a plain SHA-256 (truncated) is sufficient; no salting/KDF is needed here.
         actor_id: Final = self._get_actor(data).encode()

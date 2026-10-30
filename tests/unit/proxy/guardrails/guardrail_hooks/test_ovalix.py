@@ -632,7 +632,11 @@ class TestOvalixGuardrail:
             assert guardrail._get_actor({"metadata": {"user_api_key_user_email": "a@b.com"}}) == "a@b.com"
             assert guardrail._get_actor({"metadata": {"user_api_key_user_id": "uid-1"}}) == "uid-1"
             assert guardrail._get_actor({"litellm_metadata": {"user_api_key_user_id": "uid-2"}}) == "uid-2"
-            assert guardrail._get_actor({}) == ""
+            assert guardrail._get_actor({}) == "unknown"
+            assert (
+                guardrail._get_actor({"metadata": {"user_api_key_user_email": "", "user_api_key_user_id": ""}})
+                == "unknown"
+            )
         finally:
             for k in _ovalix_env():
                 if k in os.environ:
@@ -1124,7 +1128,14 @@ async def test_actor_sent_to_tracker_is_raw_identifier_not_hash():
 
 
 @pytest.mark.asyncio
-async def test_empty_user_sends_empty_actor_matching_reference():
+@pytest.mark.parametrize(
+    "request_data",
+    [
+        {},
+        {"metadata": {"user_id": "client-chosen"}, "litellm_metadata": {"user_api_key_user_id": "uid-1"}},
+    ],
+)
+async def test_request_with_no_user_field_sends_unknown_actor(request_data):
     g = _static_guardrail()
     inputs = GenericGuardrailAPIInputs(texts=["hi"])
     seen = {}
@@ -1137,8 +1148,8 @@ async def test_empty_user_sends_empty_actor_matching_reference():
         return r
 
     with patch.object(g._async_handler, "post", new=_post):
-        await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
-    assert seen["last"]["actor"] == ""
+        await g.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request", logging_obj=None)
+    assert seen["last"]["actor"] == "unknown"
 
 
 def _recording_post(mapping_fn=lambda body: _ALLOW):
