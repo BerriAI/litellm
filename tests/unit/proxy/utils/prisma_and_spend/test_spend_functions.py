@@ -11,7 +11,6 @@ Symbols pinned here:
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import datetime, timezone
@@ -20,12 +19,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from litellm.constants import REDIS_SPEND_LOGS_BUFFER_KEY
 from litellm.proxy.utils import (
     MAX_SPEND_LOG_DRAIN_ITERATIONS,
+    drain_spend_logs_queue,
     monitor_spend_logs_queue,
     raise_failed_update_spend_exception,
-    drain_spend_logs_queue,
     recover_parked_spend_logs,
     update_daily_tag_spend,
     update_spend,
@@ -719,10 +717,6 @@ def _table_gone_error() -> Exception:
     )
 
 
-def _parked_request_ids(fake_redis: Any) -> list[str]:
-    return [json.loads(row)["request_id"] for row in fake_redis.items.get(REDIS_SPEND_LOGS_BUFFER_KEY, [])]
-
-
 @pytest.mark.asyncio
 async def test_drain_spend_logs_queue_parks_unwritable_rows_in_redis_on_shutdown(
     mock_prisma_client: Any, make_spend_log_row: Any, proxy_logging_with_redis: MagicMock, fake_redis: Any
@@ -743,7 +737,7 @@ async def test_drain_spend_logs_queue_parks_unwritable_rows_in_redis_on_shutdown
         )
 
     assert mock_prisma_client.spend_log_transactions == []
-    assert sorted(_parked_request_ids(fake_redis)) == ["r1", "r2"]
+    assert sorted(await fake_redis.parked_request_ids()) == ["r1", "r2"]
 
 
 @pytest.mark.asyncio
@@ -779,7 +773,7 @@ async def test_drain_spend_logs_queue_waits_for_an_in_flight_write_before_parkin
         proxy_logging_obj=proxy_logging_with_redis,
     )
 
-    assert _parked_request_ids(fake_redis) == ["in-flight"]
+    assert await fake_redis.parked_request_ids() == ["in-flight"]
     assert mock_prisma_client.spend_log_transactions == []
     await release
     with suppress(Exception):
@@ -813,7 +807,7 @@ async def test_drain_spend_logs_queue_parks_rows_left_after_max_passes(
     )
 
     assert mock_prisma_client.spend_log_transactions == []
-    assert _parked_request_ids(fake_redis) == ["late"]
+    assert await fake_redis.parked_request_ids() == ["late"]
 
 
 @pytest.mark.asyncio
@@ -822,7 +816,7 @@ async def test_drain_spend_logs_queue_keeps_rows_in_memory_when_redis_is_down(
 ) -> None:
     from prisma.errors import TableNotFoundError
 
-    fake_redis.down = True
+    fake_redis.server.connected = False
     mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id="r1")]
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_table_gone_error())
 
@@ -834,7 +828,8 @@ async def test_drain_spend_logs_queue_keeps_rows_in_memory_when_redis_is_down(
         )
 
     assert [row["request_id"] for row in mock_prisma_client.spend_log_transactions] == ["r1"]
-    assert fake_redis.items == {}
+    fake_redis.server.connected = True
+    assert await fake_redis.raw.keys("*") == []
 
 
 @pytest.mark.asyncio
@@ -863,7 +858,7 @@ async def test_update_spend_writes_rows_parked_in_redis_by_a_previous_pod(
 
     written = mock_prisma_client.db.litellm_spendlogs.create_many.await_args.kwargs["data"]
     assert [row["request_id"] for row in written] == ["parked"]
-    assert _parked_request_ids(fake_redis) == []
+    assert await fake_redis.parked_request_ids() == []
     assert mock_prisma_client.spend_log_transactions == []
 
 
@@ -879,14 +874,14 @@ async def test_recover_parked_spend_logs_re_parks_rows_when_the_enqueue_is_cance
         recover_parked_spend_logs(prisma_client=mock_prisma_client, proxy_logging_obj=proxy_logging_with_redis)
     )
     await asyncio.sleep(0.01)
-    assert _parked_request_ids(fake_redis) == []
+    assert await fake_redis.parked_request_ids() == []
 
     recovery.cancel()
     with pytest.raises(asyncio.CancelledError):
         await recovery
     mock_prisma_client._spend_log_transactions_lock.release()
 
-    assert _parked_request_ids(fake_redis) == ["parked"]
+    assert await fake_redis.parked_request_ids() == ["parked"]
     assert mock_prisma_client.spend_log_transactions == []
 
 

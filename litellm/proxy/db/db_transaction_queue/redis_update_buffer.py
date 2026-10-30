@@ -7,7 +7,6 @@ This is to prevent deadlocks and improve reliability
 import asyncio
 import json
 from collections.abc import Mapping, Sequence
-from datetime import datetime
 from functools import partial, reduce
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
@@ -20,7 +19,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
 from litellm.constants import (
     MAX_REDIS_BUFFER_DEQUEUE_COUNT,
-    REDIS_SPEND_LOGS_BUFFER_KEY,
     REDIS_SPEND_LOGS_BUFFER_MAX_ROWS,
     REDIS_TOOL_DISCOVERY_BUFFER_KEY,
     REDIS_UPDATE_BUFFER_KEY,
@@ -54,6 +52,7 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     to_wire_payload,
 )
 from litellm.proxy.db.spend_log_batching import SpendLogRow
+from litellm.redis.stores.spend_logs_parking import SpendLogsParkingStore, TransportSpendLogsParkingStore
 from litellm.redis.stores.spend_update_buffer import (
     SpendBuffer,
     SpendUpdateBufferStore,
@@ -122,6 +121,10 @@ def _spend_buffers(redis_cache: RedisCache) -> SpendUpdateBufferStore:
     return TransportSpendUpdateBufferStore(redis_cache.transport())
 
 
+def _parked_spend_logs(redis_cache: RedisCache) -> SpendLogsParkingStore:
+    return TransportSpendLogsParkingStore(redis_cache.transport())
+
+
 def _zero_for_non_finite_constant(constant: str) -> float:
     verbose_proxy_logger.warning(
         "Redis spend buffer - reading a parked %s spend as 0, the spend it held is lost", constant
@@ -130,14 +133,6 @@ def _zero_for_non_finite_constant(constant: str) -> float:
 
 
 _load_buffered_transaction: Final = partial(json.loads, parse_constant=_zero_for_non_finite_constant)
-
-
-def _spend_log_json_default(value: object) -> str:
-    return value.isoformat() if isinstance(value, datetime) else str(value)
-
-
-def _encode_spend_log_row(row: SpendLogRow) -> str:
-    return json.dumps(row, default=_spend_log_json_default)
 
 
 def _decode_spend_log_row(encoded: str) -> dict[str, object] | None:
@@ -631,24 +626,19 @@ class RedisUpdateBuffer:
         """Park spend-log rows in Redis so they outlive this pod, dropping the oldest past ``max_rows``."""
         if self.redis_cache is None or len(rows) == 0 or not self.should_commit_spend_updates_to_redis():
             return False
-        try:
-            buffer_size: Final = await self.redis_cache.async_rpush_and_trim(
-                key=REDIS_SPEND_LOGS_BUFFER_KEY,
-                values=tuple(_encode_spend_log_row(row) for row in rows),
-                max_len=max_rows,
-            )
-            overflow: Final = buffer_size - max_rows
-            if overflow > 0:
-                verbose_proxy_logger.error(
-                    "Spend tracking - Redis spend log buffer is at its %d row cap; dropped the %d oldest spend logs",
-                    max_rows,
-                    overflow,
-                )
-        except Exception as e:  # noqa: BLE001  # the caller falls back to the in-memory queue on any Redis fault
+        buffer_size: Final = await _parked_spend_logs(self.redis_cache).park(rows, max_rows=max_rows)
+        if isinstance(buffer_size, RedisFailure):
             verbose_proxy_logger.error(
-                "Spend tracking - failed to park %d spend log rows in Redis. Error: %s", len(rows), str(e)
+                "Spend tracking - failed to park %d spend log rows in Redis. Error: %s", len(rows), buffer_size.message
             )
             return False
+        overflow: Final = buffer_size - max_rows
+        if overflow > 0:
+            verbose_proxy_logger.error(
+                "Spend tracking - Redis spend log buffer is at its %d row cap; dropped the %d oldest spend logs",
+                max_rows,
+                overflow,
+            )
         verbose_proxy_logger.info("Spend tracking - parked %d spend log rows in Redis for a later flush", len(rows))
         return True
 
@@ -657,14 +647,12 @@ class RedisUpdateBuffer:
         """Atomically take up to ``limit`` parked spend-log rows out of Redis."""
         if self.redis_cache is None or not self.should_commit_spend_updates_to_redis():
             return ()
-        popped: Final[str | list[str] | None] = await self.redis_cache.async_lpop(
-            key=REDIS_SPEND_LOGS_BUFFER_KEY,
-            count=limit,
-        )
+        popped: Final = await _parked_spend_logs(self.redis_cache).take(limit)
+        if isinstance(popped, RedisFailure):
+            raise_redis_failure(popped)
         if popped is None:
             return ()
-        encoded_rows: Final = tuple(popped) if isinstance(popped, list) else (popped,)
-        decoded_rows: Final = (_decode_spend_log_row(encoded) for encoded in encoded_rows)
+        decoded_rows: Final = (_decode_spend_log_row(encoded) for encoded in popped)
         return tuple(row for row in decoded_rows if row is not None)
 
     @staticmethod

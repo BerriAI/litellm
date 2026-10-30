@@ -13,15 +13,23 @@ needing a generated Prisma client or a real database.
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import threading
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from email.message import EmailMessage
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Optional
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import fakeredis
 import pytest
+import pytest_asyncio
+
+from litellm.caching.redis_cache import RedisCache
+from litellm.constants import REDIS_SPEND_LOGS_BUFFER_KEY
+from tests._support.fake_redis import fake_redis_cache
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 
@@ -51,16 +59,13 @@ VOLATILE_KEYS = frozenset(
 def normalize(data: Any, volatile: frozenset = VOLATILE_KEYS) -> Any:
     """Recursively replace values for volatile keys with '<VOLATILE>'."""
     if isinstance(data, dict):
-        return {
-            k: ("<VOLATILE>" if k in volatile else normalize(v, volatile))
-            for k, v in data.items()
-        }
+        return {k: ("<VOLATILE>" if k in volatile else normalize(v, volatile)) for k, v in data.items()}
     if isinstance(data, list):
         return [normalize(v, volatile) for v in data]
     return data
 
 
-_PRISMA_TABLES: List[str] = [
+_PRISMA_TABLES: list[str] = [
     "litellm_verificationtoken",
     "litellm_teamtable",
     "litellm_usertable",
@@ -156,7 +161,7 @@ def mock_dual_cache() -> MagicMock:
     ``cache._store`` directly in a test for assertion convenience.
     """
     cache = MagicMock(name="MockDualCache")
-    cache._store: Dict[str, Any] = {}
+    cache._store: dict[str, Any] = {}
 
     def _sync_get(key: str, **_: Any) -> Any:
         return cache._store.get(key)
@@ -191,6 +196,7 @@ def patched_prisma_import(monkeypatch: pytest.MonkeyPatch) -> Iterator[MagicMock
     directly and restore in teardown.
     """
     import prisma as _prisma_pkg
+
     import litellm.proxy.utils as _utils_mod
 
     fake_prisma = MagicMock(name="FakePrisma")
@@ -261,7 +267,7 @@ class FakeClock:
     """
 
     now: float = 0.0
-    sleep_calls: List[float] = field(default_factory=list)
+    sleep_calls: list[float] = field(default_factory=list)
 
     def advance(self, seconds: float) -> None:
         self.now += seconds
@@ -290,7 +296,7 @@ def fake_clock(monkeypatch: pytest.MonkeyPatch) -> FakeClock:
 
 
 @pytest.fixture
-def make_spend_log_row() -> Callable[..., Dict[str, Any]]:
+def make_spend_log_row() -> Callable[..., dict[str, Any]]:
     """Factory for fake LiteLLM_SpendLogs rows."""
 
     def _make(
@@ -298,7 +304,7 @@ def make_spend_log_row() -> Callable[..., Dict[str, Any]]:
         spend: float = 0.01,
         model: str = "gpt-4o-mini",
         **overrides: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         row = {
             "request_id": request_id,
             "spend": spend,
@@ -316,38 +322,21 @@ def make_spend_log_row() -> Callable[..., Dict[str, Any]]:
     return _make
 
 
+@dataclass(frozen=True)
 class FakeRedisList:
-    def __init__(self) -> None:
-        self.items: dict[str, list[str]] = {}
-        self.down = False
+    server: fakeredis.FakeServer
+    cache: RedisCache
+    raw: fakeredis.FakeAsyncRedis
 
-    def _check_up(self) -> None:
-        if self.down:
-            raise ConnectionError("redis unreachable")
-
-    async def async_rpush_and_trim(self, key: str, values: list[str], max_len: int) -> int:
-        self._check_up()
-        stored = self.items.setdefault(key, [])
-        stored.extend(str(v) for v in values)
-        pushed_len = len(stored)
-        del stored[:-max_len]
-        return pushed_len
-
-    async def async_lpop(self, key: str, count: int | None = None, **kwargs: object) -> str | list[str] | None:
-        self._check_up()
-        stored = self.items.get(key, [])
-        if not stored:
-            return None
-        if count is None:
-            return stored.pop(0)
-        popped = stored[:count]
-        del stored[:count]
-        return popped
+    async def parked_request_ids(self) -> list[str]:
+        rows = await self.raw.lrange(REDIS_SPEND_LOGS_BUFFER_KEY, 0, -1)
+        return [json.loads(row)["request_id"] for row in rows]
 
 
-@pytest.fixture
-def fake_redis() -> FakeRedisList:
-    return FakeRedisList()
+@pytest_asyncio.fixture(loop_scope="function")
+async def fake_redis() -> FakeRedisList:
+    server = fakeredis.FakeServer()
+    return FakeRedisList(server=server, cache=fake_redis_cache(server), raw=fakeredis.FakeAsyncRedis(server=server))
 
 
 @pytest.fixture
@@ -358,7 +347,7 @@ def proxy_logging_with_redis(fake_redis: FakeRedisList) -> MagicMock:
     proxy_logging.failure_handler = AsyncMock()
     proxy_logging.db_spend_update_writer = MagicMock()
     proxy_logging.db_spend_update_writer.db_update_spend_transaction_handler = AsyncMock()
-    buffer = RedisUpdateBuffer(redis_cache=fake_redis)
+    buffer = RedisUpdateBuffer(redis_cache=fake_redis.cache)
     buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=True)
     proxy_logging.db_spend_update_writer.redis_update_buffer = buffer
     return proxy_logging
@@ -366,12 +355,12 @@ def proxy_logging_with_redis(fake_redis: FakeRedisList) -> MagicMock:
 
 @dataclass
 class _SentMessage:
-    from_addr: Optional[str]
+    from_addr: str | None
     to_addrs: Any
-    subject: Optional[str]
-    body: Optional[str]
+    subject: str | None
+    body: str | None
     starttls_called: bool
-    login_args: Optional[tuple]
+    login_args: tuple | None
     thread_ident: int
 
 
@@ -379,9 +368,9 @@ class _SentMessage:
 class InMemorySMTP:
     """Captures outbound SMTP traffic for ``send_email`` tests."""
 
-    sent: List[_SentMessage] = field(default_factory=list)
-    raise_on_send: Optional[Exception] = None
-    connection_kwargs: List[Dict[str, Any]] = field(default_factory=list)
+    sent: list[_SentMessage] = field(default_factory=list)
+    raise_on_send: Exception | None = None
+    connection_kwargs: list[dict[str, Any]] = field(default_factory=list)
 
     def server_factory(self) -> Callable[..., Any]:
         outer = self
@@ -389,9 +378,9 @@ class InMemorySMTP:
         class _Conn:
             def __init__(self) -> None:
                 self._starttls_called = False
-                self._login_args: Optional[tuple] = None
+                self._login_args: tuple | None = None
 
-            def __enter__(self) -> "_Conn":
+            def __enter__(self) -> _Conn:
                 return self
 
             def __exit__(self, *exc: Any) -> None:
@@ -406,7 +395,7 @@ class InMemorySMTP:
             def send_message(
                 self,
                 msg: EmailMessage,
-                from_addr: Optional[str] = None,
+                from_addr: str | None = None,
                 to_addrs: Any = None,
             ) -> None:
                 if outer.raise_on_send is not None:

@@ -804,32 +804,9 @@ async def test_store_in_memory_spend_updates_restores_budget_window_spend_on_rpu
     assert [payload["entity_id"] for payload in restored] == ["team-1"]
 
 
-class _ListRedis:
-    def __init__(self) -> None:
-        self.rows: list[str] = []
-
-    async def async_rpush(self, key: str, values: list[str]) -> int:
-        self.rows.extend(values)
-        return len(self.rows)
-
-    async def async_rpush_and_trim(self, key: str, values: list[str], max_len: int) -> int:
-        self.rows.extend(values)
-        pushed_len = len(self.rows)
-        del self.rows[:-max_len]
-        return pushed_len
-
-    async def async_lpop(self, key: str, count: int | None = None, **kwargs: object) -> list[str] | None:
-        if not self.rows:
-            return None
-        popped = self.rows[:count]
-        del self.rows[:count]
-        return popped
-
-
 @pytest.mark.asyncio
 async def test_store_spend_logs_in_redis_drops_oldest_rows_past_the_cap():
-    redis = _ListRedis()
-    buffer = RedisUpdateBuffer(redis_cache=redis)
+    buffer = RedisUpdateBuffer(redis_cache=fake_redis_cache(fakeredis.FakeServer()))
     buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=True)
 
     assert await buffer.store_spend_logs_in_redis([{"request_id": "old"}, {"request_id": "mid"}], max_rows=2) is True
@@ -858,7 +835,7 @@ async def test_a_non_finite_daily_spend_buffered_in_redis_drains_as_zero(spend: 
 
 @pytest.mark.asyncio
 async def test_a_spend_log_row_parked_with_a_nan_spend_is_read_back_with_zero_spend():
-    buffer: Final = RedisUpdateBuffer(redis_cache=_ListRedis())
+    buffer: Final = RedisUpdateBuffer(redis_cache=fake_redis_cache(fakeredis.FakeServer()))
     buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=True)
 
     assert await buffer.store_spend_logs_in_redis([{"request_id": "nan-row", "spend": float("nan")}]) is True
@@ -876,12 +853,12 @@ async def test_store_spend_logs_in_redis_reports_failure_without_redis():
 
 @pytest.mark.asyncio
 async def test_store_spend_logs_in_redis_is_off_unless_transaction_buffering_is_enabled():
-    redis = _ListRedis()
-    buffer = RedisUpdateBuffer(redis_cache=redis)
+    server: Final = fakeredis.FakeServer()
+    buffer = RedisUpdateBuffer(redis_cache=fake_redis_cache(server))
     buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=False)
 
     assert await buffer.store_spend_logs_in_redis([{"request_id": "a"}]) is False
-    assert redis.rows == []
+    assert await fakeredis.FakeAsyncRedis(server=server).keys("*") == []
 
 
 @pytest.mark.asyncio
