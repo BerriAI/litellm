@@ -2730,6 +2730,31 @@ def test_build_vertex_schema_moves_scalar_fields_next_to_anyof_into_each_branch(
     }
 
 
+def test_build_vertex_schema_keeps_object_fields_off_a_scalar_anyof_branch():
+    built: Final = build_vertex_schema(
+        {
+            "type": "object",
+            "properties": {"field": {"type": "string", "maxItems": 3, "anyOf": [{"maxLength": 3}]}},
+        }
+    )
+
+    assert built["properties"]["field"] == {"anyOf": [{"type": "string", "maxLength": 3}]}
+
+
+def test_build_vertex_schema_keeps_the_integer_enum_without_null_on_an_anyof_branch():
+    built: Final = build_vertex_schema(
+        {
+            "type": "object",
+            "properties": {"field": {"type": ["integer", "null"], "enum": [1, 2, None], "anyOf": [{"minimum": 0}]}},
+        },
+        send_integer_enums=True,
+    )
+
+    assert built["properties"]["field"] == {
+        "anyOf": [{"type": "integer", "enum": ["1", "2"], "minimum": 0, "nullable": True}]
+    }
+
+
 def test_build_vertex_schema_unions_required_and_lets_a_branch_override_a_property():
     built: Final = build_vertex_schema(
         {
