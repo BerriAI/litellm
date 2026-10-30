@@ -623,7 +623,11 @@ def cost_per_token(
         )
         if lyria_generation_cost is not None:
             return 0.0, lyria_generation_cost
-        speech_model_info = litellm.get_model_info(model=model_without_prefix, custom_llm_provider=custom_llm_provider)
+        speech_model_info: Final = cached_get_model_info_helper(
+            model=model_without_prefix,
+            custom_llm_provider=custom_llm_provider,
+            preserve_unset_costs=True,
+        )
         cost_metric: Final = select_cost_metric_for_model(speech_model_info)
         prompt_cost: float = 0.0
         completion_cost: float = 0.0

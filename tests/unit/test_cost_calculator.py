@@ -37,7 +37,7 @@ from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import CacheCreationTokenDetails, CallTypes, Choices, CompletionTokensDetailsWrapper, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
-from litellm.utils import _invalidate_model_cost_lowercase_map, supports_prompt_caching
+from litellm.utils import _invalidate_model_cost_lowercase_map, cached_get_model_info_helper, supports_prompt_caching
 import os
 import threading
 from unittest.mock import MagicMock, patch
@@ -9668,6 +9668,48 @@ def test_azure_tts_cost_uses_test_owned_character_rate(monkeypatch: pytest.Monke
     )
 
     assert cost == pytest.approx(0.05)
+
+
+@pytest.mark.usefixtures("_local_model_cost_map")
+@pytest.mark.parametrize("call_type", ("speech", "aspeech"))
+@pytest.mark.parametrize("model", ("unpriced-speech-fixture", "openai/unpriced-speech-fixture"))
+@pytest.mark.parametrize("pricing", ({}, {"input_cost_per_character": None, "input_cost_per_token": None}))
+def test_registered_speech_without_prices_errors_until_a_zero_rate_is_registered(
+    call_type: str, model: str, pricing: ModelInfo
+) -> None:
+    litellm.register_model(
+        {model: {"litellm_provider": "openai", "mode": "audio_speech", **pricing}},
+        persist_across_reloads=False,
+    )
+    assert cached_get_model_info_helper(model, "openai")["input_cost_per_token"] == 0.0
+    assert litellm.get_model_info(model)["input_cost_per_token"] == 0.0
+
+    with pytest.raises(ValueError, match="does not have 'input_cost_per_character' or 'input_cost_per_token'"):
+        completion_cost(model=model, prompt="hello world", call_type=call_type)
+
+    litellm.register_model({model: {"input_cost_per_token": 0.0}}, persist_across_reloads=False)
+
+    assert completion_cost(model=model, prompt="hello world", call_type=call_type) == 0.0
+
+
+@pytest.mark.usefixtures("_local_model_cost_map")
+@pytest.mark.parametrize("call_type", ("speech", "aspeech"))
+@pytest.mark.parametrize("model", ("free-speech-fixture", "openai/free-speech-fixture"))
+@pytest.mark.parametrize(
+    "pricing",
+    (
+        {"input_cost_per_token": 0.0},
+        {"input_cost_per_character": 0.0, "input_cost_per_token": 2e-6},
+    ),
+)
+def test_registered_speech_explicit_zero_price_is_free(call_type: str, model: str, pricing: ModelInfo) -> None:
+    litellm.register_model(
+        {model: {"litellm_provider": "openai", "mode": "audio_speech", **pricing}},
+        persist_across_reloads=False,
+    )
+    litellm.get_model_info(model)
+
+    assert completion_cost(model=model, prompt="hello world", call_type=call_type) == 0.0
 
 
 def test_speech_cost_with_custom_pricing_bills_the_reported_usage() -> None:
