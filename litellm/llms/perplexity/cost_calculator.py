@@ -100,8 +100,9 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
         num_search_queries = getattr(usage.prompt_tokens_details, "web_search_requests", 0) or 0
 
     # Check both possible keys for search cost (legacy and current)
-    search_cost_value: Final = model_info.get("search_queries_cost_per_query") or model_info.get(
-        "search_context_cost_per_query"
+    legacy_search_cost: Final = model_info.get("search_queries_cost_per_query")
+    search_cost_value: Final = (
+        model_info.get("search_context_cost_per_query") if legacy_search_cost is None else legacy_search_cost
     )
     if num_search_queries > 0 and search_cost_value is not None:
         # Handle both dict and float formats
