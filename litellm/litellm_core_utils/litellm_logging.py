@@ -577,7 +577,8 @@ _ORPHANED_FAILURE_LOG_TASKS: Final[set["asyncio.Future[None]"]] = set()  # mutab
 
 
 _ABSENT: Final = object()
-_LOGGED_PROMPT_COPY_PATHS: Final = (
+_LOGGED_PROMPT_PATHS: Final = (
+    ("messages",),
     ("input",),
     ("optional_params", "messages"),
     ("litellm_params", "proxy_server_request", "body", "messages"),
@@ -610,15 +611,14 @@ def _with_prompt_copy_replaced(
 
 
 def _with_prompt_copies_replaced(
-    details: Mapping[str, object], raw: object
+    details: Mapping[str, object], raw: object, replacement: object
 ) -> dict[str, object]:  # mutable-ok: becomes the Logging object's model_call_details
     if raw is None:
         return dict(details)
-    replacement: Final = details.get("messages")
     return dict(
         functools.reduce(
             lambda fields, path: _with_prompt_copy_replaced(fields, path, raw, replacement),
-            _LOGGED_PROMPT_COPY_PATHS,
+            _LOGGED_PROMPT_PATHS,
             details,
         )
     )
@@ -4351,12 +4351,13 @@ class Logging(LiteLLMLoggingBaseClass):
         self._failure_logged_messages = self._unmasked_messages
         return True
 
-    def _set_failure_log_details(self, details: Mapping[str, object]) -> None:
-        self.model_call_details = _with_prompt_copies_replaced(details, self._unmasked_messages)
-        self._failure_logged_messages = self.model_call_details.get("messages")
+    def _log_failure_with_messages(self, details: Mapping[str, object], logged_messages: object) -> None:
+        self.model_call_details = _with_prompt_copies_replaced(details, self._unmasked_messages, logged_messages)
+        self._failure_logged_messages = logged_messages
 
     def _redact_failure_log_request(self) -> None:
-        self._set_failure_log_details({**self.model_call_details, **redacted_request_entries(self.model_call_details)})
+        redacted: Final = {**self.model_call_details, **redacted_request_entries(self.model_call_details)}
+        self._log_failure_with_messages(redacted, redacted["messages"])
 
     @property
     def masks_failure_log(self) -> bool:
@@ -4391,20 +4392,38 @@ class Logging(LiteLLMLoggingBaseClass):
             self._redact_failure_log_request_after_timeout()
 
     async def _run_failure_log_maskers(self, maskers: tuple[CustomGuardrail, ...]) -> None:
-        for guardrail in maskers:
-            try:
-                if not _runs_on_logging_only(guardrail, self.model_call_details):
-                    continue
-                self.model_call_details, _ = await guardrail.async_logging_hook(
-                    kwargs=_failure_log_hook_kwargs(self.model_call_details),
-                    result=None,
-                    call_type=self._logging_hook_call_type,
-                )
-            except Exception:  # noqa: BLE001  # a failing mask redacts the log instead of stopping failure logging
-                self._report_failure_log_mask_error(guardrail)
-                self._redact_failure_log_request()
-                return
-        self._set_failure_log_details(self.model_call_details)
+        masked: Final = await self._masked_failure_log_details(self.model_call_details, maskers)
+        if masked is None:
+            self._redact_failure_log_request()
+            return
+        self._log_failure_with_messages(self.model_call_details, masked.get("messages"))
+
+    async def _masked_failure_log_details(
+        self, details: Mapping[str, object] | None, maskers: tuple[CustomGuardrail, ...]
+    ) -> Mapping[str, object] | None:
+        if details is None or not maskers:
+            return details
+        return await self._masked_failure_log_details(
+            await self._async_failure_log_mask_step(details, maskers[0]), maskers[1:]
+        )
+
+    async def _async_failure_log_mask_step(
+        self, details: Mapping[str, object], guardrail: CustomGuardrail
+    ) -> Mapping[str, object] | None:
+        if not _runs_on_logging_only(guardrail, details):
+            return details
+        try:
+            hooked_details: Final = _METADATA_MAPPING.validate_python(
+                (
+                    await guardrail.async_logging_hook(
+                        kwargs=_failure_log_hook_kwargs(details), result=None, call_type=self._logging_hook_call_type
+                    )
+                )[0]
+            )
+        except Exception:  # noqa: BLE001  # a failing mask redacts the log instead of stopping failure logging
+            self._report_failure_log_mask_error(guardrail)
+            return None
+        return hooked_details
 
     async def async_mask_failure_log_request(
         self,
@@ -4448,7 +4467,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if masked is None:
             self._redact_failure_log_request()
             return
-        self._set_failure_log_details(masked)
+        self._log_failure_with_messages(self.model_call_details, masked.get("messages"))
 
     def _sync_failure_log_mask_step(
         self, details: Mapping[str, object] | None, guardrail: CustomGuardrail

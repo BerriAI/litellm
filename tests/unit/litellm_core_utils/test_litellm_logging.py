@@ -8830,6 +8830,63 @@ async def test_concurrent_failure_notifications_log_one_masked_failure() -> None
     assert recorder.logged == [(_MASKED_LOG, _MASKED_LOG)]
 
 
+class _DeploymentSuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: list[tuple[str, str, str]] = []
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        payload: Final = cast(StandardLoggingPayload, kwargs["standard_logging_object"])
+        self.logged.append((payload["model_id"] or "", payload["model_group"] or "", payload["api_base"]))
+
+
+def _deployment_params(model_id: str, model_group: str) -> dict[str, object]:
+    return {
+        "acompletion": True,
+        "api_base": f"https://{model_group}.example.com",
+        "metadata": {"model_group": model_group, "model_info": {"id": model_id}},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_global_callbacks")
+async def test_fallback_started_while_the_failure_log_is_masked_logs_its_own_deployment() -> None:
+    guardrail: Final = _BlockingNameMaskingGuardrail()
+    failures: Final = _FailureLogRecorder()
+    successes: Final = _DeploymentSuccessRecorder()
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o-mini",
+        messages=copy.deepcopy(_RAW_LOG),
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="fallback-during-mask",
+        function_id="fallback-during-mask",
+        dynamic_async_failure_callbacks=[guardrail, failures],
+        dynamic_async_success_callbacks=[successes],
+    )
+    logging_obj.update_environment_variables(litellm_params=_deployment_params("rejected", "primary"), optional_params={})
+    rejected_attempt_log: Final = asyncio.create_task(
+        logging_obj.async_failure_handler(litellm.RateLimitError("429", "openai", "gpt-4o-mini"), "tb")
+    )
+    await asyncio.wait_for(guardrail.scanning.wait(), timeout=10)
+
+    logging_obj.update_environment_variables(litellm_params=_deployment_params("served", "backup"), optional_params={})
+    guardrail.release.set()
+    await asyncio.wait_for(rejected_attempt_log, timeout=10)
+    await logging_obj.async_success_handler(
+        result=ModelResponse(
+            model="gpt-4o-mini",
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        )
+    )
+
+    assert failures.logged == [(_MASKED_LOG, _MASKED_LOG)]
+    assert successes.logged == [("served", "backup", "https://backup.example.com")]
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_global_callbacks")
 async def test_sync_sdk_failure_dispatched_from_async_code_logs_the_masked_prompt() -> None:
