@@ -6,8 +6,9 @@
 //
 // Usage:
 //
-//	litellm --model gpt-4o
-//	go run ./tools
+//	export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 32)"
+//	litellm --model gpt-4o   # start proxy in another terminal
+//	LITELLM_API_KEY="<the same master key>" go run ./tools
 package main
 
 import (
@@ -35,6 +36,7 @@ func main() {
 
 	model := openai.NewLiteLLM(proxyURL,
 		openai.WithModel("gpt-4o"),
+		openai.WithAPIKey(os.Getenv("LITELLM_API_KEY")),
 	)
 
 	// Define a type-safe tool. The function signature enforces correct types.

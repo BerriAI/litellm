@@ -6,7 +6,13 @@ A working example showing how to use [gollem](https://github.com/fugue-labs/goll
 
 ### 1. Start LiteLLM Proxy
 
+The proxy refuses to start without a master key, so generate one first and keep it for step 2:
+
 ```bash
+export OPENAI_API_KEY="sk-..."
+export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 32)"
+echo "$LITELLM_MASTER_KEY"
+
 # Simple start with a single model
 litellm --model gpt-4o
 
@@ -16,7 +22,11 @@ litellm --config proxy_config.yaml
 
 ### 2. Run the examples
 
+In a second terminal, give the examples the master key from step 1. They send `LITELLM_API_KEY` to the proxy as their API key:
+
 ```bash
+export LITELLM_API_KEY="<the master key from step 1>"
+
 # Install Go dependencies
 go mod tidy
 
@@ -48,6 +58,7 @@ model := openai.NewLiteLLM("http://localhost:4000",
     openai.WithModel("gpt-4o"),        // OpenAI
     // openai.WithModel("claude-sonnet"),  // Anthropic
     // openai.WithModel("gemini-pro"),     // Google
+    openai.WithAPIKey(os.Getenv("LITELLM_API_KEY")),
 )
 ```
 
@@ -89,23 +100,37 @@ Go App (gollem) → LiteLLM Proxy → OpenAI / Anthropic / Google / ...
 ## Environment Variables
 
 ```bash
-# Required for providers you want to use (set in LiteLLM config or env)
+# Proxy terminal: keys for the providers you want to use (set in LiteLLM config or env)
 export OPENAI_API_KEY="sk-..."
 export ANTHROPIC_API_KEY="sk-ant-..."
+
+# Proxy terminal: required, the proxy refuses to start without a master key
+export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 32)"
+
+# Go terminal: the key the examples send to the proxy (the master key or a virtual key)
+export LITELLM_API_KEY="<your LiteLLM master key>"
 
 # Optional: point to a non-default LiteLLM proxy
 export LITELLM_PROXY_URL="http://localhost:4000"
 ```
 
+When `LITELLM_API_KEY` is unset, gollem falls back to sending `OPENAI_API_KEY`, which the proxy rejects unless it holds a LiteLLM key.
+
 ## Troubleshooting
+
+**Proxy refuses to start with `no master key is set`?**
+- Export `LITELLM_MASTER_KEY` before starting it, as in step 1
 
 **Connection errors?**
 - Make sure LiteLLM is running: `litellm --model gpt-4o`
 - Check the URL is correct (default: `http://localhost:4000`)
 
+**Authentication errors (401, or 400 `No connected db.`)?**
+- Set `LITELLM_API_KEY` in the Go terminal to the proxy's master key
+
 **Model not found?**
 - Verify the model name matches what's configured in LiteLLM
-- Run `curl http://localhost:4000/models` to see available models
+- Run `curl http://localhost:4000/models -H "Authorization: Bearer $LITELLM_API_KEY"` to see available models
 
 **Tool calls not working?**
 - Ensure the underlying model supports tool use (GPT-4o, Claude, Gemini)

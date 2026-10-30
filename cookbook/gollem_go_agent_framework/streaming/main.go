@@ -5,8 +5,9 @@
 //
 // Usage:
 //
-//	litellm --model gpt-4o
-//	go run ./streaming
+//	export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 32)"
+//	litellm --model gpt-4o   # start proxy in another terminal
+//	LITELLM_API_KEY="<the same master key>" go run ./streaming
 package main
 
 import (
@@ -27,6 +28,7 @@ func main() {
 
 	model := openai.NewLiteLLM(proxyURL,
 		openai.WithModel("gpt-4o"),
+		openai.WithAPIKey(os.Getenv("LITELLM_API_KEY")),
 	)
 
 	agent := core.NewAgent[string](model)

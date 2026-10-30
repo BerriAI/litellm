@@ -2,8 +2,9 @@
 //
 // Usage:
 //
+//	export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 32)"
 //	litellm --model gpt-4o   # start proxy in another terminal
-//	go run ./basic
+//	LITELLM_API_KEY="<the same master key>" go run ./basic
 package main
 
 import (
@@ -26,6 +27,7 @@ func main() {
 	// provider pointed at the given URL.
 	model := openai.NewLiteLLM(proxyURL,
 		openai.WithModel("gpt-4o"), // any model name configured in LiteLLM
+		openai.WithAPIKey(os.Getenv("LITELLM_API_KEY")),
 	)
 
 	// Create and run a simple agent.

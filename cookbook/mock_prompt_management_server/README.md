@@ -60,11 +60,18 @@ prompts:
 
 ### Start LiteLLM Proxy
 
+The proxy refuses to start without a master key, so generate one first:
+
 ```bash
+export OPENAI_API_KEY="sk-..."
+export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 32)"
+echo "$LITELLM_MASTER_KEY"
 litellm --config config.yaml
 ```
 
 ### Make a Request
+
+In another terminal, export the same `LITELLM_MASTER_KEY` printed above, then send the request:
 
 ```bash
 curl http://0.0.0.0:4000/v1/chat/completions \
