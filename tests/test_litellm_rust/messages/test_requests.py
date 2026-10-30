@@ -189,6 +189,18 @@ async def test_drop_params_drops_non_string_user_text(server: RecordingServer, a
 
 @pytest.mark.asyncio
 @BOTH_MODES
+async def test_non_string_tool_result_text_answers_400_before_io(server: RecordingServer, asynchronous: bool) -> None:
+    server.expected_requests = 0
+    tool_result: Final = {"type": "tool_result", "tool_use_id": "toolu_1", "content": [{"type": "text", "text": None}]}
+
+    with pytest.raises(litellm.BadRequestError, match=r"tool_result toolu_1 content\.0\.text: Input should be a valid string"):
+        await call(server, asynchronous=asynchronous, messages=[{"role": "user", "content": [tool_result]}])
+
+    assert server.requests == []
+
+
+@pytest.mark.asyncio
+@BOTH_MODES
 async def test_messages_emptied_by_drop_params_answer_400_before_io(server: RecordingServer, asynchronous: bool) -> None:
     server.expected_requests = 0
     recorder: Final = RecordingLogger()

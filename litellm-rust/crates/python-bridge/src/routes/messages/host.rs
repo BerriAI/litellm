@@ -69,6 +69,21 @@ fn project_litellm_params<'py>(
     Ok(litellm_params(fields.into_iter().chain(folded).collect()))
 }
 
+fn items(value: &Value) -> impl Iterator<Item = &Value> {
+    value.as_array().into_iter().flatten()
+}
+
+fn non_string_text(block: &Value) -> bool {
+    block.get("type").and_then(Value::as_str) == Some("text")
+        && block.get("text").is_some_and(|text| !text.is_string())
+}
+
+fn has_non_string_text(messages: &Value) -> bool {
+    items(messages)
+        .flat_map(|message| items(&message["content"]))
+        .any(|block| non_string_text(block) || items(&block["content"]).any(non_string_text))
+}
+
 /// The Python side of the Messages route: projects the prepared arguments and builds the
 /// public response, chunks and exceptions.
 pub(super) struct MessagesPythonHost {
@@ -94,8 +109,12 @@ impl MessagesPythonHost {
             argument(name)?.map(|value| value.extract()).transpose()
         };
         let model = string("model")?.ok_or(ArgumentError::Required("model"))?;
-        argument("messages")?.ok_or(ArgumentError::Required("messages"))?;
-        let messages = self.messages(py, arguments)?;
+        let sent = from_py(&argument("messages")?.ok_or(ArgumentError::Required("messages"))?)?;
+        let messages = if has_non_string_text(&sent) {
+            self.messages(py, arguments)?
+        } else {
+            sent
+        };
         let fields = self.view.body_params(py, arguments, ROUTE_HOST_MODULE)?;
         let body = [
             ("model".to_string(), Value::String(model.clone())),
