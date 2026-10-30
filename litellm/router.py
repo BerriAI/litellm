@@ -182,6 +182,11 @@ from litellm.llms.openai_like.model_info import (
     MODEL_INFO_REFRESH_SECONDS,
     get_openai_compatible_model_info,
 )
+from litellm.llms.openrouter.common_utils import (
+    OpenRouterModelInfo,
+    aget_openrouter_catalog_limits,
+    openrouter_catalog_limits_for_model,
+)
 from litellm.responses.bridge_check import keep_registered_mode
 from litellm.responses.retrieve_stream_query import requests_streamed_retrieval, without_retrieve_stream_defaults
 from litellm.router_api import (
@@ -12240,53 +12245,121 @@ class Router(DeprecatedRouterMembers):
             )
         )
         model, provider, dynamic_api_key, api_base = litellm.get_llm_provider(model=params.model, litellm_params=params)
-        if provider not in MODEL_INFO_DISCOVERY_PROVIDERS:
+        if params.get("use_clientside_credentials"):
             return
-        if api_base is None or "*" in model or params.get("use_clientside_credentials"):
+        discovered: Final = await (
+            self._adiscover_openrouter_model_info(
+                raw_deployment, params, api_key=params.api_key or dynamic_api_key, api_base=api_base, client=client
+            )
+            if provider == LlmProviders.OPENROUTER.value
+            else self._adiscover_openai_compatible_model_info(
+                raw_deployment,
+                params,
+                model=model,
+                provider=provider,
+                api_key=params.api_key or dynamic_api_key,
+                api_base=api_base,
+                client=client,
+            )
+        )
+        model_id: Final = deployment.model_info.id
+        if (
+            discovered is None
+            or not (discovered.limits or discovered.limits_by_model)
+            or model_id is None
+            or self._core_get_model_info(model_id) is not raw_deployment
+        ):
             return
-        api_key: Final = await aresolve_api_key_secret_reference(
-            params.api_key or dynamic_api_key,
+        self._discovered_model_info_cache.max_size_in_memory = max(len(self._core_model_list), 1)
+        self._discovered_model_info_cache.delete_cache(model_id)
+        self._discovered_model_info_cache.set_cache(model_id, discovered)
+        self._invalidate_model_group_info_cache()
+
+    async def _adiscover_openai_compatible_model_info(
+        self,
+        raw_deployment: Mapping[str, object],
+        params: LiteLLM_Params,
+        *,
+        model: str,
+        provider: str,
+        api_key: str | None,
+        api_base: str | None,
+        client: AsyncHTTPHandler | None,
+    ) -> DiscoveredDeploymentModelInfo | None:
+        if provider not in MODEL_INFO_DISCOVERY_PROVIDERS or api_base is None or "*" in model:
+            return None
+        resolved_key: Final = await aresolve_api_key_secret_reference(
+            api_key, model=model, llm_provider=provider, upstream=MappingProxyType({"api_base": params.api_base})
+        )
+        limits: Final = await get_openai_compatible_model_info(
             model=model,
-            llm_provider=provider,
+            api_base=api_base,
+            headers=self._model_info_request_headers(params, resolved_key),
+            client=client or get_async_httpx_client(llm_provider=LlmProviders.OPENAI),
+            cache=self._core_cache.in_memory_cache,
+        )
+        return DiscoveredDeploymentModelInfo(deployment=raw_deployment, limits=limits)
+
+    async def _adiscover_openrouter_model_info(
+        self,
+        raw_deployment: Mapping[str, object],
+        params: LiteLLM_Params,
+        *,
+        api_key: str | None,
+        api_base: str | None,
+        client: AsyncHTTPHandler | None,
+    ) -> DiscoveredDeploymentModelInfo | None:
+        resolved_key: Final = await aresolve_api_key_secret_reference(
+            OpenRouterModelInfo.get_api_key(api_key),
+            model=params.model,
+            llm_provider=LlmProviders.OPENROUTER.value,
             upstream=MappingProxyType({"api_base": params.api_base}),
         )
+        if not resolved_key:
+            return None
+        catalog: Final = await aget_openrouter_catalog_limits(
+            api_base=OpenRouterModelInfo.get_api_base(api_base),
+            headers=self._model_info_request_headers(params, resolved_key),
+            client=client or get_async_httpx_client(llm_provider=LlmProviders.OPENROUTER),
+            cache=self._core_cache.in_memory_cache,
+        )
+        if "*" in params.model:
+            return DiscoveredDeploymentModelInfo(
+                deployment=raw_deployment, limits=MappingProxyType({}), limits_by_model=catalog
+            )
+        return DiscoveredDeploymentModelInfo(
+            deployment=raw_deployment, limits=openrouter_catalog_limits_for_model(catalog, params.model)
+        )
+
+    @staticmethod
+    def _model_info_request_headers(params: LiteLLM_Params, api_key: str | None) -> Mapping[str, str]:
         headers: Final = TypeAdapter(Mapping[str, str]).validate_python(
             params.get("extra_headers") or params.get("headers") or MappingProxyType({})
         )
         auth_headers: Final = (
             MappingProxyType({"authorization": f"Bearer {api_key}"}) if api_key else MappingProxyType({})
         )
-        limits: Final = await get_openai_compatible_model_info(
-            model=model,
-            api_base=api_base,
-            headers=MappingProxyType(
-                {
-                    **auth_headers,
-                    **MappingProxyType({key.lower(): value for key, value in headers.items()}),
-                }
-            ),
-            client=client or get_async_httpx_client(llm_provider=LlmProviders.OPENAI),
-            cache=self._core_cache.in_memory_cache,
+        return MappingProxyType(
+            {
+                **auth_headers,
+                **MappingProxyType({key.lower(): value for key, value in headers.items()}),
+            }
         )
-        model_id: Final = deployment.model_info.id
-        if not limits or model_id is None or self._core_get_model_info(model_id) is not raw_deployment:
-            return
-        self._discovered_model_info_cache.max_size_in_memory = max(len(self._core_model_list), 1)
-        self._discovered_model_info_cache.delete_cache(model_id)
-        self._discovered_model_info_cache.set_cache(
-            model_id, DiscoveredDeploymentModelInfo(deployment=raw_deployment, limits=limits)
-        )
-        self._invalidate_model_group_info_cache()
 
-    def _core_get_discovered_model_info(self, model_id: str | None) -> Mapping[str, int]:
+    def _core_get_discovered_model_info(self, model_id: str | None, model: str | None = None) -> Mapping[str, int]:
         cached: Final[object] = self._discovered_model_info_cache.get_cache(model_id)
         if (
             model_id is not None
             and isinstance(cached, DiscoveredDeploymentModelInfo)
             and cached.deployment is self._core_get_model_info(model_id)
         ):
-            configured: Final = TypeAdapter(Mapping[str, object]).validate_python(cached.deployment["model_info"])
-            return MappingProxyType({key: value for key, value in cached.limits.items() if configured.get(key) is None})
+            configured: Final = _MODEL_INFO_ADAPTER.validate_python(cached.deployment["model_info"])
+            limits: Final = (
+                openrouter_catalog_limits_for_model(cached.limits_by_model, model)
+                if model is not None and cached.limits_by_model
+                else cached.limits
+            )
+            return MappingProxyType({key: value for key, value in limits.items() if configured.get(key) is None})
         return MappingProxyType({})
 
     def _core_get_model_listing_info(self, model_name: str) -> DeploymentModelListingInfo | None:
@@ -12296,21 +12369,22 @@ class Router(DeprecatedRouterMembers):
         configured or discovered token limits. Resolved via O(1) index
         lookup.
 
-        Returns None for wildcard-expanded or unknown names, where the listed name is the
-        real model name and no deployment-specific information exists, and treats a
-        malformed configured limit as absent rather than failing the listing.
+        Returns None for unknown names and for wildcard-expanded names whose wildcard
+        deployment holds no catalog row for them, where the listed name is the real model
+        name and no deployment-specific information exists, and treats a malformed
+        configured limit as absent rather than failing the listing.
 
         The whole group is read rather than just its first deployment, so a group that
         mixes models does not advertise a window that depends on config order; the widest
         one is reported, which is what get_model_group_info already shows the Admin UI.
         Keys are deduplicated, so the ordinary group of interchangeable deployments of one
         model still costs the caller a single cost-map lookup. Unlike get_model_group_info,
-        this never triggers pattern matching or deep copies, so it is safe to call per
-        listed model on the /v1/models hot path.
+        this never deep copies a deployment, so it is safe to call per listed model on the
+        /v1/models hot path.
         """
         deployments: Final = self._core_deployments_named(model_name)
         if not deployments:
-            return None
+            return self._core_get_wildcard_listing_info(model_name)
 
         model_infos: Final = tuple(
             MappingProxyType(
@@ -12337,6 +12411,26 @@ class Router(DeprecatedRouterMembers):
             max_input_tokens=self._widest_configured_limit(model_infos, "max_input_tokens"),
             max_output_tokens=self._widest_configured_limit(model_infos, "max_output_tokens"),
         )
+
+    def _core_get_wildcard_listing_info(self, model_name: str) -> DeploymentModelListingInfo | None:
+        model_infos: Final = tuple(self._wildcard_catalog_model_infos(model_name))
+        if not model_infos:
+            return None
+        return DeploymentModelListingInfo(
+            cost_map_keys=(),
+            max_input_tokens=self._widest_configured_limit(model_infos, "max_input_tokens"),
+            max_output_tokens=self._widest_configured_limit(model_infos, "max_output_tokens"),
+        )
+
+    def _wildcard_catalog_model_infos(self, model_name: str) -> Iterator[Mapping[str, object]]:
+        for deployment, routed_model in self._core_pattern_router.get_routed_deployments(model_name):
+            configured = _configured_model_info(deployment)
+            model_id = configured.get("id")
+            discovered = self._core_get_discovered_model_info(
+                model_id if isinstance(model_id, str) else None, routed_model
+            )
+            if discovered:
+                yield MappingProxyType({**configured, **discovered})
 
     @staticmethod
     def _widest_configured_limit(model_infos: Sequence[Mapping[str, object]], field: str) -> int | None:
@@ -12776,7 +12870,7 @@ class Router(DeprecatedRouterMembers):
             custom_model_info = (
                 {
                     **copy.deepcopy(litellm.model_cost.get(model_id) or MappingProxyType({})),
-                    **self._core_get_discovered_model_info(model_id),
+                    **self._core_get_discovered_model_info(model_id, model_name),
                 }
                 if model_id in litellm.model_cost
                 else None

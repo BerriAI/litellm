@@ -142,7 +142,7 @@ def route_entry_points_to_stubs(router: _RouterDouble) -> _RouterDouble:
     registry.deployment.side_effect = lambda id: router.get_deployment(model_id=id)
     registry.deployment_dict.side_effect = lambda id: router.get_model_info(id=id)
     registry.has_deployment.side_effect = lambda id: router.has_model_id(id)
-    registry.discovered_model_info.side_effect = lambda id: router.get_discovered_model_info(id)
+    registry.discovered_model_info.side_effect = lambda id, model=None: router.get_discovered_model_info(id, model)
 
     def _credentials(id, *, form="params", **team):
         # Old call sites passed team_id (even None) exactly when the new ones do, so pass it on as given.

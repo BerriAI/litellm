@@ -585,7 +585,7 @@ FORWARDS = [
         "_core_get_router_model_info",
         ((), {"deployment": None, "received_model_name": "gpt", "id": "dep-a"}),
     ),
-    (lambda r: r.registry().discovered_model_info("dep-a"), "_core_get_discovered_model_info", (("dep-a",), {})),
+    (lambda r: r.registry().discovered_model_info("dep-a"), "_core_get_discovered_model_info", (("dep-a", None), {})),
     (
         lambda r: r.registry().deployments("gpt", source="routing_groups"),
         "_core_get_model_list_from_routing_groups",

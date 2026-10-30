@@ -420,9 +420,9 @@ class DeprecatedRouterMembers:
             id=id,  # pyright: ignore[reportArgumentType]  # see above
         )
 
-    def get_discovered_model_info(self, model_id: str | None) -> Mapping[str, int]:
+    def get_discovered_model_info(self, model_id: str | None, model: str | None = None) -> Mapping[str, int]:
         _note("get_discovered_model_info", "registry().discovered_model_info(id)")
-        return _as_router(self)._core_get_discovered_model_info(model_id)
+        return _as_router(self)._core_get_discovered_model_info(model_id, model)
 
     # -- registry: many deployments -------------------------------------------------------------
     def get_model_list(

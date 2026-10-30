@@ -247,9 +247,12 @@ class RouterRegistry:
             id=id,  # pyright: ignore[reportArgumentType]  # see above
         )
 
-    def discovered_model_info(self, id: str | None) -> Mapping[str, int]:
-        """Limits discovered from the provider for a deployment (was ``get_discovered_model_info``)."""
-        return self._router._core_get_discovered_model_info(id)
+    def discovered_model_info(self, id: str | None, model: str | None = None) -> Mapping[str, int]:
+        """Limits discovered from the provider for a deployment (was ``get_discovered_model_info``).
+
+        ``model`` is the concrete model a wildcard deployment serves, which selects its row in the catalog.
+        """
+        return self._router._core_get_discovered_model_info(id, model)
 
     def zero_cost(self) -> Mapping[str, bool] | None:
         """The per-deployment zero-cost lookup the auth checks read (was ``_zero_cost_cache``)."""

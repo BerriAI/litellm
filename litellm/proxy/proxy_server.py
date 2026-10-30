@@ -16155,7 +16155,7 @@ def _enrich_model_info_with_litellm_data(
             except Exception:
                 litellm_model_info = {}
     discovered_model_info: Final = (
-        llm_router.registry().discovered_model_info(model_info.get("id"))
+        llm_router.registry().discovered_model_info(model_info.get("id"), model.get("litellm_params", {}).get("model"))
         if llm_router is not None
         else MappingProxyType({})
     )

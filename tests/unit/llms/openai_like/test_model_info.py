@@ -124,3 +124,19 @@ async def test_unavailable_metadata_is_best_effort_and_negative_cached(
                 == {}
             )
         assert responder.call_count == 1
+
+
+async def test_first_card_wins_when_an_endpoint_repeats_a_model_id() -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"data": [{"id": "model", "max_model_len": 4096}, {"id": "model", "max_model_len": 8192}]}
+        )
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        handler.client = client
+        limits: Final = await get_openai_compatible_model_info(
+            model="model", api_base="https://backend.test", headers={}, client=handler, cache=InMemoryCache()
+        )
+    assert limits == {"max_tokens": 4096, "max_input_tokens": 4096, "max_output_tokens": 4096}

@@ -5,6 +5,7 @@ Class to handle llm wildcard routing and regex pattern matching
 import copy
 import itertools
 import re
+from collections.abc import Mapping
 from re import Match
 from typing import Final
 
@@ -260,8 +261,10 @@ class PatternMatchRouter:
             return pattern_match
         return []
 
-    def get_models_by_pattern(self, model: str, custom_llm_provider: str | None = None) -> frozenset[str]:
-        """The models get_deployments_by_pattern would route ``model`` to, without copying the deployments."""
+    def get_routed_deployments(
+        self, model: str, custom_llm_provider: str | None = None
+    ) -> tuple[tuple[Mapping[str, object], str], ...]:
+        """Each deployment get_deployments_by_pattern would route ``model`` to, uncopied, with its concrete model."""
         provider: Final = custom_llm_provider or inferred_provider(model)
         requests_by_pattern: Final = itertools.product((model, f"{provider}/{model}"), self.patterns)
         matched: Final = next(
@@ -273,16 +276,24 @@ class PatternMatchRouter:
             None,
         )
         if matched is None:
-            return frozenset()
+            return ()
         pattern_match, pattern = matched
-        return frozenset(
-            PatternMatchRouter.set_deployment_model_name(
-                matched_pattern=pattern_match, litellm_deployment_litellm_model=deployment["litellm_params"]["model"]
+        return tuple(
+            (
+                deployment,
+                PatternMatchRouter.set_deployment_model_name(
+                    matched_pattern=pattern_match,
+                    litellm_deployment_litellm_model=deployment["litellm_params"]["model"],
+                ),
             )
             for deployment in self.patterns.get(  # pyright: ignore[reportUnknownMemberType]  # untyped deployment dicts
                 pattern, ()
             )
         )
+
+    def get_models_by_pattern(self, model: str, custom_llm_provider: str | None = None) -> frozenset[str]:
+        """The models get_deployments_by_pattern would route ``model`` to, without copying the deployments."""
+        return frozenset(routed_model for _, routed_model in self.get_routed_deployments(model, custom_llm_provider))
 
 
 # Example usage:
