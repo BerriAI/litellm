@@ -5190,7 +5190,7 @@ def _build_redis_usage_cache_from_environment() -> RedisCache | None:
 
     Lets the proxy's coordination Redis (cross-pod tpm/rpm rate limits, spend
     tracking, pod lock manager) run when the response-cache backend is not a
-    plain Redis KV cache (e.g. a semantic cache, disk, or s3).
+    plain Redis KV cache (e.g. a semantic cache or s3).
 
     Returns None when the environment carries no connection target (host, url,
     cluster nodes, or sentinel nodes).
@@ -10974,7 +10974,7 @@ class ProxyStartupEvent:
         """
         Builds a standalone Redis cache from REDIS_* environment variables so
         use_redis_transaction_buffer can run when the proxy cache backend is not
-        Redis (e.g. disk, s3).
+        Redis (e.g. s3).
 
         Returns None when the buffer is disabled, or when no Redis host or url
         is set in the environment.
@@ -12337,8 +12337,10 @@ async def model_list(
     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
                     provider's model catalog. When present, the response is Codex's own
                     catalog shape (`{"models": [...]}`) built from the same listing, with
-                    each model's `model_info.service_tiers` as its service tiers; absent,
-                    the OpenAI shape below is returned
+                    each model's `model_info.service_tiers` as its service tiers and, for a
+                    model that Codex release does not know, the reasoning efforts
+                    `/model_group/info` reports that it can parse; absent, the OpenAI shape
+                    below is returned
     - include_metadata: Include additional metadata in the response with fallback information
     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
                     Defaults to "general" when include_metadata=true
@@ -12497,8 +12499,13 @@ async def model_list(
         admin_listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
         if client_version is not None:
             return Response(
-                content=codex_model_list_body(
-                    admin_listing, admin_entries, llm_router, team_id or user_api_key_dict.team_id
+                content=await asyncio.to_thread(
+                    codex_model_list_body,
+                    admin_listing,
+                    admin_entries,
+                    llm_router,
+                    team_id or user_api_key_dict.team_id,
+                    client_version=client_version,
                 ),
                 media_type="application/json",
             )
@@ -12573,7 +12580,15 @@ async def model_list(
     listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
     if client_version is not None:
         return Response(
-            content=codex_model_list_body(listing, entries, llm_router, team_id or user_api_key_dict.team_id, labels),
+            content=await asyncio.to_thread(
+                codex_model_list_body,
+                listing,
+                entries,
+                llm_router,
+                team_id or user_api_key_dict.team_id,
+                labels,
+                client_version=client_version,
+            ),
             media_type="application/json",
         )
 
@@ -18046,6 +18061,7 @@ def get_model_group_info(
                             registry.deployments(
                                 resolve_model_group_alias(registry.aliases(), model) or model,
                                 source="routed_group",
+                                team_id=team_id,
                             )
                         ),
                     }

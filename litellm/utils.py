@@ -9968,11 +9968,12 @@ class ProviderConfigManager:
             return litellm.LayaDecisionsConfig()
         if provider == LlmProviders.BESPOKE:
             return litellm.BespokeDecisionsConfig()
-        if provider in (LlmProviders.OPENAI, LlmProviders.AZURE, LlmProviders.AZURE_AI):
+        if provider in (LlmProviders.OPENAI, LlmProviders.AZURE, LlmProviders.AZURE_AI, LlmProviders.EU_JEV):
             configs: Final = {
                 LlmProviders.OPENAI: litellm.OpenAIDecisionsConfig,
                 LlmProviders.AZURE: litellm.AzureDecisionsConfig,
                 LlmProviders.AZURE_AI: litellm.AzureAIDecisionsConfig,
+                LlmProviders.EU_JEV: litellm.EuJevDecisionsConfig,
             }
             return configs[provider]()
         return None
@@ -10923,19 +10924,8 @@ class ProviderConfigManager:
         return None
 
     @staticmethod
-    def get_provider_image_edit_config(
-        model: str,
-        provider: LlmProviders,
-    ) -> BaseImageEditConfig | None:
-        if LlmProviders.OPENAI == provider:
-            from litellm.llms.openai.image_edit import OpenAIImageEditConfig
-
-            return OpenAIImageEditConfig()
-        elif LlmProviders.HOSTED_VLLM == provider:
-            from litellm.llms.hosted_vllm.image_edit import get_hosted_vllm_image_edit_config
-
-            return get_hosted_vllm_image_edit_config(model=model)
-        elif LlmProviders.AZURE == provider:
+    def _get_model_independent_image_edit_config(provider: LlmProviders) -> BaseImageEditConfig | None:
+        if LlmProviders.AZURE == provider:
             from litellm.llms.azure.image_edit.transformation import (
                 AzureImageEditConfig,
             )
@@ -10953,6 +10943,36 @@ class ProviderConfigManager:
             )
 
             return BlackForestLabsImageEditConfig()
+        elif LlmProviders.LITELLM_PROXY == provider:
+            from litellm.llms.litellm_proxy.image_edit.transformation import (
+                LiteLLMProxyImageEditConfig,
+            )
+
+            return LiteLLMProxyImageEditConfig()
+        elif LlmProviders.DASHSCOPE == provider:
+            from litellm.llms.dashscope.image_edit.transformation import (
+                DashScopeImageEditConfig,
+            )
+
+            return DashScopeImageEditConfig()
+        return None
+
+    @staticmethod
+    def get_provider_image_edit_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> BaseImageEditConfig | None:
+        model_independent_config: Final = ProviderConfigManager._get_model_independent_image_edit_config(provider)
+        if model_independent_config is not None:
+            return model_independent_config
+        if LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.image_edit import OpenAIImageEditConfig
+
+            return OpenAIImageEditConfig()
+        elif LlmProviders.HOSTED_VLLM == provider:
+            from litellm.llms.hosted_vllm.image_edit import get_hosted_vllm_image_edit_config
+
+            return get_hosted_vllm_image_edit_config(model=model)
         elif LlmProviders.FAL_AI == provider:
             from litellm.llms.fal_ai.image_edit import get_fal_ai_image_edit_config
 
@@ -10965,12 +10985,6 @@ class ProviderConfigManager:
             from litellm.llms.gemini.image_edit import get_gemini_image_edit_config
 
             return get_gemini_image_edit_config(model)
-        elif LlmProviders.LITELLM_PROXY == provider:
-            from litellm.llms.litellm_proxy.image_edit.transformation import (
-                LiteLLMProxyImageEditConfig,
-            )
-
-            return LiteLLMProxyImageEditConfig()
         elif LlmProviders.VERTEX_AI == provider:
             from litellm.llms.vertex_ai.image_edit import (
                 get_vertex_ai_image_edit_config,
@@ -11192,6 +11206,12 @@ class ProviderConfigManager:
             return AWSPollyTextToSpeechConfig()
         elif litellm.LlmProviders.EDENAI == provider:
             return litellm.EdenAITextToSpeechConfig()
+        elif litellm.LlmProviders.DASHSCOPE == provider:
+            from litellm.llms.dashscope.text_to_speech.transformation import (
+                DashScopeTextToSpeechConfig,
+            )
+
+            return DashScopeTextToSpeechConfig()
         return None
 
     @staticmethod

@@ -4,9 +4,11 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
+import functools
 import re
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -989,9 +991,10 @@ class AlertingConfig(LiteLLMBaseModel):
     alerting_threshold: float | None = 300
 
 
+@functools.cache
 def _resolved_annotations(model_class: type[object]) -> Mapping[str, object]:
     """Resolve a class's annotations, keeping each resolved annotation opaque."""
-    return get_type_hints(model_class)
+    return MappingProxyType(get_type_hints(model_class))
 
 
 class ModelGroupInfo(LiteLLMBaseModel):

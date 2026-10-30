@@ -217,6 +217,106 @@ def test_cleared_input_tokens_is_nonnegative():
     assert applied["cleared_input_tokens"] >= 0
 
 
+SERVER_TOOL_TURN: Final = {
+    "role": "assistant",
+    "content": [
+        {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search", "input": {"query": "Mumbai rain"}},
+        {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_01",
+            "content": [{"type": "web_search_result", "url": "https://example.com", "title": "rain " * 300}],
+        },
+    ],
+}
+
+
+def _clear_above(
+    messages: list[dict[str, object]], threshold: int
+) -> tuple[list[dict[str, object]], AppliedEdit | None]:
+    return apply_clear_tool_uses_20250919(
+        model=MODEL,
+        messages=messages,
+        tools=None,
+        system=None,
+        edit_spec={
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "input_tokens", "value": threshold},
+            "keep": {"type": "tool_uses", "value": 1},
+        },
+    )
+
+
+def test_an_input_tokens_trigger_skips_blocks_no_adapter_sends() -> None:
+    history: Final = _make_history(n_pairs=3)
+    sent_tokens: Final = litellm.token_counter(model=MODEL, messages=history)
+    turn: Final = SERVER_TOOL_TURN
+    messages: Final = [history[0], turn, *history[1:]]
+
+    untouched, not_applied = _clear_above(messages, sent_tokens + 100)
+    cleared, applied = _clear_above(messages, sent_tokens - 100)
+
+    assert not_applied is None
+    assert untouched == messages
+    assert applied is not None
+    assert applied["cleared_tool_uses"] == 2
+    assert _cleared_ids(cleared) == {"toolu_00", "toolu_01"}
+    assert cleared[1] == turn
+
+
+def _first_result_with(blocks: list[dict[str, object]]) -> dict[str, object]:
+    return {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_00", "content": blocks}]}
+
+
+def test_an_input_tokens_trigger_skips_blocks_no_adapter_sends_inside_a_tool_result() -> None:
+    history: Final = _make_history(n_pairs=3)
+    result_text: Final = {"type": "text", "text": "Result 0: " + "x" * 200}
+    search_result: Final = {"type": "web_search_result", "url": "https://example.com", "title": "rain " * 300}
+    sent_tokens: Final = litellm.token_counter(
+        model=MODEL, messages=[*history[:2], _first_result_with([result_text]), *history[3:]]
+    )
+    messages: Final = [*history[:2], _first_result_with([result_text, search_result]), *history[3:]]
+
+    untouched, not_applied = _clear_above(messages, sent_tokens + 100)
+    cleared, applied = _clear_above(messages, sent_tokens - 100)
+
+    assert not_applied is None
+    assert untouched == messages
+    assert applied is not None
+    assert _cleared_ids(cleared) == {"toolu_00", "toolu_01"}
+
+
+def _clear_at_least_one_token(
+    messages: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], AppliedEdit | None]:
+    return apply_clear_tool_uses_20250919(
+        model=MODEL,
+        messages=messages,
+        tools=None,
+        system=None,
+        edit_spec={
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "tool_uses", "value": 0},
+            "keep": {"type": "tool_uses", "value": 1},
+            "clear_at_least": {"type": "input_tokens", "value": 1},
+        },
+    )
+
+
+def test_clear_at_least_frees_only_blocks_an_adapter_sends_inside_a_tool_result() -> None:
+    history: Final = _make_history(n_pairs=3)
+    result_text: Final = {"type": "text", "text": "Result 0: " + "x" * 200}
+    search_result: Final = {"type": "web_search_result", "url": "https://example.com", "title": "rain " * 300}
+
+    _, sent_only = _clear_at_least_one_token([*history[:2], _first_result_with([result_text]), *history[3:]])
+    cleared, applied = _clear_at_least_one_token(
+        [*history[:2], _first_result_with([result_text, search_result]), *history[3:]]
+    )
+
+    assert applied is not None
+    assert applied == sent_only
+    assert _cleared_ids(cleared) == {"toolu_00", "toolu_01"}
+
+
 def _blocks_of(messages: list[dict[str, object]], block_type: str) -> tuple[dict[str, object], ...]:
     contents: Final = (message["content"] for message in messages)
     blocks: Final = chain.from_iterable(content for content in contents if isinstance(content, list))
@@ -559,6 +659,9 @@ async def _malformed_spec_error(edits: list[dict[str, object]]) -> AnthropicCont
         ("exclude_tools", "get_weather"),
         ("exclude_tools", [1]),
         ("clear_tool_inputs", "get_weather"),
+        ("trigger", "soon"),
+        ("trigger", [1]),
+        ("keep", 5),
     ],
 )
 async def test_malformed_fields_are_a_400_even_below_the_trigger(field: str, value: object) -> None:
@@ -576,12 +679,15 @@ async def test_malformed_fields_are_a_400_even_below_the_trigger(field: str, val
         ("clear_at_least", 1200, "clear_at_least: Input does not match the expected shape."),
         ("clear_at_least", {"type": "input_tokens", "value": "1200"}, "value: Input should be a valid integer"),
         ("clear_tool_inputs", 5, "clear_tool_inputs.bool: Input should be a valid boolean, unable to interpret input"),
+        ("trigger", "soon", "trigger: Input should be an object"),
+        ("keep", 5, "keep: Input should be an object"),
     ],
 )
 async def test_malformed_field_400_names_the_edit_and_field_as_the_api_does(
     field: str, value: object, message: str
 ) -> None:
-    # api.anthropic.com, measured 2026-10-19, answers these four with these messages for the edit at index 1.
+    # api.anthropic.com answers these with these messages for the edit at index 1 (trigger and keep measured
+    # 2026-10-28, the rest 2026-10-19).
     error = await _malformed_spec_error(
         [{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919", field: value}]
     )
@@ -623,6 +729,28 @@ async def test_drop_params_drops_only_the_malformed_field(field: str, value: obj
     assert result is not None
     assert _cleared_ids(result.messages) == {"toolu_00", "toolu_01"}
     assert _tool_inputs(result.messages) == {"toolu_00": {}, "toolu_01": {}, "toolu_02": {"location": "City2"}}
+
+
+@pytest.mark.parametrize(("field", "value"), [("trigger", "soon"), ("keep", 5)])
+async def test_drop_params_treats_a_malformed_trigger_or_keep_as_never_sent(field: str, value: object) -> None:
+    async def run(edit: dict[str, object], drop_invalid_edits: bool) -> PolyfillResult | None:
+        return await _run_polyfill_if_enabled(
+            model=MODEL,
+            messages=_make_history(n_pairs=5),
+            tools=None,
+            system=None,
+            context_management_spec={"edits": [edit]},
+            litellm_metadata={},
+            additional_drop_params=None,
+            llm_router=None,
+            drop_invalid_edits=drop_invalid_edits,
+        )
+
+    malformed: Final = {**_VALID_EDIT, field: value}
+    with pytest.raises(AnthropicContextManagementError, match=rf"\.{field}: Input should be an object$"):
+        await run(malformed, drop_invalid_edits=False)
+    never_sent: Final = {key: spec for key, spec in _VALID_EDIT.items() if key != field}
+    assert await run(malformed, drop_invalid_edits=True) == await run(never_sent, drop_invalid_edits=True)
 
 
 async def test_malformed_edit_is_rejected_before_a_compact_summary_is_paid_for(
