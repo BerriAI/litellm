@@ -52,6 +52,15 @@ from litellm.redis.stores.alert_daily_metrics import (
     metric_key,
     metric_number,
 )
+from litellm.redis.stores.alert_deployment_outages import (
+    AlertDeploymentOutagesStore,
+    DeploymentOutageState,
+    InvalidDeploymentOutage,
+    TransportAlertDeploymentOutagesStore,
+    deployment_outage_cache_value,
+    deployment_outage_key,
+    deployment_outage_state,
+)
 from litellm.redis.stores.alert_region_outages import (
     AlertRegionOutagesStore,
     InvalidRegionOutage,
@@ -1017,6 +1026,42 @@ class SlackAlerting(CustomBatchLogger):
             region, RegionOutageState(outage_value, {} if state is None else state.original)
         )
 
+    def _deployment_outages_store(self) -> AlertDeploymentOutagesStore | None:
+        redis: Final = self.internal_usage_cache.redis_cache
+        return None if redis is None else TransportAlertDeploymentOutagesStore(redis.transport())
+
+    async def _read_deployment_outage(self, deployment_id: str) -> DeploymentOutageState | None:
+        key: Final = deployment_outage_key(deployment_id)
+        cached: Final = _CACHED_ALERT_VALUE.validate_python(
+            await self.internal_usage_cache.async_get_cache(key, local_only=True)
+        )
+        if cached is not None:
+            return deployment_outage_state(cached)
+        store: Final = self._deployment_outages_store()
+        if store is None or self._alert_redis_read_is_missing(key):
+            return None
+        reply: Final = await store.read_deployment_outage(deployment_id)
+        if isinstance(reply, RedisFailure):
+            return None
+        if isinstance(reply, InvalidDeploymentOutage):
+            raise reply.error
+        if reply is not None:
+            await self.internal_usage_cache.async_set_cache(key, deployment_outage_cache_value(reply), local_only=True)
+        return reply
+
+    async def _replace_deployment_outage(
+        self, deployment_id: str, value: DeploymentOutageState, *, ttl: float | None = None
+    ) -> None:
+        key: Final = deployment_outage_key(deployment_id)
+        cache_value: Final = deployment_outage_cache_value(value)
+        if ttl is None:
+            await self.internal_usage_cache.async_set_cache(key, cache_value, local_only=True)
+        else:
+            await self.internal_usage_cache.async_set_cache(key, cache_value, ttl=ttl, local_only=True)
+        store: Final = self._deployment_outages_store()
+        if store is not None:
+            await store.replace_deployment_outage(deployment_id, value, ttl=self._alert_cache_ttl(ttl))
+
     async def outage_alerts(
         self,
         exception: APIError,
@@ -1037,7 +1082,8 @@ class SlackAlerting(CustomBatchLogger):
         max_alerts_size = 10
         """
         try:
-            outage_value: OutageModel | None = await self.internal_usage_cache.async_get_cache(key=deployment_id)
+            state: Final = await self._read_deployment_outage(deployment_id)
+            outage_value: OutageModel | None = None if state is None else state.outage
             if (
                 getattr(exception, "status_code", None) is None
                 or (exception.status_code != 408 and exception.status_code < 500)
@@ -1069,9 +1115,9 @@ class SlackAlerting(CustomBatchLogger):
                 )
 
                 ## add to cache ##
-                await self.internal_usage_cache.async_set_cache(
-                    key=deployment_id,
-                    value=outage_value,
+                await self._replace_deployment_outage(
+                    deployment_id,
+                    DeploymentOutageState(outage_value, {}),
                     ttl=self.alerting_args.outage_alert_ttl,
                 )
                 return
@@ -1128,9 +1174,9 @@ class SlackAlerting(CustomBatchLogger):
                 outage_value["major_alert_sent"] = True
 
             ## update cache ##
-            # Convert set to list for JSON serialization
-            cache_value: Final = self._prepare_outage_value_for_cache(outage_value)
-            await self.internal_usage_cache.async_set_cache(key=deployment_id, value=cache_value)
+            await self._replace_deployment_outage(
+                deployment_id, DeploymentOutageState(outage_value, {} if state is None else state.original)
+            )
         except Exception:
             pass
 
