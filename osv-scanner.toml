@@ -1,4 +1,14 @@
 [[IgnoredVulns]]
+id = "GHSA-v4x8-3wr5-3wq8"
+ignoreUntil = 2026-11-20
+reason = "filelock ReadWriteLock advisory, which no package in the lock takes (litellm and huggingface_hub, filelock's only dependents, use just FileLock and SoftFileLock); fixed only in 4.2.1, and filelock 4.1.1+ needs Python >= 3.11; litellm's own filelock<4.0 cap keeps every Python on 3.32.7 until it is lifted for 3.11+ (#48635, #48802); remove once that lands and 3.10 is dropped"
+
+[[IgnoredVulns]]
+id = "GHSA-567q-5qvw-pf92"
+ignoreUntil = 2026-11-20
+reason = "Windows-only local DoS (CVSS 2.5) in filelock soft locks; litellm never takes SoftFileLock, but huggingface_hub falls back to it in the Hugging Face cache when the filesystem has no flock, which litellm reaches only to download the Kimi K3 tokenizer for Bedrock token counting, and the attack needs another local user who can write that cache; fixed only in 4.2.1, and filelock 4.1.1+ needs Python >= 3.11; litellm's own filelock<4.0 cap keeps every Python on 3.32.7 until it is lifted for 3.11+ (#48635, #48802); remove once that lands and 3.10 is dropped"
+
+[[IgnoredVulns]]
 id = "GHSA-9vhv-jxww-xfm5"
 ignoreUntil = 2026-11-20
 reason = "Windows-only local DoS (CVSS 3.3) in filelock ReadWriteLock, which no package in the lock takes (litellm and huggingface_hub, filelock's only dependents, use just FileLock and SoftFileLock); fixed only in 4.2.1, and filelock 4.1.1+ needs Python >= 3.11; litellm's own filelock<4.0 cap keeps every Python on 3.32.7 until it is lifted for 3.11+ (#48635, #48802); remove once that lands and 3.10 is dropped"
