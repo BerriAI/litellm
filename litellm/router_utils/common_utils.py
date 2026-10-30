@@ -515,7 +515,9 @@ def _deployment_ids_retried_in_request(request_kwargs: Mapping[str, object]) -> 
         *_retry_breadcrumbs(request_kwargs.get("litellm_metadata")),
     )
     return tuple(
-        deployment_id for breadcrumb in breadcrumbs if isinstance(deployment_id := breadcrumb.get("deployment_id"), str)
+        deployment_id
+        for breadcrumb in breadcrumbs
+        if isinstance(deployment_id := breadcrumb.get("configured_deployment_id", breadcrumb.get("deployment_id")), str)
     )
 
 

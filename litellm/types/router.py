@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 from openai import Timeout as SDKTimeout
 from pydantic import BeforeValidator, ConfigDict, Field, JsonValue, StrictInt, field_validator, model_validator
-from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
+from typing_extensions import NotRequired, Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -1197,6 +1197,7 @@ class RetryAttemptRecord(TypedDict):
     exception_type: ReadOnly[str]
     exception_string: ReadOnly[str]
     attempted_retries: ReadOnly[int | None]
+    configured_deployment_id: ReadOnly[NotRequired[str]]
 
 
 VALID_LITELLM_ENVIRONMENTS = [

@@ -735,8 +735,12 @@ async def test_web_search_preference_gives_way_once_the_capable_deployment_faile
 
 @pytest.mark.asyncio
 @_WEB_SEARCH_REQUESTS
+@pytest.mark.parametrize(
+    "caller_credentials", [{}, {"api_key": "caller-key"}], ids=["configured-credentials", "caller-credentials"]
+)
 async def test_retry_after_a_retryable_failure_on_the_capable_deployment_reaches_the_other_one(
     web_search_request: dict[str, object],
+    caller_credentials: dict[str, str],
 ) -> None:
     router: Final = Router(
         model_list=[
@@ -752,7 +756,12 @@ async def test_retry_after_a_retryable_failure_on_the_capable_deployment_reaches
             },
             {
                 "model_name": "mixed",
-                "litellm_params": {"model": "openai/gpt-y", "api_key": "fake-key", "mock_response": "hi", "weight": 10**6},
+                "litellm_params": {
+                    "model": "openai/gpt-y",
+                    "api_key": "fake-key",
+                    "mock_response": "from no-search",
+                    "weight": 10**6,
+                },
                 "model_info": {"id": "no-search", "supports_web_search": False},
             },
         ],
@@ -760,9 +769,9 @@ async def test_retry_after_a_retryable_failure_on_the_capable_deployment_reaches
         disable_cooldowns=True,
     )
     response: Final = await router.acompletion(
-        model="mixed", messages=[{"role": "user", "content": "hi"}], **web_search_request
+        model="mixed", messages=[{"role": "user", "content": "hi"}], **web_search_request, **caller_credentials
     )
-    assert response._hidden_params["model_id"] == "no-search"
+    assert response.choices[0].message.content == "from no-search"
 
 
 def _rate_limited_web_search_group(routing_strategy: str) -> Router:

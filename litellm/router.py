@@ -119,6 +119,7 @@ from litellm.litellm_core_utils.batch_utils import (
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     coerce_token_limit,
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
@@ -9880,14 +9881,15 @@ class Router:
         _metadata_var: Final = "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
         request_metadata: Final = cast("Mapping[str, object]", kwargs[_metadata_var])  # cast-ok: untyped kwargs
         model_group: Final = kwargs.get("model")
-        model_info: Final = request_metadata.get("model_info")
-        deployment_id: Final = model_info.get("id") if isinstance(model_info, Mapping) else None
+        model_info: Final = as_str_mapping(request_metadata.get("model_info")) or {}
+        deployment_id: Final = model_info.get("id")
+        configured_deployment_id: Final = model_info.get("original_model_id")
         base_model: Final = get_base_model_from_litellm_call_metadata(
             metadata=request_metadata
         ) or self._deployment_params_base_model(deployment_id if isinstance(deployment_id, str) else None)
         deployment_model: Final = request_metadata.get("deployment")
         attempted_retries: Final = request_metadata.get("attempted_retries")
-        attempt_record: Final[RetryAttemptRecord] = {
+        attempt_fields: Final[RetryAttemptRecord] = {
             "model_group": model_group if isinstance(model_group, str) else None,
             "deployment_id": deployment_id if isinstance(deployment_id, str) else None,
             "model": deployment_model if isinstance(deployment_model, str) else None,
@@ -9896,6 +9898,11 @@ class Router:
             "exception_string": str(e),
             "attempted_retries": attempted_retries if type(attempted_retries) is int else None,
         }
+        attempt_record: Final[RetryAttemptRecord] = (
+            {**attempt_fields, "configured_deployment_id": configured_deployment_id}
+            if isinstance(configured_deployment_id, str)
+            else attempt_fields
+        )
         earlier_breadcrumbs: Final = request_metadata.get("previous_models")
         kept_breadcrumbs: Final[tuple[object, ...]] = (
             tuple(earlier_breadcrumbs)[-(RETRY_BREADCRUMB_LIMIT - 1) :]
