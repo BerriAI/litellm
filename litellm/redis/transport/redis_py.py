@@ -115,6 +115,12 @@ class RedisPyTransport:
             await self._run("eval", lambda: _evalsha_or_eval(self.client(), script, sha, namespaced, args))
         )
 
+    async def eval_direct(self, script: str, keys: Sequence[str], args: Sequence[Arg]) -> EvalReply | RedisFailure:
+        namespaced: Final = tuple(self._key(key) for key in keys)
+        return _eval_reply(
+            await self._run("eval_direct", lambda: self.client().eval(script, len(namespaced), *namespaced, *args))
+        )
+
     def batch(
         self, *, transaction: bool = False, raise_on_error: bool = False, name: str = "redis_batch"
     ) -> "RedisPyCommandBatch":
@@ -355,13 +361,26 @@ class RedisPyCommandBatch:
     async def flush(self) -> None:
         await self.engine.flush()
 
+    def eval_direct(
+        self, script: str, keys: Sequence[str], args: Sequence[Arg]
+    ) -> BatchResult[EvalReply | RedisFailure]:
+        names: Final = tuple(self.transport._key(key) for key in keys)  # pyright: ignore[reportPrivateUsage]  # the batch is the transport's own
+        return self._declare(
+            lambda pipe: _one(pipe.eval(script, len(names), *names, *args)),
+            lambda replies: _eval_reply(replies[0]),
+            lambda: self.transport.eval_direct(script, keys, args),
+            retry_missing_script=False,
+        )
+
     def _declare(
         self,
         queue: Callable[[RedisPipeline], int],
         decode: Callable[[Sequence[object]], _T | RedisFailure],
         alone: Callable[[], Awaitable[_T | RedisFailure]],
+        *,
+        retry_missing_script: bool = True,
     ) -> BatchResult[_T | RedisFailure]:
-        return self.engine.declare(_Command(queue, decode, alone))
+        return self.engine.declare(_Command(queue, decode, alone), retry_missing_script=retry_missing_script)
 
     def _note_read(
         self,

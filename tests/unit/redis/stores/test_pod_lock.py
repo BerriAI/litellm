@@ -29,6 +29,9 @@ class ExpiredLockTransport:
     async def eval(self, script: str, keys: Sequence[str], args: Sequence[Arg]) -> EvalReply | RedisFailure:
         raise AssertionError("unexpected eval")
 
+    async def eval_direct(self, script: str, keys: Sequence[str], args: Sequence[Arg]) -> EvalReply | RedisFailure:
+        raise AssertionError("unexpected eval_direct")
+
     async def incrby(self, key: str, amount: int) -> NoReturn:
         raise AssertionError("unexpected incrby")
 
