@@ -1924,6 +1924,7 @@ async def test_return_user_api_key_auth_obj_user_spend_and_budget():
         {
             "tpm_limit": 1000,
             "rpm_limit": 100,
+            "max_parallel_requests": 5,
             "user_email": "test@example.com",
             "spend": 250.0,
             "max_budget": 1000.0,
@@ -1961,6 +1962,7 @@ async def test_return_user_api_key_auth_obj_user_spend_and_budget():
     assert result.user_max_budget == 1000.0
     assert result.user_tpm_limit == 1000
     assert result.user_rpm_limit == 100
+    assert result.user_max_parallel_requests == 5
     assert result.user_email == "test@example.com"
 
 

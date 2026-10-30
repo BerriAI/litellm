@@ -1508,6 +1508,7 @@ class MCPRequestHandler:
             # per-KEY limits do not apply, there being no key.)
             user_tpm_limit=user_object.tpm_limit,
             user_rpm_limit=user_object.rpm_limit,
+            user_max_parallel_requests=user_object.max_parallel_requests,
         )
         # Server-only marker, set AFTER construction: the before-validator strips it from any validated
         # input, so caller-supplied data (key metadata, JWT claims) can never forge it.
