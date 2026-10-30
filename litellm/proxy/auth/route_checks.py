@@ -302,7 +302,7 @@ class RouteChecks:
                 f"keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
             ),
             type=ProxyErrorTypes.auth_error,
-            param="None",
+            param=None,
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
