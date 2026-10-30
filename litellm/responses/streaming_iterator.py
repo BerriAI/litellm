@@ -312,7 +312,7 @@ def map_stream_error_to_exception(
     error_body: Final = {"message": error_message, "type": error_type, "code": error_code}
     provider_exception: Final = BaseLLMException(
         status_code=status_code,
-        message=f"Error code: {status_code} - {{'error': {error_body}}}",
+        message=f"Error code: {status_code} - {json.dumps({'error': error_body})}",
         body=error_body,
         headers=headers,
     )
