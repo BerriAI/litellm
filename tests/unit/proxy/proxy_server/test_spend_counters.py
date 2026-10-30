@@ -51,7 +51,8 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_loca
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, end_user_cache_key, tag_cache_key
 from litellm.proxy.management_endpoints.team_endpoints import refresh_cached_team
-from litellm.proxy.spend_tracking.committed_spend import committed_spend_key, committed_spend_keys
+from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
+from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
 
 from .conftest import normalize
 
@@ -856,8 +857,10 @@ async def test_increment_spend_counters_pipelines_all_scopes_in_one_redis_call(
 class _VerificationTokenTable:
     def __init__(self, spend: float) -> None:
         self._spend: Final = spend
+        self.lookups: list[dict[str, str]] = []
 
     async def find_unique(self, where: dict[str, str]) -> MagicMock:
+        self.lookups.append(where)
         return MagicMock(token=where["token"], spend=self._spend)
 
 
@@ -875,30 +878,60 @@ async def test_committed_twin_takes_the_charge_but_never_a_budget_hold(monkeypat
     monkeypatch.setattr(ps, "spend_counter_cache", counter_cache)
     monkeypatch.setattr(ps, "user_api_key_cache", ps.DualCache())
     monkeypatch.setattr(ps, "prisma_client", _prisma_with_key_spend(10.0))
-    monkeypatch.setattr(litellm, "callbacks", [MagicMock(spec=PrometheusLogger)])
     reservation: Final = {"reserved_cost": 2.0, "entries": [{"counter_key": "spend:key:hashed"}], "finalized": False}
+    scope: Final = EntitySpendCounterKeys(key="spend:key:hashed")
 
     await ps.increment_spend_counters(
-        token="hashed", team_id=None, user_id=None, response_cost=0.5, budget_reservation=reservation
+        token="hashed",
+        team_id=None,
+        user_id=None,
+        response_cost=0.5,
+        budget_reservation=reservation,
+        committed_spend_scope=scope,
     )
-    await ps.increment_spend_counters(token="hashed", team_id=None, user_id=None, response_cost=0.25)
+    await ps.increment_spend_counters(
+        token="hashed", team_id=None, user_id=None, response_cost=0.25, committed_spend_scope=scope
+    )
 
     assert counter_cache.in_memory_cache.get_cache(key="spend:key:hashed") == pytest.approx(11.75)
     assert counter_cache.in_memory_cache.get_cache(key=committed_spend_key("spend:key:hashed")) == pytest.approx(10.75)
 
 
 @pytest.mark.asyncio
-async def test_no_committed_twin_is_kept_without_a_prometheus_logger(monkeypatch):
+async def test_a_charge_outside_the_committed_scope_keeps_no_twin_and_reads_no_stored_spend(monkeypatch):
     counter_cache: Final = ps.DualCache()
     counter_cache.in_memory_cache.set_cache(key="spend:key:hashed", value=10.0)
+    prisma: Final = _prisma_with_key_spend(10.0)
     monkeypatch.setattr(ps, "spend_counter_cache", counter_cache)
     monkeypatch.setattr(ps, "user_api_key_cache", ps.DualCache())
-    monkeypatch.setattr(ps, "prisma_client", _prisma_with_key_spend(10.0))
+    monkeypatch.setattr(ps, "prisma_client", prisma)
 
     await ps.increment_spend_counters(token="hashed", team_id=None, user_id=None, response_cost=0.5)
 
     assert counter_cache.in_memory_cache.get_cache(key="spend:key:hashed") == pytest.approx(10.5)
     assert counter_cache.in_memory_cache.get_cache(key=committed_spend_key("spend:key:hashed")) is None
+    assert prisma.db.litellm_verificationtoken.lookups == []
+
+
+@pytest.mark.asyncio
+async def test_only_the_entities_in_the_committed_scope_take_the_charge_on_their_twin(monkeypatch):
+    counter_cache: Final = ps.DualCache()
+    counter_cache.in_memory_cache.set_cache(key="spend:key:hashed", value=10.0)
+    counter_cache.in_memory_cache.set_cache(key="spend:team:t1", value=10.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", counter_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", ps.DualCache())
+    monkeypatch.setattr(ps, "prisma_client", _prisma_with_key_spend(10.0))
+
+    await ps.increment_spend_counters(
+        token="hashed",
+        team_id="t1",
+        user_id=None,
+        response_cost=0.5,
+        committed_spend_scope=EntitySpendCounterKeys(key="spend:key:hashed"),
+    )
+
+    assert counter_cache.in_memory_cache.get_cache(key=committed_spend_key("spend:key:hashed")) == pytest.approx(10.5)
+    assert counter_cache.in_memory_cache.get_cache(key=committed_spend_key("spend:team:t1")) is None
 
 
 _PENDING_SPEND_COUNTER_KEYS: tuple[str, ...] = (
@@ -945,7 +978,7 @@ async def _increment_every_spend_counter() -> None:
 def _assert_every_pending_counter_invalidated(fake_redis: AsyncMock) -> None:
     assert fake_redis.async_increment.await_count == 0
     deleted_keys = {call.kwargs["key"] for call in fake_redis.async_delete_cache.await_args_list}
-    assert deleted_keys == {*_PENDING_SPEND_COUNTER_KEYS, *committed_spend_keys(_PENDING_SPEND_COUNTER_KEYS)}
+    assert deleted_keys == set(_PENDING_SPEND_COUNTER_KEYS)
     for key in _PENDING_SPEND_COUNTER_KEYS:
         assert ps.spend_counter_cache.in_memory_cache.get_cache(key=key) is None
 
@@ -1309,7 +1342,7 @@ async def test_apply_spend_counter_increments_open_breaker_invalidates_and_retur
     await ps._apply_spend_counter_increments(_two_pending_increments())
 
     deleted_keys = sorted(call.kwargs["key"] for call in fake_cache.in_memory_cache.delete_cache.call_args_list)
-    assert deleted_keys == ["committed_spend:key:k", "committed_spend:team:t", "spend:key:k", "spend:team:t"]
+    assert deleted_keys == ["spend:key:k", "spend:team:t"]
     fake_cache.in_memory_cache.set_cache.assert_not_called()
 
 
@@ -1327,7 +1360,7 @@ async def test_apply_spend_counter_increments_redis_timeout_invalidates_and_retu
     await ps._apply_spend_counter_increments(_two_pending_increments())
 
     deleted_keys = sorted(call.kwargs["key"] for call in fake_cache.in_memory_cache.delete_cache.call_args_list)
-    assert deleted_keys == ["committed_spend:key:k", "committed_spend:team:t", "spend:key:k", "spend:team:t"]
+    assert deleted_keys == ["spend:key:k", "spend:team:t"]
     fake_cache.in_memory_cache.set_cache.assert_not_called()
 
 
@@ -1341,7 +1374,7 @@ async def test_apply_spend_counter_increments_other_redis_error_invalidates_and_
         await ps._apply_spend_counter_increments(_two_pending_increments())
 
     deleted_keys = sorted(call.kwargs["key"] for call in fake_cache.in_memory_cache.delete_cache.call_args_list)
-    assert deleted_keys == ["committed_spend:key:k", "committed_spend:team:t", "spend:key:k", "spend:team:t"]
+    assert deleted_keys == ["spend:key:k", "spend:team:t"]
     fake_cache.in_memory_cache.set_cache.assert_not_called()
 
 
@@ -1590,23 +1623,15 @@ async def test_increment_spend_counter_cache_redis_error_raises_and_invalidates(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("counter_key", "deleted"),
-    [
-        ("spend:key:k", ["spend:key:k", "committed_spend:key:k"]),
-        ("spend:key:k:window:1d", ["spend:key:k:window:1d"]),
-        ("spend:tag:t", ["spend:tag:t"]),
-    ],
-)
 @pytest.mark.asyncio
-async def test_invalidate_spend_counter_deletes_the_counter_and_its_committed_twin(monkeypatch, counter_key, deleted):
+async def test_invalidate_spend_counter_keeps_the_committed_twin_a_redis_failure_never_changed(monkeypatch):
     fake_cache = _make_spend_counter_cache()
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
 
-    await ps._invalidate_spend_counter(counter_key=counter_key)
+    await ps._invalidate_spend_counter(counter_key="spend:key:k")
 
-    assert [c.kwargs["key"] for c in fake_cache.in_memory_cache.delete_cache.call_args_list] == deleted
-    assert [c.kwargs["key"] for c in fake_cache.redis_cache.async_delete_cache.await_args_list] == deleted
+    assert [c.kwargs["key"] for c in fake_cache.in_memory_cache.delete_cache.call_args_list] == ["spend:key:k"]
+    assert [c.kwargs["key"] for c in fake_cache.redis_cache.async_delete_cache.await_args_list] == ["spend:key:k"]
 
 
 @pytest.mark.asyncio

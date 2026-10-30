@@ -326,6 +326,13 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         )
 
 
+def committed_budget_spend_from_metadata(metadata: Mapping[str, object]) -> CommittedBudgetSpend:
+    auth: Final = metadata.get("user_api_key_auth")
+    if isinstance(auth, UserAPIKeyAuth) and auth.committed_budget_spend is not None:
+        return auth.committed_budget_spend
+    return CommittedBudgetSpend()
+
+
 def user_api_key_has_admin_view(user_api_key_dict: UserAPIKeyAuth) -> bool:
     """Return True if the caller's role grants unscoped read access to all
     tenant resources (managed files, batches, vector stores, spend rows, etc).

@@ -18,9 +18,9 @@ from litellm.proxy.spend_tracking.carried_budget_state import (
     carry_organization_budget_state,
     carry_team_and_user_budget_state,
 )
-from litellm.proxy.spend_tracking.committed_spend import EntitySpendCounterKeys
 from litellm.types.proxy.carried_budget_state import (
     CommittedBudgetSpend,
+    EntitySpendCounterKeys,
     KeyBudgetSnapshot,
     OrgBudgetSnapshot,
     TeamBudgetSnapshot,
@@ -180,6 +180,19 @@ async def test_committed_spend_is_read_once_for_every_budgeted_entity():
     ]
     assert token.committed_budget_spend == committed
     assert (token.spend, token.team_spend) == (1.0, None)
+
+
+@pytest.mark.asyncio
+async def test_route_without_a_budget_check_carries_the_counters_it_charges_and_reads_nothing():
+    token = UserAPIKeyAuth(token="hashed", max_budget=10.0)
+
+    await carry_committed_budget_spend(
+        valid_token=token, team_object=None, user_object=None, end_user_object=None, read_committed=None
+    )
+
+    assert token.committed_budget_spend == CommittedBudgetSpend(
+        counter_keys=EntitySpendCounterKeys(key="spend:key:hashed")
+    )
 
 
 @pytest.mark.asyncio

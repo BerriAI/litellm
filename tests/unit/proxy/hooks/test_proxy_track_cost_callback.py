@@ -38,6 +38,7 @@ from litellm.proxy.utils import (
     REJECTED_BEFORE_REQUEST_SETUP_KEY,
     ProxyUpdateSpend,
 )
+from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
 from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
 
@@ -1029,6 +1030,47 @@ def test_get_budget_reservation_from_metadata_handles_dict_auth_object():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metadata", "expected_scope"),
+    [
+        (
+            {
+                "user_api_key_auth": UserAPIKeyAuth(
+                    committed_budget_spend=CommittedBudgetSpend(
+                        counter_keys=EntitySpendCounterKeys(key="spend:key:test_api_key")
+                    )
+                )
+            },
+            EntitySpendCounterKeys(key="spend:key:test_api_key"),
+        ),
+        ({}, EntitySpendCounterKeys()),
+    ],
+)
+async def test_charge_moves_only_the_committed_counters_auth_named_as_budgeted(metadata, expected_scope):
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock()
+    increment_spend_counters = AsyncMock()
+
+    await _update_database_and_spend_counters(
+        proxy_logging_obj=proxy_logging_obj,
+        increment_spend_counters=increment_spend_counters,
+        user_api_key="test_api_key",
+        user_id="test_user_id",
+        end_user_id=None,
+        team_id="test_team_id",
+        org_id="test_org_id",
+        kwargs={"litellm_params": {"metadata": metadata}},
+        completion_response=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        response_cost=0.2,
+        budget_reservation=None,
+    )
+
+    assert increment_spend_counters.await_args.kwargs["committed_spend_scope"] == expected_scope
+
+
+@pytest.mark.asyncio
 async def test_update_database_and_spend_counters_releases_reservation_when_db_update_fails():
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(side_effect=Exception("db unavailable"))
@@ -1156,6 +1198,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         request_started_at=start_time,
         model_access_groups=("premium",),
         project_id=None,
+        committed_spend_scope=EntitySpendCounterKeys(),
     )
 
 

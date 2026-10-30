@@ -67,6 +67,8 @@ from litellm.proxy.utils import (
     BilledFailedAttempt,
     ProxyUpdateSpend,
 )
+from litellm.types.proxy.auth.user_api_key_auth import committed_budget_spend_from_metadata
+from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     CallTypes,
@@ -1015,6 +1017,8 @@ class _IncrementSpendCounters(Protocol):
         tags: list[str] | None = None,
         request_started_at: datetime | None = None,
         model_access_groups: Sequence[str] | None = None,
+        project_id: str | None = None,
+        committed_spend_scope: EntitySpendCounterKeys | None = None,
     ) -> None: ...
 
 
@@ -1149,6 +1153,9 @@ async def _update_database_and_spend_counters_in_batch(
             request_started_at=start_time,
             model_access_groups=model_access_groups,
             project_id=project_id,
+            committed_spend_scope=committed_budget_spend_from_metadata(
+                _OBJECT_MAPPING.validate_python(get_litellm_metadata_from_kwargs(kwargs=kwargs))
+            ).counter_keys,
         )
     except Exception:
         if budget_reservation is not None:

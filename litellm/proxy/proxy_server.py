@@ -909,10 +909,8 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     stamp_budget_reservation_actual_cost,
 )
 from litellm.proxy.spend_tracking.committed_spend import (
-    EntitySpendCounterKeys,
     committed_spend_key,
     committed_spend_keys,
-    committed_spend_tracked,
     seed_committed_spend,
 )
 from litellm.proxy.spend_tracking.spend_capture_rate import (
@@ -1024,6 +1022,7 @@ from litellm.types.llms.openai import (
     ResponseInProgressEvent,
     ResponsesAPIResponse,
 )
+from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
@@ -3472,6 +3471,7 @@ async def increment_spend_counters(
     request_started_at: datetime | None = None,
     model_access_groups: Sequence[str] | None = None,
     project_id: str | None = None,
+    committed_spend_scope: EntitySpendCounterKeys | None = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -3508,6 +3508,7 @@ async def increment_spend_counters(
             request_started_at=request_started_at,
             model_access_groups=model_access_groups,
             project_id=project_id,
+            committed_spend_scope=committed_spend_scope,
         )
 
 
@@ -3532,18 +3533,13 @@ async def _increment_spend_counters_batched(
     request_started_at: datetime | None,
     model_access_groups: Sequence[str] | None,
     project_id: str | None = None,
+    committed_spend_scope: EntitySpendCounterKeys | None = None,
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET, and
     the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments."""
     committed_counter_keys: Final = (
-        EntitySpendCounterKeys.of(
-            token=_spend_counter_token(token) if token is not None else None,
-            team_id=team_id,
-            user_id=user_id,
-            org_id=org_id,
-            end_user_id=end_user_id,
-        ).tracked()
-        if response_cost is not None and response_cost > 0 and committed_spend_tracked()
+        committed_spend_scope.tracked()
+        if committed_spend_scope is not None and response_cost is not None and response_cost > 0
         else ()
     )
     bind_spend_counter_keys(frozenset(committed_spend_keys(committed_counter_keys)))
@@ -4224,12 +4220,11 @@ _increment_spend_counter_cache: Final = increment_spend_counter_cache
 
 @with_service_target(SPEND_COUNTERS_TARGET)
 async def invalidate_spend_counter(counter_key: str) -> None:
-    for stale_key in (counter_key, *committed_spend_keys((counter_key,))):
-        forget_spend_counter(stale_key)
-        spend_counter_cache.in_memory_cache.delete_cache(key=stale_key)
-        if spend_counter_cache.redis_cache is not None:
-            with contextlib.suppress(Exception):
-                await spend_counter_cache.redis_cache.async_delete_cache(key=stale_key)
+    forget_spend_counter(counter_key)
+    spend_counter_cache.in_memory_cache.delete_cache(key=counter_key)
+    if spend_counter_cache.redis_cache is not None:
+        with contextlib.suppress(Exception):
+            await spend_counter_cache.redis_cache.async_delete_cache(key=counter_key)
 
 
 _invalidate_spend_counter: Final = invalidate_spend_counter

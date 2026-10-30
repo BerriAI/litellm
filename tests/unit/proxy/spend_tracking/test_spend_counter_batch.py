@@ -13,7 +13,6 @@ import litellm.proxy.proxy_server as ps
 from litellm.caching.redis_cache import RedisCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
-from litellm.proxy.spend_tracking.committed_spend import committed_spend_keys
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     SpendCounterBatch,
     active_spend_counter_batch,
@@ -541,10 +540,7 @@ async def test_a_failed_post_call_pipeline_invalidates_every_counter_it_carried_
 
     assert [c.split()[0] for c in redis.commands] == ["MGET"], redis.commands
     invalidated = RESERVED_KEYS | {"spend:user:user"}
-    assert {call.kwargs["key"] for call in redis.async_delete_cache.await_args_list} == {
-        *invalidated,
-        *committed_spend_keys(invalidated),
-    }
+    assert {call.kwargs["key"] for call in redis.async_delete_cache.await_args_list} == invalidated
     assert all("applied_adjustment" not in entry for entry in reservation["entries"])
     assert {key: redis.store[key] for key in POST_CALL_KEYS} == {key: 1.0 for key in POST_CALL_KEYS}
 
@@ -634,8 +630,6 @@ async def test_a_failed_reservation_pipeline_drops_every_counter_and_reserves_no
     assert {call.kwargs["key"] for call in redis.async_delete_cache.await_args_list} == {
         "spend:key:hashed",
         "spend:team:team",
-        "committed_spend:key:hashed",
-        "committed_spend:team:team",
     }
     assert redis.store == {"spend:key:hashed": 1.0, "spend:team:team": 2.0}
 

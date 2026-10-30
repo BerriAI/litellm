@@ -488,7 +488,7 @@ async def test_a_spend_counter_whose_increment_failed_is_invalidated_not_trusted
         await flush_post_call_redis_batches()
 
     assert spend_cache.in_memory_cache.get_cache("spend:key:k1") is None
-    assert redis_cache.alone == [("DEL", "spend:key:k1"), ("DEL", "committed_spend:key:k1")]
+    assert redis_cache.alone == [("DEL", "spend:key:k1")]
     assert spend_cache.in_memory_cache.get_cache("spend:team:t1") == 7.5
 
 

@@ -5096,7 +5096,7 @@ async def test_centralized_common_checks_carry_the_committed_spend_beside_the_st
     from litellm.integrations.prometheus import PrometheusLogger
     from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
     from litellm.proxy.utils import ProxyLogging
-    from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend
+    from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
 
     for callback_list in ("success_callback", "failure_callback", "_async_success_callback", "_async_failure_callback"):
         monkeypatch.setattr(litellm, callback_list, [])
@@ -5135,7 +5135,13 @@ async def test_centralized_common_checks_carry_the_committed_spend_beside_the_st
             setattr(_proxy_server_mod, attribute, value)
 
     assert token.committed_budget_spend == (
-        CommittedBudgetSpend(key=0.37, team=1.25) if prometheus_registered else None
+        CommittedBudgetSpend(
+            counter_keys=EntitySpendCounterKeys(key=f"spend:key:{token.token}", team=f"spend:team:{token.team_id}"),
+            key=0.37,
+            team=1.25,
+        )
+        if prometheus_registered
+        else None
     )
     assert (token.spend, token.team_spend) == (0.0, 0.0)
 

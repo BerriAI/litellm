@@ -9,9 +9,9 @@ from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.spend_tracking.committed_spend import EntitySpendCounterKeys
 from litellm.types.proxy.carried_budget_state import (
     CommittedBudgetSpend,
+    EntitySpendCounterKeys,
     OrgBudgetSnapshot,
     TeamBudgetSnapshot,
     UserBudgetSnapshot,
@@ -56,7 +56,7 @@ async def carry_committed_budget_spend(
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
     end_user_object: LiteLLM_EndUserTable | None,
-    read_committed: Callable[[EntitySpendCounterKeys], Awaitable[CommittedBudgetSpend]],
+    read_committed: Callable[[EntitySpendCounterKeys], Awaitable[CommittedBudgetSpend]] | None,
 ) -> None:
     counter_keys: Final = EntitySpendCounterKeys.of(
         token=valid_token.token if valid_token.max_budget is not None else None,
@@ -65,7 +65,11 @@ async def carry_committed_budget_spend(
         org_id=_budgeted_org_id(valid_token=valid_token, team_object=team_object),
         end_user_id=_budgeted_end_user_id(end_user_object=end_user_object),
     )
-    valid_token.committed_budget_spend = await read_committed(counter_keys)  # rebind-ok: request-scoped credential
+    valid_token.committed_budget_spend = (  # rebind-ok: request-scoped credential
+        CommittedBudgetSpend(counter_keys=counter_keys)
+        if read_committed is None
+        else await read_committed(counter_keys)
+    )
 
 
 def carry_organization_budget_state(valid_token: UserAPIKeyAuth, org_table: LiteLLM_OrganizationTable) -> None:

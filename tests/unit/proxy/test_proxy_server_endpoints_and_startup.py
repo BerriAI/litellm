@@ -9405,7 +9405,6 @@ async def test_increment_spend_counter_invalidates_stale_cache_on_redis_failure(
         assert counter_cache.in_memory_cache.get_cache(key="spend:team:redis-fail") is None
         assert [call.kwargs["key"] for call in fake_redis.async_delete_cache.await_args_list] == [
             "spend:team:redis-fail",
-            "committed_spend:team:redis-fail",
         ]
     finally:
         ps.spend_counter_cache = orig_counter

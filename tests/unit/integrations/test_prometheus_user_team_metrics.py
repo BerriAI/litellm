@@ -1077,7 +1077,7 @@ async def test_customer_gauge_subtracts_the_committed_spend_instead_of_the_cache
     from litellm.models.end_user import LiteLLM_EndUserTable
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
-    from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend
+    from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
 
     mock_proxy_server = MagicMock()
     mock_proxy_server.user_api_key_cache.async_get_cache = AsyncMock(
@@ -1093,7 +1093,9 @@ async def test_customer_gauge_subtracts_the_committed_spend_instead_of_the_cache
         key=committed_spend_key("spend:end_user:cust-live"), value=2.5
     )
     token = UserAPIKeyAuth(token="hashed")
-    token.committed_budget_spend = CommittedBudgetSpend(end_user=1.5)
+    token.committed_budget_spend = CommittedBudgetSpend(
+        counter_keys=EntitySpendCounterKeys(end_user="spend:end_user:cust-live"), end_user=1.5
+    )
 
     with patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}):
         await prometheus_logger._increment_remaining_budget_metrics(

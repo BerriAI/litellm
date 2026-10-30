@@ -7,6 +7,7 @@ import re
 import sqlite3
 from collections.abc import Mapping
 from datetime import timezone
+from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,9 +18,12 @@ from fastapi.testclient import TestClient
 
 import litellm
 import litellm.proxy.proxy_server as ps
+from litellm.caching.dual_cache import DualCache
+from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy.auth.authorization import OwnedRows
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup, load_permitted_log_team_ids
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.spend_tracking.spend_management_endpoints import global_spend_reset
 
 
 def _default_date_range():
@@ -8268,3 +8272,58 @@ async def test_global_spend_refresh_runs_the_refresh_on_the_writer_when_a_reader
     assert [statement for statement in journal.statements if statement[1].startswith("REFRESH")] == [
         ("writer", 'REFRESH MATERIALIZED VIEW "MonthlyGlobalSpend";')
     ]
+
+
+class _ResetTableRows:
+    def __init__(self) -> None:
+        self.update_many: Final = AsyncMock()
+
+
+class _ResetDb:
+    def __init__(self) -> None:
+        self.litellm_verificationtoken: Final = _ResetTableRows()
+        self.litellm_teamtable: Final = _ResetTableRows()
+
+    async def query_raw(self, sql_query: str) -> list[dict[str, str]]:
+        return [{"token": "hashed"}] if "VerificationToken" in sql_query else [{"team_id": "t1"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("registered_callbacks", "twin_after"),
+    [
+        ([MagicMock(spec=PrometheusLogger)], None),
+        ([], 7.0),
+    ],
+)
+async def test_global_spend_reset_drops_the_committed_key_and_team_spend_the_gauges_read(
+    monkeypatch, registered_callbacks, twin_after
+):
+    spend_counter_cache: Final = DualCache()
+    twins: Final = ("committed_spend:key:hashed", "committed_spend:team:t1")
+    for twin in twins:
+        spend_counter_cache.in_memory_cache.set_cache(key=twin, value=7.0)
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", spend_counter_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=_ResetDb()))
+    monkeypatch.setattr(litellm, "callbacks", registered_callbacks)
+
+    response: Final = await global_spend_reset()
+
+    assert response["status"] == "success"
+    assert [spend_counter_cache.in_memory_cache.get_cache(key=twin) for twin in twins] == [twin_after, twin_after]
+
+
+@pytest.mark.asyncio
+async def test_global_spend_reset_still_succeeds_when_listing_the_committed_counters_fails(monkeypatch):
+    db: Final = _ResetDb()
+    db.query_raw = AsyncMock(side_effect=ConnectionError("db unreachable"))
+    spend_counter_cache: Final = DualCache()
+    spend_counter_cache.in_memory_cache.set_cache(key="committed_spend:team:t1", value=7.0)
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", spend_counter_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=db))
+    monkeypatch.setattr(litellm, "callbacks", [MagicMock(spec=PrometheusLogger)])
+
+    response: Final = await global_spend_reset()
+
+    assert response["status"] == "success"
+    db.litellm_teamtable.update_many.assert_awaited_once()

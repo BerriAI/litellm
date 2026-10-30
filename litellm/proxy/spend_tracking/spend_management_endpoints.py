@@ -51,6 +51,7 @@ from litellm.proxy.auth.authorization_dependencies import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.spend_tracking.committed_spend import committed_spend_tracked, drop_committed_spend
 from litellm.proxy.spend_tracking.spend_capture_rate import (
     ProviderBillingCredentialMissing,
     ProviderBillingRequestFailed,
@@ -3692,6 +3693,36 @@ async def view_spend_logs(
         )
 
 
+class _TokenRow(TypedDict):
+    token: ReadOnly[str]
+
+
+class _TeamIdRow(TypedDict):
+    team_id: ReadOnly[str]
+
+
+async def _drop_all_key_and_team_committed_spend(prisma_client: PrismaClient) -> None:
+    from litellm.proxy.proxy_server import spend_counter_cache
+
+    try:
+        token_rows: Final[Sequence[_TokenRow]] = await _query_raw(
+            prisma_client, 'SELECT token FROM "LiteLLM_VerificationToken"'
+        )
+        team_rows: Final[Sequence[_TeamIdRow]] = await _query_raw(
+            prisma_client, 'SELECT team_id FROM "LiteLLM_TeamTable"'
+        )
+    except Exception as e:  # noqa: BLE001  # the reset already committed; a kept twin only lasts until its TTL
+        verbose_proxy_logger.warning("committed spend drop after a global reset failed: %s", e)
+        return
+    await drop_committed_spend(
+        spend_counter_cache,
+        (
+            *(f"spend:key:{row['token']}" for row in token_rows),
+            *(f"spend:team:{row['team_id']}" for row in team_rows),
+        ),
+    )
+
+
 @router.post(
     "/global/spend/reset",
     tags=["Budget & Spend Tracking"],
@@ -3720,6 +3751,8 @@ async def global_spend_reset():
 
     await _verification_token_table(prisma_client).update_many(data={"spend": 0.0}, where={})
     await _team_table(prisma_client).update_many(data={"spend": 0.0}, where={})
+    if committed_spend_tracked():
+        await _drop_all_key_and_team_committed_spend(prisma_client)
 
     return {
         "message": "Spend for all API Keys and Teams reset successfully",

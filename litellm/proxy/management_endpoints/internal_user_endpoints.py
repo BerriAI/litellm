@@ -1410,8 +1410,11 @@ async def _invalidate_user_spend_counter_if_changed(
     """
     if non_default_values.get("spend") is not None:
         from litellm.proxy.proxy_server import invalidate_spend_counter
+        from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
 
-        await invalidate_spend_counter(counter_key=f"spend:user:{non_default_values['user_id']}")
+        counter_key: Final = f"spend:user:{non_default_values['user_id']}"
+        await invalidate_spend_counter(counter_key=counter_key)
+        await invalidate_spend_counter(counter_key=committed_spend_key(counter_key))
 
 
 def _clears_object_permission(user_request: UpdateUserRequest) -> bool:

@@ -4,6 +4,7 @@ from request metadata. get_*_object only runs when that state is missing (custom
 auth, SDK callers, failure paths)
 """
 
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,6 +12,8 @@ import pytest
 from prometheus_client import REGISTRY
 
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
@@ -28,6 +31,7 @@ from litellm.proxy.spend_tracking.carried_budget_state import (
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
 from litellm.types.proxy.carried_budget_state import (
     CommittedBudgetSpend,
+    EntitySpendCounterKeys,
     KeyBudgetSnapshot,
     TeamBudgetSnapshot,
     UserBudgetSnapshot,
@@ -242,7 +246,15 @@ def _remaining(prometheus_logger: PrometheusLogger) -> dict[str, float]:
 
 def _token_committed_at_auth() -> UserAPIKeyAuth:
     token = _authed_token()
-    token.committed_budget_spend = CommittedBudgetSpend(key=3.0, team=30.0, user=8.0, org=60.0)
+    token.committed_budget_spend = CommittedBudgetSpend(
+        counter_keys=EntitySpendCounterKeys.of(
+            token="hashed", team_id="t1", user_id="u1", org_id="o1", end_user_id=None
+        ),
+        key=3.0,
+        team=30.0,
+        user=8.0,
+        org=60.0,
+    )
     return token
 
 
@@ -262,6 +274,68 @@ async def test_gauges_use_the_committed_spend_at_emit_when_other_requests_finish
         "user": pytest.approx(39.0),
         "org": pytest.approx(437.0),
     }
+
+
+@pytest.mark.asyncio
+async def test_gauges_add_the_cost_to_another_requests_charge_while_the_own_charge_is_not_in_yet(
+    prometheus_logger, getters, spend_counter_cache
+):
+    """1.0 from another request reached the counters during this long request, this request's 2.0 has not."""
+    _stub_gauges(prometheus_logger)
+    _store_committed(spend_counter_cache, key=4.0, team=31.0, user=9.0, org=61.0)
+
+    await _emit(prometheus_logger, _request_metadata(_token_committed_at_auth()))
+
+    assert _remaining(prometheus_logger) == {
+        "key": pytest.approx(4.0),
+        "team": pytest.approx(267.0),
+        "user": pytest.approx(39.0),
+        "org": pytest.approx(437.0),
+    }
+
+
+@pytest.mark.asyncio
+async def test_gauges_read_no_committed_counter_auth_did_not_name_as_budgeted(
+    prometheus_logger, getters, spend_counter_cache
+):
+    _stub_gauges(prometheus_logger)
+    _store_committed(spend_counter_cache, key=9.0, team=99.0, user=19.0, org=99.0)
+
+    await _emit(prometheus_logger, _request_metadata(_authed_token()))
+
+    assert _remaining(prometheus_logger) == {
+        "key": pytest.approx(7.0),
+        "team": pytest.approx(278.0),
+        "user": pytest.approx(43.0),
+        "org": 458.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_slow_committed_read_on_a_failed_request_is_bounded_and_keeps_the_auth_time_spend(
+    prometheus_logger, getters, monkeypatch
+):
+    async def never_answers(key_list: list[str]) -> dict[str, float]:
+        await asyncio.sleep(30)
+        return {}
+
+    redis_cache = AsyncMock(spec=RedisCache)
+    redis_cache.async_batch_get_cache = never_answers
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.spend_counter_cache",
+        DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache),
+    )
+    monkeypatch.setenv("PROMETHEUS_BUDGET_METRICS_PER_REQUEST_TIMEOUT", "0.01")
+    _stub_gauges(prometheus_logger)
+
+    await asyncio.wait_for(
+        prometheus_logger.async_log_failure_event(
+            _failed_request(_request_metadata(_token_committed_at_auth())), None, KEY_RESET_AT, KEY_RESET_AT
+        ),
+        timeout=5,
+    )
+
+    prometheus_logger.litellm_remaining_org_budget_metric.labels().set.assert_called_once_with(pytest.approx(440.0))
 
 
 @pytest.mark.asyncio

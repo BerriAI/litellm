@@ -74,9 +74,10 @@ from litellm.types.integrations.prometheus import (
     sanitize_prometheus_label_value,
     validate_prometheus_deployment_and_latency_caller_identity,
 )
-from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth, committed_budget_spend_from_metadata
 from litellm.types.proxy.carried_budget_state import (
     CommittedBudgetSpend,
+    EntitySpendCounterKeys,
     KeyBudgetSnapshot,
     OrgBudgetSnapshot,
     TeamBudgetSnapshot,
@@ -363,14 +364,11 @@ def _stored_spend(value: object) -> float:
     return float(value) if isinstance(value, (int, float)) else 0.0
 
 
+_OWN_CHARGE_MATCH_RATIO: Final = 1 - 1e-9
+
+
 def _committed_floor(stored: float, committed: float | None) -> float:
     return stored if committed is None else max(stored, committed)
-
-
-def _max_known_spend(first: float | None, second: float | None) -> float | None:
-    if first is None:
-        return second
-    return first if second is None else max(first, second)
 
 
 def _customer_spend_after_request(cached_spend: float, committed_spend: float | None, response_cost: float) -> float:
@@ -379,25 +377,16 @@ def _customer_spend_after_request(cached_spend: float, committed_spend: float | 
     return max(committed_spend + response_cost, cached_spend)
 
 
-def _committed_spend_at_auth(metadata: Mapping[str, object]) -> CommittedBudgetSpend:
-    auth: Final = metadata.get("user_api_key_auth")
-    if isinstance(auth, UserAPIKeyAuth) and auth.committed_budget_spend is not None:
-        return auth.committed_budget_spend
-    return CommittedBudgetSpend()
-
-
-async def _committed_spend_now(
-    token: str | None, team_id: str | None, user_id: str | None, org_id: str | None, end_user_id: str | None
-) -> CommittedBudgetSpend:
+async def _committed_spend_now(counter_keys: EntitySpendCounterKeys) -> CommittedBudgetSpend:
+    if not counter_keys.tracked():
+        return CommittedBudgetSpend()
     try:
         from litellm.proxy.proxy_server import spend_counter_cache
-        from litellm.proxy.spend_tracking.committed_spend import EntitySpendCounterKeys, read_committed_budget_spend
+        from litellm.proxy.spend_tracking.committed_spend import read_committed_budget_spend
 
-        return await read_committed_budget_spend(
-            spend_counter_cache,
-            EntitySpendCounterKeys.of(
-                token=token, team_id=team_id, user_id=user_id, org_id=org_id, end_user_id=end_user_id
-            ),
+        return await asyncio.wait_for(
+            read_committed_budget_spend(spend_counter_cache, counter_keys),
+            timeout=_get_budget_metrics_per_request_timeout(),
         )
     except Exception as e:  # noqa: BLE001  # a gauge read never fails the request; the gauges keep the stored spend
         verbose_logger.debug("[Non-Blocking] Prometheus: committed spend read failed: %s", e)
@@ -408,7 +397,12 @@ def _committed_spend_before_request(
     at_auth: CommittedBudgetSpend, now: CommittedBudgetSpend, response_cost: float
 ) -> CommittedBudgetSpend:
     def before(at_auth_spend: float | None, now_spend: float | None) -> float | None:
-        return _max_known_spend(at_auth_spend, None if now_spend is None else now_spend - response_cost)
+        if now_spend is None:
+            return at_auth_spend
+        if at_auth_spend is None:
+            return now_spend - response_cost
+        own_charge_counted: Final = now_spend - at_auth_spend >= response_cost * _OWN_CHARGE_MATCH_RATIO
+        return max(at_auth_spend, now_spend - response_cost) if own_charge_counted else now_spend
 
     return CommittedBudgetSpend(
         key=before(at_auth.key, now.key),
@@ -2283,7 +2277,7 @@ class PrometheusLogger(CustomLogger):
         _user_email: Final = _metadata.get("user_api_key_user_email", None)
         _org_alias: Final = _metadata.get("user_api_key_org_alias", None)
         _carried_metadata: Final = _REQUEST_METADATA_ADAPTER.validate_python(_metadata)
-        _committed_at_auth: Final = _committed_spend_at_auth(_carried_metadata)
+        _committed_at_auth: Final = committed_budget_spend_from_metadata(_carried_metadata)
 
         # Bound the per-request budget-metric emission so that slow Redis/DB
         # lookups under load cannot consume the whole LoggingWorker watchdog
@@ -2297,13 +2291,7 @@ class PrometheusLogger(CustomLogger):
         async def emit_budget_metrics() -> tuple[object, ...]:
             committed: Final = _committed_spend_before_request(
                 at_auth=_committed_at_auth,
-                now=await _committed_spend_now(
-                    token=user_api_key,
-                    team_id=user_api_team,
-                    user_id=user_id,
-                    org_id=user_api_key_org_id,
-                    end_user_id=end_user_id,
-                ),
+                now=await _committed_spend_now(_committed_at_auth.counter_keys),
                 response_cost=response_cost,
             )
             return await asyncio.gather(
@@ -2874,11 +2862,10 @@ class PrometheusLogger(CustomLogger):
                 get_litellm_metadata_from_kwargs(kwargs)
             )
             failure_org_alias: Final = failure_metadata.get("user_api_key_org_alias")
+            failure_at_auth: Final = committed_budget_spend_from_metadata(failure_metadata)
             failure_committed: Final = _committed_spend_before_request(
-                at_auth=_committed_spend_at_auth(failure_metadata),
-                now=await _committed_spend_now(
-                    token=None, team_id=None, user_id=None, org_id=user_api_key_org_id, end_user_id=None
-                ),
+                at_auth=failure_at_auth,
+                now=await _committed_spend_now(EntitySpendCounterKeys(org=failure_at_auth.counter_keys.org)),
                 response_cost=0,
             )
             await self._set_org_budget_metrics_after_api_request(
