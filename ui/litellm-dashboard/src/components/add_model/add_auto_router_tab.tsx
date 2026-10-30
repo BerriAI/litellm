@@ -287,6 +287,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       buildModelAvailability(
         modelInfo.map((m) => m.model_group),
         deploymentRefsFromModelInfo(deployments ?? []),
+        new Map(modelInfo.map((m) => [m.model_group, m.providers ?? []])),
       ),
     [modelInfo, deployments],
   );

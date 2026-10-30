@@ -646,10 +646,13 @@ describe("autorouter_presets", () => {
       expect(availability.underlyingIndex.size).toBe(0);
     });
 
+    const servedBy = (provider: string, ...groups: string[]) => new Map(groups.map((group) => [group, [provider]]));
+
     it("resolves a model through the id a bare-star catch-all lists over a partial wildcard", () => {
       const availability = buildModelAvailability(
         ["claude-haiku-4-5-20251001-v1:0"],
         [{ modelGroup: "*", underlyingModels: ["bedrock/us.anthropic.*"] }],
+        servedBy("bedrock", "claude-haiku-4-5-20251001-v1:0"),
       );
       const config = simpleTierConfig("claude-haiku-4-5");
       expect(getMissingModels(config, availability)).toEqual([]);
@@ -662,8 +665,29 @@ describe("autorouter_presets", () => {
       const availability = buildModelAvailability(
         ["opus-5-5"],
         [{ modelGroup: "*", underlyingModels: ["anthropic/claude-*"] }],
+        servedBy("anthropic", "opus-5-5"),
       );
       expect(resolveAvailableModel("claude-opus-5-5", availability)).toBe("opus-5-5");
+    });
+
+    it("credits no listed id to an alias the router sends to another provider", () => {
+      const availability = buildModelAvailability(
+        ["sonnet-5"],
+        [{ modelGroup: "*", underlyingModels: ["anthropic/claude-*"] }],
+        servedBy("openai", "sonnet-5"),
+      );
+      expect(resolveAvailableModel("claude-sonnet-5", availability)).toBeUndefined();
+    });
+
+    it("credits no listed id to a paused catch-all", () => {
+      const availability = buildModelAvailability(
+        ["opus-5-5"],
+        deploymentRefsFromModelInfo([
+          { model_name: "*", litellm_params: { model: "anthropic/claude-*" }, model_info: { blocked: true } },
+        ]),
+        servedBy("anthropic", "opus-5-5"),
+      );
+      expect(resolveAvailableModel("claude-opus-5-5", availability)).toBeUndefined();
     });
 
     it("leaves a group another wildcard lists to that wildcard instead of the catch-all", () => {
@@ -674,6 +698,7 @@ describe("autorouter_presets", () => {
           { modelGroup: "openai/*", underlyingModels: ["openai/*"] },
           { modelGroup: "*", underlyingModels: ["anthropic/claude-*"] },
         ],
+        servedBy("anthropic", "sonnet-5"),
       );
       expect(resolveAvailableModel("gpt-6-sol", availability)).toBe("openai/gpt-6-sol");
       expect(resolveAvailableModel("claude-sonnet-5", availability)).toBe("sonnet-5");
@@ -691,6 +716,7 @@ describe("autorouter_presets", () => {
       const availability = buildModelAvailability(
         ["fable-5", "sonnet-5"],
         [{ modelGroup: "*", underlyingModels: ["anthropic/claude-*", "anthropic/claude-sonnet-5"] }],
+        servedBy("anthropic", "fable-5", "sonnet-5"),
       );
       expect(resolveAvailableModel("claude-sonnet-5", availability)).toBe("sonnet-5");
       expect(resolveAvailableModel("claude-fable-5", availability)).toBe("fable-5");
@@ -708,14 +734,63 @@ describe("autorouter_presets", () => {
       const availability = buildModelAvailability(
         ["claude/haiku-4-5"],
         [{ modelGroup: "claude/*", underlyingModels: ["anthropic/claude-*"] }],
+        servedBy("anthropic", "claude/haiku-4-5"),
       );
       expect(resolveAvailableModel("claude-haiku-4-5", availability)).toBe("claude/haiku-4-5");
+    });
+
+    it("keys a named wildcard whose prefix runs into the routed id's own words", () => {
+      const availability = buildModelAvailability(
+        ["team/gpt-4o-prod-mini"],
+        [{ modelGroup: "team/gpt-4o-prod*", underlyingModels: ["openai/gpt-4o*"] }],
+        servedBy("openai", "team/gpt-4o-prod-mini"),
+      );
+      expect(resolveAvailableModel("gpt-4o-mini", availability)).toBe("team/gpt-4o-prod-mini");
+    });
+
+    const anthropicTeam = { modelGroup: "team/*", underlyingModels: ["anthropic/claude-*"] };
+    const bedrockOpusTeam = { modelGroup: "team/opus-*", underlyingModels: ["bedrock/anthropic.claude-sonnet-*-v1:0"] };
+    const opuPrefixTeam = { modelGroup: "team/opu*", underlyingModels: ["anthropic/claude-opus-4-1"] };
+    const dashFiveTeam = { modelGroup: "team/*-5", underlyingModels: ["anthropic/claude-*-5"] };
+
+    it.each([
+      [
+        "a longer pattern listed after a shorter one",
+        "team/opus-5-5",
+        [anthropicTeam, bedrockOpusTeam],
+        "claude-sonnet-5-5",
+      ],
+      [
+        "a longer pattern listed before a shorter one",
+        "team/opus-5-5",
+        [bedrockOpusTeam, anthropicTeam],
+        "claude-sonnet-5-5",
+      ],
+      [
+        "more regex characters breaking a length tie",
+        "team/opus-4-5",
+        [opuPrefixTeam, dashFiveTeam],
+        "claude-opus-4-5",
+      ],
+    ])("keys a listed id only by the wildcard the router picks, %s", (_label, group, deployments, routedModel) => {
+      const availability = buildModelAvailability([group], deployments, new Map([[group, ["anthropic", "bedrock"]]]));
+      expect(resolveAvailableModel(routedModel, availability)).toBe(group);
+    });
+
+    it("does not credit a listed id to a wildcard the router never reaches", () => {
+      const availability = buildModelAvailability(
+        ["team/opus-5-5"],
+        [bedrockOpusTeam, anthropicTeam],
+        servedBy("bedrock", "team/opus-5-5"),
+      );
+      expect(resolveAvailableModel("claude-opus-5-5", availability)).toBeUndefined();
     });
 
     it("keeps replacement patterns in a listed id literal", () => {
       const availability = buildModelAvailability(
         ["haiku-4-5$&"],
         [{ modelGroup: "*", underlyingModels: ["anthropic/claude-*"] }],
+        servedBy("anthropic", "haiku-4-5$&"),
       );
       expect(resolveAvailableModel("claude-haiku-4-5$&", availability)).toBe("haiku-4-5$&");
     });
@@ -727,6 +802,7 @@ describe("autorouter_presets", () => {
           { modelGroup: "a-cloud", underlyingModels: ["bedrock/anthropic.claude-opus-5-5"] },
           { modelGroup: "*", underlyingModels: ["anthropic/claude-*"] },
         ],
+        servedBy("anthropic", "opus-5-5"),
       );
       expect(resolveAvailableModel("claude-opus-5-5", availability)).toBe("opus-5-5");
     });

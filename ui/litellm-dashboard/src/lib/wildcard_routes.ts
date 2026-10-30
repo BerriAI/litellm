@@ -20,12 +20,16 @@ const matchesWildcard = (pattern: string, name: string): boolean => {
 
 const isProviderWide = (pattern: string): boolean => pattern.slice(pattern.indexOf("/") + 1) === "*";
 
+const partialWordBeforeStar = (pattern: string): string =>
+  pattern.slice(0, pattern.indexOf("*")).split("/").at(-1) ?? "";
+
 const routesCapturedIds = (namePattern: string, deploymentPattern: string): boolean => {
   const singleStar = namePattern.split("*").length === 2 && deploymentPattern.split("*").length === 2;
-  const partialWord = deploymentPattern.slice(0, deploymentPattern.indexOf("*")).split("/").at(-1) ?? "";
   const listsCatalogIds = isProviderWide(namePattern) && isProviderWide(deploymentPattern);
   if (!deploymentPattern.includes("/") || listsCatalogIds) return false;
-  return singleStar && !/[a-z0-9]$/i.test(partialWord);
+  const listsNameFragments =
+    /[a-z0-9]$/i.test(partialWordBeforeStar(deploymentPattern)) && partialWordBeforeStar(namePattern) === "";
+  return singleStar && !listsNameFragments;
 };
 
 const substituteCapture = (namePattern: string, deploymentPattern: string, group: string): string => {
@@ -51,15 +55,51 @@ const routesThroughPattern = (
   return models.map((model) => ({ model, sourceGroup: deployment.modelGroup }));
 };
 
-export const wildcardRoutes = (group: string, deployments: readonly WildcardDeployment[]): readonly WildcardRoute[] => {
-  const listed = deployments.flatMap((deployment) =>
-    listingPatterns(deployment)
-      .filter((pattern) => matchesWildcard(pattern, group))
-      .flatMap((pattern) => routesThroughPattern(deployment, pattern, group)),
-  );
-  if (listed.length > 0) return listed;
-  return deployments
+const PYTHON_ESCAPED_CHARS = new Set(Array.from("()[]{}?*+-|^$\\.&~# \t\n\r\v\f"));
+const ROUTER_COMPLEXITY_CHARS = new Set(Array.from("*+?\\^$|()"));
+
+const routerRegexPart = (char: string): string => {
+  if (char === "*") return "(.*)";
+  return PYTHON_ESCAPED_CHARS.has(char) ? `\\${char}` : char;
+};
+
+const routerSpecificity = (namePattern: string): readonly [number, number] => {
+  const regex = Array.from(namePattern, routerRegexPart).join("");
+  return [regex.length, Array.from(regex).filter((char) => ROUTER_COMPLEXITY_CHARS.has(char)).length];
+};
+
+const isMoreSpecific = (namePattern: string, than: string): boolean => {
+  const [length, complexity] = routerSpecificity(namePattern);
+  const [otherLength, otherComplexity] = routerSpecificity(than);
+  return length > otherLength || (length === otherLength && complexity > otherComplexity);
+};
+
+const catchAllRoutes = (group: string, deployments: readonly WildcardDeployment[]): readonly WildcardRoute[] =>
+  deployments
     .filter((deployment) => deployment.modelGroup === "*")
     .flatMap((deployment) => deployment.underlyingModels.filter((model) => routesCapturedIds("*", model)))
     .map((model) => ({ model: substituteCapture("*", model, group), sourceGroup: "*" }));
+
+const routesByPrecedence = (group: string, deployments: readonly WildcardDeployment[]): readonly WildcardRoute[] => {
+  const matches = deployments.flatMap((deployment) =>
+    listingPatterns(deployment)
+      .filter((pattern) => matchesWildcard(pattern, group))
+      .map((pattern) => ({ deployment, pattern })),
+  );
+  if (matches.length === 0) return catchAllRoutes(group, deployments);
+  const routedName = matches
+    .map(({ deployment }) => deployment.modelGroup)
+    .reduce((best, name) => (isMoreSpecific(name, best) ? name : best));
+  return matches
+    .filter(({ deployment }) => deployment.modelGroup === routedName)
+    .flatMap(({ deployment, pattern }) => routesThroughPattern(deployment, pattern, group));
 };
+
+export const wildcardRoutes = (
+  group: string,
+  deployments: readonly WildcardDeployment[],
+  groupProviders: readonly string[],
+): readonly WildcardRoute[] =>
+  routesByPrecedence(group, deployments).filter(
+    ({ model }) => model === group || groupProviders.includes(model.split("/")[0]),
+  );

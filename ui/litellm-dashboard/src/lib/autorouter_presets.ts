@@ -69,6 +69,7 @@ export interface DeploymentModelRef {
   modelGroup: string;
   underlyingModels: readonly string[];
   provider?: string;
+  blocked?: boolean;
 }
 
 export interface ModelAvailability {
@@ -114,6 +115,7 @@ const normalizeUnderlyingModel = (model: string): string | null => {
 export const buildModelAvailability = (
   modelGroups: Iterable<string>,
   deployments: readonly DeploymentModelRef[],
+  groupProviders: ReadonlyMap<string, readonly string[]> = new Map(),
 ): ModelAvailability => {
   const groups = new Set(modelGroups);
   const deploymentGroups = new Set(deployments.map((deployment) => deployment.modelGroup));
@@ -131,8 +133,9 @@ export const buildModelAvailability = (
         .map((key) => ({ key, modelGroup: deployment.modelGroup, sourceGroup: deployment.modelGroup })),
     );
   const unlistedGroups = Array.from(groups).filter((group) => !group.includes("*") && !deploymentGroups.has(group));
+  const routableDeployments = deployments.filter((deployment) => !deployment.blocked);
   const wildcardEntries = unlistedGroups.flatMap((group) =>
-    wildcardRoutes(group, deployments).map(({ model, sourceGroup }) => ({
+    wildcardRoutes(group, routableDeployments, groupProviders.get(group) ?? []).map(({ model, sourceGroup }) => ({
       key: normalizeUnderlyingModel(model),
       modelGroup: group,
       sourceGroup,
@@ -170,7 +173,7 @@ export const deploymentRefsFromModelInfo = (
   rows: readonly {
     model_name?: string | null;
     litellm_params?: { model?: string | null; base_model?: string | null; custom_llm_provider?: string | null } | null;
-    model_info?: { base_model?: string | null } | null;
+    model_info?: { base_model?: string | null; blocked?: boolean | null } | null;
   }[],
 ): DeploymentModelRef[] =>
   rows.flatMap((row) => {
@@ -181,7 +184,7 @@ export const deploymentRefsFromModelInfo = (
     ].filter((model): model is string => Boolean(model));
     const provider = row.litellm_params?.custom_llm_provider || routingProvider(row.litellm_params?.model ?? "");
     return row.model_name && underlyingModels.length > 0
-      ? [{ modelGroup: row.model_name, underlyingModels, provider }]
+      ? [{ modelGroup: row.model_name, underlyingModels, provider, blocked: row.model_info?.blocked || undefined }]
       : [];
   });
 

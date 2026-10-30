@@ -2194,6 +2194,26 @@ describe("AddAutoRouterTab", () => {
       expect(optionByLabel("Anthropic Family")!).toHaveTextContent(/Matches your deployments/);
     });
 
+    it("enables a preset whose models a bare-star catch-all lists over a partial wildcard", async () => {
+      mockFetchAvailableModels.mockResolvedValue(
+        [...getRequiredModelsInPreset(ANTHROPIC_PRESET)].map((model) => ({
+          model_group: model.replace(/^claude-/, ""),
+          mode: "chat",
+          providers: ["anthropic"],
+        })),
+      );
+      mockFetchAllModelDeployments.mockResolvedValue([
+        { model_name: "*", litellm_params: { model: "anthropic/claude-*" } },
+      ]);
+
+      renderAdvanced(<Harness />);
+      openTemplateDropdown();
+
+      await waitFor(() => {
+        expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
+      });
+    });
+
     it("prefills the expanded group names and submits them", async () => {
       const user = userEvent.setup();
       mockFetchAvailableModels.mockResolvedValue(EXPANDED_HUB_GROUPS);

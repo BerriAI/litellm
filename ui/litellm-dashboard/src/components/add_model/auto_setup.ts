@@ -114,9 +114,11 @@ const routableDeployments = (deployments: readonly AutoRouterDeployment[]): Wild
       : [];
   });
 
-const routedIdentities = (group: string, wildcards: readonly WildcardDeployment[]): (ModelIdentity | null)[] => {
-  const routes = wildcardRoutes(group, wildcards);
-  return routes.length > 0 ? routes.map(({ model }) => parseModel(model)) : [parseModel(group)];
+const routedIdentities = (group: ModelGroup, wildcards: readonly WildcardDeployment[]): (ModelIdentity | null)[] => {
+  const routed = wildcardRoutes(group.model_group, wildcards, group.providers ?? []).map(({ model }) =>
+    parseModel(model),
+  );
+  return routed.some((identity) => identity !== null) ? routed : [parseModel(group.model_group)];
 };
 
 const providerOf = (deployment: AutoRouterDeployment, group: ModelGroup, family?: RouterFamily): string => {
@@ -176,7 +178,7 @@ export const deployedRouterModels = (
       const hasWildcard =
         group.model_group.includes("*") || active.some((row) => row.litellm_params?.model?.includes("*"));
       const manualOnly = isRouter || hasWildcard || (rows.length > 0 && active.length === 0);
-      const identities = active.length > 0 ? active.map(identityOf) : routedIdentities(group.model_group, wildcards);
+      const identities = active.length > 0 ? active.map(identityOf) : routedIdentities(group, wildcards);
       const first = identities[0];
       const homogeneous =
         first &&

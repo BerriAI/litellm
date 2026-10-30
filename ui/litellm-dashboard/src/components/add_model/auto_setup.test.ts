@@ -164,11 +164,31 @@ describe("deployedRouterModels", () => {
     ["a bare-star catch-all", "*", ""],
     ["a named alias", "claude/*", "claude/"],
   ])("suggests the Claude ids %s lists over a partial wildcard", (_label, name, prefix) => {
-    const groups = ["haiku-4-5", "opus-5-5"].map((id) => ({ model_group: `${prefix}${id}`, mode: "chat" }));
+    const groups = ["haiku-4-5", "opus-5-5"].map((id) => ({
+      model_group: `${prefix}${id}`,
+      mode: "chat",
+      providers: ["anthropic"],
+    }));
     const suggest = (row: AutoRouterDeployment) =>
       names(recommendSolverPair(deployedRouterModels(groups, [row]), "balanced", "auto"));
     expect(suggest(deployment(name, "anthropic/claude-*"))).toEqual([`${prefix}haiku-4-5`, `${prefix}opus-5-5`]);
     expect(suggest(deployment(name, "anthropic/claude-*", { model_info: { blocked: true } }))).toBeNull();
+  });
+
+  it("takes no Claude identity for an alias the router sends to another provider", () => {
+    const [model] = deployedRouterModels(
+      [{ model_group: "sonnet-5", mode: "chat", providers: ["openai"] }],
+      [deployment("*", "anthropic/claude-*")],
+    );
+    expect(model).toEqual({ name: "sonnet-5", model: "sonnet-5", provider: "OpenAI" });
+  });
+
+  it("keeps a canonical alias's own identity when the catch-all's listed id does not parse", () => {
+    const [model] = deployedRouterModels(
+      [{ model_group: "claude-opus-5-5", mode: "chat", providers: ["anthropic"] }],
+      [deployment("*", "anthropic/claude-*")],
+    );
+    expect(model).toMatchObject({ name: "claude-opus-5-5", line: "opus", version: [5, 5] });
   });
 
   it("keeps arbitrary canonical names available without pretending an unversioned alias is latest", () => {
