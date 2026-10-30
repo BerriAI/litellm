@@ -1502,6 +1502,36 @@ class TestToolPermissionGuardrailAnthropicMessages:
 
         assert out == chunks
 
+    ERROR_FRAMES_WITH_NO_ERROR_TYPE: Final = {
+        "non-object-data": b"event: error\ndata: 5\n\n",
+        "non-json-data": b"event: error\ndata: Overloaded\n\n",
+        "object-with-no-type": b'event: error\ndata: {"message": "Overloaded"}\n\n',
+    }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("error_frame", ERROR_FRAMES_WITH_NO_ERROR_TYPE.values(), ids=ERROR_FRAMES_WITH_NO_ERROR_TYPE)
+    async def test_rewrite_ends_in_an_error_event_known_only_by_its_name(self, error_frame: bytes):
+        chunks: Final = [*self._sse_chunks("Read")[:7], *self._cut_off_tool_use(2, "Bash"), error_frame]
+
+        out: Final = await self._drain(self.rewriting, chunks)
+
+        events: Final = self._events(out[:-1])
+        assert out[-1] == error_frame
+        assert {"message_delta", "message_stop"}.isdisjoint(event["type"] for event in events)
+        assert self._tool_use_blocks(events) == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("error_frame", ERROR_FRAMES_WITH_NO_ERROR_TYPE.values(), ids=ERROR_FRAMES_WITH_NO_ERROR_TYPE)
+    async def test_allowed_stream_drops_a_call_cut_off_before_an_error_event_known_only_by_its_name(
+        self, error_frame: bytes
+    ):
+        delivered: Final = self._sse_chunks("Bash")[:3]
+        chunks: Final = [*delivered, *self._cut_off_tool_use(2, "Bash"), error_frame]
+
+        out: Final = await self._drain(self.blocking, chunks)
+
+        assert b"".join(out) == b"".join([*delivered, error_frame])
+
     @pytest.mark.asyncio
     async def test_denied_tool_use_delivered_before_an_upstream_error_is_still_blocked(self):
         chunks: Final = self._ended_by_upstream_error(self._sse_chunks("Read")[:7])

@@ -208,6 +208,11 @@ def collapse_pure_text_chunks(
     return out
 
 
+def _has_non_object_data(event_str: str) -> bool:
+    data_start: Final = event_str.find("data:")
+    return data_start != -1 and not event_str[data_start + len("data:") :].lstrip().startswith("{")
+
+
 def build_complete_streaming_response_legacy(
     all_chunks: Sequence[str | bytes],
     litellm_logging_obj: LiteLLMLoggingObj,
@@ -245,6 +250,8 @@ def build_complete_streaming_response_legacy(
                 # text payload happens to contain "[DONE]" is not dropped.
                 if any(line.strip() == "data: [DONE]" for line in event_str.split("\n")):
                     continue
+                if _has_non_object_data(event_str):
+                    continue
                 transformed_openai_chunk = anthropic_model_response_iterator.convert_str_chunk_to_generic_chunk(
                     chunk=event_str
                 )
@@ -276,7 +283,7 @@ def extract_sse_data(event_str: str) -> dict | None:
         stripped = line.strip()
         if stripped.startswith("data:"):
             payload = stripped[len("data:") :].strip()
-            if not payload or payload == "[DONE]":
+            if not payload.startswith("{"):
                 return None
             try:
                 return json.loads(payload)
@@ -433,11 +440,15 @@ def _joined_sse_stream(all_chunks: Sequence[object]) -> str | None:
         return None
 
 
+def _sse_event_data(event: str) -> Mapping[str, object] | None:
+    return as_str_mapping(extract_sse_data(event))
+
+
 def _parsed_sse_events(sse_stream: str) -> tuple[Mapping[str, object], ...]:
     return tuple(
         event_data
         for event in split_sse_chunk_into_events(sse_stream)
-        if (event_data := as_str_mapping(extract_sse_data(event))) is not None
+        if (event_data := _sse_event_data(event)) is not None
     )
 
 
@@ -497,8 +508,18 @@ def anthropic_sse_event_types(all_chunks: Sequence[object]) -> frozenset[object]
     return frozenset(event.get("type") for event in _parsed_sse_events(_joined_sse_stream(all_chunks) or ""))
 
 
+def _is_named_error_event(event: str) -> bool:
+    return any(
+        line.startswith("event:") and line[len("event:") :].strip() == "error" for line in split_sse_lines(event)
+    )
+
+
 def _is_error_event(event: str) -> bool:
-    return anthropic_sse_event_type(event) == "error"
+    return _is_named_error_event(event) or anthropic_sse_event_type(event) == "error"
+
+
+def _error_events(sse_stream: str) -> tuple[str, ...]:
+    return tuple(event for event in split_sse_chunk_into_events(sse_stream) if _is_error_event(event))
 
 
 def anthropic_sse_error_events(all_chunks: Sequence[object]) -> tuple[str, ...]:
@@ -507,9 +528,10 @@ def anthropic_sse_error_events(all_chunks: Sequence[object]) -> tuple[str, ...]:
     A stream whose upstream fails after it started ends with an ``error`` event in place of
     ``message_stop``. That frame is the outcome the client is owed, not content, so assembly through
     the upstream error leaves it out and a caller re-emitting a rewritten response puts it back.
+    A frame counts by its SSE ``event:`` name or its data ``type``, since a client SDK raises on the
+    name alone and an upstream that is not Anthropic may send anything as the data.
     """
-    sse_stream: Final = _joined_sse_stream(all_chunks) or ""
-    return tuple(event for event in split_sse_chunk_into_events(sse_stream) if _is_error_event(event))
+    return _error_events(_joined_sse_stream(all_chunks) or "")
 
 
 def anthropic_sse_stopped_block_index(event: str) -> object:
@@ -559,8 +581,13 @@ def _sse_events_with_data(sse_stream: str) -> tuple[tuple[str, Mapping[str, obje
     return tuple(
         (event, event_data)
         for event in split_sse_chunk_into_events(sse_stream)
-        if (event_data := as_str_mapping(extract_sse_data(event))) is not None
+        if (event_data := _sse_event_data(event)) is not None
     )
+
+
+def _event_block_index(event: str) -> int | None:
+    event_data: Final = _sse_event_data(event)
+    return _block_index(event_data) if event_data is not None else None
 
 
 def anthropic_sse_events_without_blocks(
@@ -570,8 +597,8 @@ def anthropic_sse_events_without_blocks(
     sse_stream: Final = _joined_sse_stream(all_chunks) or ""
     return tuple(
         f"{event}\n\n".encode()
-        for event, event_data in _sse_events_with_data(sse_stream)
-        if _block_index(event_data) not in block_indices
+        for event in split_sse_chunk_into_events(sse_stream)
+        if _event_block_index(event) not in block_indices
     )
 
 
@@ -582,9 +609,9 @@ def _content_events_before_upstream_error(sse_stream: str) -> tuple[str, ...]:
     input is a JSON prefix, and a cut-off thinking block has no signature, so neither is a block the
     client can act on, and both are left out.
     """
-    events: Final = _sse_events_with_data(sse_stream)
-    if not any(event_data.get("type") == "error" for _, event_data in events):
+    if not _error_events(sse_stream):
         return (sse_stream,)
+    events: Final = _sse_events_with_data(sse_stream)
     cut_off: Final = frozenset(
         index
         for index, block in _unfinished_blocks(tuple(event_data for _, event_data in events)).items()

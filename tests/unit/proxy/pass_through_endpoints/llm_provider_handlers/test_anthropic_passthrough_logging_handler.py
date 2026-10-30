@@ -2105,6 +2105,18 @@ class TestAnthropicUsageOnlyFallback:
         assert usage.prompt_tokens_details.cached_tokens == 40
         assert usage.server_tool_use.web_search_requests == 2
 
+    @pytest.mark.parametrize("non_object_data_line", ["data: 5", 'data: "x"', "data: [1]"])
+    def test_build_usage_only_skips_a_data_line_that_is_not_a_json_object(self, non_object_data_line: str) -> None:
+        response = AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            all_chunks=[f"{non_object_data_line}\n\n", *self._CHUNKS], model="claude-3-5-haiku-20241022"
+        )
+        expected = AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            all_chunks=self._CHUNKS, model="claude-3-5-haiku-20241022"
+        )
+
+        assert response is not None and expected is not None
+        assert response.usage == expected.usage
+
     def test_build_usage_only_returns_none_without_usage_events(self):
         chunks = [_sse_bytes({"type": "content_block_delta", "delta": {"text": "hi"}})]
         assert (
@@ -2177,6 +2189,10 @@ class TestAnthropicUsageOnlyFallback:
             ("data: {not-json", None),
             ("event: ping", None),
             ('data: {"a": 1}', {"a": 1}),
+            ("data: 5", None),
+            ("data: []", None),
+            ('data: "x"', None),
+            ("data: null", None),
         ],
     )
     def test_extract_sse_data_handles_malformed_and_sentinel_lines(self, event_str, expected):

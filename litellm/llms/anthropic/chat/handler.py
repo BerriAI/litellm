@@ -1534,9 +1534,9 @@ class ModelResponseIterator:
             except ValueError as e:
                 raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
-    def convert_str_chunk_to_generic_chunk(self, chunk: str) -> ModelResponseStream | None:
+    def convert_str_chunk_to_generic_chunk(self, chunk: str) -> ModelResponseStream:
         """
-        Convert a string chunk to a GenericStreamingChunk, or None when its data is not a JSON object
+        Convert a string chunk to a GenericStreamingChunk
 
         Note: This is used for Anthropic pass through streaming logging
 
@@ -1554,9 +1554,7 @@ class ModelResponseIterator:
             str_line = str_line[index:]
 
         if str_line.startswith("data:"):
-            data_json: Final = _DECODED_JSON.validate_python(json.loads(str_line[5:]))
-            if not isinstance(data_json, dict):
-                return None
+            data_json: Final = _loads_stream_chunk(str_line[5:])
             return self.chunk_parser(chunk=data_json)
         else:
             return ModelResponseStream(id=self.response_id)

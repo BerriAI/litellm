@@ -136,6 +136,12 @@ def _split_sse_preface(complete_frames: bytes) -> tuple[bytes, bytes]:
     return complete_frames, b""
 
 
+def _holds_json_object_frame(frames: bytes) -> bool:
+    return any(
+        line.startswith(b"data:") and line[len(b"data:") :].lstrip().startswith(b"{") for line in frames.splitlines()
+    )
+
+
 def _flush_unmaskable_buffer(all_chunks: list[ModelResponseStream]) -> Iterator[ModelResponseStream]:
     """Buffered chunks flushed unmasked when a mixed stream shape makes reconstruction impossible."""
     if not all_chunks:
@@ -152,10 +158,11 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
     """
     Relay leading data-less SSE frames (comment keepalives, events without a
     ``data:`` line) as they complete, and join raw ``bytes`` chunks until they
-    hold one complete SSE event with a data line, so the stream shape is
-    decided on a whole frame rather than a transport fragment. Everything
-    after that first frame is forwarded untouched. The byte cap can only be
-    reached by a single unterminated frame.
+    hold one complete SSE event with a JSON object on its data line, so the
+    stream shape is decided on a whole frame rather than a transport fragment
+    or a line that says nothing about the shape. Everything after that frame
+    is forwarded untouched. The byte cap bounds a single unterminated frame
+    and a run of frames with no JSON object.
     """
     pending = b""
     try:
@@ -169,7 +176,7 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
             if preface:
                 yield _SsePreface(preface)
             pending = classifiable + tail
-            if classifiable or len(pending) >= _MAX_FIRST_SSE_FRAME_BYTES:
+            if _holds_json_object_frame(classifiable) or len(pending) >= _MAX_FIRST_SSE_FRAME_BYTES:
                 break
         else:
             if pending:
