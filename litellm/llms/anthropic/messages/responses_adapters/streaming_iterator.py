@@ -3,7 +3,7 @@
 import asyncio
 from collections import deque
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 import anyio
 from pydantic import ConfigDict, field_validator
@@ -93,6 +93,11 @@ def _failure_status_and_message(exception: Exception) -> tuple[int, str]:
     status_code: Final = failure.status_code if failure.status_code is not None else 500
     message: Final = failure.message or str(original) or INCOMPLETE_STREAM_ERROR_MESSAGE
     return status_code, message
+
+
+@runtime_checkable
+class _Closeable(Protocol):
+    def close(self) -> None: ...
 
 
 def _anthropic_error_chunk(status_code: int, message: str) -> dict[str, object]:
@@ -492,7 +497,7 @@ class AnthropicResponsesStreamWrapper:
     def __aiter__(self) -> "AnthropicResponsesStreamWrapper":
         return self
 
-    async def __anext__(self) -> dict[str, object]:
+    async def __anext__(self) -> Mapping[str, object]:
         if self._chunk_queue:
             return self._chunk_queue.popleft()
         if self._stream_failed:
@@ -511,9 +516,7 @@ class AnthropicResponsesStreamWrapper:
                     if self._chunk_queue:
                         return self._chunk_queue.popleft()
             else:
-                if self._sync_responses_iterator is None:
-                    self._sync_responses_iterator = iter(self.responses_stream)
-                sync_iterator: Final = self._sync_responses_iterator
+                sync_iterator: Final = self._sync_upstream()
                 missing: Final = object()
                 while (event := await asyncio.to_thread(next, sync_iterator, missing)) is not missing:
                     self._process_event(event)
@@ -522,22 +525,63 @@ class AnthropicResponsesStreamWrapper:
         except StopAsyncIteration:
             pass
         except Exception as e:  # noqa: BLE001  # every upstream failure becomes a client error event
-            verbose_logger.exception(
-                "AnthropicResponsesStreamWrapper: upstream Responses stream for %s failed", self.model
-            )
-            self._fail_stream(*_failure_status_and_message(e), failure=_original_failure(e))
+            self._fail_on_upstream_error(e)
 
+        last_chunk: Final = self._chunk_after_upstream_ends()
+        if last_chunk is None:
+            raise StopAsyncIteration
+        return last_chunk
+
+    def __iter__(self) -> "AnthropicResponsesStreamWrapper":
+        return self
+
+    def __next__(self) -> Mapping[str, object]:
+        if self._chunk_queue:
+            return self._chunk_queue.popleft()
+        if self._stream_failed:
+            raise StopIteration
+
+        if not self._sent_message_start:
+            self._sent_message_start = True
+            return self._make_message_start()
+
+        try:
+            for event in self._sync_upstream():
+                self._process_event(event)
+                if self._chunk_queue:
+                    return self._chunk_queue.popleft()
+        except Exception as e:  # noqa: BLE001  # every upstream failure becomes a client error event
+            self._fail_on_upstream_error(e)
+
+        last_chunk: Final = self._chunk_after_upstream_ends()
+        if last_chunk is None:
+            raise StopIteration
+        return last_chunk
+
+    def close(self) -> None:
+        if isinstance(self.responses_stream, _Closeable):
+            self.responses_stream.close()
+
+    def _sync_upstream(self) -> Iterator[object]:
+        if self._sync_responses_iterator is None:
+            self._sync_responses_iterator = iter(self.responses_stream)
+        return self._sync_responses_iterator
+
+    def _fail_on_upstream_error(self, error: Exception) -> None:
+        verbose_logger.exception("AnthropicResponsesStreamWrapper: upstream Responses stream for %s failed", self.model)
+        self._fail_stream(*_failure_status_and_message(error), failure=_original_failure(error))
+
+    def _chunk_after_upstream_ends(self) -> Mapping[str, object] | None:
         if not self._chunk_queue and not self._sent_message_stop and not self._stream_failed:
             verbose_logger.error(
                 "AnthropicResponsesStreamWrapper: upstream Responses stream for %s ended without a terminal event",
                 self.model,
             )
             self._fail_stream(500, INCOMPLETE_STREAM_ERROR_MESSAGE)
+        return self._chunk_queue.popleft() if self._chunk_queue else None
 
-        if self._chunk_queue:
-            return self._chunk_queue.popleft()
-
-        raise StopAsyncIteration
+    def anthropic_sse_wrapper(self) -> "AnthropicResponsesSyncSSEByteStream":
+        return AnthropicResponsesSyncSSEByteStream(self)
 
     def async_anthropic_sse_wrapper(self) -> "AnthropicResponsesSSEByteStream":
         """SSE-encoded bytes for each Anthropic event chunk."""
@@ -580,3 +624,17 @@ class AnthropicResponsesSSEByteStream:
 
     def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
         return self._wrapper.partial_response_on_disconnect()
+
+
+class AnthropicResponsesSyncSSEByteStream:
+    def __init__(self, wrapper: AnthropicResponsesStreamWrapper) -> None:
+        self._wrapper: Final = wrapper
+
+    def __iter__(self) -> "AnthropicResponsesSyncSSEByteStream":
+        return self
+
+    def __next__(self) -> bytes:
+        return anthropic_sse_frame(next(self._wrapper))
+
+    def close(self) -> None:
+        self._wrapper.close()

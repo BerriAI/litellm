@@ -8,7 +8,7 @@ import datetime
 import json
 import os
 import sys
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from types import SimpleNamespace
 
 import anyio
@@ -627,6 +627,65 @@ class TestUpstreamFailureEndsStreamWithErrorEvent:
         chunks = _collect(iter(()))
         assert [chunk["type"] for chunk in chunks] == ["message_start", "error"]
         assert chunks[1]["error"] == {"type": "api_error", "message": INCOMPLETE_STREAM_ERROR_MESSAGE}
+
+
+def _text_then_completed() -> Iterator[dict[str, object]]:
+    yield {"type": "response.created"}
+    yield {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}}
+    yield {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Hi"}
+    yield {"type": "response.output_item.done", "item": {"type": "message", "id": "msg_1"}}
+    yield {"type": "response.completed"}
+
+
+def _text_then_transport_error() -> Iterator[dict[str, object]]:
+    yield {"type": "response.created"}
+    yield {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}}
+    yield {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Hi"}
+    raise ConnectionResetError("Response payload is not completed")
+
+
+def _text_without_a_terminal_event() -> Iterator[dict[str, object]]:
+    yield {"type": "response.created"}
+    yield {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}}
+    yield {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Hi"}
+
+
+def _failed_then_pulled_again() -> Iterator[dict[str, object]]:
+    yield {"type": "response.created"}
+    yield {
+        "type": "response.failed",
+        "response": {"status": "failed", "output": [], "error": {"code": "server_error", "message": "boom"}},
+    }
+    raise AssertionError("upstream was pulled again after the failure")
+
+
+def _without_message_id(chunks: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {**chunk, "message": {**chunk["message"], "id": None}} if chunk["type"] == "message_start" else chunk
+        for chunk in chunks
+    ]
+
+
+class TestSyncCallerReadsTheSameStream:
+    @pytest.mark.parametrize(
+        ("upstream", "last_event"),
+        [
+            (_text_then_completed, "message_stop"),
+            (_text_then_transport_error, "error"),
+            (_text_without_a_terminal_event, "error"),
+            (_failed_then_pulled_again, "error"),
+            (lambda: iter(()), "error"),
+        ],
+        ids=["completed", "transport-error", "no-terminal-event", "response-failed", "no-events"],
+    )
+    def test_a_for_loop_gets_the_events_an_async_caller_gets(
+        self, upstream: Callable[[], Iterator[dict[str, object]]], last_event: str
+    ) -> None:
+        sync_chunks = list(AnthropicResponsesStreamWrapper(responses_stream=upstream(), model="m"))
+
+        assert _without_message_id(sync_chunks) == _without_message_id(_collect(upstream()))
+        assert sync_chunks[0]["type"] == "message_start"
+        assert sync_chunks[-1]["type"] == last_event
 
 
 class _FailureHookRecorder:
