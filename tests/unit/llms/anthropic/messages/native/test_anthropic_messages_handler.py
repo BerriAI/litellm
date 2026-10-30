@@ -2455,3 +2455,115 @@ async def test_anthropic_messages_strict_tools_rejection_is_sent_again_without_s
     assert first["tools"] == [tool]
     assert second == {**first, "tools": [{"name": "lookup_record", "input_schema": {"type": "object"}}]}
     assert _JSON_BODY.validate_python(response)["id"] == "msg_strict_retry"
+
+
+_BRIDGED_MODELS: Final = pytest.mark.parametrize(
+    "model",
+    ["fireworks_ai/accounts/fireworks/models/kimi-k3", "openai/gpt-4o-mini"],
+    ids=["chat_bridge", "responses_bridge"],
+)
+
+
+async def _send_bridged_messages(model: str, messages: list[object], *, is_async: bool, stream: bool) -> object:
+    if is_async:
+        return await litellm.anthropic.messages.acreate(
+            model=model, max_tokens=8, messages=messages, stream=stream, api_key="test-key"
+        )
+    return litellm.anthropic.messages.create(
+        model=model, max_tokens=8, messages=messages, stream=stream, api_key="test-key"
+    )
+
+
+async def _bridged_messages_rejection(
+    model: str, messages: list[object], *, is_async: bool, stream: bool
+) -> tuple[litellm.BadRequestError, int]:
+    with respx.mock(assert_all_called=False) as upstream:
+        provider: Final = upstream.route().mock(return_value=httpx.Response(500))
+        with pytest.raises(litellm.BadRequestError) as rejected:
+            await _send_bridged_messages(model, messages, is_async=is_async, stream=stream)
+    return rejected.value, provider.call_count
+
+
+@pytest.mark.asyncio
+@_BRIDGED_MODELS
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("stream", [False, True], ids=["complete", "stream"])
+async def test_bridged_message_without_role_answers_400_before_any_provider_call(
+    monkeypatch: pytest.MonkeyPatch, model: str, is_async: bool, stream: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    rejected, provider_calls = await _bridged_messages_rejection(
+        model, [{"role": "user", "content": "hi"}, {"content": "no role"}], is_async=is_async, stream=stream
+    )
+
+    assert rejected.status_code == 400
+    assert rejected.message == "litellm.BadRequestError: messages.1.role: Field required"
+    assert rejected.body == {"type": "invalid_request_error", "param": "messages.1.role"}
+    assert rejected.llm_provider == model.split("/")[0]
+    assert provider_calls == 0
+
+
+@pytest.mark.asyncio
+@_BRIDGED_MODELS
+@pytest.mark.parametrize(
+    ("message", "param", "error"),
+    [
+        ({"role": "bogus", "content": "hi"}, "messages.1.role", "Input should be 'user', 'assistant', 'system'"),
+        ({"role": ["user"], "content": "hi"}, "messages.1.role", "Input should be 'user', 'assistant', 'system'"),
+        ({"role": None, "content": "hi"}, "messages.1.role", "Input should be 'user', 'assistant', 'system'"),
+        ("hi", "messages.1", "Input does not match the expected shape."),
+    ],
+    ids=["unknown_role", "unhashable_role", "null_role", "not_an_object"],
+)
+async def test_bridged_message_with_an_invalid_role_answers_400_instead_of_being_dropped(
+    monkeypatch: pytest.MonkeyPatch, model: str, message: object, param: str, error: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    rejected, provider_calls = await _bridged_messages_rejection(
+        model, [{"role": "user", "content": "hi"}, message], is_async=True, stream=False
+    )
+
+    assert rejected.status_code == 400
+    assert rejected.message == f"litellm.BadRequestError: {param}: {error}"
+    assert rejected.body == {"type": "invalid_request_error", "param": param}
+    assert provider_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_bridged_messages_with_drop_params_drop_the_malformed_messages_and_keep_the_rest(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    completion: Final = {
+        "id": "chatcmpl-drop-params",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "kimi-k3",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    with respx.mock(assert_all_called=True) as upstream:
+        provider: Final = upstream.route().mock(return_value=httpx.Response(200, json=completion))
+        create: Final = litellm.anthropic.messages.acreate if is_async else litellm.anthropic.messages.create
+        pending: Final = create(
+            model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+            max_tokens=8,
+            messages=[
+                {"content": "no role"},
+                {"role": "user", "content": "hi"},
+                {"role": "bogus", "content": "dropped"},
+                {"role": "assistant", "content": "hello"},
+            ],
+            drop_params=True,
+            api_key="test-key",
+        )
+        result: Final = await pending if is_async else pending
+
+    assert result["content"] == [{"type": "text", "text": "ok"}]
+    assert json.loads(provider.calls.last.request.content)["messages"] == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+    ]

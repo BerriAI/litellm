@@ -55,6 +55,7 @@ from ..safeguards import (
     proxy_serves_safeguards,
     with_safeguard_results,
 )
+from ..utils import messages_with_valid_roles
 from .interceptors import get_messages_interceptors
 from .utils import AnthropicMessagesRequestUtils, mock_response, prepare_native_messages
 
@@ -691,13 +692,16 @@ def anthropic_messages_handler(
         model, custom_llm_provider, kwargs.get("model_info"), api_base
     )
     if anthropic_messages_provider_config is None:
+        bridged_messages: Final[list[dict[str, object]]] = list(  # mutable-ok: both bridge handlers take a list
+            messages_with_valid_roles(messages, original_model, custom_llm_provider, litellm_params.drop_params)
+        )
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
         if kwargs.get("compaction") is None and _should_route_to_responses_api(
             custom_llm_provider, original_model, model, kwargs.get("model_info"), stop_sequences=stop_sequences
         ):
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
                 max_tokens=max_tokens,
-                messages=messages,
+                messages=bridged_messages,
                 model=original_model,
                 metadata=metadata,
                 stop_sequences=stop_sequences,
@@ -727,7 +731,7 @@ def anthropic_messages_handler(
         # is passed through as a regular kwarg.
         return LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
             max_tokens=max_tokens,
-            messages=messages,
+            messages=bridged_messages,
             model=original_model,
             metadata=metadata,
             stop_sequences=stop_sequences,

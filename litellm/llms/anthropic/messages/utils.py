@@ -1,6 +1,8 @@
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from itertools import starmap
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeVar
 
@@ -9,6 +11,7 @@ from typing_extensions import ReadOnly
 
 import litellm
 from litellm.constants import X_LITELLM_DISABLE_CALLBACKS
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.internal_call_metadata import sanitize_user_api_key_auth
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, ModelInfo, StandardCallbackDynamicParams
@@ -234,3 +237,45 @@ def normalize_reasoning_effort_value(
 
     accepted_tiers: Final = tuple(level for level in supported if level != _THINKING_OFF)
     return next((level for level in (*chain, *accepted_tiers) if level in supported), chain[-1])
+
+
+_MESSAGE_ROLES: Final = frozenset({"user", "assistant", "system"})
+_Message: Final = TypeVar("_Message")
+
+
+@dataclass(frozen=True, slots=True)
+class _MalformedMessage:
+    param: str
+    message: str
+
+
+def _malformed_message(index: int, message: object) -> _MalformedMessage | None:
+    match as_str_mapping(message):
+        case None:
+            return _MalformedMessage(f"messages.{index}", f"messages.{index}: Input does not match the expected shape.")
+        case {"role": str() as role} if role in _MESSAGE_ROLES:
+            return None
+        case {"role": _}:
+            return _MalformedMessage(
+                f"messages.{index}.role", f"messages.{index}.role: Input should be 'user', 'assistant', 'system'"
+            )
+        case _:
+            return _MalformedMessage(f"messages.{index}.role", f"messages.{index}.role: Field required")
+
+
+def messages_with_valid_roles(
+    messages: Sequence[_Message], model: str, custom_llm_provider: str, drop_params: object
+) -> Sequence[_Message]:
+    if drops_unsupported_params(drop_params):
+        return tuple(message for index, message in enumerate(messages) if _malformed_message(index, message) is None)
+    malformed: Final = next(
+        (malformed for malformed in starmap(_malformed_message, enumerate(messages)) if malformed is not None), None
+    )
+    if malformed is None:
+        return messages
+    raise litellm.MalformedRequestFieldError(
+        message=malformed.message,
+        model=model,
+        llm_provider=custom_llm_provider,
+        body={"type": "invalid_request_error", "param": malformed.param},
+    )
