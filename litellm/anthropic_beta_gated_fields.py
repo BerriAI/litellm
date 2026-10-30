@@ -29,6 +29,7 @@ from litellm.types.llms.anthropic import (
 
 ANTHROPIC_MID_CONVERSATION_SYSTEM_CLEAR_AT_BETA_HEADER: Final = "mid-conversation-system-clear-at-2026-08-21"
 ANTHROPIC_INLINE_TOOLS_BETA_HEADER: Final = "inline-tools-2026-09-15"
+ANTHROPIC_SERVER_SIDE_FALLBACK_BETA_HEADER: Final = "server-side-fallback-2026-07-01"
 
 THINKING_BLOCK_BINDING: Final = "thinking.block_binding"
 THINKING_DISPLAY_UPDATES: Final = "thinking.display=updates"
@@ -36,6 +37,7 @@ SYSTEM_CLEAR_AT: Final = "messages[].system.clear_at"
 SYSTEM_OUTPUT_CONFIG: Final = "messages[].system.output_config"
 SYSTEM_TOOL_CHANGES: Final = "messages[].system.content[].tool_addition|tool_removal"
 SYSTEM_MESSAGE_EMPTIED: Final = "messages[].system (emptied by the strip)"
+FALLBACKS: Final = "fallbacks"
 
 _TOOL_CHANGE_BLOCK_TYPES: Final = frozenset({"tool_addition", "tool_removal"})
 
@@ -48,6 +50,7 @@ BETA_GATED_FIELDS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
         ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value: (SYSTEM_OUTPUT_CONFIG,),
         ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER: (SYSTEM_TOOL_CHANGES,),
         ANTHROPIC_INLINE_TOOLS_BETA_HEADER: (SYSTEM_TOOL_CHANGES,),
+        ANTHROPIC_SERVER_SIDE_FALLBACK_BETA_HEADER: (FALLBACKS,),
     }
 )
 
@@ -227,8 +230,8 @@ def strip_beta_gated_system_messages(
 def strip_beta_gated_request_fields(
     request: Mapping[str, object], active_betas: Set[str], *, drop_params: object
 ) -> StrippedRequest:
-    """Apply both strips to an Anthropic ``/v1/messages`` shaped body. Returns the same mapping when
-    nothing is gated, otherwise a shallow copy with ``thinking`` and ``messages`` replaced."""
+    """Apply every strip to an Anthropic ``/v1/messages`` shaped body. Returns the same mapping when
+    nothing is gated, otherwise a shallow copy with ``thinking`` and ``messages`` replaced and ``fallbacks`` dropped."""
     thinking: Final = strip_beta_gated_thinking(request.get("thinking"), active_betas, drop_params=drop_params)
     messages: Final = request.get("messages")
     message_sequence: Final = _as_sequence(messages) if not isinstance(messages, str) else None
@@ -237,11 +240,14 @@ def strip_beta_gated_request_fields(
         if message_sequence is not None
         else StrippedMessages(messages=(), stripped=())
     )
-    stripped: Final = (*thinking.stripped, *system_messages.stripped)
+    fallbacks_gated: Final = (
+        FALLBACKS in request and drops_unsupported_params(drop_params) and field_is_gated(FALLBACKS, active_betas)
+    )
+    stripped: Final = (*thinking.stripped, *system_messages.stripped, *((FALLBACKS,) if fallbacks_gated else ()))
     if not stripped:
         return StrippedRequest(request=request, stripped=())
     rewritten: Final = {
-        **request,
+        **{key: value for key, value in request.items() if not (fallbacks_gated and key == FALLBACKS)},
         **({"thinking": thinking.thinking} if thinking.stripped else {}),
         **({"messages": system_messages.messages} if system_messages.stripped else {}),
     }

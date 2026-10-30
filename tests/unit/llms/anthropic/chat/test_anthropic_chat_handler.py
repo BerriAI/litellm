@@ -136,6 +136,106 @@ def test_anthropic_completion_does_not_send_deployment_default_limits():
     assert "default_api_key_tpm_limit" not in request_body
 
 
+def test_anthropic_completion_sends_extra_body_fields_top_level_without_redirecting_model():
+    captured_requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_extra_body",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        litellm.completion(
+            model="anthropic/claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            client=client,
+            max_tokens=16,
+            extra_body={"fallbacks": [{"model": "claude-opus-5-5"}], "model": "claude-opus-5-5"},
+        )
+    finally:
+        client.close()
+
+    request_body = json.loads(captured_requests[0].content)
+    assert request_body == {
+        "model": "claude-sonnet-5-5",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        "max_tokens": 16,
+        "fallbacks": [{"model": "claude-opus-5-5"}],
+    }, request_body
+
+
+def _anthropic_request_with_fallbacks(extra_headers: dict[str, str] | None, drop_params: bool) -> httpx.Request:
+    captured_requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_fallbacks",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        litellm.completion(
+            model="anthropic/claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            client=client,
+            max_tokens=16,
+            extra_body={"fallbacks": "default"},
+            extra_headers=extra_headers,
+            drop_params=drop_params,
+        )
+    finally:
+        client.close()
+    return captured_requests[0]
+
+
+@pytest.mark.parametrize(
+    ("extra_headers", "drop_params", "expected_fallbacks"),
+    [
+        ({"anthropic-beta": "server-side-fallback-2026-07-01"}, True, "default"),
+        (None, False, "default"),
+        (None, True, None),
+    ],
+)
+def test_anthropic_chat_drops_fallbacks_under_drop_params_only_when_the_request_lacks_the_fallback_beta(
+    extra_headers: dict[str, str] | None,
+    drop_params: bool,
+    expected_fallbacks: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = _anthropic_request_with_fallbacks(extra_headers, drop_params)
+    assert json.loads(request.content).get("fallbacks") == expected_fallbacks
+    assert ("server-side-fallback-2026-07-01" in request.headers.get("anthropic-beta", "")) == (
+        extra_headers is not None
+    )
+
+
 def test_anthropic_tool_history_without_tools_injects_a_dummy_tool(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:

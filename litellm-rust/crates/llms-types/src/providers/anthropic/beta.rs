@@ -124,12 +124,14 @@ pub enum AnthropicBeta {
     ToolSearchTool20251019,
     #[strum(serialize = "inline-tools-2026-09-15")]
     InlineTools20260915,
+    #[strum(serialize = "server-side-fallback-2026-07-01")]
+    ServerSideFallback20260701,
     #[strum(default, transparent)]
     Other(String),
 }
 
 impl AnthropicBeta {
-    pub const KNOWN: [Self; 40] = [
+    pub const KNOWN: [Self; 41] = [
         Self::Oauth20250420,
         Self::WebFetch20250910,
         Self::WebSearch20250305,
@@ -170,6 +172,7 @@ impl AnthropicBeta {
         Self::ToolExamples20251029,
         Self::ToolSearchTool20251019,
         Self::InlineTools20260915,
+        Self::ServerSideFallback20260701,
     ];
 
     pub fn as_str(&self) -> &str {
@@ -248,7 +251,7 @@ impl AnthropicBeta {
             | Self::ThinkingDisplayUpdates20260818 => &[],
             Self::DangerousToolUse20260903 => &[BetaProvider::BedrockConverse],
             Self::Effort20251124 => &[BetaProvider::VertexAi],
-            Self::FastMode20260201 | Self::Oauth20250420 => &[
+            Self::FastMode20260201 | Self::Oauth20250420 | Self::ServerSideFallback20260701 => &[
                 BetaProvider::AzureAi,
                 BetaProvider::BedrockConverse,
                 BetaProvider::Bedrock,
@@ -451,7 +454,8 @@ mod tests {
             AnthropicBeta::TokenEfficientTools20250219,
             AnthropicBeta::ToolExamples20251029,
             AnthropicBeta::ToolSearchTool20251019,
-            AnthropicBeta::InlineTools20260915
+            AnthropicBeta::InlineTools20260915,
+            AnthropicBeta::ServerSideFallback20260701
         )]
         beta: AnthropicBeta,
     ) {

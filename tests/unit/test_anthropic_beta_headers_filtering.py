@@ -509,6 +509,25 @@ class TestAnthropicBetaHeadersFiltering:
 
         assert filtered == ["inline-tools-2026-09-15"]
 
+    @pytest.mark.parametrize(
+        ("provider", "expected"),
+        [
+            ("anthropic", ["server-side-fallback-2026-07-01"]),
+            ("vertex_ai", []),
+            ("bedrock", []),
+        ],
+    )
+    def test_server_side_fallback_forwarded_only_to_the_claude_api(self, provider: str, expected: list[str]) -> None:
+        """Anthropic rejects the `fallbacks` request field with 400 "fallbacks: Extra inputs are not permitted" unless
+        this beta is sent, and documents it for the Claude API only
+        (https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback, fetched 2026-10-26)"""
+        filtered: Final = filter_and_transform_beta_headers(
+            beta_headers=["server-side-fallback-2026-07-01"],
+            provider=provider,
+        )
+
+        assert filtered == expected
+
     def test_null_value_headers_filtered(self):
         """Test that headers with null values are always filtered out."""
         for provider in [
