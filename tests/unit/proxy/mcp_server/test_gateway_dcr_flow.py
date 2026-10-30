@@ -1,8 +1,10 @@
 """Tests for the aggregate gateway DCR flow (register, authorize, complete, token)."""
 
+import asyncio
 import hashlib
 import json
 import re
+import time
 from base64 import urlsafe_b64encode
 from datetime import datetime, timedelta, timezone
 from http.cookies import SimpleCookie
@@ -72,6 +74,7 @@ from litellm.redis.stores.mcp_single_use import (
     ConnectFlowUsed,
     RefreshFamilyRevoked,
     RefreshTokenUsed,
+    SingleUseMarker,
 )
 from tests._support.fake_redis import fake_redis_cache
 
@@ -823,6 +826,142 @@ async def test_single_use_guard_claims_each_marker_under_the_key_old_pods_use(ma
 
 
 LOOPBACK_REDIRECT_URI = "http://localhost:3118/callback"
+
+
+_MARKER_CASES: Final = (
+    (AuthCodeUsed("jti: é\n1"), "mcp_gateway_dcr_code_used:jti: é\n1"),
+    (ConnectFlowUsed("jti: é\n1"), "mcp_gateway_dcr_flow_used:jti: é\n1"),
+    (RefreshTokenUsed("jti: é\n1"), "mcp_gateway_dcr_refresh_used:jti: é\n1"),
+    (RefreshFamilyRevoked("jti: é\n1"), "mcp_gateway_dcr_refresh_family_revoked:jti: é\n1"),
+    (
+        AssertionRedeemed("https://issuer.example/租户", "jti: é\n1"),
+        "mcp_gateway_dcr:id_jag:dabba8ce01737ba5cb47a28665f7bec742b072d198672c80bbc6e70a2781a221",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("marker", "key"), _MARKER_CASES)
+async def test_marker_families_interoperate_with_old_writers_and_preserve_expiry(
+    marker: SingleUseMarker, key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.mcp_server.gateway_dcr_flow import _SingleUseGuard
+
+    monkeypatch.setattr(time, "time", lambda: 1_700_000_000.0)
+    server: Final = fakeredis.FakeServer()
+    redis_cache: Final = fake_redis_cache(server, namespace="ns")
+    raw: Final = fakeredis.FakeAsyncRedis(server=server)
+    guard: Final = _SingleUseGuard(DualCache(redis_cache=redis_cache))
+    wire_key: Final = f"ns:{key}"
+
+    assert await guard.peek(marker) == "unclaimed"
+    assert await guard.claim(marker, 60) == "first"
+    assert await raw.keys("*") == [wire_key.encode()]
+    assert await raw.get(wire_key) == b"1"
+    assert await raw.pttl(wire_key) == 60_000
+    assert await redis_cache.async_get_cache(key) == 1
+    assert await redis_cache.async_increment(key, 1, ttl=5) == 2.0
+    assert await guard.peek(marker) == "claimed"
+    assert await guard.claim(marker, 120) == "replayed"
+    assert await raw.get(wire_key) == b"3"
+    assert await raw.pttl(wire_key) == 60_000
+
+    assert await raw.delete(wire_key) == 1
+    assert await redis_cache.async_increment(key, 1, ttl=60) == 1.0
+    assert await raw.persist(wire_key)
+    assert await raw.pttl(wire_key) == -1
+    other_worker: Final = _SingleUseGuard(DualCache(redis_cache=fake_redis_cache(server, namespace="ns")))
+    assert await other_worker.peek(marker) == "claimed"
+    assert await other_worker.claim(marker, 17) == "replayed"
+    assert await raw.get(wire_key) == b"2"
+    assert await raw.pttl(wire_key) == 17_000
+
+    monkeypatch.setattr(time, "time", lambda: 1_700_000_018.0)
+    assert await guard.peek(marker) == "unclaimed"
+    claimed: Final = await asyncio.gather(guard.claim(marker, 30), other_worker.claim(marker, 30))
+    assert sorted(claimed) == ["first", "replayed"]
+    assert await raw.get(wire_key) == b"2"
+    assert await raw.pttl(wire_key) == 30_000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("marker", "key"), _MARKER_CASES)
+async def test_marker_families_use_canonical_keys_only_for_local_fallback(marker: SingleUseMarker, key: str) -> None:
+    from litellm.proxy.mcp_server.gateway_dcr_flow import _SingleUseGuard
+
+    cache: Final = DualCache()
+    guard: Final = _SingleUseGuard(cache)
+    assert await guard.peek(marker) == "unclaimed"
+    assert await guard.claim(marker, 60) == "first"
+    assert cache.in_memory_cache.get_cache(key) == 1
+    assert await guard.peek(marker) == "claimed"
+    assert await guard.claim(marker, 60) == "replayed"
+    assert cache.in_memory_cache.get_cache(key) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("marker", "key"), _MARKER_CASES)
+async def test_marker_families_fail_closed_on_invalid_counter(marker: SingleUseMarker, key: str) -> None:
+    from litellm.proxy.mcp_server.gateway_dcr_flow import _SingleUseGuard
+
+    server: Final = fakeredis.FakeServer()
+    cache: Final = DualCache(redis_cache=fake_redis_cache(server, namespace="ns"))
+    raw: Final = fakeredis.FakeAsyncRedis(server=server)
+    guard: Final = _SingleUseGuard(cache)
+    assert await raw.set(f"ns:{key}", b"not a counter")
+    assert await guard.claim(marker, 60) == "unavailable"
+    assert await guard.peek(marker) == "claimed"
+    assert await raw.get(f"ns:{key}") == b"not a counter"
+    assert await raw.pttl(f"ns:{key}") == -1
+    assert cache.in_memory_cache.get_cache(key) is None
+
+
+class _RedisThatLosesClaimReply(fakeredis.FakeAsyncRedis):
+    async def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> object:
+        await super().eval(script, numkeys, *keys_and_args)
+        raise RedisConnectionError("claim applied but reply was lost")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply", (b"nan", b"invalid", 1))
+async def test_malformed_claim_reply_is_unavailable_without_local_fallback(reply: bytes | int) -> None:
+    from litellm.proxy.mcp_server.gateway_dcr_flow import _SingleUseGuard
+
+    class RedisThatCorruptsClaimReply(fakeredis.FakeAsyncRedis):
+        async def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> bytes | int:
+            await super().eval(script, numkeys, *keys_and_args)
+            return reply
+
+    server: Final = fakeredis.FakeServer()
+    redis_cache: Final = fake_redis_cache(server, namespace="ns", client=RedisThatCorruptsClaimReply)
+    cache: Final = DualCache(redis_cache=redis_cache)
+    assert await _SingleUseGuard(cache).claim(AuthCodeUsed("invalid-reply"), 60) == "unavailable"
+    assert cache.in_memory_cache.get_cache("mcp_gateway_dcr_code_used:invalid-reply") is None
+    assert await fakeredis.FakeAsyncRedis(server=server).get("ns:mcp_gateway_dcr_code_used:invalid-reply") == b"1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("marker", "key"), _MARKER_CASES)
+async def test_marker_families_refuse_replay_without_retrying_a_lost_reply(
+    marker: SingleUseMarker, key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.mcp_server.gateway_dcr_flow import _SingleUseGuard
+
+    monkeypatch.setattr(time, "time", lambda: 1_700_000_000.0)
+    server: Final = fakeredis.FakeServer()
+    redis_cache: Final = fake_redis_cache(server, namespace="ns", client=_RedisThatLosesClaimReply)
+    cache: Final = DualCache(redis_cache=redis_cache)
+    guard: Final = _SingleUseGuard(cache)
+    raw: Final = fakeredis.FakeAsyncRedis(server=server)
+    assert await guard.claim(marker, 60) == "unavailable"
+    assert await raw.get(f"ns:{key}") == b"1"
+    assert await raw.pttl(f"ns:{key}") == 60_000
+    assert cache.in_memory_cache.get_cache(key) is None
+    other_worker: Final = _SingleUseGuard(DualCache(redis_cache=fake_redis_cache(server, namespace="ns")))
+    assert await other_worker.claim(marker, 120) == "replayed"
+    assert await other_worker.peek(marker) == "claimed"
+    assert await raw.get(f"ns:{key}") == b"2"
+    assert await raw.pttl(f"ns:{key}") == 60_000
 
 
 async def _complete(redirect_uri: str, delivery, cookies=None, handle=None, session_user_id="u1"):
