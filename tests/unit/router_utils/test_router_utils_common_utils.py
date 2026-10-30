@@ -774,6 +774,90 @@ async def test_retry_after_a_retryable_failure_on_the_capable_deployment_reaches
     assert response.choices[0].message.content == "from no-search"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize(("request_retry_count", "flagged_reachable"), [(1, False), (2, True)], ids=["kept", "trimmed"])
+async def test_web_search_preference_steps_aside_only_once_the_retry_history_was_trimmed(
+    metadata_field: str, request_retry_count: int, flagged_reachable: bool
+) -> None:
+    router: Final = Router(
+        model_list=[
+            *(
+                {
+                    "model_name": "mixed",
+                    "litellm_params": {"model": "openai/gpt-x", "api_key": "fake-key", "mock_response": "hi"},
+                    "model_info": {"id": deployment_id},
+                }
+                for deployment_id in ("search-a", "search-b")
+            ),
+            {
+                "model_name": "mixed",
+                "litellm_params": {
+                    "model": "openai/gpt-y",
+                    "api_key": "fake-key",
+                    "mock_response": "hi",
+                    "weight": 10**6,
+                },
+                "model_info": {"id": "no-search", "supports_web_search": False},
+            },
+        ],
+    )
+    picks: Final = {
+        (
+            await router.async_get_available_deployment(
+                model="mixed",
+                messages=[{"role": "user", "content": "hi"}],
+                request_kwargs={
+                    **_ANTHROPIC_WEB_SEARCH_REQUEST,
+                    metadata_field: {
+                        "previous_models": ({"deployment_id": "search-a", "exception_type": "Timeout"},),
+                        "request_retry_count": request_retry_count,
+                    },
+                },
+            )
+        )["model_info"]["id"]
+        for _ in range(20)
+    }
+    assert ("no-search" in picks) is flagged_reachable
+
+
+@pytest.mark.asyncio
+async def test_retries_past_the_kept_retry_history_reach_the_deployment_that_cannot_search() -> None:
+    capable_deployments: Final = [
+        {
+            "model_name": "mixed",
+            "litellm_params": {
+                "model": "openai/gpt-x",
+                "api_key": "fake-key",
+                "mock_response": Exception("connection error"),
+            },
+            "model_info": {"id": f"search-{index}"},
+        }
+        for index in range(5)
+    ]
+    router: Final = Router(
+        model_list=[
+            *capable_deployments,
+            {
+                "model_name": "mixed",
+                "litellm_params": {
+                    "model": "openai/gpt-y",
+                    "api_key": "fake-key",
+                    "mock_response": "from no-search",
+                    "weight": 10**6,
+                },
+                "model_info": {"id": "no-search", "supports_web_search": False},
+            },
+        ],
+        num_retries=5,
+        disable_cooldowns=True,
+    )
+    response: Final = await router.acompletion(
+        model="mixed", messages=[{"role": "user", "content": "hi"}], **_ANTHROPIC_WEB_SEARCH_REQUEST
+    )
+    assert response.choices[0].message.content == "from no-search"
+
+
 def _rate_limited_web_search_group(routing_strategy: str) -> Router:
     return Router(
         model_list=[

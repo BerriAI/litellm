@@ -509,6 +509,12 @@ def _retry_breadcrumbs(metadata: object) -> tuple[Mapping[str, object], ...]:
         return ()
 
 
+def _retry_history_was_trimmed(metadata: object) -> bool:
+    fields: Final = as_str_mapping(metadata)
+    retry_count: Final = None if fields is None else fields.get("request_retry_count")
+    return type(retry_count) is int and retry_count > len(_retry_breadcrumbs(metadata))
+
+
 def _deployment_ids_retried_in_request(request_kwargs: Mapping[str, object]) -> tuple[str, ...]:
     breadcrumbs: Final = (
         *_retry_breadcrumbs(request_kwargs.get("metadata")),
@@ -528,6 +534,11 @@ def prefer_web_search_deployments(
     if request_kwargs is None or not _is_web_search_request(
         request_kwargs.get("tools"), request_kwargs.get("web_search_options")
     ):
+        return deployments
+    if _retry_history_was_trimmed(request_kwargs.get("metadata")) or _retry_history_was_trimmed(
+        request_kwargs.get("litellm_metadata")
+    ):
+        verbose_router_logger.debug("This request's retry history was trimmed, so every deployment stays")
         return deployments
     tried: Final = frozenset(
         (
