@@ -1,0 +1,1 @@
+-- QA probe for the stale base.sha check, names LiteLLM_SpendLogs
