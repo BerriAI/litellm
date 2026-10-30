@@ -21,7 +21,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
-from litellm.types.llms.openai import ResponsesAPIStreamEvents
+from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStreamEvents
 from litellm.types.utils import Message, ModelResponse
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
@@ -1774,8 +1774,27 @@ def _search_calls(output: Sequence[BaseModel]) -> list[tuple[str, str, str]]:
     return [(item.type, item.status, item.action.query) for item in output]
 
 
-def test_responses_over_anthropic_report_a_paused_turn_as_incomplete_with_its_pending_search(
+def _status_and_incomplete_details(response: ResponsesAPIResponse) -> tuple[str | None, Mapping[str, object] | None]:
+    details: Final = response.incomplete_details
+    return response.status, details.model_dump() if details is not None else None
+
+
+_PAUSED_OR_CUT: Final = pytest.mark.parametrize(
+    ("stop_reason", "expected_status", "expected_incomplete_details"),
+    [
+        ("pause_turn", "completed", None),
+        ("max_tokens", "incomplete", {"reason": "max_output_tokens"}),
+    ],
+    ids=["paused", "max_tokens"],
+)
+
+
+@_PAUSED_OR_CUT
+def test_responses_over_anthropic_report_a_paused_turn_as_completed_with_its_pending_search(
     respx_mock: respx.MockRouter,
+    stop_reason: str,
+    expected_status: str,
+    expected_incomplete_details: Mapping[str, object] | None,
 ) -> None:
     respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
         return_value=httpx.Response(
@@ -1783,7 +1802,7 @@ def test_responses_over_anthropic_report_a_paused_turn_as_incomplete_with_its_pe
             json={
                 **ANTHROPIC_DOCS_REFUSAL_MESSAGE,
                 "content": [_RAN_SEARCH, _RAN_SEARCH_RESULT, _PENDING_SEARCH],
-                "stop_reason": "pause_turn",
+                "stop_reason": stop_reason,
                 "stop_details": None,
             },
         )
@@ -1793,7 +1812,7 @@ def test_responses_over_anthropic_report_a_paused_turn_as_incomplete_with_its_pe
         model=_MODEL, input="Chain sister cities.", tools=[{"type": "web_search"}], api_key="mock_api_key"
     )
 
-    assert (response.status, response.incomplete_details.reason) == ("incomplete", "max_output_tokens")
+    assert _status_and_incomplete_details(response) == (expected_status, expected_incomplete_details)
     assert _search_calls(response.output) == _EXPECTED_PAUSED_OUTPUT
 
 
@@ -1809,8 +1828,12 @@ def _server_tool_use_events(index: int, block: Mapping[str, object]) -> tuple[Ma
     )
 
 
-def test_streamed_responses_over_anthropic_leave_a_paused_turn_pending_search_in_progress(
+@_PAUSED_OR_CUT
+def test_streamed_responses_over_anthropic_complete_a_paused_turn_with_its_pending_search_in_progress(
     respx_mock: respx.MockRouter,
+    stop_reason: str,
+    expected_status: str,
+    expected_incomplete_details: Mapping[str, object] | None,
 ) -> None:
     respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
         return_value=httpx.Response(
@@ -1827,7 +1850,7 @@ def test_streamed_responses_over_anthropic_leave_a_paused_turn_pending_search_in
                 *_server_tool_use_events(2, _PENDING_SEARCH),
                 {
                     "type": "message_delta",
-                    "delta": {"stop_reason": "pause_turn", "stop_sequence": None},
+                    "delta": {"stop_reason": stop_reason, "stop_sequence": None},
                     "usage": {"output_tokens": 5},
                 },
                 {"type": "message_stop"},
@@ -1858,6 +1881,6 @@ def test_streamed_responses_over_anthropic_leave_a_paused_turn_pending_search_in
         ResponsesAPIStreamEvents.WEB_SEARCH_CALL_IN_PROGRESS,
         ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
     ]
-    assert finished.type == ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE
-    assert finished.response.incomplete_details.reason == "max_output_tokens"
+    assert finished.type == f"response.{expected_status}"
+    assert _status_and_incomplete_details(finished.response) == (expected_status, expected_incomplete_details)
     assert _search_calls(finished.response.output) == _EXPECTED_PAUSED_OUTPUT

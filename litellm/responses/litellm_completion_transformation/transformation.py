@@ -57,7 +57,7 @@ from litellm.litellm_core_utils.hidden_params import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
-from litellm.llms.anthropic.messages.native.utils import openai_chat_refusal_text
+from litellm.llms.anthropic.messages.native.utils import anthropic_stop_reason, openai_chat_refusal_text
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
 from litellm.llms.openrouter.chat.transformation import openrouter_model_supports_cache_control
@@ -3279,19 +3279,21 @@ class LiteLLMCompletionResponsesConfig:
         """
         if isinstance(chat_completion_response, dict):
             chat_completion_response = ModelResponse(**chat_completion_response)
-        # Get finish_reason from the first choice to determine overall status
-        finish_reason: str | None = None
         choices: Final[list[Choices]] = getattr(chat_completion_response, "choices", [])
-        if choices and len(choices) > 0:
-            finish_reason = choices[0].finish_reason
+        finish_reason: Final = choices[0].finish_reason if choices else None
+        paused_turn: Final = bool(choices) and anthropic_stop_reason(choices[0].message) == "pause_turn"
 
         echoed: Final = _echoable_request_params(responses_api_request)
         chat_usage: Final = getattr(chat_completion_response, "usage", None)
-        incomplete_details: Final = LiteLLMCompletionResponsesConfig._incomplete_details_for_finish_reason(
-            finish_reason=finish_reason,
-            existing=getattr(chat_completion_response, "incomplete_details", None),
-            completion_tokens=getattr(chat_usage, "completion_tokens", None),
-            max_output_tokens=echoed.get("max_output_tokens"),
+        incomplete_details: Final = (
+            None
+            if paused_turn
+            else LiteLLMCompletionResponsesConfig._incomplete_details_for_finish_reason(
+                finish_reason=finish_reason,
+                existing=getattr(chat_completion_response, "incomplete_details", None),
+                completion_tokens=getattr(chat_usage, "completion_tokens", None),
+                max_output_tokens=echoed.get("max_output_tokens"),
+            )
         )
 
         responses_api_response: Final[ResponsesAPIResponse] = ResponsesAPIResponse(
@@ -3318,8 +3320,12 @@ class LiteLLMCompletionResponsesConfig:
             max_output_tokens=echoed.get("max_output_tokens"),
             previous_response_id=echoed.get("previous_response_id"),
             reasoning=echoed.get("reasoning"),
-            status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
-                finish_reason
+            status=(
+                "completed"
+                if paused_turn
+                else LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                    finish_reason
+                )
             ),
             text=echoed.get("text") or {},
             truncation=echoed.get("truncation"),
