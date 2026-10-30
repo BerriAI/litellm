@@ -1,7 +1,7 @@
-from typing import Any
-
-from pydantic import BaseModel, Field
+from pydantic import Field
 from typing_extensions import TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .base import GuardrailConfigModel
 
@@ -18,7 +18,7 @@ class EnkryptAIPolicyViolationDetail(TypedDict, total=False):
 class EnkryptAIPIIDetail(TypedDict, total=False):
     """Details for PII detection."""
 
-    pii: dict[str, Any]
+    pii: dict[str, object]
 
 
 class EnkryptAIToxicityDetail(TypedDict, total=False):
@@ -83,8 +83,8 @@ class EnkryptAIResponseDetails(TypedDict, total=False):
     toxicity: EnkryptAIToxicityDetail | None
     keyword_detected: EnkryptAIKeywordDetail | None
     bias: EnkryptAIBiasDetail | None
-    prompt_injection: dict[str, Any] | None
-    jailbreak: dict[str, Any] | None
+    prompt_injection: dict[str, object] | None
+    jailbreak: dict[str, object] | None
 
 
 class EnkryptAIResponse(TypedDict, total=False):
@@ -105,12 +105,12 @@ class EnkryptAIProcessedResult(TypedDict):
         | EnkryptAIToxicityDetail
         | EnkryptAIKeywordDetail
         | EnkryptAIBiasDetail
-        | dict[str, Any],
+        | dict[str, object],
     ]
 
 
 # Pydantic Config Model
-class EnkryptAIGuardrailConfigs(BaseModel):
+class EnkryptAIGuardrailConfigs(LiteLLMBaseModel):
     """Configuration parameters for the EnkryptAI guardrail"""
 
     api_key: str | None = Field(

@@ -3,12 +3,28 @@ Based on Google's GenAI Kit dotprompt implementation: https://google.github.io/d
 """
 
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Final
 
 import yaml
 from jinja2 import DictLoader, select_autoescape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
+from typing_extensions import NotRequired, ReadOnly, TypedDict
+
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+
+
+class _PromptFileJson(TypedDict):
+    """JSON form of a .prompt file: rendered template text plus its frontmatter."""
+
+    content: ReadOnly[NotRequired[str]]
+    metadata: ReadOnly[NotRequired[dict[str, object]]]
+
+
+class PromptJsonEntry(TypedDict):
+    content: ReadOnly[str]
+    metadata: ReadOnly[dict[str, object]]
 
 
 def strip_version_suffix(prompt_id: str) -> str | None:
@@ -61,7 +77,7 @@ class PromptManager:
         self,
         prompt_id: str | None = None,
         prompt_directory: str | None = None,
-        prompt_data: dict[str, dict[str, Any]] | None = None,
+        prompt_data: dict[str, dict[str, object]] | None = None,
         prompt_file: str | None = None,
     ):
         self.prompt_directory = Path(prompt_directory) if prompt_directory else None
@@ -159,7 +175,7 @@ class PromptManager:
         content: Final = file_path.read_text(encoding="utf-8")
 
         # Split frontmatter and content
-        frontmatter, template_content = self._parse_frontmatter(content)
+        frontmatter, template_content = self.parse_frontmatter(content)
 
         return PromptTemplate(
             content=template_content.strip(),
@@ -167,7 +183,7 @@ class PromptManager:
             template_id=prompt_id,
         )
 
-    def _parse_frontmatter(self, content: str) -> tuple[dict[str, Any], str]:
+    def parse_frontmatter(self, content: str) -> tuple[dict[str, object], str]:
         """Parse YAML frontmatter from prompt content."""
         # Match YAML frontmatter between --- delimiters
         frontmatter_pattern: Final = r"^---\s*\n(.*?)\n---\s*\n(.*)$"
@@ -178,7 +194,7 @@ class PromptManager:
             template_content = match.group(2)
 
             try:
-                frontmatter = yaml.safe_load(frontmatter_yaml) or {}
+                frontmatter: dict[str, object] = yaml.safe_load(frontmatter_yaml) or {}
             except yaml.YAMLError as e:
                 raise ValueError(f"Invalid YAML frontmatter: {e}")
         else:
@@ -188,10 +204,12 @@ class PromptManager:
 
         return frontmatter, template_content
 
+    _parse_frontmatter = parse_frontmatter
+
     def render(
         self,
         prompt_id: str,
-        prompt_variables: dict[str, Any] | None = None,
+        prompt_variables: Mapping[str, object] | None = None,
         version: int | None = None,
     ) -> str:
         """
@@ -231,7 +249,7 @@ class PromptManager:
         except Exception as e:
             raise ValueError(f"Error rendering template '{prompt_id}': {e}")
 
-    def _validate_input(self, variables: dict[str, Any], schema: dict[str, Any]) -> None:
+    def _validate_input(self, variables: Mapping[str, object], schema: Mapping[str, str]) -> None:
         """Basic validation of input variables against schema."""
         for field_name, field_type in schema.items():
             if field_name in variables:
@@ -291,7 +309,7 @@ class PromptManager:
         """Get a list of all available prompt IDs."""
         return list(self.prompts.keys())
 
-    def get_prompt_metadata(self, prompt_id: str) -> dict[str, Any] | None:
+    def get_prompt_metadata(self, prompt_id: str) -> dict[str, object] | None:
         """Get metadata for a specific prompt."""
         template: Final = self.prompts.get(prompt_id)
         return template.metadata if template else None
@@ -302,12 +320,12 @@ class PromptManager:
         if self.prompt_directory:
             self._load_prompts()
 
-    def add_prompt(self, prompt_id: str, content: str, metadata: dict[str, Any] | None = None) -> None:
+    def add_prompt(self, prompt_id: str, content: str, metadata: dict[str, object] | None = None) -> None:
         """Add a prompt template programmatically."""
         template: Final = PromptTemplate(content=content, metadata=metadata or {}, template_id=prompt_id)
         self.prompts[prompt_id] = template
 
-    def prompt_file_to_json(self, file_path: str | Path) -> dict[str, Any]:
+    def prompt_file_to_json(self, file_path: str | Path) -> _PromptFileJson:
         """Convert a .prompt file to JSON format.
 
         Args:
@@ -320,11 +338,11 @@ class PromptManager:
         content: Final = file_path.read_text(encoding="utf-8")
 
         # Parse frontmatter and content
-        frontmatter, template_content = self._parse_frontmatter(content)
+        frontmatter, template_content = self.parse_frontmatter(content)
 
         return {"content": template_content.strip(), "metadata": frontmatter}
 
-    def json_to_prompt_file(self, prompt_data: dict[str, Any]) -> str:
+    def json_to_prompt_file(self, prompt_data: _PromptFileJson) -> str:
         """Convert JSON prompt data to .prompt file format.
 
         Args:
@@ -347,20 +365,26 @@ class PromptManager:
 
         return f"---\n{frontmatter_yaml}---\n{content}"
 
-    def get_all_prompts_as_json(self) -> dict[str, dict[str, Any]]:
+    def get_all_prompts_as_json(self) -> dict[str, PromptJsonEntry]:
         """Get all loaded prompts in JSON format.
 
         Returns:
             Dictionary mapping prompt_id to prompt data
         """
-        result: Final = {}
-        for prompt_id, template in self.prompts.items():
-            result[prompt_id] = {
+        return {
+            prompt_id: {
                 "content": template.content,
                 "metadata": template.metadata,
             }
-        return result
+            for prompt_id, template in self.prompts.items()
+        }
 
-    def load_prompts_from_json_data(self, prompt_data: dict[str, dict[str, Any]]) -> None:
-        """Load additional prompts from JSON data (merges with existing prompts)."""
-        self._load_prompts_from_json(prompt_data)
+    def load_prompts_from_json_data(self, prompt_data: Mapping[str, object]) -> None:
+        """Load additional prompts from JSON data (merges with existing prompts). Entries that are not
+        mappings are skipped, the same as a malformed entry inside the loader."""
+        entries: Final = {
+            prompt_id: dict(entry)
+            for prompt_id, raw in prompt_data.items()
+            if (entry := as_str_mapping(raw)) is not None
+        }
+        self._load_prompts_from_json(entries)

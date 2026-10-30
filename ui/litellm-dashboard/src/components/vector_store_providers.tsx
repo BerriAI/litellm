@@ -1,5 +1,7 @@
 import { getProviderLogoAndName, Providers, providerLogoMap } from "@/components/provider_info_helpers";
+import awsLogo from "../../public/assets/logos/aws.svg";
 import milvusLogo from "../../public/assets/logos/milvus.svg";
+import mongodbLogo from "../../public/assets/logos/mongodb.svg";
 import postgresqlLogo from "../../public/assets/logos/postgresql.svg";
 import s3VectorLogo from "../../public/assets/logos/s3_vector.png";
 import valkeyLogo from "../../public/assets/logos/valkey.svg";
@@ -7,12 +9,14 @@ import valkeyLogo from "../../public/assets/logos/valkey.svg";
 export enum VectorStoreProviders {
   Bedrock = "Amazon Bedrock",
   S3Vectors = "Amazon S3 Vectors",
+  OpenSearch = "Amazon OpenSearch",
   PgVector = "PostgreSQL pgvector (LiteLLM Connector)",
   VertexRagEngine = "Vertex AI RAG Engine",
   VertexAiSearch = "Vertex AI Search",
   OpenAI = "OpenAI",
   Azure = "Azure OpenAI",
   Milvus = "Milvus",
+  MongoDB = "MongoDB (BETA)",
   Valkey = "Valkey",
 }
 
@@ -24,7 +28,9 @@ export const vectorStoreProviderMap: Record<string, string> = {
   OpenAI: "openai",
   Azure: "azure",
   Milvus: "milvus",
+  MongoDB: "mongodb",
   S3Vectors: "s3_vectors",
+  OpenSearch: "opensearch",
   Valkey: "valkey",
 };
 
@@ -36,7 +42,9 @@ export const vectorStoreProviderLogoMap: Record<string, string> = {
   [VectorStoreProviders.OpenAI]: providerLogoMap[Providers.OpenAI] ?? "",
   [VectorStoreProviders.Azure]: providerLogoMap[Providers.Azure] ?? "",
   [VectorStoreProviders.Milvus]: milvusLogo.src,
+  [VectorStoreProviders.MongoDB]: mongodbLogo.src,
   [VectorStoreProviders.S3Vectors]: s3VectorLogo.src,
+  [VectorStoreProviders.OpenSearch]: awsLogo.src,
   [VectorStoreProviders.Valkey]: valkeyLogo.src,
 };
 
@@ -169,6 +177,78 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
       type: "select",
     },
   ],
+  mongodb: [
+    {
+      name: "api_base",
+      label: "Sidecar URL",
+      tooltip: "Use HTTPS for a remote sidecar, or HTTP with a loopback IP for a sidecar on the same host or Pod",
+      placeholder: "http://127.0.0.1:8080",
+      required: true,
+      type: "text",
+    },
+    {
+      name: "api_key",
+      label: "Sidecar API Key",
+      tooltip: "The MONGODB_SIDECAR_API_KEY configured in your MongoDB sidecar",
+      placeholder: "Enter sidecar API key",
+      required: true,
+      type: "password",
+    },
+    {
+      name: "mongodb_database",
+      label: "Database",
+      tooltip: "The MongoDB database holding the collection you want to search",
+      placeholder: "sample_mflix",
+      required: true,
+      type: "text",
+    },
+    {
+      name: "mongodb_collection",
+      label: "Collection",
+      tooltip: "The collection your MongoDB Vector Search index was built on",
+      placeholder: "embedded_movies",
+      required: true,
+      type: "text",
+    },
+    {
+      name: "embedding_model",
+      label: "Embedding Model",
+      tooltip:
+        "The embedding model on this proxy that created the vectors already stored in your collection. LiteLLM embeds every search query with it, so it must be the same model. A different model of the same size will not error, it will just return wrong results. Add it under Models first if it is not listed",
+      placeholder: "text-embedding-3-small",
+      required: true,
+      type: "select",
+    },
+    {
+      name: "mongodb_embedding_field",
+      label: "Vector Field Name",
+      tooltip:
+        "The field in each document that holds its embedding. It must match the path your MongoDB Vector Search index was created on (default: embedding)",
+      placeholder: "embedding",
+      required: false,
+      type: "text",
+      initialValue: "embedding",
+    },
+    {
+      name: "mongodb_text_field",
+      label: "Text Field",
+      tooltip:
+        "The field in each document that holds its readable text. LiteLLM returns this text in search results, and it accepts a dotted path such as metadata.body (default: text)",
+      placeholder: "text",
+      required: false,
+      type: "text",
+      initialValue: "text",
+    },
+    {
+      name: "mongodb_num_candidates",
+      label: "Candidates Considered",
+      tooltip:
+        "How many nearest neighbours MongoDB examines before returning the top results. Higher is more accurate and slower. Leave blank to let LiteLLM scale it with the requested result count",
+      placeholder: "100",
+      required: false,
+      type: "text",
+    },
+  ],
   valkey: [
     {
       name: "valkey_host",
@@ -235,6 +315,64 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
       required: false,
       type: "text",
       initialValue: "embedding",
+    },
+  ],
+  opensearch: [
+    {
+      name: "api_base",
+      label: "OpenSearch Endpoint",
+      tooltip:
+        "The endpoint of your OpenSearch Serverless collection or OpenSearch Service domain, starting with https://",
+      placeholder: "https://abc123.us-east-1.aoss.amazonaws.com",
+      required: true,
+      type: "text",
+    },
+    {
+      name: "aws_region_name",
+      label: "AWS Region (optional)",
+      tooltip:
+        "The AWS region of the collection or domain. Leave blank to use the region in the endpoint, and set it when the endpoint is a custom domain",
+      placeholder: "us-east-1",
+      required: false,
+      type: "text",
+    },
+    {
+      name: "embedding_model",
+      label: "Embedding Model",
+      tooltip:
+        "The embedding model on this proxy that created the vectors already stored in your index. LiteLLM embeds every search query with it, so it must be the same model. Add it under Models first if it is not listed",
+      placeholder: "text-embedding-3-small",
+      required: true,
+      type: "select",
+    },
+    {
+      name: "opensearch_embedding_field",
+      label: "Vector Field Name",
+      tooltip:
+        "The top-level knn_vector field in your index mapping that holds each document's embedding (default: embedding)",
+      placeholder: "embedding",
+      required: false,
+      type: "text",
+      initialValue: "embedding",
+    },
+    {
+      name: "opensearch_text_field",
+      label: "Text Field",
+      tooltip:
+        "The top-level field in each document that holds its readable text. LiteLLM returns this text in search results (default: text)",
+      placeholder: "text",
+      required: false,
+      type: "text",
+      initialValue: "text",
+    },
+    {
+      name: "opensearch_index_name",
+      label: "Index Name (optional)",
+      tooltip:
+        "The OpenSearch index to search. Leave blank to use the Vector Store ID, and set it to register same-named indexes from two endpoints under different IDs",
+      placeholder: "my-knn-index",
+      required: false,
+      type: "text",
     },
   ],
   s3_vectors: [

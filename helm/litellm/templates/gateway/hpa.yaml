@@ -15,12 +15,22 @@ spec:
   maxReplicas: {{ .Values.gateway.hpa.maxReplicas }}
   metrics:
     {{- if .Values.gateway.hpa.targetCPUUtilizationPercentage }}
+    {{- if and .Values.gateway.collector.enabled .Values.gateway.collector.scaleOnGatewayContainerCpu }}
+    - type: ContainerResource
+      containerResource:
+        name: cpu
+        container: gateway
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.gateway.hpa.targetCPUUtilizationPercentage }}
+    {{- else }}
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
           averageUtilization: {{ .Values.gateway.hpa.targetCPUUtilizationPercentage }}
+    {{- end }}
     {{- end }}
     {{- if .Values.gateway.hpa.targetMemoryUtilizationPercentage }}
     - type: Resource
@@ -29,6 +39,24 @@ spec:
         target:
           type: Utilization
           averageUtilization: {{ .Values.gateway.hpa.targetMemoryUtilizationPercentage }}
+    {{- end }}
+    {{- with .Values.gateway.hpa.targetRequestsPerSecond }}
+    - type: Pods
+      pods:
+        metric:
+          name: litellm_requests_per_second
+        target:
+          type: AverageValue
+          averageValue: {{ toJson . | trimAll "\"" | quote }}
+    {{- end }}
+    {{- with .Values.gateway.hpa.targetTokensPerSecond }}
+    - type: Pods
+      pods:
+        metric:
+          name: litellm_tokens_per_second
+        target:
+          type: AverageValue
+          averageValue: {{ toJson . | trimAll "\"" | quote }}
     {{- end }}
   {{- with .Values.gateway.hpa.behavior }}
   behavior:

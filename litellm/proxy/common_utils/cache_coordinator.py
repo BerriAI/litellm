@@ -13,14 +13,14 @@ pattern: global spend, feature flags, config, or other shared read-through data.
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any, Final, Protocol, TypeVar
+from typing import Final, Protocol, TypeVar
 
 from litellm._logging import verbose_proxy_logger
 
 T = TypeVar("T")
 
 
-class AsyncCacheProtocol(Protocol):
+class AsyncCacheProtocol(Protocol[T]):
     """Protocol for cache backends used by EventDrivenCacheCoordinator.
 
     Matches ``DualCache`` / ``UserApiKeyCache`` call shapes (explicit optional params
@@ -30,18 +30,18 @@ class AsyncCacheProtocol(Protocol):
     async def async_get_cache(
         self,
         key: str,
-        parent_otel_span: Any = None,
+        parent_otel_span: object = None,
         local_only: bool = False,
-        **kwargs: Any,
-    ) -> Any: ...
+        **kwargs: object,
+    ) -> T | None: ...
 
     async def async_set_cache(
         self,
         key: str,
-        value: Any,
+        value: T,
         local_only: bool = False,
-        **kwargs: Any,
-    ) -> Any: ...
+        **kwargs: object,
+    ) -> object: ...
 
 
 class EventDrivenCacheCoordinator:
@@ -64,11 +64,11 @@ class EventDrivenCacheCoordinator:
         self._query_in_progress = False
         self._log_prefix = log_prefix
 
-    async def _get_cached(self, cache_key: str, cache: AsyncCacheProtocol) -> Any | None:
+    async def _get_cached(self, cache_key: str, cache: AsyncCacheProtocol[T]) -> T | None:
         """Return value from cache if present, else None."""
         return await cache.async_get_cache(key=cache_key)
 
-    def _log_cache_hit(self, value: T) -> None:
+    def _log_cache_hit(self, value: object) -> None:
         if self._log_prefix:
             verbose_proxy_logger.debug("%s Cache hit, value: %s", self._log_prefix, value)
 
@@ -98,7 +98,7 @@ class EventDrivenCacheCoordinator:
         self,
         event: asyncio.Event,
         cache_key: str,
-        cache: AsyncCacheProtocol,
+        cache: AsyncCacheProtocol[T],
     ) -> T | None:
         """Wait for loader to finish, then read from cache."""
         await event.wait()
@@ -118,7 +118,7 @@ class EventDrivenCacheCoordinator:
     async def _load_and_cache(
         self,
         cache_key: str,
-        cache: AsyncCacheProtocol,
+        cache: AsyncCacheProtocol[T],
         load_fn: Callable[[], Awaitable[T]],
     ) -> T | None:
         """Double-check cache, run load_fn, set cache, return value. Caller must call _signal_done in finally."""
@@ -163,7 +163,7 @@ class EventDrivenCacheCoordinator:
     async def get_or_load(
         self,
         cache_key: str,
-        cache: AsyncCacheProtocol,
+        cache: AsyncCacheProtocol[T],
         load_fn: Callable[[], Awaitable[T]],
     ) -> T | None:
         """

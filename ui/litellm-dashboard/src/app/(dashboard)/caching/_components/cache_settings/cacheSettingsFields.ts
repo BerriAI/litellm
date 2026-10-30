@@ -1,4 +1,17 @@
-export type CacheFieldType = "string" | "password" | "integer" | "float" | "boolean" | "list" | "model-select";
+export type CacheFieldType =
+  | "string"
+  | "password"
+  | "integer"
+  | "float"
+  | "boolean"
+  | "list"
+  | "model-select"
+  | "select";
+
+export interface CacheFieldOption {
+  readonly value: string;
+  readonly label: string;
+}
 
 export type RedisType = "node" | "cluster" | "sentinel" | "semantic";
 
@@ -18,6 +31,7 @@ export interface CacheField {
   readonly helpText: string;
   readonly redisType: RedisType | null;
   readonly defaultValue?: string | number | boolean;
+  readonly options?: readonly CacheFieldOption[];
   readonly rules?: CacheFieldRule[];
   // Credential field: never prefilled into the form, and dropped from the save
   // payload when left untouched so the redacted marker is never persisted.
@@ -178,6 +192,20 @@ export const CACHE_FIELDS: readonly CacheField[] = [
     section: "semantic",
     helpText: "Embedding model for semantic cache",
     redisType: "semantic",
+  },
+  {
+    name: "semantic_cache_scope",
+    label: "Semantic Cache Scope",
+    type: "select",
+    section: "semantic",
+    helpText:
+      "Who can share a semantic cache hit. Key shares hits between all end users of a key/team/org. End user also isolates per end user; requests without an end user fall back to the key scope.",
+    redisType: "semantic",
+    defaultValue: "key",
+    options: [
+      { value: "key", label: "Key (shared by all end users of the key/team/org)" },
+      { value: "end_user", label: "End user (isolated per end user)" },
+    ],
   },
   {
     name: "ssl",

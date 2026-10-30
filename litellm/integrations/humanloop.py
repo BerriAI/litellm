@@ -4,14 +4,14 @@ Humanloop integration
 https://humanloop.com/
 """
 
-from typing import Any, Final, cast
+from typing import Final, cast
 
 import httpx
 from typing_extensions import TypedDict
 
 import litellm
 from litellm.caching import DualCache
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import get_httpx_client
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.prompts.init_prompts import PromptSpec
@@ -24,7 +24,7 @@ class PromptManagementClient(TypedDict):
     prompt_id: str
     prompt_template: list[AllMessageValues]
     model: str | None
-    optional_params: dict[str, Any] | None
+    optional_params: dict[str, object] | None
 
 
 class HumanLoopPromptManager(DualCache):
@@ -36,7 +36,7 @@ class HumanLoopPromptManager(DualCache):
         return cast(PromptManagementClient | None, self.get_cache(key=humanloop_prompt_id))
 
     def _compile_prompt_helper(
-        self, prompt_template: list[AllMessageValues], prompt_variables: dict[str, Any]
+        self, prompt_template: list[AllMessageValues], prompt_variables: dict[str, object]
     ) -> list[AllMessageValues]:
         """
         Helper function to compile the prompt by substituting variables in the template.
@@ -61,7 +61,7 @@ class HumanLoopPromptManager(DualCache):
         return compiled_prompts
 
     def _get_prompt_from_id_api(self, humanloop_prompt_id: str, humanloop_api_key: str) -> PromptManagementClient:
-        client: Final = _get_httpx_client()
+        client: Final = get_httpx_client()
 
         base_url: Final = f"https://api.humanloop.com/v5/prompts/{humanloop_prompt_id}"
 

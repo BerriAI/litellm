@@ -1,0 +1,2046 @@
+import json
+import logging
+from collections.abc import Mapping
+from typing import Final, List, cast
+from unittest.mock import MagicMock, patch
+from urllib.parse import urlparse
+
+import httpx
+import pytest
+import respx
+from openai import AsyncOpenAI
+
+from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
+from litellm.llms.mistral.chat.transformation import (
+    MistralChatResponseIterator,
+    MistralConfig,
+)
+from litellm.llms.vertex_ai.vertex_ai_partner_models.mistral.transformation import VertexAIMistralConfig
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponse
+from litellm.utils import supports_reasoning
+
+
+@pytest.mark.asyncio
+async def test_mistral_chat_transformation():
+    mistral_config = MistralConfig()
+    result = mistral_config.transform_messages(
+        **{
+            "messages": [
+                {
+                    "content": [
+                        {"type": "text", "text": "Here is a representation of text"},
+                        {
+                            "type": "image_url",
+                            "image_url": "https://images.pexels.com/photos/13268478/pexels-photo-13268478.jpeg",
+                        },
+                    ],
+                    "role": "user",
+                }
+            ],
+            "model": "mistral-medium-latest",
+            "is_async": True,
+        }
+    )
+
+
+class TestMistralReasoningSupport:
+    """Test suite for Mistral Magistral reasoning functionality."""
+
+    def test_get_supported_openai_params_magistral_model(self):
+        """Test that magistral models support reasoning parameters."""
+        mistral_config = MistralConfig()
+
+        # Test magistral model supports reasoning parameters
+        supported_params = mistral_config.get_supported_openai_params("mistral/magistral-medium-2506")
+        assert "reasoning_effort" in supported_params
+        assert "thinking" in supported_params
+
+        supported_params_reasoning = mistral_config.get_supported_openai_params("mistral/mistral-medium-latest")
+        assert "reasoning_effort" in supported_params_reasoning
+        assert "thinking" not in supported_params_reasoning
+
+        supported_params_normal = mistral_config.get_supported_openai_params("mistral/mistral-large-latest")
+        assert "reasoning_effort" not in supported_params_normal
+        assert "thinking" not in supported_params_normal
+
+    def test_map_openai_params_reasoning_effort(self, local_model_cost_map):
+        """Test that reasoning_effort parameter is properly mapped for magistral models."""
+        mistral_config = MistralConfig()
+
+        # Test reasoning_effort mapping for magistral model
+        optional_params = {}
+        result = mistral_config.map_openai_params(
+            non_default_params={"reasoning_effort": "low"},
+            optional_params=optional_params,
+            model="mistral/magistral-medium-2506",
+            drop_params=False,
+        )
+
+        assert result.get("_add_reasoning_prompt") is True
+
+        optional_params_normal = {}
+        result_normal = mistral_config.map_openai_params(
+            non_default_params={"reasoning_effort": "low"},
+            optional_params=optional_params_normal,
+            model="mistral/mistral-medium-latest",
+            drop_params=False,
+        )
+
+        assert "_add_reasoning_prompt" not in result_normal
+        assert result_normal["reasoning_effort"] == "high"
+
+    @pytest.mark.parametrize(
+        ("model", "requested", "sent"),
+        [
+            ("mistral-medium-latest", "high", "high"),
+            ("mistral-medium-latest", "none", "none"),
+            ("mistral-medium-latest", "low", "high"),
+            ("mistral-medium-latest", "medium", "high"),
+            ("mistral-medium-latest", "xhigh", "high"),
+            ("mistral-small-latest", "medium", "high"),
+            ("mistral-vibe-cli-latest", "medium", "high"),
+            ("zai-glm-5", "none", "none"),
+            ("zai-glm-5", "minimal", "low"),
+            ("zai-glm-5", "medium", "high"),
+            ("zai-glm-5", "xhigh", "max"),
+            ("zai-glm-5-2", "medium", "medium"),
+            ("zai-glm-5-2", "xhigh", "xhigh"),
+        ],
+    )
+    def test_reasoning_effort_is_sent_as_a_level_the_model_accepts(self, local_model_cost_map, model, requested, sent):
+        import litellm
+
+        optional_params = litellm.get_optional_params(
+            model=model,
+            custom_llm_provider="mistral",
+            reasoning_effort=requested,
+        )
+        assert optional_params["reasoning_effort"] == sent
+
+    @pytest.mark.parametrize(
+        ("requested", "drop_params", "sent"),
+        [
+            ({"effort": "medium"}, False, {"reasoning_effort": "high"}),
+            ({"effort": "high", "summary": "auto"}, True, {"reasoning_effort": "high"}),
+            ({"summary": "auto"}, True, {}),
+        ],
+    )
+    def test_reasoning_effort_object_is_sent_as_its_level(self, local_model_cost_map, requested, drop_params, sent):
+        import litellm
+
+        optional_params = litellm.get_optional_params(
+            model="mistral-small-latest",
+            custom_llm_provider="mistral",
+            reasoning_effort=requested,
+            drop_params=drop_params,
+        )
+        assert {key: optional_params[key] for key in ("reasoning_effort",) if key in optional_params} == sent
+
+    @pytest.mark.parametrize("requested", [{"effort": "high", "summary": "auto"}, {"summary": "auto"}])
+    def test_reasoning_effort_object_mistral_cannot_take_is_rejected(self, local_model_cost_map, requested):
+        import litellm
+
+        with pytest.raises(litellm.UnsupportedParamsError, match=r"\['reasoning_effort'\]"):
+            litellm.get_optional_params(
+                model="devstral-latest",
+                custom_llm_provider="mistral",
+                reasoning_effort=requested,
+            )
+
+    def test_reasoning_effort_is_forwarded_verbatim_when_the_map_declares_no_levels(
+        self, local_model_cost_map, monkeypatch
+    ):
+        import litellm
+
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "mistral/undeclared-reasoner",
+            {"litellm_provider": "mistral", "mode": "chat", "supports_reasoning": True},
+        )
+        optional_params = litellm.get_optional_params(
+            model="undeclared-reasoner",
+            custom_llm_provider="mistral",
+            reasoning_effort="medium",
+        )
+        assert optional_params["reasoning_effort"] == "medium"
+
+    def test_reasoning_effort_stays_unsupported_for_non_reasoning_models(self):
+        import litellm
+
+        with pytest.raises(litellm.UnsupportedParamsError):
+            litellm.get_optional_params(
+                model="codestral-latest",
+                custom_llm_provider="mistral",
+                reasoning_effort="high",
+            )
+
+        dropped = litellm.get_optional_params(
+            model="codestral-latest",
+            custom_llm_provider="mistral",
+            reasoning_effort="high",
+            drop_params=True,
+        )
+        assert "reasoning_effort" not in dropped
+
+    def test_client_metadata_stripped_from_request(self):
+        mistral_config = MistralConfig()
+
+        request = mistral_config.transform_request(
+            model="mistral-medium-latest",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"client_metadata": {"originator": "codex_cli_rs"}, "temperature": 0.2},
+            litellm_params={},
+            headers={},
+        )
+
+        assert "client_metadata" not in request
+        assert request["temperature"] == 0.2
+
+    def test_map_openai_params_thinking(self):
+        """Test that thinking parameter is properly mapped for magistral models."""
+        mistral_config = MistralConfig()
+
+        # Test thinking mapping for magistral model
+        optional_params = {}
+        result = mistral_config.map_openai_params(
+            non_default_params={"thinking": {"budget": 1000}},
+            optional_params=optional_params,
+            model="mistral/magistral-small-2506",
+            drop_params=False,
+        )
+
+        assert result.get("_add_reasoning_prompt") is True
+
+    def test_get_mistral_reasoning_system_prompt(self):
+        """Test that the reasoning system prompt is properly formatted."""
+        prompt = MistralConfig._get_mistral_reasoning_system_prompt()
+        assert isinstance(prompt, str)
+        assert len(prompt) > 50  # Ensure it's not empty
+
+    def test_add_reasoning_system_prompt_no_existing_system_message(self):
+        """Test adding reasoning system prompt when no system message exists."""
+        mistral_config = MistralConfig()
+
+        messages = [{"role": "user", "content": "What is 2+2?"}]
+        optional_params = {"_add_reasoning_prompt": True}
+
+        result = mistral_config._add_reasoning_system_prompt_if_needed(messages, optional_params)
+
+        # Should add a new system message at the beginning
+        assert len(result) == 2
+        assert result[0]["role"] == "system"
+        assert "<think>" in result[0]["content"]
+        assert result[1]["role"] == "user"
+        assert result[1]["content"] == "What is 2+2?"
+
+        # Should remove the internal flag
+        assert "_add_reasoning_prompt" not in optional_params
+
+    def test_add_reasoning_system_prompt_with_existing_system_message(self):
+        """Test adding reasoning system prompt when system message already exists."""
+        mistral_config = MistralConfig()
+
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "What is 2+2?"},
+        ]
+        optional_params = {"_add_reasoning_prompt": True}
+
+        result = mistral_config._add_reasoning_system_prompt_if_needed(messages, optional_params)
+
+        # Should modify existing system message
+        assert len(result) == 2
+        assert result[0]["role"] == "system"
+        assert "<think>" in result[0]["content"]
+        assert "You are a helpful assistant." in result[0]["content"]
+        assert result[1]["role"] == "user"
+
+        # Should remove the internal flag
+        assert "_add_reasoning_prompt" not in optional_params
+
+    def test_add_reasoning_system_prompt_with_existing_list_content(self):
+        """Test adding reasoning system prompt when system message has list content."""
+        mistral_config = MistralConfig()
+
+        messages = [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are a helpful assistant."},
+                    {
+                        "type": "text",
+                        "text": "You always provide detailed explanations.",
+                    },
+                ],
+            },
+            {"role": "user", "content": "What is 2+2?"},
+        ]
+        optional_params = {"_add_reasoning_prompt": True}
+
+        result = mistral_config._add_reasoning_system_prompt_if_needed(messages, optional_params)
+
+        # Should modify existing system message preserving list format
+        assert len(result) == 2
+        assert result[0]["role"] == "system"
+        assert isinstance(result[0]["content"], list)
+
+        # First item should be the reasoning prompt
+        assert result[0]["content"][0]["type"] == "text"
+        assert "<think>" in result[0]["content"][0]["text"]
+
+        # Original content should be preserved
+        assert "You are a helpful assistant." in result[0]["content"][1]["text"]
+        assert "You always provide detailed explanations." in result[0]["content"][2]["text"]
+
+        assert result[1]["role"] == "user"
+
+        # Should remove the internal flag
+        assert "_add_reasoning_prompt" not in optional_params
+
+    def test_add_reasoning_system_prompt_preserves_content_types(self):
+        """Test that reasoning prompt preserves original content types (string vs list)."""
+        mistral_config = MistralConfig()
+
+        # Test with string content
+        string_messages = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "Hello"},
+        ]
+        string_params = {"_add_reasoning_prompt": True}
+
+        string_result = mistral_config._add_reasoning_system_prompt_if_needed(string_messages, string_params)
+        assert isinstance(string_result[0]["content"], str)
+        assert "<think>" in string_result[0]["content"]
+        assert "You are helpful." in string_result[0]["content"]
+
+        # Test with list content
+        list_messages = [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "You are helpful."}],
+            },
+            {"role": "user", "content": "Hello"},
+        ]
+        list_params = {"_add_reasoning_prompt": True}
+
+        list_result = mistral_config._add_reasoning_system_prompt_if_needed(list_messages, list_params)
+        assert isinstance(list_result[0]["content"], list)
+        assert list_result[0]["content"][0]["type"] == "text"
+        assert "<think>" in list_result[0]["content"][0]["text"]
+        assert "You are helpful." in list_result[0]["content"][1]["text"]
+
+    def test_add_reasoning_system_prompt_no_flag(self):
+        """Test that no modification happens when _add_reasoning_prompt flag is not set."""
+        mistral_config = MistralConfig()
+
+        messages = [{"role": "user", "content": "What is 2+2?"}]
+        optional_params = {}
+
+        result = mistral_config._add_reasoning_system_prompt_if_needed(messages, optional_params)
+
+        # Should return messages unchanged
+        assert result == messages
+        assert len(result) == 1
+
+    def test_transform_request_magistral_with_reasoning(self):
+        """Test transform_request method for magistral model with reasoning."""
+        mistral_config = MistralConfig()
+
+        messages = [{"role": "user", "content": "What is 15 * 7?"}]
+        optional_params = {"_add_reasoning_prompt": True}
+
+        result = mistral_config.transform_request(
+            model="mistral/magistral-medium-2506",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        # Should have added system message
+        assert len(result["messages"]) == 2
+        assert result["messages"][0]["role"] == "system"
+        assert "<think>" in result["messages"][0]["content"]
+        assert result["messages"][1]["role"] == "user"
+
+        # Should remove internal flag from optional_params
+        assert "_add_reasoning_prompt" not in result
+
+    def test_transform_request_magistral_without_reasoning(self):
+        """Test transform_request method for magistral model without reasoning."""
+        mistral_config = MistralConfig()
+
+        messages = [{"role": "user", "content": "What is 15 * 7?"}]
+        optional_params = {}
+
+        result = mistral_config.transform_request(
+            model="mistral/magistral-medium-2506",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        # Should not modify messages
+        assert len(result["messages"]) == 1
+        assert result["messages"][0]["role"] == "user"
+
+    def test_transform_request_non_magistral_with_reasoning_params(self):
+        """Test that non-magistral models ignore reasoning parameters."""
+        mistral_config = MistralConfig()
+
+        messages = [{"role": "user", "content": "What is 15 * 7?"}]
+        optional_params = {"_add_reasoning_prompt": True}
+
+        result = mistral_config.transform_request(
+            model="mistral/mistral-large-latest",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        # Should not add system message for non-magistral models
+        assert len(result["messages"]) == 1
+        assert result["messages"][0]["role"] == "user"
+
+    def test_case_insensitive_magistral_detection(self):
+        """Test that magistral model detection is case-insensitive."""
+        mistral_config = MistralConfig()
+
+        # Test various case combinations
+        models_to_test = [
+            "mistral/Magistral-medium-2506",
+            "mistral/MAGISTRAL-MEDIUM-2506",
+            "mistral/magistral-SMALL-2506",
+            "MaGiStRaL-medium-2506",
+        ]
+
+        for model in models_to_test:
+            supported_params = mistral_config.get_supported_openai_params(model)
+            assert "reasoning_effort" in supported_params, f"Failed for model: {model}"
+
+    def test_end_to_end_reasoning_workflow(self):
+        """Test the complete workflow from parameter to system prompt injection."""
+        mistral_config = MistralConfig()
+
+        # Step 1: Map parameters
+        optional_params = {}
+        mapped_params = mistral_config.map_openai_params(
+            non_default_params={"reasoning_effort": "high", "temperature": 0.7},
+            optional_params=optional_params,
+            model="mistral/magistral-medium-2506",
+            drop_params=False,
+        )
+
+        assert mapped_params.get("_add_reasoning_prompt") is True
+        assert mapped_params.get("temperature") == 0.7
+
+        # Step 2: Transform request
+        messages = [{"role": "user", "content": "Solve for x: 2x + 5 = 13"}]
+
+        result = mistral_config.transform_request(
+            model="mistral/magistral-medium-2506",
+            messages=messages,
+            optional_params=mapped_params,
+            litellm_params={},
+            headers={},
+        )
+
+        # Verify final result
+        assert len(result["messages"]) == 2
+        assert result["messages"][0]["role"] == "system"
+        assert "<think>" in result["messages"][0]["content"]
+        assert result["messages"][1]["role"] == "user"
+        assert result["messages"][1]["content"] == "Solve for x: 2x + 5 = 13"
+        assert result.get("temperature") == 0.7
+        assert "_add_reasoning_prompt" not in result
+
+
+def test_mistral_streaming_chunk_preserves_thinking_blocks():
+    """Ensure streaming chunks keep magistral reasoning content."""
+    iterator = MistralChatResponseIterator(streaming_response=iter([]), sync_stream=True, json_mode=False)
+
+    streamed_chunk = {
+        "id": "chunk-1",
+        "object": "chat.completion.chunk",
+        "created": 123456,
+        "model": "magistral-medium-2509",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": [{"type": "text", "text": "Working it out."}],
+                        },
+                        {"type": "text", "text": " Hello"},
+                    ],
+                },
+                "finish_reason": None,
+            }
+        ],
+    }
+
+    parsed_chunk = iterator.chunk_parser(streamed_chunk)
+
+    delta = parsed_chunk.choices[0].delta
+    assert delta.thinking_blocks is not None
+    assert delta.thinking_blocks[0]["thinking"] == "Working it out."
+    assert delta.thinking_blocks[0]["signature"] == "mistral"
+    assert delta.reasoning_content == "Working it out."
+    assert delta.content == " Hello"
+
+
+class TestMistralNameHandling:
+    """Test suite for Mistral name handling in messages."""
+
+    def test_handle_name_in_message_tool_role_empty_name_removes_name(self):
+        """Test that empty name is removed for tool messages."""
+        # Test with empty string
+        tool_message = {"role": "tool", "content": "Function result", "name": ""}
+        result = MistralConfig._handle_name_in_message(tool_message)
+        assert "name" not in result
+        assert result["role"] == "tool"
+        assert result["content"] == "Function result"
+
+    def test_handle_name_in_message_tool_role_valid_name_keeps_name(self):
+        """Test that valid name is kept for tool messages."""
+        # Test with normal function name
+        tool_message = {
+            "role": "tool",
+            "content": "Function result",
+            "name": "get_weather",
+        }
+        result = MistralConfig._handle_name_in_message(tool_message)
+        assert "name" in result
+        assert result["name"] == "get_weather"
+        assert result["role"] == "tool"
+        assert result["content"] == "Function result"
+
+    def test_handle_name_in_message_no_name_field(self):
+        """Test that messages without name field are unchanged."""
+        # Test with user role
+        user_message = {"role": "user", "content": "Hello"}
+        result = MistralConfig._handle_name_in_message(user_message)
+        assert "name" not in result
+        assert result["role"] == "user"
+        assert result["content"] == "Hello"
+
+
+class TestMistralParallelToolCalls:
+    """Test suite for Mistral parallel tool calls functionality."""
+
+    def test_get_supported_openai_params_includes_parallel_tool_calls(self):
+        """Test that parallel_tool_calls is in supported parameters."""
+        mistral_config = MistralConfig()
+        supported_params = mistral_config.get_supported_openai_params("mistral/mistral-large-latest")
+        assert "parallel_tool_calls" in supported_params
+
+    def test_transform_request_preserves_parallel_tool_calls(self):
+        """Test that transform_request preserves parallel_tool_calls parameter."""
+        mistral_config = MistralConfig()
+
+        messages = [{"role": "user", "content": "What's the weather like?"}]
+        optional_params = {"parallel_tool_calls": True}
+
+        result = mistral_config.transform_request(
+            model="mistral/mistral-large-latest",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        assert result.get("parallel_tool_calls") is True
+        assert len(result["messages"]) == 1
+        assert result["messages"][0]["role"] == "user"
+
+
+class TestMistralThinkingContentHandling:
+    """Test suite for Mistral thinking content response handling functionality."""
+
+    def test_transform_response_with_thinking_content(self):
+        """Test that Mistral responses with thinking content are correctly transformed."""
+        import json
+        from unittest.mock import Mock
+
+        import litellm
+
+        # Raw response from Mistral with thinking content
+        raw_response_data = {
+            "id": "12a18e1439f24f95b9812a016e0af235",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "logprobs": None,
+                    "message": {
+                        "content": [
+                            {
+                                "type": "thinking",
+                                "thinking": [
+                                    {
+                                        "type": "text",
+                                        "text": "Well, the capital of France is a well-known fact. It's Paris. But just to be sure, I recall that Paris is indeed the capital city of France. I don't need to look it up because it's a common knowledge fact. But if I were unsure, I would double-check using a reliable source or a knowledge base. Since I'm confident about this, I can provide the answer directly.",
+                                    }
+                                ],
+                            },
+                            {"type": "text", "text": "The capital of France is Paris."},
+                        ],
+                        "refusal": None,
+                        "role": "assistant",
+                        "annotations": None,
+                        "audio": None,
+                        "function_call": None,
+                        "tool_calls": None,
+                    },
+                }
+            ],
+            "created": 1754654178,
+            "model": "magistral-medium-2507",
+            "object": "chat.completion",
+            "service_tier": None,
+            "system_fingerprint": None,
+            "usage": {
+                "completion_tokens": 93,
+                "prompt_tokens": 11,
+                "total_tokens": 104,
+                "completion_tokens_details": None,
+                "prompt_tokens_details": None,
+            },
+        }
+
+        # Mock httpx response
+        mock_response = Mock()
+        mock_response.json.return_value = raw_response_data
+        mock_response.headers = {}
+        mock_response.text = json.dumps(raw_response_data)
+
+        # Mock logging object with proper attributes
+        mock_logging_obj = Mock()
+        mock_logging_obj.model_call_details = {}
+
+        # Test the transformation
+        mistral_config = MistralConfig()
+        model_response = litellm.ModelResponse()
+
+        # Test transform_response method
+        final_response = mistral_config.transform_response(
+            model="mistral/magistral-medium-2507",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=mock_logging_obj,
+            request_data={},
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        # Verify the response structure
+        assert final_response is not None
+        assert len(final_response.choices) == 1
+        choice = final_response.choices[0]
+
+        # Verify message content
+        message = choice.message
+        assert message.role == "assistant"
+
+        # The content should be processed - either as text or as thinking blocks
+        # Content could be the text part or the full content list
+        content_str = str(message.content) if message.content else ""
+
+        # Verify the actual text content is preserved somewhere
+        assert "The capital of France is Paris." in content_str or (
+            hasattr(message, "thinking_blocks") and message.thinking_blocks
+        )
+
+        # Verify usage information
+        assert final_response.usage.completion_tokens == 93
+        assert final_response.usage.prompt_tokens == 11
+        assert final_response.usage.total_tokens == 104
+
+        # Verify model and metadata
+        assert final_response.id == "12a18e1439f24f95b9812a016e0af235"
+        assert final_response.created == 1754654178
+
+
+class TestMistralEmptyContentHandling:
+    """Test suite for Mistral empty content response handling functionality."""
+
+    def test_handle_empty_content_response_converts_empty_string_to_none(self):
+        """Test that empty string content is converted to None."""
+        response_data = {
+            "choices": [
+                {
+                    "message": {"content": "", "role": "assistant"},
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+
+        result = MistralConfig._handle_empty_content_response(response_data)
+
+        assert result["choices"][0]["message"]["content"] is None
+
+    def test_handle_empty_content_response_preserves_actual_content(self):
+        """Test that actual content is preserved unchanged."""
+        response_data = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Hello, how can I help you?",
+                        "role": "assistant",
+                    },
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+
+        result = MistralConfig._handle_empty_content_response(response_data)
+
+        assert result["choices"][0]["message"]["content"] == "Hello, how can I help you?"
+
+    def test_handle_empty_content_response_handles_multiple_choices(self):
+        """Test that only the first choice is processed for empty content."""
+        response_data = {
+            "choices": [
+                {
+                    "message": {"content": "", "role": "assistant"},
+                    "finish_reason": "stop",
+                },
+                {
+                    "message": {"content": "", "role": "assistant"},
+                    "finish_reason": "stop",
+                },
+            ]
+        }
+
+        result = MistralConfig._handle_empty_content_response(response_data)
+
+        # Only first choice should be converted to None
+        assert result["choices"][0]["message"]["content"] is None
+        # Second choice should remain as empty string
+        assert result["choices"][1]["message"]["content"] is None
+
+    def test_is_empty_assistant_message(self):
+        """Test that is_empty_assistant_message returns True for empty assistant message."""
+        message = {"role": "assistant", "content": ""}
+        assert MistralConfig._is_empty_assistant_message(message) is True
+
+    def test_is_empty_assistant_message_with_content(self):
+        """Test that is_empty_assistant_message returns False for assistant message with content."""
+        message = {"role": "assistant", "content": "Hello"}
+        assert MistralConfig._is_empty_assistant_message(message) is False
+
+
+class TestMistralFileHandling:
+    """Test suite for Mistral file handling functionality."""
+
+    def test_handle_file_message_with_file_id(self):
+        """Test that file messages with file_id are handled correctly."""
+        mistral_config = MistralConfig()
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Please review this file."},
+                    {"type": "file", "file": {"file_id": "file-12345"}},
+                ],
+            }
+        ]
+        casted_message = cast(list[AllMessageValues], messages)
+        result = mistral_config._handle_message_with_file(casted_message)
+        assert len(result) == 1
+        assert result[0]["role"] == "user"
+        # Check that content is transformed correctly
+        assert isinstance(result[0]["content"], list)
+        assert len(result[0]["content"]) == 2
+        # Check that file type is preserved
+        assert result[0]["content"][1]["type"] == "file"
+        # Check that file_id is modified to match Mistral's expected format
+        assert result[0]["content"][1]["file_id"] == "file-12345"  # type: ignore
+
+    def test_handle_file_message_without_file_id(self):
+        """Test that file messages without file_id are ignored."""
+        mistral_config = MistralConfig()
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Please review this file."}],
+            }
+        ]
+        casted_message = cast(list[AllMessageValues], messages)
+        result = mistral_config._handle_message_with_file(casted_message)
+        assert len(result) == 1
+        assert result[0]["role"] == "user"
+        assert isinstance(result[0]["content"], list)
+        assert len(result[0]["content"]) == 1  # Only text part remains
+
+    def test_handle_message_with_file_multiple_files(self):
+        """Test that multiple file messages are handled correctly."""
+        mistral_config = MistralConfig()
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Please review these files."},
+                    {"type": "file", "file": {"file_id": "file-12345"}},
+                    {"type": "file", "file": {"file_id": "file-67890"}},
+                ],
+            }
+        ]
+        casted_message = cast(list[AllMessageValues], messages)
+        result = mistral_config._handle_message_with_file(casted_message)
+        assert len(result) == 1
+        assert result[0]["role"] == "user"
+        # Check that content is transformed correctly
+        assert isinstance(result[0]["content"], list)
+        assert len(result[0]["content"]) == 3  # Text + 2 files
+        # Check that file types are preserved
+        assert result[0]["content"][1]["type"] == "file"
+        assert result[0]["content"][2]["type"] == "file"
+        # Check that file_ids are modified to match Mistral's expected format
+        assert result[0]["content"][1]["file_id"] == "file-12345"  # type: ignore
+        assert result[0]["content"][2]["file_id"] == "file-67890"  # type: ignore
+
+
+class TestMistralStripsOutputOnlyFields:
+    """Mistral rejects unknown input fields with a 422 ``extra_forbidden``.
+
+    LiteLLM attaches ``reasoning_content`` / ``thinking_blocks`` to assistant
+    responses, so replaying an assistant turn verbatim must not forward them.
+    Regression for https://github.com/BerriAI/litellm/issues/30835.
+    """
+
+    def test_assistant_reasoning_content_is_sent_as_a_thinking_chunk(self):
+        messages = cast(
+            List[AllMessageValues],
+            [
+                {"role": "user", "content": "Question?"},
+                {
+                    "role": "assistant",
+                    "content": "Follow-up",
+                    "reasoning_content": "Some internal reasoning text.",
+                    "thinking_blocks": [{"type": "thinking", "thinking": "step", "signature": "mistral"}],
+                },
+            ],
+        )
+
+        result = cast(
+            List[AllMessageValues],
+            MistralConfig().transform_messages(messages=messages, model="mistral-medium-3-5"),
+        )
+
+        assert result[-1] == {
+            "role": "assistant",
+            "content": [_think_chunk("Some internal reasoning text."), {"type": "text", "text": "Follow-up"}],
+        }
+
+    def test_tool_search_reply_drops_litellm_response_fields(self):
+        tool_search_reply = {
+            "role": "assistant",
+            "content": "",
+            "reasoning_items": [{"type": "reasoning", "id": "rs_1", "summary": []}],
+            "provider_specific_fields": {"tool_search_items": [{"type": "tool_search_call", "id": "ts_1"}]},
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                    "provider_specific_fields": {"namespace": "weather"},
+                }
+            ],
+        }
+        messages = cast(
+            List[AllMessageValues],
+            [
+                {"role": "user", "content": "Weather in Paris?"},
+                tool_search_reply,
+                {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+            ],
+        )
+
+        result = cast(
+            List[AllMessageValues],
+            MistralConfig().transform_messages(messages=messages, model="mistral-medium-3-5"),
+        )
+
+        assert result[1] == {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                }
+            ],
+        }
+
+    def test_non_assistant_messages_are_untouched(self):
+        messages = cast(
+            List[AllMessageValues],
+            [{"role": "user", "content": "Question?", "reasoning_content": "noise"}],
+        )
+
+        result = cast(
+            List[AllMessageValues],
+            MistralConfig().transform_messages(messages=messages, model="mistral-medium-3-5"),
+        )
+
+        assert result[0].get("reasoning_content") == "noise"
+
+    def test_reasoning_content_dropped_when_image_present(self):
+        """The image branch returns early, so stripping must run before it."""
+        messages = cast(
+            List[AllMessageValues],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe this"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "https://example.com/cat.png"},
+                        },
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": "A cat.",
+                    "reasoning_content": "leaked reasoning",
+                },
+            ],
+        )
+
+        with patch.object(
+            MistralConfig,
+            "_transform_messages_sync",
+            side_effect=lambda transformed, model: transformed,
+        ):
+            result = cast(
+                List[AllMessageValues],
+                MistralConfig().transform_messages(messages=messages, model="mistral-medium-3-5", is_async=False),
+            )
+
+        assert "reasoning_content" not in result[-1]
+
+
+def _think_chunk(text: str) -> dict[str, object]:
+    return {"type": "thinking", "thinking": [{"type": "text", "text": text}], "closed": True}
+
+
+def _mistral_request_messages(
+    messages: list[dict[str, object]], config: MistralConfig | None = None, model: str = "mistral-medium-3-5"
+) -> list[object]:
+    request: Final = (config or MistralConfig()).transform_request(
+        model=model,
+        messages=cast(List[AllMessageValues], messages),
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    return request["messages"]
+
+
+@pytest.mark.parametrize("content", [None, ""], ids=["null", "empty"])
+def test_mistral_sends_reasoning_of_a_tool_call_turn_as_a_thinking_chunk(content: str | None):
+    tool_call: Final = {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "Weather in Paris?"},
+            {
+                "role": "assistant",
+                "content": content,
+                "reasoning_content": "I should call get_weather.",
+                "tool_calls": [tool_call],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+        ]
+    )
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [_think_chunk("I should call get_weather.")],
+        "tool_calls": [tool_call],
+    }
+    assert result[2] == {"role": "tool", "tool_call_id": "call_1", "content": "sunny"}
+
+
+def test_mistral_sends_reasoning_ahead_of_a_text_part_list():
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "Question?"},
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "First. "}, {"type": "text", "text": "Second."}],
+                "reasoning_content": "Two parts.",
+            },
+            {"role": "user", "content": "And then?"},
+        ]
+    )
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [_think_chunk("Two parts."), {"type": "text", "text": "First. Second."}],
+    }
+
+
+def test_mistral_drops_a_reasoning_only_assistant_turn_between_a_tool_call_and_its_reply():
+    tool_call: Final = {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "read the log"},
+            {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+            {"role": "assistant", "content": None, "reasoning_content": "The log is empty."},
+            {"role": "tool", "tool_call_id": "call_1", "content": ""},
+        ]
+    )
+
+    assert result == [
+        {"role": "user", "content": "read the log"},
+        {"role": "assistant", "tool_calls": [tool_call]},
+        {"role": "tool", "tool_call_id": "call_1", "content": ""},
+    ]
+
+
+@pytest.mark.parametrize(
+    "assistant_content, reasoning_fields, expected_content",
+    [
+        pytest.param(
+            [{"type": "thinking", "thinking": "R", "signature": "c2ln"}, {"type": "text", "text": "A"}],
+            {"reasoning_content": "R"},
+            [_think_chunk("R"), {"type": "text", "text": "A"}],
+            id="anthropic_thinking_part_with_reasoning_content",
+        ),
+        pytest.param(
+            [{"type": "thinking", "thinking": "R", "signature": "c2ln"}, {"type": "text", "text": "A"}],
+            {},
+            "A",
+            id="anthropic_thinking_part_alone",
+        ),
+        pytest.param(
+            {"type": "text", "text": "A"},
+            {"reasoning_content": "R"},
+            {"type": "text", "text": "A"},
+            id="content_that_is_not_a_list",
+        ),
+    ],
+)
+def test_mistral_never_forwards_a_thinking_part_mistral_cannot_read(
+    assistant_content: object, reasoning_fields: dict[str, object], expected_content: object
+):
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": assistant_content, **reasoning_fields},
+            {"role": "user", "content": "Bye"},
+        ]
+    )
+
+    assert result[1] == {"role": "assistant", "content": expected_content}
+
+
+@pytest.mark.parametrize(
+    "reasoning_fields, expected_reasoning",
+    [
+        pytest.param(
+            {
+                "thinking_blocks": [
+                    {"type": "thinking", "thinking": "Let", "signature": "mistral"},
+                    {"type": "thinking", "thinking": " me", "signature": "mistral"},
+                    {"type": "thinking", "thinking": " think", "signature": "mistral"},
+                ]
+            },
+            "Let me think",
+            id="mistral_stream_fragments",
+        ),
+        pytest.param(
+            {
+                "thinking_blocks": [
+                    {"type": "thinking", "thinking": "Step one.", "signature": "c2lnLTE="},
+                    {"type": "redacted_thinking", "data": "ZW5jcnlwdGVk"},
+                    {"type": "thinking", "thinking": " Step two.", "signature": "c2lnLTI="},
+                ]
+            },
+            "Step one. Step two.",
+            id="anthropic_blocks_with_redacted",
+        ),
+        pytest.param(
+            {"reasoning_content": "  ", "thinking_blocks": [{"type": "thinking", "thinking": "From blocks."}]},
+            "From blocks.",
+            id="blank_reasoning_content_falls_back_to_blocks",
+        ),
+    ],
+)
+def test_mistral_sends_replayed_thinking_blocks_as_one_thinking_chunk(
+    reasoning_fields: dict[str, object], expected_reasoning: str
+):
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "Question?"},
+            {"role": "assistant", "content": "Answer.", **reasoning_fields},
+            {"role": "user", "content": "And then?"},
+        ]
+    )
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [_think_chunk(expected_reasoning), {"type": "text", "text": "Answer."}],
+    }
+
+
+@pytest.mark.parametrize(
+    "native_content, reasoning_fields",
+    [
+        pytest.param(
+            [
+                {"type": "thinking", "thinking": [{"type": "text", "text": "I pick 518362."}]},
+                {"type": "text", "text": "I have picked it."},
+            ],
+            {},
+            id="native_chunk",
+        ),
+        pytest.param(
+            [
+                {"type": "thinking", "thinking": [{"type": "text", "text": "I pick 518362."}]},
+                {"type": "text", "text": "I have picked it."},
+            ],
+            {"reasoning_content": "I pick 518362.", "thinking_blocks": [{"type": "thinking", "thinking": "I pick"}]},
+            id="native_chunk_and_reasoning_content",
+        ),
+        pytest.param(
+            [
+                {"type": "text", "text": "I have "},
+                {"type": "thinking", "thinking": [{"type": "text", "text": "I pick 518362."}]},
+                {"type": "text", "text": "picked it."},
+            ],
+            {},
+            id="native_chunk_between_text_parts",
+        ),
+    ],
+)
+def test_mistral_keeps_a_native_thinking_chunk_once(
+    native_content: list[dict[str, object]], reasoning_fields: dict[str, object]
+):
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "Pick a number."},
+            {"role": "assistant", "content": native_content, **reasoning_fields},
+            {"role": "user", "content": "Which one?"},
+        ]
+    )
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": [{"type": "text", "text": "I pick 518362."}]},
+            {"type": "text", "text": "I have picked it."},
+        ],
+    }
+
+
+def test_mistral_keeps_a_native_thinking_chunk_with_no_text_part():
+    native_chunk: Final = {"type": "thinking", "thinking": [{"type": "text", "text": "I pick 518362."}], "closed": True}
+
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "Pick a number."},
+            {"role": "assistant", "content": [native_chunk]},
+            {"role": "user", "content": "Which one?"},
+        ]
+    )
+
+    assert result[1] == {"role": "assistant", "content": [native_chunk]}
+
+
+@pytest.mark.parametrize(
+    ("inner_items", "expected_content"),
+    [
+        pytest.param(
+            [{"type": "text", "text": "I pick 518362."}, {"type": "reference", "reference_ids": [1]}],
+            [
+                {"type": "thinking", "thinking": [{"type": "text", "text": "I pick 518362."}], "closed": True},
+                {"type": "text", "text": "I have picked it."},
+            ],
+            id="text_and_reference",
+        ),
+        pytest.param(
+            [{"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}],
+            "I have picked it.",
+            id="only_image_url",
+        ),
+        pytest.param([1, 2], "I have picked it.", id="not_items"),
+    ],
+)
+def test_mistral_sends_only_the_text_items_of_a_native_thinking_chunk(
+    inner_items: list[object], expected_content: object
+):
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "Pick a number."},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": inner_items, "closed": True},
+                    {"type": "text", "text": "I have picked it."},
+                ],
+            },
+            {"role": "user", "content": "Which one?"},
+        ]
+    )
+
+    assert result[1] == {"role": "assistant", "content": expected_content}
+
+
+def test_mistral_sends_only_the_text_items_of_a_native_thinking_chunk_beside_an_image():
+    image_part: Final = {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}
+
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": [{"type": "text", "text": "What is this?"}, image_part]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": [{"type": "text", "text": "It has whiskers."}, {"type": "reference", "reference_ids": [1]}],
+                    },
+                    {"type": "text", "text": "A cat."},
+                ],
+            },
+            {"role": "user", "content": "What color?"},
+        ]
+    )
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": [{"type": "text", "text": "It has whiskers."}]},
+            {"type": "text", "text": "A cat."},
+        ],
+    }
+
+
+_OPEN_THINK_CHUNK: Final = {
+    "type": "thinking",
+    "thinking": [{"type": "text", "text": "I pick 482913."}],
+    "closed": False,
+}
+_THINK_CHUNK_WITHOUT_CLOSED: Final = {"type": "thinking", "thinking": [{"type": "text", "text": "I pick 482913."}]}
+_PICKED_TEXT: Final = {"type": "text", "text": "I have picked it."}
+
+
+@pytest.mark.parametrize(
+    ("assistant_turn", "later_messages", "expected_turn"),
+    [
+        pytest.param(
+            {"role": "assistant", "content": [_OPEN_THINK_CHUNK, _PICKED_TEXT]},
+            [{"role": "user", "content": "Which one?"}],
+            {"role": "assistant", "content": [_THINK_CHUNK_WITHOUT_CLOSED, _PICKED_TEXT]},
+            id="history_turn",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": [_OPEN_THINK_CHUNK], "prefix": True},
+            [],
+            {"role": "assistant", "content": [_OPEN_THINK_CHUNK], "prefix": True},
+            id="last_chunk_of_final_prefix_turn",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": [_OPEN_THINK_CHUNK, _PICKED_TEXT], "prefix": True},
+            [],
+            {"role": "assistant", "content": [_THINK_CHUNK_WITHOUT_CLOSED, _PICKED_TEXT], "prefix": True},
+            id="final_prefix_turn_with_text_after_the_chunk",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": [_PICKED_TEXT, _OPEN_THINK_CHUNK], "prefix": True},
+            [],
+            {"role": "assistant", "content": [_THINK_CHUNK_WITHOUT_CLOSED, _PICKED_TEXT], "prefix": True},
+            id="final_prefix_turn_with_text_before_the_chunk",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": [_OPEN_THINK_CHUNK]},
+            [],
+            {"role": "assistant", "content": [_THINK_CHUNK_WITHOUT_CLOSED]},
+            id="final_turn_without_prefix",
+        ),
+    ],
+)
+def test_mistral_keeps_an_open_thinking_chunk_only_as_the_last_chunk_of_a_final_prefix_turn(
+    assistant_turn: dict[str, object], later_messages: list[dict[str, object]], expected_turn: dict[str, object]
+):
+    result: Final = _mistral_request_messages(
+        [{"role": "user", "content": "Pick a number."}, assistant_turn, *later_messages]
+    )
+
+    assert result[1] == expected_turn
+
+
+@pytest.mark.parametrize(
+    "reasoning_fields",
+    [
+        pytest.param({}, id="none"),
+        pytest.param({"reasoning_content": None, "thinking_blocks": None}, id="null"),
+        pytest.param({"reasoning_content": ""}, id="empty_reasoning_content"),
+        pytest.param({"reasoning_content": " \n "}, id="blank_reasoning_content"),
+        pytest.param({"thinking_blocks": []}, id="empty_thinking_blocks"),
+        pytest.param({"thinking_blocks": [{"type": "redacted_thinking", "data": "ZW5j"}]}, id="only_redacted"),
+        pytest.param({"thinking_blocks": [{"type": "thinking", "thinking": "  "}]}, id="blank_thinking_block"),
+        pytest.param({"thinking_blocks": "not a list"}, id="thinking_blocks_not_a_list"),
+    ],
+)
+def test_mistral_sends_an_assistant_turn_without_usable_reasoning_as_plain_text(reasoning_fields: dict[str, object]):
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "Question?"},
+            {"role": "assistant", "content": "Answer.", **reasoning_fields},
+            {"role": "user", "content": "And then?"},
+        ]
+    )
+
+    assert result[1] == {"role": "assistant", "content": "Answer."}
+
+
+def test_mistral_still_flattens_text_part_lists_to_a_string():
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": [{"type": "text", "text": "Hello "}, {"type": "text", "text": "there"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Hi "}, {"type": "text", "text": "back"}]},
+            {"role": "user", "content": "Bye"},
+        ]
+    )
+
+    assert result == [
+        {"role": "user", "content": "Hello there"},
+        {"role": "assistant", "content": "Hi back"},
+        {"role": "user", "content": "Bye"},
+    ]
+
+
+def test_mistral_sends_reasoning_as_a_thinking_chunk_when_the_request_carries_an_image():
+    data_uri: Final = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+
+    result: Final = _mistral_request_messages(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this"},
+                    {"type": "image_url", "image_url": {"url": data_uri}},
+                ],
+            },
+            {"role": "assistant", "content": "A cat.", "reasoning_content": "It has whiskers."},
+            {"role": "user", "content": "What color?"},
+        ]
+    )
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [_think_chunk("It has whiskers."), {"type": "text", "text": "A cat."}],
+    }
+
+
+@pytest.mark.parametrize(
+    "config",
+    [pytest.param(MistralConfig(), id="mistral"), pytest.param(VertexAIMistralConfig(), id="vertex_ai")],
+)
+@pytest.mark.parametrize(
+    "assistant_message",
+    [
+        pytest.param(
+            {"role": "assistant", "content": "I have picked it.", "reasoning_content": "I pick 518362."},
+            id="reasoning_content",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "I have picked it.",
+                "thinking_blocks": [{"type": "thinking", "thinking": "I pick 518362.", "signature": "mistral"}],
+            },
+            id="thinking_blocks",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": [_think_chunk("I pick 518362."), {"type": "text", "text": "I have picked it."}],
+            },
+            id="native_chunk",
+        ),
+    ],
+)
+def test_mistral_drops_replayed_reasoning_for_a_model_without_reasoning(
+    config: MistralConfig, assistant_message: dict[str, object]
+):
+    model: Final = "mistral-chat-model-without-reasoning"
+    assert not supports_reasoning(model=model, custom_llm_provider=config.custom_llm_provider)
+
+    result: Final = _mistral_request_messages(
+        [{"role": "user", "content": "Pick a number."}, assistant_message, {"role": "user", "content": "Which one?"}],
+        config=config,
+        model=model,
+    )
+
+    assert result[1] == {"role": "assistant", "content": "I have picked it."}
+
+
+@pytest.mark.parametrize(
+    "config",
+    [pytest.param(MistralConfig(), id="mistral"), pytest.param(VertexAIMistralConfig(), id="vertex_ai")],
+)
+def test_mistral_drops_a_native_chunk_without_text_for_a_model_without_reasoning(config: MistralConfig):
+    tool_call: Final = {"id": "call_1", "type": "function", "function": {"name": "get_time", "arguments": "{}"}}
+
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "What time is it?"},
+            {"role": "assistant", "content": [_think_chunk("I should call get_time.")], "tool_calls": [tool_call]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "12:00"},
+        ],
+        config=config,
+        model="mistral-chat-model-without-reasoning",
+    )
+
+    assert result[1] == {"role": "assistant", "tool_calls": [tool_call]}
+
+
+@pytest.mark.parametrize(
+    "config",
+    [pytest.param(MistralConfig(), id="mistral"), pytest.param(VertexAIMistralConfig(), id="vertex_ai")],
+)
+def test_mistral_drops_a_native_chunk_from_an_image_history_for_a_model_without_reasoning(config: MistralConfig):
+    image_part: Final = {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}
+
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": [{"type": "text", "text": "What is this?"}, image_part]},
+            {
+                "role": "assistant",
+                "content": [_think_chunk("It has whiskers."), {"type": "text", "text": "A cat."}],
+            },
+            {"role": "user", "content": "What color?"},
+        ],
+        config=config,
+        model="mistral-chat-model-without-reasoning",
+    )
+
+    assert result[1] == {"role": "assistant", "content": [{"type": "text", "text": "A cat."}]}
+
+
+def test_mistral_transform_request_keeps_an_empty_tool_message_after_its_tool_call():
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "read the log"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": ""},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    result = request["messages"]
+    assert [m.get("role") for m in result] == ["user", "assistant", "tool"]
+    assert result[2].get("tool_call_id") == "call_1"
+
+
+@pytest.mark.parametrize("reply", [{"content": None}, {}], ids=["null", "missing"])
+def test_mistral_transform_request_sends_a_null_tool_reply_as_empty_text(reply):
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "read the log"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "call_1", **reply},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert request["messages"][2] == {"role": "tool", "tool_call_id": "call_1", "content": ""}
+
+
+def test_mistral_transform_request_drops_an_empty_tool_message_no_tool_call_asked_for():
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "tool", "tool_call_id": "call_9", "content": ""},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert request["messages"] == [{"role": "user", "content": "hi"}]
+
+
+@pytest.mark.parametrize("role", ["system", "user"])
+def test_mistral_transform_request_drops_a_message_with_null_content(role):
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [{"role": role, "content": None}, {"role": "user", "content": "hi"}],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert request["messages"] == [{"role": "user", "content": "hi"}]
+
+
+def test_mistral_transform_request_hoists_tool_message_image():
+    """Images inside role:"tool" messages must be moved to a following user
+    message (Mistral rejects/ignores non-text tool content), including when
+    Mistral's own _transform_messages override takes its image handling path."""
+    data_uri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "read the screenshot"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "image_url", "image_url": {"url": data_uri}}],
+            },
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-medium-2508", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    result = request["messages"]
+    assert [m.get("role") for m in result] == ["user", "assistant", "tool", "user"]
+    tool_message = result[2]
+    assert tool_message.get("tool_call_id") == "call_1"
+    assert isinstance(tool_message.get("content"), str)
+    assert result[3].get("content") == [
+        {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+        {"type": "image_url", "image_url": {"url": data_uri}},
+    ]
+
+
+def test_mistral_transform_request_drops_an_empty_tool_message_for_a_call_already_answered_earlier():
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "weather?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+            {"role": "assistant", "content": "It is sunny"},
+            {"role": "tool", "tool_call_id": "call_1", "content": ""},
+            {"role": "user", "content": "thanks"},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert [m.get("role") for m in request["messages"]] == ["user", "assistant", "tool", "assistant", "user"]
+
+
+def test_mistral_transform_request_drops_an_empty_tool_message_when_a_later_reply_carries_the_result():
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "weather?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": ""},
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+            {"role": "user", "content": "thanks"},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert [m.get("role") for m in request["messages"]] == ["user", "assistant", "tool", "user"]
+    assert request["messages"][2]["content"] == "sunny"
+
+
+def test_mistral_transform_request_keeps_an_empty_tool_message_answering_a_call_in_the_first_message():
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": ""},
+            {"role": "user", "content": "thanks"},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert [m.get("role") for m in request["messages"]] == ["assistant", "tool", "user"]
+    assert request["messages"][1]["content"] == ""
+
+
+@pytest.mark.parametrize("placeholder_role", ["assistant", "user"])
+def test_mistral_transform_request_keeps_an_empty_tool_message_after_a_dropped_empty_placeholder(placeholder_role):
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "weather?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": placeholder_role, "content": ""},
+            {"role": "tool", "tool_call_id": "call_1", "content": ""},
+            {"role": "user", "content": "thanks"},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert [m.get("role") for m in request["messages"]] == ["user", "assistant", "tool", "user"]
+    assert request["messages"][2]["content"] == ""
+
+
+def test_mistral_transform_request_drops_an_empty_tool_message_whose_call_id_is_not_a_string():
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "read the log"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": {"nested": "call_1"}, "type": "function", "function": {"name": "read", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": {"nested": "call_1"}, "content": ""},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert [m.get("role") for m in request["messages"]] == ["user", "assistant"]
+
+
+def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and f"Dropping {param}=" in r.getMessage()
+    )
+
+
+@pytest.mark.parametrize(
+    "param, value",
+    (
+        ("reasoning_effort", "none"),
+        ("reasoning_effort", "xhigh"),
+        ("thinking", {"type": "disabled"}),
+        ("thinking", {"type": ["enabled"]}),
+    ),
+)
+def test_magistral_reasoning_request_replaced_by_prompt_warns_once(
+    param: str, value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = MistralConfig().map_openai_params(
+            non_default_params={param: value},
+            optional_params={},
+            model="magistral-medium-latest",
+            drop_params=False,
+        )
+
+    warnings: Final = _warnings_naming(caplog, param)
+    assert result["_add_reasoning_prompt"] is True
+    assert len(warnings) == 1
+    assert "magistral-medium-latest" in warnings[0]
+
+
+@pytest.mark.parametrize(
+    "param, value",
+    (
+        ("reasoning_effort", "low"),
+        ("reasoning_effort", "medium"),
+        ("reasoning_effort", "high"),
+        ("thinking", {"type": "enabled", "budget_tokens": 1024}),
+    ),
+)
+def test_magistral_reasoning_request_the_prompt_honors_does_not_warn(
+    param: str, value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = MistralConfig().map_openai_params(
+            non_default_params={param: value},
+            optional_params={},
+            model="magistral-medium-latest",
+            drop_params=False,
+        )
+
+    assert result["_add_reasoning_prompt"] is True
+    assert _warnings_naming(caplog, param) == ()
+
+
+def test_non_magistral_reasoning_effort_is_sent_without_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = MistralConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model="mistral-medium-latest",
+            drop_params=False,
+        )
+
+    assert result["reasoning_effort"] == "high"
+    assert _warnings_naming(caplog, "reasoning_effort") == ()
+
+
+@pytest.mark.parametrize("reasoning_effort", [5, {"effort": 5}, {"effort": 5, "summary": "auto"}])
+def test_mistral_warns_once_when_drop_params_drops_a_level_it_cannot_send(
+    caplog: pytest.LogCaptureFixture, reasoning_effort: object
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result: Final = MistralConfig().map_openai_params(
+            non_default_params={"reasoning_effort": reasoning_effort},
+            optional_params={},
+            model="mistral-medium-latest",
+            drop_params=True,
+        )
+
+    assert "reasoning_effort" not in result
+    warnings: Final = _warnings_naming(caplog, "reasoning_effort")
+    assert len(warnings) == 1
+    assert "model='mistral-medium-latest'" in warnings[0]
+    assert "(drop_params=True)" in warnings[0]
+
+
+@pytest.mark.parametrize("reasoning_effort", [{"summary": "auto"}, {"effort": "high", "summary": "auto"}])
+def test_mistral_stays_quiet_under_drop_params_when_no_level_is_lost(
+    caplog: pytest.LogCaptureFixture, reasoning_effort: object
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        MistralConfig().map_openai_params(
+            non_default_params={"reasoning_effort": reasoning_effort},
+            optional_params={},
+            model="mistral-medium-latest",
+            drop_params=True,
+        )
+
+    assert _warnings_naming(caplog, "reasoning_effort") == ()
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [
+        ("mistral-large-latest", "mistral"),
+        ("mistral-large-4", "mistral"),
+        ("a-mistral-model-missing-from-the-cost-map", "mistral"),
+        ("codestral-latest", "codestral"),
+    ],
+)
+def test_prompt_cache_key_reaches_the_mistral_request_body(
+    local_model_cost_map: None, model: str, custom_llm_provider: str
+) -> None:
+    import litellm
+
+    optional_params: Final = litellm.get_optional_params(
+        model=model, custom_llm_provider=custom_llm_provider, prompt_cache_key="session-1"
+    )
+    request: Final = MistralConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["prompt_cache_key"] == "session-1"
+
+
+AZURE_HOSTED_MISTRAL_API_BASE: Final = "https://my-resource.services.ai.azure.com/openai/v1"
+
+
+def _transform_with_prompt_cache_key(
+    litellm_params: dict[str, object], prompt_cache_key: object = "session-1"
+) -> Mapping[str, object]:
+    return cast(
+        Mapping[str, object],
+        MistralConfig().transform_request(
+            model="mistral-small-latest",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"prompt_cache_key": prompt_cache_key, "temperature": 0.2},
+            litellm_params=litellm_params,
+            headers={},
+        ),
+    )
+
+
+@pytest.mark.parametrize("api_base", ["https://api.mistral.ai/v1", "https://codestral.mistral.ai/v1"])
+def test_prompt_cache_key_reaches_a_mistral_hosted_endpoint(api_base: str) -> None:
+    request: Final = _transform_with_prompt_cache_key({"api_base": api_base})
+
+    assert request["prompt_cache_key"] == "session-1"
+
+
+@pytest.mark.parametrize("api_base", [AZURE_HOSTED_MISTRAL_API_BASE, "https://mistral.ai.example.com/v1"])
+def test_prompt_cache_key_for_another_host_is_rejected_without_drop_params(api_base: str) -> None:
+    import litellm
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="prompt_cache_key") as rejection:
+        _transform_with_prompt_cache_key({"api_base": api_base})
+
+    upstream_host: Final = urlparse(api_base).hostname or api_base
+    assert upstream_host not in str(rejection.value)
+
+
+UNSENDABLE_PROMPT_CACHE_KEYS: Final = ("Büro-Sitzung-42", "日本", 123, ["session-1"])
+
+
+@pytest.mark.parametrize("prompt_cache_key", UNSENDABLE_PROMPT_CACHE_KEYS)
+def test_prompt_cache_key_the_mistral_api_cannot_take_is_rejected_without_drop_params(
+    prompt_cache_key: object,
+) -> None:
+    import litellm
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="ASCII"):
+        _transform_with_prompt_cache_key({"api_base": "https://api.mistral.ai/v1"}, prompt_cache_key)
+
+
+@pytest.mark.parametrize("prompt_cache_key", UNSENDABLE_PROMPT_CACHE_KEYS)
+def test_prompt_cache_key_the_mistral_api_cannot_take_is_dropped_under_drop_params(prompt_cache_key: object) -> None:
+    request: Final = _transform_with_prompt_cache_key(
+        {"api_base": "https://api.mistral.ai/v1", "drop_params": True}, prompt_cache_key
+    )
+
+    assert "prompt_cache_key" not in request
+    assert request["temperature"] == 0.2
+
+
+def test_prompt_cache_key_with_ascii_punctuation_reaches_the_mistral_api() -> None:
+    request: Final = _transform_with_prompt_cache_key({}, "team a/session:42")
+
+    assert request["prompt_cache_key"] == "team a/session:42"
+
+
+def test_prompt_cache_key_allowlisted_for_another_purpose_is_still_rejected_for_another_host() -> None:
+    import litellm
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="allowed_openai_params"):
+        _transform_with_prompt_cache_key(
+            {"api_base": AZURE_HOSTED_MISTRAL_API_BASE, "allowed_openai_params": ["reasoning_effort"]}
+        )
+
+
+def _chat_completion_reply() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "mistral-small-latest",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+
+def test_allowlisted_prompt_cache_key_reaches_a_gateway_in_front_of_mistral(respx_mock: respx.MockRouter) -> None:
+    import litellm
+
+    gateway_route: Final = respx_mock.post("https://gateway.example.com/mistral/v1/chat/completions").mock(
+        return_value=_chat_completion_reply()
+    )
+
+    litellm.completion(
+        model="mistral/mistral-small-latest",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://gateway.example.com/mistral/v1",
+        api_key="gateway-key",
+        prompt_cache_key="session-1",
+        allowed_openai_params=["prompt_cache_key"],
+        max_retries=0,
+    )
+
+    assert json.loads(gateway_route.calls.last.request.content)["prompt_cache_key"] == "session-1"
+
+
+@pytest.mark.asyncio
+async def test_prompt_cache_key_is_dropped_from_an_async_codestral_call_to_another_host(
+    respx_mock: respx.MockRouter,
+) -> None:
+    import litellm
+
+    azure_route: Final = respx_mock.post(f"{AZURE_HOSTED_MISTRAL_API_BASE}/chat/completions").mock(
+        return_value=_chat_completion_reply()
+    )
+
+    await litellm.acompletion(
+        model="codestral/codestral-latest",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base=AZURE_HOSTED_MISTRAL_API_BASE,
+        api_key="azure-key",
+        prompt_cache_key="session-1",
+        drop_params=True,
+        max_retries=0,
+        client=AsyncOpenAI(
+            api_key="azure-key", base_url=AZURE_HOSTED_MISTRAL_API_BASE, http_client=httpx.AsyncClient()
+        ),
+    )
+
+    assert "prompt_cache_key" not in json.loads(azure_route.calls.last.request.content)
+
+
+@pytest.mark.asyncio
+async def test_prompt_cache_key_rejection_for_an_async_codestral_call_names_codestral(
+    respx_mock: respx.MockRouter,
+) -> None:
+    import litellm
+
+    azure_route: Final = respx_mock.post(f"{AZURE_HOSTED_MISTRAL_API_BASE}/chat/completions").mock(
+        return_value=_chat_completion_reply()
+    )
+
+    with pytest.raises(litellm.BadRequestError, match=r"codestral does not support parameters: \['prompt_cache_key'\]"):
+        await litellm.acompletion(
+            model="codestral/codestral-latest",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base=AZURE_HOSTED_MISTRAL_API_BASE,
+            api_key="azure-key",
+            prompt_cache_key="session-1",
+            max_retries=0,
+            client=AsyncOpenAI(
+                api_key="azure-key", base_url=AZURE_HOSTED_MISTRAL_API_BASE, http_client=httpx.AsyncClient()
+            ),
+        )
+
+    assert not azure_route.called
+
+
+@pytest.mark.asyncio
+async def test_async_codestral_call_sends_an_uploaded_file_by_its_id(respx_mock: respx.MockRouter) -> None:
+    import litellm
+
+    codestral_api_base: Final = "https://codestral.mistral.ai/v1"
+    codestral_route: Final = respx_mock.post(f"{codestral_api_base}/chat/completions").mock(
+        return_value=_chat_completion_reply()
+    )
+
+    await litellm.acompletion(
+        model="codestral/codestral-latest",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Review this file"},
+                    {"type": "file", "file": {"file_id": "file-12345"}},
+                ],
+            }
+        ],
+        api_base=codestral_api_base,
+        api_key="codestral-key",
+        max_retries=0,
+        client=AsyncOpenAI(api_key="codestral-key", base_url=codestral_api_base, http_client=httpx.AsyncClient()),
+    )
+
+    sent_content: Final = json.loads(codestral_route.calls.last.request.content)["messages"][0]["content"]
+    assert sent_content[1] == {"type": "file", "file_id": "file-12345"}
+
+
+def test_prompt_cache_key_rejection_for_a_sync_codestral_call_is_an_unsupported_params_error(
+    respx_mock: respx.MockRouter,
+) -> None:
+    import litellm
+
+    azure_route: Final = respx_mock.post(f"{AZURE_HOSTED_MISTRAL_API_BASE}/chat/completions").mock(
+        return_value=_chat_completion_reply()
+    )
+
+    with pytest.raises(
+        litellm.UnsupportedParamsError, match=r"^litellm.UnsupportedParamsError: codestral does not support"
+    ):
+        litellm.completion(
+            model="codestral/codestral-latest",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base=AZURE_HOSTED_MISTRAL_API_BASE,
+            api_key="azure-key",
+            prompt_cache_key="session-1",
+            max_retries=0,
+        )
+
+    assert not azure_route.called
+
+
+def test_prompt_cache_key_for_another_host_is_dropped_under_drop_params() -> None:
+    request: Final = _transform_with_prompt_cache_key({"api_base": AZURE_HOSTED_MISTRAL_API_BASE, "drop_params": True})
+
+    assert "prompt_cache_key" not in request
+    assert request["temperature"] == 0.2
+
+
+def test_prompt_cache_key_for_the_azure_endpoint_set_in_the_environment_is_dropped_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MISTRAL_AZURE_API_BASE", "https://my-resource.services.ai.azure.com/openai")
+
+    request: Final = _transform_with_prompt_cache_key({"drop_params": True})
+
+    assert "prompt_cache_key" not in request
+
+
+def test_prompt_cache_key_stays_unsupported_for_vertex_hosted_mistral(local_model_cost_map: None) -> None:
+    import litellm
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.get_optional_params(model="mistral-medium-3", custom_llm_provider="vertex_ai", prompt_cache_key="s")
+
+    dropped: Final = litellm.get_optional_params(
+        model="mistral-medium-3", custom_llm_provider="vertex_ai", prompt_cache_key="s", drop_params=True
+    )
+    assert "prompt_cache_key" not in dropped

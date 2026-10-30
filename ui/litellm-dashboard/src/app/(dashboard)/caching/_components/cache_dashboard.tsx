@@ -21,6 +21,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import { RefreshCw } from "lucide-react";
 import { cachingHealthCheckCall } from "@/components/networking";
+import { deriveErrorMessage } from "@/lib/http/client";
+import { ErrorState } from "@/components/shared/ErrorState";
 import { useCacheActivity, type CacheActivityGroup } from "@/app/(dashboard)/hooks/caching/useCacheActivity";
 
 // Import the new component
@@ -34,6 +36,11 @@ const REQUEST_SERIES = {
   cacheHits: "Cache hit",
   failed: "Failed requests",
 } as const;
+
+const UNKNOWN_CALL_TYPE = "Unknown";
+
+const UNKNOWN_CALL_TYPE_NOTE =
+  "Unknown groups spend logs that recorded no endpoint. Older proxy versions wrote those for requests rejected before routing, so they are not necessarily LLM API requests.";
 
 const toChartDatum = (group: CacheActivityGroup) => ({
   name: group.call_type,
@@ -89,7 +96,12 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [healthCheckResponse, setHealthCheckResponse] = useState<any>("");
 
-  const { data: activity, refetch } = useCacheActivity({
+  const {
+    data: activity,
+    isError: activityFailed,
+    error: activityError,
+    refetch,
+  } = useCacheActivity({
     startDate: formatDateWithoutTZ(dateValue.from),
     endDate: formatDateWithoutTZ(dateValue.to),
     keyAliases: selectedApiKeys,
@@ -103,6 +115,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
   const uniqueApiKeys = activity?.filter_options.key_aliases ?? [];
   const uniqueModels = activity?.filter_options.models ?? [];
   const chartData = (activity?.groups ?? []).map(toChartDatum);
+  const hasUnknownGroup = (activity?.groups ?? []).some((group) => group.call_type === UNKNOWN_CALL_TYPE);
   const activeDrilldownCallType = resolveDrilldownCallType(errorDrilldownCallType, activity?.groups ?? []);
 
   const handleRefreshClick = () => {
@@ -288,19 +301,28 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                 <p className="text-sm text-muted-foreground">
                   Click a red failed-requests segment to see which error codes caused those failures.
                 </p>
-                <BarChart
-                  data={chartData}
-                  stack={true}
-                  index="name"
-                  valueFormatter={valueFormatterNumbers}
-                  categories={[REQUEST_SERIES.apiRequests, REQUEST_SERIES.cacheHits, REQUEST_SERIES.failed]}
-                  colors={["sky", "teal", "red"]}
-                  yAxisWidth={48}
-                  className="mt-2"
-                  onValueChange={(item) => {
-                    if (item.categoryClicked === REQUEST_SERIES.failed) setErrorDrilldownCallType(item.name);
-                  }}
-                />
+                {hasUnknownGroup && <p className="mt-1 text-sm text-muted-foreground">{UNKNOWN_CALL_TYPE_NOTE}</p>}
+                {activityFailed ? (
+                  <ErrorState
+                    title="Failed to load cache activity"
+                    message={deriveErrorMessage(activityError)}
+                    onRetry={() => void refetch()}
+                  />
+                ) : (
+                  <BarChart
+                    data={chartData}
+                    stack={true}
+                    index="name"
+                    valueFormatter={valueFormatterNumbers}
+                    categories={[REQUEST_SERIES.apiRequests, REQUEST_SERIES.cacheHits, REQUEST_SERIES.failed]}
+                    colors={["sky", "teal", "red"]}
+                    yAxisWidth={48}
+                    className="mt-2"
+                    onValueChange={(item) => {
+                      if (item.categoryClicked === REQUEST_SERIES.failed) setErrorDrilldownCallType(item.name);
+                    }}
+                  />
+                )}
               </CardContent>
             </Card>
 

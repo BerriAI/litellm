@@ -1,4 +1,5 @@
 import json
+import math
 from collections.abc import Callable
 from typing import Any, Final
 
@@ -6,31 +7,42 @@ from pydantic import BaseModel
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
+UNSERIALIZABLE_OBJECT: Final = "Unserializable Object"
+
 
 def strip_null_bytes(value: str) -> str:
     """Strip NUL bytes, which PostgreSQL text/jsonb columns reject (error 22P05)."""
     return value.replace("\x00", "")
 
 
-def safe_dumps(
-    data: Any,
+def _finite_or_none(value: float | None) -> float | None:
+    return None if isinstance(value, float) and not math.isfinite(value) else value
+
+
+def safe_json_structure(
+    data: object,
     max_depth: int = DEFAULT_MAX_RECURSE_DEPTH,
     value_transform: Callable[[str | None, str], str] | None = None,
-) -> str:
+    key: str | None = None,
+    *,
+    non_finite_as_null: bool = False,
+) -> object:
     """
-    Recursively serialize data while detecting circular references.
+    Rebuild data out of JSON-native pieces while detecting circular references.
     If a circular reference is detected then a marker string is returned.
-    NUL bytes are stripped from strings to prevent PostgreSQL 22P05 errors.
+    NUL bytes are stripped from strings to prevent PostgreSQL 22P05 errors. With
+    non_finite_as_null, NaN and infinite floats become null, since jsonb rejects them.
 
     value_transform, when given, is applied to every string leaf (and to the
     str() fallback for non-serializable objects) with the mapping key the leaf
     was reached under, so callers can rewrite values without touching structure.
+    key is the mapping key data itself was reached under, when the caller has one.
     """
 
     def _transform(key: str | None, value: str) -> str:
         return value if value_transform is None else value_transform(key, value)
 
-    def _serialize(obj: Any, seen: set, depth: int, key: str | None = None) -> Any:
+    def _serialize(obj: object, seen: set[int], depth: int, key: str | None = None) -> object:
         # Check for maximum depth.
         if depth > max_depth:
             return "MaxDepthExceeded"
@@ -39,43 +51,56 @@ def safe_dumps(
             cleaned = obj.replace("\x00", "") if "\x00" in obj else obj
             return _transform(key, cleaned)
         if isinstance(obj, (int, float, bool, type(None))):
-            return obj
+            return _finite_or_none(obj) if non_finite_as_null else obj
         # Check for circular reference.
         if id(obj) in seen:
             return "CircularReference Detected"
         seen.add(id(obj))
-        result: dict | list | tuple | set | str
         if isinstance(obj, dict):
-            result = {}
-            for k, v in obj.items():
-                if isinstance(k, (str)):
-                    clean_k = k.replace("\x00", "") if "\x00" in k else k
-                    result[clean_k] = _serialize(v, seen, depth + 1, clean_k)
+            mapping_result: Final = {
+                (clean_k := k.replace("\x00", "") if "\x00" in k else k): _serialize(v, seen, depth + 1, clean_k)
+                for k, v in obj.items()
+                if isinstance(k, str)
+            }
             seen.remove(id(obj))
-            return result
+            return mapping_result
         elif isinstance(obj, list):
-            result = [_serialize(item, seen, depth + 1, key) for item in obj]
+            list_result: Final = [_serialize(item, seen, depth + 1, key) for item in obj]
             seen.remove(id(obj))
-            return result
+            return list_result
         elif isinstance(obj, tuple):
-            result = tuple(_serialize(item, seen, depth + 1, key) for item in obj)
+            tuple_result: Final = tuple(_serialize(item, seen, depth + 1, key) for item in obj)
             seen.remove(id(obj))
-            return result
+            return tuple_result
         elif isinstance(obj, set):
-            result = sorted([_serialize(item, seen, depth + 1, key) for item in obj])
+            members: Final[list[Any]] = [_serialize(item, seen, depth + 1, key) for item in obj]
+            present: Final = sorted(member for member in members if member is not None)
+            set_result: Final = present + [None] * members.count(None)
             seen.remove(id(obj))
-            return result
+            return set_result
         elif isinstance(obj, BaseModel):
             dumped: Final = obj.model_dump()
-            result = _serialize(dumped, seen, depth + 1, key)
+            model_result: Final = _serialize(dumped, seen, depth + 1, key)
             seen.remove(id(obj))
-            return result
+            return model_result
         else:
             # Fall back to string conversion for non-serializable objects.
             try:
                 return _transform(key, strip_null_bytes(str(obj)))
             except Exception:
-                return "Unserializable Object"
+                return UNSERIALIZABLE_OBJECT
 
-    safe_data: Final = _serialize(data, set(), 0)
-    return json.dumps(safe_data, default=str)
+    return _serialize(data, set(), 0, key)
+
+
+def safe_dumps(
+    data: object,
+    max_depth: int = DEFAULT_MAX_RECURSE_DEPTH,
+    value_transform: Callable[[str | None, str], str] | None = None,
+    *,
+    non_finite_as_null: bool = False,
+) -> str:
+    """Serialize data to JSON text through safe_json_structure."""
+    return json.dumps(
+        safe_json_structure(data, max_depth, value_transform, non_finite_as_null=non_finite_as_null), default=str
+    )

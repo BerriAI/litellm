@@ -161,3 +161,265 @@ taken before the change, which by that point no longer exists.
 {{- fail (printf "postgresql.image.tag must be pinned to an explicit version when db.deployStandalone is true (got %q). An unpinned tag can start a different PostgreSQL major against the existing data directory, which makes the database unreadable and is not recoverable in place. Crossing a major version requires a dump and restore." $tag) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Whether the existing Postgres is reached with a short-lived token (AWS RDS IAM
+or Microsoft Entra ID) instead of a password.
+*/}}
+{{- define "litellm.db.tokenAuth" -}}
+{{- if or .Values.db.useIAMAuth .Values.db.useAzureEntraAuth -}}true{{- end -}}
+{{- end -}}
+
+{{- define "litellm.validateDbTokenAuth" -}}
+{{- if and .Values.db.useIAMAuth .Values.db.useAzureEntraAuth -}}
+{{- fail "db.useIAMAuth and db.useAzureEntraAuth are mutually exclusive: the database password can only come from one token source" -}}
+{{- end -}}
+{{- if and (include "litellm.db.tokenAuth" .) (or (not .Values.db.useExisting) .Values.db.deployStandalone) -}}
+{{- fail "db.useIAMAuth and db.useAzureEntraAuth need db.useExisting: true and db.deployStandalone: false (token auth targets an existing RDS or Azure Database for PostgreSQL; the bundled postgresql subchart only supports password auth)" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Database env for an existing Postgres, shared by the proxy container, the
+collector sidecar and the migrations Job. Under token auth every entrypoint
+mints its own token and assembles DATABASE_URL itself, so db.url is left out.
+*/}}
+{{- define "litellm.existingDbEnv" -}}
+{{- $tokenAuth := include "litellm.db.tokenAuth" . -}}
+- name: DATABASE_USERNAME
+  {{- if .Values.db.username }}
+  value: {{ .Values.db.username | quote }}
+  {{- else }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.db.secret.name }}
+      key: {{ .Values.db.secret.usernameKey }}
+  {{- end }}
+{{- if .Values.db.useIAMAuth }}
+- name: IAM_TOKEN_DB_AUTH
+  value: "true"
+{{- else if .Values.db.useAzureEntraAuth }}
+- name: AZURE_POSTGRESQL_AUTH
+  value: "true"
+{{- else }}
+- name: DATABASE_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.db.secret.name }}
+      key: {{ .Values.db.secret.passwordKey }}
+{{- end }}
+- name: DATABASE_HOST
+  {{- if .Values.db.secret.endpointKey }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.db.secret.name }}
+      key: {{ .Values.db.secret.endpointKey }}
+  {{- else }}
+  value: {{ .Values.db.endpoint }}
+  {{- end }}
+{{- if $tokenAuth }}
+- name: DATABASE_PORT
+  value: {{ .Values.db.port | quote }}
+{{- end }}
+- name: DATABASE_NAME
+  value: {{ .Values.db.database }}
+{{- if and $tokenAuth .Values.db.schema }}
+- name: DATABASE_SCHEMA
+  value: {{ .Values.db.schema | quote }}
+{{- end }}
+{{- if not $tokenAuth }}
+- name: DATABASE_URL
+  value: {{ .Values.db.url | quote }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Environment shared by the proxy container and the opt-in collector sidecar:
+database, pgbouncer, master key, redis, user envVars. Both containers must see
+the same DATABASE_URL and REDIS_* so the sidecar reaches the pod's pgbouncer
+and the same spend transaction buffer.
+*/}}
+{{- define "litellm.proxyEnv" -}}
+{{- include "litellm.validateDbTokenAuth" . -}}
+- name: HOST
+  value: "{{ .Values.listen | default "0.0.0.0" }}"
+- name: PORT
+  value: {{ .Values.service.port | quote}}
+{{- if .Values.db.deployStandalone }}
+- name: DATABASE_USERNAME
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "litellm.fullname" . }}-dbcredentials
+      key: username
+- name: DATABASE_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "litellm.fullname" . }}-dbcredentials
+      key: password
+- name: DATABASE_HOST
+  value: {{ .Release.Name }}-postgresql
+- name: DATABASE_NAME
+  value: litellm
+{{- else if .Values.db.useExisting }}
+{{ include "litellm.existingDbEnv" . }}
+{{- end }}
+{{- if and .Values.db.useExisting .Values.db.readReplicaUrl .Values.db.secret.readReplicaEndpointKey (not .Values.db.secret.readReplicaUrlKey) }}
+- name: DATABASE_READER_HOST
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.db.secret.name }}
+      key: {{ .Values.db.secret.readReplicaEndpointKey }}
+{{- end }}
+{{- if and .Values.db.useExisting .Values.db.secret.readReplicaUrlKey }}
+- name: DATABASE_URL_READ_REPLICA
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.db.secret.name }}
+      key: {{ .Values.db.secret.readReplicaUrlKey }}
+{{- else if .Values.db.readReplicaUrl }}
+- name: DATABASE_URL_READ_REPLICA
+  value: {{ .Values.db.readReplicaUrl | quote }}
+{{- end }}
+{{- if .Values.db.connectionPool.enabled }}
+- name: LITELLM_PGBOUNCER_ENABLED
+  value: "true"
+- name: LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS
+  value: {{ .Values.db.connectionPool.maxDbConnections | quote }}
+- name: LITELLM_PGBOUNCER_MAX_CLIENT_CONN
+  value: {{ .Values.db.connectionPool.maxClientConn | quote }}
+{{- end }}
+- name: PROXY_MASTER_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.masterkeySecretName | default (printf "%s-masterkey" (include "litellm.fullname" .)) }}
+      key: {{ .Values.masterkeySecretKey | default "masterkey" }}
+{{- if .Values.redis.enabled }}
+- name: REDIS_HOST
+  value: {{ include "litellm.redis.serviceName" . }}
+- name: REDIS_PORT
+  value: {{ include "litellm.redis.port" . | quote }}
+- name: REDIS_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "redis.secretName" .Subcharts.redis }}
+      key: {{include "redis.secretPasswordKey" .Subcharts.redis }}
+{{- end }}
+{{- /*
+  Inject LITELLM_LOG only when envVars does not already define it.
+*/}}
+{{- if and .Values.logLevel (not (hasKey (default dict .Values.envVars) "LITELLM_LOG")) }}
+- name: LITELLM_LOG
+  value: {{ .Values.logLevel | quote }}
+{{- end }}
+{{- if .Values.envVars }}
+{{- range $key, $val := .Values.envVars }}
+- name: {{ $key }}
+  value: {{ $val | quote }}
+{{- end }}
+{{- end }}
+{{- with .Values.extraEnvVars }}
+{{ toYaml . }}
+{{- end }}
+{{- if .Values.migrationJob.enabled }}
+# Schema updates are owned by the dedicated migrations Job; skip
+# the proxy's startup `prisma db push` so N replicas don't race
+# one DB on every rollout. Placed last (after envVars and
+# extraEnvVars) so this override can't be silently shadowed by a
+# user-supplied DISABLE_SCHEMA_UPDATE under last-wins duplicate-env
+# semantics — same pattern the migrations Job uses.
+- name: DISABLE_SCHEMA_UPDATE
+  value: "true"
+{{- end }}
+{{- end -}}
+
+{{/*
+Proxy-only metering and metrics env. The collector sidecar serves no HTTP
+traffic, so it gets neither.
+*/}}
+{{- define "litellm.proxyMetricsEnv" -}}
+{{- if .Values.billingMetrics.enabled }}
+{{ include "litellm.billingMetricsEnv" . }}
+{{- end }}
+{{- if .Values.metricsServer.enabled }}
+{{- if eq (int .Values.metricsServer.port) (int .Values.service.port) }}
+{{- fail "metricsServer.port must differ from service.port" }}
+{{- end }}
+- name: PROMETHEUS_METRICS_PORT
+  value: {{ .Values.metricsServer.port | quote }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Directory of the collector's unix socket, shared between the two containers
+through an emptyDir. Empty when the sidecar is off or uses 127.0.0.1 TCP.
+*/}}
+{{- define "litellm.collector.socketDir" -}}
+{{- if and .Values.collector.enabled (hasPrefix "unix://" .Values.collector.address) -}}
+{{- dir (trimPrefix "unix://" .Values.collector.address) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.collectorEnv" -}}
+- name: LITELLM_COLLECTOR_ENABLED
+  value: "true"
+- name: LITELLM_COLLECTOR_ADDRESS
+  value: {{ .Values.collector.address | quote }}
+- name: LITELLM_COLLECTOR_BUFFER_SIZE
+  value: {{ .Values.collector.bufferSize | quote }}
+- name: LITELLM_COLLECTOR_ON_UNAVAILABLE
+  value: {{ .Values.collector.onUnavailable | quote }}
+- name: LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS
+  value: {{ .Values.collector.drainTimeoutSeconds | quote }}
+{{- end -}}
+
+{{- define "litellm.gateway.collectorSocketDir" -}}
+{{- if and .Values.gateway.collector.enabled (hasPrefix "unix://" .Values.gateway.collector.address) -}}
+{{- dir (trimPrefix "unix://" .Values.gateway.collector.address) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+LITELLM_COLLECTOR_* env shared by the producer (gateway container) and the
+consumer (collector container), so both agree on the transport and the
+shutdown drain window.
+*/}}
+{{- define "litellm.gateway.collectorEnv" -}}
+{{- with .Values.gateway.collector }}
+- name: LITELLM_COLLECTOR_ENABLED
+  value: "true"
+- name: LITELLM_COLLECTOR_ADDRESS
+  value: {{ .address | quote }}
+- name: LITELLM_COLLECTOR_BUFFER_SIZE
+  value: {{ .bufferSize | quote }}
+- name: LITELLM_COLLECTOR_ON_UNAVAILABLE
+  value: {{ .onUnavailable | quote }}
+- name: LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS
+  value: {{ .drainTimeoutSeconds | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "litellm.lensConnectionEnv" -}}
+{{- with .Values.lensWorker }}
+{{- if or .enabled (and .mode (ne .mode "disabled")) }}
+{{- fail "lensWorker was removed; deploy Lens from its own chart and set lens.* instead, see the chart README" }}
+{{- end }}
+{{- end }}
+{{- with .Values.lens }}
+{{- if .enabled }}
+- name: LITELLM_LENS_URL
+  value: {{ required "lens.url is required when lens.enabled is true" .url | quote }}
+- name: LITELLM_LENS_PUBLIC_URL
+  value: {{ required "lens.publicUrl is required when lens.enabled is true" .publicUrl | quote }}
+- name: LENS_GATEWAY_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: {{ required "lens.gatewaySecret.name is required when lens.enabled is true" .gatewaySecret.name | quote }}
+      key: {{ .gatewaySecret.key | quote }}
+- name: LITELLM_LENS_SERVICE_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ required "lens.serviceTokenSecret.name is required when lens.enabled is true" .serviceTokenSecret.name | quote }}
+      key: {{ .serviceTokenSecret.key | quote }}
+{{- end }}
+{{- end }}
+{{- end -}}

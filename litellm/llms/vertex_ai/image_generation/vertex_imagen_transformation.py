@@ -1,7 +1,9 @@
 import os
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.llms.base_llm.image_generation.transformation import (
@@ -9,6 +11,7 @@ from litellm.llms.base_llm.image_generation.transformation import (
 )
 from litellm.llms.vertex_ai.common_utils import (
     get_vertex_base_url,
+    map_vertex_image_size,
     pop_vertex_request_labels,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
@@ -21,10 +24,17 @@ from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_VALUE: Final = TypeAdapter(object)
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_CONTAINER: Final[TypeAdapter[Mapping[str, object] | str | Sequence[object]]] = TypeAdapter(
+    Mapping[str, object] | str | Sequence[object], config=ConfigDict(hide_input_in_errors=True)
+)
 
 
 class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
@@ -63,24 +73,13 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                         mapped_params["sampleCount"] = v
                     elif k == "size":
                         # Map OpenAI size format to Imagen aspectRatio
-                        mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(v)
+                        mapped_params["aspectRatio"] = (
+                            map_vertex_image_size(v, model, imagen=True) or {"aspectRatio": "1:1"}
+                        )["aspectRatio"]
                     else:
                         mapped_params[k] = v
 
         return mapped_params
-
-    def _map_size_to_aspect_ratio(self, size: str) -> str:
-        """
-        Map OpenAI size format to Imagen aspect ratio format
-        """
-        aspect_ratio_map: Final = {
-            "1024x1024": "1:1",
-            "1792x1024": "16:9",
-            "1024x1792": "9:16",
-            "1280x896": "4:3",
-            "896x1280": "3:4",
-        }
-        return aspect_ratio_map.get(size, "1:1")
 
     def _resolve_vertex_project(self) -> str | None:
         return (
@@ -212,7 +211,7 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -220,7 +219,7 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         Transform Imagen image generation response to litellm ImageResponse format
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _JSON_VALUE.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -232,13 +231,18 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             model_response.data = []
 
         # Imagen format - predictions with generated images
-        predictions: Final = response_data.get("predictions", [])
-        for prediction in predictions:
+        predictions: Final = _JSON_CONTAINER.validate_python(
+            _JSON_OBJECT.validate_python(response_data).get("predictions", [])
+        )
+        for raw_prediction in predictions:
+            prediction = (
+                raw_prediction if isinstance(raw_prediction, str) else _JSON_CONTAINER.validate_python(raw_prediction)
+            )
             # Imagen returns images as bytesBase64Encoded
             if "bytesBase64Encoded" in prediction:
                 model_response.data.append(
                     ImageObject(
-                        b64_json=prediction["bytesBase64Encoded"],
+                        b64_json=_JSON_OBJECT.validate_python(prediction)["bytesBase64Encoded"],
                         url=None,
                     )
                 )

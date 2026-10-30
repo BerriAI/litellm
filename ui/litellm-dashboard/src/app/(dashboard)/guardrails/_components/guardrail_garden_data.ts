@@ -1,10 +1,11 @@
+import { Providers, providerLogoMap } from "@/components/provider_info_helpers";
 import { guardrailLogoMap } from "./guardrail_info_helpers";
 
 export interface GuardrailCardInfo {
   id: string;
   name: string;
   description: string;
-  category: "litellm" | "partner";
+  category: "litellm" | "decision_model" | "partner";
   subcategory?: string;
   logo: string;
   tags: string[];
@@ -240,6 +241,58 @@ export const LITELLM_CONTENT_FILTER_CARDS: GuardrailCardInfo[] = [
   },
 ];
 
+export const DECISION_MODEL_CARDS: GuardrailCardInfo[] = [
+  {
+    id: "dm_typesafe_jev",
+    name: "TypeSafe Jev",
+    description:
+      "TypeSafe's Jev decision model answers your yes/no questions about each request, such as prompt injection or policy checks.",
+    category: "decision_model",
+    logo: providerLogoMap[Providers.TypeSafe] ?? "",
+    tags: ["Decision Model", "TypeSafe", "Prompt Injection"],
+    providerKey: "DecisionModel",
+  },
+  {
+    id: "dm_perplexity",
+    name: "Perplexity Decision",
+    description: "Perplexity's pplx-decider model answers your yes/no questions about each request or response.",
+    category: "decision_model",
+    logo: providerLogoMap[Providers.Perplexity] ?? "",
+    tags: ["Decision Model", "Perplexity"],
+    providerKey: "DecisionModel",
+  },
+  {
+    id: "dm_microsoft",
+    name: "Microsoft Decision Model",
+    description:
+      "Microsoft Foundry decision models, such as Microsoft-Decision-1, answer your yes/no questions about each request or response.",
+    category: "decision_model",
+    logo: providerLogoMap[Providers.Azure_AI_Studio] ?? "",
+    tags: ["Decision Model", "Microsoft"],
+    providerKey: "DecisionModel",
+  },
+  {
+    id: "dm_openai",
+    name: "OpenAI Decision Model",
+    description:
+      "OpenAI decision models, such as gpt-6-luna, answer your yes/no questions about each request or response.",
+    category: "decision_model",
+    logo: providerLogoMap[Providers.OpenAI] ?? "",
+    tags: ["Decision Model", "OpenAI"],
+    providerKey: "DecisionModel",
+  },
+  {
+    id: "dm_databricks",
+    name: "Databricks Decision Model",
+    description:
+      "Decision models served on Databricks, such as OpenJev, answer your yes/no questions about each request or response.",
+    category: "decision_model",
+    logo: providerLogoMap[Providers.Databricks] ?? "",
+    tags: ["Decision Model", "Databricks"],
+    providerKey: "DecisionModel",
+  },
+];
+
 export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
   {
     id: "presidio",
@@ -464,6 +517,66 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     tags: ["Agentic", "Prompt Injection", "Tool Misuse", "MCP", "Skills"],
     providerKey: "Straiker",
   },
+  {
+    id: "alice",
+    name: "Alice",
+    description:
+      "Policy-based guardrails for prompts and model responses, evaluated per application so one proxy can enforce a different policy set per team or product.",
+    category: "partner",
+    logo: guardrailLogoMap["Alice"],
+    tags: ["Content Moderation", "Prompt Injection", "PII", "Policy"],
+    providerKey: "Alice",
+  },
+  {
+    id: "agent_365",
+    name: "Microsoft Agent 365",
+    description:
+      "Microsoft Agent 365 tool-call governance: Defender threat evaluation and observability for MCP tool calls, acting on behalf of the signed-in user",
+    category: "partner",
+    logo: guardrailLogoMap["Microsoft Agent 365"],
+    tags: ["Agentic", "MCP", "Tool Misuse", "Observability"],
+    providerKey: "Agent365",
+  },
+  {
+    id: "llm_shield_proxy",
+    name: "LLM Shield Proxy",
+    description:
+      "Self-hosted PII redaction that puts the original values back into the model's response, so the provider never receives personal data while the end user still sees it.",
+    category: "partner",
+    logo: guardrailLogoMap["LLM Shield Proxy"],
+    tags: ["PII", "Data Privacy", "Compliance", "Streaming"],
+    providerKey: "LLM Shield Proxy",
+  },
+  {
+    id: "conduct",
+    name: "Conduct Guard",
+    description:
+      "Conduct Guard evaluates prompts against workspace rules before the model call: prompt injection, PII, and custom policies, with block, warning, and approval verdicts.",
+    category: "partner",
+    logo: guardrailLogoMap["Conduct Guard"],
+    tags: ["Security", "Prompt Injection", "PII", "Policy"],
+    providerKey: "Conduct",
+  },
+  {
+    id: "wingback",
+    name: "Wingback",
+    description:
+      "Wingback runtime security for LiteLLM — PII detection, prompt injection, toxic content, and policy enforcement via the Wingback connectors service.",
+    category: "partner",
+    logo: guardrailLogoMap["Wingback"],
+    tags: ["Security", "PII", "Prompt Injection", "Runtime"],
+    providerKey: "Wingback",
+  },
+  {
+    id: "airia",
+    name: "Airia Guardrail",
+    description:
+      "Airia AI security and governance platform. Runtime guardrails for prompt injection, data leakage prevention, and responsible AI, enforced on every prompt and response.",
+    category: "partner",
+    logo: guardrailLogoMap["Airia Guardrail"],
+    tags: ["Security", "Prompt Injection", "PII", "Secrets", "Redaction"],
+    providerKey: "Airia",
+  },
 ];
 
-export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...PARTNER_GUARDRAIL_CARDS];
+export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...DECISION_MODEL_CARDS, ...PARTNER_GUARDRAIL_CARDS];

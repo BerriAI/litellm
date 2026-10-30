@@ -71,6 +71,7 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
   return (
     <DataTable
       data={rows}
+      paginationMode="client"
       columns={columns}
       getRowId={(row) => `${row.primaryPolicy.definition_location ?? "db"}:${row.policy_name}`}
       sortingMode="client"

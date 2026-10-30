@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { CreateUserButton } from "./CreateUserButton";
 import * as networking from "./networking";
 import { toast } from "@/lib/toast";
+import { expectControlBesideLabel } from "../../tests/fieldOrientation";
 
 vi.mock("./networking", () => ({
   userCreateCall: vi.fn(),
@@ -18,6 +19,8 @@ vi.mock("./networking", () => ({
     SSO_ENABLED: false,
   }),
   getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost"),
+  getGlobalLitellmHeaderName: vi.fn(() => "X-Litellm-Key"),
+  getUiPageUrl: (url: string) => url,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
@@ -292,6 +295,20 @@ describe("CreateUserButton", () => {
         expect(mockToast.success).toHaveBeenCalledWith("API user Created");
       });
     });
+  });
+
+  it("lays the send invitation email checkbox out beside its label", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    renderWithProviders(<CreateUserButton {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
+
+    const dialog = screen.getByRole("dialog", { name: /invite user/i });
+
+    expectControlBesideLabel(within(dialog).getByRole("checkbox"));
   });
 
   describe("organizations", () => {

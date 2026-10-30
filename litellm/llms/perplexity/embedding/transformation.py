@@ -12,17 +12,36 @@ This module decodes them into float arrays for OpenAI-compatible responses.
 """
 
 import base64
+import builtins
 import struct
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Final, Literal
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_INT: Final = TypeAdapter(int)
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _PerplexityEmbeddingResponse(TypedDict, total=False):
+    model: ReadOnly[str | None]
+    object: ReadOnly[Literal["list"]]
+    data: ReadOnly[Sequence[builtins.object] | Mapping[str, builtins.object] | Literal[""]]
+    usage: ReadOnly[builtins.object]
+
+
+_EMBEDDING_RESPONSE_ADAPTER: Final = TypeAdapter(_PerplexityEmbeddingResponse)
 
 
 class PerplexityEmbeddingError(BaseLLMException):
@@ -61,9 +80,10 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         stream: bool | None = None,
     ) -> str:
         if api_base:
-            if not api_base.endswith("/embeddings"):
-                api_base = f"{api_base}/v1/embeddings"
-            return api_base
+            clean_api_base: Final = api_base.rstrip("/")
+            if not clean_api_base.endswith("/embeddings"):
+                return join_api_base(clean_api_base, "v1/embeddings")
+            return clean_api_base
         return "https://api.perplexity.ai/v1/embeddings"
 
     def get_supported_openai_params(self, model: str) -> list:
@@ -117,7 +137,7 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         }
 
     @staticmethod
-    def _decode_base64_embedding(embedding_value: Any) -> list[float]:
+    def _decode_base64_embedding(embedding_value: object) -> object:
         """
         Decode a Perplexity embedding into a list of floats.
 
@@ -130,7 +150,7 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         if isinstance(embedding_value, str):
             raw_bytes: Final = base64.b64decode(embedding_value)
             count: Final = len(raw_bytes)
-            int8_values: Final = struct.unpack(f"{count}b", raw_bytes)
+            int8_values: Final[tuple[int, ...]] = struct.unpack(f"{count}b", raw_bytes)
             return [float(v) / 127.0 for v in int8_values]
         return embedding_value
 
@@ -146,25 +166,31 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict = {},
     ) -> EmbeddingResponse:
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final[object] = raw_response.json()
         except Exception:
             raise PerplexityEmbeddingError(message=raw_response.text, status_code=raw_response.status_code)
 
-        model_response.model = raw_response_json.get("model", model)
-        model_response.object = raw_response_json.get("object", "list")
+        response_data: Final[_PerplexityEmbeddingResponse] = _EMBEDDING_RESPONSE_ADAPTER.validate_python(
+            raw_response_json
+        )
 
-        raw_data: Final = raw_response_json.get("data", [])
-        decoded_data: Final[list[dict[str, Any]]] = []
+        model_response.model = response_data.get("model", model)
+        model_response.object = response_data.get("object", "list")
+
+        raw_data: Final = response_data.get("data", [])
+        decoded_data: Final[list[dict[str, object]]] = []
         for item in raw_data:
-            decoded_item = dict(item)
-            decoded_item["embedding"] = self._decode_base64_embedding(item.get("embedding"))
+            decoded_item = dict(_JSON_OBJECT.validate_python(item))
+            decoded_item["embedding"] = self._decode_base64_embedding(decoded_item.get("embedding"))
             decoded_data.append(decoded_item)
         model_response.data = decoded_data
 
-        usage_data: Final = raw_response_json.get("usage", {})
+        usage_data: Final = _JSON_OBJECT.validate_python(response_data.get("usage", {}))
         usage: Final = Usage(
-            prompt_tokens=usage_data.get("prompt_tokens", 0) or usage_data.get("total_tokens", 0),
-            total_tokens=usage_data.get("total_tokens", 0),
+            prompt_tokens=_INT.validate_python(
+                usage_data.get("prompt_tokens", 0) or usage_data.get("total_tokens", 0) or 0
+            ),
+            total_tokens=_INT.validate_python(usage_data.get("total_tokens", 0) or 0),
         )
         model_response.usage = usage
         return model_response

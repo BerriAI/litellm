@@ -8,10 +8,11 @@ This module handles transforming between:
 
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final, cast
+from typing import Final, cast
 
 from pydantic import BaseModel
 
+from litellm.litellm_core_utils.core_helpers import billed_usage_cost
 from litellm.types.interactions import (
     InteractionInput,
     InteractionsAPIOptionalRequestParams,
@@ -34,8 +35,8 @@ class LiteLLMResponsesInteractionsConfig:
         model: str,
         input: InteractionInput | None,
         optional_params: InteractionsAPIOptionalRequestParams,
-        **kwargs,
-    ) -> dict[str, Any]:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Transform an Interactions API request to a Responses API request.
 
@@ -45,7 +46,7 @@ class LiteLLMResponsesInteractionsConfig:
         - tools -> tools (similar format)
         - generation_config -> temperature, top_p, etc.
         """
-        responses_request: Final[dict[str, Any]] = {
+        responses_request: Final[dict[str, object]] = {
             "model": model,
         }
 
@@ -190,6 +191,7 @@ class LiteLLMResponsesInteractionsConfig:
     def transform_responses_response_to_interactions_response(
         responses_response: ResponsesAPIResponse,
         model: str | None = None,
+        custom_llm_provider: str | None = None,
     ) -> InteractionsAPIResponse:
         """
         Transform a Responses API response to an Interactions API response.
@@ -201,15 +203,15 @@ class LiteLLMResponsesInteractionsConfig:
         - Extract usage
         """
         # Extract text from outputs and build both `outputs` (legacy) and `steps` (new schema).
-        outputs: Final[list[dict[str, Any]]] = []
-        steps: Final[list[dict[str, Any]]] = []
+        outputs: Final[list[dict[str, object]]] = []
+        steps: Final[list[dict[str, object]]] = []
         if hasattr(responses_response, "output") and responses_response.output:
             for output_item in responses_response.output:
                 # Use getattr with None default to safely access content
                 content = getattr(output_item, "content", None)
                 if content is not None:
                     content_items = content if isinstance(content, list) else [content]
-                    model_output_contents: list[dict[str, Any]] = []
+                    model_output_contents: list[dict[str, object]] = []
                     for content_item in content_items:
                         # Check if content_item has text attribute
                         text = getattr(content_item, "text", None)
@@ -251,7 +253,7 @@ class LiteLLMResponsesInteractionsConfig:
 
         # Build interactions response — populate both `outputs` (legacy schema) and
         # `steps` (new schema) so callers work regardless of which schema they expect.
-        interactions_response_dict: Final[dict[str, Any]] = {
+        interactions_response_dict: Final[dict[str, object]] = {
             "id": getattr(responses_response, "id", ""),
             "object": "interaction",
             "status": interactions_status,
@@ -264,14 +266,16 @@ class LiteLLMResponsesInteractionsConfig:
         # Add usage if available
         # Map Responses API usage (input_tokens, output_tokens) to Interactions API spec format
         # (total_input_tokens, total_output_tokens)
-        usage: Final = getattr(responses_response, "usage", None)
+        usage: Final[object] = getattr(responses_response, "usage", None)
         if usage:
+            reported_cost: Final = billed_usage_cost(responses_response, custom_llm_provider)
             interactions_response_dict["usage"] = {
                 "total_input_tokens": getattr(usage, "input_tokens", 0),
                 "total_output_tokens": getattr(usage, "output_tokens", 0),
+                **({} if reported_cost is None else {"cost": reported_cost}),
             }
 
         # Add updated (same as created for now)
         interactions_response_dict["updated"] = created
 
-        return InteractionsAPIResponse(**interactions_response_dict)
+        return InteractionsAPIResponse.model_validate(interactions_response_dict)

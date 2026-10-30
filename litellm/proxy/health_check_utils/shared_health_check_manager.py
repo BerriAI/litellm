@@ -1,8 +1,13 @@
 import asyncio
 import json
 import time
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Final
 
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
+
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
@@ -11,9 +16,21 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.health_check import perform_health_check
+from litellm.router_utils.health_state_cache import HEALTH_CHECKS_TARGET
 
 if TYPE_CHECKING:
     from litellm.router import Router
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _CachedHealthCheckResults(TypedDict):
+    healthy_endpoints: NotRequired[ReadOnly[list[Mapping[str, object]]]]
+    unhealthy_endpoints: NotRequired[ReadOnly[list[Mapping[str, object]]]]
+    timestamp: NotRequired[ReadOnly[int | float]]
+    checked_by: NotRequired[ReadOnly[object]]
+
+
+_CACHED_HEALTH_CHECK_RESULTS: Final = TypeAdapter(_CachedHealthCheckResults)
 
 
 class SharedHealthCheckManager:
@@ -58,6 +75,7 @@ class SharedHealthCheckManager:
         """Get the Redis key for model-specific health check results cache."""
         return f"health_check_results:{model_name}"
 
+    @with_service_target(HEALTH_CHECKS_TARGET)
     async def acquire_health_check_lock(self) -> bool:
         """
         Attempt to acquire the global health check lock.
@@ -88,6 +106,7 @@ class SharedHealthCheckManager:
             verbose_proxy_logger.error("Error acquiring health check lock: %s", str(e))
             return False
 
+    @with_service_target(HEALTH_CHECKS_TARGET)
     async def release_health_check_lock(self) -> None:
         """Release the global health check lock."""
         if self.redis_cache is None:
@@ -103,7 +122,8 @@ class SharedHealthCheckManager:
         except Exception as e:
             verbose_proxy_logger.error("Error releasing health check lock: %s", str(e))
 
-    async def get_cached_health_check_results(self) -> dict[str, Any] | None:
+    @with_service_target(HEALTH_CHECKS_TARGET)
+    async def get_cached_health_check_results(self) -> _CachedHealthCheckResults | None:
         """
         Get cached health check results from Redis.
 
@@ -121,10 +141,9 @@ class SharedHealthCheckManager:
                 return None
 
             # Parse the cached data
-            if isinstance(cached_data, str):
-                cached_results = json.loads(cached_data)
-            else:
-                cached_results = cached_data
+            cached_results: Final = _CACHED_HEALTH_CHECK_RESULTS.validate_python(
+                json.loads(cached_data) if isinstance(cached_data, str) else cached_data
+            )
 
             # Check if the cache is still valid
             cache_timestamp: Final = cached_results.get("timestamp", 0)
@@ -141,10 +160,11 @@ class SharedHealthCheckManager:
             verbose_proxy_logger.error("Error getting cached health check results: %s", str(e))
             return None
 
+    @with_service_target(HEALTH_CHECKS_TARGET)
     async def cache_health_check_results(
         self,
-        healthy_endpoints: list[dict[str, Any]],
-        unhealthy_endpoints: list[dict[str, Any]],
+        healthy_endpoints: Sequence[Mapping[str, object]],
+        unhealthy_endpoints: Sequence[Mapping[str, object]],
     ) -> None:
         """
         Cache health check results in Redis.
@@ -182,14 +202,15 @@ class SharedHealthCheckManager:
         except Exception as e:
             verbose_proxy_logger.error("Error caching health check results: %s", str(e))
 
+    @with_service_target(HEALTH_CHECKS_TARGET)
     async def perform_shared_health_check(
         self,
-        model_list: list[dict[str, Any]],
+        model_list: list[Mapping[str, object]],
         details: bool = True,
         max_concurrency: int | None = None,
         health_check_skip_disabled_background_models: bool = False,
         router: "Router | None" = None,
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    ) -> tuple[list[Mapping[str, object]], list[Mapping[str, object]], dict[str, object]]:
         """
         Perform health check with shared state coordination.
 
@@ -318,6 +339,7 @@ class SharedHealthCheckManager:
                 router=router,
             )
 
+    @with_service_target(HEALTH_CHECKS_TARGET)
     async def is_health_check_in_progress(self) -> bool:
         """
         Check if a health check is currently in progress by another pod.
@@ -336,14 +358,15 @@ class SharedHealthCheckManager:
             verbose_proxy_logger.error("Error checking health check lock status: %s", str(e))
             return False
 
-    async def get_health_check_status(self) -> dict[str, Any]:
+    @with_service_target(HEALTH_CHECKS_TARGET)
+    async def get_health_check_status(self) -> dict[str, object]:
         """
         Get the current status of health check coordination.
 
         Returns:
             Dict containing status information
         """
-        status: Final = {
+        status: Final[dict[str, object]] = {
             "pod_id": self.pod_id,
             "redis_available": self.redis_cache is not None,
             "lock_ttl": self.lock_ttl,

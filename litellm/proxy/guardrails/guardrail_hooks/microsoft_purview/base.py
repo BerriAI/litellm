@@ -5,6 +5,7 @@ from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
+import httpx
 from typing_extensions import NotRequired, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -56,6 +57,7 @@ class PurviewGuardrailBase:
         # (typically CustomGuardrail).
         super().__init__(**kwargs)
 
+        self.timeout: float | httpx.Timeout | None
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.tenant_id = tenant_id
         self.client_id = client_id
@@ -107,6 +109,7 @@ class PurviewGuardrailBase:
             url=url,
             data=data,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=self.timeout,
         )
         response.raise_for_status()
         token_data: Final[GraphTokenResponse] = response.json()
@@ -143,7 +146,7 @@ class PurviewGuardrailBase:
             headers.update(extra_headers)
 
         verbose_proxy_logger.debug("Purview Graph POST %s", url)
-        response: Final = await self.async_handler.post(url=url, headers=headers, json=json_body)
+        response: Final = await self.async_handler.post(url=url, headers=headers, json=json_body, timeout=self.timeout)
         response.raise_for_status()
         response_json: Final[dict[str, object]] = response.json()
         response_headers: Final = dict(response.headers)

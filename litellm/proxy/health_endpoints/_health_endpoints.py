@@ -6,17 +6,21 @@ import os
 import secrets
 import time
 import traceback
-from collections.abc import Iterable, Mapping
-from datetime import datetime, timedelta
-from typing import Any, Final, Literal, TypedDict, cast
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from itertools import chain, groupby
+from types import MappingProxyType
+from typing import Final, Literal, TypedDict
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
-from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS
+from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS, PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
 from litellm.integrations.SlackAlerting.ms_teams import (
     MS_TEAMS_ALERT_HEADERS,
     build_ms_teams_payload,
@@ -29,38 +33,85 @@ from litellm.proxy._types import (
     CallInfo,
     EnterpriseLicenseData,
     Litellm_EntityType,
+    LiteLLM_UserTable,
     LitellmUserRoles,
-    ProxyErrorTypes,
+    ModelAccessDeniedProxyException,
     ProxyException,
     SpecialModelNames,
     UserAPIKeyAuth,
     WebhookEvent,
 )
+from litellm.proxy.auth.auth_checks import (
+    _resolve_key_models_for_auth_check,  # pyright: ignore[reportPrivateUsage]  # the auth layer's sentinel resolution, reused so /health scopes exactly like a request
+    agent_model_grants,
+    can_agent_call_model,
+    can_key_call_resolved_model,
+    can_user_call_model,
+    get_user_object,
+    key_model_aliases_for_auth_check,
+    model_matches_any_wildcard_pattern_in_list,
+    team_model_aliases_for_auth_check,
+)
+from litellm.proxy.auth.auth_exception_handler import (
+    _as_proxy_exception,  # pyright: ignore[reportPrivateUsage]  # one auth-failure mapping, shared with user_api_key_auth
+)
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils import http_parsing_utils
+from litellm.proxy.common_utils.model_listing_utils import (
+    CallerAliases,
+    dispatched_model,
+    requestable_alias_names,
+)
+from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
+from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.db.health_check_latest import (
+    LatestHealthCheckRow,
+    query_latest_health_checks,
+)
 from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
-from litellm.proxy.health_check import (
+from litellm.proxy.health_check import (  # noqa: F401  # legacy module exports
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
-    _clean_endpoint_data,
-    _update_litellm_params_for_health_check,
+    _clean_endpoint_data,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _update_litellm_params_for_health_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    clean_endpoint_data,
+    deployments_targeted_by_name,
     health_check_filter_kwargs_from_general_settings,
     perform_health_check,
+    resolve_health_check_mode,
     run_with_timeout,
+    update_litellm_params_for_health_check,
+)
+from litellm.proxy.middleware.admission_control_middleware import (
+    get_admission_control_stats,
 )
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+from litellm.router import Router
+from litellm.router_api import deployment_usable_by_team
 from litellm.router_utils.clientside_credential_handler import (
     _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the router path
     clientside_credential_keys,
 )
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import get_secret_bool
+from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
+from litellm.types.router import reject_server_owned_wif_fields
+from litellm.types.utils import AdminApiKeySecretReference, admin_api_key_secret_reference
 
 #### Health ENDPOINTS ####
+
+
+class _HealthBacklogResponse(TypedDict):
+    in_flight_requests: ReadOnly[int]
+    admitted_requests: ReadOnly[int]
+    queued_requests: ReadOnly[int]
+    rejected_requests: ReadOnly[int]
 
 
 def _reject_os_environ_references(params: dict) -> None:
@@ -105,34 +156,90 @@ _CONFIG_CONNECTION_FIELDS: Final[frozenset[str]] = frozenset(
 )
 
 
+def _request_inherits_config_credentials(
+    config_params: Mapping[str, object],
+    request_params: Mapping[str, object],
+    allow_client_side_credentials: bool,
+    *,
+    selected_by_id: bool,
+) -> bool:
+    """Whether the configuration's credentials are this request's to be probed with.
+
+    The configuration reached here by matching the request's model string, which
+    also matches wildcard routes and unrelated deployments that merely serve the
+    same model, so a request naming a stored credential of its own has already
+    said where its credentials come from and does not borrow that one's. A request
+    bringing its own ``api_key`` describes its own connection when matched only by
+    model name. A blank name or key is no name or key: ``load_credentials_from_list``
+    resolves nothing from it, so it must not cost the request the credentials it
+    would otherwise be probed with.
+    """
+    requested_credential: Final = request_params.get("litellm_credential_name")
+    if requested_credential and requested_credential != config_params.get("litellm_credential_name"):
+        return False
+    if not selected_by_id and request_params.get("api_key"):
+        return False
+    if allow_client_side_credentials:
+        return True
+    return not any(param in request_params for param in _BANNED_REQUEST_BODY_PARAMS)
+
+
+def _admin_api_key_from_request(
+    request_litellm_params: Mapping[str, object], call_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    """Only reached once the model auth check passed, which refuses an ``oidc/`` api_key from anyone but a proxy
+    admin."""
+    marked: Final = admin_api_key_secret_reference({**call_params, "api_key": request_litellm_params.get("api_key")})
+    api_key: Final = marked.get("api_key")
+    return MappingProxyType({"api_key": api_key} if isinstance(api_key, AdminApiKeySecretReference) else {})
+
+
 def _config_base_for_health_check(
     config_params: Mapping[str, object],
     request_params: Mapping[str, object],
     allow_client_side_credentials: bool = False,
+    *,
+    selected_by_id: bool,
 ) -> dict[str, object]:
     """Return the configured parameters to merge under a connection-test request.
 
-    A request that sets its own connection fields describes a connection of its
-    own, so the configuration's credentials are not carried into it: they belong
-    to the endpoint the configuration names. Anything the request does not set
-    still comes from the configuration, which is what lets a request name a
-    configured model and test it as configured.
+    A request that sets its own connection fields, brings an ``api_key`` when
+    matched only by model name, or names its own stored credential describes a
+    connection of its own, so the configuration's credentials are not carried
+    into it. Anything the request does not set still comes from the configuration,
+    which is what lets a request name a configured model and test it as configured.
 
     ``litellm_credential_name`` is dropped alongside the literal credential
     fields: it names a stored credential that ``load_credentials_from_list``
     resolves into the same secrets further down the call, so leaving it in place
     would reintroduce them by reference.
-
-    ``general_settings.allow_client_side_credentials`` is the existing proxy-wide
-    opt-in for callers supplying their own connection parameters. Where an admin
-    has enabled it, a request may pair its own endpoint with the configured
-    credentials, as it could before.
     """
-    if allow_client_side_credentials:
-        return dict(config_params)
-    if not any(param in request_params for param in _BANNED_REQUEST_BODY_PARAMS):
+    if _request_inherits_config_credentials(
+        config_params,
+        request_params,
+        allow_client_side_credentials,
+        selected_by_id=selected_by_id,
+    ):
         return dict(config_params)
     return {key: value for key, value in config_params.items() if key not in _CONFIG_CONNECTION_FIELDS}
+
+
+def _model_info_for_mode_resolution(
+    model_info: Mapping[str, object], stored_params: Mapping[str, object], request_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    stored_model: Final = stored_params.get("model")
+    if stored_model is None or request_params.get("model") in (None, stored_model):
+        return model_info
+    return {key: value for key, value in model_info.items() if key != "mode"}
+
+
+def _string_mode_or_bad_request(params_mode: object) -> str | None:
+    if params_mode is None or isinstance(params_mode, str):
+        return params_mode
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={"error": f"litellm_params.mode must be a string, got {type(params_mode).__name__}"},
+    )
 
 
 def get_callback_identifier(callback):
@@ -165,6 +272,29 @@ def get_callback_identifier(callback):
 
 
 router: Final = APIRouter()
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_OBJECTS: Final = TypeAdapter(tuple[object, ...])
+_DEPLOYMENTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+class _ModelGrants(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    models: tuple[object, ...] = ()
+
+
+class _ModelInfoAccessGroups(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    access_groups: tuple[object, ...]
+
+
+class _DeploymentAccessGroups(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model_info: _ModelInfoAccessGroups
+
+
 services = (
     Literal[
         "slack_budget_alerts",
@@ -182,10 +312,69 @@ services = (
         "arize",
         "galileo",
         "newrelic",
+        "pointfive",
+        "signoz",
         "sqs",
     ]
     | str
 )
+
+
+_SERVICES_WITH_DEDICATED_CHECK: Final = frozenset(
+    (
+        "slack_budget_alerts",
+        "email",
+        "langfuse",
+        "slack",
+        "ms_teams",
+        "webhook",
+        "datadog",
+        "datadog_metrics",
+        "arize",
+        "galileo",
+        "newrelic",
+        "pointfive",
+        "sqs",
+        "aws_sqs",
+    )
+)
+_SERVICES_TESTABLE_ONLY_VIA_SUCCESS_CALLBACK: Final = frozenset(("custom_callback_api",))
+
+
+def _testable_services() -> frozenset[str]:
+    return (
+        _SERVICES_WITH_DEDICATED_CHECK
+        | _SERVICES_TESTABLE_ONLY_VIA_SUCCESS_CALLBACK
+        | frozenset(
+            litellm._known_custom_logger_compatible_callbacks  # pyright: ignore[reportPrivateUsage]  # no public alias for the callback Literal's args
+        )
+    )
+
+
+def _is_testable_service(service: str) -> bool:
+    return service in _testable_services()
+
+
+def _callback_matches(service: str, cb: object) -> bool:
+    callback_name: Final = getattr(cb, "callback_name", None)
+    if service in (cb, callback_name, get_callback_identifier(cb)):
+        return True
+    return (
+        not callback_name
+        and service not in _SERVICES_WITH_DEDICATED_CHECK
+        and service in _unnamed_callback_aliases(type(cb))
+    )
+
+
+def _unnamed_callback_aliases(callback_type: type) -> frozenset[str]:
+    """A logger built from a bare config string carries no name, so its class aliases and its package name stand in."""
+    return frozenset(CustomLoggerRegistry.get_all_callback_strs_from_class_type(callback_type)) | frozenset(
+        callback_type.__module__.split(".")
+    )
+
+
+def _service_configured_in(service: str, callbacks: Sequence[object]) -> bool:
+    return any(_callback_matches(service, cb) for cb in callbacks)
 
 
 class _ServiceTestErrorDetail(TypedDict):
@@ -236,7 +425,7 @@ async def health_services_endpoint(
     Example:
     ```
     curl -L -X GET 'http://0.0.0.0:4000/health/services?service=datadog' \
-    -H 'Authorization: Bearer sk-1234'
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     try:
@@ -249,51 +438,24 @@ async def health_services_endpoint(
         if service is None:
             raise HTTPException(status_code=400, detail={"error": "Service must be specified."})
 
-        if service not in [
-            "slack_budget_alerts",
-            "email",
-            "langfuse",
-            "langfuse_otel",
-            "slack",
-            "ms_teams",
-            "openmeter",
-            "webhook",
-            "braintrust",
-            "otel",
-            "custom_callback_api",
-            "langsmith",
-            "datadog",
-            "datadog_metrics",
-            "datadog_llm_observability",
-            "generic_api",
-            "arize",
-            "galileo",
-            "newrelic",
-            "sqs",
-        ]:
+        if not _is_testable_service(service):
             raise HTTPException(
                 status_code=400,
-                detail={"error": f"Service must be in list. Service={service} not in {services}"},
+                detail={"error": f"Service must be in list. Service={service} not in {sorted(_testable_services())}"},
             )
 
-        service_in_success_callbacks = False
-        if service in litellm.success_callback:
-            service_in_success_callbacks = True
-        else:
-            for cb in litellm.success_callback:
-                if getattr(cb, "callback_name", None) == service:
-                    service_in_success_callbacks = True
-                    break
-                cb_id = get_callback_identifier(cb)
-                if cb_id == service:
-                    service_in_success_callbacks = True
-                    break
+        service_in_success_callbacks: Final = _service_configured_in(service, litellm.success_callback)
+        logger_without_dedicated_check_configured: Final = (
+            service not in _SERVICES_WITH_DEDICATED_CHECK
+            and _service_configured_in(service, litellm.logging_callback_manager.get_all_callbacks())
+        )
 
         if (
             service == "openmeter"
             or service == "braintrust"
             or service == "generic_api"
-            or (service_in_success_callbacks and service != "langfuse")
+            or (service_in_success_callbacks and service not in ("langfuse", "pointfive", "sqs", "aws_sqs"))
+            or logger_without_dedicated_check_configured
         ):
             _ = await litellm.acompletion(
                 model="openai/litellm-mock-response-model",
@@ -355,7 +517,9 @@ async def health_services_endpoint(
             from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
             langfuse_logger: Final = LangFuseLogger()
-            langfuse_logger.Langfuse.auth_check()
+            auth_failure: Final = langfuse_logger.api_client.auth_check()
+            if auth_failure is not None:
+                raise ValueError(f"langfuse auth_check failed: {auth_failure.reason}")
             _ = litellm.completion(
                 model="openai/litellm-mock-response-model",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
@@ -385,7 +549,33 @@ async def health_services_endpoint(
                 ),
             }
 
+        elif service == "pointfive":
+            if not _is_proxy_admin(user_api_key_dict):
+                non_admin_detail: Final[_ServiceTestErrorDetail] = {
+                    "error": "Only proxy admins can trigger the PointFive liveness ping."
+                }
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=non_admin_detail)
+            from litellm.integrations.pointfive import PointFiveLogger
+
+            try:
+                pointfive_logger: Final = PointFiveLogger(start_periodic_flush=False)
+            except ValueError as missing_key:
+                # No key configured is the answer the operator asked for, not a server error.
+                no_key: Final[_ServiceTestSuccessResponse] = {"status": "unhealthy", "message": str(missing_key)}
+                return no_key
+            response = await pointfive_logger.async_health_check()
+            pointfive_health: Final[_ServiceTestSuccessResponse] = {
+                "status": response["status"],
+                "message": (response["error_message"] if response["status"] == "unhealthy" else "PointFive is healthy")
+                or "PointFive is healthy",
+            }
+            return pointfive_health
         if service == "webhook":
+            if not _is_proxy_admin(user_api_key_dict):
+                webhook_non_admin_detail: Final[_ServiceTestErrorDetail] = {
+                    "error": "Only proxy admins can trigger the webhook test alert."
+                }
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=webhook_non_admin_detail)
             user_info: Final = CallInfo(
                 token=user_api_key_dict.token or "",
                 spend=1,
@@ -399,7 +589,11 @@ async def health_services_endpoint(
                 type="user_budget",
                 user_info=user_info,
             )
-        elif service == "sqs":
+            return {
+                "status": "success",
+                "message": "Mock Webhook Alert sent, verify Webhook Alert Received",
+            }
+        elif service in ("sqs", "aws_sqs"):
             from litellm.integrations.sqs import SQSLogger
 
             sqs_logger: Final = SQSLogger()
@@ -485,7 +679,7 @@ async def health_services_endpoint(
             )
             ms_teams_response: Final = await proxy_logging_obj.slack_alerting_instance.async_http_handler.post(
                 url=ms_teams_webhook_url,
-                headers=dict(MS_TEAMS_ALERT_HEADERS),  # mutable-ok: async_http_handler.post only accepts dict headers
+                headers=dict(MS_TEAMS_ALERT_HEADERS),
                 data=json.dumps(build_ms_teams_payload(ms_teams_test_message)),
             )
             if ms_teams_response.status_code >= 400:
@@ -522,27 +716,22 @@ async def health_services_endpoint(
                 "message": "Mock Email Alert sent, verify Email Alert Received",
             }
 
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Service={service} is not configured as a callback, add it to litellm_settings.callbacks."
+            },
+        )
+
     except Exception as e:
         verbose_proxy_logger.error("litellm.proxy.proxy_server.health_services_endpoint(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        if isinstance(e, ProxyException):
+            raise
+        raise proxy_exception_for(e, default_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from e
 
 
-def _convert_health_check_to_dict(check) -> dict:
+def convert_health_check_to_dict(check) -> dict:
     """Convert health check database record to dictionary format"""
     return {
         "health_check_id": check.health_check_id,
@@ -558,6 +747,9 @@ def _convert_health_check_to_dict(check) -> dict:
         "checked_at": check.checked_at.isoformat() if check.checked_at else None,
         "created_at": check.created_at.isoformat() if check.created_at else None,
     }
+
+
+_convert_health_check_to_dict: Final = convert_health_check_to_dict
 
 
 def _check_prisma_client():
@@ -638,6 +830,19 @@ def _build_model_param_to_info_mapping(model_list: list) -> dict:
     return model_param_to_info
 
 
+def _model_infos_for_endpoint(
+    model_param_to_info: Mapping[str, list[Mapping[str, str | None]]], endpoint: Mapping[str, object]
+) -> tuple[Mapping[str, str | None], ...]:
+    model_param: Final = endpoint.get("model")
+    if not isinstance(model_param, str):
+        return ()
+    model_infos: Final = model_param_to_info.get(model_param, [])
+    endpoint_model_id: Final = endpoint.get("model_id")
+    if not endpoint_model_id:
+        return tuple(model_infos)
+    return tuple(info for info in model_infos if info["model_id"] == endpoint_model_id)
+
+
 def _aggregate_health_check_results(
     model_param_to_info: dict,
     healthy_endpoints: list,
@@ -662,7 +867,7 @@ def _aggregate_health_check_results(
     for endpoint in healthy_endpoints:
         model_param = endpoint.get("model")
         if model_param and model_param in model_param_to_info:
-            for model_info in model_param_to_info[model_param]:
+            for model_info in _model_infos_for_endpoint(model_param_to_info, endpoint):
                 key = (model_info["model_id"], model_info["model_name"])
                 if key not in model_results:
                     model_results[key] = {
@@ -679,7 +884,7 @@ def _aggregate_health_check_results(
         model_param = endpoint.get("model")
         error_message = endpoint.get("error")
         if model_param and model_param in model_param_to_info:
-            for model_info in model_param_to_info[model_param]:
+            for model_info in _model_infos_for_endpoint(model_param_to_info, endpoint):
                 key = (model_info["model_id"], model_info["model_name"])
                 if key not in model_results:
                     model_results[key] = {
@@ -697,13 +902,42 @@ def _aggregate_health_check_results(
     return model_results
 
 
+class _AggregatedHealthResult(TypedDict):
+    """One entry of ``_aggregate_health_check_results``: a model's counts for this cycle."""
+
+    model_name: ReadOnly[str]
+    model_id: ReadOnly[str | None]
+    healthy_count: ReadOnly[int]
+    unhealthy_count: ReadOnly[int]
+    error_message: ReadOnly[str | None]
+
+
+def _new_health_status(result: _AggregatedHealthResult) -> str:
+    return "healthy" if result["healthy_count"] > 0 else "unhealthy"
+
+
+def _should_persist_health_check_result(
+    result: _AggregatedHealthResult, latest_checks_map: Mapping[str, LatestHealthCheckRow]
+) -> bool:
+    """
+    True when this result has to be written: no previous row, the status changed, or the
+    previous row is older than one hour (periodic refresh while the status is stable).
+    """
+    lookup_key: Final = result["model_id"] if result["model_id"] else result["model_name"]
+    last_check: Final = latest_checks_map.get(lookup_key)
+    if last_check is None or last_check.status != _new_health_status(result):
+        return True
+    time_since_last_check: Final = (datetime.now(timezone.utc) - last_check.checked_at).total_seconds()
+    return time_since_last_check >= 3600  # 1 hour threshold
+
+
 async def _save_health_check_results_if_changed(
     prisma_client,
     model_results: dict,
     latest_checks_map: dict,
     start_time: float,
     checked_by: str | None = None,
-):
+) -> bool:
     """
     Save health check results to database, but only if status changed or >1 hour since last save.
 
@@ -714,57 +948,49 @@ async def _save_health_check_results_if_changed(
     - Status changes: Immediate write (no delay)
     - Result: ~92% reduction in DB writes for stable systems, while maintaining real-time updates on changes
 
+    The writes are awaited rather than detached so the caller learns whether this cycle's
+    persistence completed.
+
     Args:
         prisma_client: Database client
         model_results: Dictionary of aggregated health check results per model
         latest_checks_map: Dictionary mapping model_id/model_name to latest health check
         start_time: Start time of health check for calculating response time
         checked_by: Identifier for who/what performed the check
+
+    Returns:
+        True when every row that needed writing was written (including when nothing needed
+        writing); False when any write failed.
     """
-    for result in model_results.values():
-        new_status = "healthy" if result["healthy_count"] > 0 else "unhealthy"
-
-        # Check if we should save this result
-        should_save = True
-        lookup_key = result["model_id"] if result["model_id"] else result["model_name"]
-        if lookup_key in latest_checks_map:
-            last_check = latest_checks_map[lookup_key]
-            # Only save if status changed or if it's been a while since last check
-            if last_check.status == new_status:
-                # Check if last check was recent (within 1 hour)
-                if last_check.checked_at:
-                    from datetime import datetime, timezone
-
-                    time_since_last_check = (datetime.now(timezone.utc) - last_check.checked_at).total_seconds()
-                    # Only skip if status unchanged AND checked recently (within 1 hour)
-                    # This ensures we still get periodic updates even if status is stable
-                    if time_since_last_check < 3600:  # 1 hour threshold
-                        should_save = False
-
-        if should_save:
-            asyncio.create_task(
-                prisma_client.save_health_check_result(
-                    model_name=result["model_name"],
-                    model_id=result["model_id"],
-                    status=new_status,
-                    healthy_count=result["healthy_count"],
-                    unhealthy_count=result["unhealthy_count"],
-                    error_message=result["error_message"],
-                    response_time_ms=(time.time() - start_time) * 1000,
-                    details=None,
-                    checked_by=checked_by,
-                )
-            )
+    to_write: Final = tuple(
+        result for result in model_results.values() if _should_persist_health_check_result(result, latest_checks_map)
+    )
+    writes: Final = tuple(
+        prisma_client.save_health_check_result(
+            model_name=result["model_name"],
+            model_id=result["model_id"],
+            status=_new_health_status(result),
+            healthy_count=result["healthy_count"],
+            unhealthy_count=result["unhealthy_count"],
+            error_message=result["error_message"],
+            response_time_ms=(time.time() - start_time) * 1000,
+            details=None,
+            checked_by=checked_by,
+        )
+        for result in to_write
+    )
+    rows: Final = await asyncio.gather(*writes)
+    return all(row is not None for row in rows)
 
 
-async def _save_background_health_checks_to_db(
+async def save_background_health_checks_to_db(
     prisma_client,
     model_list: list,
     healthy_endpoints: list,
     unhealthy_endpoints: list,
     start_time: float,
     checked_by: str | None = None,
-):
+) -> bool:
     """
     Save background health check results to database for each model.
 
@@ -773,9 +999,13 @@ async def _save_background_health_checks_to_db(
 
     OPTIMIZATION: Only saves to database if the status has changed from the last saved check.
     This dramatically reduces database writes when health status remains stable.
+
+    Returns:
+        True when this cycle's persistence completed; False when it was skipped or any step
+        failed. Never raises: a database failure must not break the health check loop.
     """
     if prisma_client is None:
-        return
+        return False
 
     try:
         # Step 1: Build mapping from model parameter to model info
@@ -789,7 +1019,7 @@ async def _save_background_health_checks_to_db(
         )
 
         # Step 3: Get latest health checks for all models in one query to compare status
-        latest_checks: Final = await prisma_client.get_all_latest_health_checks()
+        latest_checks: Final = await query_latest_health_checks(prisma_client)
         latest_checks_map: Final = {}
         for check in latest_checks:
             # Use model_id as primary key, fallback to model_name
@@ -798,7 +1028,7 @@ async def _save_background_health_checks_to_db(
                 latest_checks_map[key] = check
 
         # Step 4: Save aggregated results, but only if status changed
-        await _save_health_check_results_if_changed(
+        return await _save_health_check_results_if_changed(
             prisma_client,
             model_results,
             latest_checks_map,
@@ -808,6 +1038,10 @@ async def _save_background_health_checks_to_db(
     except Exception as db_error:
         verbose_proxy_logger.warning("Failed to save background health checks to database: %s", db_error)
         # Continue execution - don't let database save failure break health checks
+        return False
+
+
+_save_background_health_checks_to_db: Final = save_background_health_checks_to_db
 
 
 _PROXY_ADMIN_ROLES: Final = frozenset(
@@ -839,11 +1073,10 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
 
 def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     """
-    Return a copy of the /health response with provider routing fields
-    (``api_base``, ``api_version``) removed from each healthy/unhealthy
-    endpoint entry. Used to hide those fields from non-admin callers while
-    still showing them which deployments they own and whether each one is
-    healthy. Proxy admins receive the unmodified result.
+    Return a copy of the /health response with the admin-only fields (provider routing plus
+    server-owned federation or OAuth token-exchange params) removed from each healthy/unhealthy
+    endpoint entry. Used to hide those fields from non-admin callers while still showing them which
+    deployments they own and whether each one is healthy. Proxy admins receive the unmodified result.
     """
     out: Final = dict(result)
     drop: Final = set(ADMIN_ONLY_HEALTH_DISPLAY_PARAMS)
@@ -854,41 +1087,365 @@ def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     return out
 
 
-def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: str | None) -> set | None:
+def _key_models_unrestricted(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    granted_models: Final = _resolve_key_models_for_auth_check(user_api_key_dict)
+    return not granted_models or SpecialModelNames.all_proxy_models.value in granted_models
+
+
+def _own_team_names(deployment: object, team_id: str | None) -> tuple[str, str] | None:
+    match deployment:
+        case {
+            "model_name": str(internal_name),
+            "model_info": {"team_id": str(owner_team_id), "team_public_model_name": str(public_name)},
+        } if owner_team_id == team_id:
+            return (internal_name, public_name)
+        case _:
+            return None
+
+
+def _names_caller_may_request(deployment: object, team_id: str | None) -> frozenset[str]:
+    team_names: Final = _own_team_names(deployment, team_id)
+    if team_names is not None:
+        return frozenset(team_names)
+    match deployment:
+        case {"model_name": str(name)}:
+            return frozenset((name,))
+        case _:
+            return frozenset()
+
+
+def _public_names_by_internal_name(llm_model_list: Sequence[object], team_id: str | None) -> Mapping[str, str]:
+    team_names: Final = (_own_team_names(deployment, team_id) for deployment in llm_model_list)
+    return MappingProxyType(dict(names for names in team_names if names is not None))
+
+
+async def _key_owner(user_api_key_dict: UserAPIKeyAuth) -> LiteLLM_UserTable | None:
+    if user_api_key_dict.team_id is not None or user_api_key_dict.user_id is None:
+        return None
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    try:
+        return await get_user_object(
+            user_id=user_api_key_dict.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception:  # noqa: BLE001  # auth reads an unloadable user as no user limit, so /health does too
+        return None
+
+
+async def _key_may_call_model(
+    model_name: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    owner: LiteLLM_UserTable | None,
+    llm_router: Router | None,
+) -> bool:
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    await asyncio.sleep(0)
+    try:
+        await can_key_call_resolved_model(
+            model=model_name, llm_model_list=None, valid_token=user_api_key_dict, llm_router=llm_router
+        )
+        await can_agent_call_model(
+            model=model_name,
+            valid_token=user_api_key_dict,
+            llm_router=llm_router,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        await can_user_call_model(
+            model=model_name,
+            llm_router=llm_router,
+            user_object=owner,
+            key_model_aliases=key_model_aliases_for_auth_check(user_api_key_dict),
+        )
+    except ModelAccessDeniedProxyException:
+        return False
+    except ProxyException:
+        raise
+    except Exception as failure:
+        if isinstance(failure, HTTPException) and failure.status_code == status.HTTP_403_FORBIDDEN:
+            return False
+        raise _as_proxy_exception(failure) from failure
+    return True
+
+
+async def _caller_aliases(user_api_key_dict: UserAPIKeyAuth) -> CallerAliases:
+    from litellm.proxy.proxy_server import prisma_client, proxy_config, proxy_logging_obj
+
+    router_settings: Final = await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict, prisma_client, proxy_logging_obj
+    )
+    return CallerAliases(
+        team_model_aliases_for_auth_check(user_api_key_dict),
+        key_model_aliases_for_auth_check(user_api_key_dict),
+        router_settings.get("model_group_alias") if router_settings is not None else None,
+    )
+
+
+def _model_auth_checks(model_name: str, aliases: CallerAliases) -> str:
+    return resolve_model_group_alias(aliases.router, model_name) or model_name
+
+
+def _deployment_id(deployment: object) -> str | None:
+    match deployment:
+        case {"model_info": {"id": str(model_id)}}:
+            return model_id
+        case _:
+            return None
+
+
+def _granted_names(user_api_key_dict: UserAPIKeyAuth) -> frozenset[str]:
+    grants: Final = (
+        *_ModelGrants.model_validate(user_api_key_dict).models,
+        *_OBJECTS.validate_python(user_api_key_dict.team_models),
+    )
+    return frozenset(name for name in grants if isinstance(name, str))
+
+
+async def _names_any_limit_grants(user_api_key_dict: UserAPIKeyAuth, owner: LiteLLM_UserTable | None) -> frozenset[str]:
+    owner_grants: Final = _ModelGrants.model_validate(owner).models if owner is not None else ()
+    return (
+        _granted_names(user_api_key_dict)
+        | frozenset(name for name in owner_grants if isinstance(name, str))
+        | await agent_model_grants(user_api_key_dict)
+    )
+
+
+def _alias_names_caller_may_request(aliases: CallerAliases, llm_router: Router | None) -> frozenset[str]:
+    router_aliases: Final = frozenset(llm_router.registry().aliases()) if llm_router is not None else frozenset[str]()
+    return requestable_alias_names(aliases) | router_aliases
+
+
+def _served_group(model_name: str, aliases: CallerAliases, llm_router: Router | None) -> str:
+    dispatched: Final = dispatched_model(model_name, aliases)
+    return llm_router.registry().resolve(dispatched) if llm_router is not None else dispatched
+
+
+def _name_id_pairs(deployment: object, team_id: str | None) -> tuple[tuple[str, str], ...]:
+    model_id: Final = _deployment_id(deployment)
+    if model_id is None:
+        return ()
+    return tuple((name, model_id) for name in _names_caller_may_request(deployment, team_id) | {model_id})
+
+
+def _ids_by_requested_name(llm_model_list: Sequence[object], team_id: str | None) -> Mapping[str, frozenset[str]]:
+    pairs: Final = sorted(chain.from_iterable(_name_id_pairs(deployment, team_id) for deployment in llm_model_list))
+    return MappingProxyType(
+        {name: frozenset(model_id for _, model_id in group) for name, group in groupby(pairs, key=lambda pair: pair[0])}
+    )
+
+
+def _ids_of(deployments: Iterable[object]) -> frozenset[str]:
+    return frozenset(model_id for model_id in map(_deployment_id, deployments) if model_id is not None)
+
+
+def _access_groups_of(deployment: object) -> frozenset[str]:
+    match deployment:
+        case {"model_info": {"access_groups": list()}}:
+            access_groups: Final = _DeploymentAccessGroups.model_validate(deployment).model_info.access_groups
+            return frozenset(access_group for access_group in access_groups if isinstance(access_group, str))
+        case _:
+            return frozenset()
+
+
+@dataclass(frozen=True, slots=True)
+class _AccessGroupGrants:
+    granted_names: frozenset[str]
+    ids_in_granted_groups: frozenset[str]
+
+    def requested_name(self, name: str, public_names: Mapping[str, str], admitted_names: frozenset[str]) -> str:
+        public_name: Final = public_names.get(name)
+        if public_name is None or public_name not in admitted_names or self._grants(name):
+            return name
+        return public_name
+
+    def _grants(self, name: str) -> bool:
+        return name in self.granted_names or model_matches_any_wildcard_pattern_in_list(name, tuple(self.granted_names))
+
+    def narrow(self, serving_ids: frozenset[str], served_names: frozenset[str]) -> frozenset[str]:
+        in_granted_groups: Final = serving_ids & self.ids_in_granted_groups
+        granted_directly: Final = not self.granted_names.isdisjoint(served_names)
+        return serving_ids if granted_directly or not in_granted_groups else in_granted_groups
+
+
+def _access_group_grants(llm_model_list: Sequence[object], user_api_key_dict: UserAPIKeyAuth) -> _AccessGroupGrants:
+    granted: Final = _granted_names(user_api_key_dict)
+    in_granted_groups: Final = (
+        deployment for deployment in llm_model_list if not granted.isdisjoint(_access_groups_of(deployment))
+    )
+    return _AccessGroupGrants(granted, _ids_of(in_granted_groups))
+
+
+def _ids_serving_group(
+    group: str,
+    ids_by_name: Mapping[str, frozenset[str]],
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Router | None,
+    access_group_grants: _AccessGroupGrants,
+) -> frozenset[str]:
+    named: Final = ids_by_name.get(group)
+    if named is not None:
+        return access_group_grants.narrow(named, frozenset((group,)))
+    if llm_router is None:
+        return frozenset()
+    team_id: Final = user_api_key_dict.team_id
+    wildcard_served: Final = llm_router.registry().deployments(group, source="wildcard", team_id=team_id)
+    served_names: Final = frozenset((group,)).union(
+        *(_names_caller_may_request(deployment, team_id) for deployment in wildcard_served)
+    )
+    return access_group_grants.narrow(_ids_of(wildcard_served), served_names)
+
+
+async def _names_key_may_request(
+    names: Iterable[str],
+    aliases: CallerAliases,
+    user_api_key_dict: UserAPIKeyAuth,
+    owner: LiteLLM_UserTable | None,
+    llm_router: Router | None,
+) -> frozenset[str]:
+    return frozenset(
+        [
+            name
+            for name in names
+            if await _key_may_call_model(_model_auth_checks(name, aliases), user_api_key_dict, owner, llm_router)
+        ]
+    )
+
+
+def _ids_serving(
+    groups: Iterable[str],
+    ids_by_name: Mapping[str, frozenset[str]],
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Router | None,
+    access_group_grants: _AccessGroupGrants,
+) -> frozenset[str]:
+    return frozenset[str]().union(
+        *(
+            _ids_serving_group(group, ids_by_name, user_api_key_dict, llm_router, access_group_grants)
+            for group in groups
+        )
+    )
+
+
+def _shadowed_ids(
+    llm_model_list: Sequence[object], admitted_names: frozenset[str], reached_ids: frozenset[str], team_id: str | None
+) -> frozenset[str]:
+    ids_of_admitted_names: Final = (
+        _deployment_id(deployment)
+        for deployment in llm_model_list
+        if not admitted_names.isdisjoint(_names_caller_may_request(deployment, team_id))
+    )
+    return frozenset(model_id for model_id in ids_of_admitted_names if model_id is not None) - reached_ids
+
+
+@dataclass(frozen=True, slots=True)
+class _ReachableDeployments:
+    model_ids: frozenset[str]
+    groups: frozenset[str]
+
+    def include(self, deployment: object, team_id: str | None) -> bool:
+        model_id: Final = _deployment_id(deployment)
+        if model_id is None:
+            return not self.groups.isdisjoint(_names_caller_may_request(deployment, team_id))
+        return model_id in self.model_ids
+
+
+_NOTHING_REACHABLE: Final = _ReachableDeployments(frozenset(), frozenset())
+
+
+async def _deployments_key_may_reach(
+    llm_model_list: Sequence[object],
+    aliases: CallerAliases,
+    user_api_key_dict: UserAPIKeyAuth,
+    owner: LiteLLM_UserTable | None,
+    llm_router: Router | None,
+) -> _ReachableDeployments:
+    candidate_names: Final = (await _names_any_limit_grants(user_api_key_dict, owner)).union(
+        _alias_names_caller_may_request(aliases, llm_router),
+        *(_names_caller_may_request(deployment, user_api_key_dict.team_id) for deployment in llm_model_list),
+    )
+    admitted_names: Final = await _names_key_may_request(candidate_names, aliases, user_api_key_dict, owner, llm_router)
+    access_group_grants: Final = _access_group_grants(llm_model_list, user_api_key_dict)
+    public_names: Final = _public_names_by_internal_name(llm_model_list, user_api_key_dict.team_id)
+    groups: Final = frozenset(
+        _served_group(access_group_grants.requested_name(name, public_names, admitted_names), aliases, llm_router)
+        for name in admitted_names
+    )
+    ids_by_name: Final = _ids_by_requested_name(llm_model_list, user_api_key_dict.team_id)
+    reached_ids: Final = _ids_serving(groups, ids_by_name, user_api_key_dict, llm_router, access_group_grants)
+    admitted_ids: Final = await _names_key_may_request(
+        _shadowed_ids(llm_model_list, admitted_names, reached_ids, user_api_key_dict.team_id),
+        aliases,
+        user_api_key_dict,
+        owner,
+        llm_router,
+    )
+    id_groups: Final = frozenset(_served_group(model_id, aliases, llm_router) for model_id in admitted_ids)
+    return _ReachableDeployments(
+        reached_ids | _ids_serving(id_groups, ids_by_name, user_api_key_dict, llm_router, access_group_grants), groups
+    )
+
+
+def _model_param_target(
+    model: str,
+    aliases: CallerAliases,
+    llm_model_list: Sequence[Mapping[str, object]],
+    team_id: str | None,
+    llm_router: Router | None,
+) -> str:
+    group: Final = _served_group(model, aliases, llm_router)
+    if llm_router is None or deployments_targeted_by_name(llm_model_list, group, team_id):
+        return group
+    patterns: Final = frozenset(
+        deployment.get("model_name")
+        for deployment in llm_router.registry().deployments(group, source="wildcard", team_id=team_id)
+    )
+    match tuple(patterns):
+        case (str(pattern),):
+            return pattern
+        case _:
+            return group
+
+
+def _caller_may_probe_deployment(
+    deployment: Mapping[str, object], reachable: _ReachableDeployments, team_id: str | None, caller_is_admin: bool
+) -> bool:
+    """Same deployment visibility rule as routing: another team's deployment is never in scope, team-less callers included."""
+    if not caller_is_admin and not deployment_usable_by_team(deployment, team_id):
+        return False
+    return reachable.include(deployment, team_id)
+
+
+def _resolve_targeted_model_ids(
+    model_list: list, model: str | None, model_id: str | None, team_id: str | None
+) -> set | None:
     """
     Resolve a ``/health`` ``model`` / ``model_id`` query param to the set of
-    deployment IDs the response should be scoped to.
+    deployment IDs the response should be scoped to, mirroring the live-path
+    narrowing in ``perform_health_check()``: ``model_id`` wins when given and
+    matches ``model_info.id`` only; ``model`` targets the deployments a request
+    for that name from the caller would route to, else those whose
+    ``litellm_params.model`` provider string is that value (``deployments_targeted_by_name``).
 
-    Mirrors the live-path semantics in ``perform_health_check()``: ``model``
-    matches either the deployment's ``model_name`` alias or its
-    ``litellm_params.model`` provider string. ``model_id`` matches
-    ``model_info.id``.
-
-    Both query params are validated against the supplied ``model_list``.
-    Callers pass an already-scoped list (filtered to the caller's allowed
-    models for non-admins, full list for admins), so a ``model_id`` that
-    isn't present resolves to an empty set rather than a single-element
-    set — preventing a non-admin from reading another deployment's cached
-    health entry by guessing its ID.
-
-    Returns ``None`` when no targeting is requested — callers should treat
-    that as "no filter."
+    Callers pass an already-scoped list, so a ``model_id`` outside the
+    caller's scope resolves to an empty set and never to the unvalidated id.
+    Returns ``None`` when no targeting is requested.
     """
-    if not model and not model_id:
+    if model_id:
+        return {i for m in model_list if (i := (m.get("model_info") or {}).get("id")) == model_id}
+    if not model:
         return None
-    target_ids: Final[set] = set()
-    for m in model_list:
-        deployment_id = (m.get("model_info") or {}).get("id")
-        if not deployment_id:
-            continue
-        if model_id and deployment_id == model_id:
-            target_ids.add(deployment_id)
-            continue
-        if model:
-            litellm_model = (m.get("litellm_params") or {}).get("model")
-            if m.get("model_name") == model or litellm_model == model:
-                target_ids.add(deployment_id)
-    return target_ids
+    return {
+        i
+        for m in deployments_targeted_by_name(model_list, model, team_id)
+        if (i := (m.get("model_info") or {}).get("id"))
+    }
 
 
 def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: set) -> dict:
@@ -919,6 +1476,7 @@ def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: 
 async def _perform_health_check_and_save(
     model_list,
     target_model,
+    recorded_model_name: str | None,
     cli_model,
     details,
     prisma_client,
@@ -941,8 +1499,7 @@ async def _perform_health_check_and_save(
 
     # Optionally save health check result to database (non-blocking)
     if prisma_client is not None:
-        # For CLI model, use cli_model name; for router models, use target_model
-        model_name_for_db: Final = cli_model if cli_model is not None else target_model
+        model_name_for_db: Final = cli_model if cli_model is not None else recorded_model_name
         if model_name_for_db is not None:
             asyncio.create_task(
                 _save_health_check_to_db(
@@ -967,10 +1524,14 @@ async def _perform_health_check_and_save(
 def _health_endpoint_resolve_target_model_name(
     model: str | None,
     model_id: str | None,
-    llm_router,
+    llm_router: Router | None,
 ) -> str | None:
-    """Map ``model_id`` (without ``model``) to ``model_name`` for live health checks."""
-    if not model_id or model:
+    """Map ``model_id`` to its deployment's ``model_name`` for live health checks.
+
+    ``model_id`` wins over ``model``, so an id no deployment carries is a 404 even
+    when it is paired with a known name.
+    """
+    if not model_id:
         return model
     if llm_router is None:
         raise HTTPException(
@@ -978,7 +1539,7 @@ def _health_endpoint_resolve_target_model_name(
             detail={"error": f"Model with ID {model_id} not found"},
         )
     try:
-        deployment: Final = llm_router.get_deployment(model_id=model_id)
+        deployment: Final = llm_router.registry().deployment(model_id)
     except Exception as e:
         verbose_proxy_logger.error("Error getting deployment for model_id %s: %s", model_id, e)
         raise HTTPException(
@@ -1056,7 +1617,9 @@ async def health_endpoint(
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         if is_admin:
             return result
-        response.headers["Litellm-Health-Field-Notice"] = "api_base and api_version are admin-only on this endpoint"
+        response.headers["Litellm-Health-Field-Notice"] = (
+            f"{', '.join(ADMIN_ONLY_HEALTH_DISPLAY_PARAMS)} are admin-only on this endpoint"
+        )
         return _strip_admin_only_fields_from_health_result(result)
 
     try:
@@ -1066,6 +1629,7 @@ async def health_endpoint(
                 cli_result: Final = await _perform_health_check_and_save(
                     model_list=[],
                     target_model=None,
+                    recorded_model_name=None,
                     cli_model=user_model,
                     details=health_check_details,
                     prisma_client=prisma_client,
@@ -1080,32 +1644,48 @@ async def health_endpoint(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "Model list not initialized"},
             )
-        _llm_model_list = copy.deepcopy(llm_model_list)
-        ### FILTER MODELS FOR ONLY THOSE USER HAS ACCESS TO ###
-        # Live path: scope by model_name (every deployment has one).
-        # Cache path: scope by model_id (the cache is keyed on model_id).
-        # Consequence: a deployment whose model_name the caller can access
-        # but which lacks model_info.id will appear in the live /health
-        # response but NOT in the background-cache /health response. This is
-        # surfaced via the "warnings" field below so operators can fix the
-        # missing model_info.id rather than guess at the discrepancy.
-        # Keys granted SpecialModelNames.all_proxy_models carry the literal
-        # "all-proxy-models" entry, which matches no real model_name; treat
-        # them as unrestricted instead of filtering the list down to nothing.
-        # Keys granted SpecialModelNames.all_team_models inherit the parent
-        # team's allowlist (same semantics as get_key_models in
-        # model_checks.py). Without a team_id the sentinel cannot resolve and
-        # stays in the list, matching nothing; denied rather than
-        # unrestricted, mirroring _resolve_key_models_for_auth_check.
-        accessible_models = list(user_api_key_dict.models)
-        if SpecialModelNames.all_team_models.value in accessible_models and user_api_key_dict.team_id is not None:
-            accessible_models = list(user_api_key_dict.team_models)
-        restrict_to_allowed_models: Final = (
-            len(accessible_models) > 0 and SpecialModelNames.all_proxy_models.value not in accessible_models
+        restrict_to_allowed_models: Final = not is_admin or not _key_models_unrestricted(user_api_key_dict)
+        aliases: Final = await _caller_aliases(user_api_key_dict) if restrict_to_allowed_models else None
+        reachable: Final = (
+            await _deployments_key_may_reach(
+                _OBJECTS.validate_python(llm_model_list),
+                aliases,
+                user_api_key_dict,
+                await _key_owner(user_api_key_dict),
+                llm_router,
+            )
+            if aliases is not None
+            else _NOTHING_REACHABLE
         )
-        if restrict_to_allowed_models:
-            allowed_models: Final = set(accessible_models)
-            _llm_model_list = [m for m in _llm_model_list if m.get("model_name") in allowed_models]
+        requested_model: Final = (
+            _model_param_target(
+                model,
+                aliases,
+                _DEPLOYMENTS.validate_python(llm_model_list),
+                user_api_key_dict.team_id,
+                llm_router,
+            )
+            if model is not None and aliases is not None
+            else model
+        )
+        _llm_model_list: Final = [
+            m
+            for m in copy.deepcopy(llm_model_list)
+            if not restrict_to_allowed_models
+            or _caller_may_probe_deployment(m, reachable, user_api_key_dict.team_id, is_admin)
+        ]
+        targeted_ids: Final = _resolve_targeted_model_ids(
+            _llm_model_list, requested_model, model_id, user_api_key_dict.team_id
+        )
+        if restrict_to_allowed_models and targeted_ids is not None and not targeted_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": f"key not allowed to health-check model_id {model_id}"
+                    if model_id
+                    else f"key not allowed to health-check model {model}"
+                },
+            )
         if use_background_health_checks:
             # The cached background result covers every model. When the
             # caller targets a specific model/model_id we have to narrow the
@@ -1113,7 +1693,6 @@ async def health_endpoint(
             # healthy_count, otherwise an unhealthy "foo" combined with any
             # other healthy model would still report healthy_count > 0 and
             # the targeted-503 path would never fire.
-            targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, model, model_id)
             if restrict_to_allowed_models:
                 allowed_model_ids: Final = {
                     (m.get("model_info") or {}).get("id")
@@ -1125,7 +1704,7 @@ async def health_endpoint(
                 # intersection of "targeted" and "allowed."
                 filter_ids: Final = targeted_ids if targeted_ids is not None else allowed_model_ids
                 filtered: Final = _filter_health_check_results_by_model_ids(health_check_results, filter_ids)
-                if targeted_ids is None and not allowed_model_ids:
+                if targeted_ids is None and _llm_model_list and not allowed_model_ids:
                     # Caller has accessible model_names but none of the
                     # matching deployments expose a model_info.id, so the
                     # cache filter (which keys on model_id) drops every
@@ -1155,7 +1734,8 @@ async def health_endpoint(
         else:
             router_result: Final = await _perform_health_check_and_save(
                 model_list=_llm_model_list,
-                target_model=target_model,
+                target_model=target_model if model_id else requested_model,
+                recorded_model_name=target_model,
                 cli_model=None,
                 details=health_check_details,
                 prisma_client=prisma_client,
@@ -1164,6 +1744,7 @@ async def health_endpoint(
                 model_id=model_id,
                 max_concurrency=health_check_concurrency,
                 router=llm_router,
+                team_id=user_api_key_dict.team_id,
                 **_hc_filter,
             )
             return _post_process(router_result)
@@ -1197,7 +1778,7 @@ async def health_check_history_endpoint(
         )
 
         # Convert to dict format for JSON response using helper function
-        history_data: Final = [_convert_health_check_to_dict(check) for check in history]
+        history_data: Final = [convert_health_check_to_dict(check) for check in history]
 
         return {
             "health_checks": history_data,
@@ -1229,7 +1810,7 @@ async def latest_health_checks_endpoint(
 
         # Convert to dict format for JSON response using helper function
         checks_data: Final = {
-            (check.model_id if check.model_id else check.model_name): _convert_health_check_to_dict(check)
+            (check.model_id if check.model_id else check.model_name): convert_health_check_to_dict(check)
             for check in latest_checks
         }
 
@@ -1288,7 +1869,7 @@ async def shared_health_check_status_endpoint(
         )
 
 
-def _read_license_data() -> dict[str, Any] | None:
+def read_license_data() -> EnterpriseLicenseData | None:
     from litellm.proxy.proxy_server import _license_check, premium_user_data
 
     license_data: EnterpriseLicenseData | None = premium_user_data or _license_check.airgapped_license_data
@@ -1310,10 +1891,10 @@ def _read_license_data() -> dict[str, Any] | None:
 
     if license_data is None:
         return None
-    return cast(dict[str, Any], license_data)
+    return license_data
 
 
-def _read_allowed_features(license_data: dict[str, Any]) -> list:
+def _read_allowed_features(license_data: Mapping[str, object]) -> list:
     raw_allowed_features: Final = license_data.get("allowed_features")
     if isinstance(raw_allowed_features, list):
         return list(raw_allowed_features)
@@ -1333,7 +1914,7 @@ async def health_license_endpoint(
     """Return metadata about the configured LiteLLM license without exposing the key."""
     from litellm.proxy.proxy_server import _license_check, premium_user
 
-    license_data: Final = _read_license_data()
+    license_data: Final = read_license_data()
     has_license: Final = bool(getattr(_license_check, "license_str", None))
     license_type: Final = "enterprise" if premium_user else "community"
 
@@ -1372,8 +1953,25 @@ class DBHealthCache(TypedDict):
 
 db_health_cache: DBHealthCache = {"status": "unknown", "last_updated": datetime.now()}
 
+# Bounds each DB round-trip on the probe path so a hung connection during a
+# failover cannot make the probe fail by timeout (k8s default timeoutSeconds: 5).
+DB_READINESS_CHECK_TIMEOUT_SECONDS: Final = 2.0
+# One deadline for the whole probe-path DB check (initial check + reconnect +
+# re-check, including reconnect lock waits), kept under timeoutSeconds: 5.
+DB_READINESS_PROBE_DEADLINE_SECONDS: Final = 4.0
 
-async def _db_health_readiness_check():
+
+async def _db_health_readiness_check() -> DBHealthCache:
+    try:
+        return await asyncio.wait_for(
+            _db_health_readiness_check_unbounded(),
+            timeout=DB_READINESS_PROBE_DEADLINE_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        return {"status": "disconnected", "last_updated": db_health_cache["last_updated"]}
+
+
+async def _db_health_readiness_check_unbounded() -> DBHealthCache:
     from litellm.proxy.proxy_server import prisma_client
 
     global db_health_cache
@@ -1387,7 +1985,7 @@ async def _db_health_readiness_check():
             db_health_cache = {"status": "disconnected", "last_updated": datetime.now()}
             return db_health_cache
 
-        await prisma_client.health_check()
+        await asyncio.wait_for(prisma_client.health_check(), timeout=DB_READINESS_CHECK_TIMEOUT_SECONDS)
         db_health_cache = {"status": "connected", "last_updated": datetime.now()}
         return db_health_cache
     except Exception as e:
@@ -1395,8 +1993,15 @@ async def _db_health_readiness_check():
         if PrismaDBExceptionHandler.is_database_transport_error(e):
             try:
                 verbose_proxy_logger.warning("_db_health_readiness_check: health_check failed, attempting reconnect")
-                await prisma_client.attempt_db_reconnect(reason="health_readiness_check")
-                await prisma_client.health_check()
+                await prisma_client.attempt_db_reconnect(
+                    reason="health_readiness_check",
+                    timeout_seconds=DB_READINESS_CHECK_TIMEOUT_SECONDS,
+                    lock_timeout_seconds=DB_READINESS_CHECK_TIMEOUT_SECONDS,
+                )
+                await asyncio.wait_for(
+                    prisma_client.health_check(),
+                    timeout=DB_READINESS_CHECK_TIMEOUT_SECONDS,
+                )
                 verbose_proxy_logger.info("_db_health_readiness_check: reconnect succeeded")
                 db_health_cache = {
                     "status": "connected",
@@ -1503,9 +2108,9 @@ def callback_name(callback):
 DISABLE_NO_REDIS_WARNING_ENV_VAR: Final = "LITELLM_DISABLE_NO_REDIS_WARNING"
 
 
-async def _show_no_redis_warning() -> bool:
+async def no_redis_on_multiple_workers() -> bool:
     """
-    Whether the UI should warn that no Redis is configured.
+    Whether this proxy runs without Redis on more than one worker.
 
     Redis is what makes rate limits, budgets, router state, and cache
     invalidation consistent across workers, so a proxy running without it is
@@ -1516,24 +2121,45 @@ async def _show_no_redis_warning() -> bool:
     routing on its own. A deployment whose worker-heartbeat census proves it
     is exactly one worker needs no cross-worker coordination, so it never
     warns; when the census is unavailable or shows more than one worker, the
-    warning stands unless LITELLM_DISABLE_NO_REDIS_WARNING=true silences it.
+    warning stands.
     """
-    from litellm.proxy.proxy_server import llm_router, prisma_client, redis_usage_cache
+    from litellm.proxy.proxy_server import prisma_client
 
-    if redis_usage_cache is not None:
-        return False
-    if llm_router is not None and llm_router.cache.redis_cache is not None:
-        return False
-    if get_secret_bool(DISABLE_NO_REDIS_WARNING_ENV_VAR, False) is True:
+    if _redis_configured():
         return False
     if prisma_client is None:
         return True
     return await count_live_proxy_workers(prisma_client) != 1
 
 
+def _redis_configured() -> bool:
+    from litellm.proxy.proxy_server import llm_router, redis_usage_cache
+
+    return redis_usage_cache is not None or (
+        llm_router is not None and llm_router.health().store.redis_cache is not None
+    )
+
+
+def no_redis_warning_disabled_by_env() -> bool:
+    return get_secret_bool(DISABLE_NO_REDIS_WARNING_ENV_VAR, False) is True
+
+
+async def _show_no_redis_warning() -> bool:
+    if _redis_configured() or no_redis_warning_disabled_by_env():
+        return False
+    return await no_redis_on_multiple_workers()
+
+
+def env_credential_login_enabled() -> bool:
+    from litellm.proxy.auth.login_utils import is_env_credential_login_enabled
+    from litellm.proxy.proxy_server import general_settings
+
+    return is_env_credential_login_enabled(general_settings)
+
+
 async def _get_health_readiness_details(
     response: Response | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Detailed health payload for authenticated diagnostics.
     """
@@ -1552,7 +2178,7 @@ async def _get_health_readiness_details(
             success_callback_names = litellm.success_callback
 
         # check Cache
-        cache_type: Any = None
+        cache_type: object = None
         if litellm.cache is not None:
             from litellm.caching.caching import RedisSemanticCache
 
@@ -1561,7 +2187,7 @@ async def _get_health_readiness_details(
             if isinstance(litellm.cache.cache, RedisSemanticCache):
                 # ping the cache
                 # TODO: @ishaan-jaff - we should probably not ping the cache on every /health/readiness check
-                index_info: Any
+                index_info: object
                 try:
                     index_info = await litellm.cache.cache._index_info()
                 except Exception as e:
@@ -1572,26 +2198,35 @@ async def _get_health_readiness_details(
         log_level_name: Final = logging.getLevelName(verbose_logger.getEffectiveLevel())
         is_detailed_debug: Final = verbose_logger.isEnabledFor(logging.DEBUG)
         show_no_redis_warning: Final = await _show_no_redis_warning()
+        show_env_credential_login_warning: Final = env_credential_login_enabled()
 
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
-            db_health_status: Final = await _db_health_readiness_check()
+            db_status: Final = _readiness_db_status(await _db_health_readiness_check())
             # A configured DB that is not reachable means the worker cannot
             # serve requests that depend on persisted state (keys, budgets,
             # spend logs). Return 503 so orchestrators take this pod out of
             # rotation; "Not connected" (no DB configured at all) stays 200.
-            if response is not None and db_health_status["status"] != "connected":
+            # With allow_requests_on_db_unavailable the proxy keeps serving
+            # during a DB outage, so the pod must stay in rotation (200) and
+            # report the DB state through the body instead.
+            if (
+                response is not None
+                and db_status != "connected"
+                and not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+            ):
                 response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
             return {
                 "status": "healthy",
-                "db": db_health_status["status"],
+                "db": db_status,
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
-                "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
+                "use_aiohttp_transport": AsyncHTTPHandler.should_use_aiohttp_transport(),
                 "log_level": log_level_name,
                 "is_detailed_debug": is_detailed_debug,
                 "show_no_redis_warning": show_no_redis_warning,
+                "show_env_credential_login_warning": show_env_credential_login_warning,
             }
         else:
             return {
@@ -1600,10 +2235,11 @@ async def _get_health_readiness_details(
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
-                "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
+                "use_aiohttp_transport": AsyncHTTPHandler.should_use_aiohttp_transport(),
                 "log_level": log_level_name,
                 "is_detailed_debug": is_detailed_debug,
                 "show_no_redis_warning": show_no_redis_warning,
+                "show_env_credential_login_warning": show_env_credential_login_warning,
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({e})")
@@ -1659,21 +2295,32 @@ def _authorize_drain_request(request: Request) -> None:
         )
 
 
+def _readiness_db_status(db_health_status: DBHealthCache) -> str:
+    """A pod whose pre-request lookups hit their deadline inside the stall window
+    reports "stalled" even though the ping succeeds: the ping is a fresh
+    connection, the stalled lookups are the ones requests actually wait on."""
+    if db_health_status["status"] != "connected":
+        return db_health_status["status"]
+    if db_lookup_stall_tracker.stalled_within(PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS):
+        return "stalled"
+    return "connected"
+
+
 async def _resolve_public_readiness_db(response: Response) -> str:
     """
     Return the db status string for the public probe and flip the response to
-    503 when a configured DB is unreachable. Mirrors the legacy values:
-    "Not connected" (no DB configured), "connected", "disconnected".
+    503 when a configured DB is unreachable or stalled. Mirrors the legacy values:
+    "Not connected" (no DB configured), "connected", "disconnected", plus "stalled".
     """
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         return "Not connected"
 
-    db_health_status: Final = await _db_health_readiness_check()
-    if db_health_status["status"] != "connected":
+    db_status: Final = _readiness_db_status(await _db_health_readiness_check())
+    if db_status != "connected" and not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable():
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-    return db_health_status["status"]
+    return db_status
 
 
 @router.get(
@@ -1725,7 +2372,14 @@ async def health_backlog():
     for the event loop to get to them, adding latency before LiteLLM even starts
     its own timer.
     """
-    return {"in_flight_requests": get_in_flight_requests()}
+    stats: Final = get_admission_control_stats()
+    response: Final[_HealthBacklogResponse] = {
+        "in_flight_requests": get_in_flight_requests(),
+        "admitted_requests": stats.admitted,
+        "queued_requests": stats.queued,
+        "rejected_requests": stats.rejected_total,
+    }
+    return response
 
 
 @router.get(
@@ -1853,11 +2507,19 @@ async def test_model_connection(
         "rerank",
         "realtime",
         "responses",
+        "anthropic_messages",
         "ocr",
+        "evaluation",
+        "decisions",
+        "extraction",
     ]
     | None = fastapi.Body(
         None,
-        description="The mode to test the model with. If not provided, auto-detected from model capabilities.",
+        description=(
+            "The mode to test the model with. If not provided, resolved the way /health does: the deployment's "
+            "model_info.mode (only while the request tests the deployment's own model), then the mode the "
+            "provider requires for that model, then the model cost map."
+        ),
     ),
     litellm_params: dict = fastapi.Body(
         None,
@@ -1879,7 +2541,7 @@ async def test_model_connection(
     ```bash
     # If model is configured in proxy_config.yaml, you only need to specify the model name:
     curl -X POST 'http://localhost:4000/health/test_connection' \\
-      -H 'Authorization: Bearer sk-1234' \\
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
       -H 'Content-Type: application/json' \\
       -d '{
         "litellm_params": {
@@ -1892,7 +2554,7 @@ async def test_model_connection(
     
     # You can also override specific params or test with custom credentials:
     curl -X POST 'http://localhost:4000/health/test_connection' \\
-      -H 'Authorization: Bearer sk-1234' \\
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
       -H 'Content-Type: application/json' \\
       -d '{
         "litellm_params": {
@@ -1908,6 +2570,9 @@ async def test_model_connection(
     Note: 
     - If the model is configured in proxy_config.yaml, credentials (api_key, api_base, etc.) 
       will be automatically loaded from the config (with resolved environment variables).
+    - A request naming a stored credential (`litellm_credential_name`) that the configuration
+      does not name is probed with that credential instead, and inherits no credentials
+      from the configuration its model string happened to match.
     - You can override specific params by including them in the request.
     - You can use `os.environ/VARIABLE_NAME` syntax to reference environment variables,
       which will be resolved automatically (same as in proxy_config.yaml).
@@ -1948,6 +2613,7 @@ async def test_model_connection(
         # This gets the litellm_params from proxy config (with resolved env vars)
         config_litellm_params: dict = {}
         loaded_model_info: dict | None = None
+        deployment_by_id: Deployment | None = None
         if llm_router is not None:
             # Prefer disambiguation by deployment id (`model_info.id`) when
             # the caller supplies it. This is required when multiple
@@ -1960,9 +2626,8 @@ async def test_model_connection(
             request_model_info: Final = model_info or {}
             request_model_id: Final = request_model_info.get("id")
             try:
-                deployment_by_id = None
                 if request_model_id:
-                    deployment_by_id = llm_router.get_deployment(model_id=request_model_id)
+                    deployment_by_id = llm_router.registry().deployment(request_model_id)
 
                 if deployment_by_id is not None:
                     config_litellm_params = deployment_by_id.litellm_params.model_dump(exclude_none=True)
@@ -1971,12 +2636,12 @@ async def test_model_connection(
                     # Fall back to model_name lookup for callers (e.g. the
                     # "Add Model" wizard, or curl) that don't supply an id.
                     # First try to find by proxy model_name (e.g., "gpt-4o")
-                    deployments = llm_router.get_model_list(model_name=model_name)
+                    deployments = llm_router.registry().deployments(model_name)
 
                     # If not found, try to find by litellm model name
                     # (e.g., "azure/gpt-4o")
                     if not deployments or len(deployments) == 0:
-                        all_deployments: Final = llm_router.get_model_list(model_name=None)
+                        all_deployments: Final = llm_router.registry().deployments(None)
                         if all_deployments:
                             for deployment in all_deployments:
                                 if deployment.get("litellm_params", {}).get("model") == model_name:
@@ -1994,39 +2659,78 @@ async def test_model_connection(
                     "Could not find model %s in router: %s. Proceeding with request params only.", model_name, e
                 )
 
+        selected_by_id: Final = deployment_by_id is not None
+        reject_server_owned_wif_fields(
+            MappingProxyType(
+                {
+                    key: value
+                    for key, value in _OBJECT_MAPPING.validate_python(request_litellm_params).items()
+                    if key != "chatgpt_auth_file"
+                }
+            )
+        )
         # Merge: config params (from proxy config) as base, request params override
         litellm_params = {
             **_config_base_for_health_check(
                 config_litellm_params,
                 request_litellm_params,
                 allow_client_side_credentials=general_settings.get("allow_client_side_credentials") is True,
+                selected_by_id=selected_by_id,
             ),
             **request_litellm_params,
         }
 
         resolved_model_info: Final = loaded_model_info if loaded_model_info is not None else model_info
-        litellm_params = _update_litellm_params_for_health_check(
-            model_info=resolved_model_info or {},
+        probe_model_info: Final = _model_info_for_mode_resolution(
+            _OBJECT_MAPPING.validate_python(resolved_model_info or {}),
+            stored_params=_OBJECT_MAPPING.validate_python(config_litellm_params),
+            request_params=_OBJECT_MAPPING.validate_python(request_litellm_params),
+        )
+        stored_model: Final = _OBJECT_MAPPING.validate_python(config_litellm_params).get("model")
+        litellm_params = update_litellm_params_for_health_check(
+            model_info=dict(probe_model_info),
             litellm_params=litellm_params,
+            deployment_model=stored_model if isinstance(stored_model, str) else None,
         )
 
         ## Auth check, on the final probe params so health_check_params cannot retarget it afterwards
         await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=Deployment(
                 model_name="test_model",
-                litellm_params=LiteLLM_Params(**litellm_params),
+                litellm_params=LiteLLM_Params.model_validate(litellm_params),
                 model_info=resolved_model_info,
             ),
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            # The probe is a write of the caller's own params onto the stored deployment, so the
+            # caller's params are the incoming side: a probe that redirects a federated
+            # deployment's api_base is an admin's action, an unmodified probe of it is not.
+            incoming_params=request_litellm_params,
         )
-        mode = mode or litellm_params.pop("mode", None)
+        raw_params_mode: Final[object] = litellm_params.pop("mode", None)
+        probe_mode: Final = (
+            mode
+            or _string_mode_or_bad_request(raw_params_mode)
+            or resolve_health_check_mode(probe_model_info, _OBJECT_MAPPING.validate_python(litellm_params))
+        )
+
+        raw_headers: Final[dict[str, str]] = TypeAdapter(dict[str, str]).validate_python(
+            http_parsing_utils.safe_get_request_headers(request)
+        )
+        health_check_params: Final = {
+            **_OBJECT_MAPPING.validate_python(litellm_params),
+            **_admin_api_key_from_request(
+                _OBJECT_MAPPING.validate_python(request_litellm_params),
+                _OBJECT_MAPPING.validate_python(litellm_params),
+            ),
+            "secret_fields": SecretFields(raw_headers=RedactedDict(raw_headers)),
+        }
 
         result: Final = await run_with_timeout(
             litellm.ahealth_check(
-                model_params=litellm_params,
-                mode=mode,
+                model_params=health_check_params,
+                mode=probe_mode,
                 prompt="test from litellm",
                 input=["test from litellm"],
             ),
@@ -2034,14 +2738,14 @@ async def test_model_connection(
         )
 
         # Clean the result for display
-        cleaned_result: Final = _clean_endpoint_data({**litellm_params, **result}, details=True)
+        cleaned_result: Final = clean_endpoint_data({**health_check_params, **result}, details=True)
 
         return {
             "status": "error" if "error" in result else "success",
             "result": cleaned_result,
         }
 
-    except HTTPException as e:
+    except (HTTPException, ProxyException) as e:
         raise e
     except Exception as e:
         verbose_proxy_logger.debug("litellm.proxy.health_endpoints.test_model_connection(): Exception occurred - %s", e)

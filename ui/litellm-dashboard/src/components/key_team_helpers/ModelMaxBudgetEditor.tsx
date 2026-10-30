@@ -50,6 +50,8 @@ export const MODEL_BUDGET_PERIOD_OPTIONS = [
 
 const DEFAULT_PERIOD = "30d";
 
+const MODEL_PATTERN_VALUE = { hint: "Model pattern", accepts: (typed: string) => typed.includes("*") };
+
 export const entriesToModelMaxBudget = (entries: readonly ModelBudgetEntry[]): ModelMaxBudget =>
   Object.fromEntries(
     entries
@@ -92,6 +94,13 @@ export function ModelMaxBudgetEditor({
 }: ModelMaxBudgetEditorProps) {
   const [entries, setEntries] = useState<ModelBudgetEntry[]>(() => modelMaxBudgetToEntries(value));
 
+  const incoming = JSON.stringify(value ?? {});
+  const [syncedValue, setSyncedValue] = useState(incoming);
+  if (incoming !== syncedValue) {
+    setSyncedValue(incoming);
+    if (incoming !== JSON.stringify(entriesToModelMaxBudget(entries))) setEntries(modelMaxBudgetToEntries(value));
+  }
+
   const emitChange = (updated: ModelBudgetEntry[]) => {
     setEntries(updated);
     onChange(entriesToModelMaxBudget(updated));
@@ -114,7 +123,7 @@ export function ModelMaxBudgetEditor({
   const blurb = (
     <div className="text-xs text-muted-foreground">
       {premiumUser
-        ? "Cap spend per model over its own window. A budget set on the bare model name also covers the provider-prefixed spelling of that model."
+        ? "Cap spend per model over its own window. A budget set on the bare model name also covers the provider-prefixed spelling of that model. Pick an access group, or type a pattern like claude-opus*, to share one budget across every model it covers."
         : MODEL_MAX_BUDGET_PREMIUM_HINT}
     </div>
   );
@@ -144,6 +153,7 @@ export function ModelMaxBudgetEditor({
               onClick={() => removeEntry(entry.id)}
               disabled={!premiumUser}
               title={hintWhenLocked}
+              aria-label="Remove model budget"
               className="absolute top-2 right-2 text-muted-foreground hover:text-destructive transition-colors p-1"
             >
               <X className="w-4 h-4" />
@@ -153,10 +163,12 @@ export function ModelMaxBudgetEditor({
               <label className="block text-xs font-medium text-muted-foreground mb-1">Model</label>
               <SearchSelect
                 options={modelOptions.map((model) => ({ label: model, value: model }))}
-                value={entry.model ?? ""}
-                onValueChange={(model) => updateEntry(entry.id, { model: model === "" ? null : model })}
+                value={entry.model}
+                onValueChange={(model) => updateEntry(entry.id, { model })}
                 placeholder="Select model"
                 emptyText="No models found"
+                customValue={MODEL_PATTERN_VALUE}
+                reservedValues={entries.flatMap((other) => (other.id !== entry.id && other.model ? [other.model] : []))}
                 disabled={!premiumUser}
               />
             </div>
@@ -218,14 +230,15 @@ export function ModelMaxBudgetEditor({
 
 interface ModelMaxBudgetFieldProps extends ModelMaxBudgetEditorProps {
   hint: string;
+  label?: string;
 }
 
 /** The editor with its label, so every form that offers it presents it the same way. */
-export function ModelMaxBudgetField({ hint, ...editorProps }: ModelMaxBudgetFieldProps) {
+export function ModelMaxBudgetField({ hint, label = "Per-Model Budgets", ...editorProps }: ModelMaxBudgetFieldProps) {
   return (
     <Field>
       <FieldLabel>
-        <span title={hint}>Per-Model Budgets</span>
+        <span title={hint}>{label}</span>
       </FieldLabel>
       <ModelMaxBudgetEditor {...editorProps} />
     </Field>

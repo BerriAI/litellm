@@ -4,14 +4,16 @@ Transformation logic from Cohere's /v1/rerank format to Infinity's  `/v1/rerank`
 Why separate file? Make it easy to see how transformation works
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import httpx
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.cohere.rerank.transformation import CohereRerankConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import (
@@ -26,6 +28,31 @@ from litellm.types.rerank import (
 from ..common_utils import InfinityError
 
 
+class _InfinityRerankUsage(TypedDict, extra_items=ReadOnly[int]):
+    """The token counters Infinity reports in the ``usage`` block of a rerank response."""
+
+
+class _InfinityRerankResult(TypedDict):
+    """One scored document in an Infinity ``/v1/rerank`` response."""
+
+    index: ReadOnly[int]
+    relevance_score: ReadOnly[float]
+    document: ReadOnly[str]
+
+
+class _InfinityRerankResponse(TypedDict):
+    """The JSON body returned by Infinity's ``/v1/rerank`` endpoint."""
+
+    id: ReadOnly[NotRequired[str]]
+    usage: ReadOnly[NotRequired[_InfinityRerankUsage]]
+    results: ReadOnly[Sequence[_InfinityRerankResult]]
+
+
+def _parse_rerank_response(raw_response: httpx.Response) -> _InfinityRerankResponse:
+    """Read the untyped JSON body of an Infinity rerank response."""
+    return raw_response.json()
+
+
 class InfinityRerankConfig(CohereRerankConfig):
     def get_complete_url(
         self,
@@ -35,11 +62,7 @@ class InfinityRerankConfig(CohereRerankConfig):
     ) -> str:
         if api_base is None:
             raise ValueError("api_base is required for Infinity rerank")
-        # Remove trailing slashes and ensure clean base URL
-        api_base = api_base.rstrip("/")
-        if not api_base.endswith("/rerank"):
-            api_base = f"{api_base}/rerank"
-        return api_base
+        return ensure_api_route(api_base, "rerank")
 
     def validate_environment(
         self,
@@ -82,7 +105,7 @@ class InfinityRerankConfig(CohereRerankConfig):
         No transformation required, Infinity follows Cohere API response format
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _parse_rerank_response(raw_response)
         except Exception:
             raise InfinityError(message=raw_response.text, status_code=raw_response.status_code)
 

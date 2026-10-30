@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArrowDown,
   Bot,
   Code2,
   Database,
@@ -9,6 +10,7 @@ import {
   Info,
   Key,
   Link2,
+  ListPlus,
   Loader2,
   Settings,
   Shield,
@@ -40,6 +42,8 @@ import { makeAnthropicMessagesRequest } from "../../llm_calls/anthropic_messages
 import { makeOpenAIAudioSpeechRequest } from "../../llm_calls/audio_speech";
 import { makeOpenAIAudioTranscriptionRequest } from "../../llm_calls/audio_transcriptions";
 import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_completion";
+import { customHeadersFromPairs, parseStoredHeaderPairs } from "@/components/llm_calls/request_headers";
+import KeyValueInput, { type KeyValuePair } from "@/components/key_value_input";
 import { makeOpenAIEmbeddingsRequest } from "../../llm_calls/embeddings_api";
 import { Agent, fetchAvailableAgents } from "../../llm_calls/fetch_agents";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
@@ -77,6 +81,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select as ShadcnSelect, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
+import { uiHref } from "@/utils/uiHref";
 import {
   AUDIO_ACCEPT,
   IMAGE_EDIT_ACCEPT,
@@ -195,17 +200,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
     () => sessionStorage.getItem("customProxyBaseUrl") || "",
   );
   const [inputMessage, setInputMessage] = useState("");
-  const [selectedModel, setSelectedModel] = useState<string | undefined>(simplified ? fixedModel : undefined);
+  const [selectedModel, setSelectedModel] = useState<string | null | undefined>(simplified ? fixedModel : null);
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [modelLoadError, setModelLoadError] = useState(false);
   const [agentInfo, setAgentInfo] = useState<Agent[]>([]);
-  const [selectedAgent, setSelectedAgent] = useState<string | undefined>(undefined);
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const debouncedSetSelectedModel = useDebouncedCallback((value: string) => setSelectedModel(value), {
     wait: CUSTOM_MODEL_DEBOUNCE_WAIT_MS,
   });
-  const [endpointType, setEndpointType] = useState<string>(
+  const [endpointType, setEndpointType] = useState<string | null>(
     () => sessionStorage.getItem("endpointType") || EndpointType.CHAT,
   );
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -219,6 +224,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return [];
     }
   });
+  const [customHeaderPairs, setCustomHeaderPairs] = useState<readonly KeyValuePair[]>(() =>
+    parseStoredHeaderPairs(getSecureItem("customHeaders")),
+  );
+  const customHeaders = useMemo(() => customHeadersFromPairs(customHeaderPairs), [customHeaderPairs]);
   const [selectedVoice, setSelectedVoice] = useState<OpenAIVoice>(() => {
     const saved = sessionStorage.getItem("selectedVoice");
     if (!saved) return "alloy";
@@ -279,7 +288,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   // Code Interpreter state (using custom hook)
   const codeInterpreter = useCodeInterpreter();
 
-  const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
 
   // Fetch MCP servers and toolsets
   const loadMCPServers = async () => {
@@ -326,7 +335,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   useEffect(() => {
-    if (isGetCodeModalVisible) {
+    if (isGetCodeModalVisible && endpointType !== null) {
       const code = generateCodeSnippet({
         apiKeySource,
         accessToken,
@@ -341,10 +350,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
         mcpServers,
         mcpServerToolRestrictions,
         endpointType,
-        selectedModel,
+        selectedModel: selectedModel ?? undefined,
         selectedSdk,
         selectedVoice,
         proxySettings,
+        customHeaders,
       });
       setGeneratedCode(code);
     }
@@ -366,16 +376,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
     endpointType,
     selectedModel,
     proxySettings,
+    customHeaders,
   ]);
 
   useEffect(() => {
     try {
       setSecureItem("apiKeySource", JSON.stringify(apiKeySource));
       setSecureItem("apiKey", apiKey);
+      setSecureItem("customHeaders", JSON.stringify(customHeaderPairs));
     } catch {
       // Storage full or unavailable — non-critical, skip persisting.
     }
-    sessionStorage.setItem("endpointType", endpointType);
+    if (endpointType === null) sessionStorage.removeItem("endpointType");
+    else sessionStorage.setItem("endpointType", endpointType);
     sessionStorage.setItem("selectedTags", JSON.stringify(selectedTags));
     sessionStorage.setItem("selectedVectorStores", JSON.stringify(selectedVectorStores));
     sessionStorage.setItem("selectedGuardrails", JSON.stringify(selectedGuardrails));
@@ -408,6 +421,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     mcpServerToolRestrictions,
     selectedVoice,
     streamingEnabled,
+    customHeaderPairs,
   ]);
 
   useEffect(() => {
@@ -492,7 +506,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
         setAgentInfo(agents);
         // Clear selection if current agent not in list
         if (selectedAgent && !agents.some((a) => a.agent_name === selectedAgent)) {
-          setSelectedAgent(undefined);
+          setSelectedAgent(null);
         }
       } catch (error) {
         console.error("Error fetching agents:", error);
@@ -503,17 +517,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
   }, [accessToken, apiKeySource, apiKey, endpointType, customProxyBaseUrl, selectedAgent]);
 
   useEffect(() => {
-    // Scroll to the bottom of the chat whenever chatHistory updates
-    if (chatEndRef.current) {
-      // Add a small delay to ensure content is rendered
-      setTimeout(() => {
-        chatEndRef.current?.scrollIntoView({
-          behavior: "smooth",
-          block: "end", // Keep the scroll position at the end
-        });
-      }, 100);
-    }
+    const el = chatScrollRef.current;
+    if (!el || chatHistory.at(-1)?.role !== "user") return;
+    const userMessages = el.querySelectorAll<HTMLElement>('[data-role="user"]');
+    const last = userMessages[userMessages.length - 1];
+    if (last) el.scrollTop = last.offsetTop;
   }, [chatHistory]);
+
+  const scrollToLastMessage = () => {
+    const el = chatScrollRef.current;
+    const messages = el?.querySelectorAll<HTMLElement>("[data-role]");
+    const last = messages?.[messages.length - 1];
+    if (el && last) el.scrollTop = last.offsetTop + last.offsetHeight - el.clientHeight;
+  };
 
   const handleCancelRequest = () => {
     if (abortControllerRef.current) {
@@ -615,10 +631,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setUploadedAudio(file);
   };
 
-  const handleEndpointChange = (value: string) => {
+  const handleEndpointChange = (value: string | null) => {
     setEndpointType(value);
-    setSelectedModel(undefined);
-    setSelectedAgent(undefined);
+    setGeneratedCode("");
+    setSelectedModel(null);
+    setSelectedAgent(null);
     setShowCustomModelInput(false);
     setSelectedMCPDirectTool(undefined);
     if (value === EndpointType.MCP) {
@@ -709,6 +726,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   const handleSendMessage = async () => {
+    if (endpointType === null) {
+      toast.fromError("Please select an endpoint before sending a request");
+      return;
+    }
+
     if (inputMessage.trim() === "" && endpointType !== EndpointType.TRANSCRIPTION && endpointType !== EndpointType.MCP)
       return;
 
@@ -913,6 +935,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             mockTestFallbacks,
             mcpToolsets,
             streamingEnabled,
+            customHeaders,
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -924,6 +947,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             selectedTags,
             signal,
             customProxyBaseUrl || undefined,
+            customHeaders,
           );
         } else if (endpointType === EndpointType.SPEECH) {
           // For audio speech
@@ -938,6 +962,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             undefined, // responseFormat
             undefined, // speed
             customProxyBaseUrl || undefined,
+            customHeaders,
           );
         } else if (endpointType === EndpointType.IMAGE_EDITS) {
           // For image edits
@@ -951,6 +976,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               selectedTags,
               signal,
               customProxyBaseUrl || undefined,
+              customHeaders,
             );
           }
         } else if (endpointType === EndpointType.RESPONSES) {
@@ -996,6 +1022,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             mcpToolsets,
             streamingEnabled,
             updateTotalLatency,
+            customHeaders,
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [
@@ -1024,6 +1051,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             mcpServers,
             mcpServerToolRestrictions,
             mcpToolsets,
+            streamingEnabled,
+            customHeaders,
           );
         } else if (endpointType === EndpointType.EMBEDDINGS) {
           await makeOpenAIEmbeddingsRequest(
@@ -1033,6 +1062,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             effectiveApiKey,
             selectedTags,
             customProxyBaseUrl || undefined,
+            customHeaders,
           );
         } else if (endpointType === EndpointType.TRANSCRIPTION) {
           // For audio transcriptions
@@ -1049,6 +1079,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               undefined, // responseFormat
               undefined, // temperature
               customProxyBaseUrl || undefined,
+              customHeaders,
             );
           }
         } else if (endpointType === EndpointType.INTERACTIONS) {
@@ -1060,6 +1091,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             selectedTags,
             signal,
             customProxyBaseUrl || undefined,
+            undefined,
+            customHeaders,
           );
         }
       }
@@ -1077,13 +1110,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
           resolvedServerId = toolEntry?.server_id ?? rawSelected;
         }
         if (resolvedServerId && !resolvedServerId.startsWith("toolset:") && selectedMCPDirectTool) {
-          const result = await callMCPTool(
-            effectiveApiKey,
-            resolvedServerId,
-            selectedMCPDirectTool,
-            mcpToolArguments,
-            selectedGuardrails.length > 0 ? { guardrails: selectedGuardrails } : undefined,
-          );
+          const result = await callMCPTool(effectiveApiKey, resolvedServerId, selectedMCPDirectTool, mcpToolArguments, {
+            ...(selectedGuardrails.length > 0 ? { guardrails: selectedGuardrails } : {}),
+            customHeaders,
+          });
           const resultText =
             result?.content?.length > 0
               ? JSON.stringify(
@@ -1109,6 +1139,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
           updateA2AMetadata,
           customProxyBaseUrl || undefined,
           selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+          customHeaders,
         );
       }
     } catch (error) {
@@ -1150,7 +1181,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     toast.success("Chat history cleared.");
   };
 
-  const onModelChange = (value: string) => {
+  const onModelChange = (value: string | null) => {
     setSelectedModel(value);
     setShowCustomModelInput(value === "custom");
 
@@ -1173,7 +1204,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
     return !model.mode || model.mode === "chat";
   };
 
-  const supportsStreamingToggle = endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES;
+  const supportsStreamingToggle =
+    endpointType === EndpointType.CHAT ||
+    endpointType === EndpointType.RESPONSES ||
+    endpointType === EndpointType.ANTHROPIC_MESSAGES;
   const modelsForEndpoint = useMemo(
     () => filterModelsForEndpoint(modelInfo, endpointType as EndpointType),
     [modelInfo, endpointType],
@@ -1205,6 +1239,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               : "Describe the image you want to generate...";
 
   const sendDisabled =
+    endpointType === null ||
     isLoading ||
     (endpointType === EndpointType.MCP
       ? !(selectedMCPServers.length === 1 && selectedMCPServers[0] !== "__all__" && selectedMCPDirectTool)
@@ -1472,6 +1507,18 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   />
                 </div>
 
+                {endpointType !== EndpointType.REALTIME && (
+                  <div>
+                    <label className="mb-2 flex items-center text-sm font-medium text-foreground">
+                      <ListPlus className="mr-2 size-4" aria-hidden="true" /> Custom Headers
+                    </label>
+                    <KeyValueInput value={customHeaderPairs} onChange={setCustomHeaderPairs} />
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Sent with every playground request, e.g. provider-specific headers like anthropic-beta.
+                    </p>
+                  </div>
+                )}
+
                 <div>
                   <div className="mb-2 flex items-center gap-1 text-sm font-medium text-foreground">
                     <Wrench className="mr-1 size-4" aria-hidden="true" />
@@ -1650,7 +1697,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       </TooltipTrigger>
                       <TooltipContent className="max-w-xs">
                         Select vector store(s) to use for this LLM API call. You can set up your vector store{" "}
-                        <a href="?page=vector-stores" className="text-info underline">
+                        <a href={uiHref("vector-stores")} className="text-info underline">
                           here
                         </a>
                         .
@@ -1674,7 +1721,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       </TooltipTrigger>
                       <TooltipContent className="max-w-xs">
                         Select guardrail(s) to use for this LLM API call. You can set up your guardrails{" "}
-                        <a href="?page=guardrails" className="text-info underline">
+                        <a href={uiHref("guardrails")} className="text-info underline">
                           here
                         </a>
                         .
@@ -1700,7 +1747,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         <TooltipContent className="max-w-xs">
                           Select policy/policies to apply to this LLM API call. Policies define which guardrails are
                           applied based on conditions. You can set up your policies{" "}
-                          <a href="?page=policies" className="text-info underline">
+                          <a href={uiHref("policies")} className="text-info underline">
                             here
                           </a>
                           .
@@ -1757,51 +1804,68 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     )}
                   </div>
                 </div>
-                <div className="min-h-0 min-w-0 flex-1 overflow-auto p-3 pb-0 sm:p-4 sm:pb-0">
-                  {chatHistory.length === 0 && (
-                    <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
-                      <Bot className="mb-4 size-12" aria-hidden="true" />
-                      <p className="text-sm">Start a conversation, generate an image, or handle audio</p>
-                    </div>
-                  )}
-
-                  {chatHistory.map((message, index) => (
-                    <div key={index}>
-                      <ChatMessageBubble
-                        message={message}
-                        isLastMessage={index === chatHistory.length - 1}
-                        endpointType={endpointType as EndpointType}
-                        mcpEvents={mcpEvents}
-                        codeInterpreterResult={codeInterpreter.result}
-                        accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
-                      />
-                    </div>
-                  ))}
-
-                  {isLoading &&
-                    mcpEvents.length > 0 &&
-                    (endpointType === EndpointType.RESPONSES || endpointType === EndpointType.CHAT) &&
-                    chatHistory.length > 0 &&
-                    chatHistory[chatHistory.length - 1].role === "user" && (
-                      <div className="mb-4 text-left">
-                        <div className="inline-block max-w-[80%] rounded-lg border border-border bg-card p-3.5 px-4 text-left text-card-foreground shadow-xs">
-                          <div className="mb-1.5 flex items-center gap-2">
-                            <div className="mr-1 flex h-6 w-6 items-center justify-center rounded-full bg-muted">
-                              <Bot className="size-3 text-muted-foreground" aria-hidden="true" />
-                            </div>
-                            <strong className="text-sm capitalize">Assistant</strong>
-                          </div>
-                          <MCPEventsDisplay events={mcpEvents} />
-                        </div>
+                <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+                  <div
+                    ref={chatScrollRef}
+                    className="relative min-h-0 min-w-0 flex-1 overflow-auto p-3 pb-0 sm:p-4 sm:pb-0"
+                  >
+                    {chatHistory.length === 0 && (
+                      <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
+                        <Bot className="mb-4 size-12" aria-hidden="true" />
+                        <p className="text-sm">Start a conversation, generate an image, or handle audio</p>
                       </div>
                     )}
 
-                  {isLoading && (
-                    <div className="my-4 flex items-center justify-center">
-                      <Loader2 className="size-6 animate-spin text-muted-foreground" aria-label="Loading" />
-                    </div>
+                    {chatHistory.map((message, index) => (
+                      <div key={index} data-role={message.role}>
+                        <ChatMessageBubble
+                          message={message}
+                          isLastMessage={index === chatHistory.length - 1}
+                          endpointType={endpointType as EndpointType}
+                          mcpEvents={mcpEvents}
+                          codeInterpreterResult={codeInterpreter.result}
+                          accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
+                        />
+                      </div>
+                    ))}
+
+                    {isLoading &&
+                      mcpEvents.length > 0 &&
+                      (endpointType === EndpointType.RESPONSES || endpointType === EndpointType.CHAT) &&
+                      chatHistory.length > 0 &&
+                      chatHistory[chatHistory.length - 1].role === "user" && (
+                        <div className="mb-4 text-left">
+                          <div className="inline-block max-w-[80%] rounded-lg border border-border bg-card p-3.5 px-4 text-left text-card-foreground shadow-xs">
+                            <div className="mb-1.5 flex items-center gap-2">
+                              <div className="mr-1 flex h-6 w-6 items-center justify-center rounded-full bg-muted">
+                                <Bot className="size-3 text-muted-foreground" aria-hidden="true" />
+                              </div>
+                              <strong className="text-sm capitalize">Assistant</strong>
+                            </div>
+                            <MCPEventsDisplay events={mcpEvents} />
+                          </div>
+                        </div>
+                      )}
+
+                    {isLoading && (
+                      <div className="my-4 flex items-center justify-center">
+                        <Loader2 className="size-6 animate-spin text-muted-foreground" aria-label="Loading" />
+                      </div>
+                    )}
+                    {chatHistory.length > 0 && <div aria-hidden className="h-[calc(100%-3rem)]" />}
+                  </div>
+                  {chatHistory.length > 0 && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      aria-label="Jump to bottom"
+                      className="absolute bottom-3 right-3 rounded-full shadow-sm"
+                      onClick={scrollToLastMessage}
+                    >
+                      <ArrowDown className="size-4" />
+                    </Button>
                   )}
-                  <div ref={chatEndRef} style={{ height: "1px" }} />
                 </div>
 
                 <div className="max-h-[50%] shrink-0 overflow-y-auto border-t border-border bg-card p-3 sm:p-4">

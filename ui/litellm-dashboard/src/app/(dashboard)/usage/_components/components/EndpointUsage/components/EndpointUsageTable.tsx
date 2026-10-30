@@ -1,5 +1,8 @@
 import React from "react";
 import type { ColumnDef } from "@tanstack/react-table";
+import { Route } from "lucide-react";
+import { cn } from "@/lib/cva.config";
+import { Panel } from "../../overview/Primitives";
 import { Meter, MeterIndicator, MeterTrack } from "@/components/shared/Meter";
 import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
@@ -41,7 +44,7 @@ const EndpointUsageTable: React.FC<EndpointUsageTableProps> = ({ endpointData })
     {
       header: "Endpoint",
       accessorKey: "endpoint",
-      cell: ({ row }) => <span className="font-medium">{row.original.endpoint}</span>,
+      cell: ({ row }) => <span className="font-mono text-xs text-foreground">{row.original.endpoint}</span>,
     },
     {
       header: "Successful / Failed",
@@ -54,18 +57,20 @@ const EndpointUsageTable: React.FC<EndpointUsageTableProps> = ({ endpointData })
         const totalPercentage = successPercentage + failurePercentage;
 
         return (
-          <div className="flex items-center space-x-3">
-            <div className="flex-1 relative">
+          <div className="flex items-center gap-3">
+            <div className="relative min-w-16 flex-1">
               <Meter value={successPercentage} max={totalPercentage || 100} aria-label="Successful requests">
-                <MeterTrack className={failurePercentage > 0 ? "bg-destructive" : undefined}>
-                  <MeterIndicator className="bg-success" />
+                <MeterTrack className={failurePercentage > 0 ? "h-1 bg-destructive/70" : "h-1"}>
+                  <MeterIndicator className="bg-[#2b3fd6]" />
                 </MeterTrack>
               </Meter>
             </div>
-            <div className="flex items-center space-x-2 text-sm min-w-[100px]">
-              <span className="text-success font-medium">{record.successful_requests.toLocaleString()}</span>
+            <div className="flex min-w-[100px] items-center gap-1.5 text-xs tabular-nums">
+              <span className="text-foreground">{record.successful_requests.toLocaleString()}</span>
               <span className="text-muted-foreground">/</span>
-              <span className="text-destructive font-medium">{record.failed_requests.toLocaleString()}</span>
+              <span className={record.failed_requests > 0 ? "text-destructive" : "text-muted-foreground"}>
+                {record.failed_requests.toLocaleString()}
+              </span>
             </div>
           </div>
         );
@@ -75,7 +80,7 @@ const EndpointUsageTable: React.FC<EndpointUsageTableProps> = ({ endpointData })
       header: "Total Request",
       accessorKey: "api_requests",
       meta: { numeric: true },
-      cell: ({ row }) => row.original.api_requests.toLocaleString(),
+      cell: ({ row }) => <span className="tabular-nums">{row.original.api_requests.toLocaleString()}</span>,
     },
     {
       header: "Success Rate",
@@ -86,13 +91,10 @@ const EndpointUsageTable: React.FC<EndpointUsageTableProps> = ({ endpointData })
         const successRateStr = value.toFixed(2);
         return (
           <span
-            className={
-              value >= 95
-                ? "text-success font-medium"
-                : value >= 80
-                  ? "text-warning font-medium"
-                  : "text-destructive font-medium"
-            }
+            className={cn(
+              "tabular-nums",
+              value >= 95 ? "text-foreground" : value >= 80 ? "text-warning" : "text-destructive",
+            )}
           >
             {successRateStr}%
           </span>
@@ -103,7 +105,7 @@ const EndpointUsageTable: React.FC<EndpointUsageTableProps> = ({ endpointData })
       header: "Total Tokens",
       accessorKey: "total_tokens",
       meta: { numeric: true },
-      cell: ({ row }) => row.original.total_tokens.toLocaleString(),
+      cell: ({ row }) => <span className="tabular-nums">{row.original.total_tokens.toLocaleString()}</span>,
     },
     {
       header: "Spend",
@@ -114,13 +116,23 @@ const EndpointUsageTable: React.FC<EndpointUsageTableProps> = ({ endpointData })
   ];
 
   return (
-    <DataTable
-      columns={columns}
-      data={dataSource}
-      getRowId={(row) => row.key}
-      noDataMessage="No endpoint usage data"
-      size="compact"
-    />
+    <Panel
+      icon={Route}
+      title="Endpoints"
+      action={
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {dataSource.length.toLocaleString()} {dataSource.length === 1 ? "endpoint" : "endpoints"}
+        </span>
+      }
+    >
+      <DataTable
+        columns={columns}
+        data={dataSource}
+        getRowId={(row) => row.key}
+        noDataMessage="No endpoint usage data"
+        size="compact"
+      />
+    </Panel>
   );
 };
 

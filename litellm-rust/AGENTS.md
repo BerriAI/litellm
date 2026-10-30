@@ -1,42 +1,30 @@
-# AGENTS.md
+# Rust workspace rules
 
-litellm-rust has exactly THREE crates. A crate is a LAYER, not a route. Routes (ocr, realtime, chat) and providers (mistral, openai) are MODULES inside the layers.
+For keeping secrets out of Debug output, follow [.agents/skills/rust-redaction/SKILL.md](.agents/skills/rust-redaction/SKILL.md)
 
-## Crates
+For diagnostic tracing changes, follow [.agents/skills/rust-tracing/SKILL.md](.agents/skills/rust-tracing/SKILL.md)
 
-| Crate | Role |
-|-------|------|
-| litellm-core | The LiteLLM SDK in Rust. One public entrypoint per top-level call (`messages::messages()`), owning types, transforms, provider resolution, auth, and the provider HTTP call. Call it, get a typed response. |
-| litellm-ai-gateway | The axum server (behind the `server` feature) plus the WebSocket hosts. Translates HTTP/WS to core entrypoints; owns no provider logic and no handlers. |
-| litellm-python-bridge | PyO3 cdylib exposing Rust to the litellm Python SDK — marshals Python objects and calls core entrypoints. |
+For string-valued enums and their Serde conversions, follow [.agents/skills/rust-string-enums/SKILL.md](.agents/skills/rust-string-enums/SKILL.md)
 
-Dependency direction (acyclic): litellm-core ← litellm-ai-gateway ← litellm-python-bridge.
+For error types, error variants and conversions between crate errors, follow [.agents/skills/rust-error/SKILL.md](.agents/skills/rust-error/SKILL.md)
 
-## Where a route lives
+For fieldless enums, derive `strum::VariantArray` and use `VARIANTS` instead of a hand-listed `ALL` array. Derive Strum string conversions instead of hand-written variant-to-string matches
 
-A top-level LiteLLM call is a module under `crates/core/src/<route>/`, shaped like `messages`:
+Use the derived conversions directly (`<&'static str>::from(x)` / `.into()`, `str::parse`) with no `as_str`/`parse` wrapper that only delegates, and spell each variant with explicit `#[strum(serialize = "...")]` instead of `serialize_all`
 
-```
-core/src/messages/
-  mod.rs             # pub async fn messages(..) -> CoreResult<..>  (+ messages_stream for SSE)
-  types.rs           # request/response types, MessagesRequest
-  transformation.rs  # the provider template trait
-  prepare.rs         # provider resolution, auth headers, URL
-  handler.rs         # the provider call
-  client.rs          # the shared reqwest client
-```
+## Test placement
 
-Handlers never live in `ai-gateway`. `ocr`, `audio_transcription`, and `realtime` are still hosted there from before this rule; they move to `core` as they are touched.
+- Never create a `tests.rs` (or `test.rs`) file under `src/`, and never `#[path = "tests.rs"] mod tests;`
+- Tests live inline by default, in a `#[cfg(test)] mod tests { ... }` at the bottom of the file that owns the code under test, whether or not they touch private items
+- `crates/<crate>/tests/` is only for tests that drive several modules together end to end, such as a full request through a route. A test of one type or function never goes there
+- A helper shared by several inline test modules goes in a `#[cfg(test)] mod test_support;` at the crate root, and only once a second module needs it
+- A test for another crate's item belongs in that crate, not in a downstream one
+- Tests that call a real provider go in `crates/<crate>/tests/live/<provider>.rs` behind a `tests/live/main.rs`. Each reads the provider's key from the environment through an `Option` fixture and returns early when it is unset, never `#[ignore]`, so `cargo test` stays offline until the key is exported
+- Never set `autotests = false` or hand-list `[[test]]` targets. Every file directly under `tests/` is discovered by cargo, and a shared helper goes in `tests/<name>/mod.rs` or `tests/<subject>/support.rs` so it is not picked up as a test crate of its own
 
-Adding a crate: default to a MODULE. New crate ONLY on a real trigger — separate artifact (binary/cdylib), proc-macro, shared foundation, or publishable standalone. A new provider or route is none of these.
+## Test fixtures and cases
 
-Adding a crate fails crates/core/tests/workspace_crate_allowlist.rs until you update its allowlist and this file — intentional.
+Use [`#[rstest]`](https://docs.rs/rstest/latest/rstest/attr.rstest.html) for new and updated tests and [`#[fixture]`](https://docs.rs/rstest/latest/rstest/attr.fixture.html) for reusable setup, injected through typed test arguments. Express input variations as named `#[case::name(...)]` cases instead of loops or duplicated tests so each failure identifies its case. Keep behavior assertions in the test body and fixtures focused on setup. Use the workspace `rstest` dependency
 
-## Style
-
-All Rust in `litellm-rust/` follows the official Rust Style Guide:
-https://doc.rust-lang.org/style-guide/
-
-`rustfmt` implements its formatting by default, so run `cargo fmt` before committing; CI gates every PR on `cargo fmt --check`. Do not hand-format against rustfmt or add a `rustfmt.toml` that diverges from the default style.
-
-Beyond formatting, follow the guide's naming and idiom conventions rustfmt cannot auto-apply: `snake_case` items/functions/modules, `UpperCamelCase` types/traits/variants, `SCREAMING_SNAKE_CASE` constants/statics (acronyms as one word, e.g. `HttpClient`), and the import grouping and item ordering it prescribes. See CLAUDE.md for the detailed version.
+- Never loop over inputs (`for`, `.iter().for_each`, `.all`) inside a test body. Give each input its own `#[case::name(...)]`, or use `#[values(...)]` for a cross product
+- Exception: a test pinning a Rust table against a repo-owned data file (for example `include_str!` of a JSON config) may iterate that file's entries

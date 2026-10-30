@@ -14,11 +14,16 @@ Works across multiple proxy instances via DualCache (in-memory + Redis).
 Follows the same pattern as max_iterations_limiter.py.
 """
 
+import logging
 import os
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import ConfigDict, TypeAdapter
+
 from litellm import DualCache
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.redis_cache import log_redis_failure
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -31,6 +36,14 @@ if TYPE_CHECKING:
     InternalUsageCache = _InternalUsageCache
 else:
     InternalUsageCache = Any
+
+
+_CACHE_AMOUNT_ADAPTER: Final[TypeAdapter[str | bytes | int | float]] = TypeAdapter(
+    str | bytes | int | float, config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
+_OPTIONAL_CACHE_AMOUNT_ADAPTER: Final[TypeAdapter[str | bytes | int | float | None]] = TypeAdapter(
+    str | bytes | int | float | None, config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 
 # Redis Lua script for atomic float increment with TTL.
@@ -81,6 +94,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         else:
             self.increment_script = None
 
+    @with_service_target("session_budgets")
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -125,7 +139,8 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
 
         return None
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    @with_service_target("session_budgets")
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         """
         After a successful LLM call, increment the session spend by the response cost.
         """
@@ -206,53 +221,67 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
     def _make_cache_key(self, session_id: str) -> str:
         return f"{{session_budget:{session_id}}}:spend"
 
+    @with_service_target("session_budgets")
     async def _get_current_spend(self, cache_key: str) -> float:
         """Read current accumulated spend for a session."""
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
             try:
-                result = await self.internal_usage_cache.dual_cache.redis_cache.async_get_cache(key=cache_key)
-                if result is not None:
-                    return float(result)
+                redis_result: Final[str | bytes | int | float | None] = _OPTIONAL_CACHE_AMOUNT_ADAPTER.validate_python(
+                    await self.internal_usage_cache.dual_cache.redis_cache.async_get_cache(key=cache_key)
+                )
+                if redis_result is not None:
+                    return float(redis_result)
                 return 0.0
             except Exception as e:
-                verbose_proxy_logger.warning(
-                    "MaxBudgetPerSessionHandler: Redis GET failed, falling back to in-memory: %s",
-                    str(e),
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "MaxBudgetPerSessionHandler: Redis GET failed, falling back to in-memory",
+                    e,
                 )
 
-        result = await self.internal_usage_cache.async_get_cache(
-            key=cache_key,
-            litellm_parent_otel_span=None,
-            local_only=True,
+        cache_result: Final[str | bytes | int | float | None] = _OPTIONAL_CACHE_AMOUNT_ADAPTER.validate_python(
+            await self.internal_usage_cache.async_get_cache(
+                key=cache_key,
+                litellm_parent_otel_span=None,
+                local_only=True,
+            )
         )
-        if result is not None:
-            return float(result)
+        if cache_result is not None:
+            return float(cache_result)
         return 0.0
 
     async def _increment_spend(self, cache_key: str, amount: float) -> float:
         """Atomically increment the session spend and return the new value."""
         if self.increment_script is not None:
             try:
-                result: Final = await self.increment_script(
-                    keys=[cache_key],
-                    args=[str(amount), self.ttl],
+                script_result: Final[str | bytes | int | float] = _CACHE_AMOUNT_ADAPTER.validate_python(
+                    await self.increment_script(
+                        keys=[cache_key],
+                        args=[str(amount), self.ttl],
+                    )
                 )
-                return float(result)
+                return float(script_result)
             except Exception as e:
-                verbose_proxy_logger.warning(
-                    "MaxBudgetPerSessionHandler: Redis INCRBYFLOAT failed, falling back to in-memory: %s",
-                    str(e),
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "MaxBudgetPerSessionHandler: Redis INCRBYFLOAT failed, falling back to in-memory",
+                    e,
                 )
 
         return await self._in_memory_increment_spend(cache_key, amount)
 
     async def _in_memory_increment_spend(self, cache_key: str, amount: float) -> float:
-        current: Final = await self.internal_usage_cache.async_get_cache(
-            key=cache_key,
-            litellm_parent_otel_span=None,
-            local_only=True,
+        current: Final[str | bytes | int | float | None] = _OPTIONAL_CACHE_AMOUNT_ADAPTER.validate_python(
+            await self.internal_usage_cache.async_get_cache(
+                key=cache_key,
+                litellm_parent_otel_span=None,
+                local_only=True,
+            )
         )
-        new_value: Final = (float(current) if current is not None else 0.0) + amount
+        current_spend: Final = float(current) if current is not None else 0.0
+        new_value: Final = current_spend + amount
         await self.internal_usage_cache.async_set_cache(
             key=cache_key,
             value=new_value,
@@ -261,3 +290,6 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
             local_only=True,
         )
         return new_value
+
+
+PROXY_MaxBudgetPerSessionHandler: Final = _PROXY_MaxBudgetPerSessionHandler

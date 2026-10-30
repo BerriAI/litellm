@@ -5,20 +5,21 @@ For vertex ai, check out the vertex_ai/files/handler.py file.
 """
 
 import time
-from typing import Any, Final, Literal
+from collections.abc import Mapping
+from typing import Final, Literal, TypedDict
 from urllib.parse import urlparse
 
 import httpx
 from openai.types.file_deleted import FileDeleted
+from typing_extensions import ReadOnly, Required
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
 )
-from litellm.types.llms.gemini import GeminiCreateFilesResponseObject
 from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
@@ -31,6 +32,25 @@ from litellm.types.utils import LlmProviders
 from ..common_utils import GeminiModelInfo
 
 
+class _GeminiFileMetadata(TypedDict, total=False):
+    name: ReadOnly[str]
+    uri: ReadOnly[Required[str]]
+    displayName: ReadOnly[Required[str]]
+    mimeType: ReadOnly[str]
+    sizeBytes: ReadOnly[Required[str]]
+    createTime: ReadOnly[Required[str]]
+    updateTime: ReadOnly[str]
+    expirationTime: ReadOnly[str]
+    sha256Hash: ReadOnly[str]
+    state: ReadOnly[str]
+    source: ReadOnly[str]
+    error: ReadOnly[Mapping[str, object]]
+
+
+class _GeminiCreateFileResponse(TypedDict):
+    file: ReadOnly[_GeminiFileMetadata]
+
+
 class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
     def __init__(self):
         pass
@@ -41,14 +61,14 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
 
     def validate_environment(
         self,
-        headers: dict[Any, Any],
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict[Any, Any],
-        litellm_params: dict[Any, Any],
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[Any, Any]:
+    ) -> dict[str, str]:
         """
         Validate environment and add Gemini API key to headers.
         Google AI Studio uses x-goog-api-key header for authentication.
@@ -86,8 +106,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         if not final_api_key:
             raise ValueError("api_key is required")
 
-        url: Final = f"{api_base}/{endpoint}"
-        return url
+        return join_api_base(api_base, endpoint)
 
     def get_supported_openai_params(self, model: str) -> list[OpenAICreateFileRequestOptionalParams]:
         return []
@@ -164,9 +183,9 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         Transform Gemini's file upload response into OpenAI-style FileObject
         """
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final[_GeminiCreateFileResponse] = raw_response.json()
 
-            response_object: Final = GeminiCreateFilesResponseObject(**response_json.get("file", {}))
+            response_object: Final = response_json["file"]
 
             # Extract file information from Gemini response
 
@@ -215,10 +234,11 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
 
         file_part: Final = self._normalize_gemini_file_id(file_id)
 
-        api_base = self.get_api_base(litellm_params.get("api_base")) or "https://generativelanguage.googleapis.com"
-        api_base = api_base.rstrip("/")
+        api_base: Final = (
+            self.get_api_base(litellm_params.get("api_base")) or "https://generativelanguage.googleapis.com"
+        )
 
-        url: Final = f"{api_base}/v1beta/{file_part}"
+        url: Final = join_api_base(api_base, f"v1beta/{file_part}")
 
         # API key is passed via x-goog-api-key header (set in validate_environment)
         return url, {}
@@ -262,7 +282,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         """
         try:
             verbose_logger.debug("Retrieve file response: %s", raw_response.text)
-            response_json: Final = raw_response.json()
+            response_json: Final[_GeminiFileMetadata] = raw_response.json()
             verbose_logger.debug("Response JSON: %s", response_json)
             # Map Gemini state to OpenAI status
             gemini_state: Final = response_json.get("state", "STATE_UNSPECIFIED")
@@ -325,7 +345,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         file_name: Final = self._normalize_gemini_file_id(file_id)
 
         # Construct the delete URL
-        url: Final = f"{api_base}/v1beta/{file_name}"
+        url: Final = join_api_base(api_base, f"v1beta/{file_name}")
 
         # Add API key as header (Google AI Studio uses x-goog-api-key header)
         params: Final[dict] = {}

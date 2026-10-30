@@ -58,6 +58,17 @@ describe("OrganizationDropdown", () => {
     expect(onChange.mock.calls[0][0]).toBe("org-1");
   });
 
+  it("emits null, never the empty string, when the selection is cleared", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<OrganizationDropdown organizations={MOCK_ORGS} value="org-1" onChange={onChange} />);
+
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith(null);
+  });
+
   it("should filter options by organization id", async () => {
     const user = userEvent.setup();
     render(<OrganizationDropdown organizations={MOCK_ORGS} />);

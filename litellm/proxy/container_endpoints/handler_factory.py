@@ -6,11 +6,14 @@ FastAPI route handlers for ALL container file endpoints.
 """
 
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Final
+from types import MappingProxyType
+from typing import Final
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse
+from pydantic import TypeAdapter
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -23,6 +26,8 @@ from litellm.proxy.container_endpoints.ownership import (
     assert_user_can_access_container,
     get_container_forwarding_params,
 )
+
+_UPLOADED_FILE_FIELD: Final = TypeAdapter(object)
 
 
 def _load_endpoints_config() -> dict:
@@ -56,6 +61,7 @@ def _create_handler_for_path_params(
     route_type: str,
     returns_binary: bool = False,
     is_multipart: bool = False,
+    query_param_names: Sequence[str] = (),
 ):
     """
     Dynamically create a handler with the correct path parameter signature.
@@ -114,6 +120,7 @@ def _create_handler_for_path_params(
                 user_api_key_dict=user_api_key_dict,
                 route_type=route_type,
                 path_params={"container_id": container_id},
+                query_param_names=query_param_names,
             )
 
         return handler_container_id
@@ -133,6 +140,7 @@ def _create_handler_for_path_params(
                 user_api_key_dict=user_api_key_dict,
                 route_type=route_type,
                 path_params={"container_id": container_id, "file_id": file_id},
+                query_param_names=query_param_names,
             )
 
         return handler_container_file
@@ -150,6 +158,7 @@ def _create_handler_for_path_params(
                 user_api_key_dict=user_api_key_dict,
                 route_type=route_type,
                 path_params={},
+                query_param_names=query_param_names,
             )
 
         return handler_no_params
@@ -194,7 +203,7 @@ async def _process_binary_request(
         user_api_key_dict=user_api_key_dict,
         custom_llm_provider=custom_llm_provider,
     )
-    data: Final[dict[str, Any]] = {
+    data: Final[dict[str, object]] = {
         "file_id": file_id,
         **(
             await get_container_forwarding_params(
@@ -207,7 +216,7 @@ async def _process_binary_request(
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
 
     try:
-        content: Final = await processor.base_process_llm_request(
+        content: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -254,7 +263,7 @@ async def _process_binary_request(
         )
 
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -268,7 +277,7 @@ async def _process_multipart_upload_request(
     user_api_key_dict: UserAPIKeyAuth,
     route_type: str,
     container_id: str,
-):
+) -> object:
     """Process multipart file upload requests."""
     from litellm.proxy.common_utils.http_parsing_utils import (
         convert_upload_files_to_file_data,
@@ -298,7 +307,7 @@ async def _process_multipart_upload_request(
         raise HTTPException(status_code=400, detail="Missing required 'file' field")
 
     # convert_upload_files_to_file_data returns list of tuples, extract single file
-    file_list: Final = data["file"]
+    file_list: Final = _UPLOADED_FILE_FIELD.validate_python(data["file"])
     if isinstance(file_list, list) and len(file_list) > 0:
         data["file"] = file_list[0]
 
@@ -343,12 +352,16 @@ async def _process_multipart_upload_request(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+
+
+def _declared_query_params(query_params: Mapping[str, str], query_param_names: Sequence[str]) -> Mapping[str, str]:
+    return MappingProxyType({name: query_params[name] for name in query_param_names if name in query_params})
 
 
 async def _process_request(
@@ -357,7 +370,8 @@ async def _process_request(
     user_api_key_dict: UserAPIKeyAuth,
     route_type: str,
     path_params: dict[str, str],
-):
+    query_param_names: Sequence[str] = (),
+) -> object:
     """Common request processing logic."""
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -374,8 +388,9 @@ async def _process_request(
     )
 
     query_params: Final = dict(request.query_params)
-    data: Final[dict[str, Any]] = {
+    data: Final[dict[str, object]] = {
         "query_params": query_params,
+        **_declared_query_params(query_params, query_param_names),
         **path_params,
     }
 
@@ -426,7 +441,7 @@ async def _process_request(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -452,7 +467,13 @@ def register_container_file_endpoints(router: APIRouter) -> None:
         is_multipart = endpoint_config.get("is_multipart", False)
 
         # Create handler with correct signature for path params
-        handler = _create_handler_for_path_params(path_params, route_type, returns_binary, is_multipart)
+        handler = _create_handler_for_path_params(
+            path_params,
+            route_type,
+            returns_binary,
+            is_multipart,
+            query_param_names=endpoint_config.get("query_params", ()),
+        )
 
         # Register routes
         route_method = getattr(router, method)

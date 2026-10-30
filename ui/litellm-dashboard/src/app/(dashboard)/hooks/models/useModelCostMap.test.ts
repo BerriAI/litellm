@@ -141,4 +141,23 @@ describe("useModelCostMap", () => {
     expect(result.current).toHaveProperty("isSuccess");
     expect(result.current).toHaveProperty("error");
   });
+
+  it("fetches the catalog-only map under its own cache entry when catalogOnly is set", async () => {
+    (modelCostMap as any).mockImplementation(async (catalogOnly: boolean) =>
+      catalogOnly ? { catalog: { litellm_provider: "bedrock" } } : mockModelCostData,
+    );
+
+    const { result: live } = renderHook(() => useModelCostMap(), { wrapper });
+    const { result: catalog } = renderHook(() => useModelCostMap(true, true), { wrapper });
+
+    await waitFor(() => {
+      expect(live.current.isSuccess).toBe(true);
+      expect(catalog.current.isSuccess).toBe(true);
+    });
+
+    expect(live.current.data).toEqual(mockModelCostData);
+    expect(catalog.current.data).toEqual({ catalog: { litellm_provider: "bedrock" } });
+    expect(modelCostMap).toHaveBeenCalledWith(false);
+    expect(modelCostMap).toHaveBeenCalledWith(true);
+  });
 });
