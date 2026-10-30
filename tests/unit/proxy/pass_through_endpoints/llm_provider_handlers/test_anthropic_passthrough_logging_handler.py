@@ -1160,16 +1160,18 @@ class TestBuildCompleteStreamingResponseRobustness:
         ids=["text", "tool_use"],
     )
     @pytest.mark.parametrize("non_object_data_line", ["data: 5", "data: []", 'data: "x"', "data: null"])
-    def test_data_line_that_is_not_a_json_object_is_skipped(self, content_events, non_object_data_line):
-        chunks = [
+    def test_data_line_that_is_not_a_json_object_is_skipped(
+        self, content_events: list[str], non_object_data_line: str
+    ) -> None:
+        chunks: Final = [
             'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-sonnet-20240229","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
             *content_events,
             'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}',
             'event: message_stop\ndata: {"type":"message_stop"}',
         ]
-        expected = self._build(chunks)
+        expected: Final = self._build(chunks)
 
-        result = self._build([non_object_data_line, *chunks[:2], non_object_data_line, *chunks[2:]])
+        result: Final = self._build([non_object_data_line, *chunks[:2], non_object_data_line, *chunks[2:]])
 
         assert result is not None
         assert result.choices[0].message == expected.choices[0].message
