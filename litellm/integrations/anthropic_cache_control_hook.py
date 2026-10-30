@@ -208,6 +208,26 @@ def _without_oldest_mark(message: _MessageT, _: int) -> _MessageT:
     )
 
 
+def tool_message_with_single_cache_mark(message: _MessageT) -> _MessageT:
+    if not isinstance(message, dict):
+        return message
+    fields: Final = _CONTENT_PART_ADAPTER.validate_python(message)
+    content: Final = fields.get("content")
+    if fields.get("role") != "tool" or not isinstance(content, list):
+        return message
+    kept_index: Final = None if fields.get("cache_control") is not None else _first_marked_index(content)
+    return cast(  # cast-ok: the same tool message keeping only the mark its single cache point reads
+        _MessageT,
+        {
+            **fields,
+            "content": [
+                block if index == kept_index else block_with_cache_control(block, dropped_cache_control)
+                for index, block in enumerate(_OBJECT_LIST_ADAPTER.validate_python(content))
+            ],
+        },
+    )
+
+
 _BudgetSpend: TypeAlias = Callable[[tuple[int, int], int], tuple[int, int]]
 
 

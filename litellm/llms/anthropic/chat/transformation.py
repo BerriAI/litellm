@@ -2282,7 +2282,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             anthropic_messages_pt,
         )
 
-        drop_params: Final = litellm.drop_params is True or litellm_params.get("drop_params") is True
+        drop_params: Final = drops_unsupported_params(litellm_params.get("drop_params"))
         capped_messages: Final = (
             list(
                 self._messages_within_cache_control_cap(

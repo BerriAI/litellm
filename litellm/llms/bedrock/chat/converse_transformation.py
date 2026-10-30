@@ -25,6 +25,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
+    drops_unsupported_params,
     filter_exceptions_from_params,
     filter_internal_params,
     map_finish_reason,
@@ -2136,12 +2137,16 @@ class AmazonConverseConfig(BaseConfig):
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
     ) -> Sequence[AllMessageValues]:
-        drop_params: Final = litellm.drop_params is True or litellm_params.get("drop_params") is True
-        if not drop_params or "claude" not in capability_model.lower():
+        if not drops_unsupported_params(litellm_params.get("drop_params")) or "claude" not in capability_model.lower():
             return messages
-        from litellm.integrations.anthropic_cache_control_hook import messages_within_cache_control_cap
+        from litellm.integrations.anthropic_cache_control_hook import (
+            messages_within_cache_control_cap,
+            tool_message_with_single_cache_mark,
+        )
 
-        return messages_within_cache_control_cap(messages, optional_params.get("tools"))
+        return messages_within_cache_control_cap(
+            tuple(map(tool_message_with_single_cache_mark, messages)), optional_params.get("tools")
+        )
 
     async def _async_transform_request(
         self,

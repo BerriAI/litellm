@@ -14,7 +14,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     extract_reasoning_content,
     handle_invalid_parallel_tool_calls,
@@ -129,7 +129,12 @@ def _litellm_params_str(litellm_params: Mapping[str, object] | None, key: str) -
 
 
 def _drops_params(litellm_params: Mapping[str, object]) -> bool:
-    return litellm.drop_params is True or litellm_params.get("drop_params") is True
+    return drops_unsupported_params(litellm_params.get("drop_params"))
+
+
+def _names_claude(model: str, litellm_params: Mapping[str, object]) -> bool:
+    base_model: Final = litellm_params.get("base_model")
+    return "claude" in model.lower() or (isinstance(base_model, str) and "claude" in base_model.lower())
 
 
 def _claude_messages_within_cache_control_cap(
@@ -138,7 +143,7 @@ def _claude_messages_within_cache_control_cap(
     tools: Sequence["ChatCompletionToolParam"] | None,
     litellm_params: Mapping[str, object],
 ) -> Sequence[AllMessageValues]:
-    if "claude" not in model.lower() or not _drops_params(litellm_params):
+    if not _names_claude(model, litellm_params) or not _drops_params(litellm_params):
         return messages
     from litellm.integrations.anthropic_cache_control_hook import messages_within_cache_control_cap
 

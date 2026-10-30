@@ -9885,14 +9885,19 @@ def _cached_texts(node: object) -> Iterator[str]:
     ("drop_params", "expected_cached_texts"),
     [
         (True, ["answer 1", "turn 1", "turn 2", "turn 3"]),
+        ("true", ["answer 1", "turn 1", "turn 2", "turn 3"]),
         (False, ["answer 1", "system prompt", "turn 1", "turn 2", "turn 3"]),
     ],
-    ids=["drop_params_keeps_the_newest_four", "without_drop_params_all_five_pass_through"],
+    ids=[
+        "drop_params_keeps_the_newest_four",
+        "string_drop_params_keeps_the_newest_four",
+        "without_drop_params_all_five_pass_through",
+    ],
 )
 def test_claude_request_over_the_cache_control_cap_drops_the_oldest_hints_only_under_drop_params(
     config: AnthropicConfig,
     model: str,
-    drop_params: bool,
+    drop_params: bool | str,
     expected_cached_texts: list[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

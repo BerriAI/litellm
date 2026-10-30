@@ -2775,8 +2775,13 @@ def test_claude_json_schema_stream_split_across_json_tools_keeps_the_non_stream_
     assert [choice.finish_reason for choice in choices if choice.finish_reason] == [answer.finish_reason]
 
 
+@pytest.mark.parametrize(
+    ("model", "base_model"),
+    [("databricks-claude-haiku-5-5", None), ("support-bot-endpoint", "databricks/databricks-claude-haiku-5-5")],
+    ids=["claude_in_the_endpoint_name", "claude_named_only_by_base_model"],
+)
 def test_databricks_claude_request_over_the_cache_control_cap_keeps_the_newest_four_hints_under_drop_params(
-    monkeypatch: pytest.MonkeyPatch,
+    model: str, base_model: str | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     hint: Final = {"type": "ephemeral"}
@@ -2791,10 +2796,10 @@ def test_databricks_claude_request_over_the_cache_control_cap_keeps_the_newest_f
     messages_before: Final = copy.deepcopy(messages)
 
     body: Final = DatabricksConfig().transform_request(
-        model="databricks-claude-haiku-5-5",
+        model=model,
         messages=messages,
         optional_params={},
-        litellm_params={"drop_params": True, "custom_llm_provider": "databricks"},
+        litellm_params={"drop_params": True, "custom_llm_provider": "databricks", "base_model": base_model},
         headers={},
     )
 
