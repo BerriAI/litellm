@@ -16,7 +16,9 @@ from functools import partial
 from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+import respx
 
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
@@ -1799,6 +1801,56 @@ def _connection_logged_through(rate_limits: "ModelRateLimitingCheck", opened_wit
     return connection
 
 
+def _provider_turn_stream(_request: httpx.Request) -> httpx.Response:
+    completed: Final = {
+        "id": "resp_turn",
+        "object": "response",
+        "created_at": 1767271505,
+        "status": "completed",
+        "model": "gpt-5-mini",
+        "output": [],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "usage": {"input_tokens": 5, "output_tokens": _OUTPUT_TOKENS_PER_TURN, "total_tokens": 7},
+    }
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        text="".join(
+            f"event: {kind}\ndata: {json.dumps({'type': kind, 'response': completed})}\n\n"
+            for kind in ("response.created", "response.completed")
+        ),
+    )
+
+
+class _ProviderResponsesSocket:
+    """A provider's native Responses socket that answers each ``response.create`` with a completed turn."""
+
+    def __init__(self) -> None:
+        self.sent: Final[list[dict[str, object]]] = []
+        self._replies: Final[asyncio.Queue[str]] = asyncio.Queue()
+
+    def connect(self, _url: str, **_kwargs: object) -> "_ProviderResponsesSocket":
+        return self
+
+    async def __aenter__(self) -> "_ProviderResponsesSocket":
+        return self
+
+    async def __aexit__(self, *_exc_info: object) -> None:
+        return None
+
+    async def send(self, message: str) -> None:
+        self.sent.append(json.loads(message))
+        await self._replies.put(_turn_completed())
+
+    async def recv(self, decode: bool = False) -> str:
+        return await self._replies.get()
+
+    async def close(self) -> None:
+        return None
+
+
 class _TwoOutputTokenTurns(CustomLLM):
     def __init__(self, failing_turns: frozenset[int] = frozenset()) -> None:
         super().__init__()
@@ -1827,19 +1879,33 @@ async def _run_managed_relay(
     opened_with: Mapping[str, object],
 ) -> _ClientSocket:
     import litellm
+
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "ws-turn-llm", "custom_handler": provider}])
+    return await _relay_turns_to(monkeypatch, "ws-turn-llm/turns", rate_limits, frames, turn_admission, opened_with)
+
+
+async def _relay_turns_to(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    rate_limits: "ModelRateLimitingCheck",
+    frames: tuple[str, ...],
+    turn_admission: "ResponsesWsTurnAdmission | None",
+    opened_with: Mapping[str, object],
+    **connection: object,
+) -> _ClientSocket:
+    import litellm
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
     from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler, drain_logging_tasks
 
-    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "ws-turn-llm", "custom_handler": provider}])
     monkeypatch.setattr(litellm, "callbacks", [rate_limits])
     first, *later = frames
     websocket: Final = _ClientSocket(*later)
     handler: Final = ManagedResponsesWebSocketHandler(
         websocket=websocket,
-        model="ws-turn-llm/turns",
+        model=model,
         logging_obj=Logging(
-            model="ws-turn-llm/turns",
+            model=model,
             messages=[],
             stream=True,
             call_type="aresponses",
@@ -1850,7 +1916,7 @@ async def _run_managed_relay(
         litellm_metadata={"user_api_key_hash": "k1", **opened_with},
         first_message=first,
         turn_admission=turn_admission,
-        metadata=dict(opened_with),
+        **connection,
     )
 
     await handler.run()
@@ -2043,6 +2109,78 @@ class TestWebSocketTurnAdmission:
             await dual_cache.async_get_cache(key=_TURNED_ON)
             == _OTHER_USAGE + first_turn_tokens + 2 * _OUTPUT_TOKENS_PER_TURN
         )
+
+    @pytest.mark.asyncio
+    async def test_managed_relay_sends_the_provider_only_the_metadata_each_turn_carries(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ) -> None:
+        import litellm
+        from litellm.caching.dual_cache import DualCache
+        from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        _turns_finish_at(monkeypatch, _TURNED_AT)
+        provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=_provider_turn_stream)
+        client_metadata: Final = {"session": "abc", "team": "search"}
+        dual_cache: Final = DualCache()
+
+        await _relay_turns_to(
+            monkeypatch,
+            "openai/gpt-5-mini",
+            ModelRateLimitingCheck(dual_cache),
+            tuple(
+                json.dumps({"type": "response.create", "input": word, "metadata": client_metadata})
+                for word in ("one", "two")
+            ),
+            _later_turns_admitted_through(dual_cache),
+            await _socket_opened_on(dual_cache),
+            api_key="sk-fake",
+        )
+
+        assert [json.loads(call.request.read()).get("metadata") for call in provider.calls] == [
+            client_metadata,
+            client_metadata,
+        ]
+        assert await dual_cache.async_get_cache(key=_TURNED_ON) == _OTHER_USAGE + 2 * _OUTPUT_TOKENS_PER_TURN
+
+    @pytest.mark.asyncio
+    async def test_native_relay_sends_the_provider_only_the_metadata_the_socket_opened_with(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import patch
+
+        from litellm import Router
+
+        monkeypatch.setenv("LITELLM_RUST", "false")
+        provider: Final = _ProviderResponsesSocket()
+        client_metadata: Final = {"session": "abc", "team": "search"}
+        first, second, _ = _turn_frames()
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "ws-io",
+                    "litellm_params": {
+                        "model": "openai/gpt-5-mini",
+                        "api_key": "sk-fake",
+                        "itpm": 40_000,
+                        "otpm": 4096,
+                    },
+                    "model_info": {"id": "ws-dep"},
+                }
+            ],
+            optional_pre_call_checks=["enforce_model_rate_limits"],
+        )
+
+        with patch("websockets.connect", provider.connect):
+            await router._aresponses_websocket(
+                model="ws-io",
+                websocket=_ClientSocket(second),
+                first_message=first,
+                metadata=dict(client_metadata),
+            )
+
+        assert [frame.get("metadata") for frame in provider.sent] == [client_metadata, client_metadata]
 
     @pytest.mark.asyncio
     async def test_managed_relay_skips_a_later_turn_the_deployment_refuses(self, monkeypatch: pytest.MonkeyPatch):

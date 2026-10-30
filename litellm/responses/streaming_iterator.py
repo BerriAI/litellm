@@ -3592,13 +3592,11 @@ class ManagedResponsesWebSocketHandler:
             )
         self._update_proxy_request(call_kwargs, requested_model or self.model_group or model)
         call_kwargs.update(self.extra_kwargs)
-        call_kwargs.update(
-            {
-                channel: {**bucket, **verdict.reservation}
-                for channel, bucket in call_kwargs.items()
-                if channel in _PER_TURN_METADATA_KEYS and _is_json_object(bucket)
-            }
-        )
+        turn_litellm_metadata: Final = call_kwargs.get("litellm_metadata")
+        call_kwargs["litellm_metadata"] = {
+            **(turn_litellm_metadata if _is_json_object(turn_litellm_metadata) else {}),
+            **verdict.reservation,
+        }
 
         try:
             terminal_event: Final = await self._stream_and_forward(model, call_kwargs)

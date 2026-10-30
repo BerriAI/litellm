@@ -4,13 +4,15 @@ import gc
 import json
 import os
 import weakref
-from collections.abc import Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from datetime import datetime, timezone
 from types import MethodType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm import Router
@@ -900,6 +902,169 @@ async def test_responses_websocket_turn_refused_for_tokens_leaves_the_daily_requ
 
     with pytest.raises(litellm.RateLimitError, match="RPD"):
         await admit_turn()
+
+
+_PROVIDER_RESPONSE: Final = {
+    "id": "resp_io",
+    "object": "response",
+    "created_at": 1767268830,
+    "status": "completed",
+    "model": "ws-io-unpriced",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_io",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Done.", "annotations": []}],
+        }
+    ],
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+    "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client_metadata", [None, {"session": "abc", "team": "search"}], ids=["without_metadata", "with_metadata"]
+)
+async def test_responses_call_sends_the_provider_only_the_client_metadata_and_settles_deployment_io_tokens(
+    client_metadata: Mapping[str, str] | None,
+    router_minute_pinned: datetime,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+):
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.responses.streaming_iterator import drain_logging_tasks
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_PROVIDER_RESPONSE)
+    )
+    router: Final = _io_limited_router("itpm", otpm=10_000)
+
+    await router.aresponses(
+        model="ws-io",
+        input="hi",
+        max_output_tokens=50,
+        **({} if client_metadata is None else {"metadata": dict(client_metadata)}),
+    )
+    await drain_logging_tasks()
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+
+    assert [json.loads(call.request.read()).get("metadata") for call in provider.calls] == [client_metadata]
+    assert [
+        await router.cache.async_get_cache(key=_minutes_counter_key(kind, router_minute_pinned))
+        for kind in ("itpm", "otpm")
+    ] == [10, 5]
+
+
+@pytest.mark.parametrize(
+    "client_metadata", [None, {"session": "abc", "team": "search"}], ids=["without_metadata", "with_metadata"]
+)
+def test_sync_responses_call_sends_the_provider_only_the_client_metadata(
+    client_metadata: Mapping[str, str] | None, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+):
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_PROVIDER_RESPONSE)
+    )
+
+    _io_limited_router("itpm", otpm=10_000).responses(
+        model="ws-io",
+        input="hi",
+        max_output_tokens=50,
+        **({} if client_metadata is None else {"metadata": dict(client_metadata)}),
+    )
+
+    assert [json.loads(call.request.read()).get("metadata") for call in provider.calls] == [client_metadata]
+
+
+_ANTHROPIC_PROVIDER_RESPONSE: Final = {
+    "id": "msg_io",
+    "type": "message",
+    "role": "assistant",
+    "model": "ws-io-unpriced",
+    "content": [{"type": "text", "text": "Done."}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 10, "output_tokens": 5},
+}
+
+
+async def _responses_call(router: Router) -> object:
+    return await router.aresponses(model="ws-io", input="hi", max_output_tokens=50)
+
+
+async def _messages_call(router: Router) -> object:
+    return await router.aanthropic_messages(model="ws-io", messages=[{"role": "user", "content": "hi"}], max_tokens=50)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "provider_url", "provider_response", "call"),
+    [
+        pytest.param(
+            "openai/ws-io-unpriced",
+            "https://api.openai.com/v1/responses",
+            _PROVIDER_RESPONSE,
+            _responses_call,
+            id="responses",
+        ),
+        pytest.param(
+            "anthropic/ws-io-unpriced",
+            "https://api.anthropic.com/v1/messages",
+            _ANTHROPIC_PROVIDER_RESPONSE,
+            _messages_call,
+            id="messages",
+        ),
+    ],
+)
+async def test_retried_call_settles_deployment_io_tokens_to_the_successful_attempt_s_tokens(
+    model: str,
+    provider_url: str,
+    provider_response: Mapping[str, object],
+    call: Callable[[Router], Awaitable[object]],
+    router_minute_pinned: datetime,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+):
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.responses.streaming_iterator import drain_logging_tasks
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    provider: Final = respx_mock.post(provider_url).mock(
+        side_effect=[
+            httpx.Response(500, json={"error": {"message": "upstream failed", "type": "server_error"}}),
+            httpx.Response(200, json=provider_response),
+        ]
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "ws-io",
+                "litellm_params": {"model": model, "api_key": "sk-fake", "itpm": 10_000, "otpm": 10_000},
+                "model_info": {"id": "ws-io-dep"},
+            }
+        ],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+        num_retries=1,
+        retry_after=0,
+    )
+
+    await call(router)
+    await drain_logging_tasks()
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+
+    assert provider.call_count == 2
+    assert [
+        await router.cache.async_get_cache(key=_minutes_counter_key(kind, router_minute_pinned, model))
+        for kind in ("itpm", "otpm")
+    ] == [10, 5]
 
 
 @pytest.mark.asyncio

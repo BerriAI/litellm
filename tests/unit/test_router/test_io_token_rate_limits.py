@@ -3,14 +3,14 @@ Tests for separate ITPM/OTPM deployment rate limits (enforce_model_rate_limits).
 """
 
 import asyncio
-import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fakeredis import TcpFakeServer
+from fakeredis import FakeRedis, FakeServer
+from fakeredis.aioredis import FakeRedis as FakeAsyncRedis
 
 import litellm
 from litellm import Router
@@ -100,7 +100,7 @@ class TestModelRateLimitingCheckIOTokens:
             "max_tokens": 10,
             "metadata": {},
         }
-        set_io_token_rate_limit_request_kwargs(request_kwargs)
+        set_io_token_rate_limit_request_kwargs(request_kwargs, metadata_channel="metadata")
         await check.async_pre_call_check(deployment)
 
         minute = get_utc_datetime().strftime("%H-%M")
@@ -158,7 +158,8 @@ class TestModelRateLimitingCheckIOTokens:
                 ],
                 "max_tokens": 10,
                 "metadata": {},
-            }
+            },
+            metadata_channel="metadata",
         )
 
         with pytest.raises(litellm.RateLimitError) as exc_info:
@@ -188,7 +189,8 @@ class TestModelRateLimitingCheckIOTokens:
                 "messages": [{"role": "user", "content": "hi"}],
                 "max_tokens": max_tokens,
                 "metadata": {},
-            }
+            },
+            metadata_channel="metadata",
         )
 
         async def _attempt():
@@ -240,7 +242,8 @@ class TestModelRateLimitingCheckIOTokens:
             {
                 "max_tokens": 5,
                 "metadata": {},
-            }
+            },
+            metadata_channel="metadata",
         )
 
         async def _attempt():
@@ -305,7 +308,7 @@ class TestModelRateLimitingCheckIOTokens:
         }
 
         request_kwargs = {"max_tokens": 5, "metadata": {}}
-        set_io_token_rate_limit_request_kwargs(request_kwargs)
+        set_io_token_rate_limit_request_kwargs(request_kwargs, metadata_channel="metadata")
         await check.async_pre_call_check(deployment)
 
         minute = get_utc_datetime().strftime("%H-%M")
@@ -348,15 +351,15 @@ class TestModelRateLimitingCheckIOTokens:
             "model_name": "opus",
         }
         request_kwargs = {"max_tokens": 5, "metadata": {}}
-        set_io_token_rate_limit_request_kwargs(request_kwargs)
+        set_io_token_rate_limit_request_kwargs(request_kwargs, metadata_channel="metadata")
         await check.async_pre_call_check(deployment)
 
         # Second zero-estimate call still fits within the itpm=2 limit.
-        set_io_token_rate_limit_request_kwargs({"max_tokens": 5, "metadata": {}})
+        set_io_token_rate_limit_request_kwargs({"max_tokens": 5, "metadata": {}}, metadata_channel="metadata")
         await check.async_pre_call_check(deployment)
 
         # A third exceeds the limit and is rejected.
-        set_io_token_rate_limit_request_kwargs({"max_tokens": 5, "metadata": {}})
+        set_io_token_rate_limit_request_kwargs({"max_tokens": 5, "metadata": {}}, metadata_channel="metadata")
         with pytest.raises(litellm.RateLimitError):
             await check.async_pre_call_check(deployment)
 
@@ -377,7 +380,7 @@ class TestModelRateLimitingCheckIOTokens:
             "max_tokens": 0,
             "metadata": {},
         }
-        set_io_token_rate_limit_request_kwargs(zero_output_kwargs)
+        set_io_token_rate_limit_request_kwargs(zero_output_kwargs, metadata_channel="metadata")
         await check.async_pre_call_check(deployment)
 
         zero_output_otpm_key = zero_output_kwargs["metadata"][OTPM_CACHE_KEY]
@@ -389,7 +392,7 @@ class TestModelRateLimitingCheckIOTokens:
             "max_tokens": 5,
             "metadata": {},
         }
-        set_io_token_rate_limit_request_kwargs(normal_output_kwargs)
+        set_io_token_rate_limit_request_kwargs(normal_output_kwargs, metadata_channel="metadata")
         await check.async_pre_call_check(deployment)
 
         normal_output_otpm_key = normal_output_kwargs["metadata"][OTPM_CACHE_KEY]
@@ -414,7 +417,7 @@ class TestModelRateLimitingCheckIOTokens:
             "max_tokens": 10,
             "metadata": {},
         }
-        set_io_token_rate_limit_request_kwargs(request_kwargs)
+        set_io_token_rate_limit_request_kwargs(request_kwargs, metadata_channel="metadata")
         check.pre_call_check(deployment)
 
         minute = get_utc_datetime().strftime("%H-%M")
@@ -550,7 +553,7 @@ class TestModelRateLimitingCheckIOTokens:
 
         # The retry proceeds to stash deployment B's own reservation on the
         # same dict; it starts clean, unaffected by A's cleared sentinels.
-        set_io_token_rate_limit_request_kwargs(shared_kwargs)
+        set_io_token_rate_limit_request_kwargs(shared_kwargs, metadata_channel="metadata")
         itpm_key_b = f"global_router:io-retry-b:bedrock_mantle/test-b:itpm:{minute}"
         shared_kwargs["metadata"][ITPM_RESERVED_KEY] = 4
         shared_kwargs["metadata"][ITPM_CACHE_KEY] = itpm_key_b
@@ -566,7 +569,7 @@ class TestModelRateLimitingCheckIOTokens:
             "litellm_metadata": {OTPM_RESERVED_KEY: 7},
             "litellm_params": {"metadata": {OTPM_CACHE_KEY: "attacker:key:otpm:00-00"}},
         }
-        set_io_token_rate_limit_request_kwargs(forged)
+        set_io_token_rate_limit_request_kwargs(forged, metadata_channel="metadata")
         stored = get_io_token_rate_limit_request_kwargs()
 
         assert ITPM_RESERVED_KEY not in stored["metadata"]
@@ -592,7 +595,7 @@ class TestModelRateLimitingCheckIOTokens:
             },
         }
         # The router sanitizes the request kwargs before the call runs.
-        set_io_token_rate_limit_request_kwargs(kwargs)
+        set_io_token_rate_limit_request_kwargs(kwargs, metadata_channel="metadata")
         response = ModelResponse(
             choices=[{"message": {"role": "assistant", "content": "ok"}, "index": 0, "finish_reason": "stop"}],
             usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
@@ -627,7 +630,8 @@ class TestModelRateLimitingCheckIOTokens:
                 "messages": [{"role": "user", "content": "hello world"}],
                 "max_tokens": 5,
                 "metadata": {},
-            }
+            },
+            metadata_channel="metadata",
         )
 
         with pytest.raises(RuntimeError):
@@ -692,7 +696,7 @@ class TestModelRateLimitingCheckIOTokens:
             "max_tokens": 5,
             "metadata": {},
         }
-        set_io_token_rate_limit_request_kwargs(request_kwargs)
+        set_io_token_rate_limit_request_kwargs(request_kwargs, metadata_channel="metadata")
 
         result = await async_io_token_pre_call_check(dual_cache, deployment)
 
@@ -863,7 +867,7 @@ class TestModelRateLimitingCheckIOTokens:
             "max_tokens": 5,
             "metadata": {},
         }
-        set_io_token_rate_limit_request_kwargs(request_kwargs)
+        set_io_token_rate_limit_request_kwargs(request_kwargs, metadata_channel="metadata")
 
         with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
             with pytest.raises(litellm.RateLimitError):
@@ -1004,15 +1008,15 @@ class TestContextSlotRetention:
             "messages": [{"role": "user", "content": "x" * 1000}],
             "metadata": {ITPM_RESERVED_KEY: 999, ITPM_CACHE_KEY: "forged"},
         }
-        set_io_token_rate_limit_request_kwargs(kwargs, store_in_context=False)
+        set_io_token_rate_limit_request_kwargs(kwargs, store_in_context=False, metadata_channel="metadata")
         assert get_io_token_rate_limit_request_kwargs() is None
         assert ITPM_RESERVED_KEY not in kwargs["metadata"]
         assert ITPM_CACHE_KEY not in kwargs["metadata"]
 
-        set_io_token_rate_limit_request_kwargs(kwargs, store_in_context=True)
+        set_io_token_rate_limit_request_kwargs(kwargs, store_in_context=True, metadata_channel="metadata")
         assert get_io_token_rate_limit_request_kwargs() is kwargs
 
-        set_io_token_rate_limit_request_kwargs(kwargs, store_in_context=False)
+        set_io_token_rate_limit_request_kwargs(kwargs, store_in_context=False, metadata_channel="metadata")
         assert get_io_token_rate_limit_request_kwargs() is None
 
     @pytest.mark.asyncio
@@ -1025,7 +1029,7 @@ class TestContextSlotRetention:
                 }
             ]
         )
-        set_io_token_rate_limit_request_kwargs(None)
+        set_io_token_rate_limit_request_kwargs(None, metadata_channel="metadata")
         kwargs = {"messages": [{"role": "user", "content": "hello"}], "metadata": {}}
         deployment = router.get_deployment_by_model_group_name("plain")
         assert deployment is not None
@@ -1043,7 +1047,7 @@ class TestContextSlotRetention:
             ],
             optional_pre_call_checks=["enforce_model_rate_limits"],
         )
-        set_io_token_rate_limit_request_kwargs(None)
+        set_io_token_rate_limit_request_kwargs(None, metadata_channel="metadata")
         kwargs = {"messages": [{"role": "user", "content": "hello"}], "metadata": {}}
         deployment = router.get_deployment_by_model_group_name("limited")
         assert deployment is not None
@@ -1060,7 +1064,7 @@ async def test_custom_azure_deployment_name_reserves_itpm_on_its_base_models_tok
             "max_tokens": 5,
             "metadata": metadata,
         }
-        set_io_token_rate_limit_request_kwargs(request_kwargs)
+        set_io_token_rate_limit_request_kwargs(request_kwargs, metadata_channel="metadata")
         await async_io_token_pre_call_check(DualCache(), deployment)
         return metadata[ITPM_RESERVED_KEY]
 
@@ -1211,7 +1215,7 @@ async def test_a_socket_open_reserves_nothing_and_its_first_turn_counts_its_actu
     dual_cache: Final = DualCache()
     await dual_cache.async_increment_cache(key=_turn_key(kind), value=used_by_others, ttl=60)
     socket_open: Final[dict[str, object]] = {"metadata": {}}
-    set_io_token_rate_limit_request_kwargs(socket_open, opens_responses_socket=True)
+    set_io_token_rate_limit_request_kwargs(socket_open, opens_responses_socket=True, metadata_channel="metadata")
 
     assert await async_io_token_pre_call_check(dual_cache, _turn_deployment(kind)) == _turn_deployment(kind)
     assert await dual_cache.async_get_cache(key=_turn_key(kind)) == used_by_others
@@ -1225,30 +1229,23 @@ async def test_a_socket_open_reserves_nothing_and_its_first_turn_counts_its_actu
     assert await dual_cache.async_get_cache(key=_turn_key(kind)) == used_by_others + _ACTUAL_TOKENS[kind]
 
 
-@pytest.fixture
-def shared_redis() -> Iterator[RedisCache]:
-    server: Final = TcpFakeServer(("127.0.0.1", 0), server_type="redis")
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
-        yield RedisCache(host="127.0.0.1", port=server.server_address[1])
-    finally:
-        server.shutdown()
-        server.server_close()
+class _RedisCacheOnFakeServer(RedisCache):
+    def __init__(self, server: FakeServer) -> None:
+        super().__init__(host="io-token-turn-redis", connection_pool=FakeRedis(server=server).connection_pool)
+        self._fake_async_client: Final = FakeAsyncRedis(server=server)
 
-
-@pytest.fixture
-def unreachable_redis() -> RedisCache:
-    server: Final = TcpFakeServer(("127.0.0.1", 0), server_type="redis")
-    server.server_close()
-    return RedisCache(host="127.0.0.1", port=server.server_address[1])
+    def init_async_client(self) -> FakeAsyncRedis:
+        return self._fake_async_client
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["itpm", "otpm"])
 async def test_a_turn_is_refused_on_this_instance_s_count_when_reading_the_shared_counter_fails(
-    kind: str, unreachable_redis: RedisCache
+    kind: str,
 ) -> None:
-    dual_cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=unreachable_redis)
+    server: Final = FakeServer()
+    dual_cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=_RedisCacheOnFakeServer(server))
+    server.connected = False
     await dual_cache.in_memory_cache.async_increment(key=_turn_key(kind), value=100)
 
     with pytest.raises(litellm.RateLimitError, match=f"{kind.upper()} limit=100, current usage=100"):
@@ -1284,11 +1281,12 @@ async def test_a_turn_finishing_in_the_next_minute_counts_its_actual_tokens_on_t
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["itpm", "otpm"])
 async def test_a_turn_is_admitted_once_the_shared_counter_drops_below_the_limit_this_instance_last_read(
-    kind: str, shared_redis: RedisCache
+    kind: str,
 ) -> None:
-    dual_cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=shared_redis)
+    redis_cache: Final = _RedisCacheOnFakeServer(FakeServer())
+    dual_cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache)
     await dual_cache.in_memory_cache.async_increment(key=_turn_key(kind), value=100)
-    await shared_redis.async_increment(key=_turn_key(kind), value=99)
+    await redis_cache.async_increment(key=_turn_key(kind), value=99)
 
     admitted: Final = await async_admit_io_token_turn(dual_cache, _turn_deployment(kind), _TURN_AT)
 

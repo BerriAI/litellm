@@ -5205,6 +5205,7 @@ class Router(DeprecatedRouterMembers):
             kwargs,
             store_in_context=deployment_has_io_token_limits(deployment),
             opens_responses_socket=opens_responses_socket,
+            metadata_channel=metadata_variable_name,
         )
 
         kwargs[metadata_variable_name].setdefault(

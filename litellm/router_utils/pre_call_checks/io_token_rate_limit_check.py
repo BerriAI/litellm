@@ -53,6 +53,7 @@ RoutingArgsTTL: Final = 60
 class _IoTokenRateLimitRequest:
     kwargs: dict[str, object] | None
     opens_responses_socket: bool
+    metadata_channel: str
 
 
 _io_token_rate_limit_request: Final[contextvars.ContextVar[_IoTokenRateLimitRequest | None]] = contextvars.ContextVar(
@@ -62,7 +63,11 @@ _io_token_rate_limit_request: Final[contextvars.ContextVar[_IoTokenRateLimitRequ
 
 
 def set_io_token_rate_limit_request_kwargs(
-    kwargs: dict[str, object] | None, store_in_context: bool = True, *, opens_responses_socket: bool = False
+    kwargs: dict[str, object] | None,
+    store_in_context: bool = True,
+    *,
+    opens_responses_socket: bool = False,
+    metadata_channel: str,
 ) -> None:
     # The reservation sentinels are server-only, but `metadata` is caller
     # controlled on proxy requests. Strip any client-supplied copies here (this
@@ -78,7 +83,7 @@ def set_io_token_rate_limit_request_kwargs(
     # kwargs; overwriting (rather than skipping) also releases a previous
     # request's kwargs when a context is reused.
     _io_token_rate_limit_request.set(
-        _IoTokenRateLimitRequest(kwargs, opens_responses_socket) if store_in_context else None
+        _IoTokenRateLimitRequest(kwargs, opens_responses_socket, metadata_channel) if store_in_context else None
     )
 
 
@@ -295,15 +300,10 @@ def _reservation(
     )
 
 
-def _stash_reservation_in_metadata(request_kwargs: dict[str, object] | None, reservation: Mapping[str, object]) -> None:
-    if not request_kwargs:
-        return
-    for channel in ("metadata", "litellm_metadata"):
-        existing = request_kwargs.get(channel)
-        if isinstance(existing, dict):
-            existing.update(reservation)
-        elif channel == "metadata":
-            request_kwargs[channel] = dict(reservation)
+def _stash_reservation_in_metadata(request: _IoTokenRateLimitRequest | None, reservation: Mapping[str, object]) -> None:
+    metadata: Final = None if request is None or not request.kwargs else request.kwargs.get(request.metadata_channel)
+    if isinstance(metadata, dict):
+        metadata.update(reservation)
 
 
 def _extract_reservation(reservation: Mapping[str, int | str | None]) -> tuple[int, int, str | None, str | None]:
@@ -332,7 +332,9 @@ def _reservation_channels(kwargs: Mapping[str, object] | None) -> tuple[object, 
         return ()
     top_level: Final = (kwargs.get("metadata"), kwargs.get("litellm_metadata"))
     litellm_params: Final = _as_mutable_mapping(kwargs.get("litellm_params"))
-    from_params: Final = () if litellm_params is None else (litellm_params.get("metadata"),)
+    from_params: Final = (
+        () if litellm_params is None else (litellm_params.get("metadata"), litellm_params.get("litellm_metadata"))
+    )
     standard_logging_object: Final = _as_mutable_mapping(kwargs.get("standard_logging_object"))
     from_logging_object: Final = () if standard_logging_object is None else (standard_logging_object.get("metadata"),)
     return top_level + from_params + from_logging_object
@@ -453,7 +455,8 @@ def io_token_pre_call_check(
     if itpm_limit is None and otpm_limit is None:
         return deployment
 
-    request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
+    request: Final = _io_token_rate_limit_request.get()
+    request_kwargs: Final = None if request is None else request.kwargs
     _model: Final = _tokenizer_model(deployment)
     estimated_input: Final = _estimate_input_tokens(request_kwargs, model=_model)
     max_tokens: Final = _resolve_max_tokens(request_kwargs, deployment)
@@ -498,7 +501,7 @@ def io_token_pre_call_check(
             raise
 
     _stash_reservation_in_metadata(
-        request_kwargs,
+        request,
         _reservation(
             itpm_reserved,
             otpm_reserved,
@@ -523,7 +526,7 @@ async def async_io_token_pre_call_check(
     request_kwargs: Final = None if request is None else request.kwargs
     if request is not None and request.opens_responses_socket:
         _stash_reservation_in_metadata(
-            request_kwargs,
+            request,
             await async_admit_io_token_turn(dual_cache, deployment, get_utc_datetime(), parent_otel_span),
         )
         return deployment
@@ -577,7 +580,7 @@ async def async_io_token_pre_call_check(
             raise
 
     _stash_reservation_in_metadata(
-        request_kwargs,
+        request,
         _reservation(
             itpm_reserved,
             otpm_reserved,
