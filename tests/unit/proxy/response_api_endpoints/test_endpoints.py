@@ -12,6 +12,8 @@ from collections.abc import Callable, Mapping
 from typing import Any, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 import httpx
 import pytest
 import respx
@@ -912,7 +914,7 @@ def _configured_deployment_router(fetched: ResponsesAPIResponse) -> MagicMock:
         )
     )
     router.aget_responses = AsyncMock(return_value=fetched)
-    return router
+    return route_entry_points_to_stubs(router)
 
 
 def _background_response(response_id: str, status: str, input_tokens: int) -> ResponsesAPIResponse:
@@ -3936,7 +3938,7 @@ class TestCursorInputArmFlattening:
 
 class TestChatCompletionsBodyDetection:
     def test_routing_matrix(self):
-        from litellm.proxy.response_api_endpoints.endpoints import _is_chat_completions_body
+        from litellm.proxy.litellm_pre_call_utils import is_chat_completions_body as _is_chat_completions_body
 
         assert _is_chat_completions_body({"messages": [{"role": "user", "content": "hi"}]}) is True
         assert _is_chat_completions_body({"messages": [{"role": "user", "content": "hi"}], "input": []}) is True
@@ -4128,7 +4130,7 @@ class TestResolveCursorModelVariant:
 
 
 def _router_serving_only(base_model: str) -> MagicMock:
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.model_names = set()
     mock_router.model_group_alias = {}
     mock_router.team_public_model_names = frozenset()

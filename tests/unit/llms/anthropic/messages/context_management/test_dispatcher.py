@@ -5,6 +5,7 @@ Unit tests for the context_management polyfill dispatcher.
 from litellm.llms.anthropic.messages.context_management import (
     apply_context_management,
 )
+from litellm.llms.anthropic.messages.convertible_blocks import drop_non_string_tool_result_texts
 
 MODEL = "xai/grok-4"
 
@@ -160,3 +161,57 @@ async def test_sync_editor_counts_tokens_off_the_event_loop():
 
     assert result.messages == messages
     assert_loop_stayed_free(took, lags)
+
+
+def _history_with_null_text_beside_a_short_first_result():
+    return [
+        {"role": "user", "content": "Hi"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "t0", "name": "f", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "t0",
+                    "content": [{"type": "text", "text": "ok"}, {"type": "text", "text": None}],
+                }
+            ],
+        },
+        *_history_with_two_tool_pairs()[1:],
+    ]
+
+
+async def test_drop_invalid_edits_clears_as_if_malformed_tool_result_text_was_never_sent():
+    spec = {
+        "edits": [
+            {
+                "type": "clear_tool_uses_20250919",
+                "trigger": {"type": "tool_uses", "value": 2},
+                "keep": {"type": "tool_uses", "value": 1},
+            }
+        ]
+    }
+    history = _history_with_null_text_beside_a_short_first_result()
+
+    from_raw = await apply_context_management(
+        model=MODEL,
+        messages=history,
+        tools=None,
+        system=None,
+        context_management_spec=spec,
+        drop_invalid_edits=True,
+    )
+    from_sent = await apply_context_management(
+        model=MODEL,
+        messages=list(drop_non_string_tool_result_texts(history, True)),
+        tools=None,
+        system=None,
+        context_management_spec=spec,
+        drop_invalid_edits=True,
+    )
+
+    assert from_raw.applied_edits == from_sent.applied_edits
+    assert from_raw.messages == from_sent.messages
