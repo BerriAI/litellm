@@ -3447,7 +3447,7 @@ async def test_auth_builder_single_team_fallback_membership_outage_raises_instea
     get_team_object succeeds but the membership read hits a database outage: the
     outage propagates (auth maps it to 503) instead of the team being dropped.
     """
-    from litellm.proxy.auth.auth_exception_handler import auth_failure_as_proxy_exception
+    from litellm.proxy.auth.auth_exception_handler import _as_proxy_exception
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import ProxyLogging
 
@@ -3529,7 +3529,7 @@ async def test_auth_builder_single_team_fallback_membership_outage_raises_instea
             )
 
     mock_get_team.assert_called()
-    surfaced = auth_failure_as_proxy_exception(raised.value)
+    surfaced = _as_proxy_exception(raised.value)
     assert (surfaced.code, surfaced.type) == ("503", ProxyErrorTypes.no_db_connection)
 
 

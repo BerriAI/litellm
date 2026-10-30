@@ -51,7 +51,9 @@ from litellm.proxy.auth.auth_checks import (
     key_model_aliases_for_auth_check,
     team_model_aliases_for_auth_check,
 )
-from litellm.proxy.auth.auth_exception_handler import auth_failure_as_proxy_exception
+from litellm.proxy.auth.auth_exception_handler import (
+    _as_proxy_exception,  # pyright: ignore[reportPrivateUsage]  # one auth-failure mapping, shared with user_api_key_auth
+)
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
 )
@@ -1168,7 +1170,7 @@ async def _key_may_call_model(
     except Exception as failure:
         if isinstance(failure, HTTPException) and failure.status_code == status.HTTP_403_FORBIDDEN:
             return False
-        raise auth_failure_as_proxy_exception(failure) from failure
+        raise _as_proxy_exception(failure) from failure
     return True
 
 
