@@ -9894,3 +9894,31 @@ def test_claude_cache_control_cap_keeps_a_cached_tool_and_drops_the_oldest_messa
     assert body["tools"][0]["cache_control"] == {"type": "ephemeral"}
     assert sorted(_cached_texts(body["messages"])) == ["answer 1", "turn 2", "turn 3"]
     assert json.dumps(body).count('"cache_control"') == 4
+
+
+def test_claude_cache_control_cap_keeps_the_newest_hints_inside_one_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                *({"type": "text", "text": f"part {n}", "cache_control": {"type": "ephemeral"}} for n in range(1, 6)),
+                {"type": "text", "text": "Reply with the single word OK."},
+            ],
+        }
+    ]
+    messages_before: Final = copy.deepcopy(messages)
+
+    body: Final = AnthropicConfig().transform_request(
+        model="claude-haiku-5-5",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert sorted(_cached_texts(body["messages"])) == ["part 2", "part 3", "part 4", "part 5"]
+    assert json.dumps(body).count('"cache_control"') == 4
+    assert messages == messages_before

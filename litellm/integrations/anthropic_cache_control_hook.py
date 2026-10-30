@@ -10,6 +10,7 @@ Supported for both `v1/chat/completions` (via the prompt-management hook) and
 """
 
 import copy
+import functools
 import itertools
 import os
 import re
@@ -162,23 +163,54 @@ def dropped_cache_control(_: object) -> None:
     return None
 
 
-def _kept_within_budget(state: tuple[int, bool], marks: int) -> tuple[int, bool]:
+def _first_marked_index(value: object) -> int | None:
+    if not isinstance(value, list):
+        return None
+    blocks: Final = _OBJECT_LIST_ADAPTER.validate_python(value)
+    return next((index for index, block in enumerate(blocks) if _block_carries_cache_control(block)), None)
+
+
+def _without_oldest_mark(message: _MessageT, _: int) -> _MessageT:
+    if not isinstance(message, dict):
+        return message
+    fields: Final = _CONTENT_PART_ADAPTER.validate_python(message)
+    marked_field: Final = next(
+        (key for key in _MARK_CARRYING_MESSAGE_FIELDS if _first_marked_index(fields.get(key)) is not None), None
+    )
+    if marked_field is None:
+        return cast(  # cast-ok: the same message without its own cache marker
+            _MessageT, _fields_with_cache_control(fields, dropped_cache_control)
+        )
+    oldest: Final = _first_marked_index(fields[marked_field])
+    blocks: Final = _OBJECT_LIST_ADAPTER.validate_python(fields[marked_field])
+    return cast(  # cast-ok: the same message with its first marked block unmarked
+        _MessageT,
+        {
+            **fields,
+            marked_field: [
+                block_with_cache_control(block, dropped_cache_control) if index == oldest else block
+                for index, block in enumerate(blocks)
+            ],
+        },
+    )
+
+
+def _kept_within_budget(state: tuple[int, int], marks: int) -> tuple[int, int]:
     remaining, _ = state
-    if marks > remaining:
-        return remaining, False
-    return remaining - marks, True
+    kept: Final = min(marks, remaining)
+    return remaining - kept, marks - kept
 
 
 def messages_within_cache_control_limit(messages: Sequence[_MessageT], reserved_marks: int) -> Sequence[_MessageT]:
     budget: Final = max(MAX_CACHE_CONTROL_BLOCKS - reserved_marks, 0)
     newest_first: Final = tuple(reversed(messages))
     budget_after_each: Final = itertools.accumulate(
-        (cache_control_count(message) for message in newest_first), _kept_within_budget, initial=(budget, True)
+        (cache_control_count(message) for message in newest_first), _kept_within_budget, initial=(budget, 0)
     )
-    kept_flags: Final = tuple(kept for _, kept in itertools.islice(budget_after_each, 1, None))
+    dropped_counts: Final = tuple(dropped for _, dropped in itertools.islice(budget_after_each, 1, None))
     kept_newest_first: Final = tuple(
-        message if kept else with_cache_control(message, dropped_cache_control)
-        for message, kept in zip(newest_first, kept_flags)
+        functools.reduce(_without_oldest_mark, range(dropped), message)
+        for message, dropped in zip(newest_first, dropped_counts)
     )
     return tuple(reversed(kept_newest_first))
 
