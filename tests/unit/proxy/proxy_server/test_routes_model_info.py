@@ -1083,24 +1083,31 @@ def test_model_info_prices_a_wildcard_row_whose_team_alias_targets_a_deleted_tea
     local_model_cost_map: None,
 ) -> None:
     """Calls skip a team alias whose target team deployment was deleted, so the row that alias names keeps the
-    price its calls through the wildcard are billed at."""
+    price its calls through the wildcard are billed at, while the team's live aliases still apply."""
     from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
 
     _catch_all_and_shadowed_wildcard_router(monkeypatch)
-    caller: Final = {"team_id": "team-a", "team_model_aliases": {"my-fw/acme-mini": "model_name_team-a_deleted"}}
+    caller: Final = {
+        "team_id": "team-a",
+        "team_model_aliases": {"my-fw/acme-mini": "model_name_team-a_deleted", "openai/gpt-5.6-acme": "my-fw/acme-mini"},
+    }
 
     with auth_as(**caller):
         rows: Final = _expanded_wildcard_rows(client)
 
-    request: Final = {"model": "my-fw/acme-mini"}
-    _update_model_if_team_alias_exists(data=request, user_api_key_dict=UserAPIKeyAuth(**caller))
+    stale_request: Final = {"model": "my-fw/acme-mini"}
+    live_request: Final = {"model": "openai/gpt-5.6-acme"}
+    _update_model_if_team_alias_exists(data=stale_request, user_api_key_dict=UserAPIKeyAuth(**caller))
+    _update_model_if_team_alias_exists(data=live_request, user_api_key_dict=UserAPIKeyAuth(**caller))
     shown: Final = rows["my-fw/acme-mini"]["model_info"]
-    assert request["model"] == "my-fw/acme-mini"
+    live_alias_row: Final = rows["openai/gpt-5.6-acme"]["model_info"]
+    assert (stale_request["model"], live_request["model"]) == ("my-fw/acme-mini", "my-fw/acme-mini")
     assert (
         shown.get("input_cost_per_token"),
         shown.get("output_cost_per_token"),
         shown.get("litellm_provider"),
     ) == (5e-08, 6e-08, "fireworks_ai")
+    assert (live_alias_row.get("input_cost_per_token"), live_alias_row.get("litellm_provider")) == (None, None)
     _invalidate_model_cost_lowercase_map()
 
 

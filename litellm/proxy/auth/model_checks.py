@@ -646,13 +646,11 @@ def _without_deleted_team_targets(caller_aliases: CallerAliases, registry: Route
     live_names: Final = registry.index("model_name")
     return replace(
         caller_aliases,
-        team=MappingProxyType(
-            {
-                alias: target
-                for alias, target in alias_map(caller_aliases.team).items()
-                if not target.startswith(deleted_prefix) or target in live_names
-            }
-        ),
+        team={
+            alias: target
+            for alias, target in alias_map(caller_aliases.team).items()
+            if not target.startswith(deleted_prefix) or target in live_names
+        },
     )
 
 
