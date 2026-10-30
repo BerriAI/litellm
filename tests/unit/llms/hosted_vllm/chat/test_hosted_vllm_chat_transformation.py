@@ -1,9 +1,11 @@
 import json
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
-
+import litellm
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
@@ -41,6 +43,34 @@ def test_hosted_vllm_chat_transformation_file_url():
             "content": [{"type": "video_url", "video_url": {"url": video_data}}],
         }
     ]
+
+
+def test_hosted_vllm_video_file_conversion_leaves_caller_messages_untouched():
+    video_file_part = {"type": "file", "file": {"file_id": "https://example.com/video.mp4", "format": "video/mp4"}}
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Describe this video"}, video_file_part]}]
+    with respx.mock() as upstream:
+        route = upstream.post("http://vllm.test/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-1",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "qwen-vl",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "A cat."}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            )
+        )
+        litellm.completion(model="hosted_vllm/qwen-vl", messages=messages, api_base="http://vllm.test/v1")
+
+    assert json.loads(route.calls.last.request.content)["messages"][0]["content"][1] == {
+        "type": "video_url",
+        "video_url": {"url": "https://example.com/video.mp4"},
+    }
+    assert messages[0]["content"][1] is video_file_part
 
 
 def test_hosted_vllm_supports_reasoning_effort():
