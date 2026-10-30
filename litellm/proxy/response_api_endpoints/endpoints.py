@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.realtime_errors import refusal_close_code, websocket_close_reason
 from litellm.litellm_core_utils.token_counter import usage_tokenizer_model
 from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, first_validation_error
 from litellm.llms.openai.responses.guardrail_translation.handler import (
@@ -2081,22 +2082,36 @@ def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, objec
     return MappingProxyType({key: value for key, value in hints.items() if value is not None})
 
 
-def _responses_ws_failure_frame(failure: Exception) -> str:
-    if isinstance(failure, EndpointNotSupportedByModelError):
-        return json.dumps(
-            {
-                "type": "error",
-                "status": 400,
-                "error": {"type": "invalid_request_error", "message": failure.message.split("\n\n", 1)[0]},
-            }
-        )
-    proxy_exception: Final = handle_exception_on_proxy(failure)
-    status: Final = int(proxy_exception.code) if str(proxy_exception.code).isdigit() else 500
+@dataclass(frozen=True, slots=True)
+class _ResponsesWsFailureReply:
+    frame: str
+    close_code: int
+    close_reason: str
+
+
+def _responses_ws_error_frame(status: int, message: str) -> str:
     error_type: Final = (
         "rate_limit_exceeded" if status == 429 else "invalid_request_error" if 400 <= status < 500 else "server_error"
     )
-    return json.dumps(
-        {"type": "error", "status": status, "error": {"type": error_type, "message": proxy_exception.message}}
+    return json.dumps({"type": "error", "status": status, "error": {"type": error_type, "message": message}})
+
+
+def _responses_ws_failure_reply(failure: Exception) -> _ResponsesWsFailureReply:
+    if isinstance(failure, EndpointNotSupportedByModelError):
+        return _ResponsesWsFailureReply(
+            frame=_responses_ws_error_frame(400, failure.message.split("\n\n", 1)[0]),
+            close_code=1008,
+            close_reason="Pre-call error",
+        )
+    proxy_exception: Final = handle_exception_on_proxy(failure)
+    status: Final = int(proxy_exception.code) if str(proxy_exception.code).isdigit() else 500
+    close_code: Final = refusal_close_code(status)
+    return _ResponsesWsFailureReply(
+        frame=_responses_ws_error_frame(status, proxy_exception.message),
+        close_code=close_code,
+        close_reason="Internal server error"
+        if close_code == 1011
+        else websocket_close_reason(proxy_exception.message.split("\n\n", 1)[0], fallback="Request refused"),
     )
 
 
@@ -2445,15 +2460,11 @@ async def _responses_websocket_session(
             raise
         except Exception as e:
             crash_row: Final = bill_socket_failure(e)
+            reply: Final = _responses_ws_failure_reply(e)
             with contextlib.suppress(Exception):
-                await websocket.send_text(_responses_ws_failure_frame(e))
+                await websocket.send_text(reply.frame)
             with contextlib.suppress(Exception):
-                await websocket.close(
-                    code=1008 if isinstance(e, EndpointNotSupportedByModelError) else 1011,
-                    reason="Pre-call error"
-                    if isinstance(e, EndpointNotSupportedByModelError)
-                    else "Internal server error",
-                )
+                await websocket.close(code=reply.close_code, reason=reply.close_reason)
             return crash_row
         return bill_socket_failure(outcome) if isinstance(outcome, Exception) else None
 

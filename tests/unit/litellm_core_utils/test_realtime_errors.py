@@ -8,7 +8,7 @@ from litellm.litellm_core_utils.realtime_errors import (
     client_close_code,
     close_after_upstream_handshake_refusal,
     realtime_error_event,
-    upstream_handshake_close_code,
+    refusal_close_code,
     websocket_close_reason,
 )
 from litellm.types.realtime import RealtimeErrorEvent
@@ -62,8 +62,8 @@ def test_client_close_code_only_forwards_codes_a_server_may_send(upstream_code, 
     ("status_code", "expected"),
     [(401, 1008), (403, 1008), (429, 1013), (500, 1011)],
 )
-def test_upstream_handshake_close_code_maps_http_status_to_close_code(status_code: int, expected: int):
-    assert upstream_handshake_close_code(status_code) == expected
+def test_refusal_close_code_maps_http_status_to_close_code(status_code: int, expected: int):
+    assert refusal_close_code(status_code) == expected
 
 
 class _RecordingWebSocket:
