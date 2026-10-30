@@ -268,8 +268,15 @@ token = MASTER_KEY
 
 
 @pytest.mark.asyncio
-async def test_shutdown_persists_accounting_from_worker_callbacks_before_returning() -> None:
+async def test_shutdown_persists_accounting_from_worker_callbacks_before_returning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import datetime
+
     from litellm.litellm_core_utils.logging_worker import LoggingWorker
+    from litellm.proxy.db.accounting_ledger import UsageWrite
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime, capture_callback
+    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
     from litellm.responses.streaming_iterator import spawn_logging_task
 
     worker: Final = LoggingWorker()
@@ -279,7 +286,25 @@ async def test_shutdown_persists_accounting_from_worker_callbacks_before_returni
     pending: Final[asyncio.Queue[str]] = asyncio.Queue()
     persisted: Final[asyncio.Queue[str]] = asyncio.Queue()
 
+    captured: Final[asyncio.Queue[str]] = asyncio.Queue()
+
+    async def persist_usage(writes: tuple[UsageWrite, ...]) -> None:
+        for write in writes:
+            captured.put_nowait(write.event.event_id)
+
+    capture: Final = UsageCaptureRuntime()
+    capture.start(persist_usage, UsageCaptureSettings(flush_interval_seconds=10))
+    monkeypatch.setattr(litellm.proxy.proxy_server, "usage_capture", capture)
+
     async def enqueue_spend() -> None:
+        assert capture.meter is not None
+        capture_callback(
+            capture.meter,
+            {"call_type": "acompletion", "litellm_call_id": "shutdown-usage", "litellm_params": {}},
+            {"id": "shutdown-attempt", "usage": {"total_tokens": 3}},
+            datetime(2026, 1, 1),
+            datetime(2026, 1, 1),
+        )
         pending.put_nowait("accounted request")
 
     async def callback() -> None:
@@ -305,10 +330,13 @@ async def test_shutdown_persists_accounting_from_worker_callbacks_before_returni
         assert waited_for_callback, "Shutdown returned while accounting callbacks were still running"
         assert persisted.get_nowait() == "accounted request"
         assert pending.empty()
+        assert (captured.get_nowait(), captured.get_nowait()) == ("shutdown-usage:inbound", "shutdown-attempt")
+        assert capture.meter is None
     finally:
         release.set()
         await worker.flush()
         await worker.stop()
+        await capture.stop(0)
 
 
 @pytest.mark.asyncio
@@ -4261,3 +4289,25 @@ async def test_shutdown_waits_for_enqueue_producers_before_stopping_worker() -> 
         assert worker.pending_count == 0
     finally:
         await worker.stop(discard_pending=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unsupported", ["database", "collector", "remote", "free_tier"])
+async def test_capture_enablement_rejects_unrecoverable_writer_modes(
+    unsupported: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+
+    monkeypatch.setattr(proxy_server, "usage_capture", UsageCaptureRuntime())
+    monkeypatch.setattr(proxy_server, "general_settings", {"accounting_capture": {}})
+    monkeypatch.setattr(proxy_server, "prisma_client", None if unsupported == "database" else object())
+    monkeypatch.setattr(litellm, "apply_search_free_tier", unsupported == "free_tier")
+    monkeypatch.setenv("LITELLM_COLLECTOR_ENABLED", "true" if unsupported == "collector" else "false")
+    monkeypatch.delenv("SPEND_LOGS_URL", raising=False)
+    if unsupported == "remote":
+        monkeypatch.setenv("SPEND_LOGS_URL", "https://writer.invalid")
+    with pytest.raises(ValueError, match="requires local Prisma"):
+        proxy_server._configure_usage_capture()
+    assert proxy_server.usage_capture.meter is None

@@ -89,6 +89,7 @@ async def _finish_finalization(
             if litellm.apply_search_free_tier
             else None
         )
+        logging_obj.cost_allowance_allocation = allocation  # rebind-ok: retain the allocation for durable capture
         logging_obj.cost_allowance_discount = (  # rebind-ok: retain allocation across snapshot retries
             allocation.discount if allocation is not None else 0.0
         )

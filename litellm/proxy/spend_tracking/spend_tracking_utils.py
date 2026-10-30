@@ -3,7 +3,7 @@ import json
 import os
 import re
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from datetime import datetime as dt
 from functools import reduce
@@ -55,6 +55,8 @@ from litellm.litellm_core_utils.get_llm_provider_logic import declared_authentic
 from litellm.litellm_core_utils.hidden_params import served_from_cache
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
 from litellm.litellm_core_utils.litellm_logging import (
+    StandardLoggingPayloadSetup,
+    UsageObservation,
     coerce_model_access_groups,
     is_valid_sha256_hash,
     request_model_access_groups_from_litellm_params,
@@ -599,6 +601,7 @@ def get_logging_payload(
     start_time: datetime,
     end_time: datetime,
     llm_router: "Router | None" = None,
+    capture_usage: Callable[[SpendLogsPayload, str | None], None] | None = None,
 ) -> SpendLogsPayload:
     if kwargs is None:
         kwargs = {}
@@ -622,7 +625,9 @@ def get_logging_payload(
         routing_metadata,
         routing_litellm_params,
     )
-    completion_start_time: Final = kwargs.get("completion_start_time", end_time)
+    completion_start_time: Final = TypeAdapter(datetime).validate_python(
+        kwargs.get("completion_start_time") or end_time
+    )
     call_type: Final = kwargs.get("call_type")
     cache_hit: Final = kwargs.get("cache_hit", False)
 
@@ -983,6 +988,14 @@ def get_logging_payload(
             payload.get("model"),
             payload.get("spend"),
         )
+
+        if capture_usage is not None:
+            observed_usage: Final = (
+                StandardLoggingPayloadSetup.get_usage_as_dict({"usage": usage})
+                if usage and kwargs.get("_accounting_usage_observed") is not UsageObservation.UNKNOWN
+                else None
+            )
+            capture_usage(payload, safe_dumps(observed_usage) if observed_usage is not None else None)
 
         # Explicitly clear large intermediate objects to reduce memory pressure
         del response_obj_dict, usage, clean_metadata, additional_usage_values

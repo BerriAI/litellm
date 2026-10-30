@@ -3,9 +3,10 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import replace as dataclasses_replace
 from enum import Enum
+from itertools import groupby
 from typing import Any, Final, Literal, cast
 
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -15,6 +16,7 @@ from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.llms.bedrock.batches.transformation import titan_embedding_usage_from_batch_output
 from litellm.llms.vertex_ai.batches.transformation import (
     is_native_vertex_batch_output_row,
+    native_vertex_batch_row_model,
     native_vertex_batch_row_stats,
 )
 from litellm.types.llms.openai import Batch
@@ -210,6 +212,7 @@ class _BatchOutputLineStats:
     cache_creation_tokens: int
     reasoning_tokens: int
     model: str | None
+    usage: Usage | None
 
 
 def _classify_output_line_stats(
@@ -268,7 +271,7 @@ def _compute_output_line_stats(
     raw_model: Final = response_body.get("model")
     response_model: Final = raw_model if isinstance(raw_model, str) and raw_model else None
     completion_details: Final = usage.completion_tokens_details
-    line_prompt_cost, line_completion_cost = _output_line_cost(
+    line_prompt_cost, line_completion_cost = _output_line_cost_or_pending(
         response_body=response_body,
         usage=usage,
         custom_llm_provider=custom_llm_provider,
@@ -286,7 +289,15 @@ def _compute_output_line_stats(
         cache_read_tokens=prompt_details["cache_hit_tokens"],
         cache_creation_tokens=prompt_details["cache_creation_tokens"],
         reasoning_tokens=(completion_details.reasoning_tokens if completion_details else None) or 0,
-        model=response_model,
+        model=response_model or model_name,
+        usage=(
+            usage.model_copy(update=ocr_usage.model_dump(exclude_none=True))
+            if (ocr_usage := _ocr_usage_info_from_response_body(response_body)) is not None
+            and ocr_usage.model_dump(exclude_none=True)
+            else usage
+            if response_body.get("usage") is not None or usage.total_tokens > 0
+            else None
+        ),
     )
 
 
@@ -296,6 +307,47 @@ def _ocr_usage_info_from_response_body(response_body: Mapping[str, object]) -> O
     if not isinstance(raw_usage_info, Mapping):
         return None
     return OCRUsageInfo.model_validate(raw_usage_info)
+
+
+def _output_line_cost_or_pending(
+    response_body: Mapping[str, object],
+    usage: Usage,
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    model_name: str | None,
+    response_model: str | None,
+    model_info: ModelInfo | None,
+    vertex_location: str | None,
+) -> tuple[float, float]:
+    try:
+        return _output_line_cost(
+            response_body, usage, custom_llm_provider, model_name, response_model, model_info, vertex_location
+        )
+    except Exception:  # noqa: BLE001  # retain measured usage when existing batch pricing fails
+        verbose_logger.warning("Batch line pricing unavailable; retaining usage with the existing zero-cost fallback")
+        return 0.0, 0.0
+
+
+def _combined_reported_batch_usage(usages: tuple[Usage | None, ...]) -> Mapping[str, object] | None:
+    from litellm.cost_calculator import BaseTokenUsageProcessor
+
+    reported: Final = [usage for usage in usages if usage is not None]
+    if not reported:
+        return None
+    fields: Final = tuple(TypeAdapter(dict[str, JsonValue]).validate_python(usage.model_dump()) for usage in reported)
+    quantities: Final = {
+        key: sum(value for usage in fields if isinstance(value := usage.get(key), (int, float)))
+        for key in OCRUsageInfo.model_fields
+        if any(isinstance(usage.get(key), (int, float)) for usage in fields)
+    }
+    return {**BaseTokenUsageProcessor.combine_usage_objects(usage_objects=reported).model_dump(), **quantities}
+
+
+def _batch_usage_by_model(usages: tuple[tuple[str | None, Usage | None], ...]) -> Mapping[str, object]:
+    ordered: Final = sorted(usages, key=lambda item: item[0] or "")
+    return {
+        model: _combined_reported_batch_usage(tuple(item[1] for item in group))
+        for model, group in groupby(ordered, key=lambda item: item[0] or "")
+    }
 
 
 def _output_line_cost(
@@ -361,6 +413,8 @@ def _aggregate_batch_cost_usage_models(
         completion_tokens=sum(stats.completion_tokens for stats in line_stats),
         reasoning_tokens=sum(stats.reasoning_tokens for stats in line_stats),
         **cache_token_params,
+        batch_usage_by_model=_batch_usage_by_model(tuple((stats.model, stats.usage) for stats in line_stats)),
+        batch_unknown_usage_requests=sum(stats.usage is None for stats in line_stats),
     )
     batch_models: Final = [model_name] if model_name else [stats.model for stats in line_stats if stats.model]
     total_prompt_cost: Final = sum((stats.prompt_cost for stats in line_stats), 0.0)
@@ -401,17 +455,21 @@ def calculate_vertex_ai_batch_cost_and_usage(
     from litellm.cost_calculator import batch_cost_calculator
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
-    row_stats: Final = tuple(
-        native_vertex_batch_row_stats(
-            row,
-            model_name,
-            model_info=model_info,
-            calculate_usage=VertexGeminiConfig.calculate_usage,
-            cost_calculator=batch_cost_calculator,
-            vertex_location=vertex_location,
+    observations: Final = tuple(
+        (
+            native_vertex_batch_row_model(row, model_name),
+            native_vertex_batch_row_stats(
+                row,
+                model_name,
+                model_info=model_info,
+                calculate_usage=VertexGeminiConfig.calculate_usage,
+                cost_calculator=batch_cost_calculator,
+                vertex_location=vertex_location,
+            ),
         )
         for row in vertex_ai_batch_responses
     )
+    row_stats: Final = tuple(stats for _, stats in observations)
     priced: Final = tuple(stats for stats in row_stats if stats is not None)
     total_prompt_cost: Final = sum(stats.prompt_cost for stats in priced)
     total_completion_cost: Final = sum(stats.completion_cost for stats in priced)
@@ -435,6 +493,10 @@ def calculate_vertex_ai_batch_cost_and_usage(
             total_tokens=total_tokens,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            batch_usage_by_model=_batch_usage_by_model(
+                tuple((model, stats.usage if stats is not None else None) for model, stats in observations)
+            ),
+            batch_unknown_usage_requests=sum(stats is None for stats in row_stats),
         ),
         models=(
             [model_name]

@@ -163,7 +163,12 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.deployment_pricing import pricing_models
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
-from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch, Logging, deployment_pricing_model_info
+from litellm.litellm_core_utils.litellm_logging import (
+    BilledRoundsDispatch,
+    Logging,
+    UsageObservation,
+    deployment_pricing_model_info,
+)
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -1747,6 +1752,27 @@ def _failure_fields_to_lift(
         ("response_cost", None if _usage_to_lift is None else (_usage_to_lift[1] or 0.0)),
         ("standard_logging_object", _model_call_details.get("standard_logging_object")),
         ("billed_failed_attempts", _earlier_attempts or None),
+        ("_accounting_capture", _model_call_details.get("_accounting_capture")),
+        ("_accounting_pricing_snapshot", _model_call_details.get("_accounting_pricing_snapshot")),
+        ("_accounting_finalized_cost", _logging_obj.finalized_cost if isinstance(_logging_obj, Logging) else None),
+        (
+            "_accounting_allocation",
+            _logging_obj.cost_allowance_allocation if isinstance(_logging_obj, Logging) else None,
+        ),
+        (
+            "_accounting_usage_observed",
+            (
+                None
+                if Logging.usage_capture_callback is None
+                else UsageObservation.UNKNOWN
+                if _usage_to_lift is None
+                else UsageObservation.KNOWN
+                if _model_call_details.get("combined_usage_object") is not None
+                or _model_call_details.get("failed_attempts_usage")
+                else UsageObservation.ESTIMATED
+            ),
+        ),
+        ("_accounting_included_attempt_ids", _model_call_details.get("_accounting_prior_attempt_ids")),
     )
     return MappingProxyType({key: value for key, value in _entries if value is not None})
 

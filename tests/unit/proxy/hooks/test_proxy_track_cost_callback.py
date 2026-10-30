@@ -3949,3 +3949,53 @@ async def test_async_post_call_failure_hook_disable_pre_routing_error_logs(
             user_api_key_dict=user_api_key_dict,
         )
     assert len(writer.rows) == rows_written
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "streaming", "background"),
+    [("acompletion", True, False), ("aresponses", False, True), ("aocr", False, False)],
+)
+async def test_sync_ack_rejection_before_setup_does_not_capture_an_ignored_route(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    call_type: str,
+    streaming: bool,
+    background: bool,
+) -> None:
+    import asyncio
+    from typing import Final
+
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db.accounting_ledger import UsageWrite
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime, validate_sync_ack_request
+    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
+    from litellm.proxy.utils import REJECTED_BEFORE_REQUEST_SETUP, REJECTED_BEFORE_REQUEST_SETUP_KEY
+    from tests.unit.proxy.spend_tracking.test_usage_capture import _logger
+
+    persisted: Final = asyncio.Queue[tuple[UsageWrite, ...]]()
+
+    async def persist(writes: tuple[UsageWrite, ...]) -> None:
+        persisted.put_nowait(writes)
+
+    runtime: Final = UsageCaptureRuntime()
+    runtime.start(persist, UsageCaptureSettings())
+    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    logger: Final = _logger("IGNORE_THIS")
+    request: Final = {
+        "litellm_logging_obj": logger,
+        REJECTED_BEFORE_REQUEST_SETUP_KEY: REJECTED_BEFORE_REQUEST_SETUP,
+    }
+    try:
+        with pytest.raises(HTTPException) as rejected:
+            validate_sync_ack_request({"accounting_sync_ack": True}, call_type, streaming, background)
+        assert rejected.value.status_code == 400
+        assert "supports foreground non-stream" in rejected.value.detail
+        await ProxyDBLogger().async_post_call_failure_hook(request, rejected.value, UserAPIKeyAuth())
+    finally:
+        await runtime.stop(1)
+    assert persisted.empty()
+    assert "Usage capture failed on the request failure path" not in caplog.text

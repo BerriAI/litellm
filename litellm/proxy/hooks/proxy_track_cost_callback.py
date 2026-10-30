@@ -22,7 +22,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_parent_otel_span_from_kwargs,
 )
-from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup, UsageObservation
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.litellm_core_utils.redact_messages import MESSAGE_REDACTION_ENABLE_HEADERS
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
@@ -63,6 +63,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     sanitize_error_information_for_spend_logs,
     should_store_prompts_and_responses_in_spend_logs,
 )
+from litellm.proxy.spend_tracking.usage_capture import CapturedUsage, capture_callback, captured_callback_kwargs
 from litellm.proxy.utils import (
     REJECTED_BEFORE_REQUEST_SETUP,
     REJECTED_BEFORE_REQUEST_SETUP_KEY,
@@ -344,11 +345,23 @@ def _attempt_spend_row_kwargs(
         "litellm_params": litellm_params,
         "combined_usage_object": attempt.usage,
         "response_cost": attempt.response_cost,
+        "_accounting_usage_observed": UsageObservation.ESTIMATED,
     }
     row.pop("billed_failed_attempts", None)
+    row.pop("_accounting_capture", None)
     call_id: Final = request_data.get("litellm_call_id") or litellm_params.get("litellm_call_id")
     if isinstance(call_id, str):
         row["litellm_call_id"] = f"{call_id}{suffix}"
+        row["parent_request_id"] = call_id
+        metadata["parent_request_id"] = call_id
+        captured_attempts: Final = request_data.get("_accounting_billed_attempts")
+        if isinstance(captured_attempts, tuple):
+            for captured in TypeAdapter(tuple[object, ...]).validate_python(captured_attempts):
+                if (
+                    isinstance(captured, CapturedUsage)
+                    and captured.payload["litellm_call_id"] == row["litellm_call_id"]
+                ):
+                    row["_accounting_capture"] = captured
     standard_logging_object: Final = request_data.get("standard_logging_object")
     if isinstance(standard_logging_object, dict):
         payload: Final = cast("Mapping[str, object]", standard_logging_object)  # cast-ok: StandardLoggingPayload dict
@@ -384,11 +397,12 @@ class _ProxyDBLogger(CustomLogger):
     async def async_log_success_event(
         self, kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
+        captured_kwargs: Final = captured_callback_kwargs(kwargs, response_obj, start_time, end_time)
         if self.spend_event_producer is None or not is_offloadable_success(response_obj):
-            await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
+            await self._PROXY_track_cost_callback(captured_kwargs, response_obj, start_time, end_time)
             return
         event: Final = build_spend_event(
-            kwargs,
+            captured_kwargs,
             response_obj,
             start_time,
             end_time,
@@ -416,6 +430,7 @@ class _ProxyDBLogger(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,
     ) -> None:
+        self._try_capture_failure_usage(request_data, original_exception, user_api_key_dict)
         completed_cost: Final = (
             _str_keyed_fields(request_data.get("standard_logging_object")).get("cost_finalized") is True
         )
@@ -594,6 +609,65 @@ class _ProxyDBLogger(CustomLogger):
                 self._deployment_lookup,
             ),
         )
+
+    def _try_capture_failure_usage(
+        self,
+        request_data: dict[str, object],  # mutable-ok: receipt handoff shared with the legacy writer
+        original_exception: Exception,
+        auth: UserAPIKeyAuth,
+    ) -> None:
+        try:
+            self._capture_failure_usage(request_data, original_exception, auth)
+        except Exception:  # noqa: BLE001  # capture failure must not suppress legacy billing or reservation release
+            verbose_proxy_logger.exception("Usage capture failed on the request failure path")
+
+    def _capture_failure_usage(
+        self,
+        request_data: dict[str, object],  # mutable-ok: receipt handoff shared with the legacy writer
+        original_exception: Exception,
+        auth: UserAPIKeyAuth,
+    ) -> None:
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy.db.exception_handler import exception_chain
+        from litellm.proxy.proxy_server import usage_capture
+        from litellm.proxy.spend_tracking.usage_capture import UsageAcknowledgementError
+
+        if any(isinstance(error, UsageAcknowledgementError) for error in exception_chain(original_exception)):
+            return
+        usage_meter: Final = usage_capture.meter
+
+        if usage_meter is None:
+            return
+        logging_obj: Final = request_data.get("litellm_logging_obj")
+        details: Final[Mapping[str, object]] = (
+            _str_keyed_fields(logging_obj.model_call_details) if isinstance(logging_obj, Logging) else {}
+        )
+        if details.get("call_type") == "IGNORE_THIS" and is_pre_routing_rejection(original_exception, request_data):
+            return
+        params: Final = _str_keyed_fields(request_data.get("litellm_params") or details.get("litellm_params"))
+        failure_data: Final = {
+            **details,
+            **request_data,
+            "litellm_params": {
+                **params,
+                "metadata": {
+                    **_str_keyed_fields(params.get("metadata")),
+                    **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=auth),
+                    "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(auth),
+                    "status": "failure",
+                },
+            },
+        }
+        start: Final = logging_obj.start_time if isinstance(logging_obj, Logging) else request_data.get("start_time")
+        if not isinstance(start, datetime):
+            return
+        end: Final = datetime.now(timezone.utc)
+        captured: Final = tuple(
+            capture_callback(usage_meter, row, original_exception, start, end)
+            for _, row in _failure_spend_rows(failure_data, 0.0, None, self._deployment_lookup)
+        )
+        request_data["_accounting_capture"] = captured[0]  # rebind-ok: share one receipt with the legacy writer
+        request_data["_accounting_billed_attempts"] = captured[1:]  # rebind-ok: share attempt receipts
 
     async def _write_failure_spend_rows(
         self,
