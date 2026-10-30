@@ -681,7 +681,7 @@ async def acompletion(
         - The `completion` function is called using `run_in_executor` to execute synchronously in the event loop.
         - If `stream` is True, the function returns an async generator that yields completion lines.
     """
-    fallbacks = kwargs.get("fallbacks", None)
+    fallbacks: Final = kwargs.get("fallbacks", None) or litellm.model_fallbacks
     mock_timeout = kwargs.get("mock_timeout", None)
 
     if mock_timeout is True:
@@ -697,6 +697,7 @@ async def acompletion(
     loop: Final = asyncio.get_event_loop()
     custom_llm_provider = kwargs.get("custom_llm_provider", None)
     _ = _resolve_control_options(kwargs, model)
+    caller_kwargs: Final = cast("Mapping[str, object]", {**kwargs})  # cast-ok: acompletion takes untyped kwargs
 
     ## PROMPT MANAGEMENT HOOKS ##
     #########################################################
@@ -715,15 +716,34 @@ async def acompletion(
         custom_llm_provider=cast(str | None, custom_llm_provider),  # cast-ok: read from untyped kwargs
         tools=tools,
         enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
-        api_base=kwargs.get("api_base") or base_url,
+        api_base=base_url or kwargs.get("api_base"),
     )
 
-    if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
-        litellm_logging_obj.should_run_prompt_management_hooks(
-            prompt_id=kwargs.get("prompt_id", None),
+    prompt_id: Final = cast(str | None, kwargs.get("prompt_id", None))  # cast-ok: read from untyped kwargs
+    prompt_management_logger: Final = (
+        litellm_logging_obj.get_custom_logger_for_prompt_management(
+            model=model,
+            non_default_params=kwargs,
+            tools=tools,
+            prompt_id=prompt_id,
+            dynamic_callback_params=litellm_logging_obj.standard_callback_dynamic_params,
+        )
+        if isinstance(litellm_logging_obj, LiteLLMLoggingObj)
+        and litellm_logging_obj.should_run_prompt_management_hooks(
+            prompt_id=prompt_id,
             non_default_params=kwargs,
             tools=tools,
         )
+        else None
+    )
+    each_fallback_writes_its_own_cache_dialect: Final = fallbacks is not None and isinstance(
+        prompt_management_logger, AnthropicCacheControlHook
+    )
+
+    if (
+        isinstance(litellm_logging_obj, LiteLLMLoggingObj)
+        and prompt_management_logger is not None
+        and not each_fallback_writes_its_own_cache_dialect
     ):
         (
             model,
@@ -733,8 +753,9 @@ async def acompletion(
             model=model,
             messages=messages,
             non_default_params=kwargs,
-            prompt_id=kwargs.get("prompt_id", None),
+            prompt_id=prompt_id,
             prompt_variables=kwargs.get("prompt_variables", None),
+            prompt_management_logger=prompt_management_logger,
             tools=tools,
             prompt_label=kwargs.get("prompt_label", None),
             prompt_version=kwargs.get("prompt_version", None),
@@ -826,9 +847,10 @@ async def acompletion(
             litellm_params=(GenericLiteLLMParams.model_validate(_supplemental) if _supplemental else None),
         )
 
-    fallbacks = fallbacks or litellm.model_fallbacks
     if fallbacks is not None:
-        response = await async_completion_with_fallbacks(**completion_kwargs, kwargs={"fallbacks": fallbacks, **kwargs})
+        response = await async_completion_with_fallbacks(
+            **completion_kwargs, kwargs={"fallbacks": fallbacks, **caller_kwargs}
+        )
         if response is None:
             raise Exception(
                 "No response from fallbacks. Got none. Turn on `litellm.set_verbose=True` to see more details."
@@ -5765,7 +5787,7 @@ def completion(
         custom_llm_provider=cast(str | None, kwargs.get("custom_llm_provider")),  # cast-ok: untyped kwargs
         tools=tools,
         enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
-        api_base=kwargs.get("api_base") or base_url,
+        api_base=base_url or kwargs.get("api_base"),
     )
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
