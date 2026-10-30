@@ -237,9 +237,7 @@ class OllamaChatConfig(BaseConfig):
 
         def transform_tool_call(typed_tool: ChatCompletionAssistantToolCall) -> OllamaToolCall:
             arguments: Final = (
-                json.loads(typed_tool["function"]["arguments"])
-                if "arguments" in typed_tool["function"]
-                else {}
+                json.loads(typed_tool["function"]["arguments"]) if "arguments" in typed_tool["function"] else {}
             )
             function: Final = OllamaToolCallFunction(
                 name=typed_tool["function"].get("name") or "",
@@ -247,9 +245,7 @@ class OllamaChatConfig(BaseConfig):
             )
             tool_id: Final = typed_tool.get("id")
             ollama_tool_call: Final = (
-                OllamaToolCall(function=function)
-                if tool_id is None
-                else OllamaToolCall(id=tool_id, function=function)
+                OllamaToolCall(function=function) if tool_id is None else OllamaToolCall(id=tool_id, function=function)
             )
             return ollama_tool_call
 
