@@ -87,7 +87,9 @@ def _int_or_none(value: object) -> int | None:
 
 def _asks_for_one_candidate(generation_config: Mapping[str, object]) -> bool:
     return all(
-        _int_or_none(generation_config[key] or 1) == 1 for key in _CANDIDATE_COUNT_KEYS if key in generation_config
+        generation_config[key] is None or _int_or_none(generation_config[key]) in (0, 1)
+        for key in _CANDIDATE_COUNT_KEYS
+        if key in generation_config
     )
 
 
