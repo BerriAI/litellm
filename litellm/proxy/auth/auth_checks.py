@@ -992,7 +992,7 @@ def _guardrail_modification_check(request_body: Mapping[str, object], team_objec
 
 
 async def check_tools_allowlist(
-    request_body: dict,
+    request_body: dict[str, object],
     valid_token: UserAPIKeyAuth | None,
     team_object: LiteLLM_TeamTable | None,
     route: str,
@@ -1011,6 +1011,9 @@ async def check_tools_allowlist(
     call_types: Final = get_call_types_for_route(route)
     if not call_types or not any(ct.value in TOOL_CAPABLE_CALL_TYPES for ct in call_types):
         return
+    from litellm.proxy.auth.native_mcp_policy import check_native_mcp_request
+
+    check_native_mcp_request(valid_token, request_body)
     tool_names: Final = extract_request_tool_names(route, request_body)
     if not tool_names:
         return

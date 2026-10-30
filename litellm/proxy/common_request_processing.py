@@ -2614,6 +2614,9 @@ class ProxyBaseLLMRequestProcessing:
             call_type=route_type,
             skip_guardrails=skip_guardrails,
         )
+        from litellm.proxy.auth.native_mcp_policy import check_native_mcp_request
+
+        check_native_mcp_request(user_api_key_dict, _REQUEST_FIELDS.validate_python(self.data))  # pyright: ignore[reportUnknownMemberType]  # the legacy request payload is validated here
         await _enforce_guardrail_added_tag_budgets(
             data=self.data,
             tags_before_guardrails=self._tags_before_guardrails,

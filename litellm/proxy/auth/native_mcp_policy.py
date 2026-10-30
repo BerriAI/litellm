@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final, Literal, Protocol, TypeAlias
 
@@ -110,3 +111,25 @@ def evaluate_native_mcp_policy(policy: NativeMCPResolution, accesses: NativeMCPE
     failures: Final = tuple(_check_access(policy, access) for access in accesses)
     messages: Final = tuple(failure.message for failure in failures if failure is not None)
     return NativeMCPDenial("; ".join(messages)) if messages else None
+
+
+def raise_native_mcp_denial(denial: NativeMCPDenial | None) -> None:
+    if denial is None:
+        return
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    raise ProxyException(
+        message=denial.message,
+        type=ProxyErrorTypes.tool_access_denied,
+        param="tools",
+        code=400,
+    )
+
+
+def check_native_mcp_request(identity: NativeMCPIdentity, data: Mapping[str, object]) -> None:
+    policy: Final = resolve_native_mcp_policy(identity)
+    if policy is None:
+        return
+    from litellm.proxy.guardrails.tool_name_extraction import extract_request_mcp_accesses
+
+    raise_native_mcp_denial(evaluate_native_mcp_policy(policy, extract_request_mcp_accesses(data)))
