@@ -9,7 +9,7 @@ from litellm._logging import verbose_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching.redis_cache import (
     _get_call_stack_info,  # pyright: ignore[reportPrivateUsage]  # same caller attribution as RedisCache events
-    _log_redis_failure_value,  # pyright: ignore[reportPrivateUsage]  # same timeout throttle as RedisCache logging
+    log_redis_failure_value,
 )
 from litellm.redis.transport.contract import RedisFailure
 from litellm.types.services import ServiceTypes
@@ -66,6 +66,6 @@ def _log_failure(call_type: str, result: object) -> None:
     if not isinstance(result, RedisFailure):
         return
     target: Final = current_service_target()
-    _log_redis_failure_value(
+    log_redis_failure_value(
         verbose_logger, logging.WARNING, f"Redis {call_type} failed" + (f" for {target}" if target else ""), result
     )

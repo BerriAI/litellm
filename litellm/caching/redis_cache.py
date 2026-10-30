@@ -530,7 +530,7 @@ def log_redis_failure(
     )
 
 
-def _log_redis_failure_value(logger: logging.Logger, level: int, message: str, failure: RedisFailure) -> None:
+def log_redis_failure_value(logger: logging.Logger, level: int, message: str, failure: RedisFailure) -> None:
     if failure.kind == "breaker_open":
         logger.debug("%s: %s", message, failure.message, stacklevel=2)
         return
@@ -617,7 +617,7 @@ async def _run_under_circuit_breaker(
     return result
 
 
-def _is_redis_error(exc: BaseException) -> bool:
+def is_redis_error(exc: BaseException) -> bool:
     from redis.exceptions import RedisError
 
     return isinstance(exc, RedisError)
