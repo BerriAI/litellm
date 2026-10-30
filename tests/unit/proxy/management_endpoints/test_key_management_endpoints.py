@@ -5902,6 +5902,52 @@ async def test_delete_verification_tokens_stops_the_key_on_a_peer_worker(monkeyp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deleter",
+    [
+        UserAPIKeyAuth(user_id="admin-user", api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN.value),
+        UserAPIKeyAuth(user_id="user-123", api_key="sk-owner", user_role=LitellmUserRoles.INTERNAL_USER.value),
+    ],
+    ids=["proxy_admin", "key_owner"],
+)
+async def test_delete_verification_tokens_evicts_a_requested_key_whose_row_is_already_gone(
+    monkeypatch: pytest.MonkeyPatch, deleter: UserAPIKeyAuth
+) -> None:
+    """A key whose row was removed outside the API stays cached on every worker, so deleting it in a
+    batch beside a live key must still stop it everywhere instead of only evicting the rows found"""
+    live_key: Final = "sk-" + uuid4().hex
+    gone_key: Final = "sk-" + uuid4().hex
+    live_token: Final = hash_token(live_key)
+    gone_token: Final = hash_token(gone_key)
+    deleting_worker_cache: Final = UserApiKeyCache()
+    peer_worker_cache: Final = UserApiKeyCache()
+    for cache in (deleting_worker_cache, peer_worker_cache):
+        for token in (live_token, gone_token):
+            cache.set_cache(key=token, value=UserAPIKeyAuth(token=token, user_id="user-123"))
+    coordination_redis: Final = _SharedCoordinationRedis()
+    peer_subscriber: Final = AuthCacheInvalidationSubscriber(
+        redis_cache=coordination_redis, user_api_key_cache=peer_worker_cache
+    )
+    peer_subscriber.start()
+    monkeypatch.setattr("litellm.proxy.proxy_server.redis_usage_cache", coordination_redis)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _prisma_with_key_row(_owned_key_row(live_token)))
+
+    try:
+        await delete_verification_tokens(
+            tokens=[live_key, gone_key], user_api_key_cache=deleting_worker_cache, user_api_key_dict=deleter
+        )
+        await coordination_redis.until_every_subscriber_applied_its_messages()
+    finally:
+        await peer_subscriber.stop()
+
+    assert [
+        cache.get_cache(key=token)
+        for cache in (deleting_worker_cache, peer_worker_cache)
+        for token in (live_token, gone_token)
+    ] == [None, None, None, None]
+
+
+@pytest.mark.asyncio
 async def test_delete_verification_tokens_leaves_unowned_cache_entries_alone_on_every_worker(monkeypatch: pytest.MonkeyPatch) -> None:
     """/key/delete accepts any string, and a name that is not a key row passes through unhashed. A key
     owner padding the request with another team's spend counter name must not wipe that counter from
