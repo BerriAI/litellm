@@ -765,7 +765,7 @@ async def test_native_count_answers_openais_rejection_with_its_status_and_text(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("declared", "effort_counted"), [(True, True), (False, False)], ids=["declared", "undeclared"])
 async def test_the_count_reads_the_deployments_declared_efforts_under_drop_params(
-    local_model_cost_map, monkeypatch: pytest.MonkeyPatch, declared: bool, effort_counted: bool
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, declared: bool, effort_counted: bool
 ) -> None:
     row: Final = litellm.model_cost["gpt-6.1-sol"]
     effort: Final = next(
@@ -790,7 +790,7 @@ async def test_the_count_reads_the_deployments_declared_efforts_under_drop_param
 @pytest.mark.asyncio
 @pytest.mark.parametrize("drop_params", [True, False], ids=["drop-params", "send-as-is"])
 async def test_the_count_rounds_the_effort_to_a_declared_level_as_inference_does(
-    local_model_cost_map, monkeypatch: pytest.MonkeyPatch, drop_params: bool
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, drop_params: bool
 ) -> None:
     declared: Final = ["low", "medium", "high"]
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)

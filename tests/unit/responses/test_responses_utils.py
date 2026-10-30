@@ -1014,8 +1014,8 @@ def test_responses_object_bills_an_explicit_cache_hit_at_the_explicit_rate():
 
 @pytest.mark.parametrize(("field", "declarations"), [("mode", "reasoning_modes"), ("context", "reasoning_contexts")])
 def test_the_chat_bridge_drops_a_reasoning_value_no_openai_row_declares_under_drop_params(
-    local_model_cost_map, field, declarations
-):
+    local_model_cost_map: None, field: str, declarations: str
+) -> None:
     undeclared_model: Final = next(
         name
         for name, row in litellm.model_cost.items()
@@ -1044,8 +1044,8 @@ def test_the_chat_bridge_drops_a_reasoning_value_no_openai_row_declares_under_dr
     assert bridged(False) == requested
 
 def test_the_chat_bridge_outside_the_openai_catalog_drops_undeclared_values_and_keeps_other_keys(
-    local_model_cost_map,
-):
+    local_model_cost_map: None,
+) -> None:
     declared_mode: Final = litellm.model_cost["gpt-6.1-sol"]["reasoning_modes"][-1]
     requested: Final = {"effort": "high", "mode": declared_mode, "context": "forever", "max_tokens": 2000}
 
@@ -1068,8 +1068,8 @@ def test_the_chat_bridge_outside_the_openai_catalog_drops_undeclared_values_and_
 
 
 def test_the_chat_bridge_keeps_other_keys_for_an_openai_prefixed_name_it_resolves_to_a_catalog_row(
-    local_model_cost_map,
-):
+    local_model_cost_map: None,
+) -> None:
     declared_mode: Final = litellm.model_cost["gpt-6.1-sol"]["reasoning_modes"][-1]
     requested: Final = {"effort": "high", "mode": "not-a-declared-value", "max_tokens": 2000}
 
@@ -1092,7 +1092,7 @@ def test_the_chat_bridge_keeps_other_keys_for_an_openai_prefixed_name_it_resolve
     assert bridged("gpt-6.1-sol", True) == {"effort": "high", "mode": declared_mode}
 
 
-def test_the_chat_bridge_keeps_only_effort_for_a_catalog_model_that_does_not_reason(local_model_cost_map):
+def test_the_chat_bridge_keeps_only_effort_for_a_catalog_model_that_does_not_reason(local_model_cost_map: None) -> None:
     non_reasoning_model: Final = next(
         name
         for name, row in litellm.model_cost.items()

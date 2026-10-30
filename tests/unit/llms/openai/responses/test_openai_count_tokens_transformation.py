@@ -683,7 +683,7 @@ def _disabled_effort(model: str) -> str:
 _DROP: Final = DropPolicy(drop_params=True, additional_drop_params=frozenset())
 
 
-def test_the_count_drops_what_inference_drops_under_drop_params(local_model_cost_map) -> None:
+def test_the_count_drops_what_inference_drops_under_drop_params(local_model_cost_map: None) -> None:
     malformed: Final = {
         "tool_choice": "required",
         "parallel_tool_calls": "true",
@@ -700,7 +700,7 @@ def test_the_count_drops_what_inference_drops_under_drop_params(local_model_cost
     assert inference == {"reasoning": {"summary": "auto"}}
 
 
-def test_the_count_keeps_an_effort_the_deployment_declares(local_model_cost_map) -> None:
+def test_the_count_keeps_an_effort_the_deployment_declares(local_model_cost_map: None) -> None:
     effort: Final = _disabled_effort("gpt-6.1-sol")
 
     body: Final = native_count_request(

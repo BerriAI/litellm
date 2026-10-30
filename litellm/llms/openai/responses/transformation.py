@@ -319,6 +319,7 @@ def _bundled_openai_reasoning_models() -> frozenset[str]:
 
 
 _TOOL_CHOICES_WITHOUT_TOOLS: Final = frozenset({"auto", "none"})
+_TOOL_CHOICE_STRINGS: Final = _TOOL_CHOICES_WITHOUT_TOOLS | {"required"}
 
 
 _PROVIDERS_CHECKED_FOR_MALFORMED_VALUES: Final = (LlmProviders.OPENAI, LlmProviders.AZURE)
@@ -355,9 +356,17 @@ def _names_a_sent_tool(tool_choice: object, tools: tuple[Mapping[str, object], .
             return True
 
 
+def _has_tool_choice_shape(tool_choice: object) -> bool:
+    if isinstance(tool_choice, str):
+        return tool_choice in _TOOL_CHOICE_STRINGS
+    return as_str_mapping(tool_choice) is not None
+
+
 def _accepts_tool_choice(tool_choice: object, params: Mapping[str, object]) -> bool:
-    if tool_choice is None or params.get("prompt") is not None:
+    if tool_choice is None:
         return True
+    if params.get("prompt") is not None:
+        return _has_tool_choice_shape(tool_choice)
     tools: Final = params.get("tools")
     if isinstance(tool_choice, str):
         return tool_choice in _TOOL_CHOICES_WITHOUT_TOOLS or (tool_choice == "required" and bool(tools))

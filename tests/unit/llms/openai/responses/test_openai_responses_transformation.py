@@ -3352,11 +3352,21 @@ class TestMalformedParamsFollowDropParams:
             pytest.param({"tool_choice": 5, "tools": [_WEATHER_TOOL]}, id="tool-choice-a-number-with-tools"),
             pytest.param({"tool_choice": ["get_time"], "tools": [_WEATHER_TOOL]}, id="tool-choice-a-list-with-tools"),
             pytest.param({"reasoning": "high"}, id="reasoning-not-an-object"),
+            pytest.param(
+                {"tool_choice": 5, "prompt": {"id": "pmpt_abc"}}, id="tool-choice-a-number-with-stored-prompt"
+            ),
+            pytest.param(
+                {"tool_choice": "always", "prompt": {"id": "pmpt_abc"}}, id="unknown-string-with-stored-prompt"
+            ),
         ],
     )
     def test_a_malformed_value_is_dropped_under_drop_params_and_sent_as_is_without(
-        self, local_model_cost_map, monkeypatch, config, params
-    ):
+        self,
+        local_model_cost_map: None,
+        monkeypatch: pytest.MonkeyPatch,
+        config: OpenAIResponsesAPIConfig,
+        params: dict[str, object],
+    ) -> None:
         monkeypatch.setattr(litellm, "drop_params", False)
         malformed: Final = next(name for name in params if name != "tools")
 
@@ -3367,8 +3377,8 @@ class TestMalformedParamsFollowDropParams:
         assert sent == params
 
     def test_azure_o_series_forwards_a_row_disabled_effort_while_dropping_malformed_values(
-        self, local_model_cost_map, monkeypatch
-    ):
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         row: Final = litellm.model_cost["gpt-6.1-sol"]
         monkeypatch.setitem(litellm.model_cost, "gpt-6.1-sol", {**row, "supports_minimal_reasoning_effort": False})
 
@@ -3393,6 +3403,10 @@ class TestMalformedParamsFollowDropParams:
             pytest.param({"previous_response_id": "resp_abc"}, id="previous-response-id-string"),
             pytest.param({"tool_choice": "required", "prompt": {"id": "pmpt_abc"}}, id="required-with-stored-prompt"),
             pytest.param(
+                {"tool_choice": {"type": "function", "name": "lookup_order"}, "prompt": {"id": "pmpt_abc"}},
+                id="function-from-stored-prompt",
+            ),
+            pytest.param(
                 {"tool_choice": {"type": "custom", "name": "other"}, "tools": [_SQL_TOOL]},
                 id="custom-with-a-custom-tool",
             ),
@@ -3416,7 +3430,9 @@ class TestMalformedParamsFollowDropParams:
             ),
         ],
     )
-    def test_a_well_formed_value_is_kept_under_drop_params(self, local_model_cost_map, params):
+    def test_a_well_formed_value_is_kept_under_drop_params(
+        self, local_model_cost_map: None, params: dict[str, object]
+    ) -> None:
         assert OpenAIResponsesAPIConfig().map_openai_params(dict(params), "gpt-6.1-sol", True) == params
 
     @pytest.mark.parametrize(
@@ -3428,10 +3444,12 @@ class TestMalformedParamsFollowDropParams:
             ),
         ],
     )
-    def test_a_tool_choice_the_check_cannot_read_is_kept_under_drop_params(self, local_model_cost_map, params):
+    def test_a_tool_choice_the_check_cannot_read_is_kept_under_drop_params(
+        self, local_model_cost_map: None, params: dict[str, object]
+    ) -> None:
         assert OpenAIResponsesAPIConfig().map_openai_params(dict(params), "gpt-6.1-sol", True) == params
 
-    def test_providers_outside_openai_and_azure_keep_these_values_as_sent(self, local_model_cost_map):
+    def test_providers_outside_openai_and_azure_keep_these_values_as_sent(self, local_model_cost_map: None) -> None:
         params: Final = {
             "tool_choice": "required",
             "parallel_tool_calls": "true",
@@ -3446,8 +3464,8 @@ class TestMalformedParamsFollowDropParams:
         [("mode", "turbo"), ("context", "forever"), ("summary", "sometimes"), ("generate_summary", "auto")],
     )
     def test_a_reasoning_value_the_model_row_does_not_declare_is_dropped_under_drop_params(
-        self, local_model_cost_map, monkeypatch, field, value
-    ):
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, field: str, value: str
+    ) -> None:
         monkeypatch.setattr(litellm, "drop_params", False)
         row: Final = litellm.model_cost["gpt-6.1-sol"]
         declared: Final = {
@@ -3466,8 +3484,8 @@ class TestMalformedParamsFollowDropParams:
 
     @pytest.mark.parametrize(("field", "declarations"), [("mode", "reasoning_modes"), ("context", "reasoning_contexts")])
     def test_a_row_without_reasoning_declarations_drops_values_no_openai_row_declares(
-        self, local_model_cost_map, monkeypatch, field, declarations
-    ):
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, field: str, declarations: str
+    ) -> None:
         monkeypatch.setattr(litellm, "drop_params", False)
         undeclared_model: Final = next(
             name
@@ -3487,7 +3505,9 @@ class TestMalformedParamsFollowDropParams:
         assert sent["reasoning"] == malformed
         assert kept["reasoning"] == declared
 
-    def test_reasoning_on_a_non_reasoning_model_is_dropped_under_drop_params(self, local_model_cost_map, monkeypatch):
+    def test_reasoning_on_a_non_reasoning_model_is_dropped_under_drop_params(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(litellm, "drop_params", False)
         non_reasoning_model: Final = next(
             name
@@ -3515,8 +3535,8 @@ class TestMalformedParamsFollowDropParams:
         ids=["openai", "azure", "azure-o-series"],
     )
     def test_an_effort_outside_the_known_levels_is_dropped_unless_the_deployment_declares_it(
-        self, local_model_cost_map, monkeypatch, config, model
-    ):
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, config: OpenAIResponsesAPIConfig, model: str
+    ) -> None:
         monkeypatch.setattr(litellm, "drop_params", False)
         reasoning: Final = {"effort": "not-an-effort", "summary": "auto"}
 
@@ -3543,8 +3563,8 @@ class TestMalformedParamsFollowDropParams:
         ids=["azure", "azure-o-series"],
     )
     def test_azure_drops_reasoning_values_and_keys_no_openai_row_declares(
-        self, local_model_cost_map, monkeypatch, config, model
-    ):
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, config: OpenAIResponsesAPIConfig, model: str
+    ) -> None:
         monkeypatch.setattr(litellm, "drop_params", False)
         row: Final = litellm.model_cost["gpt-6.1-sol"]
         declared: Final = {
@@ -3570,8 +3590,8 @@ class TestMalformedParamsFollowDropParams:
         assert sent["reasoning"] == malformed
 
     def test_an_openai_model_outside_the_catalog_keeps_reasoning_keys_openai_does_not_define(
-        self, local_model_cost_map, monkeypatch
-    ):
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(litellm, "drop_params", False)
         server_keys: Final = {"max_tokens": 2000, "exclude": True}
         requested: Final = {"effort": "high", "mode": "turbo", "context": "forever", "summary": "sometimes", **server_keys}
@@ -3582,7 +3602,7 @@ class TestMalformedParamsFollowDropParams:
 
         assert dropped["reasoning"] == {"effort": "high", **server_keys}
 
-    def test_a_reasoning_mode_a_reloaded_cost_map_declares_is_kept_on_azure(self, local_model_cost_map):
+    def test_a_reasoning_mode_a_reloaded_cost_map_declares_is_kept_on_azure(self, local_model_cost_map: None) -> None:
         row: Final = litellm.model_cost["gpt-6.1-sol"]
         new_mode: Final = "-".join(row["reasoning_modes"]) + "-next"
         request: Final = {"reasoning": {"effort": "high", "mode": new_mode}}
