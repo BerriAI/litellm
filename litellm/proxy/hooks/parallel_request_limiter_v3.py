@@ -11,8 +11,8 @@ import json
 import logging
 import os
 import uuid
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence, Set
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapping, Sequence, Set
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -745,6 +745,7 @@ class RequestRateLimiterStash:
     batch_tpd_refund_ops: tuple[ReservationAwareIncrementOperation, ...] = ()
     reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
+    borrowed_parallel_keys: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -802,6 +803,23 @@ _request_stash: Final[ContextVar[RequestRateLimiterStash | None]] = ContextVar(
 
 def get_request_stash() -> RequestRateLimiterStash | None:
     return _request_stash.get()
+
+
+@contextmanager
+def isolated_mcp_tool_call() -> Generator[None]:
+    """Give a child its own accounting, borrowing only concurrency held by its parent."""
+    parent: Final = get_request_stash()
+    borrowed: Final[frozenset[str]] = (
+        parent.borrowed_parallel_keys
+        | (frozenset(parent.parallel_slot["counter_keys"]) if parent.parallel_slot is not None else frozenset[str]())
+        if parent is not None
+        else frozenset[str]()
+    )
+    token: Final = _request_stash.set(RequestRateLimiterStash(borrowed_parallel_keys=borrowed))
+    try:
+        yield
+    finally:
+        _request_stash.reset(token)
 
 
 def get_or_create_request_stash() -> RequestRateLimiterStash:
@@ -4325,10 +4343,28 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         request_data: Final = _REQUEST_RATE_LIMIT_DATA.validate_python(data)
         model_value: Final = request_data.get("model")
         requested_model: Final = model_value if isinstance(model_value, str) else None
-        descriptors: Final = await self._build_request_rate_limit_descriptors(
+        requested_descriptors: Final = await self._build_request_rate_limit_descriptors(
             user_api_key_dict=user_api_key_dict,
             data=request_data,
             call_type=call_type,
+        )
+        # The enclosing code request owns these slots until all children finish.
+        # Keep every RPM/TPM limit and acquire any additional child-only scope normally.
+        descriptors: Final = (
+            [
+                RateLimitDescriptor(
+                    key=descriptor["key"],
+                    value=descriptor["value"],
+                    rate_limit={**rate, "max_parallel_requests": None},
+                )
+                if (rate := descriptor["rate_limit"]) is not None
+                and self.create_rate_limit_keys(descriptor["key"], descriptor["value"], "max_parallel_requests")
+                in stash.borrowed_parallel_keys
+                else descriptor
+                for descriptor in requested_descriptors
+            ]
+            if stash.borrowed_parallel_keys
+            else requested_descriptors
         )
         stash.tpm_limited_tags = frozenset(
             d["value"]

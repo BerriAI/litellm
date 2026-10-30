@@ -1345,6 +1345,7 @@ class TestListToolsRestAPI:
             extra_headers=None,
             apply_tool_filters=True,
             client_ip=None,
+            preserve_tool_names: bool = False,
         ):
             captured["called"] = True
             captured["server"] = server
@@ -1432,6 +1433,7 @@ class TestListToolsRestAPI:
             extra_headers=None,
             apply_tool_filters=True,
             client_ip=None,
+            preserve_tool_names: bool = False,
         ):
             captured["user_api_key_auth"] = user_api_key_auth
             return ["tool-1"]
@@ -2001,6 +2003,7 @@ class TestListToolsRestAPI:
             extra_headers=None,
             apply_tool_filters=True,
             client_ip=None,
+            preserve_tool_names: bool = False,
         ):
             captured["called"] = True
             captured["server_arg"] = server
@@ -2138,6 +2141,7 @@ class TestListToolsRestAPI:
             extra_headers=None,
             apply_tool_filters=True,
             client_ip=None,
+            preserve_tool_names: bool = False,
         ):
             captured["called"] = True
             captured["server_arg"] = server
@@ -2224,6 +2228,7 @@ class TestListToolsRestAPI:
             extra_headers=None,
             apply_tool_filters=True,
             client_ip=None,
+            preserve_tool_names: bool = False,
         ):
             return ["scoped-tool"]
 
@@ -2432,6 +2437,7 @@ class TestListToolsRestAPI:
             extra_headers=None,
             apply_tool_filters=True,
             client_ip=None,
+            preserve_tool_names: bool = False,
         ):
             captured["server"] = server
             captured["auth_header"] = server_auth_header

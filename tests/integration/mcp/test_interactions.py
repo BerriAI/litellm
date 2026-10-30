@@ -1604,3 +1604,176 @@ def test_legacy_notification_dispatch_finishes_before_session_deletion() -> None
             assert terminated.status_code == 200
         finally:
             deleted.set()
+
+
+def test_code_mode_blocks_legacy_elicitation_but_preserves_ordinary_consent(tmp_path: Path) -> None:
+    import asyncio
+
+    import httpx2
+    from integration._support.mcp import mcp_peer, tool_calls
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+    from mcp.types import ElicitResult
+
+    with mcp_peer("sse", rich=True) as peer, httpx.Client() as http_client:
+        config = tmp_path / "proxy.yaml"
+        config.write_text(
+            yaml.safe_dump(
+                {
+                    "model_list": [],
+                    "mcp_servers": {
+                        "peer": {
+                            "url": peer.url,
+                            "transport": "sse",
+                            "protocol_version": "2025-11-25",
+                            "allow_elicitation": True,
+                        }
+                    },
+                    "general_settings": {
+                        "master_key": _KEY,
+                        "store_model_in_db": False,
+                        "mcp_advertised_versions": ["2025-11-25"],
+                    },
+                    "litellm_settings": {"mcp_code_mode": True},
+                }
+            )
+        )
+        consent_requests: list[str] = []
+
+        async def consent(context, params):
+            consent_requests.append(params.message)
+            return ElicitResult(action="accept", content={"confirmed": True})
+
+        async def exercise(gateway):
+            async with (
+                httpx2.AsyncClient(headers={"Authorization": "Bearer " + gateway.key}) as client,
+                streamable_http_client(
+                    str(gateway.client.base_url).rstrip("/") + "/mcp/", http_client=client
+                ) as streams,
+                ClientSession(streams[0], streams[1], elicitation_callback=consent) as session,
+            ):
+                await session.initialize()
+                await session.list_tools()
+                ordinary = await session.call_tool("peer-elicit", {"question": "Confirm"})
+                assert not ordinary.is_error and ordinary.content[0].text == "elicited:accept", ordinary
+                assert consent_requests == ["Confirm"]
+                consent_requests.clear()
+                nested = await session.call_tool(
+                    "litellm_execute_code",
+                    {"code": 'text(await tools.call_tool({tool_id:"peer-elicit",arguments:{question:"Confirm"}}))'},
+                )
+                assert consent_requests == [], nested
+                body = json.loads(nested.content[0].text)
+                assert body["calls_started"] == 1, body
+                child = body["output"][0]
+                assert child["isError"] is True, child
+                assert "elicitation" in json.dumps(child).lower(), child
+                assert "unsupported" in json.dumps(child).lower(), child
+                recovered = await session.call_tool("peer-elicit", {"question": "Confirm again"})
+                assert not recovered.is_error and recovered.content[0].text == "elicited:accept", recovered
+                assert consent_requests == ["Confirm again"]
+
+        with owned_proxy(
+            Gateway(http_client, _KEY, peer.url),
+            tmp_path / "gateway",
+            {
+                "PYTHONPATH": _PROXY_PYTHONPATH,
+                "STORE_MODEL_IN_DB": "False",
+                "DISABLE_SCHEMA_UPDATE": "true",
+                "LITELLM_SALT_KEY": "code-elicitation-test",
+                "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+            },
+            config=config,
+            workers=1,
+            database_setup=(),
+            remove_environment=("DATABASE_URL", "DATABASE_URL_READ_REPLICA", "DIRECT_URL", "REDIS_URL", "REDIS_HOST"),
+        ) as gateway:
+            asyncio.run(exercise(gateway))
+        assert len(tool_calls(peer.drain())) == 3, "Consent handling restarted an upstream tool"
+
+
+def test_code_mode_checks_final_output_guardrail_on_all_routes(tmp_path: Path) -> None:
+    from integration._support.mcp import mcp_peer, official_client_outcomes, tool_calls
+
+    (tmp_path / "code_output_guard.py").write_text("""
+from fastapi import HTTPException
+from litellm.integrations.custom_guardrail import CustomGuardrail
+
+class RejectOutput(CustomGuardrail):
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        if any("qa-rejected-output" in text or "秘密" in text for text in inputs.get("texts", [])):
+            raise HTTPException(status_code=400, detail="QA output rejected")
+        return inputs
+""")
+    with mcp_peer() as peer, httpx.Client() as client:
+        config = tmp_path / "proxy.yaml"
+        config.write_text(
+            yaml.safe_dump(
+                {
+                    "model_list": [],
+                    "mcp_servers": {"peer": {"url": peer.url, "transport": "http"}},
+                    "general_settings": {"master_key": _KEY, "store_model_in_db": False},
+                    "litellm_settings": {"mcp_code_mode": True},
+                    "guardrails": [
+                        {
+                            "guardrail_name": "qa-output",
+                            "litellm_params": {
+                                "guardrail": "code_output_guard.RejectOutput",
+                                "mode": "post_mcp_call",
+                                "default_on": True,
+                            },
+                        }
+                    ],
+                }
+            )
+        )
+        with owned_proxy(
+            Gateway(client, _KEY, peer.url),
+            tmp_path / "gateway",
+            {
+                "PYTHONPATH": os.pathsep.join([str(tmp_path), _PROXY_PYTHONPATH]),
+                "STORE_MODEL_IN_DB": "False",
+                "DISABLE_SCHEMA_UPDATE": "true",
+                "LITELLM_SALT_KEY": "code-output-test",
+                "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+            },
+            config=config,
+            workers=2,
+            database_setup=(),
+            remove_environment=("DATABASE_URL", "DATABASE_URL_READ_REPLICA", "DIRECT_URL", "REDIS_URL", "REDIS_HOST"),
+        ) as gateway:
+            outcomes = []
+            for path in ("/mcp", "/mcp/proxy", "rest"):
+                responses = []
+                for code in (
+                    'text("qa-rejected-output")',
+                    'text(String.fromCodePoint(0x79d8, 0x5bc6))',
+                    'text("qa-allowed-output")',
+                    'text(String.fromCodePoint(0x4f60, 0x597d))',
+                ):
+                    if path == "rest":
+                        result = McpCaller(gateway, gateway.key, "rest").call("litellm_execute_code", {"code": code})
+                    else:
+                        _, result = official_client_outcomes(
+                            gateway, gateway.key, path, "litellm_execute_code", {"code": code}
+                        )
+                    responses.append(result)
+                outcomes.append((path, *responses))
+            unicode_outcomes: Final = tuple(
+                {"route": route, "status": result.status, "ok": result.ok, "output": result.text}
+                for route, _rejected, result, _allowed, _unicode_allowed in outcomes
+            )
+            for path, rejected, unicode_rejected, allowed, unicode_allowed in outcomes:
+                for blocked in (rejected, unicode_rejected):
+                    assert not blocked.ok, (path, blocked, unicode_outcomes)
+                    assert "QA output rejected" in (blocked.error or ""), (path, blocked)
+                assert allowed.ok and allowed.text is not None, (path, allowed)
+                assert json.loads(allowed.text)["output"] == ["qa-allowed-output"]
+                assert unicode_allowed.ok and unicode_allowed.text is not None, (path, unicode_allowed)
+                assert json.loads(unicode_allowed.text)["output"] == ["你好"]
+            surrogate = McpCaller(gateway, gateway.key, "rest").call(
+                "litellm_execute_code", {"code": "text('kept'); text(String.fromCharCode(0xd800));"}
+            )
+            assert surrogate.ok and surrogate.text is not None, surrogate
+            assert json.loads(surrogate.text) == {"output": ["kept", chr(0xD800)], "error": None, "calls_started": 0}
+            assert tool_calls(peer.drain()) == (), "Pure code unexpectedly invoked an upstream tool"

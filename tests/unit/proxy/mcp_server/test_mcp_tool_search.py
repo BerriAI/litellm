@@ -1468,4 +1468,73 @@ async def test_cold_concurrent_schema_validation_accepts_valid_arguments() -> No
         if original_affinity is not None:
             os.sched_setaffinity(0, original_affinity)
 
+@pytest.mark.asyncio
+async def test_disabled_code_mode_preserves_legacy_pre_hook_argument_mutation(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mcp.types import TextContent
 
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    from litellm.types.utils import CallTypesLiteral
+
+    tool_name = "legacy-rewrite-echo"
+
+    class RewriteVirtualArguments(CustomLogger):
+        async def async_pre_call_hook(
+            self,
+            user_api_key_dict: UserAPIKeyAuth,
+            cache: DualCache,
+            data: dict[str, object],
+            call_type: CallTypesLiteral,
+        ) -> dict[str, object]:
+            # Only the virtual pre-hook has `name`; the later per-tool hook has
+            # `mcp_tool_name`. A second rewrite there would hide a broken handoff.
+            if data.get("name") == tool_name and "mcp_tool_name" not in data:
+                arguments = data.get("arguments")
+                assert isinstance(arguments, dict)
+                arguments["message"] = "rewritten by pre-hook"
+            return data
+
+    async def echo(message: str) -> str:
+        return message
+
+    server = MCPServer(
+        server_id="legacy-rewrite-server",
+        name="legacy-rewrite",
+        alias="legacy-rewrite",
+        transport=MCPTransport.http,
+        allow_all_keys=True,
+    )
+    manager = mcp_operations.global_mcp_server_manager
+    monkeypatch.setattr(litellm, "mcp_code_mode", False, raising=False)
+    monkeypatch.setattr(litellm, "callbacks", [RewriteVirtualArguments()])
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=UserApiKeyCache()))
+    monkeypatch.setitem(manager.registry, server.server_id, server)
+    monkeypatch.setitem(manager.tool_name_to_mcp_server_name_mapping, tool_name, server.name)
+    monkeypatch.setattr(global_mcp_tool_registry, "tools", dict(global_mcp_tool_registry.tools))
+    global_mcp_tool_registry.register_tool(
+        name=tool_name,
+        description="Echo the supplied message",
+        input_schema={"type": "object", "properties": {"message": {"type": "string"}}},
+        handler=echo,
+        server_id=server.server_id,
+    )
+    auth = UserAPIKeyAuth(
+        api_key="legacy-rewrite-test",
+        object_permission=_make_perm(mcp_tool_search_enabled=True),
+    )
+    result = await mcp_operations._dispatch_virtual_mcp_tool(
+        name=MCP_TOOL_CALL_TOOL_NAME,
+        arguments={"tool_name": tool_name, "arguments": {"message": "original message"}},
+        user_api_key_auth=auth,
+        client_ip=None,
+    )
+    assert result is not None
+    assert not result.is_error
+    assert isinstance(result.content[0], TextContent)
+    assert result.content[0].text == "rewritten by pre-hook"

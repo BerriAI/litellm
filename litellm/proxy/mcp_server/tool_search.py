@@ -139,6 +139,7 @@ def coerce_top_k(value: Any, default: int = 5) -> int:
 
 
 class ToolSearchResult(TypedDict, total=False):
+    code_mode: ReadOnly[Mapping[str, JsonValue]]
     name: Required[ReadOnly[str]]
     description: Required[ReadOnly[str]]
     inputSchema: Required[ReadOnly[Mapping[str, object]]]
@@ -146,6 +147,7 @@ class ToolSearchResult(TypedDict, total=False):
 
 
 class MCPProxySearchResult(TypedDict, total=False):
+    code_mode: ReadOnly[Mapping[str, JsonValue]]
     tool_id: Required[ReadOnly[str]]
     name: Required[ReadOnly[str]]
     description: Required[ReadOnly[str]]
@@ -186,20 +188,18 @@ def mcp_tool_search_settings() -> MCPToolSearchSettings | ValidationError:
 
 
 def _tool_result(tool: Tool) -> ToolSearchResult:
-    return {
+    from litellm.proxy.mcp_server.code_execution import code_description, compatibility, settings
+
+    base: Final[ToolSearchResult] = {
         "name": tool.name,
-        "description": tool.description or "",
+        "description": code_description(tool),
         "inputSchema": tool.input_schema,
     }
+    return {**base, "code_mode": compatibility(tool)} if settings().enabled else base
 
 
 def _scored_result(tool: Tool, score: float) -> ToolSearchResult:
-    return {
-        "name": tool.name,
-        "description": tool.description or "",
-        "inputSchema": tool.input_schema,
-        "score": score,
-    }
+    return {**_tool_result(tool), "score": score}
 
 
 _MCP_PROXY_IDENTITY_META_KEY: Final[str] = "litellm.ai/proxy_tool_identity"
@@ -228,24 +228,32 @@ def mcp_proxy_tool_id(tool: Tool) -> str:
 
 
 def _proxy_search_result(hit: MCPToolSearchHit) -> MCPProxySearchResult:
+    from litellm.proxy.mcp_server.code_execution import code_description, compatibility, settings
+
     base: Final[MCPProxySearchResult] = {
         "tool_id": mcp_proxy_tool_id(hit.tool),
         "name": hit.tool.name,
-        "description": hit.tool.description or "",
+        "description": code_description(hit.tool),
     }
-    return {**base, "score": hit.score} if hit.score is not None else base
+    annotated: Final[MCPProxySearchResult] = (
+        {**base, "code_mode": compatibility(hit.tool)} if settings().enabled else base
+    )
+    return {**annotated, "score": hit.score} if hit.score is not None else annotated
 
 
 def _proxy_schema_result(tool: Tool) -> MCPProxySchemaResult:
+    from litellm.proxy.mcp_server.code_execution import code_description, compatibility, settings
+
     base: Final[MCPProxySchemaResult] = {
         "tool_id": mcp_proxy_tool_id(tool),
         "name": tool.name,
-        "description": tool.description or "",
+        "description": code_description(tool),
         "inputSchema": tool.input_schema,
     }
+    annotated: Final[MCPProxySchemaResult] = {**base, "code_mode": compatibility(tool)} if settings().enabled else base
     if tool.output_schema is None:
-        return base
-    return {**base, "outputSchema": tool.output_schema}
+        return annotated
+    return {**annotated, "outputSchema": tool.output_schema}
 
 
 def _tool_text(tool: Tool) -> str:

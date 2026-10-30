@@ -144,3 +144,16 @@ def _mcp_request_ctx():
         return ServerRequestContext(**kwargs)
 
     return _mcp_request_ctx
+
+
+@pytest.fixture
+def mcp_code_runtime() -> None:
+    from importlib.metadata import PackageNotFoundError, version
+
+    from litellm.proxy.mcp_server.code_runtime import check_runtime
+
+    try:
+        version("quickjs-ng")
+    except PackageNotFoundError:
+        pytest.skip("Requires the optional litellm[mcp-code-mode] runtime")
+    check_runtime()

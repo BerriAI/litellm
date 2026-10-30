@@ -1,0 +1,385 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import re
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
+from datetime import datetime
+from typing import Final, Protocol
+from uuid import uuid4
+
+import anyio
+from mcp.shared.exceptions import MCPError
+from mcp.types import CallToolResult, TextContent, Tool
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
+
+import litellm
+from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.mcp_server.contracts import OperationContext
+from litellm.proxy.mcp_server.legacy_callbacks import noninteractive_code_execution
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.mcp import MCPCodeModeSettings
+
+CODE_TOOL_NAME: Final = "litellm_execute_code"
+CODE_MODE_META: Final = "litellm.ai/code_mode"
+_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+
+
+class _FailureLogger(Protocol):
+    async def post_call_failure_hook(
+        self,
+        request_data: dict[str, object],  # mutable-ok: existing proxy failure hook mutates the request
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        *,
+        route: str,
+    ) -> object: ...
+
+
+class CodeInput(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    code: str
+
+
+def settings() -> MCPCodeModeSettings:
+    configured: Final = litellm.mcp_code_mode
+    return (
+        MCPCodeModeSettings(enabled=configured)
+        if isinstance(configured, bool)
+        else MCPCodeModeSettings.model_validate(configured)
+    )
+
+
+def validate_settings(configured: object) -> MCPCodeModeSettings:
+    validated: Final = (
+        MCPCodeModeSettings(enabled=configured)
+        if isinstance(configured, bool)
+        else MCPCodeModeSettings.model_validate(configured)
+    )
+    if validated.enabled:
+        from litellm.proxy.mcp_server.code_runtime import check_runtime
+
+        check_runtime()
+    return validated
+
+
+def tool_names(tool: Tool) -> frozenset[str]:
+    """Recognize canonical, bare and configured display names for one identity."""
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.mcp_server.tool_search import (
+        _mcp_proxy_identity,  # pyright: ignore[reportPrivateUsage]  # shared identity metadata contract
+    )
+    from litellm.proxy.mcp_server.utils import strip_known_server_prefix
+
+    try:
+        identity: Final = _mcp_proxy_identity(tool)
+    except TypeError:
+        return frozenset((tool.name,))
+    canonical: Final = identity["tool_name"]
+    server: Final = next(
+        (item for item in global_mcp_server_manager.get_registry().values() if item.server_id == identity["server_id"]),
+        None,
+    )
+    if server is None:
+        return frozenset((tool.name, canonical))
+    bare: Final = strip_known_server_prefix(canonical, server)
+    display: Final = (server.tool_name_to_display_name or {}).get(bare, canonical)
+    return frozenset((tool.name, canonical, bare, display))
+
+
+def compatibility(tool: Tool) -> Mapping[str, JsonValue]:
+    from litellm.proxy.mcp_server.tool_search import MCP_PROXY_TOOL_NAMES, VIRTUAL_TOOL_NAMES
+
+    names: Final = tool_names(tool)
+    if names.intersection((*MCP_PROXY_TOOL_NAMES, *VIRTUAL_TOOL_NAMES, CODE_TOOL_NAME)):
+        return {"status": "unsupported", "reason": "Nested orchestration is unsupported"}
+    if tool.execution is not None and tool.execution.task_support == "required":
+        return {"status": "unsupported", "reason": "Task-based execution is unsupported in code mode"}
+    excluded: Final = next((reason for name, reason in settings().excluded_tools.items() if name in names), None)
+    return (
+        {"status": "unsupported", "reason": excluded}
+        if excluded is not None
+        else {
+            "status": "available",
+            "reason": "JSON tool calls only. Interactive continuations are unsupported; upstream behavior has not been verified.",
+        }
+    )
+
+
+def _code_reference(tool: Tool) -> str:
+    from litellm.proxy.mcp_server.tool_search import mcp_proxy_tool_id
+
+    try:
+        return mcp_proxy_tool_id(tool)
+    except TypeError:
+        return tool.name
+
+
+def code_description(tool: Tool) -> str:
+    """Publish a reference clients can copy even when they rename the tool."""
+    if not settings().enabled:
+        return tool.description or ""
+    support: Final = compatibility(tool)
+    hint: Final = (
+        f"Code mode unsupported: {support['reason']}"
+        if support["status"] == "unsupported"
+        else f"Code mode tool_id: {json.dumps(_code_reference(tool))}."
+    )
+    return f"{hint}\n\n{tool.description}" if tool.description else hint
+
+
+def code_tool() -> Tool:
+    from litellm.proxy.mcp_server.code_runtime import CodeExecutionLimits
+
+    limits: Final = CodeExecutionLimits()
+    return Tool(
+        name=CODE_TOOL_NAME,
+        description=(
+            "Run JavaScript to compose MCP tool calls. Use await tools.call_tool({tool_id, arguments}); "
+            "Copy the exact Code mode tool_id from the tool description, or tool_id from search_tools. "
+            "Do not rename, normalize or prefix this reference. "
+            "Each call returns the full MCP envelope: structuredContent, content and isError. "
+            "Inspect isError before using results. Emit only needed results with text(value). "
+            "No filesystem, network, imports, persistent state or interactive continuations. "
+            "A failed script may have completed some calls; never blindly replay writes. "
+            f"Limits: {limits.timeout_seconds:g} seconds, {limits.max_calls} calls, "
+            f"{limits.max_concurrent_calls} concurrent calls, {limits.output_bytes // 1024} KiB output."
+        ),
+        input_schema=CodeInput.model_json_schema(),
+    )
+
+
+def with_code_tool(
+    tools: Sequence[Tool], *, first_page: bool = True
+) -> list[Tool]:  # mutable-ok: MCP SDK requires a list
+    if not settings().enabled:
+        return list(tools)
+    if any(tool.name == CODE_TOOL_NAME for tool in tools):
+        raise MCPError(code=-32602, message="MCP tool name conflicts with the reserved code execution tool")
+    annotated: Final = [
+        tool.model_copy(
+            update={
+                "meta": {**(tool.meta or {}), CODE_MODE_META: compatibility(tool)},
+                "description": code_description(tool),
+            }
+        )
+        for tool in tools
+    ]
+    return [*annotated, *([code_tool()] if first_page else [])]
+
+
+def error_result(message: str) -> CallToolResult:
+    return CallToolResult(content=[TextContent(type="text", text=message)], is_error=True)
+
+
+def serialize_tool_result(
+    result: CallToolResult,
+) -> dict[str, JsonValue]:  # mutable-ok: runtime JSON callback contract
+    return _JSON_OBJECT.validate_python(result.model_dump(mode="json", by_alias=True, exclude_none=True))
+
+
+def with_code_trace(context: OperationContext) -> OperationContext:
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    headers: Final = dict(context.raw_headers or {})
+    if get_chain_id_from_headers(headers):
+        return context
+    return replace(context, raw_headers={**headers, "x-litellm-trace-id": str(uuid4())})
+
+
+async def cleanup_cancelled_call(data: Mapping[str, object], caller: UserAPIKeyAuth, logger: _FailureLogger) -> None:
+    from fastapi import HTTPException
+
+    with anyio.CancelScope(shield=True):
+        try:
+            await logger.post_call_failure_hook(
+                request_data=dict(data),
+                original_exception=HTTPException(status_code=499, detail="MCP code execution cancelled"),
+                user_api_key_dict=caller,
+                route="/mcp/call_tool",
+            )
+        except Exception:  # noqa: BLE001  # Callback failures must not replace cancellation.
+            verbose_proxy_logger.error("MCP code cancellation cleanup failed")
+
+
+async def run_code_tool(arguments: Mapping[str, object] | None, context: OperationContext) -> CallToolResult:
+    from litellm.proxy.mcp_server.operations import (
+        _fire_mcp_tool_call_logging,
+        _run_post_mcp_call_guardrails,
+        fire_mcp_tool_call_failure_logging,
+        prepare_virtual_mcp_call,
+    )
+
+    if not settings().enabled:
+        return error_result("MCP code mode is disabled")
+    caller: Final = context.user_api_key_auth
+    if caller is None:
+        return error_result("MCP code execution requires an authenticated caller")
+    traced: Final = with_code_trace(context)
+    started: Final = datetime.now()  # noqa: DTZ005  # MCP logging uses naive timestamps
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    data: Mapping[str, object] = {  # rebind-ok: enriched by pre-call setup
+        "name": CODE_TOOL_NAME,
+        "arguments": arguments or {},
+    }
+    try:
+        data, logging_obj = await prepare_virtual_mcp_call(  # rebind-ok: retain enriched data for cancellation cleanup
+            CODE_TOOL_NAME,
+            dict(arguments or {}),
+            caller,
+            raw_headers=traced.raw_headers,
+            client_ip=traced.client_ip,
+        )
+        try:
+            processed: Final = TypeAdapter(dict[str, object]).validate_python(
+                data.get("modified_arguments", data.get("mcp_arguments", data.get("arguments", {})))
+            )
+            executed: Final = await _execute_script(processed, traced)
+            result: Final = await _run_post_mcp_call_guardrails(
+                executed,
+                litellm_logging_obj=logging_obj,
+                original_auth=caller,
+                guardrail_auth=caller,
+                request_data=data,
+            )
+            if logging_obj is None:
+                return result
+            return await _fire_mcp_tool_call_logging(
+                logging_obj,
+                result,
+                started,
+                datetime.now(),  # noqa: DTZ005  # MCP logging uses naive timestamps
+                caller,
+                data,
+            )
+        except Exception as exc:
+            await fire_mcp_tool_call_failure_logging(logging_obj, exc, started, caller, data)
+            raise
+    except asyncio.CancelledError:
+        await cleanup_cancelled_call(data, caller, proxy_logging_obj)
+        raise
+    finally:
+        with anyio.CancelScope(shield=True):
+            await proxy_logging_obj.arelease_max_parallel_requests(caller)
+
+
+async def _execute_script(arguments: Mapping[str, object], context: OperationContext) -> CallToolResult:
+    from litellm.proxy.mcp_server.operations import _dispatch_virtual_mcp_tool, _list_mcp_tools, find_mcp_proxy_tool
+    from litellm.proxy.mcp_server.tool_search import (
+        MCP_PROXY_TOOL_NAMES,
+        VIRTUAL_TOOL_NAMES,
+        mcp_proxy_tool_id,
+    )
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    if not settings().enabled:
+        return error_result("MCP code mode is disabled")
+    caller: Final = context.user_api_key_auth
+    if caller is None:
+        return error_result("MCP code execution requires an authenticated caller")
+    from litellm.proxy.mcp_server.code_runtime import execute_code
+    from litellm.proxy.mcp_server.code_worker import json_bytes
+
+    try:
+        request: Final = CodeInput.model_validate(arguments or {})
+    except ValidationError:
+        return error_result("Invalid code request. Provide only a 'code' string.")
+    auth, header, servers, server_headers, oauth_headers, raw_headers, client_ip = context.legacy_auth()
+    forbidden: Final = {*MCP_PROXY_TOOL_NAMES, *VIRTUAL_TOOL_NAMES, CODE_TOOL_NAME}
+
+    async def find_tool(tool_id: str) -> Tool | None:
+        if re.fullmatch(r"[0-9a-f]{32}", tool_id):
+            return await find_mcp_proxy_tool(
+                tool_id,
+                user_api_key_auth=caller,
+                mcp_servers=servers,
+                client_ip=client_ip,
+                mcp_auth_header=header,
+                mcp_server_auth_headers=server_headers,
+                oauth2_headers=oauth_headers,
+                raw_headers=raw_headers,
+            )
+        listing: Final = await _list_mcp_tools(
+            user_api_key_auth=auth,
+            mcp_servers=servers,
+            client_ip=client_ip,
+            mcp_auth_header=header,
+            mcp_server_auth_headers=server_headers,
+            oauth2_headers=oauth_headers,
+            raw_headers=raw_headers,
+            mcp_proxy_mode=True,
+        )
+        matches: Final = tuple(tool for tool in listing.tools if tool_id in tool_names(tool))
+        return matches[0] if len(matches) == 1 else None
+
+    async def call_tool(
+        tool_id: str,
+        tool_arguments: dict[str, JsonValue],  # mutable-ok: runtime JSON callback contract
+    ) -> dict[str, JsonValue]:  # mutable-ok: runtime JSON callback contract
+        if tool_id in forbidden:
+            return serialize_tool_result(error_result("Nested orchestration tools are unsupported"))
+        selected: Final = await find_tool(tool_id)
+        if selected is None:
+            return serialize_tool_result(
+                error_result(
+                    "Unknown, ambiguous or unauthorized tool. Copy the exact Code mode tool_id from "
+                    "the tool description, or tool_id returned by search_tools."
+                )
+            )
+        support: Final = compatibility(selected)
+        if support["status"] == "unsupported":
+            return serialize_tool_result(error_result(f"Tool is unsupported in code mode: {support['reason']}"))
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import isolated_mcp_tool_call
+
+        with isolated_mcp_tool_call():
+            try:
+                result: Final = await _dispatch_virtual_mcp_tool(
+                    name="call_tool",
+                    arguments={"tool_id": mcp_proxy_tool_id(selected), "arguments": tool_arguments},
+                    user_api_key_auth=auth,
+                    client_ip=client_ip,
+                    mcp_servers=servers,
+                    mcp_auth_header=header,
+                    mcp_server_auth_headers=server_headers,
+                    oauth2_headers=oauth_headers,
+                    raw_headers=raw_headers,
+                    mcp_proxy_mode=True,
+                    incoming_bearer_token=context.incoming_bearer_token,
+                    resolved_tool=selected,
+                )
+            except asyncio.CancelledError:
+                await cleanup_cancelled_call(
+                    {"name": selected.name, "arguments": tool_arguments}, caller, proxy_logging_obj
+                )
+                raise
+        assert result is not None
+        from litellm.proxy.mcp_server.result_conversion import INPUT_REQUIRED_UNSUPPORTED_MESSAGE
+
+        if result.is_error and any(
+            isinstance(block, TextContent) and block.text == INPUT_REQUIRED_UNSUPPORTED_MESSAGE
+            for block in result.content
+        ):
+            return serialize_tool_result(
+                error_result(
+                    "This tool requires an interactive continuation, which is unsupported in code mode. "
+                    "Call it directly instead. Earlier calls in this script may already have completed."
+                )
+            )
+        return serialize_tool_result(result)
+
+    with noninteractive_code_execution():
+        result: Final = await execute_code(request.code, call_tool)
+    return CallToolResult(
+        content=[
+            TextContent(
+                type="text",
+                text=json_bytes(
+                    {"output": result.output, "error": result.error, "calls_started": result.calls_started}
+                ).decode("utf-8"),
+            )
+        ],
+        is_error=result.error is not None,
+    )

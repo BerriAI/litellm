@@ -1,4 +1,6 @@
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Final, Protocol
 
 import httpx2
@@ -21,6 +23,17 @@ from litellm.proxy.mcp_server.scope_challenge import (
     is_tool_call_request,
     scope_response_from_request,
 )
+
+_code_execution_active: Final[ContextVar[bool]] = ContextVar("mcp_code_execution_active", default=False)
+
+
+@contextmanager
+def noninteractive_code_execution() -> Generator[None, None, None]:
+    token: Final = _code_execution_active.set(True)
+    try:
+        yield
+    finally:
+        _code_execution_active.reset(token)
 
 
 class SamplingCallback(Protocol):
@@ -77,6 +90,7 @@ def create_sampling_callback(
 def create_elicitation_callback(timeout: float | None = None) -> ElicitationCallback:
     from litellm.proxy.mcp_server.server import get_active_mcp_session
 
+    code_execution_active: Final = _code_execution_active.get()
     downstream_session: Final = get_active_mcp_session()
     request: Final = get_active_mcp_request_ctx()
     client_params: Final = downstream_session.client_params if downstream_session is not None else None
@@ -89,6 +103,14 @@ def create_elicitation_callback(timeout: float | None = None) -> ElicitationCall
     relay_timeout: Final = timeout if timeout is not None else MCP_CLIENT_TIMEOUT
 
     async def callback(context: object, params: ElicitRequestParams) -> ElicitResult | ErrorData:
+        if code_execution_active:
+            return ErrorData(
+                code=-32602,
+                message=(
+                    "Interactive elicitation is unsupported in code mode. Call this tool directly instead. "
+                    "Earlier actions may already have completed; do not automatically replay the script."
+                ),
+            )
         if request is not None and request.protocol_version == "2026-07-28":
             return ErrorData(
                 code=-32602,
