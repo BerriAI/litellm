@@ -4,3 +4,4 @@
 /helm/ @yassin-berriai
 /terraform/ @yassin-berriai
 /.github/workflows/zizmor.yml @yuneng-berri
+/litellm/proxy/middleware/ @kerry-berri
