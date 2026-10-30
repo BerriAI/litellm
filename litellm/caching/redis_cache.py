@@ -109,6 +109,7 @@ _GENERIC_CALLER_MODULES: Final = frozenset(
         "litellm.caching.caching",
         "litellm.rust_bridge.execution",
         "litellm.redis.transport.redis_py",
+        "litellm.redis.transport.native",
         "contextlib",
     }
 )

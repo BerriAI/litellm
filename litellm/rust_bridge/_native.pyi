@@ -1,6 +1,6 @@
 from asyncio import Future
 from collections.abc import Mapping, Sequence
-from typing import Never, final
+from typing import Literal, Never, final
 
 import httpx
 from pydantic import JsonValue
@@ -80,6 +80,22 @@ def messages(
 def amessages(
     call: NativeCall,
 ) -> Execution: ...
+
+@final
+class NativeRedisFailure:
+    @property
+    def kind(self) -> Literal["transport", "server", "decode", "breaker_open"]: ...
+    @property
+    def message(self) -> str: ...
+    @property
+    def timeout(self) -> bool: ...
+
+@final
+class NativeRedisClient:
+    def __new__(cls, url: str, *, namespace: str | None = None, timeout_seconds: float) -> NativeRedisClient: ...
+    def get(self, key: str) -> Future[bytes | None | NativeRedisFailure]: ...
+    def set(self, key: str, value: bytes, *, ttl_ms: int, nx: bool) -> Future[bool | NativeRedisFailure]: ...
+    def delete(self, key: str) -> Future[int | NativeRedisFailure]: ...
 
 @final
 class ResponsesWebSocketConnection:
