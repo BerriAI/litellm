@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     safe_convert_created_field,
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.responses.transformation import STANDARD_MODE_REASONING_FIELD_VALUES, ReasoningFieldValues
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -295,3 +296,6 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def supports_native_websocket(self) -> bool:
         """ChatGPT does not support native WebSocket for Responses API"""
         return False
+
+    def reasoning_field_values(self) -> ReasoningFieldValues:
+        return STANDARD_MODE_REASONING_FIELD_VALUES

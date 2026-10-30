@@ -53,7 +53,7 @@ from litellm.main import (
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.llms.openai import ImageGenerationRequestQuality
-from litellm.types.router import GenericLiteLLMParams
+from litellm.types.router import CustomPricingLiteLLMParams, GenericLiteLLMParams
 from litellm.types.utils import (
     LITELLM_IMAGE_VARIATION_PROVIDERS,
     LlmProviders,
@@ -1010,6 +1010,7 @@ def image_edit(
             optional_params=dict(image_edit_request_params),
             litellm_params={
                 **image_edit_request_params,
+                **litellm_params.model_dump(include=set(CustomPricingLiteLLMParams.model_fields), exclude_none=True),
                 "litellm_call_id": litellm_call_id,
                 "model_info": model_info,
                 "vertex_location": litellm_params.vertex_location,
