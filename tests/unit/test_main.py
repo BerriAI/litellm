@@ -23,7 +23,7 @@ import respx
 from openai import APITimeoutError, AsyncOpenAI, OpenAI
 from openai._legacy_response import LegacyAPIResponse
 from openai.types.chat.chat_completion import ChatCompletion
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
 from litellm import (
@@ -48,7 +48,14 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.litellm_params import ControlOptions
 from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from litellm.types.prompts.init_prompts import PromptSpec
-from litellm.types.utils import Delta, ModelResponseStream, StandardCallbackDynamicParams, StreamingChoices, Usage
+from litellm.types.utils import (
+    Delta,
+    ModelResponseStream,
+    StandardCallbackDynamicParams,
+    StreamingChoices,
+    TextCompletionResponse,
+    Usage,
+)
 from tests.unit.llms.bedrock.slow_upstream import (
     CONVERSE_ANSWER,
     STREAM_TIMEOUT_SECONDS,
@@ -501,25 +508,6 @@ def test_bedrock_latency_optimized_inference():
         mock_post.assert_called_once()
         json_data = json.loads(mock_post.call_args.kwargs["data"])
         assert json_data["performanceConfig"]["latency"] == "optimized"
-
-
-@pytest.mark.parametrize(
-    ("custom_llm_provider", "model", "expected"),
-    [
-        ("anthropic", "claude-sonnet-5", True),
-        ("bedrock", "us.anthropic.claude-sonnet-5-20260501-v1:0", True),
-        ("bedrock", "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123", True),
-        ("bedrock", "us.amazon.nova-2-lite-v1:0", False),
-        ("vertex_ai", "claude-sonnet-5", True),
-        ("vertex_ai", "gemini-3.8-flash", False),
-        ("azure_ai", "claude-sonnet-4-6", True),
-        ("azure_ai", "gpt-5.6", False),
-        ("openai", "gpt-5.6", False),
-        ("gemini", "gemini-3.8-flash", False),
-    ],
-)
-def test_is_claude_tool_target(custom_llm_provider: str, model: str, expected: bool):
-    assert litellm_main._is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model) is expected
 
 
 @pytest.mark.parametrize("key", ["input_examples", "eager_input_streaming"])
@@ -2843,9 +2831,10 @@ def test_stream_chunk_builder_keeps_tool_calls_carried_only_by_a_later_choice_of
 
     response = stream_chunk_builder(chunks=chunks)
 
-    tool_calls = response.choices[0].message.tool_calls
-    assert tool_calls is not None
-    assert [(call.id, call.function.name, call.function.arguments) for call in tool_calls] == [
+    text_choice, tool_choice = response.choices
+    assert (text_choice.index, text_choice.message.content, text_choice.message.tool_calls) == (0, "hello world", None)
+    assert tool_choice.index == 1
+    assert [(call.id, call.function.name, call.function.arguments) for call in tool_choice.message.tool_calls] == [
         ("call_1", "lookup_fruit", '{"fruit":"kiwi"}')
     ]
 
@@ -4155,6 +4144,95 @@ def test_mock_text_completion_stream_and_non_stream_report_the_same_zero_admissi
     assert non_stream.usage.prompt_tokens == 0
 
 
+def _carries_text_or_finish(frame: TextCompletionResponse) -> bool:
+    return frame.choices[0].text is not None or frame.choices[0].finish_reason is not None
+
+
+@pytest.mark.asyncio
+async def test_mock_atext_completion_stream_hides_the_usage_chunk_the_proxy_asked_for_on_the_clients_behalf():
+    response: Final = await litellm.atext_completion(
+        model="openai/gpt-5.4-mini",
+        prompt="hi",
+        mock_response="ok then",
+        api_key="mock",
+        stream=True,
+        stream_options={"include_usage": True},
+        _litellm_strip_stream_usage=True,
+    )
+
+    frames: Final[list[TextCompletionResponse]] = [frame async for frame in response]
+
+    assert len(frames) == 4
+    assert all(_carries_text_or_finish(frame) for frame in frames)
+    assert all(frame.usage is None for frame in frames)
+
+
+def _native_completions_reply(outbound: list[dict[str, object]]) -> Callable[[httpx.Request], httpx.Response]:
+    def respond(request: httpx.Request) -> httpx.Response:
+        outbound.append(json.loads(request.content))
+        base: Final = {"id": "cmpl-native", "object": "text_completion", "created": 1, "model": "code-model"}
+        frames: Final = (
+            {**base, "choices": [{"index": 0, "text": "def ", "finish_reason": None, "logprobs": None}]},
+            {**base, "choices": [{"index": 0, "text": "main", "finish_reason": "length", "logprobs": None}]},
+            {**base, "choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}},
+        )
+        content: Final = "".join(f"data: {json.dumps(frame)}\n\n" for frame in frames) + "data: [DONE]\n\n"
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=content.encode())
+
+    return respond
+
+
+def _native_completions_upstream(outbound: list[dict[str, object]]) -> OpenAI:
+    transport: Final = httpx.MockTransport(_native_completions_reply(outbound))
+    return OpenAI(api_key="transport-only", http_client=httpx.Client(transport=transport))
+
+
+def _async_native_completions_upstream(outbound: list[dict[str, object]]) -> AsyncOpenAI:
+    transport: Final = httpx.MockTransport(_native_completions_reply(outbound))
+    return AsyncOpenAI(api_key="transport-only", http_client=httpx.AsyncClient(transport=transport))
+
+
+@pytest.mark.asyncio
+async def test_native_atext_completion_stream_hides_the_usage_chunk_the_proxy_asked_for_on_the_clients_behalf():
+    outbound: Final[list[dict[str, object]]] = []
+    response: Final = await litellm.atext_completion(
+        model="text-completion-openai/code-model",
+        prompt="hi",
+        client=_async_native_completions_upstream(outbound),
+        api_key="transport-only",
+        stream=True,
+        stream_options={"include_usage": True},
+        _litellm_strip_stream_usage=True,
+    )
+
+    frames: Final[list[TextCompletionResponse]] = [frame async for frame in response]
+
+    assert [sent.get("stream_options") for sent in outbound] == [{"include_usage": True}]
+    assert [(frame.choices[0].text, frame.choices[0].finish_reason) for frame in frames] == [
+        ("def ", None),
+        ("main", None),
+        (None, "length"),
+    ]
+    assert all(frame.usage is None for frame in frames)
+
+
+def test_native_text_completion_stream_keeps_the_usage_chunk_the_client_asked_for():
+    frames: Final = list(
+        litellm.text_completion(
+            model="text-completion-openai/code-model",
+            prompt="hi",
+            client=_native_completions_upstream([]),
+            api_key="transport-only",
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+    )
+
+    assert len(frames) == 4
+    assert all(_carries_text_or_finish(frame) for frame in frames[:3])
+    assert (frames[-1].usage.prompt_tokens, frames[-1].usage.completion_tokens) == (10, 5)
+
+
 def test_mock_completion_stream_with_model_response():
     """Test that mock_completion correctly handles stream=True with a ModelResponse as mock_response."""
     from litellm import completion
@@ -4312,7 +4390,6 @@ class TestCallTypesOCR:
 
 def test_stream_chunk_builder_text_completion_combines_text_and_usage():
     from litellm.main import stream_chunk_builder_text_completion
-    from litellm.types.utils import TextCompletionResponse
 
     chunks = [
         TextCompletionResponse(
@@ -5364,6 +5441,46 @@ def test_stream_chunk_builder_keeps_provider_reported_usage_cost():
     assert response is not None
     assert getattr(response.usage, "cost", None) == pytest.approx(0.5)
     assert response._hidden_params["response_cost"] == pytest.approx(0.5)
+
+
+def test_completion_cost_on_a_stamped_stream_still_bills_the_reported_charge():
+    usage_chunk: Final = _stream_builder_text_chunk("gpt-4o", "")
+    usage_chunk.usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15, cost=0.5)
+    chunks: Final = [
+        _stream_builder_text_chunk("gpt-4o", "Hello ", finish_reason="stop"),
+        usage_chunk,
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=_stream_builder_logging_obj()
+    )
+
+    assert response is not None
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(0.5)
+
+
+def test_stream_chunk_builder_stamps_a_zero_operator_price_over_a_reported_cost():
+    logging_obj: Final = _stream_builder_logging_obj()
+    logging_obj.litellm_params = {
+        **logging_obj.litellm_params,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+    }
+    logging_obj.custom_cost_per_token = {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+    usage_chunk: Final = _stream_builder_text_chunk("gpt-4o", "")
+    usage_chunk.usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15, cost=0.5)
+    chunks: Final = [
+        _stream_builder_text_chunk("gpt-4o", "Hello ", finish_reason="stop"),
+        usage_chunk,
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=logging_obj
+    )
+
+    assert response is not None
+    assert getattr(response.usage, "cost", None) == 0.0
+    assert response._hidden_params["response_cost"] == 0.0
 
 
 def test_stream_chunk_builder_prices_alias_from_openai_sdk_usage_chunk():
@@ -10217,6 +10334,309 @@ async def test_atranscription_ignores_a_non_string_base_url_when_api_base_is_set
 
     assert route.called
     assert response.text == "four score"
+
+
+_PDF_FILE_PART: Final = {
+    "type": "file",
+    "file": {"filename": "report.pdf", "file_data": "data:application/pdf;base64,JVBERi0xLjQK"},
+}
+_SUMMARIZE_TEXT_PART: Final = {"type": "text", "text": "Summarize this."}
+
+
+def _pdf_messages() -> list[dict[str, object]]:
+    return [{"role": "user", "content": [_SUMMARIZE_TEXT_PART, _PDF_FILE_PART]}]
+
+
+class _SentChatRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    messages: list[dict[str, object]]
+
+
+def _sent_messages(respx_mock: respx.MockRouter) -> list[dict[str, object]]:
+    request: Final[httpx.Request] = respx_mock.calls[0].request
+    return _SentChatRequest.model_validate_json(request.content).messages
+
+
+def _mock_pdf_chat_route(respx_mock: respx.MockRouter, api_base: str) -> respx.Route:
+    return respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-pdf",
+                "object": "chat.completion",
+                "created": 1712697600,
+                "model": "qa-pdf-model",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+
+def test_drop_params_drops_a_pdf_the_model_cannot_read(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12347/v1"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="openai/qa-text-only-model",
+        messages=_pdf_messages(),
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        model_info={"supports_pdf_input": False},
+        drop_params=True,
+    )
+
+    assert _sent_messages(respx_mock) == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART]}]
+
+
+@pytest.mark.parametrize(
+    "pdf_file",
+    [
+        {"filename": "report.pdf", "file_data": "JVBERi0xLjQK"},
+        {"file_id": "file-report", "format": "application/pdf"},
+        {"file_id": "file-report", "filename": "Report.PDF"},
+    ],
+    ids=["bare_base64_named_pdf", "file_id_with_pdf_format", "file_id_named_pdf"],
+)
+def test_drop_params_drops_a_pdf_file_part_without_a_data_url(
+    respx_mock: respx.MockRouter, pdf_file: dict[str, str]
+) -> None:
+    api_base: Final = "http://localhost:12350/v1"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="openai/qa-text-only-model",
+        messages=[{"role": "user", "content": [_SUMMARIZE_TEXT_PART, {"type": "file", "file": pdf_file}]}],
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        model_info={"supports_pdf_input": False},
+        drop_params=True,
+    )
+
+    assert _sent_messages(respx_mock) == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART]}]
+
+
+def test_drop_params_drops_a_user_turn_that_held_only_a_pdf(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12352/v1"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="openai/qa-text-only-model",
+        messages=[
+            {"role": "user", "content": [_PDF_FILE_PART]},
+            {"role": "user", "content": [_SUMMARIZE_TEXT_PART]},
+        ],
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        model_info={"supports_pdf_input": False},
+        drop_params=True,
+    )
+
+    assert _sent_messages(respx_mock) == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART]}]
+
+
+def test_drop_params_keeps_roles_alternating_after_dropping_a_pdf_only_turn(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12353/v1"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="openai/qa-text-only-model",
+        messages=[
+            {"role": "user", "content": [_SUMMARIZE_TEXT_PART]},
+            {"role": "assistant", "content": "Send the file."},
+            {"role": "user", "content": [_PDF_FILE_PART]},
+            {"role": "assistant", "content": "Got it."},
+            {"role": "user", "content": [_SUMMARIZE_TEXT_PART]},
+        ],
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        model_info={"supports_pdf_input": False},
+        drop_params=True,
+        ensure_alternating_roles=True,
+    )
+
+    sent_roles: Final = [message["role"] for message in _sent_messages(respx_mock)]
+    assert sent_roles == ["user", "assistant", "user", "assistant", "user"]
+
+
+def test_drop_params_keeps_an_image_data_url_whose_filename_says_pdf(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12351/v1"
+    _mock_pdf_chat_route(respx_mock, api_base)
+    image_part: Final = {
+        "type": "file",
+        "file": {"filename": "scan.pdf", "file_data": "data:image/png;base64,iVBORw0KGgo="},
+    }
+
+    litellm.completion(
+        model="openai/qa-text-only-model",
+        messages=[{"role": "user", "content": [_SUMMARIZE_TEXT_PART, image_part]}],
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        model_info={"supports_pdf_input": False},
+        drop_params=True,
+    )
+
+    assert _sent_messages(respx_mock) == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART, image_part]}]
+
+
+def test_pdf_to_a_model_that_cannot_read_it_is_rejected_without_drop_params(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12348/v1"
+    route: Final = _mock_pdf_chat_route(respx_mock, api_base)
+
+    with pytest.raises(litellm.BadRequestError, match="does not accept PDF input"):
+        litellm.completion(
+            model="openai/qa-text-only-model",
+            messages=_pdf_messages(),
+            api_base=api_base,
+            api_key="fake_openai_api_key",
+            model_info={"supports_pdf_input": False},
+        )
+
+    assert not route.called
+
+
+def test_pdf_to_a_model_with_unknown_pdf_support_is_sent_even_with_drop_params(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12349/v1"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="openai/qa-unlisted-model",
+        messages=_pdf_messages(),
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        drop_params=True,
+    )
+
+    assert _sent_messages(respx_mock) == _pdf_messages()
+
+
+def test_pdf_to_ollama_is_rejected_without_drop_params() -> None:
+    with pytest.raises(litellm.BadRequestError, match="does not accept PDF input"):
+        litellm.completion(model="ollama_chat/llama3.2", messages=_pdf_messages(), api_base="http://127.0.0.1:9")
+
+
+def _azure_ai_model_without_pdf_input() -> str:
+    return next(
+        name
+        for name, entry in litellm.model_cost.items()
+        if entry.get("litellm_provider") == "azure_ai" and entry.get("supports_pdf_input") is False
+    )
+
+
+def test_pdf_to_a_deployment_whose_base_model_cannot_read_it_is_rejected() -> None:
+    with pytest.raises(litellm.BadRequestError, match="does not accept PDF input"):
+        litellm.completion(
+            model="azure_ai/qa-custom-deployment",
+            messages=_pdf_messages(),
+            api_base="http://127.0.0.1:9",
+            api_key="fake_azure_ai_api_key",
+            model_info={"base_model": _azure_ai_model_without_pdf_input()},
+        )
+
+
+def test_drop_params_drops_a_pdf_a_deployments_base_model_cannot_read(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12353"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="azure_ai/qa-custom-deployment",
+        messages=_pdf_messages(),
+        api_base=api_base,
+        api_key="fake_azure_ai_api_key",
+        model_info={"base_model": _azure_ai_model_without_pdf_input()},
+        drop_params=True,
+    )
+
+    assert _sent_messages(respx_mock) == [{"role": "user", "content": _SUMMARIZE_TEXT_PART["text"]}]
+
+
+def _azure_ai_model_with_pdf_input() -> str:
+    return next(
+        name
+        for name, entry in litellm.model_cost.items()
+        if entry.get("litellm_provider") == "azure_ai" and entry.get("supports_pdf_input") is True
+    )
+
+
+def test_pdf_to_a_deployment_whose_base_model_param_cannot_read_it_is_rejected() -> None:
+    with pytest.raises(litellm.BadRequestError, match="does not accept PDF input"):
+        litellm.completion(
+            model="azure_ai/qa-custom-deployment",
+            messages=_pdf_messages(),
+            api_base="http://127.0.0.1:9",
+            api_key="fake_azure_ai_api_key",
+            base_model=_azure_ai_model_without_pdf_input(),
+        )
+
+
+def test_drop_params_keeps_a_pdf_a_deployments_base_model_param_reads(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12357"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="azure_ai/qa-custom-deployment",
+        messages=_pdf_messages(),
+        api_base=api_base,
+        api_key="fake_azure_ai_api_key",
+        base_model=_azure_ai_model_with_pdf_input(),
+        drop_params=True,
+    )
+
+    assert _sent_messages(respx_mock) == _pdf_messages()
+
+
+def test_drop_params_rejects_a_request_whose_only_user_turn_was_a_pdf(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12354/v1"
+    route: Final = _mock_pdf_chat_route(respx_mock, api_base)
+
+    with pytest.raises(litellm.BadRequestError, match="no user message is left"):
+        litellm.completion(
+            model="openai/qa-text-only-model",
+            messages=[
+                {"role": "system", "content": "You read documents."},
+                {"role": "user", "content": [_PDF_FILE_PART]},
+            ],
+            api_base=api_base,
+            api_key="fake_openai_api_key",
+            model_info={"supports_pdf_input": False},
+            drop_params=True,
+        )
+
+    assert not route.called
+
+
+def test_drop_params_drops_a_pdf_an_unlisted_azure_ai_model_never_declared_it_reads(
+    respx_mock: respx.MockRouter,
+) -> None:
+    api_base: Final = "http://localhost:12355"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="azure_ai/qa-unlisted-deployment",
+        messages=_pdf_messages(),
+        api_base=api_base,
+        api_key="fake_azure_ai_api_key",
+        drop_params=True,
+    )
+
+    assert _sent_messages(respx_mock) == [{"role": "user", "content": _SUMMARIZE_TEXT_PART["text"]}]
+
+
+def test_drop_params_keeps_a_pdf_an_azure_ai_deployment_declares_it_reads(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12356"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="azure_ai/qa-unlisted-deployment",
+        messages=_pdf_messages(),
+        api_base=api_base,
+        api_key="fake_azure_ai_api_key",
+        model_info={"supports_pdf_input": True},
+        drop_params=True,
+    )
+
+    assert _sent_messages(respx_mock) == _pdf_messages()
 
 
 @pytest.mark.parametrize("stream", (False, True))

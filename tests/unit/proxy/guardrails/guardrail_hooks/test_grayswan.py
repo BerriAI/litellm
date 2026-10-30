@@ -5,6 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.llms.openai.completion.guardrail_translation.handler import OpenAITextCompletionHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.grayswan import grayswan as grayswan_module
 from litellm.proxy.guardrails.guardrail_hooks.grayswan.grayswan import (
@@ -12,6 +13,7 @@ from litellm.proxy.guardrails.guardrail_hooks.grayswan.grayswan import (
     GraySwanGuardrailAPIError,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import TextChoices, TextCompletionResponse
 
 
 @pytest.fixture
@@ -884,3 +886,29 @@ async def test_pre_call_payload_unchanged() -> None:
         {"role": "user", "content": "second"},
     ]
     assert "tools" not in payload
+
+
+@pytest.mark.asyncio
+async def test_post_call_never_forwards_the_proxy_key_metadata_of_the_request_metadata() -> None:
+    guardrail = _post_call_guardrail()
+    client = _CapturingClient()
+    guardrail.async_handler = client
+
+    await OpenAITextCompletionHandler().process_output_response(
+        response=TextCompletionResponse(
+            id="cmpl-1", model="gpt-4.1-mini", choices=[TextChoices(index=0, text="hello", finish_reason="stop")]
+        ),
+        guardrail_to_apply=guardrail,
+        user_api_key_dict=UserAPIKeyAuth(team_id="team-456", key_alias="ci-key", user_email="dev@example.com"),
+        request_data={
+            "model": "gpt-4.1-mini",
+            "prompt": "say hello",
+            "metadata": {
+                "user_api_key_hash": "hashed-key",
+                "user_api_key_user_email": "dev@example.com",
+                "user_api_key_request_route": "/v1/completions",
+            },
+        },
+    )
+
+    assert "litellm_metadata" not in client.calls[0]["json"]

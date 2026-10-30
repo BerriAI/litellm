@@ -25,6 +25,7 @@ from litellm.videos.main import (
     video_generation,
     video_status,
 )
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 class TestVideoGeneration:
@@ -1605,7 +1606,7 @@ class TestVideoEndpointsProxyLitellmParams:
         encoded_video_id = mock_video_generation_response.id
 
         # Mock the router instance
-        mock_router_instance = MagicMock()
+        mock_router_instance = route_entry_points_to_stubs(MagicMock())
         mock_router_instance.resolve_model_name_from_model_id.return_value = (
             "vertex-ai-sora-2"
         )
@@ -1674,7 +1675,7 @@ class TestVideoEndpointsProxyLitellmParams:
         encoded_video_id = mock_video_generation_response.id
 
         # Mock the router instance
-        mock_router_instance = MagicMock()
+        mock_router_instance = route_entry_points_to_stubs(MagicMock())
         mock_router_instance.resolve_model_name_from_model_id.return_value = (
             "vertex-ai-sora-2"
         )
@@ -1743,7 +1744,7 @@ class TestVideoEndpointsProxyLitellmParams:
         encoded_video_id = mock_video_generation_response.id
 
         # Mock the router instance
-        mock_router_instance = MagicMock()
+        mock_router_instance = route_entry_points_to_stubs(MagicMock())
         mock_router_instance.resolve_model_name_from_model_id.return_value = (
             "vertex-ai-sora-2"
         )
@@ -2338,7 +2339,7 @@ def test_video_get_character_accepts_encoded_character_id(video_proxy_test_clien
         provider="vertex_ai",
         model_id="veo-2.0-generate-001",
     )
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.resolve_model_name_from_model_id.return_value = "vertex-ai-sora-2"
 
     with patch("litellm.proxy.proxy_server.llm_router", mock_router):
@@ -2495,7 +2496,7 @@ def test_edit_and_extension_route_with_encoded_video_ids(
     if endpoint.endswith("extensions"):
         payload["seconds"] = "4"
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.resolve_model_name_from_model_id.return_value = "vertex-ai-sora-2"
 
     with patch("litellm.proxy.proxy_server.llm_router", mock_router):

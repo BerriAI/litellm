@@ -421,7 +421,10 @@ class SpendLogCleanup:
         general_settings=None,
         redis_cache: RedisCache | None = None,
         partition_manager: SpendLogsPartitionManager | None = None,
+        *,
+        clock: Callable[[], float] = time.monotonic,
     ):
+        self._clock = clock
         self.retention_seconds: int | None = None
         self.partition_manager = partition_manager or SpendLogsPartitionManager()
         from litellm.proxy.proxy_server import general_settings as default_settings
@@ -586,7 +589,7 @@ class SpendLogCleanup:
 
     async def _probe_storage(self, prisma_client: PrismaClient, deadline: float) -> StorageProbe | None:
         """Read what the spend-log tables weigh from the catalog, or None when the probe fails or has no budget."""
-        if time.monotonic() >= deadline:
+        if self._clock() >= deadline:
             return None
         timeout_ms: Final = self._timeout_ms(deadline)
         try:
@@ -624,7 +627,7 @@ class SpendLogCleanup:
             stale.allocated_bytes,
             _ANALYZE_SQL,
         )
-        if time.monotonic() >= deadline:
+        if self._clock() >= deadline:
             return None
         timeout_ms: Final = self._timeout_ms(deadline)
         try:
@@ -653,7 +656,7 @@ class SpendLogCleanup:
 
     async def _load_size_state(self, prisma_client: PrismaClient, deadline: float) -> SizeCleanupState | None:
         """The reclaimable count saved by the last check, or None on the first check or when it cannot be read."""
-        if time.monotonic() >= deadline:
+        if self._clock() >= deadline:
             return None
         timeout_ms: Final = self._timeout_ms(deadline)
         try:
@@ -686,7 +689,7 @@ class SpendLogCleanup:
         the tool-index rows that expire with their spend logs. When fewer rows than that remain, the step is
         everything up to now.
         """
-        if time.monotonic() >= deadline:
+        if self._clock() >= deadline:
             return None
         timeout_ms: Final = self._timeout_ms(deadline)
         async with db_span("size_step_cutoff", "LiteLLM_SpendLogs"), bounded_tx(prisma_client, timeout_ms) as tx:
@@ -718,11 +721,11 @@ class SpendLogCleanup:
         Interpolating this into SQL is safe by construction: an int cannot carry
         SQL, and SET does not accept a bind parameter.
         """
-        remaining_ms: Final = int((deadline - time.monotonic()) * 1000)
+        remaining_ms: Final = int((deadline - self._clock()) * 1000)
         return max(1, min(int(self.batch_timeout_seconds * 1000), remaining_ms))
 
     @staticmethod
-    def _group_deadline(overall_deadline: float, groups_remaining: int) -> float:
+    def _group_deadline(overall_deadline: float, groups_remaining: int, now: float) -> float:
         """
         Give each pending cleanup group an equal share of the time left.
 
@@ -731,10 +734,9 @@ class SpendLogCleanup:
         """
         if groups_remaining == 1:
             return overall_deadline
-        current_time: Final = time.monotonic()
-        if current_time >= overall_deadline:
+        if now >= overall_deadline:
             return overall_deadline
-        return current_time + (overall_deadline - current_time) / groups_remaining
+        return now + (overall_deadline - now) / groups_remaining
 
     def _remaining_timeout_ms(self, deadline: float) -> RemainingTimeoutMs:
         """
@@ -748,7 +750,7 @@ class SpendLogCleanup:
         """
 
         def remaining() -> int | None:
-            return None if time.monotonic() >= deadline else self._timeout_ms(deadline)
+            return None if self._clock() >= deadline else self._timeout_ms(deadline)
 
         return remaining
 
@@ -841,7 +843,7 @@ class SpendLogCleanup:
         run_count = 0
         consecutive_failures = 0
         while True:
-            if time.monotonic() >= deadline:
+            if self._clock() >= deadline:
                 verbose_proxy_logger.info(
                     "Run budget exhausted during %s cleanup after %d rows; the next run resumes from here",
                     table_name,
@@ -858,13 +860,13 @@ class SpendLogCleanup:
                     prisma_client, cutoff_date, table_name, time_column, total_deleted, "batch_cap_reached", deadline
                 )
             # Find rows and delete them in one go without fetching to application
-            batch_started_at = time.monotonic()
+            batch_started_at = self._clock()
             try:
                 batch_result = await self._execute_delete_batch(
                     prisma_client, delete_sql, cutoff_date, table_name, deadline
                 )
             except Exception as batch_exc:
-                if time.monotonic() >= deadline:
+                if self._clock() >= deadline:
                     # The statement timeout was clamped to the budget that was
                     # left, so this batch was cancelled by the deadline itself.
                     # That is the bound working, not a database fault, and
@@ -920,7 +922,7 @@ class SpendLogCleanup:
 
             consecutive_failures = 0
             deleted_count = batch_result
-            SpendLogCleanupMetrics.record_batch(table_name, deleted_count, time.monotonic() - batch_started_at)
+            SpendLogCleanupMetrics.record_batch(table_name, deleted_count, self._clock() - batch_started_at)
             verbose_proxy_logger.info("Deleted %s %s rows in this batch", deleted_count, table_name)
 
             if deleted_count == 0:
@@ -957,7 +959,7 @@ class SpendLogCleanup:
         operator the backlog was not drained; the gauge simply keeps its value
         from the last run that finished inside its budget.
         """
-        if time.monotonic() >= deadline:
+        if self._clock() >= deadline:
             return TableCleanupResult(table_name=table_name, rows_deleted=rows_deleted, stop_reason=stop_reason)
         remaining: Final = await self._count_remaining(prisma_client, cutoff_date, table_name, time_column, deadline)
         if remaining is not None:
@@ -1070,7 +1072,7 @@ class SpendLogCleanup:
         # behind any long-running reader for as long as that reader lives, which
         # is the one way this job could still outlast its budget without bound.
         remaining_timeout_ms: Final = self._remaining_timeout_ms(deadline)
-        if time.monotonic() >= deadline:
+        if self._clock() >= deadline:
             verbose_proxy_logger.info("Run budget already spent, skipping partition maintenance this run")
         elif self.general_settings.get(
             "use_spend_logs_partitioning", False
@@ -1082,7 +1084,7 @@ class SpendLogCleanup:
             verbose_proxy_logger.info("Dropped %d expired spend-log partitions: %s", len(dropped), dropped)
 
         logs_result: Final = await self._delete_old_logs(
-            prisma_client, cutoff_date, self._group_deadline(deadline, groups_remaining=2)
+            prisma_client, cutoff_date, self._group_deadline(deadline, groups_remaining=2, now=self._clock())
         )
         verbose_proxy_logger.info("Deleted %s logs", logs_result.rows_deleted)
 
@@ -1210,7 +1212,7 @@ class SpendLogCleanup:
         self, prisma_client: PrismaClient, deadline: float, still_over_target: Callable[[], Awaitable[bool]]
     ) -> tuple[str, ...]:
         remaining_timeout_ms: Final = self._remaining_timeout_ms(deadline)
-        if time.monotonic() >= deadline or not self._setting("use_spend_logs_partitioning"):
+        if self._clock() >= deadline or not self._setting("use_spend_logs_partitioning"):
             return ()
         if not await self.partition_manager.is_partitioned(prisma_client, remaining_timeout_ms):
             return ()
@@ -1257,7 +1259,7 @@ class SpendLogCleanup:
         needed: Final = rows_still_needed(state.logs_deleted + state.index_deleted)
         if needed <= 0:
             return state.stopped("target_reached")
-        if time.monotonic() >= deadline:
+        if self._clock() >= deadline:
             return state.stopped("budget_exhausted")
         if state.batches_left <= 0:
             return state.stopped("batch_cap_reached")
@@ -1318,11 +1320,11 @@ class SpendLogCleanup:
             except Exception:  # noqa: BLE001  # retained observations are retried by the next cleanup job
                 verbose_proxy_logger.warning("Auto-router baseline retention remains pending")
         sessions_result: Final = await self._delete_old_autorouter_session_rows(
-            prisma_client, session_cutoff, self._group_deadline(deadline, 3)
+            prisma_client, session_cutoff, self._group_deadline(deadline, 3, self._clock())
         )
         verbose_proxy_logger.info("Deleted %s expired auto-router session rollup rows", sessions_result.rows_deleted)
         user_sessions_result: Final = await self._delete_old_autorouter_user_session_rows(
-            prisma_client, session_cutoff, self._group_deadline(deadline, 2)
+            prisma_client, session_cutoff, self._group_deadline(deadline, 2, self._clock())
         )
         verbose_proxy_logger.info(
             "Deleted %s expired auto-router user session rollup rows", user_sessions_result.rows_deleted
@@ -1443,7 +1445,7 @@ class SpendLogCleanup:
 
     async def _run_passes(self, prisma_client: PrismaClient, age_rules: bool, size_rule: bool) -> None:
         lock_acquired = False
-        run_started_at: Final = time.monotonic()
+        run_started_at: Final = self._clock()
         progress: Final = _RunProgress()
         progress_token: Final = _run_progress.set(progress)
         try:
@@ -1493,7 +1495,7 @@ class SpendLogCleanup:
                     SpendLogCleanupMetrics.record_run("skipped_locked")
                     return
 
-            deadline: Final = time.monotonic() + self.run_budget_seconds
+            deadline: Final = self._clock() + self.run_budget_seconds
             size_group: Final = int(active_size_rule is not None)
             configured_group_count: Final = (
                 int(delete_spend_logs and self.retention_seconds is not None)
@@ -1506,7 +1508,7 @@ class SpendLogCleanup:
             spend_log_results: Final = (
                 await self._clean_spend_log_tables(
                     prisma_client,
-                    self._group_deadline(deadline, configured_group_count),
+                    self._group_deadline(deadline, configured_group_count, self._clock()),
                 )
                 if delete_spend_logs and self.retention_seconds is not None
                 else ()
@@ -1526,7 +1528,7 @@ class SpendLogCleanup:
                 await self._clean_session_rollup(
                     prisma_client,
                     autorouter_retention_seconds,
-                    self._group_deadline(deadline, remaining_groups_after_spend_logs),
+                    self._group_deadline(deadline, remaining_groups_after_spend_logs, self._clock()),
                 )
                 if autorouter_retention_seconds is not None
                 else ()
@@ -1535,7 +1537,7 @@ class SpendLogCleanup:
                 await self._clean_health_checks(
                     prisma_client,
                     health_check_retention_seconds,
-                    self._group_deadline(deadline, remaining_groups_after_sessions),
+                    self._group_deadline(deadline, remaining_groups_after_sessions, self._clock()),
                 )
                 if health_check_retention_seconds is not None
                 else ()
@@ -1544,7 +1546,7 @@ class SpendLogCleanup:
                 await self._clean_daily_tag_spend(
                     prisma_client,
                     daily_tag_spend_retention_seconds,
-                    self._group_deadline(deadline, 1 + size_group),
+                    self._group_deadline(deadline, 1 + size_group, self._clock()),
                 )
                 if daily_tag_spend_retention_seconds is not None
                 else ()
@@ -1561,12 +1563,12 @@ class SpendLogCleanup:
             )
             outcome: Final = self._run_outcome(results)
             SpendLogCleanupMetrics.record_run(outcome)
-            self._log_run_summary(outcome, results, time.monotonic() - run_started_at, size_report)
+            self._log_run_summary(outcome, results, self._clock() - run_started_at, size_report)
 
         except asyncio.CancelledError:
             verbose_proxy_logger.error(
                 "Spend log cleanup cancelled after %.2fs (rows_deleted=%d, batches=%d); the next run resumes from here",
-                time.monotonic() - run_started_at,
+                self._clock() - run_started_at,
                 progress.rows_deleted,
                 progress.batches,
             )

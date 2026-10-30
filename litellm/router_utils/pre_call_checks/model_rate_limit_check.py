@@ -26,7 +26,6 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
-    ITPM_RESERVED_KEY,
     async_io_token_pre_call_check,
     async_io_token_reconcile_success,
     async_io_token_refund_failure,
@@ -485,24 +484,12 @@ class ModelRateLimitingCheck(CustomLogger):
 
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
-
-            # IO token reconciliation works purely from the cache keys stashed in
-            # kwargs/metadata, so it must run before the model_id guard below
-            # (which only the TPM-tracking path needs). Otherwise a request whose
-            # standard_logging_object lacks model_id would never return its
-            # reservation, leaving the counter elevated until the TTL expires.
-            slo_metadata: Final = (standard_logging_object.get("metadata") or {}) if standard_logging_object else {}
-            kwargs_metadata: Final = kwargs.get("metadata") or {}
-            if ITPM_RESERVED_KEY in slo_metadata or ITPM_RESERVED_KEY in kwargs_metadata:
-                await async_io_token_reconcile_success(
-                    self.dual_cache,
-                    kwargs,
-                    response_obj,
-                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
-                )
-                # Fall through: a deployment can also configure tpm/rpm alongside
-                # itpm/otpm, and that path's pre-call check reads the tpm_key
-                # counter tracked below, so it must still be incremented here.
+            await async_io_token_reconcile_success(
+                self.dual_cache,
+                kwargs,
+                response_obj,
+                parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
+            )
 
             if standard_logging_object is None:
                 return
@@ -557,17 +544,7 @@ class ModelRateLimitingCheck(CustomLogger):
         """
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
-            slo_metadata: Final = (standard_logging_object.get("metadata") or {}) if standard_logging_object else {}
-            kwargs_metadata: Final = kwargs.get("metadata") or {}
-            if ITPM_RESERVED_KEY in slo_metadata or ITPM_RESERVED_KEY in kwargs_metadata:
-                io_token_reconcile_success(
-                    self.dual_cache,
-                    kwargs,
-                    response_obj,
-                )
-                # Fall through: a deployment can also configure tpm/rpm alongside
-                # itpm/otpm, and that path's pre-call check reads the tpm_key
-                # counter tracked below, so it must still be incremented here.
+            io_token_reconcile_success(self.dual_cache, kwargs, response_obj)
 
             if standard_logging_object is None:
                 return

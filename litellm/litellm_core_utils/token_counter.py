@@ -7,14 +7,17 @@ import re
 import struct
 from bisect import bisect_right
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from itertools import accumulate
+from dataclasses import dataclass
+from functools import cached_property
+from itertools import accumulate, chain, islice
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast
 
 import anyio
 import anyio.lowlevel
 import httpx
 import tiktoken
+from pydantic import TypeAdapter
 from tiktoken.model import MODEL_TO_ENCODING
 from typing_extensions import ParamSpec, TypeVar
 
@@ -33,7 +36,12 @@ from litellm.constants import (
     MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES,
     MAX_TILE_HEIGHT,
     MAX_TILE_WIDTH,
+    OPENAI_CHAT_MODES,
+    OPENAI_MODEL_NAME_MAX_DASHES,
+    OPENAI_PDF_TEXT_PAGE_FRAMING_TOKENS,
     PDF_DATA_URL_PREFIX,
+    PDF_MAX_FORM_XOBJECT_DEPTH,
+    PDF_MAX_XOBJECT_DRAWS_PER_PAGE,
     TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
     TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
     TOKEN_COUNTER_MAX_EXACT_CHARS,
@@ -62,6 +70,7 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesToolResultParam,
     AnthropicMessagesToolUseParam,
     AnthropicSearchResultParam,
+    CompactionBlock,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -606,12 +615,41 @@ TokenCounterFunction = Callable[[str], int]
 Type for a function that counts tokens in a string.
 """
 
+PdfPagePricing: TypeAlias = Literal["openai", "claude"]
+
+
+class _PdfBox(Protocol):
+    @property
+    def width(self) -> float: ...
+
+    @property
+    def height(self) -> float: ...
+
+
+class _PdfContent(Protocol):
+    def get_data(self) -> bytes: ...
+
+
+class _PdfPage(Protocol):
+    @property
+    def mediabox(self) -> _PdfBox: ...
+
+    def extract_text(self) -> str: ...
+
+    def get_contents(self) -> _PdfContent | None: ...
+
+
+class _PdfReader(Protocol):
+    @property
+    def pages(self) -> Sequence[_PdfPage]: ...
+
+
 EXTRAPOLATION_SAMPLES: Final = 16
 T_ParamSpec: Final = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
 _COUNT_OFFLOAD_LIMITER: Final = anyio.lowlevel.RunVar[anyio.CapacityLimiter]("litellm_count_offload_limiter")
 _ANTHROPIC_TOOL_KEYS_MAPPED_BY_BRIDGE: Final = frozenset(
-    ("name", "input_schema", "description", "cache_control", "strict", "type", "eager_input_streaming")
+    ("name", "input_schema", "description", "cache_control", "strict", "type", "eager_input_streaming", "custom")
 )
 
 
@@ -662,7 +700,7 @@ class _MessageCountParams:
         if uses_legacy_message_accounting(model):
             self.tokens_per_message = 4  # every message follows <|start|>{role/name}\n{content}<|end|>\n
             self.tokens_per_name = -1  # if there's a name, the role is omitted
-        elif actual_model in litellm.open_ai_chat_completion_models or actual_model in litellm.azure_llms:
+        elif _is_openai_chat_model(actual_model):
             self.tokens_per_message = 3
             self.tokens_per_name = 1
         else:
@@ -671,6 +709,63 @@ class _MessageCountParams:
             self.tokens_per_name = 1
         self.count_function = _get_count_function(model, custom_tokenizer)
         self.tool_section = chat_template_tool_section(model)
+        self._model = model
+
+    @cached_property
+    def pdf_pricing(self) -> PdfPagePricing:
+        return pdf_page_pricing(self._model)
+
+
+def _is_openai_chat_model(model: str) -> bool:
+    return model in litellm.open_ai_chat_completion_models or model in litellm.azure_llms
+
+
+def _openai_deployment_name(model: str) -> str:
+    name: Final = model.rpartition("/")[2]
+    return name.split(":")[1] if name.startswith("ft:") else name
+
+
+def _openai_model_family(model: str) -> str | None:
+    words: Final = _openai_deployment_name(model).split("-", OPENAI_MODEL_NAME_MAX_DASHES)
+    prefixes: Final = ("-".join(words[:end]) for end in range(len(words), 0, -1))
+    listed: Final = next((prefix for prefix in prefixes if _is_openai_chat_model(prefix)), None)
+    return None if listed is None or _is_listed_non_chat_model(listed) else listed
+
+
+def _untyped_cost_map() -> object:
+    return litellm.model_cost  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # loaded untyped
+
+
+def _cost_map_entry(model: str) -> Mapping[str, object]:
+    cost_map: Final = _pdf_dictionary(_untyped_cost_map()) or {}
+    return _pdf_dictionary(cost_map.get(model)) or {}
+
+
+def _is_azure_openai_chat_model(model: str) -> bool:
+    name: Final = _openai_deployment_name(model)
+    entry: Final = _cost_map_entry(f"azure/{name}")
+    return (
+        entry.get("litellm_provider") == "azure"
+        and entry.get("mode") in OPENAI_CHAT_MODES
+        and (entry.get("supports_pdf_input") is True or name.startswith("gpt-"))
+    )
+
+
+def _is_openai_or_azure_model(model: str) -> bool:
+    if _is_listed_non_chat_model(_openai_deployment_name(model)):
+        return False
+    return _is_openai_chat_model(model) or _openai_model_family(model) is not None or _is_azure_openai_chat_model(model)
+
+
+def pdf_page_pricing(model: str | None) -> PdfPagePricing:
+    return "openai" if _is_openai_or_azure_model(model or "") else "claude"
+
+
+def reads_pdf_pages(model: str) -> bool:
+    segments: Final = model.split("/")
+    names: Final = ("/".join(segments[start:]) for start in range(len(segments)))
+    stated: Final = (_cost_map_entry(name).get("supports_pdf_input") for name in names)
+    return next((support for support in stated if support is not None), False) is True
 
 
 def token_counter(
@@ -842,7 +937,10 @@ def _count_messages(
                     value,
                     use_default_image_token_count,
                     default_token_count,
+                    params.pdf_pricing,
                 )
+            elif key == "provider_specific_fields":
+                num_tokens += sum(map(params.count_function, _compaction_summaries(value)))
             elif key == "search_results" and isinstance(value, list):
                 from litellm.litellm_core_utils.prompt_templates.common_utils import (
                     extract_search_results_text,
@@ -855,6 +953,25 @@ def _count_messages(
                 # Skip unsupported keys instead of raising an error
                 continue
     return num_tokens
+
+
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+
+
+def _compaction_summaries(provider_specific_fields: object) -> tuple[str, ...]:
+    fields: Final = as_str_mapping(provider_specific_fields)
+    blocks: Final = fields.get("compaction_blocks") if fields is not None else None
+    block_fields: Final = (
+        tuple(map(as_str_mapping, _OBJECT_LIST.validate_python(blocks))) if isinstance(blocks, list) else ()
+    )
+    return tuple(
+        content
+        for block in block_fields
+        if block is not None
+        and block.get("type") == "compaction"
+        and isinstance(content := block.get("content"), str)
+        and content
+    )
 
 
 def _count_extra(
@@ -986,7 +1103,7 @@ def _get_exact_count_function(
 
         return count_tokens
     if tokenizer_json["type"] == "openai_tokenizer":
-        encoding: Final = openai_tokenizer_encoding(model)
+        encoding: Final = openai_tokenizer_encoding(model or "")
 
         def encode_length(text: str) -> int:
             return _encoding_count(encoding, text)
@@ -1006,6 +1123,11 @@ def openai_tokenizer_encoding(model: str) -> "Encoding":
     return get_encoding(openai_tokenizer_encoding_name(model))
 
 
+def _is_listed_non_chat_model(model: str) -> bool:
+    modes: Final = (_cost_map_entry(name).get("mode") for name in (model, f"azure/{model}"))
+    return any(mode is not None and mode not in OPENAI_CHAT_MODES for mode in modes)
+
+
 def openai_tokenizer_encoding_name(model: str) -> str:
     """The tiktoken encoding name for `model`, without loading the encoding.
 
@@ -1021,7 +1143,9 @@ def openai_tokenizer_encoding_name(model: str) -> str:
     try:
         return tiktoken.encoding_name_for_model(model_to_use)
     except KeyError:
-        return _suffixed_variant_encoding_name(model_to_use) or "o200k_base"
+        return _suffixed_variant_encoding_name(model_to_use) or (
+            "cl100k_base" if _is_listed_non_chat_model(model_to_use) else "o200k_base"
+        )
 
 
 def unresolved_tokenizer_model(model: str) -> str:
@@ -1079,7 +1203,16 @@ def single_encoding_openai_model(served: Sequence[str | None]) -> str | None:
 
 
 def _openai_model_name(model: str) -> str | None:
-    return _listed_openai_model_name(model) or _tiktoken_o200k_model_name(model) or _versioned_openai_model_name(model)
+    return (
+        _listed_openai_model_name(model)
+        or _tiktoken_o200k_model_name(model)
+        or _versioned_openai_model_name(model)
+        or _azure_openai_chat_model_name(model)
+    )
+
+
+def _azure_openai_chat_model_name(model: str) -> str | None:
+    return _openai_deployment_name(model) if _is_azure_openai_chat_model(model) else None
 
 
 _VERSIONED_OPENAI_MODEL: Final = re.compile(r"(?:gpt-(?:[5-9]|[1-9]\d+)|o[1-9]\d*)(?:[.-]|$)")
@@ -1224,10 +1357,6 @@ def _validate_anthropic_content(content: Mapping[str, object]) -> type:
     if expected_cls is None:
         raise ValueError(f"Unknown Anthropic content type: '{content_type}'")
 
-    missing: Final = [k for k in getattr(expected_cls, "__required_keys__", set()) if k not in content]
-    if missing:
-        raise ValueError(f"Missing required fields in {content_type} block: {', '.join(missing)}")
-
     return expected_cls
 
 
@@ -1253,7 +1382,165 @@ def _anthropic_rendered_page_image_tokens(width: float, height: float) -> int:
     return math.ceil(min(float(ANTHROPIC_IMAGE_MAX_PIXELS), area_at_max_edge) / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN)
 
 
-def _count_inline_pdf_tokens(data_url: str, count_function: TokenCounterFunction) -> int | None:
+def _pdf_dictionary(node: object) -> Mapping[str, object] | None:
+    return node if isinstance(node, Mapping) else None  # pyright: ignore[reportUnknownVariableType]  # read per key
+
+
+def _pdf_value(container: Mapping[str, object], key: str) -> object:
+    return container[key] if key in container else None  # noqa: SIM401  # pypdf resolves references only in []
+
+
+_PdfXObjects: TypeAlias = Mapping[str, object] | None
+_PdfXObjectUse: TypeAlias = tuple[Mapping[str, object], _PdfXObjects]
+
+
+@dataclass(frozen=True, slots=True)
+class _PdfContentSummary:
+    drawn_names: tuple[str, ...]
+    draws_inline_image: bool
+
+
+_PdfDrawing: TypeAlias = tuple[_PdfContentSummary, _PdfXObjects]
+
+
+@dataclass(frozen=True, slots=True)
+class _PdfWalk:
+    frontier: tuple[_PdfDrawing, ...]
+    seen: frozenset[tuple[int, int]]
+    summaries: Mapping[int, _PdfContentSummary | None]
+    draws: int
+
+
+def _pdf_xobjects(container: Mapping[str, object], inherited: _PdfXObjects) -> _PdfXObjects:
+    resources: Final = _pdf_dictionary(_pdf_value(container, "/Resources"))
+    if resources is None:
+        return inherited
+    return _pdf_dictionary(_pdf_value(resources, "/XObject"))
+
+
+_PDF_WHITESPACE: Final = rb"\x00\t\n\x0c\r "
+_PDF_TOKEN_END: Final = _PDF_WHITESPACE + rb"()<>\[\]{}/%"
+_PDF_XOBJECT_DRAW: Final = re.compile(
+    rb"/([^" + _PDF_TOKEN_END + rb"]*)(?:[" + _PDF_WHITESPACE + rb"]|%[^\r\n]*[\r\n])+Do(?![^" + _PDF_TOKEN_END + rb"])"
+)
+_PDF_INLINE_IMAGE: Final = re.compile(rb"(?<![^" + _PDF_WHITESPACE + rb"])BI(?![^" + _PDF_WHITESPACE + rb"/])")
+_PDF_NAME_ESCAPE: Final = re.compile(rb"#([0-9A-Fa-f]{2})")
+_PDF_NAME_CHARSETS: Final = ("utf-8", "gbk")
+
+
+def _decoded(raw: bytes, charset: str) -> str | None:
+    try:
+        return raw.decode(charset)
+    except UnicodeDecodeError:
+        return None
+
+
+def _pdf_name(escaped: bytes) -> str:
+    raw: Final = _PDF_NAME_ESCAPE.sub(lambda escape: bytes.fromhex(escape[1].decode("ascii")), escaped)
+    decoded: Final = (_decoded(raw, charset) for charset in _PDF_NAME_CHARSETS)
+    return "/" + next((name for name in decoded if name is not None), raw.decode("latin-1"))
+
+
+def _pdf_content_summary(content: _PdfContent) -> _PdfContentSummary:
+    data: Final = content.get_data()
+    draws: Final = islice(_PDF_XOBJECT_DRAW.finditer(data), PDF_MAX_XOBJECT_DRAWS_PER_PAGE + 1)
+    return _PdfContentSummary(
+        drawn_names=tuple(_pdf_name(draw[1]) for draw in draws),
+        draws_inline_image=_PDF_INLINE_IMAGE.search(data) is not None,
+    )
+
+
+def _pdf_form_summary(form: Mapping[str, object]) -> _PdfContentSummary | None:
+    from pypdf.generic import StreamObject
+
+    if not isinstance(form, StreamObject):
+        return None
+    return _pdf_content_summary(cast(_PdfContent, form))  # cast-ok: pypdf is untyped
+
+
+def _pdf_drawn_xobjects(drawing: _PdfDrawing) -> tuple[_PdfXObjectUse, ...]:
+    summary, xobjects = drawing
+    if xobjects is None:
+        return ()
+    resolved: Final = (_pdf_dictionary(_pdf_value(xobjects, name)) for name in summary.drawn_names)
+    return tuple((xobject, xobjects) for xobject in resolved if xobject is not None)
+
+
+def _pdf_drawing_key(use: _PdfXObjectUse) -> tuple[int, int]:
+    xobject, inherited = use
+    return id(xobject), id(_pdf_xobjects(xobject, inherited))
+
+
+def _pdf_next_walk(walk: _PdfWalk) -> _PdfWalk | None:
+    draws: Final = walk.draws + sum(len(summary.drawn_names) for summary, _ in walk.frontier)
+    if draws > PDF_MAX_XOBJECT_DRAWS_PER_PAGE:
+        return None
+    drawn: Final = tuple(chain.from_iterable(map(_pdf_drawn_xobjects, walk.frontier)))
+    if any(_pdf_value(xobject, "/Subtype") == "/Image" for xobject, _ in drawn):
+        return None
+    forms: Final = {_pdf_drawing_key(use): use for use in drawn if _pdf_value(use[0], "/Subtype") == "/Form"}
+    unseen: Final = tuple(forms[key] for key in forms.keys() - walk.seen)
+    unparsed: Final = {id(form): form for form, _ in unseen if id(form) not in walk.summaries}
+    summaries: Final = MappingProxyType(
+        {**walk.summaries, **{key: _pdf_form_summary(form) for key, form in unparsed.items()}}
+    )
+    drawings: Final = ((summaries[id(form)], _pdf_xobjects(form, inherited)) for form, inherited in unseen)
+    return _PdfWalk(
+        frontier=tuple((summary, xobjects) for summary, xobjects in drawings if summary is not None),
+        seen=walk.seen | frozenset(forms),
+        summaries=summaries,
+        draws=draws,
+    )
+
+
+def _pdf_page_draws_raster_image(page: _PdfPage) -> bool:
+    contents: Final = page.get_contents()
+    page_dictionary: Final = _pdf_dictionary(page)
+    if contents is None or page_dictionary is None:
+        return False
+    walk: _PdfWalk = _PdfWalk(  # rebind-ok: breadth-first walk, recursion is banned
+        frontier=((_pdf_content_summary(contents), _pdf_xobjects(page_dictionary, None)),),
+        seen=frozenset(),
+        summaries=MappingProxyType({}),
+        draws=0,
+    )
+    for _ in range(PDF_MAX_FORM_XOBJECT_DEPTH):
+        if not walk.frontier:
+            return False
+        if any(summary.draws_inline_image for summary, _ in walk.frontier):
+            return True
+        if (next_walk := _pdf_next_walk(walk)) is None:
+            return True
+        walk = next_walk
+    return bool(walk.frontier)
+
+
+def _openai_pdf_page_tokens(page: _PdfPage, count_function: TokenCounterFunction) -> int:
+    if _pdf_page_draws_raster_image(page):
+        return _claude_pdf_page_tokens(page, count_function)
+    text: Final = page.extract_text() or ""
+    return count_function(text) + OPENAI_PDF_TEXT_PAGE_FRAMING_TOKENS if text.strip() else 0
+
+
+def _claude_pdf_page_tokens(page: _PdfPage, count_function: TokenCounterFunction) -> int:
+    return count_function(page.extract_text() or "") + _anthropic_rendered_page_image_tokens(
+        float(page.mediabox.width), float(page.mediabox.height)
+    )
+
+
+def _pdf_page_tokens(page: _PdfPage, count_function: TokenCounterFunction, pdf_pricing: PdfPagePricing) -> int:
+    match pdf_pricing:
+        case "openai":
+            return _openai_pdf_page_tokens(page, count_function)
+        case "claude":
+            return _claude_pdf_page_tokens(page, count_function)
+
+
+def _count_inline_pdf_tokens(
+    data_url: str,
+    count_function: TokenCounterFunction,
+    pdf_pricing: PdfPagePricing = "claude",
+) -> int | None:
     if not data_url.startswith(PDF_DATA_URL_PREFIX):
         return None
     try:
@@ -1262,12 +1549,10 @@ def _count_inline_pdf_tokens(data_url: str, count_function: TokenCounterFunction
         verbose_logger.debug("pypdf is not installed, so the PDF document is priced like one image")
         return None
     try:
-        reader: Final = PdfReader(io.BytesIO(base64.b64decode(data_url[len(PDF_DATA_URL_PREFIX) :])))
-        return sum(
-            count_function(page.extract_text() or "")
-            + _anthropic_rendered_page_image_tokens(float(page.mediabox.width), float(page.mediabox.height))
-            for page in reader.pages
+        reader: Final = cast(  # cast-ok: pypdf's PdfReader satisfies _PdfReader, typed only where pypdf is installed
+            _PdfReader, PdfReader(io.BytesIO(base64.b64decode(data_url[len(PDF_DATA_URL_PREFIX) :])))
         )
+        return sum(_pdf_page_tokens(page, count_function, pdf_pricing) for page in reader.pages)
     except Exception as e:
         verbose_logger.debug("Could not read the PDF document's pages (%s), so it is priced like one image", e)
         return None
@@ -1277,8 +1562,9 @@ def _count_opaque_document_tokens(
     data_url: str,
     count_function: TokenCounterFunction,
     use_default_image_token_count: bool,
+    pdf_pricing: PdfPagePricing = "claude",
 ) -> int:
-    pdf_tokens: Final = _count_inline_pdf_tokens(data_url, count_function)
+    pdf_tokens: Final = _count_inline_pdf_tokens(data_url, count_function, pdf_pricing)
     if pdf_tokens is not None:
         return pdf_tokens
     return calculate_img_tokens(
@@ -1293,6 +1579,7 @@ def _count_document_tokens(
     count_function: TokenCounterFunction,
     use_default_image_token_count: bool,
     default_token_count: int | None,
+    pdf_pricing: PdfPagePricing = "claude",
 ) -> int:
     source: Final = document["source"]
     metadata_tokens: Final = sum(
@@ -1305,10 +1592,10 @@ def _count_document_tokens(
         if isinstance(content, str):
             return metadata_tokens + count_function(content)
         return metadata_tokens + _count_content_list(
-            count_function, content, use_default_image_token_count, default_token_count
+            count_function, content, use_default_image_token_count, default_token_count, pdf_pricing
         )
     return metadata_tokens + _count_opaque_document_tokens(
-        _anthropic_image_source_data(source), count_function, use_default_image_token_count
+        _anthropic_image_source_data(source), count_function, use_default_image_token_count, pdf_pricing
     )
 
 
@@ -1316,6 +1603,7 @@ def _count_file_tokens(
     file_value: object,
     count_function: TokenCounterFunction,
     use_default_image_token_count: bool,
+    pdf_pricing: PdfPagePricing = "claude",
 ) -> int:
     """An OpenAI `file` block is the chat-completions spelling of a document, so it prices like one."""
     if not isinstance(file_value, Mapping):
@@ -1325,7 +1613,9 @@ def _count_file_tokens(
     name_tokens: Final = count_function(filename) if isinstance(filename, str) and filename else 0
     if not isinstance(file_data, str) or not file_data:
         return name_tokens
-    return name_tokens + _count_opaque_document_tokens(file_data, count_function, use_default_image_token_count)
+    return name_tokens + _count_opaque_document_tokens(
+        file_data, count_function, use_default_image_token_count, pdf_pricing
+    )
 
 
 def _count_anthropic_content(
@@ -1333,6 +1623,7 @@ def _count_anthropic_content(
     count_function: TokenCounterFunction,
     use_default_image_token_count: bool,
     default_token_count: int | None,
+    pdf_pricing: PdfPagePricing = "claude",
 ) -> int:
     """
     Count tokens in Anthropic-specific content blocks (tool_use, tool_result, etc.).
@@ -1367,6 +1658,7 @@ def _count_anthropic_content(
                     field_value,
                     use_default_image_token_count,
                     default_token_count,
+                    pdf_pricing,
                 )
             elif isinstance(field_value, dict):
                 tokens += count_function(str(field_value))
@@ -1377,6 +1669,11 @@ def _count_anthropic_content(
                 f"Error counting field '{field_name}': {e}"
             )
     return tokens
+
+
+_TEXT_FIELD_BY_BLOCK_TYPE: Final = MappingProxyType(
+    {"text": "text", "thinking": "thinking", "redacted_thinking": "thinking", "compaction": "content"}
+)
 
 
 def _count_content_list(
@@ -1390,9 +1687,11 @@ def _count_content_list(
         | AnthropicMessagesImageParam
         | AnthropicMessagesDocumentParam
         | AnthropicSearchResultParam
+        | CompactionBlock
     ],
     use_default_image_token_count: bool,
     default_token_count: int | None,
+    pdf_pricing: PdfPagePricing = "claude",
 ) -> int:
     """Recursively count tokens from a list of content blocks."""
     try:
@@ -1400,8 +1699,10 @@ def _count_content_list(
         for c in content_list:
             if isinstance(c, str):
                 num_tokens += count_function(c)
-            elif c["type"] == "text":
-                num_tokens += count_function(str(c.get("text", "")))
+            elif c["type"] in _TEXT_FIELD_BY_BLOCK_TYPE:
+                block_text = str(c.get(_TEXT_FIELD_BY_BLOCK_TYPE[c["type"]]) or "")
+                if block_text:
+                    num_tokens += count_function(block_text)
             elif c["type"] == "image_url":
                 image_url = c.get("image_url")
                 num_tokens += _count_image_tokens(image_url, use_default_image_token_count)
@@ -1417,12 +1718,14 @@ def _count_content_list(
                     count_function,
                     use_default_image_token_count,
                     default_token_count,
+                    pdf_pricing,
                 )
             elif c["type"] == "file":
                 num_tokens += _count_file_tokens(
                     c.get("file"),
                     count_function,
                     use_default_image_token_count,
+                    pdf_pricing,
                 )
             elif c["type"] in ("tool_use", "tool_result", "search_result"):
                 num_tokens += _count_anthropic_content(
@@ -1430,13 +1733,8 @@ def _count_content_list(
                     count_function,
                     use_default_image_token_count,
                     default_token_count,
+                    pdf_pricing,
                 )
-            elif c["type"] in ("thinking", "redacted_thinking"):
-                # Claude extended thinking content block
-                # Count the thinking text and skip the opaque blobs (signature, redacted data)
-                thinking_text = str(c.get("thinking", ""))
-                if thinking_text:
-                    num_tokens += count_function(thinking_text)
             elif c["type"] == "tool_reference":
                 # Anthropic tool-search reference block: a lightweight pointer to
                 # a deferred tool, e.g. {"type": "tool_reference", "tool_name": ...}.
@@ -1454,7 +1752,7 @@ def _count_content_list(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
                     f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"tool_reference, search_result)."
+                    f"compaction, tool_reference, search_result)."
                 )
         return num_tokens
     except Exception as e:
@@ -1552,12 +1850,13 @@ def _format_single_function_definition(function: Mapping[str, object]) -> tuple[
 
 def _format_object_parameters(parameters, indent):
     properties: Final = parameters.get("properties")
-    if not properties:
+    if not isinstance(properties, Mapping) or not properties:
         return ""
-    required_params: Final = parameters.get("required", [])
+    required: Final = parameters.get("required")
+    required_params: Final = tuple(required) if isinstance(required, list) else ()
     lines: Final = []
     for key, props in properties.items():
-        description = props.get("description")
+        description = props.get("description") if isinstance(props, Mapping) else None
         if description:
             lines.append(f"// {description}")
         question = "?"
@@ -1568,19 +1867,21 @@ def _format_object_parameters(parameters, indent):
 
 
 def _format_type(props, indent):
+    if not isinstance(props, Mapping):
+        return "any"
     type: Final = props.get("type")
+    enum: Final = props.get("enum")
     if type == "string":
-        if "enum" in props:
-            return " | ".join([f'"{item}"' for item in props["enum"]])
+        if isinstance(enum, list):
+            return " | ".join([f'"{item}"' for item in enum])
         return "string"
     elif type == "array":
-        # items is required, OpenAI throws an error if it's missing
-        return f"{_format_type(props['items'], indent)}[]"
+        return f"{_format_type(props.get('items'), indent)}[]"
     elif type == "object":
         return f"{{\n{_format_object_parameters(props, indent + 2)}\n}}"
     elif type in ["integer", "number"]:
-        if "enum" in props:
-            return " | ".join([f'"{item}"' for item in props["enum"]])
+        if isinstance(enum, list):
+            return " | ".join([f'"{item}"' for item in enum])
         return "number"
     elif type == "boolean":
         return "boolean"
