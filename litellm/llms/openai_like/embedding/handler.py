@@ -24,7 +24,19 @@ from ..common_utils import OpenAILikeBase, OpenAILikeError
 
 _KEY_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
 _EXTRA_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-_TRANSPORT_HEADER_NAMES: Final = frozenset({"host", "content-length", "transfer-encoding"})
+_TRANSPORT_HEADER_NAMES: Final = frozenset(
+    {
+        "host",
+        "content-length",
+        "transfer-encoding",
+        "connection",
+        "keep-alive",
+        "proxy-connection",
+        "te",
+        "trailer",
+        "upgrade",
+    }
+)
 _HEADER_NAME: Final = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
 _HEADER_VALUE: Final = re.compile(r"[\t\x20-\x7e]*")
 
@@ -34,7 +46,7 @@ def _header_text(name: str, value: object) -> str | None:
         return None
     if _HEADER_NAME.fullmatch(name) is None:
         return None
-    return str(value).strip(" \t")
+    return str(value).strip(" \t\r\n")
 
 
 def _extra_headers_as_text(extra_headers: Mapping[str, object], model: str, drop_params: bool) -> Mapping[str, str]:
@@ -54,7 +66,9 @@ def _extra_headers_as_text(extra_headers: Mapping[str, object], model: str, drop
     unsendable: Final = sorted(name for name, text in named.items() if _HEADER_VALUE.fullmatch(text) is None)
     if unsendable:
         verbose_logger.warning(
-            "extra_headers %s dropped, since a header value must be printable ASCII on one line", unsendable
+            "extra_headers %s dropped for model %s, since a header value must be printable ASCII on one line",
+            unsendable,
+            model,
         )
     return MappingProxyType({name: text for name, text in named.items() if name not in unsendable})
 

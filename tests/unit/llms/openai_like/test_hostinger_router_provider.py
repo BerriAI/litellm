@@ -300,7 +300,17 @@ def test_hostinger_router_embeddings_drop_non_text_extra_headers_under_drop_para
     assert set(json.loads(request.content)) == {"model", "input"}
 
 
-TRANSPORT_EXTRA_HEADERS: Final = [("Host", "other.example"), ("content-length", "1"), ("Transfer-Encoding", "chunked")]
+TRANSPORT_EXTRA_HEADERS: Final = [
+    ("Host", "other.example"),
+    ("content-length", "1"),
+    ("Transfer-Encoding", "chunked"),
+    ("Connection", "close"),
+    ("Keep-Alive", "timeout=5"),
+    ("Proxy-Connection", "close"),
+    ("TE", "gzip"),
+    ("Trailer", "X-Checksum"),
+    ("Upgrade", "websocket"),
+]
 
 
 @pytest.mark.parametrize(("name", "configured"), TRANSPORT_EXTRA_HEADERS)
@@ -318,6 +328,7 @@ def test_hostinger_router_embeddings_ignore_transport_extra_headers(name: str, c
     assert request.headers.get_list("host") == ["router.hostinger.com"]
     assert request.headers.get_list("content-length") == [str(len(request.content))]
     assert "transfer-encoding" not in request.headers
+    assert configured not in request.headers.get_list(name)
     assert request.headers.get_list("x-trace-id") == ["trace-1"]
 
 
@@ -376,8 +387,11 @@ def test_hostinger_router_embeddings_drop_extra_header_values_http_cannot_carry(
     assert "x-litellm-user_api_key_alias" not in request.headers
 
 
-@pytest.mark.parametrize(("configured", "sent"), [(" x ", "x"), ("\t", ""), (" a\tb ", "a\tb")])
-def test_hostinger_router_embeddings_trim_spaces_around_extra_header_values(configured: str, sent: str):
+@pytest.mark.parametrize(
+    ("configured", "sent"),
+    [(" x ", "x"), ("\t", ""), (" a\tb ", "a\tb"), ("env-secret\n", "env-secret"), ("\r\n x \r\n", "x")],
+)
+def test_hostinger_router_embeddings_trim_whitespace_around_extra_header_values(configured: str, sent: str):
     with respx.mock() as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         litellm.embedding(
