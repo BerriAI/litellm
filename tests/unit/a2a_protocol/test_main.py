@@ -24,6 +24,7 @@ from litellm.a2a_protocol.main import (
     _stream_messages,
     aget_agent_card,
     asend_message,
+    asend_message_streaming,
     create_a2a_client,
 )
 from litellm.a2a_protocol.exceptions import A2AError
@@ -720,6 +721,64 @@ async def test_streamed_send_is_timed_from_before_the_agent_card_fetch(
 
     assert card_recorder.card_served_at is not None
     assert logger.payload["startTime"] <= card_recorder.card_served_at.timestamp()
+
+
+@pytest.fixture
+def usage_recorder(monkeypatch: pytest.MonkeyPatch) -> _UsageRecorder:
+    recorder: Final = _UsageRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    return recorder
+
+
+_LOGGED_AGENT_NAMES: Final = pytest.mark.parametrize(
+    ("agent_name", "logged_model"),
+    [("configured-agent", "a2a_agent/configured-agent"), (None, "a2a_agent/recording-agent")],
+)
+
+
+@_LOGGED_AGENT_NAMES
+@pytest.mark.asyncio
+async def test_url_agent_send_is_logged_under_the_configured_agent_name(
+    agent_name: str | None,
+    logged_model: str,
+    isolated_client_cache: LLMClientCache,
+    usage_recorder: _UsageRecorder,
+):
+    await _seed_shared_a2a_client()
+
+    _ = await asend_message(request=_send_request("named-send"), api_base="http://127.0.0.1:9", agent_name=agent_name)
+    await asyncio.wait_for(usage_recorder.logged.wait(), timeout=10)
+
+    assert usage_recorder.payload["model"] == logged_model
+
+
+@_LOGGED_AGENT_NAMES
+@pytest.mark.asyncio
+async def test_url_agent_stream_is_logged_under_the_configured_agent_name(
+    agent_name: str | None,
+    logged_model: str,
+    isolated_client_cache: LLMClientCache,
+    usage_recorder: _UsageRecorder,
+):
+    await _seed_shared_a2a_client(rpc_stream_events=_LANGGRAPH_STREAM_EVENTS)
+    request: Final = SendStreamingMessageRequest(
+        id="reply",
+        params=MessageSendParams(
+            message={"messageId": "m-user", "role": "user", "parts": [{"kind": "text", "text": "hi"}]}
+        ),
+    )
+
+    _ = [
+        chunk
+        async for chunk in asend_message_streaming(
+            request=request, api_base="http://127.0.0.1:9", agent_name=agent_name
+        )
+    ]
+    await asyncio.wait_for(usage_recorder.logged.wait(), timeout=10)
+
+    assert usage_recorder.payload["model"] == logged_model
 
 
 @pytest.mark.asyncio

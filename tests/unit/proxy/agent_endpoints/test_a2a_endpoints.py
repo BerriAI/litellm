@@ -44,6 +44,7 @@ def _sse_upstream_response(*lines: str, first_line_delay: float = 0.0) -> httpx.
 class CapturedAgentCall:
     request_id: object
     agent_extra_headers: dict[str, str] | None
+    agent_name: object
 
 
 @pytest.mark.asyncio
@@ -627,7 +628,11 @@ async def _invoke_message_method(
 
     kwargs: Final = downstream.call_args.kwargs
     request_id: Final = kwargs["request"].__dict__["id"] if is_send else kwargs["request_id"]
-    return CapturedAgentCall(request_id=request_id, agent_extra_headers=kwargs.get("agent_extra_headers"))
+    return CapturedAgentCall(
+        request_id=request_id,
+        agent_extra_headers=kwargs.get("agent_extra_headers"),
+        agent_name=kwargs.get("agent_name"),
+    )
 
 
 @pytest.mark.asyncio
@@ -639,6 +644,17 @@ async def test_message_methods_preserve_numeric_zero_request_id(method: str):
     captured = await _invoke_message_method(method, mock_request, user_api_key_dict)
 
     assert captured.request_id == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["message/send", "message/stream"])
+async def test_message_methods_name_url_agents_by_their_configured_name(method: str):
+    mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    captured = await _invoke_message_method(method, mock_request, user_api_key_dict)
+
+    assert captured.agent_name == "Test Agent"
 
 
 @pytest.mark.asyncio
@@ -1723,7 +1739,10 @@ async def test_handle_stream_message_frames_events_as_sse():
         },
     ]
 
+    stream_kwargs: Final[list[dict[str, object]]] = []
+
     async def fake_stream(**kwargs):
+        stream_kwargs.append(kwargs)
         for event in events:
             yield event
 
@@ -1746,11 +1765,13 @@ async def test_handle_stream_message_frames_events_as_sse():
                     "messageId": "msg-1",
                 }
             },
+            agent_name="Test Agent",
         )
 
         assert response.media_type == "text/event-stream"
         chunks = [chunk.decode() if isinstance(chunk, bytes) else chunk async for chunk in response.body_iterator]
 
+    assert [kwargs["agent_name"] for kwargs in stream_kwargs] == ["Test Agent"]
     assert len(chunks) == len(events)
     for chunk, event in zip(chunks, events):
         assert chunk.startswith("data: ")
