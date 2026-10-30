@@ -50,8 +50,8 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
 from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
+    invalidate_user_permission_link,
     object_permission_cache_key,
-    user_object_permission_id_cache_key,
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
@@ -1481,9 +1481,11 @@ async def _invalidate_cached_user_entitlement(user_id: str | None, object_permis
 
     keys: Final = (
         *(object_permission_cache_key(permission_id) for permission_id in dict.fromkeys(object_permission_ids)),
-        *((user_object_permission_id_cache_key(user_id), user_id) if user_id is not None else ()),
     )
     await evict_and_broadcast(cache_keys=keys, user_api_key_cache=user_api_key_cache)
+    if user_id is not None:
+        await invalidate_user_permission_link(user_api_key_cache, user_id)
+        await evict_and_broadcast(cache_keys=(user_id,), user_api_key_cache=user_api_key_cache)
 
 
 async def _update_single_user_helper(

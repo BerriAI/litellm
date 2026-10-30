@@ -3,16 +3,28 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Sequence
+from contextlib import suppress
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, TypeVar, cast, overload
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_batch import active_request_redis_batch
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+from litellm.redis.stores.mcp_user_permission_links import (
+    USER_NO_MCP_PERMISSION_SENTINEL as _USER_NO_PERMISSION,
+)
+from litellm.redis.stores.mcp_user_permission_links import (
+    McpUserPermissionLinkStore,
+    TransportMcpUserPermissionLinkStore,
+    user_permission_link_key,
+)
+from litellm.redis.transport.contract import RedisFailure
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -291,21 +303,64 @@ class UserApiKeyCache(DualCache):
             await super().async_set_cache_pipeline(cache_list=other_entries, local_only=local_only, **kwargs)
 
 
-#: Value cached under ``user_object_permission_id_cache_key`` when the user links no permission row,
-#: so a human without an entitlement costs no DB read per request. Lives beside the key builder
-#: because it is part of the same cache protocol: a reader that knows the key must know this value.
-USER_NO_MCP_PERMISSION_SENTINEL: Final = "__user_no_mcp_permission__"
+_PERMISSION_LINK_VALUE: Final = TypeAdapter(object)
+USER_NO_MCP_PERMISSION_SENTINEL: Final = _USER_NO_PERMISSION
 
 
 def user_object_permission_id_cache_key(user_id: str) -> str:
-    """Cache key for the ``user_id -> object_permission_id`` link.
+    return user_permission_link_key(user_id)
 
-    Lives here rather than next to either user because two modules own the two halves: the MCP auth
-    resolver writes it on read, and ``/user/update`` deletes it after changing the link. A key format
-    duplicated across those two drifts silently, and the failure is an entitlement change that never
-    takes effect.
-    """
-    return f"user_object_permission_id:{user_id}"
+
+async def get_user_permission_link(cache: UserApiKeyCache, user_id: str) -> str | None:
+    key: Final = user_permission_link_key(user_id)
+    local: Final = _PERMISSION_LINK_VALUE.validate_python(await cache.async_get_cache(key=key, local_only=True))
+    if local is not None:
+        return local if isinstance(local, str) else None
+    if cache.redis_cache is None:
+        return None
+    batch: Final = active_request_redis_batch(cache.redis_cache)
+    if batch is not None and batch.read_as_missing(key):
+        return None
+    with suppress(Exception):
+        store: Final[McpUserPermissionLinkStore] = TransportMcpUserPermissionLinkStore(cache.redis_cache.transport())
+        result: Final = await store.get(user_id)
+        if isinstance(result, RedisFailure):
+            return None
+        if result is not None:
+            await cache.async_set_cache(key=key, value=result, local_only=True)
+        return result
+    return None
+
+
+async def fill_user_permission_link(
+    cache: UserApiKeyCache, user_id: str, permission_id: str | None, *, ttl: float
+) -> None:
+    await cache.async_set_cache(
+        key=user_permission_link_key(user_id),
+        value=permission_id or USER_NO_MCP_PERMISSION_SENTINEL,
+        ttl=ttl,
+        local_only=True,
+    )
+    if cache.redis_cache is not None:
+        with suppress(Exception):
+            store: Final[McpUserPermissionLinkStore] = TransportMcpUserPermissionLinkStore(
+                cache.redis_cache.transport()
+            )
+            _ = await store.fill(user_id, permission_id, ttl=timedelta(seconds=int(ttl)))
+
+
+async def invalidate_user_permission_link(cache: UserApiKeyCache, user_id: str) -> None:
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
+
+    key: Final = user_permission_link_key(user_id)
+    cache.in_memory_cache.delete_cache(key)
+    if cache.redis_cache is not None:
+        with suppress(Exception):
+            store: Final[McpUserPermissionLinkStore] = TransportMcpUserPermissionLinkStore(
+                cache.redis_cache.transport()
+            )
+            _ = await store.invalidate(user_id)
+    await publish_auth_cache_invalidation(cache_key=key)
 
 
 def object_permission_cache_key(object_permission_id: str) -> str:
