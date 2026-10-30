@@ -109,7 +109,10 @@ def _request_tool_names(tool: object) -> tuple[str, ...]:
     server_name: Final = (
         _non_empty_string(fields.get(server_field)) if fields is not None and server_field is not None else None
     )
-    return anthropic_tool_names(tool) + tuple(name for name in (custom_name, server_name) if name is not None)
+    function: Final = _object_mapping(fields.get("function")) if fields is not None else None
+    function_name: Final = _non_empty_string(function.get("name")) if function is not None else None
+    extra_names: Final = tuple(name for name in (function_name, custom_name, server_name) if name is not None)
+    return tuple(dict.fromkeys(anthropic_tool_names(tool) + extra_names))
 
 
 def _namespace_members(tool: object) -> Sequence[object]:
@@ -943,10 +946,12 @@ class ToolPermissionGuardrail(CustomGuardrail):
             else ()
         )
         keyed: Final = _keyed_tool_fields(tool)
-        if keyed is not None:
-            return member_targets + tuple(_part_target(keyed, key) for key in _part_keys(keyed))
-        if group is not None:
-            return member_targets
+        part_targets: Final = tuple(_part_target(keyed, key) for key in _part_keys(keyed)) if keyed is not None else ()
+        return member_targets + part_targets + self._own_tool_targets(tool)
+
+    def _own_tool_targets(self, tool: object) -> tuple[_ToolTarget, ...]:
+        if _keyed_tool_fields(tool) is not None or _namespace_members(tool):
+            return ()
         raw_type: Final = self._get_mapping_value(tool, "type")
         tool_type: Final = raw_type if isinstance(raw_type, str) else None
         anthropic_custom: Final = (
@@ -1038,6 +1043,8 @@ class ToolPermissionGuardrail(CustomGuardrail):
         fields: Final = _object_mapping(tool)
         if fields is None or (group is None and keyed is None):
             return () if any(map(is_denied, self._get_request_tool_targets(tool))) else (tool,)
+        if any(map(is_denied, self._own_tool_targets(tool))):
+            return ()
         kept_members: Final = _kept_members(group, is_denied)
         denied_keys: Final = (
             frozenset(key for key in _part_keys(keyed) if is_denied(_part_target(keyed, key)))

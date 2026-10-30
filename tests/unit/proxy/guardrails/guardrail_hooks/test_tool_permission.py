@@ -2345,6 +2345,64 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert excinfo.value.detail["detection_message"] == f"Tool '{tool['type']}' denied by default action"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("on_disallowed_action", ["block", "rewrite"])
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            {"type": "function", "function": {"name": "delete_db"}, "functionDeclarations": [{"name": "get_weather"}]},
+            {"type": "function", "function": {"name": "delete_db"}, "function_declarations": [{"name": "get_weather"}]},
+            {"type": "custom", "name": "get_weather", "function": {"name": "delete_db"}},
+            {"type": "mcp", "server_label": "get_weather", "function": {"name": "delete_db"}},
+            {
+                "type": "computer_20251124",
+                "name": "computer",
+                "function": {"name": "delete_db", "parameters": {"display_width_px": 1024, "display_height_px": 768}},
+            },
+        ],
+        ids=[
+            "declarations_list",
+            "snake_case_declarations_list",
+            "custom_top_level_name",
+            "mcp_server_label",
+            "computer_top_level_name",
+        ],
+    )
+    async def test_pre_call_judges_the_function_a_tool_runs_behind_an_allowed_name(
+        self, tool: dict[str, object], on_disallowed_action: Literal["block", "rewrite"]
+    ) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_known", "tool_name": r"^(get_weather|computer)$", "decision": "allow"}],
+            on_disallowed_action,
+            default_action="deny",
+        )
+        weather = {"type": "function", "function": {"name": "get_weather"}}
+        data = {"model": "gemini-3", "messages": [{"role": "user", "content": "hi"}], "tools": [weather, tool]}
+
+        if on_disallowed_action == "block":
+            with pytest.raises(HTTPException) as excinfo:
+                await self._run_pre_call(guardrail, data, "acompletion")
+            assert excinfo.value.detail["detection_message"] == "Tool 'delete_db' denied by default action"
+            return
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [weather]
+
+    @pytest.mark.asyncio
+    async def test_pre_call_allows_a_custom_tool_by_its_function_name(self) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_weather", "tool_name": r"^get_weather$", "decision": "allow"}],
+            "block",
+            default_action="deny",
+        )
+        tool = {"type": "custom", "function": {"name": "get_weather"}}
+        data = {"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}], "tools": [tool]}
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [tool]
+
+    @pytest.mark.asyncio
     async def test_pre_call_blocks_a_tool_whose_type_is_not_a_string_by_its_name(self) -> None:
         guardrail = self._pre_call(
             [
