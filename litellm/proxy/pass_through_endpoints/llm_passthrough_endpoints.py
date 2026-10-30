@@ -3857,6 +3857,10 @@ VERTEX_LIVE_UNCONFIGURED_CLOSE_REASON: Final = (
     "Vertex AI auth failed: set a use_in_pass_through vertex model, default_vertex_config, or DEFAULT_VERTEXAI_* env"
 )
 
+VERTEX_LIVE_UNPINNED_PROJECT_CLOSE_REASON: Final = (
+    "Rejected Request: vertex_project must come from the proxy's configuration, see allow_client_side_credentials"
+)
+
 VERTEX_PUBLISHER_MODEL_PREFIX: Final = "publishers/google/models/"
 
 VERTEX_PUBLISHERS_SEGMENT: Final = "publishers/"
@@ -3947,6 +3951,10 @@ def _live_target_override_reason(
     if allow_client_side_credentials:
         return None
     match target:
+        case _ConfiguredVertexLiveTarget(credentials=credentials) if vertex_project and (
+            credentials is None or credentials.vertex_project is None
+        ):
+            return VERTEX_LIVE_UNPINNED_PROJECT_CLOSE_REASON
         case _ConfiguredVertexLiveTarget(credentials=VertexPassThroughCredentials() as credentials):
             configured_field: Final = next(
                 (
@@ -3986,12 +3994,13 @@ def _live_target_override_reason(
             )
 
 
-_VERTEX_RESOURCE_PROJECT_AND_LOCATION: Final = re.compile(r"projects/[^/]+/locations/[^/]+/")
+_VERTEX_RESOURCE_PROJECT_AND_LOCATION: Final = re.compile(r"projects/[^/]+/locations/(?P<location>[^/]+)/")
 
 
 def _build_vertex_live_setup_model_rewriter(
     vertex_project: str | None,
     vertex_location: str | None,
+    configured_location: str | None,
     llm_router: Router | None,
     keeps_caller_resource_path: bool,
 ) -> Callable[[str], str] | None:
@@ -4000,8 +4009,8 @@ def _build_vertex_live_setup_model_rewriter(
 
     Clients address the gateway the way they address LiteLLM (bare id or model alias); Vertex reads anything
     that is not a ``projects/...`` path as a project name and closes the socket. A ``projects/...`` path
-    picks the project the proxy's token is spent on, so it is moved onto the connection's project and region
-    unless ``allow_client_side_credentials`` lets callers choose them
+    picks the project the proxy's token is spent on, so it is moved onto the connection's project, and onto its
+    region when one is configured, unless ``allow_client_side_credentials`` lets callers choose them
     """
     if vertex_project is None or vertex_location is None:
         return None
@@ -4011,7 +4020,8 @@ def _build_vertex_live_setup_model_rewriter(
             resource_prefix: Final = _VERTEX_RESOURCE_PROJECT_AND_LOCATION.match(setup_model)
             if keeps_caller_resource_path or resource_prefix is None:
                 return setup_model
-            return f"projects/{vertex_project}/locations/{vertex_location}/{setup_model[resource_prefix.end() :]}"
+            location: Final = configured_location or resource_prefix.group("location")
+            return f"projects/{vertex_project}/locations/{location}/{setup_model[resource_prefix.end() :]}"
         aliased: Final = _resolve_alias_to_upstream_model(setup_model, llm_router)
         return f"projects/{vertex_project}/locations/{vertex_location}/{_vertex_publisher_model_suffix(aliased)}"
 
@@ -4155,6 +4165,7 @@ async def vertex_ai_live_websocket_passthrough(
         setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
             vertex_project=resolved_project,
             vertex_location=resolved_location,
+            configured_location=configured_location,
             llm_router=_get_llm_router(),
             keeps_caller_resource_path=allow_client_side_credentials,
         ),

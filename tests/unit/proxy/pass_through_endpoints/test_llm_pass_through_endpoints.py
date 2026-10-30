@@ -6338,6 +6338,7 @@ class TestVertexAILiveWebsocketPassthrough:
         rewriter = passthrough_module._build_vertex_live_setup_model_rewriter(
             vertex_project="proj-db",
             vertex_location="global",
+            configured_location="global",
             llm_router=llm_router,
             keeps_caller_resource_path=False,
         )
@@ -6705,6 +6706,103 @@ class TestVertexAILiveWebsocketPassthrough:
             rewriter("projects/caller-project/locations/us-central1/publishers/google/models/gemini-2.0-flash")
             == expected
         )
+
+    def _pin_no_vertex_project(
+        self,
+        monkeypatch,
+        general_settings: Mapping[str, object],
+        default_vertex_config: VertexPassThroughCredentials | None,
+    ):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", dict(general_settings))
+        monkeypatch.setattr(
+            passthrough_module.passthrough_endpoint_router, "default_vertex_config", default_vertex_config
+        )
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "deployment_key_to_vertex_credentials", {})
+        self._clear_vertex_env(monkeypatch)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "default_vertex_config",
+        [None, VertexPassThroughCredentials(vertex_location="europe-west4")],
+        ids=["no_default_vertex_config", "default_vertex_config_without_a_project"],
+    )
+    async def test_caller_named_project_closes_before_any_upstream_connect_when_nothing_pins_one(
+        self, monkeypatch, default_vertex_config: VertexPassThroughCredentials | None
+    ):
+        self._pin_no_vertex_project(monkeypatch, {}, default_vertex_config)
+
+        websocket, ensure_token, ws_passthrough = await self._open_live({"vertex_project": "other-project"})
+
+        ws_passthrough.assert_not_awaited()
+        ensure_token.assert_not_awaited()
+        close_kwargs = websocket.close.await_args.kwargs
+        assert close_kwargs["code"] == 1008
+        assert "vertex_project" in close_kwargs["reason"]
+        assert len(close_kwargs["reason"].encode("utf-8")) <= 123
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "general_settings, query, expected_project, expected_location",
+        [
+            ({}, {"vertex_location": "europe-west4"}, "proj-env", "europe-west4"),
+            (
+                {"allow_client_side_credentials": True},
+                {"vertex_project": "other-project", "vertex_location": "europe-west4"},
+                "other-project",
+                "europe-west4",
+            ),
+        ],
+        ids=["caller_region", "proxy_wide_opt_in"],
+    )
+    async def test_with_nothing_pinned_the_caller_keeps_the_region_and_the_opt_in_keeps_the_project(
+        self,
+        monkeypatch,
+        general_settings: Mapping[str, object],
+        query: Mapping[str, str],
+        expected_project: str,
+        expected_location: str,
+    ):
+        self._pin_no_vertex_project(monkeypatch, general_settings, None)
+
+        websocket, _, ws_passthrough = await self._open_live(query)
+
+        websocket.close.assert_not_awaited()
+        passthrough_kwargs = ws_passthrough.await_args.kwargs
+        assert passthrough_kwargs["custom_headers"]["x-goog-user-project"] == expected_project
+        assert passthrough_kwargs["setup_model_rewriter"]("gemini-2.0-flash") == (
+            f"projects/{expected_project}/locations/{expected_location}/publishers/google/models/gemini-2.0-flash"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "setup_model, expected",
+        [
+            (
+                "projects/proj-env/locations/europe-west4/publishers/google/models/gemini-2.0-flash",
+                "projects/proj-env/locations/europe-west4/publishers/google/models/gemini-2.0-flash",
+            ),
+            (
+                "projects/caller-project/locations/europe-west4/publishers/google/models/gemini-2.0-flash",
+                "projects/proj-env/locations/europe-west4/publishers/google/models/gemini-2.0-flash",
+            ),
+        ],
+        ids=["own_project", "other_project"],
+    )
+    async def test_setup_frame_keeps_its_region_when_no_region_is_pinned(
+        self, monkeypatch, setup_model: str, expected: str
+    ):
+        self._use_default_vertex_config(monkeypatch, {}, vertex_location=None)
+
+        websocket, _, ws_passthrough = await self._open_live({})
+
+        websocket.close.assert_not_awaited()
+        rewriter = ws_passthrough.await_args.kwargs["setup_model_rewriter"]
+        assert rewriter(setup_model) == expected
 
 
 class TestAnthropicProxyRoute:

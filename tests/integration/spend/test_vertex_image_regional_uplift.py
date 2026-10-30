@@ -100,6 +100,7 @@ def _deployment(
     location: Mapping[str, JsonValue],
     multiplier: JsonValue = 1.1,
     backend: str = _IMAGE_BACKEND,
+    clientside_params: tuple[str, ...] = (),
 ) -> str:
     return scenario.model(
         model=f"vertex_ai/{backend}",
@@ -111,6 +112,7 @@ def _deployment(
         output_cost_per_token=4e-5,
         output_cost_per_image=0.05,
         **({} if multiplier is None else {"regional_endpoint_uplift_multiplier": multiplier}),
+        **({"configurable_clientside_auth_params": list(clientside_params)} if clientside_params else {}),
         **location,
     )
 
@@ -380,7 +382,13 @@ def test_request_body_location_overrides_the_deployment(
     gateway: Gateway, deployment_location: str, extra: Mapping[str, JsonValue], expected: float
 ) -> None:
     with wire_server(_scripted()) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(gateway, scenario, wire, location={"vertex_location": deployment_location})
+        model: Final = _deployment(
+            gateway,
+            scenario,
+            wire,
+            location={"vertex_location": deployment_location},
+            clientside_params=("vertex_location", "vertex_ai_location"),
+        )
         call_id, response = _generate(gateway, model, extra=extra)
         _assert_images(response, call_id, expected)
         _assert_one_upstream_image_call(wire)

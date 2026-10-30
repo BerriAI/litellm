@@ -2,7 +2,7 @@ import importlib.util
 import os
 import re
 import sys
-from collections.abc import Collection, Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from functools import lru_cache
 from itertools import accumulate, chain, repeat
 from logging import Logger
@@ -23,6 +23,7 @@ from litellm.constants import (
     STANDARD_CUSTOMER_ID_HEADERS,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, reject_api_key_secret_reference
+from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import (
     SSRFError,
@@ -40,12 +41,13 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 from litellm.types.router import (
     CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
     Deployment,
+    DeploymentTypedDict,
     LiteLLMParamsTypedDict,
     reject_server_owned_wif_fields,
     server_owned_wif_fields_present,
 )
 from litellm.types.router import reject_server_owned_wif_params as _reject_server_owned_wif_params
-from litellm.types.utils import CustomPricingLiteLLMParams, oauth_token_exchange_litellm_params
+from litellm.types.utils import CustomPricingLiteLLMParams, LlmProviders, oauth_token_exchange_litellm_params
 from litellm.types.videos.main import DecodedVideoId
 
 
@@ -217,23 +219,50 @@ def deployment_clientside_auth_params(litellm_params: LiteLLMParamsTypedDict) ->
     return litellm_params["configurable_clientside_auth_params"]
 
 
+def _model_group_deployments(model: str, llm_router: Router) -> Sequence[DeploymentTypedDict]:
+    registry: Final = llm_router.registry()
+    provider_group: Final = model.split("/", 1)[0]
+    return (
+        registry.deployments(model, source="routed_group")
+        or (registry.deployments(provider_group) if provider_group in provider_list else None)
+        or ()
+    )
+
+
+_VERTEX_TARGET_READING_PROVIDERS: Final[frozenset[str]] = frozenset(
+    (LlmProviders.VERTEX_AI.value, LlmProviders.VERTEX_AI_BETA.value, LlmProviders.GEMINI.value, LlmProviders.GDC.value)
+)
+
+
+def _deployment_provider(litellm_params: LiteLLMParamsTypedDict) -> str | None:
+    match litellm_params:
+        case {"custom_llm_provider": str(declared)} if declared:
+            return declared
+        case {"model": str(model)}:
+            return inferred_provider(model)
+        case _:
+            return None
+
+
+def _model_group_reads_vertex_target(model: str, llm_router: Router | None) -> bool:
+    if llm_router is None:
+        return True
+    deployments: Final = _model_group_deployments(model, llm_router)
+    providers: Final = frozenset(_deployment_provider(deployment["litellm_params"]) for deployment in deployments)
+    return not deployments or None in providers or bool(providers & _VERTEX_TARGET_READING_PROVIDERS)
+
+
 def _allow_model_level_clientside_configurable_parameters(
     model: str, param: str, request_body_value: object, llm_router: Router | None
 ) -> bool:
     """
     The router, not the caller, picks which deployment serves the request, so an
-    opt-in counts only when every deployment the model can route to carries it
+    opt-in counts only when every deployment of the model group, already alias
+    resolved, carries it
     """
     if llm_router is None:
         return False
-    registry: Final = llm_router.registry()
-    routed_group: Final = registry.resolve(model, kind="alias") or model
-    provider_group: Final = routed_group.split("/", 1)[0]
-    deployments: Final = (
-        registry.deployments(routed_group, source="routed_group")
-        or (registry.deployments(provider_group) if provider_group in provider_list else None)
-        or ()
-    )
+    deployments: Final = _model_group_deployments(model, llm_router)
     return bool(deployments) and all(
         _is_param_allowed(
             param=param,
@@ -322,21 +351,15 @@ def route_manages_mcp_servers(route: str | None) -> bool:
 VERTEX_TARGET_PARAMS: Final[frozenset[str]] = frozenset(
     ("vertex_project", "vertex_location", "vertex_ai_project", "vertex_ai_location")
 )
-_RAG_INGEST_VERTEX_TARGET_PARAMS: Final[frozenset[str]] = frozenset(("vertex_project", "vertex_location"))
-_ROUTE_NAMED_VERTEX_TARGET_PARAMS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
-    {
-        "/vertex_ai/live": VERTEX_TARGET_PARAMS,
-        "/rag/ingest": _RAG_INGEST_VERTEX_TARGET_PARAMS,
-        "/v1/rag/ingest": _RAG_INGEST_VERTEX_TARGET_PARAMS,
-    }
+_ROUTES_THAT_NAME_THEIR_VERTEX_TARGET: Final[frozenset[str]] = frozenset(
+    ("/vertex_ai/live", "/rag/ingest", "/v1/rag/ingest")
 )
 
 
 def _without_route_named_vertex_target(request_body: Mapping[str, object], route: str | None) -> Mapping[str, object]:
-    route_named: Final = _ROUTE_NAMED_VERTEX_TARGET_PARAMS.get(route) if route is not None else None
-    if route_named is None:
+    if route not in _ROUTES_THAT_NAME_THEIR_VERTEX_TARGET:
         return request_body
-    return MappingProxyType({key: value for key, value in request_body.items() if key not in route_named})
+    return MappingProxyType({key: value for key, value in request_body.items() if key not in VERTEX_TARGET_PARAMS})
 
 
 _NESTED_CONFIG_KEYS: Final[tuple[str, ...]] = ("litellm_embedding_config", "extra_body")
@@ -509,14 +532,17 @@ _BANNED_METADATA_PARAMS: Final[tuple[str, ...]] = tuple(
 
 
 def _opt_in_model_groups(
-    model: str, request_fallback_models: tuple[str, ...], llm_router: Router | None
+    model: str, also_requested_models: tuple[str, ...], llm_router: Router | None
 ) -> frozenset[str]:
-    requested: Final = frozenset((model, *request_fallback_models))
+    requested: Final = frozenset((model, *also_requested_models))
     if llm_router is None:
         return requested
     registry: Final = llm_router.registry()
-    routed: Final = frozenset(target for name in requested if (target := registry.resolve(name, kind="alias")))
-    return (requested | routed).union(*(router_fallback_model_names(name, llm_router) for name in requested | routed))
+    routed: Final = frozenset(registry.resolve(name, kind="alias") or name for name in requested)
+    fallbacks: Final = frozenset[str]().union(
+        *(router_fallback_model_names(name, llm_router, _EVERY_FALLBACK_TYPE) for name in requested | routed)
+    )
+    return routed | frozenset(registry.resolve(name, kind="alias") or name for name in fallbacks)
 
 
 def _check_banned_params(
@@ -528,7 +554,7 @@ def _check_banned_params(
     manages_deployments: bool = False,
     mcp_server_fields_allowed: bool = False,
     banned_params: tuple[str, ...] = _BANNED_REQUEST_BODY_PARAMS,
-    request_fallback_models: tuple[str, ...] = (),
+    also_requested_models: tuple[str, ...] = (),
 ) -> None:
     """Raise ``ValueError`` if ``body`` carries a banned param without admin opt-in.
 
@@ -558,7 +584,8 @@ def _check_banned_params(
                 llm_router=llm_router,
             )
             is True
-            for model_group in _opt_in_model_groups(model, request_fallback_models, llm_router)
+            for model_group in _opt_in_model_groups(model, also_requested_models, llm_router)
+            if param not in VERTEX_TARGET_PARAMS or _model_group_reads_vertex_target(model_group, llm_router)
         ):
             # Per-param opt-in: only THIS param is permitted by the
             # deployment's ``configurable_clientside_auth_params``. Skip
@@ -649,27 +676,39 @@ def fallback_target_model_name(target: object) -> str | None:
     return None
 
 
-def _direct_fallback_model_names(model: str, llm_router: Router) -> frozenset[str]:
+_EVERY_FALLBACK_TYPE: Final[tuple[str, ...]] = ("general", "context_window", "content_policy")
+
+
+def _direct_fallback_model_names(model: str, llm_router: Router, fallback_types: tuple[str, ...]) -> frozenset[str]:
     from litellm.proxy.auth.model_checks import get_all_fallbacks
 
-    return frozenset(
-        name for target in get_all_fallbacks(model, llm_router) if (name := fallback_target_model_name(target))
+    targets: Final = chain.from_iterable(
+        get_all_fallbacks(model, llm_router, fallback_type) for fallback_type in fallback_types
     )
+    return frozenset(name for target in targets if (name := fallback_target_model_name(target)))
 
 
 def _fallback_hop(
-    frontier_and_reached: tuple[frozenset[str], frozenset[str]], llm_router: Router
+    frontier_and_reached: tuple[frozenset[str], frozenset[str]], router_and_types: tuple[Router, tuple[str, ...]]
 ) -> tuple[frozenset[str], frozenset[str]]:
     frontier, reached = frontier_and_reached
+    llm_router, fallback_types = router_and_types
     next_hop: Final = (
-        frozenset(chain.from_iterable(_direct_fallback_model_names(model, llm_router) for model in frontier)) - reached
+        frozenset(
+            chain.from_iterable(_direct_fallback_model_names(model, llm_router, fallback_types) for model in frontier)
+        )
+        - reached
     )
     return next_hop, reached | next_hop
 
 
-def router_fallback_model_names(model: str, llm_router: Router) -> frozenset[str]:
+def router_fallback_model_names(
+    model: str, llm_router: Router, fallback_types: tuple[str, ...] = ("general",)
+) -> frozenset[str]:
     """The groups a failure on `model` can reach through the router's fallbacks, chained and generic (`*`) ones."""
-    hops: Final = accumulate(repeat(llm_router), _fallback_hop, initial=(frozenset({model}), frozenset({model})))
+    hops: Final = accumulate(
+        repeat((llm_router, fallback_types)), _fallback_hop, initial=(frozenset({model}), frozenset({model}))
+    )
     _, reached = next(hop for hop in hops if not hop[0])
     return reached - {model}
 
@@ -735,7 +774,11 @@ def is_request_body_safe(
         raise ValueError("Rejected Request: model_list is not allowed in the request body.")
     manages_deployments: Final = route_manages_deployments(route)
     root_body: Final = _without_route_named_vertex_target(request_body, route)
-    request_fallback_models: Final = request_fallback_model_names(root_body)
+    route_model: Final = _model_from_route_path(route) if route is not None else None
+    also_requested_models: Final = (
+        *request_fallback_model_names(root_body),
+        *((route_model,) if route_model else ()),
+    )
     _check_banned_params(
         root_body,
         general_settings,
@@ -743,7 +786,7 @@ def is_request_body_safe(
         model,
         manages_deployments=manages_deployments,
         mcp_server_fields_allowed=route_manages_mcp_servers(route),
-        request_fallback_models=request_fallback_models,
+        also_requested_models=also_requested_models,
     )
     for nested_key in _NESTED_CONFIG_KEYS:
         nested = _coerce_metadata_to_dict(request_body.get(nested_key))
@@ -754,7 +797,7 @@ def is_request_body_safe(
                 llm_router,
                 model,
                 manages_deployments=manages_deployments,
-                request_fallback_models=request_fallback_models,
+                also_requested_models=also_requested_models,
             )
     for metadata_key in _NESTED_METADATA_KEYS:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
@@ -766,7 +809,7 @@ def is_request_body_safe(
                 model,
                 manages_deployments=manages_deployments,
                 banned_params=_BANNED_METADATA_PARAMS,
-                request_fallback_models=request_fallback_models,
+                also_requested_models=also_requested_models,
             )
         if any(isinstance(key, str) and key.startswith(f"{metadata_key}[") for key in request_body):
             _check_banned_params(
@@ -776,7 +819,7 @@ def is_request_body_safe(
                 model,
                 manages_deployments=manages_deployments,
                 banned_params=_BANNED_METADATA_PARAMS,
-                request_fallback_models=request_fallback_models,
+                also_requested_models=also_requested_models,
             )
     for target in iter_request_fallback_targets(request_body):
         if isinstance(target, dict):
@@ -786,7 +829,7 @@ def is_request_body_safe(
                 llm_router,
                 model,
                 manages_deployments=manages_deployments,
-                request_fallback_models=request_fallback_models,
+                also_requested_models=also_requested_models,
             )
             target_model = target.get("model")
             if isinstance(target_model, str):
@@ -807,7 +850,7 @@ def is_request_body_safe(
                 model,
                 manages_deployments=manages_deployments,
                 banned_params=_BANNED_METADATA_PARAMS,
-                request_fallback_models=request_fallback_models,
+                also_requested_models=also_requested_models,
             )
     for user_config_params in _user_config_litellm_params(request_body):  # pyright: ignore[reportUnknownArgumentType]  # request_body is an untyped dict
         reject_api_key_secret_reference(user_config_params)
