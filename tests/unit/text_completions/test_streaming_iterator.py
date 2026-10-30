@@ -131,6 +131,18 @@ def test_text_completion_stream_keeps_stop_reason_on_the_finish_chunk(final_text
     }
 
 
+def test_text_completion_stream_puts_stop_reason_on_the_final_text_chunk() -> None:
+    responses: Final = _text_completion_stream(
+        (_completion_chunk(", 5", None), _completion_chunk(", 6", "stop", stop_reason=", 7"))
+    )
+
+    assert [(response.choices[0].get("text"), response.choices[0].get("stop_reason")) for response in responses] == [
+        (", 5", None),
+        (", 6", ", 7"),
+        (None, ", 7"),
+    ]
+
+
 @pytest.mark.parametrize("final_text", [", 6", ""], ids=["text-then-finish", "finish-only"])
 def test_text_completion_stream_keeps_held_back_token_ids_and_the_stop_reason(final_text: str) -> None:
     responses: Final = _text_completion_stream(

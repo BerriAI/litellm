@@ -1314,6 +1314,8 @@ class CustomStreamWrapper:
                 _apply_choice_fields(model_response.choices[0], chunk_choice_fields)
                 if sibling_finish_reason is not None:
                     self._finish_sibling_choice(model_response.choices[0], sibling_finish_reason)
+                elif response_obj.get("is_finished"):
+                    self._apply_finish_choice_fields(model_response.choices[0])
                 self._optional_combine_thinking_block_in_choices(model_response=model_response)
 
                 return model_response

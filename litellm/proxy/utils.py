@@ -172,7 +172,7 @@ from litellm.litellm_core_utils.served_output_texts import (
 )
 from litellm.litellm_core_utils.token_counter import offload_token_count, usage_tokenizer_model
 from litellm.llms import load_guardrail_translation_mappings
-from litellm.llms.base_llm.guardrail_translation.utils import stream_item_items
+from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
@@ -704,6 +704,37 @@ def _pipeline_step_streams_live(step: "PipelineStep") -> bool:
 def _drop_stream_chunk_token_ids(chunk: object) -> None:
     for choice in stream_item_items(chunk, "choices"):
         drop_token_ids(choice)
+
+
+_PLAIN_STREAM_FIELDS: Final = TypeAdapter(dict[str, object])
+_EMPTY_STREAM_VALUES: Final[tuple[object, ...]] = (None, "", [], {})
+
+
+def _holds_stream_payload(value: object) -> bool:
+    if isinstance(value, dict):
+        nested: Final = _PLAIN_STREAM_FIELDS.validate_python(value).values()
+        return any(item not in _EMPTY_STREAM_VALUES for item in nested)
+    return value not in _EMPTY_STREAM_VALUES
+
+
+def _choice_carries_only_token_ids(choice: object) -> bool:
+    if stream_item_field(choice, "token_ids") is None or not isinstance(choice, BaseModel):
+        return False
+    fields: Final = _PLAIN_STREAM_FIELDS.validate_python(choice.model_dump())
+    return not any(_holds_stream_payload(value) for key, value in fields.items() if key not in ("index", "token_ids"))
+
+
+def _is_token_id_only_chunk(chunk: object) -> bool:
+    choices: Final = stream_item_items(chunk, "choices")
+    return bool(choices) and all(_choice_carries_only_token_ids(choice) for choice in choices)
+
+
+async def _without_token_id_only_chunks(response: AsyncIterable[object]) -> AsyncGenerator[object, None]:
+    async for chunk in response:
+        if _is_token_id_only_chunk(chunk):
+            _drop_stream_chunk_token_ids(chunk)
+            continue
+        yield chunk
 
 
 def _pipelines_stream_live(pipelines: Sequence[tuple[str, "GuardrailPipeline"]]) -> bool:
@@ -4540,7 +4571,7 @@ class ProxyLogging:
         self,
         response,
         user_api_key_dict: UserAPIKeyAuth,
-        request_data: dict,
+        request_data: dict[str, object],
     ):
         """
         Allow user to modify outgoing streaming data -> Given a whole response iterator.
@@ -4574,7 +4605,6 @@ class ProxyLogging:
         # Merge model-level guardrails before checking which guardrails to run
         request_data = check_and_merge_model_level_guardrails(data=request_data, llm_router=llm_router)
 
-        current_response = response
         stream_needs_translation: Final = ProxyLogging._stream_requires_guardrail_translation(user_api_key_dict)
 
         pipeline_gated_names: Final = _pipeline_step_guardrail_names(post_call_pipelines)
@@ -4590,6 +4620,7 @@ class ProxyLogging:
         drops_token_ids: Final = bool(post_call_pipelines) or any(
             isinstance(callback, CustomGuardrail) for callback, _ in running_overrides
         )
+        current_response = _without_token_id_only_chunks(response) if drops_token_ids else response
         guarded_layers: Final[list[AsyncGenerator[object, None]]] = []  # mutable-ok: closed on disconnect
         for resolved_callback, kind in running_overrides:
             effective_kind = (

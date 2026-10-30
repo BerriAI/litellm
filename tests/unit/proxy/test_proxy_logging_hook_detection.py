@@ -400,6 +400,68 @@ async def test_post_call_stream_keeps_token_ids_when_no_guardrail_runs_on_the_re
     assert served_token_ids == ([1, 2, 3], [4])
 
 
+def _completion_chunk(text: str, token_ids: list[int], finish_reason: str | None = None) -> object:
+    from litellm.types.utils import TextChoices, TextCompletionResponse
+
+    return TextCompletionResponse(
+        object="text_completion",
+        choices=[TextChoices(index=0, text=text, finish_reason=finish_reason, token_ids=token_ids)],
+    )
+
+
+def _guarded_completions_stream(monkeypatch, action: str, held_back: tuple[object, ...]):
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+    from litellm.types.guardrails import BlockedWord, ContentFilterAction
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            ContentFilterGuardrail(
+                guardrail_name="output-filter",
+                blocked_words=[BlockedWord(keyword="7", action=ContentFilterAction(action))],
+                event_hook="post_call",
+                default_on=True,
+            )
+        ],
+    )
+
+    async def upstream():
+        for chunk in held_back:
+            yield chunk
+        yield _completion_chunk(", 6, 7", [21, 11, 22], finish_reason="stop")
+
+    return ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
+        response=upstream(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/completions"),
+        request_data={"model": "qwen3", "metadata": {}},
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_call_stream_guardrail_blocks_completions_before_serving_token_id_only_chunks(monkeypatch):
+    stream = _guarded_completions_stream(
+        monkeypatch, "BLOCK", (_completion_chunk("", [11]), _completion_chunk("", [220]))
+    )
+
+    with pytest.raises(HTTPException):
+        await stream.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_post_call_stream_guardrail_serves_no_chunk_left_empty_by_the_token_id_drop(monkeypatch):
+    held_back = (_completion_chunk("", [11]), _completion_chunk("", [220]))
+
+    served = [chunk async for chunk in _guarded_completions_stream(monkeypatch, "MASK", held_back)]
+
+    assert [(chunk.choices[0].text, chunk.choices[0].token_ids) for chunk in served] == [
+        (", 6, [KEYWORD_REDACTED]", None)
+    ]
+    assert [chunk.choices[0].token_ids for chunk in held_back] == [None, None]
+
+
 @pytest.mark.asyncio
 async def test_post_call_stream_records_masked_text_for_deferred_logging(monkeypatch):
     from litellm.caching.caching import DualCache
