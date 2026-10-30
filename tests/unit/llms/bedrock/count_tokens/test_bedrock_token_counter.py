@@ -294,8 +294,15 @@ async def test_claude_count_rejects_a_lone_responses_tool_without_calling_bedroc
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model_to_use", ("us.anthropic.claude-opus-5-5", "bedrock_mantle/anthropic.claude-opus-5-5"))
-async def test_claude_count_rejects_a_message_without_content_without_calling_bedrock(model_to_use: str) -> None:
+@pytest.mark.parametrize(
+    "model_to_use",
+    (
+        "us.anthropic.claude-opus-5-5",
+        "bedrock_mantle/anthropic.claude-opus-5-5",
+        "bedrock_mantle/openai.gpt-6.1-sol",
+    ),
+)
+async def test_count_rejects_a_message_without_content_without_calling_bedrock(model_to_use: str) -> None:
     bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
 
     result: Final = await _counter(bedrock).count_tokens(

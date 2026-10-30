@@ -152,7 +152,11 @@ class _ChatRequestTranslator(Protocol):
 
 
 def _needs_chat_translation(message: Mapping[str, object]) -> bool:
-    return message.get("role") == "tool" or not _PLAIN_MESSAGE_KEYS.issuperset(message.keys())
+    return (
+        message.get("role") == "tool"
+        or message.get("content") is None
+        or not _PLAIN_MESSAGE_KEYS.issuperset(message.keys())
+    )
 
 
 def _is_chat_tool(tool: Mapping[str, object]) -> bool:

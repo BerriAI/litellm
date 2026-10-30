@@ -172,7 +172,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         )
         if isinstance(translated, ChatCountTranslationError):
             return translated.response(request_model, model_to_use, primary_tokenizer)
-        malformed: Final = malformed_message_error(messages) if claude and translated is None else None
+        malformed: Final = malformed_message_error(messages) if (claude or use_mantle) and translated is None else None
         if malformed is not None:
             return malformed.response(request_model, model_to_use, primary_tokenizer)
         runtime_request: Final = (

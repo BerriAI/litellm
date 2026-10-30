@@ -789,14 +789,14 @@ async def test_counter_rejects_input_chat_translation_would_leave_out_without_ca
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("httpx_transport_clients")
 @_COUNTERS
-@pytest.mark.parametrize("messages_format", ("anthropic", "openai"))
 @pytest.mark.parametrize(
-    ("message", "problem"),
+    ("messages_format", "message", "problem"),
     (
-        ({"role": "user"}, "Message 1 must have a 'content' field"),
-        ({"content": "Hello"}, "Message 1 must have a 'role' field"),
+        ("anthropic", {"role": "user"}, "Message 1 must have a 'content' field"),
+        ("anthropic", {"content": "Hello"}, "Message 1 must have a 'role' field"),
+        ("openai", {"content": "Hello"}, "Message 1 must have a 'role' field"),
     ),
-    ids=("without-content", "without-role"),
+    ids=("anthropic-without-content", "anthropic-without-role", "openai-without-role"),
 )
 async def test_counter_rejects_a_message_anthropic_rejects_without_calling_anthropic(
     counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
@@ -813,6 +813,27 @@ async def test_counter_rejects_a_message_anthropic_rejects_without_calling_anthr
     assert result is not None
     assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
     assert result.error_message == problem
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+@pytest.mark.parametrize("message", ({"role": "user"}, {"role": "user", "content": None}))
+async def test_counter_counts_a_chat_message_without_content_as_chat_inference_sends_it(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    message: dict[str, JsonValue],
+) -> None:
+    messages: Final = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}, message]
+    inference: Final = AnthropicConfig().transform_request(
+        model="claude-opus-5-5", messages=deepcopy(messages), optional_params={}, litellm_params={}, headers={}
+    )
+
+    result, bodies = await _counted_body(counter_type, count_endpoint, messages, None, "openai")
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 31)
+    assert [body["messages"] for body in bodies] == [inference["messages"]]
 
 
 @pytest.mark.asyncio
