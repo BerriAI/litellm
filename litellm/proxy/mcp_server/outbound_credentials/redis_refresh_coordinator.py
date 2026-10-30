@@ -31,6 +31,7 @@ from typing import Final, Protocol
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
 )
+from litellm.redis.stores.mcp_credential_refresh import refresh_lock_key
 
 
 class LockAcquisition(Enum):
@@ -63,7 +64,6 @@ class DistributedLock(Protocol):
 class RedisRefreshCoordinator:
     lock: DistributedLock
     _: KW_ONLY
-    key_prefix: str = "mcp:refresh_lock:"
     lock_ttl_seconds: float = 10.0
     # The holder renews its lease while a slow token endpoint runs, but only up to this budget; past it
     # it stops renewing and the lock lapses, so a hung refresh degrades to "maybe an extra refresh"
@@ -79,9 +79,6 @@ class RedisRefreshCoordinator:
     clock: Callable[[], float] = time.monotonic
     new_token: Callable[[], str] = lambda: uuid.uuid4().hex
 
-    def _key(self, user_id: str, server_id: str) -> str:
-        return f"{self.key_prefix}{user_id}:{server_id}"
-
     async def run(
         self,
         user_id: str,
@@ -89,7 +86,7 @@ class RedisRefreshCoordinator:
         refresh: Callable[[], Awaitable[OAuthToken | None]],
         reread: Callable[[], Awaitable[OAuthToken | None]],
     ) -> OAuthToken | None:
-        key: Final = self._key(user_id, server_id)
+        key: Final = refresh_lock_key(user_id, server_id)
         token: Final = self.new_token()
         match await self.lock.acquire(key, token, self.lock_ttl_seconds):
             case LockAcquisition.ACQUIRED:
