@@ -19,6 +19,7 @@ import litellm.types
 from litellm._internal_context import service_target
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_batch import active_request_redis_batch
 from litellm.constants import (
     HOURS_IN_A_DAY,
     SLACK_DAILY_REPORT_LOCK_ID,
@@ -37,6 +38,12 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
+)
+from litellm.redis.stores.alert_budget_markers import (
+    AlertBudgetMarkersStore,
+    BudgetAlertMarker,
+    TransportAlertBudgetMarkersStore,
+    budget_marker_key,
 )
 from litellm.redis.stores.alert_daily_metrics import (
     AlertDailyMetricsStore,
@@ -546,22 +553,49 @@ class SlackAlerting(CustomBatchLogger):
         if "failed_tracking_spend" not in self.alert_types:
             return
 
-        _cache: Final[DualCache] = self.internal_usage_cache
         message: Final = "Failed Tracking Cost for " + error_message
-        _cache_key: Final = f"budget_alerts:failed_tracking:{failing_model}"
-        result: Final = await _cache.async_get_cache(key=_cache_key)
-        if result is None:
+        marker: Final = BudgetAlertMarker("failed_tracking", failing_model)
+        if not await self._was_budget_alert_sent(marker):
             await self.send_alert(
                 message=message,
                 level="High",
                 alert_type=AlertType.failed_tracking_spend,
                 alerting_metadata={},
             )
-            await _cache.async_set_cache(
-                key=_cache_key,
-                value="SENT",
-                ttl=self.alerting_args.budget_alert_ttl,
-            )
+            await self._mark_budget_alert_sent(marker)
+
+    def _alert_redis_read_is_missing(self, key: str) -> bool:
+        redis: Final = self.internal_usage_cache.redis_cache
+        batch: Final = None if redis is None else active_request_redis_batch(redis)
+        return batch is not None and batch.read_as_missing(key)
+
+    def _budget_markers_store(self) -> AlertBudgetMarkersStore | None:
+        redis: Final = self.internal_usage_cache.redis_cache
+        return None if redis is None else TransportAlertBudgetMarkersStore(redis.transport())
+
+    async def _was_budget_alert_sent(self, marker: BudgetAlertMarker) -> bool:
+        key: Final = budget_marker_key(marker)
+        cached: Final = _CACHED_ALERT_VALUE.validate_python(
+            await self.internal_usage_cache.async_get_cache(key, local_only=True)
+        )
+        if cached is not None:
+            return True
+        store: Final = self._budget_markers_store()
+        if store is None or self._alert_redis_read_is_missing(key):
+            return False
+        reply: Final = await store.was_budget_alert_sent(marker)
+        if isinstance(reply, RedisFailure):
+            return False
+        if reply:
+            await self.internal_usage_cache.async_set_cache(key, "SENT", local_only=True)
+        return reply
+
+    async def _mark_budget_alert_sent(self, marker: BudgetAlertMarker) -> None:
+        ttl: Final = self.alerting_args.budget_alert_ttl
+        await self.internal_usage_cache.async_set_cache(budget_marker_key(marker), "SENT", ttl=ttl, local_only=True)
+        store: Final = self._budget_markers_store()
+        if store is not None:
+            await store.mark_budget_alert_sent(marker, ttl=self._alert_cache_ttl(ttl))
 
     async def budget_alerts(
         self,
@@ -589,8 +623,6 @@ class SlackAlerting(CustomBatchLogger):
         # - Alert once within 24hr period
         # - Cache this information
         # - Don't re-alert, if alert already sent
-        _cache: Final[DualCache] = self.internal_usage_cache
-
         if self.alerting is None or self.alert_types is None:
             # do nothing if alerting is not switched on
             return
@@ -627,9 +659,8 @@ class SlackAlerting(CustomBatchLogger):
 
         # send alert
         if event is not None and user_info.event_group is not None:
-            _cache_key: Final = f"budget_alerts:{event}:{_id}"
-            result: Final = await _cache.async_get_cache(key=_cache_key)
-            if result is None:
+            marker: Final = BudgetAlertMarker(event, _id)
+            if not await self._was_budget_alert_sent(marker):
                 webhook_event = WebhookEvent(
                     event=event,
                     event_message=event_message,
@@ -657,11 +688,7 @@ class SlackAlerting(CustomBatchLogger):
                     user_info=webhook_event,
                     alerting_metadata={},
                 )
-                await _cache.async_set_cache(
-                    key=_cache_key,
-                    value="SENT",
-                    ttl=self.alerting_args.budget_alert_ttl,
-                )
+                await self._mark_budget_alert_sent(marker)
 
             return
         return
