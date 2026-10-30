@@ -72727,12 +72727,13 @@
         }
     },
     "nace/drex-v1.0": {
-        "input_cost_per_token": 4e-08,
+        "input_cost_per_token": 3e-08,
         "litellm_provider": "nace",
-        "max_input_tokens": 32768,
+        "max_input_tokens": 262144,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
-        "source": "https://console.nace.ai/docs/drex/reference/models"
+        "source": "https://console.nace.ai/docs/drex/reference/models",
+        "supports_vision": true
     },
     "nace/drex-v1.5": {
         "input_cost_per_token": 5e-08,
@@ -72757,6 +72758,24 @@
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
         "source": "https://console.nace.ai/docs/drex/reference/models"
+    },
+    "nace/drex-max": {
+        "input_cost_per_token": 3e-08,
+        "litellm_provider": "nace",
+        "max_input_tokens": 262144,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://console.nace.ai/docs/drex/guides/drex-max",
+        "supports_vision": true
+    },
+    "nace/drex-max-v1.1": {
+        "input_cost_per_token": 3e-08,
+        "litellm_provider": "nace",
+        "max_input_tokens": 262144,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://console.nace.ai/docs/drex/guides/drex-max",
+        "supports_vision": true
     },
     "typesafe/jev-1.13.0": {
         "input_cost_per_token": 4.2e-08,

@@ -463,6 +463,8 @@ def test_jev_config_requires_classifier_config() -> None:
         ("bespoke", "nimble-latest", "bespoke"),
         ("databricks", "databricks-openjev-qwen35-4b", "databricks"),
         ("databricks", "ai_decide", "databricks"),
+        ("nace", "drex-max", "nace"),
+        ("nace", "drex-max-v1.1", "nace"),
     ],
 )
 def test_classifier_aliases_load_and_serialize_one_canonical_config(
@@ -1337,3 +1339,152 @@ def test_jev_input_targets_still_takes_a_router_with_a_deprecation_warning() -> 
 
     assert old_way == jev_input_targets(router._core_ctx, config)
     assert [target.max_tokens for target in old_way] == [1234]
+
+
+def test_nace_requires_a_model_because_the_default_names_a_typesafe_model() -> None:
+    with pytest.raises(ValueError, match="model is required for provider 'nace'"):
+        JevClassifierConfig.model_validate({"provider": "nace"})
+    assert JevClassifierConfig.model_validate({"provider": "nace", "model": "drex-max"}).model == "drex-max"
+
+
+def test_nace_api_base_without_its_own_key_is_rejected_so_the_environment_key_stays_home() -> None:
+    with pytest.raises(ValueError, match="NACE_API_KEY is only sent to NACE_API_BASE"):
+        JevClassifierConfig.model_validate(
+            {"provider": "nace", "model": "drex-max", "api_base": "https://collector.invalid"}
+        )
+    paired: Final = JevClassifierConfig.model_validate(
+        {"provider": "nace", "model": "drex-max", "api_base": "https://eu.nace.invalid", "api_key": "sk-own"}
+    )
+    assert (paired.api_base, paired.api_key) == ("https://eu.nace.invalid", "sk-own")
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize(
+    ("configured", "unresolved"),
+    [
+        ({"api_base": "https://collector.invalid", "api_key": "os.environ/MISSING_KEY"}, "api_key"),
+        ({"api_base": "https://collector.invalid", "api_key": "os.environ/EMPTY_KEY"}, "api_key"),
+        ({"api_base": "os.environ/MISSING_BASE", "api_key": "sk-own"}, "api_base"),
+    ],
+)
+def test_nace_unresolved_reference_fails_without_falling_back_to_the_environment_key(
+    monkeypatch: pytest.MonkeyPatch, configured: Mapping[str, str], unresolved: str, legacy: bool
+) -> None:
+    monkeypatch.setenv("NACE_API_KEY", "nace-env-key")
+    monkeypatch.setenv("EMPTY_KEY", "  ")
+    monkeypatch.delenv("MISSING_KEY", raising=False)
+    monkeypatch.delenv("MISSING_BASE", raising=False)
+    with respx.mock(assert_all_called=False) as upstream:
+        with pytest.raises(ValueError, match=unresolved):
+            ComplexityRouter(
+                "nace-route",
+                litellm.Router(model_list=[]),
+                {
+                    "classifier_type": "jev" if legacy else "oss_classifier",
+                    "jev_classifier_config" if legacy else "opensource_classifier_config": {
+                        "provider": "nace",
+                        "model": "drex-max",
+                        **configured,
+                    },
+                    "tiers": {"SIMPLE": "cheap"},
+                },
+                derive_savings_baseline=False,
+            )
+        assert upstream.calls.call_count == 0
+
+
+def test_nace_without_a_key_fails_at_client_build(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NACE_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="NACE_API_KEY"):
+        ComplexityRouter(
+            "nace-route",
+            litellm.Router(model_list=[]),
+            {
+                "classifier_type": "oss_classifier",
+                "opensource_classifier_config": {"provider": "nace", "model": "drex-max"},
+                "tiers": {"SIMPLE": "cheap"},
+            },
+            derive_savings_baseline=False,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured", "env_base", "server", "expected_authorization"),
+    [
+        ({}, None, "https://console.nace.ai", "Bearer nace-env-key"),
+        ({}, "https://nace.test/v1/", "https://nace.test", "Bearer nace-env-key"),
+        (
+            {"api_base": "https://eu.nace.test", "api_key": "nace-configured"},
+            None,
+            "https://eu.nace.test",
+            "Bearer nace-configured",
+        ),
+        (
+            {"api_base": "os.environ/NACE_TEST_BASE", "api_key": "os.environ/NACE_TEST_KEY"},
+            None,
+            "https://ref.nace.test",
+            "Bearer nace-referenced",
+        ),
+    ],
+)
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_nace_routes_through_its_console_with_its_own_key_and_accounts_the_model(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    configured: Mapping[str, str],
+    env_base: str | None,
+    server: str,
+    expected_authorization: str,
+    legacy: bool,
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "never-send-typesafe-key")
+    monkeypatch.setenv("NACE_API_KEY", "nace-env-key")
+    monkeypatch.setenv("NACE_TEST_KEY", "nace-referenced")
+    monkeypatch.setenv("NACE_TEST_BASE", "https://ref.nace.test")
+    monkeypatch.delenv("NACE_BASE_URL", raising=False)
+    if env_base is None:
+        monkeypatch.delenv("NACE_API_BASE", raising=False)
+    else:
+        monkeypatch.setenv("NACE_API_BASE", env_base)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(litellm.model_cost, "nace/drex-max", {"input_cost_per_token": 0.01})
+    recorder: Final = _UsageRecorder("nace/drex-max")
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    router: Final = ComplexityRouter(
+        "nace-route",
+        litellm.Router(model_list=[]),
+        {
+            "classifier_type": "jev" if legacy else "oss_classifier",
+            "jev_classifier_config" if legacy else "opensource_classifier_config": {
+                "provider": "nace",
+                "model": "drex-max",
+                **configured,
+            },
+            "tiers": {"SIMPLE": "cheap"},
+        },
+        derive_savings_baseline=False,
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post(f"{server}/v1/systemone").respond(
+            200,
+            json={
+                "model": "drex-max",
+                "answers": {"tier": _answer().model_dump()},
+                "usage": {"input_tokens": 31, "output_tokens": 0},
+                "evaluation_time_ms": 12.5,
+                "request_id": "req_test",
+            },
+        )
+        outcome: Final = await router.aclassify("choose a tier")
+        await GLOBAL_LOGGING_WORKER.flush()
+
+    assert outcome.cause == "jev_classifier"
+    assert outcome.jev_verdict is not None
+    assert (outcome.jev_verdict.provider, outcome.jev_verdict.model) == ("nace", "drex-max")
+    assert outcome.classifier_cost == pytest.approx(0.31)
+    sent: Final = route.calls.last.request
+    assert sent.headers.get("authorization") == expected_authorization
+    assert json.loads(sent.content)["model"] == "drex-max"
+    assert len(recorder.calls) == 1
+    assert recorder.calls[0]["response_cost"] == pytest.approx(0.31)

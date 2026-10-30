@@ -64,6 +64,7 @@ from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_CONFIG
+from litellm.llms.nace.decisions.transformation import NACE_DECISIONS_CONFIG
 from litellm.router_deprecated import RenamedRouterAttribute, renamed_router_param
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
@@ -1439,6 +1440,29 @@ class ComplexityRouter(CustomLogger):
                 api_base=databricks.api_base,
                 http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
                 provider="databricks",
+            )
+        if config.provider == "nace":
+            resolved: Final = {
+                name: get_secret_str(value) if value is not None and value.startswith("os.environ/") else value
+                for name, value in (("api_base", config.api_base), ("api_key", config.api_key))
+            }
+            for name, value in (("api_base", config.api_base), ("api_key", config.api_key)):
+                if value is not None and value.startswith("os.environ/") and not (resolved[name] or "").strip():
+                    return _JevConnectionError(
+                        f"opensource_classifier_config.{name} references {value!r}, which is not set"
+                    )
+            nace_api_base, nace_api_key = NACE_DECISIONS_CONFIG.resolve_connection(
+                resolved["api_base"], resolved["api_key"]
+            )
+            if nace_api_base is None or not nace_api_key or not nace_api_key.strip():
+                return _JevConnectionError(
+                    "opensource_classifier_config.api_key or NACE_API_KEY is required for provider 'nace'"
+                )
+            return HttpJevClassifierClient(
+                api_key=nace_api_key,
+                api_base=nace_api_base,
+                http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
+                provider="nace",
             )
         api_key: Final = (
             get_secret_str(config.api_key)
