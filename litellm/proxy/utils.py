@@ -5197,6 +5197,8 @@ async def prefetch_config_params(prisma_client: "PrismaClient | None", param_nam
 _WRITER_WRITABILITY_PROBE_SQL: Final = "SELECT current_setting('transaction_read_only') AS transaction_read_only"
 _WRITER_WRITABILITY_PROBE_ROWS: Final = TypeAdapter(list[dict[str, object]])
 _READ_ONLY_RECREATE_BACKOFF_CAP_SECONDS: Final = 600
+_SHUTDOWN_RECONNECT_WAIT_SECONDS: Final = 5.0
+_SHUTDOWN_ENGINE_EXIT_WAIT_SECONDS: Final = 5.0
 
 
 class _ForcedRecreateDeclined(Exception):
@@ -5281,6 +5283,7 @@ class PrismaClient:
         database_url: str,
         proxy_logging_obj: ProxyLogging,
         http_client: "HttpConfig | None" = None,
+        engine_exit_wait_seconds: float = _SHUTDOWN_ENGINE_EXIT_WAIT_SECONDS,
     ):
         ## init logging object
         self.baseline_accounting_transactions: list[BaselineAccountingRecord] = []
@@ -5382,6 +5385,9 @@ class PrismaClient:
         else:
             self.db = writer_wrapper  # Client to connect to Prisma db
         self._db_reconnect_lock = asyncio.Lock()
+        self._closing: bool = False
+        self._engine_exit_wait_seconds: Final = engine_exit_wait_seconds
+        self._engine_tasks: frozenset[asyncio.Task[object]] = frozenset()
         self._db_health_watchdog_task: asyncio.Task | None = None
         self._view_setup_task: asyncio.Task[_ViewSetupOutcome] | None = None
         self._db_last_reconnect_attempt_ts: float = 0.0
@@ -5423,6 +5429,7 @@ class PrismaClient:
         self._watching_engine: bool = False
         self._engine_confirmed_dead: bool = False
         self._engine_wait_thread: threading.Thread | None = None
+        self._engine_wait_threads: tuple[threading.Thread, ...] = ()
         verbose_proxy_logger.debug("Success - Created Prisma Client")
 
     @property
@@ -6631,6 +6638,14 @@ class PrismaClient:
         start_time: Final = time.time()
         try:
             await self.db.disconnect()
+            if self._closing:
+                await asyncio.gather(
+                    *(
+                        asyncio.to_thread(thread.join, self._engine_exit_wait_seconds)
+                        for thread in self._engine_wait_threads
+                    )
+                )
+                self._engine_wait_threads = ()
         except Exception as e:
             import traceback
 
@@ -6648,6 +6663,43 @@ class PrismaClient:
                 )
             )
             raise e
+
+    def _spawn_engine_task(self, work: Coroutine[object, object, object]) -> None:
+        if self._closing:
+            work.close()
+            return
+        task: Final = asyncio.create_task(work)
+        self._engine_tasks = self._engine_tasks | {task}
+        task.add_done_callback(self._engine_task_finished)
+
+    def _engine_task_finished(self, task: asyncio.Task[object]) -> None:
+        self._engine_tasks = self._engine_tasks - {task}
+        if not task.cancelled() and (error := task.exception()) is not None:
+            verbose_proxy_logger.error("Prisma engine background task failed: %s", error)
+
+    async def _stop_engine_tasks(self) -> None:
+        tasks: Final = tuple(self._engine_tasks)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await self._wait_for_inflight_reconnect()
+
+    async def _wait_for_inflight_reconnect(self) -> None:
+        waiter: Final = asyncio.ensure_future(self._db_reconnect_lock.acquire())
+        waiter.add_done_callback(lambda acquired: acquired.cancelled() or self._db_reconnect_lock.release())
+        done, _pending = await asyncio.wait({waiter}, timeout=_SHUTDOWN_RECONNECT_WAIT_SECONDS)
+        if waiter not in done:
+            waiter.cancel()
+            verbose_proxy_logger.warning("Shutdown stopped waiting for an in-flight DB reconnect")
+
+    async def stop_background_tasks(self) -> None:
+        self._closing = True
+        self._stop_engine_watcher()
+        async with contextlib.AsyncExitStack() as cleanup:
+            cleanup.push_async_callback(self._stop_engine_tasks)
+            cleanup.push_async_callback(self.db.stop_token_refresh_task)
+            cleanup.push_async_callback(self.stop_view_setup_task)
+            cleanup.push_async_callback(self.stop_db_health_watchdog_task)
 
     def _get_engine_pid(self) -> int:
         """Get the PID of the writer's engine subprocess, or 0 if unavailable.
@@ -6742,7 +6794,7 @@ class PrismaClient:
             self._engine_confirmed_dead = True
             self._reap_all_zombies()
             self._cleanup_engine_watcher()
-            asyncio.create_task(
+            self._spawn_engine_task(
                 self.attempt_db_reconnect(
                     reason="engine_process_death",
                     force=True,
@@ -6762,6 +6814,9 @@ class PrismaClient:
             name=f"prisma-engine-waitpid-{pid}",
         )
         thread.start()
+        self._engine_wait_threads = tuple(thread for thread in self._engine_wait_threads if thread.is_alive()) + (
+            thread,
+        )
         self._engine_wait_thread = thread
         return True
 
@@ -6823,7 +6878,7 @@ class PrismaClient:
         self._engine_confirmed_dead = True
         self._reap_all_zombies()
         self._cleanup_engine_watcher()
-        asyncio.create_task(
+        self._spawn_engine_task(
             self.attempt_db_reconnect(
                 reason="engine_process_death",
                 force=True,
@@ -6885,7 +6940,7 @@ class PrismaClient:
         self._engine_confirmed_dead = True
         self._reap_all_zombies()
         self._cleanup_engine_watcher()
-        asyncio.create_task(
+        self._spawn_engine_task(
             self.attempt_db_reconnect(
                 reason="engine_process_death",
                 force=True,
@@ -6958,7 +7013,7 @@ class PrismaClient:
            waitpid thread nor pidfd are available.
 
         """
-        if self._watching_engine or self._engine_pidfd >= 0 or self._engine_wait_thread is not None:
+        if self._closing or self._watching_engine or self._engine_pidfd >= 0 or self._engine_wait_thread is not None:
             return
         pid: Final = self._get_engine_pid()
         if pid == 0:
@@ -6985,7 +7040,7 @@ class PrismaClient:
                 pid,
             )
             self._watching_engine = True
-            asyncio.create_task(self._poll_engine_proc())
+            self._spawn_engine_task(self._poll_engine_proc())
 
     def _stop_engine_watcher(self) -> None:
         """Stop watching the engine process and clean up all resources."""
@@ -7007,7 +7062,7 @@ class PrismaClient:
         """
         self._engine_confirmed_dead = False
         self._cleanup_engine_watcher()
-        asyncio.create_task(self._start_engine_watcher())
+        self._spawn_engine_task(self._start_engine_watcher())
 
     async def _run_reconnect_cycle(
         self,
@@ -7214,6 +7269,8 @@ class PrismaClient:
         force_recreate: bool = False,
         stale_read_engine: "_StaleReadEngine | None" = None,
     ) -> bool:
+        if self._closing:
+            return False
         now: Final = time.time()
         if (
             force is False
@@ -7404,7 +7461,7 @@ class PrismaClient:
         - A periodic SELECT 1 probe that triggers reconnect on network/connection failure.
         - A process-level watcher that detects engine death via waitpid thread, pidfd, or os.kill polling.
         """
-        if self._db_health_watchdog_enabled is not True:
+        if self._closing or self._db_health_watchdog_enabled is not True:
             verbose_proxy_logger.debug("Prisma DB health watchdog disabled via PRISMA_HEALTH_WATCHDOG_ENABLED")
             return
         if self._db_health_watchdog_task is not None:
@@ -7438,7 +7495,7 @@ class PrismaClient:
         verbose_proxy_logger.info("Stopped Prisma DB health watchdog")
 
     def start_view_setup_task(self) -> None:
-        if self._view_setup_task is not None:
+        if self._closing or self._view_setup_task is not None:
             return
         self._view_setup_task = asyncio.create_task(self._run_view_setup())
 
