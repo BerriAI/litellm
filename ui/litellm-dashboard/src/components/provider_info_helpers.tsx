@@ -1,6 +1,7 @@
 import { resolveLogoSrc } from "@/lib/assetPaths";
 import a2aAgentLogo from "../../public/assets/logos/a2a_agent.png";
 import ai21Logo from "../../public/assets/logos/ai21.svg";
+import aiandLogo from "../../public/assets/logos/aiand.svg";
 import aimlApiLogo from "../../public/assets/logos/aiml_api.svg";
 import anthropicLogo from "../../public/assets/logos/anthropic.svg";
 import assemblyaiSmallLogo from "../../public/assets/logos/assemblyai_small.png";
@@ -76,6 +77,7 @@ export enum Providers {
   A2A_Agent = "A2A Agent",
   AI21 = "Ai21",
   AI21_CHAT = "Ai21 Chat",
+  AIAND = "ai&",
   AIML = "AI/ML API",
   AIOHTTP_OPENAI = "Aiohttp Openai",
   Anthropic = "Anthropic",
@@ -138,6 +140,7 @@ export enum Providers {
   LLAMAFILE = "Llamafile",
   LM_STUDIO = "Lm Studio",
   LLAMA = "Meta Llama",
+  META = "Meta Model API",
   MARITALK = "Maritalk",
   MICROSOFT_365_COPILOT = "Microsoft 365 Copilot",
   MiniMax = "MiniMax",
@@ -208,6 +211,7 @@ export const provider_map: Record<string, string> = {
   A2A_Agent: "a2a_agent",
   AI21: "ai21",
   AI21_CHAT: "ai21_chat",
+  AIAND: "aiand",
   AIML: "aiml",
   AIOHTTP_OPENAI: "aiohttp_openai",
   Anthropic: "anthropic",
@@ -268,6 +272,7 @@ export const provider_map: Record<string, string> = {
   LEMONADE: "lemonade",
   LLAMAFILE: "llamafile",
   LLAMA: "meta_llama",
+  META: "meta",
   LM_STUDIO: "lm_studio",
   MICROSOFT_365_COPILOT: "microsoft_365_copilot",
   MARITALK: "maritalk",
@@ -336,7 +341,7 @@ export const provider_map: Record<string, string> = {
   ZeroGPU: "zerogpu",
 };
 
-const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle"]);
+const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle", "meta_llama"]);
 
 export const resolveLitellmProviderSlug = (provider: string): string =>
   provider_map[provider] ?? provider.toLowerCase();
@@ -346,6 +351,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.A2A_Agent]: a2aAgentLogo.src,
   [Providers.AI21]: ai21Logo.src,
   [Providers.AI21_CHAT]: ai21Logo.src,
+  [Providers.AIAND]: aiandLogo.src,
   [Providers.AIML]: aimlApiLogo.src,
   [Providers.AIOHTTP_OPENAI]: openaiSmallLogo.src,
   [Providers.Anthropic]: anthropicLogo.src,
@@ -391,6 +397,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.LAMBDA_AI]: lambdaLogo.src,
   [Providers.LM_STUDIO]: lmstudioLogo.src,
   [Providers.LLAMA]: metaLlamaLogo.src,
+  [Providers.META]: metaLlamaLogo.src,
   [Providers.MiniMax]: minimaxLogo.src,
   [Providers.MICROSOFT_365_COPILOT]: microsoft365CopilotLogo.src,
   [Providers.MistralAI]: mistralLogo.src,
@@ -474,6 +481,7 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string; d
 
 const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.AIML]: "aiml/flux-pro/v1.1",
+  [Providers.AIAND]: "aiand/openai/gpt-oss-120b",
   [Providers.Anthropic]: "claude-3-opus",
   [Providers.Azure]: "my-deployment",
   [Providers.Azure_AI_Studio]: "azure_ai/command-r-plus",
@@ -488,6 +496,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.FalAI]: "fal_ai/fal-ai/flux-pro/v1.1-ultra",
   [Providers.Google_AI_Studio]: "gemini-pro",
   [Providers.JinaAI]: "jina_ai/",
+  [Providers.META]: "meta/muse-spark-1.1",
   [Providers.MICROSOFT_365_COPILOT]: "microsoft_365_copilot/chat",
   [Providers.NVIDIA_RIVA]: "nvidia_riva/nvidia/parakeet-ctc-1_1b-asr",
   [Providers.Oracle]: "oci/xai.grok-4",

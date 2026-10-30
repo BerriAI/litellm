@@ -361,6 +361,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_LensReview",
         "LiteLLM_LensIngestionKey",
         "LiteLLM_LensWorker",
+        "LiteLLM_SubscriptionAccountTable",
         "LiteLLM_LensSignalConfig",
         "LiteLLM_LensTraceSignal",
     )

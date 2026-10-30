@@ -26,13 +26,24 @@ from litellm.litellm_core_utils.core_helpers import (
     normalize_drop_params,
     preserve_upstream_non_openai_attributes,
     process_response_headers,
+    provider_reported_usage_cost,
+    qualify_agentic_followup_model,
+    qualify_provider_stripped_model,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
+    response_cost_in_hidden_params,
     set_provider_response_headers_in_hidden_params,
     unbind_budget_reservation_from_callbacks,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import Delta, ImageResponse, ModelResponseStream, StreamingChoices, TranscriptionResponse
+from litellm.types.utils import (
+    Delta,
+    ImageResponse,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+    TranscriptionResponse,
+)
 
 
 def test_parent_otel_span_reads_dict_like_metadata_by_index():
@@ -67,9 +78,7 @@ def test_preserve_upstream_non_openai_attributes_keeps_scalar_and_structured_val
         scalar_attribute="scalar",
         structured_attribute={"items": ["value"]},
     )
-    model_response: Final = ModelResponseStream(
-        choices=[StreamingChoices(index=0, delta=Delta(content="hello"))]
-    )
+    model_response: Final = ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="hello"))])
 
     preserve_upstream_non_openai_attributes(model_response, original_chunk)
 
@@ -260,9 +269,7 @@ class TestMapFinishReasonAnthropic:
             ("content_filtered", "content_filter"),
         ],
     )
-    def test_anthropic_finish_reasons(
-        self, provider_reason: str, expected: str
-    ) -> None:
+    def test_anthropic_finish_reasons(self, provider_reason: str, expected: str) -> None:
         assert map_finish_reason(provider_reason) == expected
 
     def test_refusal(self):
@@ -334,9 +341,7 @@ class TestMapFinishReasonZhipu:
 
 
 class TestMapFinishReasonOpenAIPassthrough:
-    @pytest.mark.parametrize(
-        "reason", ["stop", "length", "tool_calls", "function_call", "content_filter"]
-    )
+    @pytest.mark.parametrize("reason", ["stop", "length", "tool_calls", "function_call", "content_filter"])
     def test_openai_values_pass_through(self, reason):
         assert map_finish_reason(reason) == reason
 
@@ -347,9 +352,7 @@ class TestMapFinishReasonGenericError:
         assert map_finish_reason("error") == "stop"
 
     def test_lowercase_error_does_not_warn(self, mocker):
-        warn = mocker.patch(
-            "litellm.litellm_core_utils.core_helpers.verbose_logger.warning"
-        )
+        warn = mocker.patch("litellm.litellm_core_utils.core_helpers.verbose_logger.warning")
         assert map_finish_reason("error") == "stop"
         warn.assert_not_called()
 
@@ -367,8 +370,7 @@ class TestFinishReasonMapOutputsAreValid:
         """Every value in _FINISH_REASON_MAP must be a valid OpenAI finish reason."""
         for provider_reason, openai_reason in _FINISH_REASON_MAP.items():
             assert openai_reason in VALID_OPENAI_FINISH_REASONS, (
-                f"Mapped value '{openai_reason}' (from '{provider_reason}') "
-                f"is not a valid OpenAI finish reason"
+                f"Mapped value '{openai_reason}' (from '{provider_reason}') is not a valid OpenAI finish reason"
             )
 
 
@@ -378,28 +380,18 @@ class TestRedactNestedMatchAndRegexKeys:
             "assessments": [
                 {
                     "sensitiveInformationPolicy": {
-                        "piiEntities": [
-                            {"type": "NAME", "match": "secret-name", "action": "BLOCKED"}
-                        ]
+                        "piiEntities": [{"type": "NAME", "match": "secret-name", "action": "BLOCKED"}]
                     },
-                    "wordPolicy": {
-                        "customWords": [{"match": "badword", "action": "BLOCKED"}]
-                    },
+                    "wordPolicy": {"customWords": [{"match": "badword", "action": "BLOCKED"}]},
                 }
             ],
             "regex": "should-redact-key-named-regex",
         }
         out = redact_nested_match_and_regex_keys(payload)
-        assert out["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
-            "match"
-        ] == "[REDACTED]"
-        assert out["assessments"][0]["wordPolicy"]["customWords"][0]["match"] == (
-            "[REDACTED]"
-        )
+        assert out["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0]["match"] == "[REDACTED]"
+        assert out["assessments"][0]["wordPolicy"]["customWords"][0]["match"] == ("[REDACTED]")
         assert out["regex"] == "[REDACTED]"
-        assert payload["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][
-            0
-        ]["match"] == "secret-name"
+        assert payload["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0]["match"] == "secret-name"
 
     def test_passes_through_none_and_str(self):
         assert redact_nested_match_and_regex_keys(None) is None
@@ -562,13 +554,17 @@ class TestIsExpectedClientError:
         assert is_expected_client_error(over_budget) is True
 
         litellm_limit = RateLimitError(
-            message="key over rpm", llm_provider="anthropic", model="claude-haiku-4-5",
+            message="key over rpm",
+            llm_provider="anthropic",
+            model="claude-haiku-4-5",
             category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
         )
         assert is_expected_client_error(litellm_limit) is True
 
         vendor_limit = RateLimitError(
-            message="rate limited upstream", llm_provider="anthropic", model="claude-haiku-4-5",
+            message="rate limited upstream",
+            llm_provider="anthropic",
+            model="claude-haiku-4-5",
             category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
         )
         assert is_expected_client_error(vendor_limit) is False
@@ -635,6 +631,87 @@ class TestProviderResponseHeadersInHiddenParams:
 
         assert get_provider_response_headers_from_hidden_params(sibling) is None
         assert "additional_headers" not in sibling._hidden_params
+
+
+@pytest.mark.parametrize(
+    "model,provider,expected",
+    [
+        ("mantle/anthropic.claude-sonnet-5", "bedrock", "bedrock/mantle/anthropic.claude-sonnet-5"),
+        ("invoke/anthropic.claude-v2", "bedrock", "bedrock/invoke/anthropic.claude-v2"),
+        ("openai/gpt-4o", "openrouter", "openrouter/openai/gpt-4o"),
+        ("gpt-4o", "openai", "openai/gpt-4o"),
+        ("claude-sonnet-4-5", "anthropic", "anthropic/claude-sonnet-4-5"),
+    ],
+)
+def test_the_provider_prefix_is_restored(model: str, provider: str, expected: str) -> None:
+    assert qualify_provider_stripped_model(model, provider) == expected
+
+
+@pytest.mark.parametrize(
+    "model,provider",
+    [
+        ("bedrock/mantle/anthropic.claude-sonnet-5", "bedrock"),
+        ("openai/gpt-4o", "openai"),
+        ("cohere/command-a-03-2025", "cohere_chat"),
+        ("ai21/jamba-1.5-large", "ai21_chat"),
+        ("anthropic/claude-2", "anthropic_text"),
+    ],
+)
+def test_an_already_qualified_model_is_left_alone(model: str, provider: str) -> None:
+    assert qualify_provider_stripped_model(model, provider) == model
+
+
+def test_a_provider_that_only_shares_a_prefix_is_still_qualified() -> None:
+    assert qualify_provider_stripped_model("openai_like/foo", "openai") == "openai/openai_like/foo"
+
+
+def test_no_provider_leaves_the_model_untouched() -> None:
+    assert qualify_provider_stripped_model("gpt-4o", "") == "gpt-4o"
+
+
+def test_a_cross_provider_patched_model_is_dispatched_as_the_hook_asked() -> None:
+    assert qualify_agentic_followup_model("anthropic/claude-sonnet-4-5", "gpt-4o", "openai") == (
+        "anthropic/claude-sonnet-4-5"
+    )
+
+
+def test_a_bare_patched_model_takes_the_request_provider() -> None:
+    assert qualify_agentic_followup_model("gpt-4o-mini", "gpt-4o", "openai") == "openai/gpt-4o-mini"
+
+
+def test_a_sub_path_request_model_keeps_its_provider() -> None:
+    assert qualify_agentic_followup_model(None, "mantle/anthropic.claude-sonnet-5", "bedrock") == (
+        "bedrock/mantle/anthropic.claude-sonnet-5"
+    )
+
+
+def test_an_unpatched_ordinary_model_takes_the_request_provider() -> None:
+    assert qualify_agentic_followup_model(None, "gpt-4o", "openai") == "openai/gpt-4o"
+
+
+def test_a_patched_model_already_holding_the_request_provider_is_left_alone() -> None:
+    assert qualify_agentic_followup_model("openai/gpt-4o", "gpt-4o", "openai") == "openai/gpt-4o"
+
+
+@pytest.mark.parametrize("patched", ["", None])
+def test_a_patch_without_a_model_falls_back_to_the_request_model(patched: str | None) -> None:
+    assert qualify_agentic_followup_model(patched, "gpt-4o", "openai") == "openai/gpt-4o"
+
+
+def test_a_patched_sub_path_model_still_takes_the_request_provider() -> None:
+    assert qualify_agentic_followup_model("mantle/anthropic.claude-sonnet-5", "gpt-4o", "bedrock") == (
+        "bedrock/mantle/anthropic.claude-sonnet-5"
+    )
+
+
+def test_a_patched_model_on_a_json_configured_provider_reaches_that_provider() -> None:
+    assert qualify_agentic_followup_model("aihubmix/gpt-4o", "gpt-4o", "openai") == "aihubmix/gpt-4o"
+
+
+def test_a_patch_echoing_the_request_model_keeps_the_request_provider() -> None:
+    assert qualify_agentic_followup_model("openai/gpt-4o", "openai/gpt-4o", "openrouter") == (
+        "openrouter/openai/gpt-4o"
+    )
 
 
 def test_spend_metadata_merge_survives_the_logging_thread_inserting_into_the_request_metadata() -> None:
@@ -720,3 +797,51 @@ class TestReceiveStampSurvivesASecondMetadataBucket:
         }
 
         assert get_litellm_metadata_from_kwargs(kwargs)["litellm_received_at"] is own
+
+
+@pytest.mark.parametrize("reported", [float("nan"), float("inf"), {"total_cost": float("nan")}])
+def test_a_non_finite_provider_reported_cost_counts_as_unreported(reported: object) -> None:
+    assert provider_reported_usage_cost({"cost": reported}, "openrouter") is None
+    assert provider_reported_usage_cost({"cost": {"total_cost": 0.25}}, "openrouter") == 0.25
+
+
+@pytest.mark.parametrize("header_cost", [float("nan"), float("inf")])
+def test_a_non_finite_response_cost_header_counts_as_unreported(header_cost: float) -> None:
+    response: Final = ModelResponse()
+    response._hidden_params = {"additional_headers": {RESPONSE_COST_HEADER: header_cost}}
+    finite: Final = ModelResponse()
+    finite._hidden_params = {"additional_headers": {RESPONSE_COST_HEADER: 0.25}}
+
+    assert response_cost_in_hidden_params(response) is None
+    assert response_cost_in_hidden_params(finite) == 0.25
+
+
+def test_billed_usage_cost_bills_any_chat_upstream_without_its_own_reader() -> None:
+    from types import SimpleNamespace
+
+    from litellm.litellm_core_utils.core_helpers import billed_usage_cost
+    from litellm.types.utils import ModelResponse, Usage
+
+    usage = Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120, cost=0.037)
+    chat = ModelResponse(usage=usage)
+    assert billed_usage_cost(chat, "openai") == 0.037
+    assert billed_usage_cost(chat, "openrouter") == 0.037
+    assert billed_usage_cost(chat, "xai") is None
+    assert billed_usage_cost(SimpleNamespace(usage=usage), "openai") == 0.037
+
+
+def test_billed_usage_cost_keeps_the_upstream_charge_after_litellm_wrote_its_bill_into_usage_cost() -> None:
+    from litellm.litellm_core_utils.core_helpers import billed_usage_cost, stamp_litellm_bill_on_usage
+    from litellm.types.utils import ModelResponse, Usage
+
+    reported = ModelResponse(usage=Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120, cost=0.037))
+    stamp_litellm_bill_on_usage(reported, reported.usage, 0.0407)
+    stamp_litellm_bill_on_usage(reported, reported.usage, 0.0407)
+    assert reported.usage.cost == 0.0407
+    assert reported._hidden_params["response_cost"] == 0.0407
+    assert billed_usage_cost(reported, "openai") == 0.037
+
+    unreported = ModelResponse(usage=Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120))
+    stamp_litellm_bill_on_usage(unreported, unreported.usage, 0.0015)
+    assert unreported.usage.cost == 0.0015
+    assert billed_usage_cost(unreported, "openai") is None
