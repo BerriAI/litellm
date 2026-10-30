@@ -2,7 +2,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from enum import Enum
 from typing import Final, Literal, TypeAlias
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, NonNegativeInt
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -705,6 +705,15 @@ class AnthropicResponseContentBlockThinking(LiteLLMBaseModel):
 class AnthropicResponseContentBlockRedactedThinking(LiteLLMBaseModel):
     type: Literal["redacted_thinking"]
     data: str
+
+
+class AnthropicContentBlockOrderEntry(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: str
+    id: str | None = None
+    tool_use_id: str | None = None
+    length: NonNegativeInt | None = None
 
 
 class AnthropicResponseUsageBlock(LiteLLMBaseModel):
