@@ -121,6 +121,7 @@ _ASYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(
         Feature.PRE_REQUEST_HOOK: route_detectors.pre_request_hook,
         Feature.WEBSEARCH_INTERCEPTION: route_detectors.websearch_interception,
         Feature.MESSAGES_INTERCEPTOR: route_detectors.intercepted,
+        Feature.STRICT_TOOLS_RETRY: route_detectors.strict_tools_retry,
     }
 )
 
