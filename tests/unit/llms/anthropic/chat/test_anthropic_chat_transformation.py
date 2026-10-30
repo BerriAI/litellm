@@ -9686,6 +9686,40 @@ def _transform_message_body(body: dict) -> litellm.ModelResponse:
     )
 
 
+def test_native_mcp_identity_survives_chat_and_responses_translation():
+    from litellm.responses.litellm_completion_transformation.transformation import (
+        LiteLLMCompletionResponsesConfig,
+    )
+
+    call = {
+        "type": "mcp_tool_use",
+        "id": "mcp_call_1",
+        "server_name": "github",
+        "name": "search_code",
+        "input": {"query": "hello"},
+    }
+    tool_result = {
+        "type": "mcp_tool_result",
+        "tool_use_id": "mcp_call_1",
+        "is_error": False,
+        "content": [{"type": "text", "text": "found"}],
+    }
+    response = _transform_message_body({
+        "id": "msg_mcp", "type": "message", "role": "assistant", "model": "claude",
+        "content": [call, tool_result], "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    })
+    message = response.choices[0].message
+    assert message.tool_calls is None
+    assert message.provider_specific_fields["mcp_tool_uses"] == [call]
+    assert message.provider_specific_fields["tool_results"] == [tool_result]
+    bridged = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="hello", chat_completion_response=response, responses_api_request={}
+    )
+    assert bridged.provider_specific_fields["mcp_tool_uses"] == [call]
+    assert bridged.provider_specific_fields["tool_results"] == [tool_result]
+
+
 def test_refusal_stop_details_kept_in_provider_specific_fields():
     stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
     result: Final = _transform_message_body(ANTHROPIC_DOCS_REFUSAL_MESSAGE)

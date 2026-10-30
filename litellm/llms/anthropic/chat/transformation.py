@@ -2950,6 +2950,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if tool_results is not None:
             provider_specific_fields["tool_results"] = tool_results
 
+        # Provider-executed MCP calls must retain their server identity without
+        # becoming ordinary function calls that a client might execute again.
+        mcp_tool_uses: Final = [
+            block for block in completion_response["content"] if block.get("type") == "mcp_tool_use"
+        ]
+        if mcp_tool_uses:
+            provider_specific_fields["mcp_tool_uses"] = mcp_tool_uses
+
         if tool_results is not None and any(result.get("type") != "tool_search_tool_result" for result in tool_results):
             container_id: Final = (
                 completion_response.get("container", {}).get("id")
