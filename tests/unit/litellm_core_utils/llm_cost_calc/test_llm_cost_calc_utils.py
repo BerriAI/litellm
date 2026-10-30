@@ -22,7 +22,6 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     generic_cost_per_token,
     get_billed_token_rates,
     get_token_type_cost_breakdown,
-    select_cost_metric_for_model,
 )
 from litellm.llms.gemini.image_generation.cost_calculator import (
     cost_calculator as gemini_image_generation_cost_calculator,
@@ -47,55 +46,6 @@ from litellm.types.utils import (
 def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-
-
-@pytest.mark.parametrize("call_type", ("speech", "aspeech"))
-@pytest.mark.parametrize(
-    ("pricing", "expected_prompt_cost"),
-    (
-        pytest.param({"input_cost_per_character": 0.0, "input_cost_per_token": 2e-6}, 0.0, id="free-characters"),
-        pytest.param({"input_cost_per_token": 0.0}, 0.0, id="free-tokens"),
-        pytest.param({"input_cost_per_token": 2e-6}, 100 * 2e-6, id="missing-character-rate"),
-        pytest.param(
-            {"input_cost_per_character": None, "input_cost_per_token": 2e-6},
-            100 * 2e-6,
-            id="null-character-rate",
-        ),
-        pytest.param(
-            {"input_cost_per_character": 3e-6, "input_cost_per_token": 2e-6},
-            1000 * 3e-6,
-            id="paid-characters",
-        ),
-    ),
-)
-def test_speech_cost_preserves_zero_prices_when_selecting_the_billing_unit(
-    monkeypatch: pytest.MonkeyPatch,
-    call_type: str,
-    pricing: ModelInfo,
-    expected_prompt_cost: float,
-) -> None:
-    model: Final = "openai/speech-pricing-fixture"
-    monkeypatch.setitem(
-        litellm.model_cost,
-        model,
-        {"litellm_provider": "openai", "mode": "audio_speech", "output_cost_per_token": 0.0, **pricing},
-    )
-
-    prompt_cost, completion_cost = litellm.cost_per_token(
-        model=model,
-        call_type=call_type,
-        prompt_tokens=100,
-        prompt_characters=1000,
-    )
-
-    assert prompt_cost == pytest.approx(expected_prompt_cost)
-    assert completion_cost == 0.0
-
-
-@pytest.mark.parametrize("pricing", ({}, {"input_cost_per_character": None, "input_cost_per_token": None}))
-def test_speech_cost_metric_rejects_unset_prices(pricing: ModelInfo) -> None:
-    with pytest.raises(ValueError, match="does not have"):
-        select_cost_metric_for_model({"key": "unpriced-speech-fixture", **pricing})
 
 
 @pytest.mark.parametrize("prompt_tokens", [100, 200000, 200001])

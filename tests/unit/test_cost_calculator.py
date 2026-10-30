@@ -4598,24 +4598,26 @@ def test_batch_cost_calculator_prices_cache_creation_tokens_at_cache_write_rate(
     assert completion_cost_value == pytest.approx(200 * 15e-6 / 2)
 
 
+@pytest.mark.parametrize("input_rate", (3e-6, 0.0))
 @pytest.mark.parametrize(
     ("cache_pricing", "expected_write_rate"),
     [
-        pytest.param({}, 3e-6, id="missing"),
-        pytest.param({"cache_creation_input_token_cost": None}, 3e-6, id="null"),
+        pytest.param({}, None, id="missing"),
+        pytest.param({"cache_creation_input_token_cost": None}, None, id="null"),
         pytest.param({"cache_creation_input_token_cost": 0.0}, 0.0, id="free"),
         pytest.param({"cache_creation_input_token_cost": 3.75e-6}, 3.75e-6, id="paid"),
     ],
 )
 def test_batch_cost_calculator_preserves_cache_write_prices_and_defaults_only_when_unset(
     cache_pricing: ModelInfo,
-    expected_write_rate: float,
+    expected_write_rate: float | None,
+    input_rate: float,
 ) -> None:
     from litellm.cost_calculator import batch_cost_calculator
 
     model_info: Final[ModelInfo] = {
         "supported_openai_params": [],
-        "input_cost_per_token": 3e-6,
+        "input_cost_per_token": input_rate,
         "output_cost_per_token": 15e-6,
         "cache_read_input_token_cost": 3e-7,
         **cache_pricing,
@@ -4627,28 +4629,8 @@ def test_batch_cost_calculator_preserves_cache_write_prices_and_defaults_only_wh
         model_info=model_info,
     )
 
-    assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * expected_write_rate) / 2)
-    assert completion_cost_value == pytest.approx(200 * 15e-6 / 2)
-
-
-def test_batch_cost_calculator_prices_cache_tokens_when_uncached_input_is_free() -> None:
-    from litellm.cost_calculator import batch_cost_calculator
-
-    model_info: Final[ModelInfo] = {
-        "supported_openai_params": [],
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 15e-6,
-        "cache_read_input_token_cost": 3e-7,
-        "cache_creation_input_token_cost": 3.75e-6,
-    }
-    prompt_cost, completion_cost_value = batch_cost_calculator(
-        usage=_batch_cache_usage(),
-        model="batch-pricing-fixture",
-        custom_llm_provider="anthropic",
-        model_info=model_info,
-    )
-
-    assert prompt_cost == pytest.approx((8000 * 3e-7 + 2000 * 3.75e-6) / 2)
+    write_rate: Final = input_rate if expected_write_rate is None else expected_write_rate
+    assert prompt_cost == pytest.approx((1000 * input_rate + 8000 * 3e-7 + 2000 * write_rate) / 2)
     assert completion_cost_value == pytest.approx(200 * 15e-6 / 2)
 
 
@@ -7852,20 +7834,42 @@ def test_vertex_ai_mistral_predict_cost(usage):
     assert predictive_cost > 0
 
 
+@pytest.mark.usefixtures("_local_model_cost_map")
+@pytest.mark.parametrize("call_type", ("speech", "aspeech"))
+@pytest.mark.parametrize("model", ("speech-fixture", "openai/speech-fixture", "azure/speech-fixture"))
 @pytest.mark.parametrize(
-    "model", ["openai/tts-1", "azure/tts-1", "openai/gpt-4o-mini-tts"]
+    ("pricing", "expected_cost"),
+    (
+        pytest.param({}, None, id="missing"),
+        pytest.param({"input_cost_per_character": None, "input_cost_per_token": None}, None, id="null"),
+        pytest.param({"input_cost_per_token": 0.0}, 0.0, id="free-tokens"),
+        pytest.param({"input_cost_per_character": 0.0, "input_cost_per_token": 2e-6}, 0.0, id="free-characters"),
+        pytest.param({"input_cost_per_token": 2e-6}, 100 * 2e-6, id="missing-character-rate"),
+        pytest.param({"input_cost_per_character": None, "input_cost_per_token": 2e-6}, 100 * 2e-6, id="null-character-rate"),
+        pytest.param({"input_cost_per_character": 3e-6, "input_cost_per_token": 2e-6}, 1000 * 3e-6, id="paid-characters"),
+    ),
 )
-def test_completion_cost_tts(model):
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    cost = completion_cost(
-        model=model,
-        prompt="the quick brown fox jumped over the lazy dogs",
-        call_type="speech",
+def test_registered_speech_prices_distinguish_unset_from_zero(
+    call_type: str, model: str, pricing: ModelInfo, expected_cost: float | None
+) -> None:
+    provider: Final = "azure" if model.startswith("azure/") else "openai"
+    litellm.register_model(
+        {model: {"litellm_provider": provider, "mode": "audio_speech", **pricing}},
+        persist_across_reloads=False,
     )
+    compatibility_info: Final = cached_get_model_info_helper(model, provider)
+    assert compatibility_info["input_cost_per_token"] == (pricing.get("input_cost_per_token") or 0.0)
+    litellm.get_model_info(model)
+    response: Final = ModelResponse(usage=Usage(prompt_tokens=100, completion_tokens=0, total_tokens=100))
 
-    assert cost > 0
+    if expected_cost is None:
+        with pytest.raises(ValueError, match="does not have 'input_cost_per_character' or 'input_cost_per_token'"):
+            completion_cost(completion_response=response, model=model, prompt="a" * 1000, call_type=call_type)
+        litellm.register_model({model: {"input_cost_per_token": 0.0}}, persist_across_reloads=False)
+
+    assert completion_cost(
+        completion_response=response, model=model, prompt="a" * 1000, call_type=call_type
+    ) == pytest.approx(expected_cost or 0.0)
 
 
 def test_completion_cost_anthropic():
@@ -9668,48 +9672,6 @@ def test_azure_tts_cost_uses_test_owned_character_rate(monkeypatch: pytest.Monke
     )
 
     assert cost == pytest.approx(0.05)
-
-
-@pytest.mark.usefixtures("_local_model_cost_map")
-@pytest.mark.parametrize("call_type", ("speech", "aspeech"))
-@pytest.mark.parametrize("model", ("unpriced-speech-fixture", "openai/unpriced-speech-fixture"))
-@pytest.mark.parametrize("pricing", ({}, {"input_cost_per_character": None, "input_cost_per_token": None}))
-def test_registered_speech_without_prices_errors_until_a_zero_rate_is_registered(
-    call_type: str, model: str, pricing: ModelInfo
-) -> None:
-    litellm.register_model(
-        {model: {"litellm_provider": "openai", "mode": "audio_speech", **pricing}},
-        persist_across_reloads=False,
-    )
-    assert cached_get_model_info_helper(model, "openai")["input_cost_per_token"] == 0.0
-    assert litellm.get_model_info(model)["input_cost_per_token"] == 0.0
-
-    with pytest.raises(ValueError, match="does not have 'input_cost_per_character' or 'input_cost_per_token'"):
-        completion_cost(model=model, prompt="hello world", call_type=call_type)
-
-    litellm.register_model({model: {"input_cost_per_token": 0.0}}, persist_across_reloads=False)
-
-    assert completion_cost(model=model, prompt="hello world", call_type=call_type) == 0.0
-
-
-@pytest.mark.usefixtures("_local_model_cost_map")
-@pytest.mark.parametrize("call_type", ("speech", "aspeech"))
-@pytest.mark.parametrize("model", ("free-speech-fixture", "openai/free-speech-fixture"))
-@pytest.mark.parametrize(
-    "pricing",
-    (
-        {"input_cost_per_token": 0.0},
-        {"input_cost_per_character": 0.0, "input_cost_per_token": 2e-6},
-    ),
-)
-def test_registered_speech_explicit_zero_price_is_free(call_type: str, model: str, pricing: ModelInfo) -> None:
-    litellm.register_model(
-        {model: {"litellm_provider": "openai", "mode": "audio_speech", **pricing}},
-        persist_across_reloads=False,
-    )
-    litellm.get_model_info(model)
-
-    assert completion_cost(model=model, prompt="hello world", call_type=call_type) == 0.0
 
 
 def test_speech_cost_with_custom_pricing_bills_the_reported_usage() -> None:
