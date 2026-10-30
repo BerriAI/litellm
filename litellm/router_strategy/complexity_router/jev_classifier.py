@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_CONFIG, is_ai_decide_model
 from litellm.llms.laya.common_utils import laya_response_model
+from litellm.llms.nace.decisions.transformation import NACE_DECISIONS_CONFIG
 from litellm.llms.pass_through.typesafe_logging_handler import TypeSafePassthroughLoggingHandler
 from litellm.router_strategy.complexity_router.config import DEFAULT_JEV_INSTRUCTIONS as _DEFAULT_JEV_INSTRUCTIONS
 from litellm.types.decisions import DecisionsResponse
@@ -31,7 +32,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 JevProbability: TypeAlias = Annotated[float, Field(ge=0.0, le=1.0)]
-ClassifierProvider: TypeAlias = Literal["typesafe", "laya", "bespoke", "databricks"]
+ClassifierProvider: TypeAlias = Literal["typesafe", "laya", "bespoke", "databricks", "nace"]
 DEFAULT_JEV_INSTRUCTIONS: Final = _DEFAULT_JEV_INSTRUCTIONS
 _WITHOUT_MODEL: Final = MappingProxyType({"model": True})
 
@@ -201,6 +202,8 @@ class HttpJevClassifierClient:
     def _request_url(self, model: str) -> str:
         if self._provider == "databricks":
             return DATABRICKS_DECISIONS_CONFIG.get_complete_url(self._api_base, model)
+        if self._provider == "nace":
+            return NACE_DECISIONS_CONFIG.get_complete_url(self._api_base, model)
         return f"{self._api_base}/v1/systemone"
 
     def _normalized_body(self, body: Mapping[str, object], requested_model: str) -> Mapping[str, object]:
@@ -209,7 +212,7 @@ class HttpJevClassifierClient:
                 return MappingProxyType({**body, "model": laya_response_model(body, requested_model)})
             case "databricks":
                 return DATABRICKS_DECISIONS_CONFIG.classifier_response(body, requested_model)
-            case "typesafe" | "bespoke":
+            case "typesafe" | "bespoke" | "nace":
                 return body
 
     def _log_response(
