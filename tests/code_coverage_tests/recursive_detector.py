@@ -86,6 +86,9 @@ IGNORE_FUNCTIONS = [
     "scrub_json_strings",  # max depth set (MAX_SCRUB_DEPTH); fails closed by returning "[Filtered]" for anything nested past the cap.
     "_without_requester_ip_address",  # walks only the fresh tree _sanitize_request_body_for_spend_logs_payload returns (mapping cycles already cut), so it never goes deeper than that sanitizer did.
     "_merge_session_fields",  # max depth set (_SESSION_MERGE_MAX_DEPTH); deeper mappings are replaced wholesale by the later session.update.
+    "response_api_handler",  # fallback params switch to json_object, so only one retry can occur.
+    "_read_stream_head",  # bounded to three unique lifecycle events and one terminal event.
+    "_aread_stream_head",  # bounded to the same lifecycle events as its sync counterpart.
 ]
 
 
