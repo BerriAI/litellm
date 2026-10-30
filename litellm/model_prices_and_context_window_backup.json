@@ -30850,13 +30850,14 @@
     "gemini/gemini-embedding-001": {
         "deprecation_date": "2028-05-14",
         "input_cost_per_token": 1.5e-07,
+        "input_cost_per_token_batches": 7.5e-08,
         "litellm_provider": "gemini",
         "max_input_tokens": 2048,
         "mode": "embedding",
         "output_cost_per_token": 0,
         "output_vector_size": 3072,
         "rpm": 10000,
-        "source": "https://ai.google.dev/gemini-api/docs/embeddings#model-versions",
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "tpm": 10000000
     },
     "gemini/gemini-embedding-2": {
@@ -31658,6 +31659,7 @@
     "gemini/gemini-2.5-pro": {
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
+        "cache_read_input_token_cost_above_200k_tokens_batches": 2.5e-07,
         "cache_read_input_token_cost_above_200k_tokens_priority": 4.5e-07,
         "cache_read_input_token_cost_batches": 1.25e-07,
         "cache_read_input_token_cost_flex": 1.25e-07,
@@ -31709,8 +31711,10 @@
         },
         "search_free_requests": {"count": 10000, "period": "day", "shared_group": "gemini-2.5-pro"},
         "google_maps_grounding_cost_per_query": 0.025,
+        "input_cost_per_token_above_200k_tokens_batches": 1.25e-06,
         "input_cost_per_token_batches": 6.25e-07,
         "input_cost_per_token_flex": 6.25e-07,
+        "output_cost_per_token_above_200k_tokens_batches": 7.5e-06,
         "output_cost_per_token_batches": 5e-06,
         "output_cost_per_token_flex": 5e-06,
         "supports_url_context": true
@@ -32223,6 +32227,7 @@
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
+        "cache_read_input_token_cost_above_200k_tokens_batches": 4e-07,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_200k_tokens": 4e-06,
         "input_cost_per_token_batches": 1e-06,
@@ -32279,13 +32284,16 @@
         "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
+        "input_cost_per_token_above_200k_tokens_batches": 2e-06,
         "input_cost_per_token_flex": 1e-06,
+        "output_cost_per_token_above_200k_tokens_batches": 9e-06,
         "output_cost_per_token_flex": 6e-06
     },
     "gemini/gemini-3.1-pro-preview-customtools": {
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
+        "cache_read_input_token_cost_above_200k_tokens_batches": 4e-07,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_200k_tokens": 4e-06,
         "input_cost_per_token_batches": 1e-06,
@@ -32342,7 +32350,9 @@
         "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
+        "input_cost_per_token_above_200k_tokens_batches": 2e-06,
         "input_cost_per_token_flex": 1e-06,
+        "output_cost_per_token_above_200k_tokens_batches": 9e-06,
         "output_cost_per_token_flex": 6e-06
     },
     "gemini-3-flash-preview": {
@@ -76514,7 +76524,7 @@
         "input_cost_per_token_priority": 3.6e-06,
         "litellm_provider": "gemini",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 1048576,
+        "max_output_tokens": 65536,
         "mode": "chat",
         "output_cost_per_reasoning_token": 1e-05,
         "output_cost_per_token": 1e-05,
