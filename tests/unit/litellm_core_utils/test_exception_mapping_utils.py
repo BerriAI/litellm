@@ -5,6 +5,7 @@ from typing import Any, Final, Literal, Optional, Union
 from unittest.mock import MagicMock, patch
 
 import httpx
+import httpx2
 import openai
 import pytest
 from fastapi import HTTPException
@@ -24,6 +25,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.common_utils import OpenAIError
+from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.proxy.common_utils.openai_error_payload import openai_error_type
 from litellm.types.utils import LlmProviders
 
@@ -54,8 +56,8 @@ def test_openai_cyber_policy_uses_the_structured_error_code(shape: str, code: st
         assert caught.value.code == code
         assert caught.value.body == body
         assert caught.value.status_code == 400
-        assert caught.value.response is response
-        assert caught.value.request is request
+        assert caught.value.response.status_code == 400
+        assert caught.value.request.url == request.url
         assert caught.value.response.headers["x-request-id"] == "cyber-policy-request"
 
 
@@ -2938,3 +2940,110 @@ def test_transport_timeout_maps_to_timeout(
 
     assert exc_info.value.status_code == 408
     assert f"Request timed out. Error_str: {reason}" in str(exc_info.value)
+
+
+def test_bedrock_server_error_keeps_the_aws_body_without_the_signed_request() -> None:
+    body: Final = '{"message":"Bedrock is unable to process your request."}'
+    signed_request: Final = httpx.Request(
+        "POST",
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-opus-5-5/converse",
+        headers={"authorization": "AWS4-HMAC-SHA256 Credential=AKIDSIGNED/20261029/us-east-1/bedrock/aws4_request"},
+        content=b'{"messages":[{"role":"user","content":[{"text":"hi"}]}]}',
+    )
+    upstream: Final = httpx.Response(
+        500, content=body, headers={"x-amzn-requestid": "req-aws"}, request=signed_request
+    )
+
+    with pytest.raises(litellm.ServiceUnavailableError) as raised:
+        exception_type(
+            model="bedrock/anthropic.claude-opus-5-5",
+            original_exception=BedrockError(status_code=500, message=body, response=upstream),
+            custom_llm_provider="bedrock",
+        )
+
+    assert raised.value.response.text == body
+    assert raised.value.response.headers["x-amzn-requestid"] == "req-aws"
+    assert "AKIDSIGNED" not in str(raised.value.request.headers)
+    assert raised.value.request.content == b""
+
+
+@pytest.mark.parametrize("provider", ("gemini", "vertex_ai"))
+def test_gemini_server_error_response_carries_the_upstream_error_body(provider: str) -> None:
+    body: Final = '{"error":{"code":500,"message":"Internal error encountered.","status":"INTERNAL"}}'
+
+    with pytest.raises(litellm.InternalServerError) as raised:
+        exception_type(
+            model="gemini-3.1-pro",
+            original_exception=VertexAIError(status_code=500, message=body, headers=None),
+            custom_llm_provider=provider,
+        )
+
+    assert raised.value.response.status_code == 500
+    assert raised.value.response.json() == json.loads(body)
+
+
+@pytest.mark.parametrize(
+    ("status_code", "message", "mapped_error"),
+    (
+        (500, "The server had an error processing your request. Sorry about that!", litellm.InternalServerError),
+        (520, "Web server is returning an unknown error", litellm.InternalServerError),
+        (504, "A timeout occurred", litellm.Timeout),
+        (500, "Mistral API raised a streaming error", litellm.APIError),
+    ),
+)
+def test_openai_error_matched_by_its_message_keeps_the_upstream_body(
+    status_code: int, message: str, mapped_error: type[Exception]
+) -> None:
+    body: Final = json.dumps({"error": {"message": message, "type": "server_error", "param": None, "code": None}})
+    sent_request: Final = httpx.Request(
+        "POST",
+        "https://api.openai.com/v1/chat/completions",
+        headers={"authorization": "Bearer sk-openai-secret"},
+        content=b'{"messages":[{"role":"user","content":"hi"}]}',
+    )
+    upstream: Final = httpx.Response(
+        status_code, content=body, headers={"x-request-id": "req-openai"}, request=sent_request
+    )
+
+    with pytest.raises(mapped_error) as raised:
+        exception_type(
+            model="gpt-5.6",
+            original_exception=openai.APIStatusError(message, response=upstream, body=json.loads(body)),
+            custom_llm_provider="openai",
+        )
+
+    error_response: Final = getattr(raised.value, "response")
+    assert error_response.text == body
+    assert error_response.headers["x-request-id"] == "req-openai"
+    assert "sk-openai-secret" not in str(error_response.request.headers)
+    assert error_response.request.content == b""
+
+
+@pytest.mark.parametrize("custom_llm_provider", ("openai", "azure"))
+def test_sdk_error_on_httpx2_keeps_the_upstream_body_without_the_provider_credentials(
+    custom_llm_provider: str,
+) -> None:
+    body: Final = json.dumps(
+        {"error": {"message": "Unsupported value: 'temperature'", "type": "invalid_request_error", "code": None}}
+    )
+    sent_request: Final = httpx2.Request(
+        "POST",
+        "https://resource.openai.azure.com/openai/v1/chat/completions?api-key=sdk-query-secret",
+        headers={"authorization": "Bearer sk-openai-secret"},
+        content=b'{"messages":[{"role":"user","content":"hi"}]}',
+    )
+    upstream: Final = httpx2.Response(400, content=body, headers={"x-request-id": "req-sdk3"}, request=sent_request)
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        exception_type(
+            model="gpt-5.6",
+            original_exception=openai.BadRequestError(
+                "Unsupported value: 'temperature'", response=upstream, body=json.loads(body)
+            ),
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    assert raised.value.response.text == body
+    assert raised.value.response.headers["x-request-id"] == "req-sdk3"
+    assert str(raised.value.response.request.url) == "https://resource.openai.azure.com/openai/v1/chat/completions"
+    assert "sk-openai-secret" not in str(raised.value.response.request.headers)

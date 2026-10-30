@@ -2664,7 +2664,7 @@ def test_perplexity_streaming_dict_cost_bills_through_its_own_calculator():
     ) == pytest.approx(0.00503)
 
 
-def test_openai_compatible_streaming_cost_is_priced_from_the_cost_map():
+def test_openai_compatible_streaming_reported_cost_is_billed_instead_of_the_cost_map():
     import litellm
     from litellm.cost_calculator import (
         get_response_cost_from_hidden_params,
@@ -2686,7 +2686,7 @@ def test_openai_compatible_streaming_cost_is_priced_from_the_cost_map():
         id="chatcmpl-openai-compatible",
         model=model,
         choices=[],
-        usage=Usage(completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=3_144_000),
+        usage=Usage(completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.037),
     )
 
     CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response, "openai")
@@ -2698,7 +2698,7 @@ def test_openai_compatible_streaming_cost_is_priced_from_the_cost_map():
         custom_llm_provider="openai",
         call_type="completion",
         optional_params={},
-    ) == pytest.approx(2e-5)
+    ) == pytest.approx(0.037)
 
 
 def test_xai_streaming_reported_cost_still_takes_the_margin(monkeypatch):

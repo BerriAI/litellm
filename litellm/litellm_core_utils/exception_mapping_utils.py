@@ -38,6 +38,8 @@ from ..exceptions import (
     ServiceUnavailableError,
     Timeout,
     UnprocessableEntityError,
+    error_response_without_credentials,
+    upstream_http_response,
 )
 
 
@@ -310,6 +312,17 @@ def _litellm_proxy_response(
     )
 
 
+def _without_credentials(response: httpx.Response | None) -> httpx.Response | None:
+    upstream: Final = upstream_http_response(response)
+    if upstream is None:
+        return response
+    return error_response_without_credentials(upstream.status_code, upstream, "https://docs.litellm.ai/docs")
+
+
+def _upstream_reply(response: httpx.Response | None) -> httpx.Response | None:
+    return response if response is not None and (response.headers or response.content) else None
+
+
 def _map_openai_exception(
     *,
     model: str,
@@ -320,7 +333,7 @@ def _map_openai_exception(
     exception_provider: str,
     extra_information: str,
 ) -> None:
-    response: Final = _litellm_proxy_response(original_exception, custom_llm_provider)
+    response: Final = _without_credentials(_litellm_proxy_response(original_exception, custom_llm_provider))
     if (cyber_policy_body := _openai_cyber_policy_body(original_exception)) is not None:
         raise ContentPolicyViolationError(
             message=f"ContentPolicyViolationError: {exception_provider} - {original_exception}",
@@ -383,6 +396,7 @@ def _map_openai_exception(
             model=model,
             llm_provider=custom_llm_provider,
             litellm_debug_info=extra_information,
+            response=_upstream_reply(response),
         )
     elif (
         ("invalid_request_error" in error_str and "content_policy_violation" in error_str)
@@ -454,6 +468,7 @@ def _map_openai_exception(
             model=model,
             llm_provider=custom_llm_provider,
             body=getattr(original_exception, "body", None),
+            response=_upstream_reply(response),
         )
     elif "Request too large" in error_str:
         raise RateLimitError(
@@ -481,6 +496,7 @@ def _map_openai_exception(
             model=model,
             request=_request,
             litellm_debug_info=extra_information,
+            response=_upstream_reply(response),
         )
     elif hasattr(original_exception, "status_code"):
         if original_exception.status_code == 400:
@@ -514,6 +530,7 @@ def _map_openai_exception(
                 model=model,
                 llm_provider=custom_llm_provider,
                 litellm_debug_info=extra_information,
+                response=_upstream_reply(response),
             )
         elif original_exception.status_code == 422:
             raise BadRequestError(
@@ -565,6 +582,7 @@ def _map_openai_exception(
                 llm_provider=custom_llm_provider,
                 litellm_debug_info=extra_information,
                 exception_status_code=original_exception.status_code,
+                response=_upstream_reply(response),
             )
         else:
             raise APIError(
@@ -574,6 +592,7 @@ def _map_openai_exception(
                 model=model,
                 request=getattr(original_exception, "request", None),
                 litellm_debug_info=extra_information,
+                response=_upstream_reply(response),
             )
     else:
         # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
@@ -2021,6 +2040,7 @@ def _map_azure_exception(
     exception_provider: str,
     extra_information: str,
 ) -> None:
+    response: Final = _without_credentials(getattr(original_exception, "response", None))
     message = get_error_message(error_obj=original_exception)
     if message is None:
         if hasattr(original_exception, "message"):
@@ -2056,7 +2076,7 @@ def _map_azure_exception(
             llm_provider="azure",
             model=model,
             litellm_debug_info=extra_information,
-            response=getattr(original_exception, "response", None),
+            response=response,
         )
     elif "DeploymentNotFound" in error_str:
         raise NotFoundError(
@@ -2064,7 +2084,7 @@ def _map_azure_exception(
             llm_provider="azure",
             model=model,
             litellm_debug_info=extra_information,
-            response=getattr(original_exception, "response", None),
+            response=response,
         )
     elif azure_error_code == "content_policy_violation" or ExceptionCheckers.is_azure_content_policy_violation_error(
         error_str
@@ -2078,6 +2098,7 @@ def _map_azure_exception(
             model=model,
             extra_information=extra_information,
             original_exception=original_exception,
+            response=response,
         )
     elif azure_error_code == "invalid_encrypted_content" or "could not be verified" in error_str:
         helpful_message: Final = (
@@ -2096,7 +2117,7 @@ def _map_azure_exception(
             llm_provider="azure",
             model=model,
             litellm_debug_info=extra_information,
-            response=getattr(original_exception, "response", None),
+            response=response,
             body=getattr(original_exception, "body", None),
         )
     elif getattr(original_exception, "status_code", None) in (None, 400) and (
@@ -2108,7 +2129,7 @@ def _map_azure_exception(
             llm_provider="azure",
             model=model,
             litellm_debug_info=extra_information,
-            response=getattr(original_exception, "response", None),
+            response=response,
             body=getattr(original_exception, "body", None),
         )
     elif "invalid_request_error" in error_str and getattr(original_exception, "status_code", None) in (None, 400):
@@ -2117,7 +2138,7 @@ def _map_azure_exception(
             llm_provider="azure",
             model=model,
             litellm_debug_info=extra_information,
-            response=getattr(original_exception, "response", None),
+            response=response,
             body=getattr(original_exception, "body", None),
         )
     elif any(marker in error_str for marker in _OPENAI_CLIENT_MISSING_CREDENTIALS_MESSAGES):
@@ -2126,7 +2147,7 @@ def _map_azure_exception(
             llm_provider=custom_llm_provider,
             model=model,
             litellm_debug_info=extra_information,
-            response=getattr(original_exception, "response", None),
+            response=response,
         )
     elif "Connection error" in error_str:
         raise APIConnectionError(
@@ -2142,7 +2163,7 @@ def _map_azure_exception(
                 llm_provider="azure",
                 model=model,
                 litellm_debug_info=extra_information,
-                response=getattr(original_exception, "response", None),
+                response=response,
                 body=getattr(original_exception, "body", None),
             )
         elif original_exception.status_code == 401:
@@ -2151,7 +2172,7 @@ def _map_azure_exception(
                 llm_provider="azure",
                 model=model,
                 litellm_debug_info=extra_information,
-                response=getattr(original_exception, "response", None),
+                response=response,
             )
         elif original_exception.status_code == 404:
             raise NotFoundError(
@@ -2159,7 +2180,7 @@ def _map_azure_exception(
                 llm_provider="azure",
                 model=model,
                 litellm_debug_info=extra_information,
-                response=getattr(original_exception, "response", None),
+                response=response,
             )
         elif original_exception.status_code == 408:
             raise Timeout(
@@ -2167,6 +2188,7 @@ def _map_azure_exception(
                 model=model,
                 litellm_debug_info=extra_information,
                 llm_provider="azure",
+                response=_upstream_reply(response),
             )
         elif original_exception.status_code == 422:
             raise BadRequestError(
@@ -2174,7 +2196,7 @@ def _map_azure_exception(
                 model=model,
                 llm_provider="azure",
                 litellm_debug_info=extra_information,
-                response=getattr(original_exception, "response", None),
+                response=response,
             )
         elif original_exception.status_code == 429:
             raise RateLimitError(
@@ -2182,7 +2204,7 @@ def _map_azure_exception(
                 model=model,
                 llm_provider="azure",
                 litellm_debug_info=extra_information,
-                response=getattr(original_exception, "response", None),
+                response=response,
             )
         elif original_exception.status_code == 502:
             raise BadGatewayError(
@@ -2190,7 +2212,7 @@ def _map_azure_exception(
                 model=model,
                 llm_provider="azure",
                 litellm_debug_info=extra_information,
-                response=getattr(original_exception, "response", None),
+                response=response,
             )
         elif original_exception.status_code == 503:
             raise ServiceUnavailableError(
@@ -2198,7 +2220,7 @@ def _map_azure_exception(
                 model=model,
                 llm_provider="azure",
                 litellm_debug_info=extra_information,
-                response=getattr(original_exception, "response", None),
+                response=response,
             )
         elif original_exception.status_code == 504:  # gateway timeout error
             raise Timeout(
@@ -2207,6 +2229,7 @@ def _map_azure_exception(
                 litellm_debug_info=extra_information,
                 llm_provider="azure",
                 exception_status_code=original_exception.status_code,
+                response=_upstream_reply(response),
             )
         else:
             raise APIError(
@@ -2216,6 +2239,7 @@ def _map_azure_exception(
                 litellm_debug_info=extra_information,
                 model=model,
                 request=httpx.Request(method="POST", url="https://openai.com/"),
+                response=_upstream_reply(response),
             )
     else:
         # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
@@ -2591,17 +2615,20 @@ def exception_type(
                     model=model,
                     llm_provider=custom_llm_provider,
                     litellm_debug_info=extra_information,
+                    response=_upstream_reply(
+                        _without_credentials(_litellm_proxy_response(mappable_exception, custom_llm_provider))
+                    ),
                 )
 
             if (
                 custom_llm_provider == "litellm_proxy"
             ):  # handle special case where calling litellm proxy + exception str contains error message
                 extract_and_raise_litellm_exception(
-                    response=_litellm_proxy_response(mappable_exception, custom_llm_provider),
+                    response=_without_credentials(_litellm_proxy_response(mappable_exception, custom_llm_provider)),
                     error_str=error_str,
                     model=model,
                     custom_llm_provider=custom_llm_provider,
-                    body=getattr(original_exception, "body", None),
+                    body=getattr(mappable_exception, "body", None),
                 )
             if (
                 custom_llm_provider == "openai"

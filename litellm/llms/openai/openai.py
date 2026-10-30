@@ -27,6 +27,7 @@ import litellm
 from litellm import LlmProviders
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
+from litellm.exceptions import UnsupportedParamsError
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -65,6 +66,7 @@ from .common_utils import (
     is_output_token_limit_error,
     model_dump_provider_response,
     openai_sdk_key_params,
+    upstream_error_response,
 )
 from .workload_identity import (
     build_async_openai_client,
@@ -971,8 +973,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         litellm.remove_index_from_tool_calls(messages=messages)
                     else:
                         raise e
-        except OpenAIError as e:
-            raise e
+        except (OpenAIError, UnsupportedParamsError):
+            raise
         except Exception as e:
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
@@ -984,6 +986,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             raise OpenAIError(
                 status_code=status_code,
                 message=error_text,
+                response=upstream_error_response(e),
                 headers=error_headers,
                 body=error_body,
             )
@@ -1111,6 +1114,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 raise OpenAIError(
                     status_code=status_code,
                     message=message,
+                    response=upstream_error_response(e),
                     headers=error_headers,
                     body=exception_body,
                 )
@@ -1283,6 +1287,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         raise OpenAIError(
                             status_code=getattr(e, "status_code", 500),
                             message=str(e),
+                            response=upstream_error_response(e),
                             headers=error_headers,
                             body=exception_body,
                         )
@@ -1410,7 +1415,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
+            raise OpenAIError(
+                status_code=status_code,
+                message=error_text,
+                response=upstream_error_response(e),
+                headers=error_headers,
+            )
 
     def embedding(
         self,
@@ -1500,7 +1510,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
+            raise OpenAIError(
+                status_code=status_code,
+                message=error_text,
+                response=upstream_error_response(e),
+                headers=error_headers,
+            )
 
     async def aimage_generation(
         self,
@@ -1667,7 +1682,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 original_response=str(e),
             )
             if hasattr(e, "status_code"):
-                raise OpenAIError(status_code=getattr(e, "status_code", 500), message=str(e))
+                raise OpenAIError(
+                    status_code=getattr(e, "status_code", 500),
+                    message=str(e),
+                    response=upstream_error_response(e),
+                )
             else:
                 raise OpenAIError(status_code=500, message=str(e))
 

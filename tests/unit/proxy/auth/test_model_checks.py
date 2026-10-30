@@ -1057,7 +1057,9 @@ def test_wildcard_lists_each_model_once_under_its_full_owner_id(provider: str):
     import litellm
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
 
-    full_ids: Final = {f"{provider}/{model.removeprefix(f'{provider}/')}" for model in litellm.models_by_provider[provider]}
+    full_ids: Final = {
+        f"{provider}/{model.removeprefix(f'{provider}/')}" for model in litellm.models_by_provider[provider]
+    }
     assert any(model.count("/") > 1 for model in full_ids)
 
     assert sorted(get_known_models_from_wildcard(f"{provider}/*")) == sorted(full_ids)
@@ -1372,12 +1374,57 @@ def test_partial_wildcard_lists_catalog_ids_stored_with_the_provider_prefix(
     assert sorted(listed) == expected
 
 
+@pytest.mark.parametrize(
+    ("provider", "routing_segment"), [("bedrock", "converse"), ("bedrock", "us-east-1"), ("openai", "responses")]
+)
+def test_routing_segment_lists_the_same_catalog_ids_as_the_bare_provider_wildcard(
+    provider: str, routing_segment: str
+) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    bare_listing: Final = get_known_models_from_wildcard(f"{provider}/*", LiteLLM_Params(model=f"{provider}/*"))
+    routed_listing: Final = get_known_models_from_wildcard(
+        f"{provider}/*", LiteLLM_Params(model=f"{provider}/{routing_segment}/*")
+    )
+
+    assert bare_listing
+    assert sorted(routed_listing) == sorted(bare_listing)
+
+
+def test_provider_wildcard_lists_cost_map_models_but_not_pricing_tiers() -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    model_id: Final = "together_ai/partial-wildcard-org/model-t"
+    pricing_tier: Final = "together-ai-partial-wildcard-tier"
+    with _registered_chat_models({model_id: "together_ai", pricing_tier: "together_ai"}):
+        listed: Final = get_known_models_from_wildcard("together_ai/*")
+
+    assert model_id in listed
+    assert [listed_id for listed_id in listed if pricing_tier in listed_id] == []
+
+
+def test_provider_wildcard_stops_listing_a_cost_map_model_once_it_is_retired() -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    model_id: Final = "together_ai/partial-wildcard-org/model-retired"
+    with _registered_chat_models({model_id: "together_ai"}):
+        listed_while_served: Final = get_known_models_from_wildcard("together_ai/*")
+        litellm.add_known_models({model_id: {"litellm_provider": "together_ai", "deprecation_date": "2000-01-01"}})
+        listed_once_retired: Final = get_known_models_from_wildcard("together_ai/*")
+
+    assert model_id in listed_while_served
+    assert model_id not in listed_once_retired
+
+
 _ROUTE_CF_ID: Final = "cloudflare/@cf/partial-route-org/model-a-instruct"
 _ROUTE_CF_SUFFIXED_ID: Final = "cloudflare/@cf/partial-route-org/model-b-instruct-v2"
 _ROUTE_HF_ID: Final = "cloudflare/@hf/partial-route-org/model-c"
 _ROUTE_GEMINI_ID: Final = "gemini-partial-route-9-flash"
 _ROUTE_OPENAI_ID: Final = "gpt-partial-route-9-mini"
 _ROUTE_BEDROCK_ID: Final = "anthropic.partial-route-9-v1:0"
+_ROUTE_TOGETHER_ID: Final = "together_ai/partial-route-org/model-t"
 _ROUTE_CF_IDS: Final = {_ROUTE_CF_ID, _ROUTE_CF_SUFFIXED_ID}
 
 
@@ -1457,6 +1504,29 @@ _ROUTE_CF_IDS: Final = {_ROUTE_CF_ID, _ROUTE_CF_SUFFIXED_ID}
             id="same-name-namespace-the-catalog-lacks",
         ),
         pytest.param(
+            "together/*", "together_ai/partial-route-missing-org/*", None, set(), id="alias-over-org-the-catalog-lacks"
+        ),
+        pytest.param(
+            "openai/*",
+            "openai/chat_completions/*",
+            None,
+            {f"openai/chat_completions/{_ROUTE_OPENAI_ID}"},
+            id="chat-completions-bridge-route",
+        ),
+        pytest.param(
+            "bedrock/*", "bedrock/llama/*", None, {f"bedrock/llama/{_ROUTE_BEDROCK_ID}"}, id="invoke-format-route"
+        ),
+        pytest.param(
+            "together/*",
+            "together_ai/partial-route-org/*",
+            None,
+            {_ROUTE_TOGETHER_ID},
+            id="alias-over-org-a-cost-map-catalog-carries",
+        ),
+        pytest.param(
+            "bedrock/*", "bedrock/us-east-1/*", None, {f"bedrock/us-east-1/{_ROUTE_BEDROCK_ID}"}, id="region-route"
+        ),
+        pytest.param(
             "*", "openai/*", "openai/gpt-partial-route-9*", set(), id="provider-prefixed-key-filter-over-catch-all"
         ),
         pytest.param("*", "cloudflare/@cf/*", None, _ROUTE_CF_IDS, id="catch-all-over-partial-deployment"),
@@ -1501,6 +1571,7 @@ def test_every_listed_partial_wildcard_id_routes_to_the_catalog_model_it_names(
             _ROUTE_GEMINI_ID: "gemini",
             _ROUTE_OPENAI_ID: "openai",
             _ROUTE_BEDROCK_ID: "bedrock",
+            _ROUTE_TOGETHER_ID: "together_ai",
         }
     ):
         v1_models: Final = get_complete_model_list(
@@ -1533,6 +1604,20 @@ def test_every_listed_partial_wildcard_id_routes_to_the_catalog_model_it_names(
     assert listed_v1_models == sorted(reachable)
     if key_model is None:
         assert listed_model_info_names == sorted(reachable)
+
+
+def test_inference_provider_route_lists_every_id_the_plain_provider_wildcard_lists() -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    plain: Final = get_known_models_from_wildcard("huggingface/*", LiteLLM_Params(model="huggingface/*"))
+    routed: Final = get_known_models_from_wildcard(
+        "huggingface/*", LiteLLM_Params(model="huggingface/featherless-ai/*")
+    )
+
+    assert plain
+    assert [model for model in plain if "/" not in model.removeprefix("huggingface/")] == []
+    assert sorted(routed) == sorted(plain)
 
 
 def test_catch_all_lists_no_id_a_more_specific_sibling_wildcard_routes_elsewhere() -> None:
