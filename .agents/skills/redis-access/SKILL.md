@@ -24,17 +24,24 @@ metadata:
 
 ## The transport
 
-`RedisTransport` in `litellm/redis/transport/contract.py` is how Python keyspace code reaches redis-py. It is a Protocol of plain methods, one per Redis command the Python code uses (`get`, `mget`, `set`, `delete`, `eval`), command-shaped and never redis-py shaped
+`RedisTransport` in `litellm/redis/transport/contract.py` is how Python code reaches redis-py. It is a Protocol of plain methods, command-shaped and never redis-py shaped, and it covers every Redis use in Python, so a keyspace move never waits on the transport
+
+- Data commands `get`, `mget`, `set`, `delete`, `incrby`, `incrbyfloat`, `expire`, `ttl`, `rpush`, `lpop`, `ltrim`, `sadd`, `scan` and `eval`
+- Batches, `batch()` for one caller's commands, `batch(transaction=True)` for MULTI/EXEC, and `request_batch()` / `post_call_batch()` for the request scope
+- Pub/sub, `publish`, `publish_all` and `subscribe`
+- Admin and health, `ping`, `info`, `client_list` and `flushall`
 
 - Every method returns its value or a `RedisFailure`. Nothing raises for a Redis problem
 - `RedisFailure.kind` is `transport` (timeout or lost connection, the command may still have applied, so a failed write is an unknown outcome, never "not applied"), `server` (Redis answered with an error, the connection is fine and the breaker does not count it), `decode` (the reply was not the shape expected) or `breaker_open` (refused without touching the socket)
-- The namespace is applied once, inside the transport, to every key including Lua `KEYS`. A key that already starts with `{namespace}:` is left alone. Stores and callers pass logical keys
+- The namespace is applied once, inside the transport, to every key including Lua `KEYS` and pub/sub channels. A key that already starts with `{namespace}:` is left alone. Stores and callers pass logical keys
 - Every write takes its TTL from the caller as a `timedelta`. `None` means no expiry, there is no default
 - Replies are undecoded bytes. `eval` returns `int | bytes | None | tuple[...]`. Decoding belongs to the store that owns the keyspace
 - `eval` takes script text every call and does `EVALSHA` with `EVAL` fallback, so nothing registers scripts
 - These rules are shared with `crates/redis-client`, whose `AGENTS.md` has the Rust side. Change both together, since Python and Rust pods share keys in one Redis
-- `RedisCache.transport()` builds the transport over that cache's own client, namespace, circuit breaker, `_admit_async_call` and `ServiceLogging`. No new connection, no second breaker, and `RedisClusterCache`'s connection gate still applies
+- `RedisCache.transport()` builds the transport over that cache's own client, pub/sub client, namespace, circuit breaker, `_admit_async_call`, cluster-aware `mget` and `ServiceLogging`. No new connection, no second breaker, and `RedisClusterCache`'s connection gate still applies
 - Every method runs its command through two steps, in this order. `run_under_breaker` wraps the existing `_run_under_circuit_breaker` from `litellm/caching/redis_cache.py`, so admission, the generation check, the health failure classification and the timeout flag are the ones legacy traffic uses, and maps the outcome to a `RedisFailure` (`breaker_open`, `transport`, `server`) instead of raising. `RedisServiceEvents.observe` times the call, logs a failure and emits the service event
+
+- `ping`, the admin commands and pub/sub skip the breaker, like the `RedisCache` methods they replace, so health checks still reach a Redis the breaker took out. They still go through `RedisServiceEvents.observe`, except `get_message` polling
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -44,6 +51,7 @@ class RedisPyTransport:
     breaker: RedisCircuitBreaker
     admit: Admit
     events: RedisServiceEvents
+    ...
 
     async def get(self, key: str) -> bytes | None | RedisFailure:
         return _bytes_reply(await self._run("get", lambda: self.client().get(self._key(key))))
@@ -51,8 +59,19 @@ class RedisPyTransport:
     async def _run(self, name: str, call: Callable[[], Awaitable[_T]]) -> _T | RedisFailure:
         return await self.events.observe(name, lambda: run_under_breaker(self.breaker, name, self.admit, call))
 ```
-- Adding a command means a method on the Protocol, an implementation in `redis_py.py`, and a fakeredis test that the namespace is applied once, the TTL lands, a rejected command is `server` and an outage is `transport`. Before adding one, check whether the operation is really one `eval`. A counter with a TTL on first write or an owner-checked release is one script, not three round trips
+- A Redis command Python starts using is a method on the Protocol and on the batch, an implementation in `redis_py.py`, and a fakeredis test that the namespace is applied once, the TTL lands, a rejected command is `server` and an outage is `transport`
+- A store still picks the fewest round trips. A counter with a TTL on first write or an owner-checked release is one `eval`, not three commands
 - Multi-key commands and scripts keep their keys in one slot, or they break on cluster depending on slot ownership
+
+## Batches
+
+The pipeline engine is `PipelineBatch` in `litellm/redis/transport/batch.py`, the one `RedisBatch` has always had. Transport batches and `RedisBatch` (`litellm/caching/redis_batch.py`) declare onto it, so a request keeps one round trip per backend while callers move over one at a time
+
+- Every batch method returns an awaitable reply, and awaiting any reply flushes everything declared so far. Each reply is its value or a `RedisFailure`, so one rejected command fails only its own reply, and an outage fails every reply and counts once on the breaker
+- `request_batch()` and `post_call_batch()` return the engine `request_redis_batch_scope` holds for this backend, or `None` outside a request. Never build a second request scope
+- A script Redis has not cached reruns on its own after the pipeline, so do not rely on its effect being visible to later commands in the same batch. A transaction batch sends `EVAL` instead, so its scripts run inside the MULTI
+- On a cluster client a request batch runs each command on its own, as `RedisBatch` always has. Explicit and transaction batches still pipeline
+- One REDIS event per flush, named by the batch and targeted by the key families that shared it, `mixed` with the sorted families when there are several
 
 ## Stores
 
@@ -73,7 +92,7 @@ A store owns one keyspace. Python and Rust pods share one Redis, so each keyspac
 - Delete the caller's own timing, service hooks and Redis health logging. The transport emits for it now
 - Move one keyspace per change. An extraction is not a Rust port
 - `RedisCache` is a connection object wearing a cache name. Its own cache verbs move onto the transport one method at a time, each conversion deleting that method's inline logging, until what is left is the connection, the breaker and a thin facade
-- Not on the transport yet, so leave them on `RedisCache` until the transport grows them: pub/sub, admin commands, pipelines and `RedisBatch`. Vector and semantic search keep their own clients
+- Pipelined and batched access moves onto a transport batch, pub/sub onto `publish` / `subscribe`, and admin onto the admin methods. Vector and semantic search keep their own clients
 
 ## Observability
 

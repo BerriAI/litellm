@@ -46,4 +46,9 @@ def fake_redis_transport(
         breaker=RedisCircuitBreaker(failure_threshold=failure_threshold, recovery_timeout=3600),
         admit=_admit_directly,
         events=RedisServiceEvents(events or ServiceLogging()),
+        multi_get=lambda keys: client.mget(keys),
+        server_version=lambda: 7,
+        pubsub_client=lambda: client,
+        request_engine=lambda: None,
+        post_call_engine=lambda: None,
     )
