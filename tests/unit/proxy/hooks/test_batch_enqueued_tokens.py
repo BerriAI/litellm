@@ -173,8 +173,9 @@ def _redis_store(
     fail_from_call: Mapping[str, int] = MappingProxyType({}),
     raise_after_landing_keys: frozenset[str] = frozenset(),
     monotonic: Callable[[], float] = time.monotonic,
+    namespace: str | None = None,
 ) -> tuple[BatchEnqueuedTokenStore, fakeredis.FakeAsyncRedis]:
-    cache = fake_redis_cache(server)
+    cache = fake_redis_cache(server, namespace=namespace)
     raw = fakeredis.FakeAsyncRedis(server=server)
     litellm.in_memory_llm_clients_cache.set_cache(
         key=cache._get_async_client_cache_key(),
@@ -430,3 +431,171 @@ async def test_an_open_circuit_breaker_keeps_reservations_in_memory_without_a_wa
 
     assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
     assert sum("circuit breaker is open" in record.getMessage() for record in caplog.records) == 3
+
+
+def _saved_reservation() -> BatchEnqueuedTokenReservation:
+    return BatchEnqueuedTokenReservation(
+        tokens=5,
+        scopes=(
+            BatchEnqueuedTokenScope(key="api_key", value='clé "one"', limit=100),
+            BatchEnqueuedTokenScope(key="team", value="組/二", limit=200),
+        ),
+        backend="memory",
+        owner="worker\n雪",
+        reserved_at_monotonic=1000.25,
+    )
+
+
+_SAVED_DOCUMENT: Final = (
+    '{"tokens":5,"scopes":[{"key":"api_key","value":"clé \\"one\\"","limit":100},'
+    '{"key":"team","value":"組/二","limit":200}],"backend":"memory",'
+    '"owner":"worker\\n雪","reserved_at_monotonic":1000.25}'
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("namespace", (None, "test-namespace"))
+async def test_reservation_unicode_wire_bytes_tombstone_and_elapsed_expiry(
+    monkeypatch: pytest.MonkeyPatch, namespace: str | None
+) -> None:
+    monkeypatch.setattr(time, "time", lambda: 1000.0)
+    store, raw = _redis_store(fakeredis.FakeServer(), monotonic=lambda: 1030.5, namespace=namespace)
+    reservation: Final = _saved_reservation()
+    prefix: Final = f"{namespace}:" if namespace else ""
+    old_key: Final = prefix + _record("unicode_old")
+    new_key: Final = prefix + _record("unicode_new")
+    await raw.set(old_key, _SAVED_DOCUMENT.encode("utf-8"), ex=60)
+
+    popped: Final = await store.pop_reservation("unicode_old")
+    assert popped == reservation
+    assert popped is not None
+    assert popped.reserved_at_monotonic == 1000.25
+    assert await raw.get(old_key) == b""
+    assert await raw.pttl(old_key) == BATCH_ENQUEUED_TOKEN_TTL_SECONDS * 1000
+    assert await store.pop_reservation("unicode_old") is None
+
+    await store.save_reservation("unicode_new", reservation)
+    document: Final = TypeAdapter(bytes).validate_python(await raw.get(new_key))
+    assert document == _SAVED_DOCUMENT.encode("utf-8")
+    old_reader: Final = _RESERVATION_ADAPTER.validate_json(document)
+    assert old_reader == reservation
+    assert old_reader.reserved_at_monotonic == 1000.25
+    assert await raw.pttl(new_key) == (BATCH_ENQUEUED_TOKEN_TTL_SECONDS - 31) * 1000
+    keys: Final = TypeAdapter(tuple[bytes, ...]).validate_python(await raw.keys("*"))
+    assert frozenset(keys) == {old_key.encode(), new_key.encode()}
+
+
+@pytest.mark.asyncio
+async def test_reservation_wire_includes_default_fields_and_empty_scopes() -> None:
+    store, raw = _redis_store(fakeredis.FakeServer(), monotonic=lambda: 1000.25)
+    reservation: Final = BatchEnqueuedTokenReservation(tokens=0, scopes=(), reserved_at_monotonic=1000.25)
+    await store.save_reservation("defaults", reservation)
+    assert await raw.get(_record("defaults")) == (
+        b'{"tokens":0,"scopes":[],"backend":"redis","owner":"","reserved_at_monotonic":1000.25}'
+    )
+    popped: Final = await store.pop_reservation("defaults")
+    assert popped == reservation
+    assert popped is not None
+    assert popped.reserved_at_monotonic == 1000.25
+
+
+@pytest.mark.asyncio
+async def test_legacy_redis_record_fills_owner_and_monotonic_defaults() -> None:
+    store, raw = _redis_store(fakeredis.FakeServer())
+    await raw.set(_record("legacy_defaults"), b'{"tokens":5,"scopes":[]}', ex=60)
+    popped: Final = await store.pop_reservation("legacy_defaults")
+    assert popped == BatchEnqueuedTokenReservation(tokens=5, scopes=(), backend="redis", owner="")
+    assert popped is not None
+    assert isinstance(popped.reserved_at_monotonic, float)
+    assert await store.pop_reservation("legacy_defaults") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("document", (b"{", b"{}", b"null", b'"text"', b"\xff"))
+async def test_malformed_redis_record_never_returns_local_fallback(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, document: bytes
+) -> None:
+    monkeypatch.setattr(time, "time", lambda: 1000.0)
+    server: Final = fakeredis.FakeServer()
+    wire_key: Final = f"test-namespace:{_record('malformed_landed')}"
+    store, raw = _redis_store(
+        server,
+        namespace="test-namespace",
+        monotonic=lambda: 1000.25,
+    )
+    server.connected = False
+    await store.save_reservation("malformed_landed", _saved_reservation())
+    server.connected = True
+    await raw.set(wire_key, document, ex=60)
+
+    assert await store.pop_reservation("malformed_landed") is None
+    assert "Discarding malformed enqueued-token reservation record for malformed_landed" in caplog.text
+    assert await raw.get(wire_key) == b""
+    assert await raw.pttl(wire_key) == BATCH_ENQUEUED_TOKEN_TTL_SECONDS * 1000
+    assert await store.pop_reservation("malformed_landed") is None
+    server.connected = False
+    assert await store.pop_reservation("malformed_landed") is None
+
+
+@pytest.mark.asyncio
+async def test_reservation_outage_preserves_saved_fields_and_consumes_once() -> None:
+    server: Final = fakeredis.FakeServer()
+    store, raw = _redis_store(server, monotonic=lambda: 1000.25, namespace="test-namespace")
+    server.connected = False
+    await store.save_reservation("outage_fields", _saved_reservation())
+    popped: Final = await store.pop_reservation("outage_fields")
+    assert popped == _saved_reservation()
+    assert popped is not None
+    assert popped.reserved_at_monotonic == 1000.25
+    assert await store.pop_reservation("outage_fields") is None
+    server.connected = True
+    assert await raw.keys("*") == []
+
+
+@pytest.mark.asyncio
+async def test_local_save_preserves_reservation_fields_and_monotonic() -> None:
+    store: Final = BatchEnqueuedTokenStore(
+        internal_usage_cache=InternalUsageCache(DualCache(default_in_memory_ttl=60)), monotonic=lambda: 1000.25
+    )
+    await store.save_reservation("local_fields", _saved_reservation())
+    popped: Final = await store.pop_reservation("local_fields")
+    assert popped == _saved_reservation()
+    assert popped is not None
+    assert popped.reserved_at_monotonic == 1000.25
+    assert await store.pop_reservation("local_fields") is None
+
+
+@pytest.mark.asyncio
+async def test_landed_save_fallback_preserves_unicode_fields_and_monotonic(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(time, "time", lambda: 1000.0)
+    key: Final = _record("landed_fields")
+    store, raw = _redis_store(
+        fakeredis.FakeServer(), monotonic=lambda: 1000.25, raise_after_landing_keys=frozenset({key})
+    )
+    await store.save_reservation("landed_fields", _saved_reservation())
+    assert await raw.get(key) == _SAVED_DOCUMENT.encode("utf-8")
+    popped: Final = await store.pop_reservation("landed_fields")
+    assert popped == _saved_reservation()
+    assert popped is not None
+    assert popped.reserved_at_monotonic == 1000.25
+    assert await raw.get(key) == b""
+    assert await raw.pttl(key) == BATCH_ENQUEUED_TOKEN_TTL_SECONDS * 1000
+    assert await store.pop_reservation("landed_fields") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("elapsed, ttl", ((30.25, BATCH_ENQUEUED_TOKEN_TTL_SECONDS - 31), (700000.0, 1)))
+async def test_local_record_expiry_accounts_for_elapsed_time(
+    monkeypatch: pytest.MonkeyPatch, elapsed: float, ttl: int
+) -> None:
+    monkeypatch.setattr(time, "time", lambda: 1000.0)
+    store: Final = BatchEnqueuedTokenStore(
+        internal_usage_cache=InternalUsageCache(DualCache(default_in_memory_ttl=60)),
+        monotonic=lambda: 1000.25 + elapsed,
+    )
+    await store.save_reservation("before_expiry", _saved_reservation())
+    await store.save_reservation("after_expiry", _saved_reservation())
+    monkeypatch.setattr(time, "time", lambda: 1000.0 + ttl - 0.25)
+    assert await store.pop_reservation("before_expiry") == _saved_reservation()
+    monkeypatch.setattr(time, "time", lambda: 1000.0 + ttl + 0.25)
+    assert await store.pop_reservation("after_expiry") is None
