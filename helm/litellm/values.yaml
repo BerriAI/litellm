@@ -383,6 +383,7 @@ gateway:
   service:
     type: ClusterIP
     port: 4000
+    annotations: {}
   resources:
     requests:
       cpu: "1"
@@ -529,6 +530,7 @@ backend:
   service:
     type: ClusterIP
     port: 4001
+    annotations: {}
   resources:
     requests:
       cpu: "1"
@@ -597,6 +599,7 @@ ui:
   service:
     type: ClusterIP
     port: 3000
+    annotations: {}
   # The backend's public origin, passed to the UI only when ingress.componentHosts is configured.
   backendUrl: ""
   # Public origin of the UI, used for backend and gateway CORS.
