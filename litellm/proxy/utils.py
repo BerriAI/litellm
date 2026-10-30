@@ -1744,6 +1744,7 @@ def _failure_fields_to_lift(
         if _prompt_estimate is not None
         else ()
     )
+    _recorded_observation: Final[object] = _model_call_details.get("_accounting_usage_observed")
     _entries: Final = (
         ("start_time", _model_call_details.get("start_time")),
         ("first_api_call_start_time", _first_handoff),
@@ -1764,6 +1765,8 @@ def _failure_fields_to_lift(
             (
                 None
                 if Logging.usage_capture_callback is None
+                else _recorded_observation
+                if isinstance(_recorded_observation, UsageObservation)
                 else UsageObservation.UNKNOWN
                 if _usage_to_lift is None
                 else UsageObservation.KNOWN
