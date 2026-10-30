@@ -31871,7 +31871,8 @@
         },
         "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
-        "google_maps_grounding_cost_per_query": 0.014
+        "google_maps_grounding_cost_per_query": 0.014,
+        "supports_computer_use": true
     },
     "gemini/gemini-3-flash-preview": {
         "cache_read_input_audio_token_cost": 1e-07,
@@ -31937,7 +31938,8 @@
         "input_cost_per_token_flex": 2.5e-07,
         "output_cost_per_token_batches": 1.5e-06,
         "output_cost_per_token_flex": 1.5e-06,
-        "supports_audio_input": true
+        "supports_audio_input": true,
+        "supports_computer_use": true
     },
     "gemini/gemini-3.5-flash": {
         "prompt_cache_min_tokens": 4096,
@@ -32184,7 +32186,8 @@
         },
         "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
-        "google_maps_grounding_cost_per_query": 0.014
+        "google_maps_grounding_cost_per_query": 0.014,
+        "supports_computer_use": true
     },
     "gemini/gemini-omni-flash-preview": {
         "input_cost_per_audio_token": 1.5e-06,
@@ -76540,6 +76543,7 @@
         ],
         "supports_audio_input": true,
         "supports_audio_output": false,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
