@@ -736,6 +736,8 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
                 "call_id": "toolu_vrtx_014c2eZQXGiRtzh9KvDXRhRh",
                 "name": "read_file",
                 "type": "function_call",
+                "async": None,
+                "caller": None,
                 "id": "fc_toolu_vrtx_014c2eZQXGiRtzh9KvDXRhRh",
                 "namespace": None,
                 "status": "completed",
@@ -745,6 +747,8 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
                 "call_id": "toolu_vrtx_01VoiC4J2kb7yivWHYGqvRRm",
                 "name": "read_file",
                 "type": "function_call",
+                "async": None,
+                "caller": None,
                 "id": "fc_toolu_vrtx_01VoiC4J2kb7yivWHYGqvRRm",
                 "namespace": None,
                 "status": "completed",
@@ -907,6 +911,8 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
                 "call_id": "toolu_vrtx_01Jxxsojf34b9skuGH47XkJd",
                 "name": "read_file",
                 "type": "function_call",
+                "async": None,
+                "caller": None,
                 "id": "fc_toolu_vrtx_01Jxxsojf34b9skuGH47XkJd",
                 "namespace": None,
                 "status": "completed",
@@ -1056,6 +1062,8 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
                 "call_id": "toolu_vrtx_01GFi5nAbXNTTfSxopXwNNPp",
                 "name": "read_file",
                 "type": "function_call",
+                "async": None,
+                "caller": None,
                 "id": "fc_toolu_vrtx_01GFi5nAbXNTTfSxopXwNNPp",
                 "namespace": None,
                 "status": "completed",
@@ -1219,6 +1227,8 @@ CLAUDE_FABLE_5_1_TEST_CASE: Final = TranslationTestCase(
                 "call_id": "toolu_vrtx_01WCXdQndfe72gQeCatYYmiP",
                 "name": "read_file",
                 "type": "function_call",
+                "async": None,
+                "caller": None,
                 "id": "fc_toolu_vrtx_01WCXdQndfe72gQeCatYYmiP",
                 "namespace": None,
                 "status": "completed",
@@ -1228,6 +1238,8 @@ CLAUDE_FABLE_5_1_TEST_CASE: Final = TranslationTestCase(
                 "call_id": "toolu_vrtx_01MDyzK8nTHNuCpY7jS6YJ2Y",
                 "name": "read_file",
                 "type": "function_call",
+                "async": None,
+                "caller": None,
                 "id": "fc_toolu_vrtx_01MDyzK8nTHNuCpY7jS6YJ2Y",
                 "namespace": None,
                 "status": "completed",
@@ -1429,6 +1441,8 @@ GEMINI_3_8_FLASH_TEST_CASE: Final = TranslationTestCase(
                 ),
                 "name": "read_file",
                 "type": "function_call",
+                "async": None,
+                "caller": None,
                 "id": (
                     "fc_call_316157__thought__AY89a18zqWYsP1fCe9VRYni0L9f03IJNDHvm1boNA4Q2dVNJPzZZvrxcHGuC7kCwx5e9kBdKsGE"
                     "Q9/Nr4AjO5c6ukC2h2NEeTinmhak8IRJNBkDQ7OZ7at4q5KYoqYfDZ8aNohtXWBxVdoSK9YZHp+nPGYE7zmXk1icksF+WJG0ga0j"
@@ -1480,6 +1494,7 @@ GEMINI_3_8_FLASH_TEST_CASE: Final = TranslationTestCase(
                 "image_tokens": None,
                 "text_tokens": 242,
                 "video_tokens": None,
+                "cache_write_tokens": 0,
             },
             "output_tokens": 329,
             "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 265, "text_tokens": 64},
@@ -1637,6 +1652,8 @@ GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
                 ),
                 "name": "read_file",
                 "type": "function_call",
+                "async": None,
+                "caller": None,
                 "id": (
                     "fc_call_226688__thought__AY89a18mH4gPpBuF8sZq3BxEt7fVfeky9tDk6WrFiAYqUNfy1TwKL5UEuc60FQFzZzoY6BhtmNY"
                     "M/YnvWntgJG06tpD+R69L+px8wJWN2jf96nYOxDNe5xM3Z6yz7QO1XikWun/bqStP3GVvN2xCTRBeQxkN0n5+NPDWYXC94zo2uik"
@@ -1678,6 +1695,7 @@ GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
                 "image_tokens": None,
                 "text_tokens": 242,
                 "video_tokens": None,
+                "cache_write_tokens": 0,
             },
             "output_tokens": 241,
             "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 171, "text_tokens": 70},
@@ -1817,6 +1835,8 @@ GEMINI_4_ARGON_TEST_CASE: Final = TranslationTestCase(
                 ),
                 "name": "read_file",
                 "type": "function_call",
+                "async": None,
+                "caller": None,
                 "id": (
                     "fc_call_268046__thought__AY89a180ZmYN6Zq/ICj0BCu+eBS75TWGlATeX2fsIhoKaFuGLfTjmizARO/YOhSzt4TK8d1jl7s"
                     "kKbDq23TdvRVOJfjPsI85UiVCF8DZC4gSdHQbTXiDtBUsue7BxMBnoNfPJe34Y1p6WqjbaK44zsfJybZVsWJSmQOW5Ky8qnBZXfE"
@@ -1850,6 +1870,7 @@ GEMINI_4_ARGON_TEST_CASE: Final = TranslationTestCase(
                 "image_tokens": None,
                 "text_tokens": 412,
                 "video_tokens": None,
+                "cache_write_tokens": 0,
             },
             "output_tokens": 161,
             "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 92, "text_tokens": 69},

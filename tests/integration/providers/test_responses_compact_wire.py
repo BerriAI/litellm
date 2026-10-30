@@ -179,6 +179,9 @@ def test_responses_compact_routes_forward_complete_request_and_typed_items(gatew
                             "status": "completed",
                             "type": "function_call_output",
                             "created_by": None,
+                            "caller": None,
+                            "name": None,
+                            "namespace": None,
                         },
                     ],
                     "parallel_tool_calls": None,
@@ -201,6 +204,7 @@ def test_responses_compact_routes_forward_complete_request_and_typed_items(gatew
                             "image_tokens": None,
                             "text_tokens": None,
                             "video_tokens": None,
+                            "cache_write_tokens": 0,
                         },
                         "output_tokens": 3,
                         "output_tokens_details": {
