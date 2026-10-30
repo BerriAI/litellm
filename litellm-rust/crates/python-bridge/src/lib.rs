@@ -115,6 +115,7 @@ mod tests {
                 "NativeDiagnosticProcessor",
                 "NativeClickHouseSpendConfig",
                 "NativeClickHouseSpendStorage",
+                "NativeDatabase",
                 "trace_encode_error",
                 "bundled_model_cost_map",
                 "TokenCounter",
