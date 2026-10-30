@@ -8,6 +8,7 @@ from pydantic import TypeAdapter, ValidationError
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
+    DB_RETRY_SAFE_ERROR_TYPES,
     ProxyErrorTypes,
     ProxyException,
 )
@@ -31,9 +32,11 @@ _CONNECTION_CAPACITY_PHRASES: Final = (
     "remaining connection slots are reserved",
 )
 _PRISMA_POOL_TIMEOUT_CODE: Final = "P2024"
+_LOCK_TIMEOUT_SQLSTATE: Final = "55P03"
+_LOCK_TIMEOUT_PHRASE: Final = "canceling statement due to lock timeout"
 
 
-def _exception_chain(e: BaseException) -> Iterator[BaseException]:
+def exception_chain(e: BaseException) -> Iterator[BaseException]:
     current = e  # rebind-ok: advances one link per iteration of the bounded walk
     for _ in range(_MAX_EXCEPTION_CHAIN_DEPTH):
         yield current
@@ -46,7 +49,7 @@ def _exception_chain(e: BaseException) -> Iterator[BaseException]:
 def _database_service_unavailable_errors(e: BaseException) -> tuple[Exception, ...]:
     return tuple(
         link
-        for link in _exception_chain(e)
+        for link in exception_chain(e)
         if isinstance(link, Exception) and PrismaDBExceptionHandler.is_database_service_unavailable_error(link)
     )
 
@@ -267,6 +270,21 @@ class PrismaDBExceptionHandler:
         return any(phrase in error_message for phrase in _CONNECTION_CAPACITY_PHRASES)
 
     @staticmethod
+    def is_lock_timeout_error(e: Exception) -> bool:
+        """True iff Postgres cancelled a statement for exceeding ``lock_timeout``
+        (SQLSTATE 55P03). The statement never acquired its lock, so it never
+        applied and the transaction rolled back: the rows it carried are safe to
+        re-send, and the pooled connection is free again rather than pinned
+        behind the holder."""
+        import prisma
+
+        if not isinstance(e, _exception_types(prisma.errors.PrismaError)):
+            return False
+        if PrismaDBExceptionHandler.postgres_sqlstate(e) == _LOCK_TIMEOUT_SQLSTATE:
+            return True
+        return _LOCK_TIMEOUT_PHRASE in str(e).lower()
+
+    @staticmethod
     def postgres_sqlstate(e: Exception) -> str | None:
         """The SQLSTATE Postgres attached to a failed statement, as prisma surfaces it, or None."""
         import prisma
@@ -417,7 +435,7 @@ class PrismaDBExceptionHandler:
         return ProxyException(
             message=PrismaDBExceptionHandler.database_unavailable_message(e),
             type=ProxyErrorTypes.no_db_connection,
-            param="None",
+            param=None,
             code=HTTPStatus.SERVICE_UNAVAILABLE.value,
         )
 
@@ -620,3 +638,14 @@ async def call_with_db_reconnect_retry(
         # propagate — repeated reconnect-loops are the watchdog's job, not
         # this helper's.
         return await coro_factory()
+
+
+_DATA_REJECTED_SQLSTATE_CLASSES: Final = frozenset({"22", "23"})
+
+
+def db_write_failure_is_requeue_safe(e: Exception) -> bool:
+    """Whether a failed write provably never applied, so its rows can be sent again without double counting."""
+    if isinstance(e, DB_CONNECTION_ERROR_TYPES):
+        return isinstance(e, DB_RETRY_SAFE_ERROR_TYPES)
+    sqlstate: Final = PrismaDBExceptionHandler.postgres_sqlstate(e)
+    return sqlstate is None or sqlstate[:2] not in _DATA_REJECTED_SQLSTATE_CLASSES

@@ -66,6 +66,30 @@ class KeyPage:
 
 
 @dataclass(frozen=True, slots=True)
+class UserSpendRow:
+    user_id: str | None
+    spend: float
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    api_requests: int
+    successful_requests: int
+    failed_requests: int
+
+
+@dataclass(frozen=True, slots=True)
+class UserPage:
+    rows: tuple[UserSpendRow, ...]
+    total_users: int
+
+
+@dataclass(frozen=True, slots=True)
+class UserMetadataRow:
+    user_email: str | None
+    user_alias: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class KeyMetadataRow:
     api_key: str
     key_alias: str | None
@@ -142,6 +166,16 @@ class EntityRollupRow(RollupMetricsRow):
     entity_id: str | None
     api_key_rolled: int
     distinct_api_keys: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class GuardrailSpendRow:
+    date: str
+    guardrail_id: str
+    guardrail_name: str
+    api_key: str
+    spend: float
+    untracked_units: int
 
 
 @dataclass(frozen=True, slots=True)

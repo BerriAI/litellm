@@ -4,6 +4,8 @@ Unit tests for WebSearch Interception Handler
 Tests the WebSearchInterceptionLogger class and helper functions.
 """
 
+from collections.abc import Awaitable, Callable
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
@@ -20,7 +22,8 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.types.utils import LlmProviders
+from litellm.router_api import RouterSettings
+from litellm.types.utils import CallTypes, LlmProviders
 
 
 def test_initialize_from_proxy_config():
@@ -198,19 +201,21 @@ async def test_execute_search_passes_selected_search_tool_litellm_params(monkeyp
         search_tool_name="ui-tavily",
     )
     router = MagicMock()
-    router.search_tools = [
-        {
-            "search_tool_name": "ui-tavily",
-            "litellm_params": {
-                "search_provider": "tavily",
-                "api_key": "fake-ui-key",
-                "api_base": "https://api.tavily.com",
-                "timeout": 10.0,
-                "max_retries": 2,
-                "country": None,
-            },
-        }
-    ]
+    router.settings.return_value = RouterSettings(
+        search_tools=[
+            {
+                "search_tool_name": "ui-tavily",
+                "litellm_params": {
+                    "search_provider": "tavily",
+                    "api_key": "fake-ui-key",
+                    "api_base": "https://api.tavily.com",
+                    "timeout": 10.0,
+                    "max_retries": 2,
+                    "country": None,
+                },
+            }
+        ]
+    )
     mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
     user_api_key_auth = UserAPIKeyAuth(
         object_permission=LiteLLM_ObjectPermissionTable(
@@ -243,12 +248,14 @@ async def test_execute_search_attributes_cli_session_spend_to_the_per_user_alias
 
     logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"], search_tool_name="perplexity-sonar-pro")
     router = MagicMock()
-    router.search_tools = [
-        {
-            "search_tool_name": "perplexity-sonar-pro",
-            "litellm_params": {"search_provider": "perplexity", "api_key": "fake-key"},
-        }
-    ]
+    router.settings.return_value = RouterSettings(
+        search_tools=[
+            {
+                "search_tool_name": "perplexity-sonar-pro",
+                "litellm_params": {"search_provider": "perplexity", "api_key": "fake-key"},
+            }
+        ]
+    )
     mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
     session = UserAPIKeyAuth(
         api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa",
@@ -285,12 +292,14 @@ async def test_execute_search_attributes_spend_to_the_calling_key(monkeypatch):
         search_tool_name="perplexity-sonar-pro",
     )
     router = MagicMock()
-    router.search_tools = [
-        {
-            "search_tool_name": "perplexity-sonar-pro",
-            "litellm_params": {"search_provider": "perplexity", "api_key": "fake-key"},
-        }
-    ]
+    router.settings.return_value = RouterSettings(
+        search_tools=[
+            {
+                "search_tool_name": "perplexity-sonar-pro",
+                "litellm_params": {"search_provider": "perplexity", "api_key": "fake-key"},
+            }
+        ]
+    )
     mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
     user_api_key_auth = UserAPIKeyAuth(
         api_key="hashed-sk-9876",
@@ -328,12 +337,14 @@ async def test_execute_search_attributes_spend_to_the_calling_key(monkeypatch):
 
 def _perplexity_router() -> MagicMock:
     router = MagicMock()
-    router.search_tools = [
-        {
-            "search_tool_name": "perplexity-sonar-pro",
-            "litellm_params": {"search_provider": "perplexity", "api_key": "fake-key"},
-        }
-    ]
+    router.settings.return_value = RouterSettings(
+        search_tools=[
+            {
+                "search_tool_name": "perplexity-sonar-pro",
+                "litellm_params": {"search_provider": "perplexity", "api_key": "fake-key"},
+            }
+        ]
+    )
     return router
 
 
@@ -493,12 +504,14 @@ async def test_execute_search_without_proxy_auth_context_stays_sdk_only(monkeypa
         search_tool_name="perplexity-sonar-pro",
     )
     router = MagicMock()
-    router.search_tools = [
-        {
-            "search_tool_name": "perplexity-sonar-pro",
-            "litellm_params": {"search_provider": "perplexity", "api_key": "fake-key"},
-        }
-    ]
+    router.settings.return_value = RouterSettings(
+        search_tools=[
+            {
+                "search_tool_name": "perplexity-sonar-pro",
+                "litellm_params": {"search_provider": "perplexity", "api_key": "fake-key"},
+            }
+        ]
+    )
     mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
 
     monkeypatch.setattr(proxy_server, "llm_router", router)
@@ -519,15 +532,17 @@ async def test_execute_search_enforces_key_search_tool_permission(monkeypatch):
         search_tool_name="blocked-search",
     )
     router = MagicMock()
-    router.search_tools = [
-        {
-            "search_tool_name": "blocked-search",
-            "litellm_params": {
-                "search_provider": "tavily",
-                "api_key": "fake-ui-key",
-            },
-        }
-    ]
+    router.settings.return_value = RouterSettings(
+        search_tools=[
+            {
+                "search_tool_name": "blocked-search",
+                "litellm_params": {
+                    "search_provider": "tavily",
+                    "api_key": "fake-ui-key",
+                },
+            }
+        ]
+    )
     mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
     user_api_key_auth = UserAPIKeyAuth(
         object_permission=LiteLLM_ObjectPermissionTable(
@@ -558,15 +573,17 @@ async def test_execute_search_enforces_team_search_tool_permission(monkeypatch):
         search_tool_name="blocked-search",
     )
     router = MagicMock()
-    router.search_tools = [
-        {
-            "search_tool_name": "blocked-search",
-            "litellm_params": {
-                "search_provider": "tavily",
-                "api_key": "fake-ui-key",
-            },
-        }
-    ]
+    router.settings.return_value = RouterSettings(
+        search_tools=[
+            {
+                "search_tool_name": "blocked-search",
+                "litellm_params": {
+                    "search_provider": "tavily",
+                    "api_key": "fake-ui-key",
+                },
+            }
+        ]
+    )
     mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
     team_key_auth = UserAPIKeyAuth(team_id="team-1")
     team_object = LiteLLM_TeamTable(
@@ -665,6 +682,52 @@ async def test_async_pre_call_deployment_hook_returns_full_kwargs():
         t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
+async def test_deployment_hook_intercepts_bare_web_search_type_and_keeps_user_web_search_function(provider: str):
+    user_web_search_function: Final = {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search a private index",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+        },
+    }
+    logger: Final = WebSearchInterceptionLogger(enabled_providers=[provider])
+
+    result: Final = await logger.async_pre_call_deployment_hook(
+        kwargs={
+            "model": "some-model",
+            "messages": [{"role": "user", "content": "Who won the latest Nobel Prize in Physics?"}],
+            "tools": [{"type": "web_search"}, user_web_search_function],
+            "custom_llm_provider": provider,
+        },
+        call_type=CallTypes.acompletion,
+    )
+
+    assert result is not None
+    assert [t.get("function", {}).get("name") for t in result["tools"]] == [LITELLM_WEB_SEARCH_TOOL_NAME, "web_search"]
+    assert result["tools"][1] == user_web_search_function
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", [CallTypes.anthropic_messages, CallTypes.aanthropic_messages])
+async def test_deployment_hook_leaves_bare_web_search_type_alone_on_messages(call_type: CallTypes):
+    logger: Final = WebSearchInterceptionLogger(enabled_providers=["openai"])
+
+    result: Final = await logger.async_pre_call_deployment_hook(
+        kwargs={
+            "model": "some-model",
+            "messages": [{"role": "user", "content": "Who won the latest Nobel Prize in Physics?"}],
+            "tools": [{"type": "web_search"}],
+            "custom_llm_provider": "openai",
+        },
+        call_type=call_type,
+    )
+
+    assert result is None
 
 
 @pytest.mark.asyncio
@@ -810,6 +873,70 @@ async def test_deployment_hook_converts_stream_and_logging_obj_syncs():
     assert logging_obj.stream is False
 
 
+_STREAM_USAGE_OPTIONS = {"include_usage": True}
+
+
+_Convert = Callable[[WebSearchInterceptionLogger, dict[str, Any]], Awaitable[dict[str, Any] | None]]
+
+
+async def _convert_via_deployment_hook_chat(
+    logger: WebSearchInterceptionLogger, kwargs: dict[str, Any]
+) -> dict[str, Any] | None:
+    return await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.acompletion)
+
+
+async def _convert_via_deployment_hook_responses(
+    logger: WebSearchInterceptionLogger, kwargs: dict[str, Any]
+) -> dict[str, Any] | None:
+    return await logger.async_pre_call_deployment_hook(
+        kwargs={**kwargs, "tools": [{"type": "web_search"}]}, call_type=CallTypes.aresponses
+    )
+
+
+async def _convert_via_pre_request_hook(
+    logger: WebSearchInterceptionLogger, kwargs: dict[str, Any]
+) -> dict[str, Any] | None:
+    return await logger.async_pre_request_hook(model=kwargs["model"], messages=kwargs["messages"], kwargs=kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "convert",
+    (_convert_via_deployment_hook_chat, _convert_via_deployment_hook_responses, _convert_via_pre_request_hook),
+    ids=("deployment_hook_chat", "deployment_hook_responses", "pre_request_hook"),
+)
+async def test_converted_stream_moves_stream_options_out_of_the_provider_request(convert: _Convert):
+    """Every site that flips a streamed web search request to stream=False must take
+    stream_options with it: a provider that validates its body (Azure chat completions)
+    rejects stream_options on a non-streaming request, so the converted kwargs carry no
+    stream_options and stash the client's value for the replayed stream instead."""
+    logger: Final = WebSearchInterceptionLogger(enabled_providers=["azure"])
+    kwargs: Final = {
+        "model": "azure/gpt-4o",
+        "messages": [{"role": "user", "content": "Search for LiteLLM"}],
+        "custom_llm_provider": "azure",
+        "litellm_params": {"custom_llm_provider": "azure"},
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": LITELLM_WEB_SEARCH_TOOL_NAME, "parameters": {"type": "object"}},
+            }
+        ],
+        "stream": True,
+        "stream_options": dict(_STREAM_USAGE_OPTIONS),
+    }
+
+    result: Final = await convert(logger, kwargs)
+
+    assert result is not None
+    assert (
+        result["stream"],
+        "stream_options" in result,
+        result["_websearch_interception_converted_stream"],
+        result["_websearch_interception_stream_options"],
+    ) == (False, False, True, _STREAM_USAGE_OPTIONS)
+
+
 def test_sync_forced_tool_choice_repoints_converted_web_search():
     """Regression (tool_choice 400): a forced tool_choice naming the original
     web_search tool must be repointed to litellm_web_search after conversion.
@@ -909,12 +1036,14 @@ async def test_pre_request_hook_syncs_forced_tool_choice():
 
 def _single_search_tool_router(search_tool_name):
     router = MagicMock()
-    router.search_tools = [
-        {
-            "search_tool_name": search_tool_name,
-            "litellm_params": {"search_provider": "tavily", "api_key": "fake-ui-key"},
-        }
-    ]
+    router.settings.return_value = RouterSettings(
+        search_tools=[
+            {
+                "search_tool_name": search_tool_name,
+                "litellm_params": {"search_provider": "tavily", "api_key": "fake-ui-key"},
+            }
+        ]
+    )
     return router
 
 
@@ -1036,7 +1165,7 @@ async def test_execute_search_unregistered_fallback_follows_search_tool_deny_by_
 
     logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
     router = MagicMock()
-    router.search_tools = []
+    router.settings.return_value = RouterSettings(search_tools=[])
     mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
 
     monkeypatch.setattr(proxy_server, "llm_router", router)
@@ -1069,7 +1198,9 @@ async def test_execute_search_registered_tool_without_provider_follows_unregiste
 
     logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"], search_tool_name="no-provider")
     router = MagicMock()
-    router.search_tools = [{"search_tool_name": "no-provider", "litellm_params": {}}]
+    router.settings.return_value = RouterSettings(
+        search_tools=[{"search_tool_name": "no-provider", "litellm_params": {}}]
+    )
     mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
 
     monkeypatch.setattr(proxy_server, "llm_router", router)
@@ -1086,3 +1217,73 @@ async def test_execute_search_registered_tool_without_provider_follows_unregiste
             await logger._execute_search("what is litellm", kwargs=kwargs)
         assert exc_info.value.code == "403"
         mock_asearch.assert_not_awaited()
+
+
+def test_is_web_search_tool_detection():
+    """
+    PRIORITY TEST #3: Unit test for is_web_search_tool() utility.
+
+    Validates detection of all supported formats including future versions.
+    """
+    print("\n" + "=" * 80)
+    print("UNIT TEST: Web Search Tool Detection")
+    print("=" * 80)
+
+    from litellm.integrations.websearch_interception import is_web_search_tool
+
+    test_cases = [
+        ({"name": "litellm_web_search"}, True, "LiteLLM standard tool"),
+        (
+            {"type": "web_search_20250305", "name": "web_search", "max_uses": 8},
+            True,
+            "Current Anthropic native (2025)",
+        ),
+        (
+            {"type": "web_search_2026", "name": "web_search"},
+            True,
+            "Future Anthropic native (2026)",
+        ),
+        (
+            {"type": "web_search_20270615", "name": "web_search"},
+            True,
+            "Future Anthropic native (2027)",
+        ),
+        (
+            {"name": "web_search", "type": "web_search_20250305"},
+            True,
+            "Claude Code format",
+        ),
+        ({"name": "WebSearch"}, True, "Legacy WebSearch"),
+        ({"name": "calculator"}, False, "Non-web-search tool"),
+        ({"name": "some_tool", "type": "function"}, False, "Other tool with type"),
+        ({"type": "custom_tool"}, False, "Custom tool type"),
+    ]
+
+    passed = 0
+    failed = 0
+
+    for tool, expected, description in test_cases:
+        result = is_web_search_tool(tool)
+        if result == expected:
+            print(f"   ✅ PASS: {description}")
+            passed += 1
+        else:
+            print(f"   ❌ FAIL: {description}")
+            print(f"      Tool: {tool}")
+            print(f"      Expected: {expected}, Got: {result}")
+            failed += 1
+
+    print(f"\n📊 Results: {passed} passed, {failed} failed")
+    assert failed == 0
+
+    if failed == 0:
+        print("\n" + "=" * 80)
+        print("✅ ALL DETECTION TESTS PASSED!")
+        print("=" * 80)
+        print("✅ Detects all current formats")
+        print("✅ Future-proof for new web_search_* versions")
+        print("=" * 80)
+        return True
+    else:
+        print("\n❌ Some detection tests failed")
+        return False

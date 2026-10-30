@@ -20,7 +20,10 @@ class _FakeRouter:
     def __init__(self, deployments: Mapping[str, Sequence[str] | None]) -> None:
         self._deployments = deployments
 
-    def get_model_info(self, id: str) -> dict | None:
+    def registry(self) -> "_FakeRouter":
+        return self
+
+    def deployment_dict(self, id: str) -> dict | None:
         if id not in self._deployments:
             return None
         declared = self._deployments[id]
@@ -63,6 +66,9 @@ class _FakeTransaction:
 
     def batch_(self) -> _FakeBatchManager:
         return _FakeBatchManager(self._batcher)
+
+    async def execute_raw(self, query: str, *args: object) -> int:
+        return 0
 
     async def __aenter__(self) -> "_FakeTransaction":
         return self

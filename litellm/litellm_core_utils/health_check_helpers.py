@@ -3,7 +3,10 @@ Helper functions for health check calls.
 """
 
 import base64
-from collections.abc import Awaitable, Callable
+import itertools
+import re
+from collections.abc import Awaitable, Callable, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
 from litellm.llms.base_llm.ocr.transformation import DocumentType
@@ -25,9 +28,21 @@ IMAGE_EDIT_HEALTH_CHECK_PROMPT: Final = (
 )
 
 ANTHROPIC_MESSAGES_HEALTH_CHECK_MAX_TOKENS: Final = 16
+WILDCARD_HEALTH_CHECK_SERVED_MODEL_COUNT: Final = 2
+WILDCARD_HEALTH_CHECK_PROVIDER_MODEL_COUNT: Final = 3
+BEDROCK_ANY_MODEL_ROUTES: Final = frozenset({"converse", "invoke"})
+EXTRACTION_HEALTH_CHECK_FIELDS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
+    {"reachable": MappingProxyType({"type": "text", "instructions": "Any word from the text"})}
+)
 
 
-def native_health_check_mode(model: str, custom_llm_provider: str | None) -> Literal["anthropic_messages"] | None:
+def native_health_check_mode(
+    model: str, custom_llm_provider: str | None
+) -> Literal["anthropic_messages", "realtime"] | None:
+    if custom_llm_provider == "soniox":
+        from litellm.llms.soniox.common_utils import soniox_health_check_mode
+
+        return soniox_health_check_mode(model)
     if custom_llm_provider != "bedrock_mantle":
         return None
     from litellm.llms.bedrock_mantle.common_utils import mantle_health_check_mode
@@ -56,6 +71,21 @@ def get_image_file_for_health_check() -> bytes:
     return base64.b64decode(TEST_IMAGE_BASE64)
 
 
+def _decisions_health_check_questions(model: str, custom_llm_provider: str) -> Mapping[str, Mapping[str, object]]:
+    import litellm
+    from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
+    from litellm.utils import ProviderConfigManager
+
+    provider: Final = next((member for member in litellm.LlmProviders if member.value == custom_llm_provider), None)
+    config: Final = (
+        None
+        if provider is None
+        else ProviderConfigManager.get_provider_decisions_config(model=model, provider=provider)
+    )
+    questions: Final = BaseDecisionsConfig.health_check_questions if config is None else config.health_check_questions
+    return {name: dict(question) for name, question in questions.items()}
+
+
 def _ocr_health_check_document(model: str, custom_llm_provider: str) -> DocumentType:
     native: Final = NATIVE_OCR_HEALTH_CHECK_DOCUMENT.load()
     if native is None:
@@ -63,6 +93,62 @@ def _ocr_health_check_document(model: str, custom_llm_provider: str) -> Document
             "ocr health check documents are resolved by the Rust extension, which is not available"
         )
     return native(model, custom_llm_provider)
+
+
+def _provider_base_model(custom_llm_provider: str, model: str) -> str | None:
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    try:
+        model_info: Final = ProviderConfigManager.get_provider_model_info(
+            model=None, provider=LlmProviders(custom_llm_provider)
+        )
+        return None if model_info is None else model_info.get_base_model(model)
+    except (ValueError, NotImplementedError):
+        return None
+
+
+def _is_route_segment(custom_llm_provider: str, segment: str, model_after_segment: str) -> bool:
+    if custom_llm_provider == "bedrock":
+        from litellm.llms.bedrock.common_utils import get_all_bedrock_regions
+
+        return segment in BEDROCK_ANY_MODEL_ROUTES or segment in get_all_bedrock_regions()
+    base_model: Final = _provider_base_model(custom_llm_provider, f"{segment}/{model_after_segment}")
+    return base_model is not None and not base_model.startswith(f"{segment}/")
+
+
+def wildcard_health_check_models(wildcard: str, custom_llm_provider: str) -> tuple[str, ...]:
+    from litellm.litellm_core_utils.llm_request_utils import rank_chat_models_from_llm_provider
+    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+
+    provider_prefix: Final = f"{custom_llm_provider}/"
+    segments: Final = wildcard.removeprefix(provider_prefix).split("/")
+    route_segments: Final = tuple(
+        itertools.takewhile(
+            lambda segment_index: _is_route_segment(
+                custom_llm_provider, segments[segment_index], "/".join(segments[segment_index + 1 :])
+            ),
+            range(len(segments) - 1),
+        )
+    )
+    route_prefix: Final = "".join(f"{segments[segment_index]}/" for segment_index in route_segments)
+    model_regex: Final = re.compile(PatternMatchRouter().pattern_to_regex("/".join(segments[len(route_segments) :])))
+    ranked_model_ids: Final = tuple(
+        (ranked_model.model.removeprefix(provider_prefix), ranked_model)
+        for ranked_model in rank_chat_models_from_llm_provider(custom_llm_provider)
+    )
+    served_model_ids: Final = sorted(
+        (ranked for ranked in ranked_model_ids if model_regex.fullmatch(ranked[0])),
+        key=lambda ranked: (ranked[1].is_past_deprecation_date, ranked[1].route_rank, ranked[1].cost, ranked[0]),
+    )
+    served_probes: Final = itertools.islice(
+        dict.fromkeys(f"{provider_prefix}{route_prefix}{model_id}" for model_id, _ in served_model_ids),
+        WILDCARD_HEALTH_CHECK_SERVED_MODEL_COUNT,
+    )
+    provider_probes: Final = (
+        f"{provider_prefix}{model_id}" for model_id, _ in ranked_model_ids[:WILDCARD_HEALTH_CHECK_PROVIDER_MODEL_COUNT]
+    )
+    return tuple(dict.fromkeys((*served_probes, *provider_probes)))
 
 
 class HealthCheckHelpers:
@@ -74,29 +160,22 @@ class HealthCheckHelpers:
         litellm_logging_obj: "Logging",
     ) -> dict:
         from litellm import acompletion
-        from litellm.litellm_core_utils.llm_request_utils import (
-            pick_cheapest_chat_models_from_llm_provider,
-        )
 
-        # this is a wildcard model, we need to pick a random model from the provider
-        cheapest_models = pick_cheapest_chat_models_from_llm_provider(custom_llm_provider=custom_llm_provider, n=3)
-        if len(cheapest_models) == 0:
+        probe_models: Final = wildcard_health_check_models(wildcard=model, custom_llm_provider=custom_llm_provider)
+        if len(probe_models) == 0:
             raise Exception(
-                f"Unable to health check wildcard model for provider {custom_llm_provider}. Add a model on your config.yaml or contribute here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+                f"Unable to health check wildcard model {model} for provider {custom_llm_provider}: the cost map has "
+                "no chat model for this provider. Set model_info.health_check_model to a model this wildcard serves"
             )
-        if len(cheapest_models) > 1:
-            fallback_models = cheapest_models[1:]  # Pick the last 2 models from the shuffled list
-        else:
-            fallback_models = None
-        model_params["model"] = cheapest_models[0]
+        model_params["model"] = probe_models[0]
         model_params["litellm_logging_obj"] = litellm_logging_obj
-        model_params["fallbacks"] = fallback_models
+        model_params["fallbacks"] = list(probe_models[1:]) or None
         model_params["max_tokens"] = model_params.get("max_tokens", 16)  # GPT-5 models require max_output_tokens >= 16
         await acompletion(**model_params)
         return {}
 
     @staticmethod
-    def _update_model_params_with_health_check_tracking_information(
+    def update_model_params_with_health_check_tracking_information(
         model_params: dict,
     ) -> dict:
         """
@@ -107,8 +186,8 @@ class HealthCheckHelpers:
             2. `user_api_key_auth`: This helps identify health check calls in the DB.
                 We need this since the DB requires an API Key to track a log in the SpendLogs Table
         """
-        from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+        from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
         _metadata_variable_name: Final = "litellm_metadata"
         litellm_metadata: Final = HealthCheckHelpers._get_metadata_for_health_check_call()
@@ -119,6 +198,10 @@ class HealthCheckHelpers:
             _metadata_variable_name=_metadata_variable_name,
         )
         return model_params
+
+    _update_model_params_with_health_check_tracking_information = (
+        update_model_params_with_health_check_tracking_information
+    )
 
     @staticmethod
     def _get_metadata_for_health_check_call():
@@ -195,7 +278,8 @@ class HealthCheckHelpers:
             "responses",
             "anthropic_messages",
             "ocr",
-            "evaluation",
+            "decisions",
+            "extraction",
         ],
         Callable,
     ]:
@@ -218,8 +302,12 @@ class HealthCheckHelpers:
         from litellm.litellm_core_utils.audio_utils.utils import (
             get_audio_file_for_health_check,
         )
-        from litellm.litellm_core_utils.health_check_utils import DECISIONS_CALL_PARAMS, _filter_model_params
-        from litellm.realtime_api.main import _realtime_health_check
+        from litellm.litellm_core_utils.health_check_utils import (
+            DECISIONS_CALL_PARAMS,
+            EXTRACTION_CALL_PARAMS,
+            _filter_model_params,
+        )
+        from litellm.realtime_api.main import realtime_health_check
 
         return {
             "chat": lambda: litellm.acompletion(
@@ -264,7 +352,7 @@ class HealthCheckHelpers:
                 query=prompt or "",
                 documents=["my sample text"],
             ),
-            "realtime": lambda: _realtime_health_check(
+            "realtime": lambda: realtime_health_check(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 api_base=model_params.get("api_base", None),
@@ -292,11 +380,22 @@ class HealthCheckHelpers:
                 **_filter_model_params(model_params=model_params),
                 document=_ocr_health_check_document(model=model, custom_llm_provider=custom_llm_provider),
             ),
-            "evaluation": lambda: litellm.adecisions(
+            "decisions": lambda: litellm.asystemone(
                 **DECISIONS_CALL_PARAMS.validate_python(
                     {
                         "state": prompt or "health check",
-                        "questions": {"reachable": {"type": "noul", "instructions": "Is the service reachable?"}},
+                        "questions": _decisions_health_check_questions(
+                            model=model, custom_llm_provider=custom_llm_provider
+                        ),
+                        **_filter_model_params(model_params=model_params),
+                    }
+                )
+            ),
+            "extraction": lambda: litellm.aextraction(
+                **EXTRACTION_CALL_PARAMS.validate_python(
+                    {
+                        "state": prompt or "health check",
+                        "fields": EXTRACTION_HEALTH_CHECK_FIELDS,
                         **_filter_model_params(model_params=model_params),
                     }
                 )

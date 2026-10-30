@@ -12,6 +12,7 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountTokensConfig,
@@ -38,6 +39,8 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
         tools: list[dict[str, JsonValue]] | None = None,
         system: JsonValue = None,
         optional_params: Mapping[str, JsonValue] | None = None,
+        context_management: JsonValue = None,
+        drop_params: bool = False,
     ) -> dict[str, JsonValue]:
         """
         Handle a CountTokens request using httpx.
@@ -62,12 +65,14 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
             verbose_logger.debug("Processing Anthropic CountTokens request for model: %s", model)
 
             # Transform request to Anthropic format
-            request_body: Final = self.transform_request_to_count_tokens(
+            request_body: Final = await asyncify(self.transform_request_to_count_tokens)(
                 model=model,
                 messages=messages,
                 tools=tools,
                 system=system,
                 optional_params=optional_params,
+                context_management=context_management,
+                drop_params=drop_params,
             )
 
             verbose_logger.debug("Transformed request: %s", request_body)
@@ -78,7 +83,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
             verbose_logger.debug("Making request to: %s", endpoint_url)
 
             # Get required headers
-            headers: Final = self.get_count_tokens_headers(auth_header)
+            headers: Final = self.get_count_tokens_headers(auth_header, messages, context_management)
 
             # Use LiteLLM's async httpx client
             async_client: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)

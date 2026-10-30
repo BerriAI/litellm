@@ -2,10 +2,13 @@ import asyncio
 import base64
 import importlib
 import os
-from collections.abc import Coroutine, Iterator
+import shutil
+import tempfile
+from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Final
+from types import MappingProxyType
+from typing import Final, Literal, TypeAlias
 
 import boto3
 import httpx
@@ -44,6 +47,7 @@ import litellm  # noqa: E402  # litellm reads LITELLM_LOCAL_MODEL_COST_MAP at im
 import litellm.router as litellm_router_module  # noqa: E402  # same import-time dependency
 import litellm.utils as litellm_utils_module  # noqa: E402  # same import-time dependency
 from litellm._logging import ALL_LOGGERS  # noqa: E402  # same import-time dependency
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER  # noqa: E402  # same import-time dependency
 from litellm.anthropic_beta_headers_manager import reload_beta_headers_config  # noqa: E402  # same import-time dependency
 from litellm.litellm_core_utils.prompt_templates import factory as prompt_factory_module  # noqa: E402  # same import-time dependency
 from litellm.litellm_core_utils.prompt_templates import (  # noqa: E402  # same import-time dependency
@@ -91,7 +95,15 @@ CALLBACK_LISTS: Final = (
     "_async_failure_callback",
     "_async_input_callback",
 )
-RESET_TO_NONE_GLOBALS: Final = ("model_fallbacks", "cache")
+RESET_TO_NONE_GLOBALS: Final = (
+    "model_fallbacks",
+    "cache",
+    "max_fallbacks",
+    "default_fallbacks",
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+)
 RESTORED_GLOBALS: Final = (
     "disable_aiohttp_transport",
     "force_ipv4",
@@ -157,6 +169,31 @@ def _run_coroutine_if_needed(result: object) -> None:
         loop.create_task(coroutine)
 
 
+async def _complete_test_logging() -> None:
+    await GLOBAL_LOGGING_WORKER.flush()
+    await GLOBAL_LOGGING_WORKER.stop()
+
+
+def _flush_completed_test_logging() -> None:
+    queue: Final = GLOBAL_LOGGING_WORKER._queue
+    if queue is None or queue._unfinished_tasks == 0:
+        return
+    worker_loop: Final = GLOBAL_LOGGING_WORKER._bound_loop
+    if worker_loop is None or worker_loop.is_closed():
+        _run_coroutine_if_needed(_complete_test_logging())
+        return
+    if worker_loop.is_running():
+        asyncio.run_coroutine_threadsafe(_complete_test_logging(), worker_loop).result()
+        return
+    worker_loop.run_until_complete(_complete_test_logging())
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call() -> Iterator[None]:
+    yield
+    _flush_completed_test_logging()
+
+
 def _close_handler_if_needed(handler: object) -> None:
     close: Final = getattr(handler, "close", None)
     if not callable(close):
@@ -180,6 +217,38 @@ def _flush_client_caches() -> None:
     litellm.in_memory_llm_clients_cache.flush_cache()
     image_handling_module.in_memory_cache.flush_cache()
     _reset_aws_auth_caches()
+
+
+_MACOS_LONGEST_SOCKET_PATH: Final = 103
+_LONGEST_SOCKET_SUFFIX: Final = len("/sock12345678/d/litellm-pgbouncer-12345678/.s.PGSQL.65535")
+
+
+def _socket_root() -> str:
+    default: Final = tempfile.gettempdir()
+    fits: Final = len(os.fsencode(default)) + _LONGEST_SOCKET_SUFFIX <= _MACOS_LONGEST_SOCKET_PATH
+    return default if fits else "/tmp"
+
+
+@pytest.fixture
+def socket_dir(tmp_path: Path) -> Iterator[Path]:
+    """``tmp_path`` behind a short link, so unix socket paths fit the sun_path limit that it exceeds on macOS."""
+    link_dir: Final = Path(tempfile.mkdtemp(prefix="sock", dir=_socket_root()))
+    link: Final = link_dir / "d"
+    link.symlink_to(tmp_path, target_is_directory=True)
+    yield link
+    shutil.rmtree(link_dir, ignore_errors=True)
+
+
+@pytest.fixture
+def socket_path(socket_dir: Path) -> Path:
+    return socket_dir / "spend.sock"
+
+
+@pytest.fixture
+def socket_tempdir(socket_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point ``tempfile``'s default directory at ``socket_dir``, for code that picks its own socket directory."""
+    monkeypatch.setattr(tempfile, "tempdir", str(socket_dir))
+    return socket_dir
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -208,7 +277,8 @@ def isolate_host_environment(isolated_aws_config_files: tuple[Path, Path]) -> It
         environment.setenv("AWS_EC2_METADATA_DISABLED", "true")
         for name in AMBIENT_AWS_ENV_VARS:
             environment.delenv(name, raising=False)
-        environment.delenv("PROXY_BASE_URL", raising=False)
+        for name in ("PROXY_BASE_URL", "SERVER_ROOT_PATH", "SERVER_ROOT_PATHS", "LITELLM_LOG"):
+            environment.delenv(name, raising=False)
         environment.setenv("LITELLM_CLI_DISABLE_KEYRING", "1")
         yield
 
@@ -216,6 +286,7 @@ def isolate_host_environment(isolated_aws_config_files: tuple[Path, Path]) -> It
 @pytest.fixture(autouse=True)
 def isolate_litellm_globals() -> Iterator[None]:
     original_callbacks: Final = {name: list(getattr(litellm, name) or []) for name in CALLBACK_LISTS}
+    original_callback_holders: Final = frozenset(litellm_router_module._routers_holding_global_callbacks)
     original_reset: Final = {name: getattr(litellm, name) for name in RESET_TO_NONE_GLOBALS}
     original_restored: Final = {name: getattr(litellm, name) for name in RESTORED_GLOBALS if hasattr(litellm, name)}
     original_clients: Final = {name: litellm.__dict__[name] for name in MODULE_LEVEL_CLIENTS if name in litellm.__dict__}
@@ -227,6 +298,7 @@ def isolate_litellm_globals() -> Iterator[None]:
     _flush_client_caches()
     for name in CALLBACK_LISTS:
         setattr(litellm, name, [])
+    litellm_router_module._routers_holding_global_callbacks.clear()
     for name in RESET_TO_NONE_GLOBALS:
         setattr(litellm, name, None)
     for name in MODULE_LEVEL_CLIENTS:
@@ -241,6 +313,8 @@ def isolate_litellm_globals() -> Iterator[None]:
     litellm.__dict__.update(original_clients)
     for name, value in (original_callbacks | original_reset | original_restored).items():
         setattr(litellm, name, value)
+    litellm_router_module._routers_holding_global_callbacks.clear()
+    litellm_router_module._routers_holding_global_callbacks.update(original_callback_holders)
     for logger, (level, disabled, propagate, handlers, filters) in original_loggers.items():
         logger.setLevel(level)
         logger.disabled = disabled
@@ -258,6 +332,8 @@ def isolate_router_model_cost_state() -> Iterator[None]:
         for model_key, model_value in litellm_utils_module._runtime_registered_model_cost.items()
     }
     litellm_utils_module._invalidate_model_cost_lowercase_map()
+    litellm_router_module._live_routers.clear()
+    litellm_utils_module._runtime_registered_model_cost.clear()
     yield
     for router in tuple(litellm_router_module._live_routers):
         litellm_router_module._live_routers.discard(router)
@@ -269,6 +345,30 @@ def isolate_router_model_cost_state() -> Iterator[None]:
     litellm.get_model_info.cache_clear()
 
 
+def _provider_model_sets() -> tuple[set[str], ...]:
+    module_globals: Final = tuple(vars(litellm).items())
+    return tuple(models for name, models in module_globals if name.endswith("_models") and isinstance(models, set))
+
+
+@pytest.fixture(autouse=True)
+def isolate_model_catalog() -> Iterator[None]:
+    model_cost: Final = litellm.model_cost
+    model_cost_entries: Final = dict(model_cost)
+    models_by_provider: Final = litellm.models_by_provider
+    models_by_provider_entries: Final = dict(models_by_provider)
+    provider_model_sets: Final = tuple((models, frozenset(models)) for models in _provider_model_sets())
+    yield
+    model_cost.clear()
+    model_cost.update(model_cost_entries)
+    models_by_provider.clear()
+    models_by_provider.update(models_by_provider_entries)
+    for models, entries in provider_model_sets:
+        models.clear()
+        models.update(entries)
+    litellm_utils_module._invalidate_model_cost_lowercase_map()
+    litellm.get_model_info.cache_clear()
+
+
 @pytest.fixture
 def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -276,6 +376,36 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
+
+
+@pytest.fixture
+def declare_mid_conversation_system(monkeypatch: pytest.MonkeyPatch) -> Callable[[str, bool], None]:
+    def declare(model_cost_key: str, supported: bool) -> None:
+        entry: Final = {
+            "litellm_provider": model_cost_key.split("/", 1)[0],
+            "mode": "chat",
+            "supports_mid_conversation_system": supported,
+        }
+        monkeypatch.setitem(litellm.model_cost, model_cost_key, entry)
+        litellm.get_model_info.cache_clear()
+
+    return declare
+
+
+NativeStructuredOutputKey: TypeAlias = Literal["legacy", "bedrock"] | None
+
+
+@pytest.fixture
+def set_native_structured_output(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[str, NativeStructuredOutputKey], None]:
+    def set_flags(model_cost_key: str, native_key: NativeStructuredOutputKey) -> None:
+        entry: Final = litellm.model_cost[model_cost_key]
+        monkeypatch.setitem(entry, "supports_native_structured_output", native_key == "legacy")
+        monkeypatch.setitem(entry, "supports_bedrock_native_structured_output", native_key == "bedrock")
+        litellm.get_model_info.cache_clear()
+
+    return set_flags
 
 
 @pytest.fixture
@@ -323,6 +453,35 @@ def async_only_image_fetch(monkeypatch: pytest.MonkeyPatch) -> AsyncOnlyImageFet
 def no_ambient_azure_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in AMBIENT_AZURE_CREDENTIAL_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+
+
+FAKE_PROVIDER_CREDENTIALS: Final = MappingProxyType(
+    {
+        "OPENAI_API_KEY": "sk-unit-test",
+        "ANTHROPIC_API_KEY": "sk-ant-unit-test",
+        "GEMINI_API_KEY": "unit-test",
+        "AZURE_API_KEY": "unit-test",
+        "AZURE_API_BASE": "https://unit-test.openai.azure.com",
+        "AZURE_API_VERSION": "2024-02-01",
+        "AWS_ACCESS_KEY_ID": "unit-test",
+        "AWS_SECRET_ACCESS_KEY": "unit-test",
+        "AWS_REGION_NAME": "us-east-1",
+        "COHERE_API_KEY": "unit-test",
+        "DD_API_KEY": "unit-test",
+        "DD_SITE": "us5.datadoghq.com",
+    }
+)
+
+
+@pytest.fixture
+def fake_provider_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name, value in FAKE_PROVIDER_CREDENTIALS.items():
+        monkeypatch.setenv(name, value)
+
+
+@pytest.fixture
+async def drained_logging_worker() -> None:
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.clear_queue(), timeout=10)
 
 
 def pytest_sessionfinish() -> None:

@@ -1,27 +1,119 @@
 import json
+import logging
+from collections.abc import Callable, Mapping
 from types import SimpleNamespace
-from typing import Final
-from unittest.mock import MagicMock, Mock, patch
+from typing import Final, cast
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import httpx
 import pytest
-
+import respx
+from openai.types.responses.response_compaction_item import ResponseCompactionItem
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
-from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
+from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     ImageGenerationPartialImageEvent,
+    IncompleteDetails,
     OutputTextDeltaEvent,
+    ResponseAPIUsage,
     ResponseCompletedEvent,
+    ResponseInputParam,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import Choices, Message, ModelResponse
+from tests.unit.proxy.conftest import httpx_transport
+import time
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
+
+
+@pytest.fixture
+def restore_litellm_set_verbose(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "set_verbose", litellm.set_verbose)
+
+
+def validate_responses_api_response(response: ResponsesAPIResponse, final_chunk: bool = False) -> bool:
+    response_fields: Final = cast(Mapping[str, object], response)
+    assert isinstance(response, ResponsesAPIResponse)
+    assert "id" in response_fields and isinstance(response_fields["id"], str)
+    assert "created_at" in response_fields and isinstance(response_fields["created_at"], int)
+
+    response_status: Final = response_fields.get("status")
+    if response_status == "completed":
+        assert "output" in response_fields and isinstance(response_fields["output"], list)
+
+    optional_fields: Final = (
+        ("error", (dict, type(None))),
+        ("incomplete_details", (IncompleteDetails, type(None))),
+        ("instructions", (str, type(None))),
+        ("metadata", dict),
+        ("model", str),
+        ("object", str),
+        ("parallel_tool_calls", (bool, type(None))),
+        ("temperature", (int, float, type(None))),
+        ("tool_choice", (dict, str, type(None))),
+        ("tools", (list, type(None))),
+        ("top_p", (int, float, type(None))),
+        ("max_output_tokens", (int, type(None))),
+        ("previous_response_id", (str, type(None))),
+        ("reasoning", (dict, type(None))),
+        ("status", str),
+        ("text", dict),
+        ("truncation", (str, type(None))),
+        ("usage", ResponseAPIUsage if final_chunk else type(None)),
+        ("user", (str, type(None))),
+        ("store", (bool, type(None))),
+    )
+    for field, expected_type in optional_fields:
+        if field in response_fields:
+            assert isinstance(response_fields[field], expected_type)
+
+    if final_chunk and response_status == "completed":
+        assert len(cast(list[object], response_fields["output"])) > 0
+
+    return True
+
+
+_CLAUDE_SEARCH_CALL: Final = {
+    "type": "function_call",
+    "call_id": "srvtoolu_01Search",
+    "name": "tool_search_tool_bm25",
+    "arguments": '{"query": "weather"}',
+}
+
+
+_BM25_TOOL: Final = {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
+_DEFERRED_WEATHER: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True}
+_CLIENT_TOOL_SEARCH: Final = {
+    "type": "tool_search",
+    "execution": "client",
+    "description": "Search the tool catalog",
+    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+}
+
+
+def _undeferred(tool: Mapping[str, object]) -> dict[str, object]:
+    return {key: value for key, value in tool.items() if key != "defer_loading"}
+
+
+def _openai_model(supports_tool_search: bool) -> str:
+    return next(
+        name
+        for name, info in litellm.model_cost.items()
+        if info.get("litellm_provider") == "openai" and info.get("supports_tool_search", False) is supports_tool_search
+    )
 
 
 class TestOpenAIResponsesAPIConfig:
@@ -90,11 +182,14 @@ class TestOpenAIResponsesAPIConfig:
             (17, 17),
             (256, 256),
             (None, None),
+            (0, 0),
+            (-1, -1),
         ],
     )
     def test_enforce_min_max_output_tokens(self, value, expected):
-        """Below the minimum clamps to 16; the boundary, larger values, and None
-        are returned unchanged so no previously-valid request regresses."""
+        """Positive values below the minimum clamp to 16; the boundary, larger values,
+        None, and non-positive values are returned unchanged so the provider rejects
+        an invalid value instead of the proxy silently rewriting it."""
         assert self.config._enforce_min_max_output_tokens(value) == expected
 
     def validate_responses_api_request_params(self, params, expected_fields):
@@ -138,6 +233,248 @@ class TestOpenAIResponsesAPIConfig:
         }
 
         self.validate_responses_api_request_params(result, expected_fields)
+
+    @pytest.mark.parametrize(
+        "tool_type",
+        ["tool_search_tool_bm25_20251119", "tool_search_tool_regex_20251119"],
+    )
+    def test_transform_maps_anthropic_search_tool_and_preserves_deferred_functions(self, tool_type: str) -> None:
+        tools: Final = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "parameters": {"type": "object"},
+                "defer_loading": True,
+            },
+            {"type": tool_type, "name": "tool_search"},
+            {
+                "type": "function",
+                "name": "get_stock_price",
+                "parameters": {"type": "object"},
+                "defer_loading": True,
+            },
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["tools"] == [
+            tools[0],
+            {"type": "tool_search", "execution": "server"},
+            tools[2],
+        ]
+
+    def test_transform_deduplicates_anthropic_search_tools(self) -> None:
+        tools: Final = [
+            {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+            {"type": "function", "name": "get_stock_price", "parameters": {"type": "object"}},
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["tools"] == [
+            tools[0],
+            {"type": "tool_search", "execution": "server"},
+            tools[2],
+        ]
+
+    @pytest.mark.parametrize("execution", [None, "client", "server"])
+    def test_transform_keeps_caller_tool_search_and_drops_anthropic_search_tools(
+        self, execution: str | None
+    ) -> None:
+        caller_tool_search: Final[dict[str, object]] = {
+            "type": "tool_search",
+            **({"execution": execution} if execution is not None else {}),
+        }
+        tools: Final = [
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+            {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+            caller_tool_search,
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["tools"] == [tools[1], caller_tool_search]
+
+    def test_transform_leaves_tools_without_anthropic_search_unchanged(self) -> None:
+        tools: Final = [
+            {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+            {"type": "tool_search", "execution": "client"},
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["tools"] == tools
+
+    def test_transform_forwards_anthropic_search_tool_and_history_unchanged_to_another_gateway(self) -> None:
+        tools: Final = [
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+            {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True},
+        ]
+        history: Final = [{"role": "user", "content": "What is the weather in Paris?"}, _CLAUDE_SEARCH_CALL]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input=history,
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=_OTHER_HOST,
+            headers={},
+        )
+
+        assert result["tools"] == tools
+        assert result["input"] == history
+
+    def _transform_tools(self, model: str, tools: list[dict[str, object]], drop_params: bool) -> object:
+        return self.config.transform_responses_api_request(
+            model=model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=GenericLiteLLMParams(api_base="https://api.openai.com/v1", drop_params=drop_params),
+            headers={},
+        )["tools"]
+
+    def test_drop_params_drops_tool_search_for_a_model_that_cannot_run_it(self) -> None:
+        eager: Final = {"type": "function", "name": "get_stock_price", "parameters": {"type": "object"}}
+        namespace: Final = {
+            "type": "namespace",
+            "name": "finance",
+            "description": "Finance tools",
+            "tools": [{**_DEFERRED_WEATHER, "name": "get_quote"}],
+        }
+
+        tools: Final = self._transform_tools(
+            _openai_model(supports_tool_search=False), [_BM25_TOOL, _DEFERRED_WEATHER, eager, namespace], True
+        )
+
+        assert tools == [
+            _undeferred(_DEFERRED_WEATHER),
+            eager,
+            {**namespace, "tools": [_undeferred({**_DEFERRED_WEATHER, "name": "get_quote"})]},
+        ]
+
+    def test_drop_params_drops_tool_search_when_no_tool_is_deferred(self) -> None:
+        tools: Final = self._transform_tools(
+            _openai_model(supports_tool_search=True), [_BM25_TOOL, _undeferred(_DEFERRED_WEATHER)], True
+        )
+
+        assert tools == [_undeferred(_DEFERRED_WEATHER)]
+
+    @pytest.mark.parametrize(
+        ("sent", "expected"),
+        [
+            pytest.param(
+                [{"type": "tool_search"}, _DEFERRED_WEATHER], [{"type": "tool_search"}, _DEFERRED_WEATHER], id="alone"
+            ),
+            pytest.param(
+                [_CLIENT_TOOL_SEARCH, _BM25_TOOL, _undeferred(_DEFERRED_WEATHER)],
+                [_CLIENT_TOOL_SEARCH, _undeferred(_DEFERRED_WEATHER)],
+                id="beside-anthropic-search",
+            ),
+        ],
+    )
+    def test_drop_params_keeps_a_callers_own_tool_search_unchanged(
+        self, sent: list[dict[str, object]], expected: list[dict[str, object]]
+    ) -> None:
+        tools: Final = self._transform_tools(_openai_model(supports_tool_search=False), sent, True)
+
+        assert tools == expected
+
+    @pytest.mark.parametrize("drop_params", [False, True])
+    @pytest.mark.parametrize(
+        "malformed",
+        [
+            pytest.param({"type": None, "name": "x"}, id="null-type"),
+            pytest.param({"type": "namespace", "name": "ns", "description": "d", "tools": "oops"}, id="string-members"),
+            pytest.param({"type": "namespace", "name": "ns", "description": "d", "tools": ["x"]}, id="string-member"),
+        ],
+    )
+    def test_malformed_tool_beside_the_search_tool_reaches_openai_as_sent(
+        self, malformed: dict[str, object], drop_params: bool
+    ) -> None:
+        model: Final = _openai_model(supports_tool_search=True)
+
+        tools: Final = self._transform_tools(model, [_BM25_TOOL, malformed], drop_params)
+
+        assert malformed in tools
+
+    @pytest.mark.parametrize(
+        "deferred",
+        [
+            pytest.param(_DEFERRED_WEATHER, id="function"),
+            pytest.param(
+                {"type": "namespace", "name": "weather", "description": "Weather", "tools": [_DEFERRED_WEATHER]},
+                id="namespace-member",
+            ),
+        ],
+    )
+    def test_drop_params_keeps_tool_search_for_a_model_that_runs_it(self, deferred: dict[str, object]) -> None:
+        tools: Final = self._transform_tools(_openai_model(supports_tool_search=True), [_BM25_TOOL, deferred], True)
+
+        assert tools == [{"type": "tool_search", "execution": "server"}, deferred]
+
+    def test_transform_drops_claude_search_calls_openai_cannot_answer_from_history(self) -> None:
+        answered_search_call: Final = {
+            **_CLAUDE_SEARCH_CALL,
+            "call_id": "srvtoolu_02Answered",
+            "name": "tool_search_tool_regex",
+        }
+        history: Final = [
+            {"role": "user", "content": "What is the weather in Paris?"},
+            _CLAUDE_SEARCH_CALL,
+            answered_search_call,
+            {"type": "function_call_output", "call_id": "srvtoolu_02Answered", "output": "get_weather"},
+            {"type": "function_call", "call_id": "toolu_01Weather", "name": "get_weather", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "toolu_01Weather", "output": "18C and sunny"},
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input=history,
+            response_api_optional_request_params={"tools": [_BM25_TOOL, _DEFERRED_WEATHER]},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == [item for item in history if item is not _CLAUDE_SEARCH_CALL]
+
+    def test_transform_keeps_history_as_sent_when_no_anthropic_search_tool_is_mapped(self) -> None:
+        history: Final = [{"role": "user", "content": "What is the weather in Paris?"}, _CLAUDE_SEARCH_CALL]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input=history,
+            response_api_optional_request_params={"tools": [_undeferred(_DEFERRED_WEATHER)]},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == history
 
     def test_transform_strips_cache_control_from_input_content_blocks(self):
         """`cache_control` markers (Anthropic-only) must be stripped from
@@ -1043,12 +1380,99 @@ class TestOpenAIResponsesAPIConfig:
 
         assert request["input"] == [expected, {"role": "user", "content": "And Berlin?"}]
 
+    @pytest.mark.parametrize(
+        ("item", "expected"),
+        [
+            (
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA", "created_by": None},
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA"},
+            ),
+            (
+                {
+                    "type": "shell_call_output",
+                    "call_id": "call_1",
+                    "created_by": None,
+                    "output": [{"stdout": "a.py", "stderr": "", "created_by": None}],
+                },
+                {"type": "shell_call_output", "call_id": "call_1", "output": [{"stdout": "a.py", "stderr": ""}]},
+            ),
+            (
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA", "created_by": "user_1"},
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA", "created_by": "user_1"},
+            ),
+        ],
+        ids=("compaction", "shell-call-output-entries", "sent-created-by"),
+    )
+    def test_an_input_item_saved_with_a_null_created_by_replays_without_it(
+        self, item: dict[str, object], expected: dict[str, object]
+    ):
+        request: Final = self.config.transform_responses_api_request(
+            model="gpt-5.6",
+            input=[item, {"role": "user", "content": "And Berlin?"}],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == [expected, {"role": "user", "content": "And Berlin?"}]
+
+    @pytest.mark.parametrize(
+        ("item", "expected"),
+        [
+            (
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA", "created_by": "user_1"},
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA"},
+            ),
+            (
+                ResponseCompactionItem(id="cmp_1", type="compaction", encrypted_content="gAAAA", created_by="user_1"),
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA"},
+            ),
+            (
+                {
+                    "type": "shell_call_output",
+                    "call_id": "call_1",
+                    "created_by": "user_1",
+                    "output": [{"stdout": "a.py", "stderr": "", "created_by": "user_1"}],
+                },
+                {"type": "shell_call_output", "call_id": "call_1", "output": [{"stdout": "a.py", "stderr": ""}]},
+            ),
+            (
+                {"id": "rs_1", "type": "reasoning", "summary": [], "created_by": "user_1"},
+                {"id": "rs_1", "type": "reasoning", "summary": []},
+            ),
+        ],
+        ids=("compaction", "sdk-compaction-item", "shell-call-output-entries", "reasoning"),
+    )
+    def test_a_set_created_by_is_dropped_under_drop_params(self, item: object, expected: dict[str, object]):
+        request: Final = self.config.transform_responses_api_request(
+            model="gpt-5.6",
+            input=cast("list[dict[str, object]]", [item]),  # cast-ok: an SDK item stands in for its JSON shape
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(drop_params=True),
+            headers={},
+        )
+
+        assert request["input"] == [expected]
+
 
 class TestAzureResponsesAPIConfig:
     def setup_method(self):
         self.config = AzureOpenAIResponsesAPIConfig()
         self.model = "gpt-4o"
         self.logging_obj = MagicMock()
+
+    def test_azure_drops_a_set_created_by_under_drop_params(self):
+        compaction: Final = {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA"}
+
+        request: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input=[{**compaction, "created_by": "user_1"}],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(drop_params=True),
+            headers={},
+        )
+
+        assert request["input"] == [compaction]
 
     def test_azure_decodes_json_string_tool_parameters(self):
         """Azure reaches the same wire through `super()`, after un-nesting a chat-shaped tool."""
@@ -1063,6 +1487,19 @@ class TestAzureResponsesAPIConfig:
         )
 
         assert result["tools"][0]["parameters"] == {"type": "object"}
+
+    def test_azure_leaves_anthropic_search_tool_unchanged(self) -> None:
+        tool: Final = {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": [tool]},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["tools"] == [tool]
 
     def test_azure_get_complete_url_with_version_types(self):
         """Test Azure get_complete_url with different API version types"""
@@ -1091,11 +1528,11 @@ class TestAzureResponsesAPIConfig:
         # Test with date-based version - should use openai/responses
         result_date = self.config.get_complete_url(
             api_base=base_url,
-            litellm_params={"api_version": "2025-01-01"},
+            litellm_params={"api_version": "2025-04-01-preview"},
         )
         assert (
             result_date
-            == "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-01-01"
+            == "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-04-01-preview"
         )
 
     def test_azure_transform_then_normalize_strips_custom_tool_call_namespace(self):
@@ -1960,6 +2397,214 @@ class TestResponsesSurfaceSharesTheEffortRule:
         )
         assert ("top_p" in mapped) is top_p_survives
 
+    @pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+    def test_effort_levels_the_map_row_turns_off_are_dropped_or_refused(self, local_model_cost_map, level):
+        """Same row as the chat gate, read opt-out for every level but max. gpt-6.1-sol's row turns
+        none and minimal off: OpenAI lists low, medium, high, xhigh and max for it
+        (https://developers.openai.com/api/docs/models/gpt-6.1-sol, via #43910), and a local proxy
+        got OpenAI's 400 for none and minimal through /v1/responses on 2026-09-30."""
+        forwarded = (
+            level == "max" or litellm.model_cost["gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is not False
+        )
+        dropped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": level}},
+            model="gpt-6.1-sol",
+            drop_params=True,
+        )
+        assert ("reasoning" in dropped) is forwarded
+        if forwarded:
+            kept = OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": level}},
+                model="gpt-6.1-sol",
+                drop_params=False,
+            )
+            assert kept["reasoning"] == {"effort": level}
+        else:
+            with pytest.raises(litellm.UnsupportedParamsError):
+                OpenAIResponsesAPIConfig().map_openai_params(
+                    response_api_optional_params={"reasoning": {"effort": level}},
+                    model="gpt-6.1-sol",
+                    drop_params=False,
+                )
+
+    @pytest.mark.parametrize(
+        ("flags", "level", "forwarded"),
+        [
+            ({}, "none", True),
+            ({"supports_none_reasoning_effort": False}, "none", False),
+            ({"supports_none_reasoning_effort": True}, "none", True),
+            ({"supports_minimal_reasoning_effort": False}, "minimal", False),
+            ({"supports_max_reasoning_effort": False}, "max", True),
+            ({}, "xhigh", True),
+            ({"supports_xhigh_reasoning_effort": False}, "xhigh", False),
+            ({"supports_none_reasoning_effort": False}, "medium", True),
+        ],
+    )
+    def test_the_row_flags_alone_decide_whether_a_level_is_forwarded(
+        self, local_model_cost_map, monkeypatch, flags, level, forwarded
+    ):
+        """Same model name, rewritten row: this surface reads every level opt-out, xhigh included,
+        so the gate flips with the flags alone. max is the one level no flag can turn off here,
+        since the same model honors it on this route and refuses it on chat. The chat test module
+        pins the real row's facts."""
+        real_row = litellm.model_cost["gpt-6.1-sol"]
+        without_flags = {
+            field: value
+            for field, value in real_row.items()
+            if not (field.startswith("supports_") and field.endswith("_reasoning_effort"))
+        }
+        monkeypatch.setitem(litellm.model_cost, "gpt-6.1-sol", {**without_flags, **flags})
+        dropped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": level}},
+            model="gpt-6.1-sol",
+            drop_params=True,
+        )
+        assert ("reasoning" in dropped) is forwarded
+        if not forwarded:
+            with pytest.raises(litellm.UnsupportedParamsError):
+                OpenAIResponsesAPIConfig().map_openai_params(
+                    response_api_optional_params={"reasoning": {"effort": level}},
+                    model="gpt-6.1-sol",
+                    drop_params=False,
+                )
+
+    def test_dropping_a_refused_effort_keeps_the_rest_of_the_reasoning_object(self, local_model_cost_map):
+        refused = next(
+            level
+            for level in ("none", "minimal", "low")
+            if litellm.model_cost["gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is False
+        )
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": refused, "summary": "auto"}},
+            model="gpt-6.1-sol",
+            drop_params=True,
+        )
+        assert mapped["reasoning"] == {"summary": "auto"}
+
+    @pytest.mark.parametrize(
+        ("declared_reasoning_efforts", "suggests_declared_levels"),
+        [((), True), (None, False)],
+        ids=["responses route reads model_info levels", "compact route reads none"],
+    )
+    def test_dropping_a_refused_effort_logs_one_warning_naming_only_the_fix_its_route_honors(
+        self,
+        local_model_cost_map: None,
+        caplog: pytest.LogCaptureFixture,
+        declared_reasoning_efforts: tuple[str, ...] | None,
+        suggests_declared_levels: bool,
+    ) -> None:
+        refused: Final = next(
+            level
+            for level in ("none", "minimal", "low")
+            if litellm.model_cost["gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is False
+        )
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            mapped: Final = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+                model="gpt-6.1-sol",
+                responses_api_provider_config=OpenAIResponsesAPIConfig(),
+                response_api_optional_params={"reasoning": {"effort": refused}},
+                drop_params=True,
+                declared_reasoning_efforts=declared_reasoning_efforts,
+            )
+
+        assert "reasoning" not in mapped
+        drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+        assert len(drop_warnings) == 1
+        assert repr(refused) in drop_warnings[0] and "gpt-6.1-sol" in drop_warnings[0]
+        assert ("model_info.reasoning_effort_levels" in drop_warnings[0]) is suggests_declared_levels
+        assert "model_info.base_model" not in drop_warnings[0]
+
+    def test_dropping_reasoning_for_a_model_without_supports_reasoning_logs_one_warning(
+        self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "medium"}},
+                model="gpt-4o",
+                drop_params=True,
+            )
+
+        assert "reasoning" not in mapped
+        drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+        assert len(drop_warnings) == 1
+        assert all(fragment in drop_warnings[0] for fragment in ("'medium'", "gpt-4o", "supports_reasoning"))
+
+    def test_turning_reasoning_off_for_a_model_without_supports_reasoning_drops_it_silently(
+        self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "none", "summary": "auto"}},
+                model="gpt-4o",
+                drop_params=True,
+            )
+
+        assert "reasoning" not in mapped
+        assert not [record for record in caplog.records if "Dropping" in record.getMessage()]
+
+    def test_turning_reasoning_off_warns_when_only_custom_pricing_describes_the_model(
+        self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        litellm.register_model(
+            {
+                "pricing-only-test-model": {
+                    "litellm_provider": "openai",
+                    "mode": "responses",
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000002,
+                }
+            }
+        )
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "none"}},
+                model="pricing-only-test-model",
+                drop_params=True,
+            )
+
+        assert "reasoning" not in mapped
+        drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+        assert len(drop_warnings) == 1
+        assert all(fragment in drop_warnings[0] for fragment in ("'none'", "pricing-only-test-model"))
+
+    def test_a_forwarded_effort_logs_no_drop_warning(
+        self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "medium"}},
+                model="gpt-6.1-sol",
+                drop_params=True,
+            )
+
+        assert mapped["reasoning"] == {"effort": "medium"}
+        assert not [record for record in caplog.records if "Dropping" in record.getMessage()]
+
+    @pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+    def test_gpt5_3_codex_forwards_exactly_the_effort_levels_its_map_row_allows(self, local_model_cost_map, level):
+        """The gate turns a stale false into a local refusal, so the Responses-only codex row has to
+        say what the route does. On 2026-10-01 /v1/responses answered gpt-5.3-codex none and xhigh
+        with 200 (effort echoed back) and minimal and max with 400 unsupported_value naming none,
+        low, medium, high and xhigh, so the row takes none and xhigh and turns minimal off."""
+        forwarded = (
+            level == "max" or litellm.model_cost["gpt-5.3-codex"].get(f"supports_{level}_reasoning_effort") is not False
+        )
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": level}},
+            model="gpt-5.3-codex",
+            drop_params=True,
+        )
+        assert ("reasoning" in mapped) is forwarded
+
+    def test_gpt5_3_codex_row_takes_none_and_xhigh(self, local_model_cost_map):
+        """Pinned on purpose so the row-derived test above cannot go vacuous: the live answers of
+        2026-10-01 listed above. When OpenAI changes the set, flip the row and this assertion
+        together."""
+        row = litellm.model_cost["gpt-5.3-codex"]
+        assert row["supports_none_reasoning_effort"] is True
+        assert row["supports_xhigh_reasoning_effort"] is True
+        assert row["supports_minimal_reasoning_effort"] is False
+
     def test_top_p_raises_without_drop_params(self, local_model_cost_map):
         with pytest.raises(litellm.UnsupportedParamsError):
             OpenAIResponsesAPIConfig().map_openai_params(
@@ -2245,6 +2890,314 @@ class TestToolSchemaRegexPatternWiring:
         assert result["tools"][0] is tool
 
 
+_OPENAI_API: Final = GenericLiteLLMParams(api_base="https://api.openai.com/v1")
+_OTHER_HOST: Final = GenericLiteLLMParams(api_base="https://gateway.example/v1")
+_EXPLICIT_OPT_IN: Final = {"prompt_cache_options": {"mode": "explicit"}}
+_EPHEMERAL: Final = {"type": "ephemeral"}
+_EXPLICIT_BREAKPOINT: Final = {"mode": "explicit"}
+
+
+def _marked_input(cache_control: dict[str, str] | None) -> list[dict[str, object]]:
+    mark: Final = {} if cache_control is None else {"cache_control": cache_control}
+    return [
+        {
+            "role": "developer",
+            "content": [
+                {"type": "input_text", "text": "Be concise."},
+                {"type": "input_text", "text": "Be helpful.", **mark},
+            ],
+        },
+        {"type": "message", "role": "user", "content": "look", **mark},
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "looking", **mark}]},
+        {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_1", "output": "found", **mark},
+        {"type": "function_call", "call_id": "call_2", "name": "lookup", "arguments": "{}"},
+        {
+            "type": "function_call_output",
+            "call_id": "call_2",
+            "output": [{"type": "input_text", "text": "first"}, {"type": "input_text", "text": "last"}],
+            **mark,
+        },
+    ]
+
+
+def _marked_tool(cache_control: dict[str, str] | None) -> dict[str, object]:
+    mark: Final = {} if cache_control is None else {"cache_control": cache_control}
+    return {"type": "function", "name": "lookup", "parameters": {"type": "object", "properties": {}}, **mark}
+
+
+def _openai_like_responses_config() -> OpenAIResponsesAPIConfig:
+    from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+
+    return OpenAILikeResponsesConfig()
+
+
+def _generated_sail_responses_config() -> OpenAIResponsesAPIConfig:
+    from litellm.llms.openai_like.dynamic_config import create_responses_config_class
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    sail = JSONProviderRegistry.get("sail")
+    assert sail is not None
+    return create_responses_config_class(sail)()
+
+
+class TestCacheControlBecomesPromptCacheBreakpoint:
+    """Clients that speak Anthropic's dialect mark blocks with `cache_control`. On a deployment that
+    reads OpenAI's `prompt_cache_breakpoint` the mark moves onto the same block instead of being
+    stripped, so explicit-mode prompt caching keeps working through the proxy."""
+
+    @pytest.fixture(autouse=True)
+    def _no_openai_api_base_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+        monkeypatch.setattr(litellm, "api_base", None)
+
+    def _transform(
+        self,
+        model: str,
+        litellm_params: GenericLiteLLMParams,
+        cache_control: dict[str, str] | None,
+        extra_params: dict[str, object] | None = None,
+        config: OpenAIResponsesAPIConfig | None = None,
+    ) -> dict[str, object]:
+        return (config or OpenAIResponsesAPIConfig()).transform_responses_api_request(
+            model=model,
+            input=_marked_input(cache_control),
+            response_api_optional_request_params={"tools": [_marked_tool(cache_control)], **(extra_params or {})},
+            litellm_params=litellm_params,
+            headers={},
+        )
+
+    @pytest.mark.parametrize(
+        ("litellm_params", "extra_params"),
+        [
+            pytest.param(_OPENAI_API, {}, id="api.openai.com"),
+            pytest.param(
+                GenericLiteLLMParams(base_url="https://api.openai.com/v1"), {}, id="api.openai.com-as-base_url"
+            ),
+            pytest.param(GenericLiteLLMParams(), {}, id="default-host"),
+            pytest.param(_OTHER_HOST, _EXPLICIT_OPT_IN, id="other-host-opted-in"),
+        ],
+    )
+    def test_marks_reach_gpt_5_6_as_explicit_breakpoints_on_the_same_blocks(
+        self, litellm_params: GenericLiteLLMParams, extra_params: dict[str, object]
+    ) -> None:
+        result = self._transform("gpt-5.6", litellm_params, {**_EPHEMERAL, "ttl": "1h"}, extra_params)
+
+        assert result["input"] == [
+            {
+                "role": "developer",
+                "content": [
+                    {"type": "input_text", "text": "Be concise."},
+                    {"type": "input_text", "text": "Be helpful.", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+                ],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "look", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}],
+            },
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "looking"}]},
+            {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": [{"type": "input_text", "text": "found", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}],
+            },
+            {"type": "function_call", "call_id": "call_2", "name": "lookup", "arguments": "{}"},
+            {
+                "type": "function_call_output",
+                "call_id": "call_2",
+                "output": [
+                    {"type": "input_text", "text": "first"},
+                    {"type": "input_text", "text": "last", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+                ],
+            },
+        ]
+        assert result["tools"] == [_marked_tool(None)]
+        assert result.get("prompt_cache_options") == extra_params.get("prompt_cache_options")
+
+    def test_per_part_marks_win_over_the_item_mark_and_keep_their_own_block(self) -> None:
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-5.6",
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "a", "cache_control": _EPHEMERAL},
+                        {"type": "input_image", "image_url": "https://img.example/x.png", "detail": "auto"},
+                        {"type": "input_text", "text": "b"},
+                    ],
+                    "cache_control": _EPHEMERAL,
+                }
+            ],
+            response_api_optional_request_params={},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "a", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+                    {"type": "input_image", "image_url": "https://img.example/x.png", "detail": "auto"},
+                    {"type": "input_text", "text": "b", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+                ],
+            }
+        ]
+
+    @pytest.mark.parametrize(
+        ("model", "litellm_params"),
+        [
+            pytest.param("gpt-4o", _OPENAI_API, id="model-older-than-gpt-5.6"),
+            pytest.param("gpt-5.6", _OTHER_HOST, id="other-host-not-opted-in"),
+            pytest.param(
+                "gpt-5.6", GenericLiteLLMParams(base_url="https://gateway.example/v1"), id="other-host-as-base_url"
+            ),
+        ],
+    )
+    def test_marks_are_still_stripped_where_the_deployment_does_not_read_breakpoints(
+        self, model: str, litellm_params: GenericLiteLLMParams
+    ) -> None:
+        marked = self._transform(model, litellm_params, _EPHEMERAL)
+        unmarked = self._transform(model, litellm_params, None)
+
+        assert marked == unmarked
+        assert "prompt_cache_breakpoint" not in json.dumps(marked)
+
+    def test_non_openai_subclass_still_strips_on_a_gpt_5_6_deployment(self) -> None:
+        from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
+
+        config = HostedVLLMResponsesAPIConfig()
+        marked = self._transform("gpt-5.6", _OPENAI_API, _EPHEMERAL, _EXPLICIT_OPT_IN, config=config)
+        unmarked = self._transform("gpt-5.6", _OPENAI_API, None, _EXPLICIT_OPT_IN, config=config)
+
+        assert marked == unmarked
+        assert "prompt_cache_breakpoint" not in json.dumps(marked["input"])
+
+    @pytest.mark.parametrize(
+        "make_config", [_openai_like_responses_config, _generated_sail_responses_config], ids=["openai_like", "sail"]
+    )
+    def test_a_config_naming_its_provider_as_a_plain_str_still_strips_on_a_gpt_5_6_deployment(
+        self, make_config: Callable[[], OpenAIResponsesAPIConfig]
+    ) -> None:
+        config = make_config()
+        assert type(config.custom_llm_provider) is str
+
+        marked = self._transform("gpt-5.6", _OPENAI_API, _EPHEMERAL, _EXPLICIT_OPT_IN, config=config)
+        unmarked = self._transform("gpt-5.6", _OPENAI_API, None, _EXPLICIT_OPT_IN, config=config)
+
+        assert marked == unmarked
+        assert "prompt_cache_breakpoint" not in json.dumps(marked["input"])
+
+    def test_a_breakpoint_the_client_wrote_on_the_same_block_wins_over_the_mark_ttl_included(self) -> None:
+        kept = {"mode": "explicit", "ttl": "30m"}
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-5.6",
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "a",
+                            "prompt_cache_breakpoint": kept,
+                            "cache_control": _EPHEMERAL,
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "b", "prompt_cache_breakpoint": kept}],
+                    "cache_control": _EPHEMERAL,
+                },
+            ],
+            response_api_optional_request_params={},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == [
+            {"role": "user", "content": [{"type": "input_text", "text": "a", "prompt_cache_breakpoint": kept}]},
+            {"role": "user", "content": [{"type": "input_text", "text": "b", "prompt_cache_breakpoint": kept}]},
+        ]
+
+    def test_marks_on_parts_openai_does_not_cache_are_dropped_and_the_item_mark_skips_them(self) -> None:
+        audio = {"type": "input_audio", "input_audio": {"data": "UklGRg==", "format": "wav"}}
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-5.6",
+            input=[
+                {"role": "user", "content": [{**audio, "cache_control": _EPHEMERAL}], "cache_control": _EPHEMERAL},
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "a"}, {**audio, "cache_control": _EPHEMERAL}],
+                    "cache_control": _EPHEMERAL,
+                },
+            ],
+            response_api_optional_request_params={},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == [
+            {"role": "user", "content": [audio]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "a", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+                    audio,
+                ],
+            },
+        ]
+
+    def test_items_and_content_of_a_shape_openai_will_reject_pass_through_to_the_strip(self) -> None:
+        """Validating the body is upstream's job. The swap leaves what it cannot read alone, so the
+        caller gets OpenAI's 400 for it instead of a failure inside the proxy."""
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-5.6",
+            input=[
+                "a bare string where an item belongs",
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": {"result": 1},
+                    "cache_control": _EPHEMERAL,
+                },
+                {"role": "user", "content": "look", "cache_control": _EPHEMERAL},
+            ],
+            response_api_optional_request_params={},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == [
+            "a bare string where an item belongs",
+            {"type": "function_call_output", "call_id": "call_1", "output": {"result": 1}},
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "look", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}],
+            },
+        ]
+
+    def test_compact_request_swaps_marks_the_same_way(self) -> None:
+        _, data = OpenAIResponsesAPIConfig().transform_compact_response_api_request(
+            model="gpt-5.6",
+            input=[{"role": "user", "content": "look", "cache_control": _EPHEMERAL}],
+            response_api_optional_request_params=dict(_EXPLICIT_OPT_IN),
+            litellm_params=_OTHER_HOST,
+            headers={},
+            api_base="https://gateway.example/v1/responses",
+        )
+
+        assert data["input"] == [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "look", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}],
+            }
+        ]
+
+
 class TestReasoningFollowsModelSupport:
     """Responses API clients like Codex send `reasoning` on every request, and OpenAI 400s it
     on non-reasoning models like gpt-4o. drop_params must strip it there, the same way the
@@ -2348,3 +3301,1584 @@ class TestReasoningFollowsModelSupport:
             drop_params=True,
         )
         assert mapped["reasoning"] == {"effort": "medium"}
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_litellm_router_no_metadata():
+    """
+    Test that metadata is not passed through when using the Router for responses API
+    """
+    mock_response = {
+        "id": "resp_123",
+        "object": "response",
+        "created_at": 1741476542,
+        "status": "completed",
+        "model": "gpt-5.5",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_123",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "Hello world!", "annotations": []}
+                ],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "total_tokens": 30,
+            "output_tokens_details": {"reasoning_tokens": 0},
+        },
+        "text": {"format": {"type": "text"}},
+        # Adding all required fields
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "metadata": {},
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "max_output_tokens": None,
+        "previous_response_id": None,
+        "reasoning": {"effort": None, "summary": None},
+        "truncation": "disabled",
+        "user": None,
+    }
+
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = str(json_data)
+            self.headers = httpx.Headers({})
+
+        def json(self):  # Changed from async to sync
+            return self._json_data
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        # Configure the mock to return our response
+        mock_post.return_value = MockResponse(mock_response, 200)
+
+        litellm.turn_on_debug()
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt4o-special-alias",
+                    "litellm_params": {
+                        "model": "gpt-5.5",
+                        "api_key": "fake-key",
+                    },
+                }
+            ]
+        )
+
+        # Call the handler with metadata
+        await router.aresponses(
+            model="gpt4o-special-alias",
+            input="Hello, can you tell me a short joke?",
+        )
+
+        # Check the request body
+        request_body = mock_post.call_args.kwargs["json"]
+        print("Request body:", json.dumps(request_body, indent=4))
+
+        # Assert metadata is not in the request
+        assert (
+            "metadata" not in request_body
+        ), "metadata should not be in the request body"
+        mock_post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_litellm_router_with_metadata():
+    """
+    Test that metadata is correctly passed through when explicitly provided to the Router for responses API
+    """
+    test_metadata = {
+        "user_id": "123",
+        "conversation_id": "abc",
+        "custom_field": "test_value",
+    }
+
+    mock_response = {
+        "id": "resp_123",
+        "object": "response",
+        "created_at": 1741476542,
+        "status": "completed",
+        "model": "gpt-5.5",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_123",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "Hello world!", "annotations": []}
+                ],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "total_tokens": 30,
+            "output_tokens_details": {"reasoning_tokens": 0},
+        },
+        "text": {"format": {"type": "text"}},
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "metadata": test_metadata,  # Include the test metadata in response
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "max_output_tokens": None,
+        "previous_response_id": None,
+        "reasoning": {"effort": None, "summary": None},
+        "truncation": "disabled",
+        "user": None,
+    }
+
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = str(json_data)
+            self.headers = httpx.Headers({})
+
+        def json(self):
+            return self._json_data
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        # Configure the mock to return our response
+        mock_post.return_value = MockResponse(mock_response, 200)
+
+        litellm.turn_on_debug()
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt4o-special-alias",
+                    "litellm_params": {
+                        "model": "gpt-5.5",
+                        "api_key": "fake-key",
+                    },
+                }
+            ]
+        )
+
+        # Call the handler with metadata
+        await router.aresponses(
+            model="gpt4o-special-alias",
+            input="Hello, can you tell me a short joke?",
+            metadata=test_metadata,
+        )
+
+        # Check the request body
+        request_body = mock_post.call_args.kwargs["json"]
+        print("Request body:", json.dumps(request_body, indent=4))
+
+        # Assert metadata matches exactly what was passed
+        assert (
+            request_body["metadata"] == test_metadata
+        ), "metadata in request body should match what was passed"
+        mock_post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_litellm_router_with_prompt():
+    """Test that prompt object is passed through the Router for responses API"""
+
+    prompt_obj = {
+        "id": "pmpt_abc123",
+        "version": "2",
+        "variables": {"random_variable": "ishaan_from_litellm"},
+    }
+
+    mock_response = {
+        "id": "resp_123",
+        "object": "response",
+        "created_at": 1741476542,
+        "status": "completed",
+        "model": "gpt-5.5",
+        "output": [],
+        "parallel_tool_calls": True,
+        "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+        "text": {"format": {"type": "text"}},
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "metadata": {},
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "max_output_tokens": None,
+        "previous_response_id": None,
+        "reasoning": {"effort": None, "summary": None},
+        "truncation": "disabled",
+        "user": None,
+    }
+
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = str(json_data)
+            self.headers = httpx.Headers({})
+
+        def json(self):
+            return self._json_data
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = MockResponse(mock_response, 200)
+
+        litellm.turn_on_debug()
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt4o-special-alias",
+                    "litellm_params": {
+                        "model": "gpt-5.5",
+                        "api_key": "fake-key",
+                    },
+                }
+            ]
+        )
+
+        await router.aresponses(
+            model="gpt4o-special-alias",
+            input="Hello",
+            prompt=prompt_obj,
+        )
+
+        request_body = mock_post.call_args.kwargs["json"]
+        assert request_body["prompt"] == prompt_obj
+        mock_post.assert_called_once()
+
+
+def test_bad_request_bad_param_error():
+    """Raise a BadRequestError when an invalid parameter value is provided"""
+    try:
+        litellm.responses(model="gpt-5.5", input="This should fail", temperature=2000)
+        pytest.fail("Expected BadRequestError but no exception was raised")
+    except litellm.BadRequestError as e:
+        print(f"Exception raised: {e}")
+        print(f"Exception type: {type(e)}")
+        print(f"Exception args: {e.args}")
+        print(f"Exception details: {e.__dict__}")
+    except Exception as e:
+        pytest.fail(f"Unexpected exception raised: {e}")
+
+
+@pytest.mark.asyncio()
+async def test_async_bad_request_bad_param_error():
+    """Raise a BadRequestError when an invalid parameter value is provided"""
+    try:
+        await litellm.aresponses(
+            model="gpt-5.5", input="This should fail", temperature=2000
+        )
+        pytest.fail("Expected BadRequestError but no exception was raised")
+    except litellm.BadRequestError as e:
+        print(f"Exception raised: {e}")
+        print(f"Exception type: {type(e)}")
+        print(f"Exception args: {e.args}")
+        print(f"Exception details: {e.__dict__}")
+    except Exception as e:
+        pytest.fail(f"Unexpected exception raised: {e}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_openai_o1_pro_response_api(sync_mode):
+    """
+    Test that LiteLLM correctly handles an incomplete response from OpenAI's o1-pro model
+    due to reaching max_output_tokens limit.
+    """
+    # Mock response from o1-pro
+    mock_response = {
+        "id": "resp_67dc3dd77b388190822443a85252da5a0e13d8bdc0e28d88",
+        "object": "response",
+        "created_at": 1742486999,
+        "status": "incomplete",
+        "error": None,
+        "incomplete_details": {"reason": "max_output_tokens"},
+        "instructions": None,
+        "max_output_tokens": 20,
+        "model": "o1-pro-2025-03-19",
+        "output": [
+            {
+                "type": "reasoning",
+                "id": "rs_67dc3de50f64819097450ed50a33d5f90e13d8bdc0e28d88",
+                "summary": [],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "previous_response_id": None,
+        "reasoning": {"effort": "medium", "generate_summary": None},
+        "store": True,
+        "temperature": 1.0,
+        "text": {"format": {"type": "text"}},
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "truncation": "disabled",
+        "usage": {
+            "input_tokens": 73,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 20,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 93,
+        },
+        "user": None,
+        "metadata": {},
+    }
+
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = json.dumps(json_data)
+            self.headers = httpx.Headers({})
+
+        def json(self):  # Changed from async to sync
+            return self._json_data
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        # Configure the mock to return our response
+        mock_post.return_value = MockResponse(mock_response, 200)
+
+        litellm.turn_on_debug()
+        litellm.set_verbose = True
+
+        # Call o1-pro with max_output_tokens=20
+        response = await litellm.aresponses(
+            model="openai/o1-pro",
+            input="Write a detailed essay about artificial intelligence and its impact on society",
+            max_output_tokens=20,
+        )
+
+        # Verify the request was made correctly
+        mock_post.assert_called_once()
+        request_body = mock_post.call_args.kwargs["json"]
+        assert request_body["model"] == "o1-pro"
+        assert request_body["max_output_tokens"] == 20
+
+        # Validate the response
+        print("Response:", json.dumps(response, indent=4, default=str))
+
+        # Check that the response has the expected structure
+        assert response["id"] is not None
+        assert response["status"] == "incomplete"
+        assert response["incomplete_details"].reason == "max_output_tokens"
+        assert response["max_output_tokens"] == 20
+
+        # Validate usage information
+        assert response["usage"]["input_tokens"] == 73
+        assert response["usage"]["output_tokens"] == 20
+        assert response["usage"]["total_tokens"] == 93
+
+        # Validate that the response is properly identified as incomplete
+        validate_responses_api_response(response, final_chunk=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_openai_o1_pro_response_api_streaming(sync_mode):
+    """
+    Test that LiteLLM correctly handles an incomplete response from OpenAI's o1-pro model
+    due to reaching max_output_tokens limit in both sync and async streaming modes.
+    """
+    # Mock response from o1-pro
+    mock_response = {
+        "id": "resp_67dc3dd77b388190822443a85252da5a0e13d8bdc0e28d88",
+        "object": "response",
+        "created_at": 1742486999,
+        "status": "incomplete",
+        "error": None,
+        "incomplete_details": {"reason": "max_output_tokens"},
+        "instructions": None,
+        "max_output_tokens": 20,
+        "model": "o1-pro-2025-03-19",
+        "output": [
+            {
+                "type": "reasoning",
+                "id": "rs_67dc3de50f64819097450ed50a33d5f90e13d8bdc0e28d88",
+                "summary": [],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "previous_response_id": None,
+        "reasoning": {"effort": "medium", "generate_summary": None},
+        "store": True,
+        "temperature": 1.0,
+        "text": {"format": {"type": "text"}},
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "truncation": "disabled",
+        "usage": {
+            "input_tokens": 73,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 20,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 93,
+        },
+        "user": None,
+        "metadata": {},
+    }
+
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = json.dumps(json_data)
+            self.headers = httpx.Headers({})
+
+        def json(self):
+            return self._json_data
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        # Configure the mock to return our response
+        mock_post.return_value = MockResponse(mock_response, 200)
+
+        litellm.turn_on_debug()
+        litellm.set_verbose = True
+
+        # Verify the request was made correctly
+        if sync_mode:
+            # For sync mode, we need to patch the sync HTTP handler
+            with patch(
+                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+                return_value=MockResponse(mock_response, 200),
+            ) as mock_sync_post:
+                response = litellm.responses(
+                    model="openai/o1-pro",
+                    input="Write a detailed essay about artificial intelligence and its impact on society",
+                    max_output_tokens=20,
+                    stream=True,
+                )
+
+                # Process the sync stream
+                event_count = 0
+                for event in response:
+                    print(
+                        f"Sync litellm response #{event_count}:",
+                        json.dumps(event, indent=4, default=str),
+                    )
+                    event_count += 1
+
+                # Verify the sync request was made correctly
+                mock_sync_post.assert_called_once()
+                request_body = mock_sync_post.call_args.kwargs["json"]
+                assert request_body["model"] == "o1-pro"
+                assert request_body["max_output_tokens"] == 20
+                assert "stream" not in request_body
+        else:
+            # For async mode
+            response = await litellm.aresponses(
+                model="openai/o1-pro",
+                input="Write a detailed essay about artificial intelligence and its impact on society",
+                max_output_tokens=20,
+                stream=True,
+            )
+
+            # Process the async stream
+            event_count = 0
+            async for event in response:
+                print(
+                    f"Async litellm response #{event_count}:",
+                    json.dumps(event, indent=4, default=str),
+                )
+                event_count += 1
+
+            # Verify the async request was made correctly
+            mock_post.assert_called_once()
+            request_body = mock_post.call_args.kwargs["json"]
+            assert request_body["model"] == "o1-pro"
+            assert request_body["max_output_tokens"] == 20
+            assert "stream" not in request_body
+
+
+def test_basic_computer_use_preview_tool_call():
+    """
+    Test that LiteLLM correctly handles a computer_use_preview tool call where the environment is set to "linux"
+
+    linux is an unsupported environment for the computer_use_preview tool, but litellm users should still be able to pass it to openai
+    """
+    # Mock response from OpenAI
+
+    mock_response = {
+        "id": "resp_67dc3dd77b388190822443a85252da5a0e13d8bdc0e28d88",
+        "object": "response",
+        "created_at": 1742486999,
+        "status": "incomplete",
+        "error": None,
+        "incomplete_details": {"reason": "max_output_tokens"},
+        "instructions": None,
+        "max_output_tokens": 20,
+        "model": "o1-pro-2025-03-19",
+        "output": [
+            {
+                "type": "reasoning",
+                "id": "rs_67dc3de50f64819097450ed50a33d5f90e13d8bdc0e28d88",
+                "summary": [],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "previous_response_id": None,
+        "reasoning": {"effort": "medium", "generate_summary": None},
+        "store": True,
+        "temperature": 1.0,
+        "text": {"format": {"type": "text"}},
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "truncation": "disabled",
+        "usage": {
+            "input_tokens": 73,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 20,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 93,
+        },
+        "user": None,
+        "metadata": {},
+    }
+
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = json.dumps(json_data)
+            self.headers = httpx.Headers({})
+
+        def json(self):
+            return self._json_data
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+        return_value=MockResponse(mock_response, 200),
+    ) as mock_post:
+        litellm.turn_on_debug()
+        litellm.set_verbose = True
+
+        # Call the responses API with computer_use_preview tool
+        response = litellm.responses(
+            model="openai/computer-use-preview",
+            tools=[
+                {
+                    "type": "computer_use_preview",
+                    "display_width": 1024,
+                    "display_height": 768,
+                    "environment": "linux",  # other possible values: "mac", "windows", "ubuntu"
+                }
+            ],
+            input="Check the latest OpenAI news on bing.com.",
+            reasoning={"summary": "concise"},
+            truncation="auto",
+        )
+
+        # Verify the request was made correctly
+        mock_post.assert_called_once()
+        request_body = mock_post.call_args.kwargs["json"]
+
+        # Validate the request structure
+        assert request_body["model"] == "computer-use-preview"
+        assert len(request_body["tools"]) == 1
+        assert request_body["tools"][0]["type"] == "computer_use_preview"
+        assert request_body["tools"][0]["display_width"] == 1024
+        assert request_body["tools"][0]["display_height"] == 768
+        assert request_body["tools"][0]["environment"] == "linux"
+
+        # Check that reasoning was passed correctly
+        assert request_body["reasoning"]["summary"] == "concise"
+        assert request_body["truncation"] == "auto"
+
+        # Validate the input format
+        assert isinstance(request_body["input"], str)
+        assert request_body["input"] == "Check the latest OpenAI news on bing.com."
+
+
+@pytest.mark.asyncio
+async def test_store_field_transformation():
+    """Test store field transformation with mocked API responses"""
+    config = OpenAIResponsesAPIConfig()
+
+    # Initialize logging object with required parameters
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-5.5",
+        messages=[],
+        stream=False,
+        call_type="aresponses",
+        start_time=time.time(),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+
+    # Base response data with all required fields
+    base_response = {
+        "id": "test_id",
+        "created_at": 1751443898,
+        "model": "gpt-5.5",
+        "object": "response",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "Hello", "annotations": []}
+                ],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "error": None,
+        "incomplete_details": None,
+        "instructions": "test instructions",
+        "metadata": {},
+        "temperature": 0.7,
+        "top_p": 1.0,
+        "max_output_tokens": 100,
+        "previous_response_id": None,
+        "reasoning": None,
+        "status": "completed",
+        "text": None,
+        "truncation": "auto",
+        "usage": {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30},
+        "user": "test_user",
+    }
+
+    # Test case 1: API returns store=True
+    mock_response_store_true = httpx.Response(
+        status_code=200, content=json.dumps({**base_response, "store": True}).encode()
+    )
+
+    # Test case 2: API returns store=False
+    mock_response_store_false = httpx.Response(
+        status_code=200, content=json.dumps({**base_response, "store": False}).encode()
+    )
+
+    # Test case 3: API returns store=null
+    mock_response_store_null = httpx.Response(
+        status_code=200, content=json.dumps({**base_response, "store": None}).encode()
+    )
+
+    # Test case 4: API omits store field
+    mock_response_no_store = httpx.Response(
+        status_code=200, content=json.dumps(base_response).encode()
+    )
+
+    # Test when store=True in request
+    logging_obj.optional_params = {"store": True}
+    response = config.transform_response_api_response(
+        model="gpt-5.5", raw_response=mock_response_store_true, logging_obj=logging_obj
+    )
+    assert (
+        response.store is True
+    ), "store should be True when specified in request and API returns True"
+
+    # Test when store=False in request
+    logging_obj.optional_params = {"store": False}
+    response = config.transform_response_api_response(
+        model="gpt-5.5", raw_response=mock_response_store_false, logging_obj=logging_obj
+    )
+    assert (
+        response.store is False
+    ), "store should be False when specified in request and API returns False"
+
+    # Test when store not in request but API returns null
+    response = config.transform_response_api_response(
+        model="gpt-5.5", raw_response=mock_response_store_null, logging_obj=logging_obj
+    )
+    assert (
+        response.store is None
+    ), "store should be None when not specified in request and API returns null"
+
+    # Test when store not in request and API omits store field
+    response = config.transform_response_api_response(
+        model="gpt-5.5", raw_response=mock_response_no_store, logging_obj=logging_obj
+    )
+    assert (
+        response.store is None
+    ), "store should be None when not specified in request and API omits store"
+
+    # Verify created_at is always converted to integer
+    assert isinstance(
+        response.created_at, int
+    ), "created_at should always be converted to integer"
+    assert (
+        response.created_at == 1751443898
+    ), "created_at should maintain the same value after conversion"
+
+
+@pytest.mark.asyncio
+async def test_aresponses_service_tier_and_safety_identifier():
+    """
+    Test that service_tier and safety_identifier parameters are correctly sent in the request body
+    when using litellm.aresponses.
+    """
+    mock_response = {
+        "id": "resp_01234567890abcdef",
+        "object": "response",
+        "created_at": 1753060947,
+        "status": "completed",
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "max_output_tokens": None,
+        "model": "gpt-4o-2024-05-13",
+        "output": [
+            {
+                "type": "text",
+                "id": "out_01234567890abcdef",
+                "text": "This is a test response with service tier and safety identifier.",
+            }
+        ],
+        "parallel_tool_calls": True,
+        "previous_response_id": None,
+        "reasoning": None,
+        "store": True,
+        "temperature": 1.0,
+        "text": {"format": {"type": "text"}},
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "truncation": "disabled",
+        "usage": {
+            "input_tokens": 15,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 25,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 40,
+        },
+        "user": None,
+        "metadata": {},
+    }
+
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = json.dumps(json_data)
+            self.headers = httpx.Headers({})
+
+        def json(self):
+            return self._json_data
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        # Configure the mock to return our response
+        mock_post.return_value = MockResponse(mock_response, 200)
+
+        litellm.turn_on_debug()
+        litellm.set_verbose = True
+
+        # Call aresponses with service_tier and safety_identifier
+        response = await litellm.aresponses(
+            model="openai/gpt-5.5",
+            input="Test with service tier and safety identifier",
+            service_tier="flex",
+            safety_identifier="123",
+        )
+
+        # Verify the request was made correctly
+        mock_post.assert_called_once()
+        request_body = mock_post.call_args.kwargs["json"]
+        print("request_body=", json.dumps(request_body, indent=4, default=str))
+
+        # Validate that both parameters are present in the request body
+        assert (
+            request_body["service_tier"] == "flex"
+        ), "service_tier should be 'flex' in request body"
+        assert (
+            request_body["safety_identifier"] == "123"
+        ), "safety_identifier should be '123' in request body"
+        assert request_body["model"] == "gpt-5.5"
+        assert request_body["input"] == "Test with service tier and safety identifier"
+
+        # Validate the response
+        print("Response:", json.dumps(response, indent=4, default=str))
+
+
+@pytest.mark.asyncio
+async def test_openai_gpt5_reasoning_effort_parameter():
+    """Test that reasoning_effort parameter is properly sent in the HTTP request for GPT-5 models."""
+
+    # Mock response for GPT-5 responses API (correct format)
+    mock_response = {
+        "id": "resp_01ABC123",
+        "object": "response",
+        "created_at": 1729621667,
+        "status": "completed",
+        "model": "gpt-5-mini",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_123",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "The capital of France is Paris.",
+                        "annotations": [],
+                    }
+                ],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "usage": {
+            "input_tokens": 15,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 8,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 23,
+        },
+        "text": {"format": {"type": "text"}},
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "metadata": {},
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "max_output_tokens": None,
+        "previous_response_id": None,
+        "reasoning": {"effort": "low", "summary": None},
+        "truncation": "disabled",
+        "user": None,
+    }
+
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = json.dumps(json_data)
+            self.headers = httpx.Headers({})
+
+        def json(self):
+            return self._json_data
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        # Configure the mock to return our response
+        mock_post.return_value = MockResponse(mock_response, 200)
+
+        litellm.turn_on_debug()
+        litellm.set_verbose = True
+
+        # Call aresponses with reasoning_effort parameter
+        response = await litellm.aresponses(
+            model="openai/gpt-5-mini",
+            input="What is the capital of France?",
+            reasoning={"effort": "minimal"},
+        )
+
+        # Verify the request was made correctly
+        mock_post.assert_called_once()
+        request_body = mock_post.call_args.kwargs["json"]
+        print("request_body=", json.dumps(request_body, indent=4, default=str))
+        print("reasoning=", request_body["reasoning"])
+        # Validate that reasoning_effort is present in the request body
+        assert (
+            "reasoning" in request_body
+        ), "reasoning should be present in request body"
+        assert (
+            request_body["reasoning"]["effort"] == "minimal"
+        ), "reasoning_effort should be 'minimal' in request body"
+        assert request_body["model"] == "gpt-5-mini"
+        assert request_body["input"] == "What is the capital of France?"
+
+        # Validate the response
+        print("Response:", json.dumps(response, indent=4, default=str))
+
+
+class MockResponse:
+    def __init__(self, json_data, status_code):
+        self._json_data = json_data
+        self.status_code = status_code
+        self.text = str(json_data)
+        self.headers = httpx.Headers({})
+
+    def json(self):
+        return self._json_data
+
+
+@pytest.fixture
+def extra_body_mock_response_data():
+    return {
+        "id": "resp_test123",
+        "object": "response",
+        "created_at": 1234567890,
+        "status": "completed",
+        "model": "gpt-5.5",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_123",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Hello!", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        "parallel_tool_calls": True,
+        "text": {"format": {"type": "text"}},
+        "error": None,
+        "metadata": {},
+        "temperature": 1.0,
+        "reasoning": {"effort": None, "summary": None},
+    }
+
+
+@pytest.mark.asyncio
+async def test_aresponses_extra_body_params_passed(extra_body_mock_response_data):
+    """Test that extra_body parameters are passed in async mode."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = MockResponse(extra_body_mock_response_data, 200)
+
+        response = await litellm.aresponses(
+            model="gpt-5.5",
+            input="Test input",
+            max_output_tokens=20,
+            extra_body={
+                "custom_param_1": "value1",
+                "custom_param_2": {"nested": "value2"},
+                "experimental_feature": True,
+            },
+        )
+
+        assert response is not None
+        assert response.id is not None
+
+        request_body = mock_post.call_args.kwargs["json"]
+
+        assert "custom_param_1" in request_body
+        assert request_body["custom_param_1"] == "value1"
+        assert "custom_param_2" in request_body
+        assert request_body["custom_param_2"]["nested"] == "value2"
+        assert "experimental_feature" in request_body
+        assert request_body["experimental_feature"] is True
+        assert request_body["model"] == "gpt-5.5"
+        assert request_body["input"] == "Test input"
+
+
+def test_responses_extra_body_params_passed_sync(extra_body_mock_response_data):
+    """Test that extra_body parameters are passed in sync mode."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+        return_value=MockResponse(extra_body_mock_response_data, 200),
+    ) as mock_post:
+        response = litellm.responses(
+            model="gpt-5.5",
+            input="Sync test",
+            max_output_tokens=20,
+            extra_body={
+                "sync_custom_param": "sync_value",
+                "another_param": 42,
+            },
+        )
+
+        assert response is not None
+        assert response.id is not None
+
+        request_body = mock_post.call_args.kwargs["json"]
+
+        assert "sync_custom_param" in request_body
+        assert request_body["sync_custom_param"] == "sync_value"
+        assert "another_param" in request_body
+        assert request_body["another_param"] == 42
+        assert request_body["model"] == "gpt-5.5"
+
+
+@pytest.mark.asyncio
+async def test_extra_body_merges_with_request_data(extra_body_mock_response_data):
+    """Test that extra_body is merged into the request data."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = MockResponse(extra_body_mock_response_data, 200)
+
+        await litellm.aresponses(
+            model="gpt-5.5",
+            input="Test",
+            temperature=1,
+            max_output_tokens=20,
+            extra_body={
+                "custom_field": "custom_value",
+            },
+        )
+
+        request_body = mock_post.call_args.kwargs["json"]
+
+        assert "temperature" in request_body
+        assert "custom_field" in request_body
+        assert request_body["custom_field"] == "custom_value"
+
+
+_MALFORMED_MARKERS: Final = ("yes", 1, {"mode": "bogus"}, {"mode": "explicit", "ttl": "1h"})
+_MALFORMED_MARKER_IDS: Final = ("string", "int", "bogus-mode", "bad-ttl")
+_VALID_MARKERS: Final = ({"mode": "explicit"}, {"mode": "explicit", "ttl": "30m"})
+_VALID_MARKER_IDS: Final = ("explicit", "explicit-30m")
+_PARTS: Final[Mapping[str, Mapping[str, object]]] = {
+    "input_text": {"type": "input_text", "text": "Say ok"},
+    "input_image": {"type": "input_image", "image_url": "https://example.com/a.png"},
+    "input_file": {"type": "input_file", "file_id": "file-abc"},
+}
+_CONFIGS: Final = (OpenAIResponsesAPIConfig(), AzureOpenAIResponsesAPIConfig())
+_CONFIG_IDS: Final = ("openai", "azure")
+
+
+def _marked_message(part_type: str, marker: object) -> list[dict[str, object]]:
+    return [{"type": "message", "role": "user", "content": [{**_PARTS[part_type], "prompt_cache_breakpoint": marker}]}]
+
+
+def _transformed_input(
+    config: BaseResponsesAPIConfig, input: str | list[dict[str, object]], litellm_params: GenericLiteLLMParams
+) -> object:
+    request: Final = config.transform_responses_api_request(
+        model="gpt-6.1-sol",
+        input=cast("ResponseInputParam", input),  # cast-ok: plain dicts shaped like the SDK's input items
+        response_api_optional_request_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+    return request["input"]
+
+
+def _single_part(transformed_input: object) -> Mapping[str, object]:
+    (item,) = cast(list[Mapping[str, object]], transformed_input)
+    (part,) = cast(list[Mapping[str, object]], item["content"])
+    return part
+
+
+@pytest.mark.parametrize("config", _CONFIGS, ids=_CONFIG_IDS)
+@pytest.mark.parametrize("part_type", tuple(_PARTS))
+@pytest.mark.parametrize("marker", _MALFORMED_MARKERS, ids=_MALFORMED_MARKER_IDS)
+def test_malformed_prompt_cache_breakpoint_is_dropped_under_deployment_drop_params(
+    monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig, part_type: str, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    transformed: Final = _transformed_input(
+        config, _marked_message(part_type, marker), GenericLiteLLMParams(drop_params=True)
+    )
+    assert _single_part(transformed) == _PARTS[part_type]
+
+
+@pytest.mark.parametrize("marker", _MALFORMED_MARKERS, ids=_MALFORMED_MARKER_IDS)
+def test_malformed_prompt_cache_breakpoint_is_dropped_under_global_drop_params(
+    monkeypatch: pytest.MonkeyPatch, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    transformed: Final = _transformed_input(_CONFIGS[0], _marked_message("input_text", marker), GenericLiteLLMParams())
+    assert _single_part(transformed) == _PARTS["input_text"]
+
+
+@pytest.mark.parametrize("drop_params", (False, None), ids=("false", "null"))
+@pytest.mark.parametrize("marker", _MALFORMED_MARKERS, ids=_MALFORMED_MARKER_IDS)
+def test_malformed_prompt_cache_breakpoint_is_forwarded_verbatim_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch, marker: object, drop_params: bool | None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", marker)
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=drop_params)) == input
+
+
+@pytest.mark.parametrize("marker", _MALFORMED_MARKERS, ids=_MALFORMED_MARKER_IDS)
+def test_a_non_flag_deployment_drop_params_keeps_the_marker_like_the_param_mapper_does(
+    monkeypatch: pytest.MonkeyPatch, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", marker)
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params="maybe")) == input
+
+
+@pytest.mark.parametrize("drop_params", (True, False), ids=("drop", "keep"))
+@pytest.mark.parametrize("marker", _VALID_MARKERS, ids=_VALID_MARKER_IDS)
+def test_valid_prompt_cache_breakpoint_reaches_the_wire_under_both_settings(
+    monkeypatch: pytest.MonkeyPatch, marker: Mapping[str, str], drop_params: bool
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", marker)
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=drop_params)) == input
+
+
+def test_prompt_cache_breakpoint_unknown_key_is_trimmed_under_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", {"mode": "explicit", "note": "kept"})
+    dropped: Final = _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=True))
+    assert _single_part(dropped)["prompt_cache_breakpoint"] == {"mode": "explicit"}
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=False)) == input
+
+
+def test_malformed_prompt_cache_breakpoint_on_a_tool_output_part_is_dropped_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    marked_output: Final = [{"type": "input_text", "text": "42", "prompt_cache_breakpoint": "yes"}]
+    input: Final[list[dict[str, object]]] = [{"type": "function_call_output", "call_id": "call_1", "output": marked_output}]
+    (item,) = cast(
+        list[Mapping[str, object]], _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=True))
+    )
+    assert item["output"] == [{"type": "input_text", "text": "42"}]
+
+
+@pytest.mark.parametrize("input", ("hi", [{"type": "message", "role": "user", "content": "hi"}]), ids=("string", "unmarked"))
+def test_input_without_a_marker_is_untouched_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, input: str | list[dict[str, object]]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=True)) == input
+
+
+def _transformed_input_for(
+    model: str,
+    input: list[dict[str, object]],
+    litellm_params: GenericLiteLLMParams,
+    config: BaseResponsesAPIConfig = _CONFIGS[0],
+) -> object:
+    request: Final = config.transform_responses_api_request(
+        model=model,
+        input=cast("ResponseInputParam", input),  # cast-ok: plain dicts shaped like the SDK's input items
+        response_api_optional_request_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+    return request["input"]
+
+
+@pytest.mark.parametrize(
+    "marker", (*_VALID_MARKERS, *_MALFORMED_MARKERS), ids=(*_VALID_MARKER_IDS, *_MALFORMED_MARKER_IDS)
+)
+def test_every_prompt_cache_breakpoint_is_dropped_under_drop_params_for_a_model_without_breakpoints(
+    monkeypatch: pytest.MonkeyPatch, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", marker)
+    dropped: Final = _transformed_input_for("gpt-5.4-mini", input, GenericLiteLLMParams(drop_params=True))
+    assert _single_part(dropped) == _PARTS["input_text"]
+    assert _transformed_input_for("gpt-5.4-mini", input, GenericLiteLLMParams(drop_params=False)) == input
+
+
+@pytest.mark.parametrize(
+    "model",
+    ("o4-mini", "ft:gpt-4o-mini-2024-07-18:my-org::abc123", "ft:o4-mini-2025-04-16:my-org::abc123"),
+    ids=("o-series", "fine-tune-of-older-gpt", "fine-tune-of-o-series"),
+)
+def test_a_valid_marker_is_dropped_under_drop_params_on_a_model_known_to_lack_breakpoints(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", {"mode": "explicit"})
+    dropped: Final = _transformed_input_for(model, input, GenericLiteLLMParams(drop_params=True))
+    assert _single_part(dropped) == _PARTS["input_text"]
+
+
+@pytest.mark.parametrize("config", _CONFIGS, ids=_CONFIG_IDS)
+def test_a_cost_map_entry_registered_under_the_deployment_name_keeps_a_valid_marker_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    registered: Final = {"id": "litellm-qa-sol-alias", "supports_vision": True, "input_cost_per_token": 1e-6}
+    monkeypatch.setitem(litellm.model_cost, "litellm-qa-sol-alias", registered)
+    valid: Final = _marked_message("input_text", {"mode": "explicit"})
+    assert _transformed_input_for("litellm-qa-sol-alias", valid, GenericLiteLLMParams(drop_params=True), config) == valid
+
+
+@pytest.mark.parametrize("config", _CONFIGS, ids=_CONFIG_IDS)
+def test_a_valid_marker_survives_drop_params_on_a_deployment_name_with_unknown_breakpoint_support(
+    monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    litellm_params: Final = GenericLiteLLMParams(drop_params=True)
+    valid: Final = _marked_message("input_text", {"mode": "explicit"})
+    malformed: Final = _marked_message("input_text", {"mode": "explicit", "ttl": "1h"})
+    assert _transformed_input_for("litellm-qa-sol-alias", valid, litellm_params, config) == valid
+    dropped: Final = _transformed_input_for("litellm-qa-sol-alias", malformed, litellm_params, config)
+    assert _single_part(dropped) == _PARTS["input_text"]
+
+
+def _declaring_base_model(where: str, base_model: str) -> GenericLiteLLMParams:
+    if where == "litellm_params":
+        return GenericLiteLLMParams(drop_params=True, base_model=base_model)
+    return GenericLiteLLMParams(drop_params=True, model_info={"base_model": base_model})
+
+
+@pytest.mark.parametrize("where", ("litellm_params", "model_info"))
+def test_a_declared_base_model_decides_whether_a_valid_marker_survives_drop_params(
+    monkeypatch: pytest.MonkeyPatch, where: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", {"mode": "explicit"})
+    kept: Final = _transformed_input_for("gpt-5.4-mini-prod", input, _declaring_base_model(where, "gpt-6.1-sol"))
+    assert kept == input
+    dropped: Final = _transformed_input_for("prod-deployment", input, _declaring_base_model(where, "gpt-5.4-mini"))
+    assert _single_part(dropped) == _PARTS["input_text"]
+
+
+def test_a_deployment_that_marks_cache_control_keeps_the_callers_own_marker_whatever_its_base_model_says(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    cached: Final = {"type": "input_text", "text": "a", "cache_control": {"type": "ephemeral"}}
+    marked: Final = {"type": "input_text", "text": "b", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    input: Final = [{"type": "message", "role": "user", "content": [cached, marked]}]
+    transformed: Final = _transformed_input_for("gpt-6.1-sol", input, _declaring_base_model("model_info", "gpt-5.5"))
+    (item,) = cast(list[Mapping[str, object]], transformed)
+    parts: Final = cast(list[Mapping[str, object]], item["content"])
+    assert [part.get("prompt_cache_breakpoint") for part in parts] == [{"mode": "explicit"}, {"mode": "explicit"}]
+
+
+def test_a_model_that_takes_markers_sends_kept_parts_byte_for_byte_and_drops_only_the_rejected_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    kept: Final = [
+        {"type": "input_text", "text": "a", "prompt_cache_breakpoint": None},
+        {"prompt_cache_breakpoint": {"mode": "explicit"}, "type": "input_text", "text": "b"},
+    ]
+    rejected: Final = {"type": "input_text", "text": "c"}
+    bad_ttl: Final = {"prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}}
+    input: Final = [
+        {"type": "message", "role": "user", "content": kept},
+        {"type": "message", "role": "user", "content": [{**bad_ttl, **rejected}]},
+    ]
+    transformed: Final = _transformed_input_for("gpt-6.1-sol", input, GenericLiteLLMParams(drop_params=True))
+    assert json.dumps(transformed) == json.dumps(
+        [{"type": "message", "role": "user", "content": kept}, {"type": "message", "role": "user", "content": [rejected]}]
+    )
+
+
+@pytest.mark.parametrize("content", ("Say ok", [{"type": "input_text", "text": "Say ok"}]), ids=("string", "parts"))
+@pytest.mark.parametrize("marker", (_VALID_MARKERS[0], "yes"), ids=("explicit", "string"))
+def test_a_prompt_cache_breakpoint_on_the_message_item_is_dropped_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, content: object, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    unmarked: Final[dict[str, object]] = {"type": "message", "role": "user", "content": content}
+    input: Final = [{**unmarked, "prompt_cache_breakpoint": marker}]
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=True)) == [unmarked]
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=False)) == input
+
+
+def test_cache_control_still_marks_a_part_whose_own_marker_is_malformed_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    part: Final = {"type": "input_text", "text": "Say ok", "cache_control": {"type": "ephemeral"}}
+    input: Final = [{"type": "message", "role": "user", "content": [{**part, "prompt_cache_breakpoint": "yes"}]}]
+    transformed: Final = _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=True))
+    assert _single_part(transformed) == {
+        "type": "input_text",
+        "text": "Say ok",
+        "prompt_cache_breakpoint": {"mode": "explicit"},
+    }
+
+
+def _caller_input_after_transform(model: str, marker: object) -> str:
+    hint: Final = {"type": "ephemeral"}
+    marked: Final = {} if marker is None else {"prompt_cache_breakpoint": marker}
+    input: Final = [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Say ok", "cache_control": hint, **marked},
+                {"type": "input_text", "text": "Thanks", "cache_control": hint},
+            ],
+            "cache_control": hint,
+        },
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "ok", "cache_control": hint, **marked}],
+        },
+    ]
+    _CONFIGS[0].transform_responses_api_request(
+        model=model,
+        input=cast("ResponseInputParam", input),  # cast-ok: plain dicts shaped like the SDK's input items
+        response_api_optional_request_params={},
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+    return json.dumps(input)
+
+
+@pytest.mark.parametrize("model", ("gpt-4.1", "gpt-6.1-sol"))
+@pytest.mark.parametrize("marker", (_VALID_MARKERS[0], "yes"), ids=("explicit", "malformed"))
+def test_a_marker_leaves_the_caller_request_that_fallbacks_and_logs_read_as_an_unmarked_one_would(
+    monkeypatch: pytest.MonkeyPatch, model: str, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    marker_json: Final = f', "prompt_cache_breakpoint": {json.dumps(marker)}'
+    unmarked: Final = _caller_input_after_transform(model, None)
+    assert _caller_input_after_transform(model, marker).replace(marker_json, "") == unmarked
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures(httpx_transport.__name__)
+async def test_aresponses_forwards_previous_response_id_to_openai() -> None:
+    first_input: Final = "remember the first turn"
+    second_input: Final = "continue the conversation"
+    first_id: Final = "resp_previous_turn"
+    second_id: Final = "resp_follow_up"
+    response_payloads: Final = (
+        {
+            "id": first_id,
+            "object": "response",
+            "created_at": 1734366691,
+            "status": "completed",
+            "model": "gpt-4o",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_first",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "first answer", "annotations": []}],
+                }
+            ],
+            "usage": {
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "total_tokens": 2,
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        },
+        {
+            "id": second_id,
+            "object": "response",
+            "created_at": 1734366692,
+            "status": "completed",
+            "model": "gpt-4o",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_second",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "second answer", "annotations": []}],
+                }
+            ],
+            "usage": {
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "total_tokens": 2,
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        },
+    )
+    provider_url: Final = "https://api.openai.com/v1/responses"
+
+    with respx.mock() as router:
+        route: Final = router.post(provider_url).mock(
+            side_effect=[
+                httpx.Response(status_code=200, json=response_payloads[0]),
+                httpx.Response(status_code=200, json=response_payloads[1]),
+            ]
+        )
+        first_response: Final = await litellm.aresponses(
+            model="openai/gpt-4o",
+            api_key="sk-test",
+            input=first_input,
+        )
+        assert isinstance(first_response, ResponsesAPIResponse)
+        second_response: Final = await litellm.aresponses(
+            model="openai/gpt-4o",
+            api_key="sk-test",
+            input=second_input,
+            previous_response_id=first_response.id,
+        )
+        calls: Final = route.calls
+
+    assert isinstance(second_response, ResponsesAPIResponse)
+    assert first_response.output[0].content[0].text == "first answer"
+    assert second_response.output[0].content[0].text == "second answer"
+    assert len(calls) == 2
+    request_adapter: Final = TypeAdapter(dict[str, JsonValue])
+    request_bodies: Final = tuple(request_adapter.validate_json(call.request.content) for call in calls)
+    assert request_bodies[0]["input"] == first_input
+    assert request_bodies[1]["input"] == second_input
+    assert request_bodies[1]["previous_response_id"] == first_id
+
+
+def test_dict_responses_input_filters_unset_reasoning_fields() -> None:
+    test_input: Final = [
+        {"role": "user", "content": "test"},
+        {
+            "id": "rs_123",
+            "summary": [{"text": "test", "type": "summary_text"}],
+            "type": "reasoning",
+            "content": None,
+            "encrypted_content": None,
+            "status": None,
+        },
+        {
+            "arguments": "{}",
+            "call_id": "call_123",
+            "name": "get_today",
+            "type": "function_call",
+            "id": "fc_123",
+            "status": "completed",
+        },
+    ]
+
+    validated_input: Final = OpenAIResponsesAPIConfig()._validate_input_param(test_input)
+
+    assert len(validated_input) == 3
+    reasoning_item: Final = validated_input[1]
+    assert reasoning_item["type"] == "reasoning"
+    assert "status" not in reasoning_item
+    assert "content" not in reasoning_item
+    assert "encrypted_content" not in reasoning_item
+    assert reasoning_item["id"] == "rs_123"
+    assert reasoning_item["summary"] == [{"text": "test", "type": "summary_text"}]
+
+    function_call_item: Final = validated_input[2]
+    assert function_call_item["type"] == "function_call"
+    assert function_call_item["status"] == "completed"
+
+
+_COMPACT_CONFIGS: Final = (
+    pytest.param(OpenAIResponsesAPIConfig(), "https://api.openai.com/v1/responses", id="openai"),
+    pytest.param(
+        AzureOpenAIResponsesAPIConfig(),
+        "https://x.openai.azure.com/openai/responses?api-version=2025-04-01-preview",
+        id="azure",
+    ),
+    pytest.param(AzureAIResponsesAPIConfig(), "https://x.services.ai.azure.com/openai/v1/responses", id="azure_ai"),
+)
+
+
+@pytest.mark.parametrize(("config", "api_base"), _COMPACT_CONFIGS)
+def test_compact_request_omits_metadata_and_user_and_keeps_the_rest_without_drop_params(
+    config: OpenAIResponsesAPIConfig, api_base: str
+) -> None:
+    _, data = config.transform_compact_response_api_request(
+        model="gpt-5.4-mini",
+        input="hi",
+        response_api_optional_request_params={
+            "metadata": {"ticket": "qa-1"},
+            "user": "end-user-1",
+            "instructions": "be brief",
+            "previous_response_id": "resp_1",
+            "reasoning": {"effort": "low"},
+            "temperature": 0.2,
+        },
+        api_base=api_base,
+        litellm_params=GenericLiteLLMParams(drop_params=False),
+        headers={},
+    )
+
+    assert {key: data[key] for key in data if key != "input"} == {
+        "model": "gpt-5.4-mini",
+        "instructions": "be brief",
+        "previous_response_id": "resp_1",
+        "reasoning": {"effort": "low"},
+        "temperature": 0.2,
+    }
+
+
+@pytest.mark.parametrize(("config", "api_base"), _COMPACT_CONFIGS)
+def test_compact_request_drops_params_compact_rejects_under_drop_params(
+    config: OpenAIResponsesAPIConfig, api_base: str
+) -> None:
+    _, data = config.transform_compact_response_api_request(
+        model="gpt-5.4-mini",
+        input="hi",
+        response_api_optional_request_params={
+            "metadata": {"ticket": "qa-1"},
+            "user": "end-user-1",
+            "temperature": 0.2,
+            "store": False,
+            "truncation": "auto",
+            "max_output_tokens": 100,
+            "tool_choice": "auto",
+            "reasoning": {"effort": "low"},
+            "include": ["reasoning.encrypted_content"],
+            "text": {"format": {"type": "text"}},
+        },
+        api_base=api_base,
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+
+    assert {key: data[key] for key in data if key != "input"} == {
+        "model": "gpt-5.4-mini",
+        "reasoning": {"effort": "low"},
+        "include": ["reasoning.encrypted_content"],
+        "text": {"format": {"type": "text"}},
+    }
+
+
+@pytest.mark.parametrize(
+    ("config", "api_base"),
+    (
+        pytest.param(XAIResponsesAPIConfig(), "https://api.x.ai/v1/responses", id="xai"),
+        pytest.param(HostedVLLMResponsesAPIConfig(), "http://vllm.example.com/v1/responses", id="hosted_vllm"),
+    ),
+)
+def test_compact_request_forwards_every_param_for_providers_not_known_to_reject_them(
+    config: OpenAIResponsesAPIConfig, api_base: str
+) -> None:
+    _, data = config.transform_compact_response_api_request(
+        model="some-model",
+        input="hi",
+        response_api_optional_request_params={"metadata": {"ticket": "qa-1"}, "user": "end-user-1", "temperature": 0.2},
+        api_base=api_base,
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+
+    assert {key: data[key] for key in data if key != "input"} == {
+        "model": "some-model",
+        "metadata": {"ticket": "qa-1"},
+        "user": "end-user-1",
+        "temperature": 0.2,
+    }
+
+
+@pytest.mark.parametrize(("config", "api_base"), _COMPACT_CONFIGS)
+def test_compact_request_keeps_stream_under_drop_params(config: OpenAIResponsesAPIConfig, api_base: str) -> None:
+    _, data = config.transform_compact_response_api_request(
+        model="gpt-5.4-mini",
+        input="hi",
+        response_api_optional_request_params={"stream": True, "stream_options": {"include_obfuscation": False}},
+        api_base=api_base,
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+
+    assert {key: data[key] for key in data if key != "input"} == {"model": "gpt-5.4-mini", "stream": True}

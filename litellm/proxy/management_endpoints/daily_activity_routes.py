@@ -22,6 +22,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     parse_canonical_date_range,
     raise_public,
     spend_logs_window,
+    sum_spend_metrics,
 )
 from litellm.proxy.management_endpoints.daily_activity_scopes import (
     AGENT_RESOLVER,
@@ -34,14 +35,18 @@ from litellm.proxy.management_endpoints.daily_activity_scopes import (
     EntityScopeResolver,
     ResolvedScope,
 )
+from litellm.proxy.management_endpoints.ptu_consumption import single_team_id, with_ptu_consumption
 from litellm.proxy.management_endpoints.team_endpoints import aggregated_date_range_error
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import PrismaClient, get_prisma_client_or_throw
+from litellm.repositories.daily_activity_buckets import api_key_bucket
 from litellm.repositories.daily_activity_repository import DailyActivityRepository
+from litellm.router import Router
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     CacheLeakageKeysResponse,
     DailyActivityKeyPageResponse,
     DailyActivityKeySearchResponse,
+    DailyActivityUserPageResponse,
     KeyActivityRow,
     KeyMetadata,
     KeySpendActivityRow,
@@ -49,12 +54,15 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     ModelTopKeysResponse,
     SpendAnalyticsPaginatedResponse,
     SpendMetrics,
+    UserActivityRow,
 )
 from litellm.types.repositories.daily_activity import (
     ExportRow,
     ExportType,
     KeyMetadataRow,
     KeySpendRow,
+    UserMetadataRow,
+    UserSpendRow,
 )
 
 router = APIRouter()
@@ -66,6 +74,12 @@ def get_daily_activity_prisma_client() -> PrismaClient:
 
 def get_daily_activity_repository() -> DailyActivityRepository:
     return daily_activity_repository(get_daily_activity_prisma_client())
+
+
+def get_daily_activity_llm_router() -> Router | None:
+    from litellm.proxy.proxy_server import llm_router
+
+    return llm_router
 
 
 def _date_range_error(query: EntityQuery, *, user_aggregated: bool) -> InvalidDateRange | None:
@@ -94,29 +108,9 @@ async def _resolved_scope(
     return result
 
 
-def _sum_metrics(metrics: Sequence[SpendMetrics]) -> SpendMetrics:
-    return SpendMetrics(
-        spend=sum(metric.spend for metric in metrics),
-        flat_cost=sum(metric.flat_cost for metric in metrics),
-        prompt_tokens=sum(metric.prompt_tokens for metric in metrics),
-        completion_tokens=sum(metric.completion_tokens for metric in metrics),
-        cache_read_input_tokens=sum(metric.cache_read_input_tokens for metric in metrics),
-        cache_creation_input_tokens=sum(metric.cache_creation_input_tokens for metric in metrics),
-        compression_saved_tokens=sum(metric.compression_saved_tokens for metric in metrics),
-        compression_savings_spend=sum(metric.compression_savings_spend for metric in metrics),
-        prompt_caching_savings_spend=sum(metric.prompt_caching_savings_spend for metric in metrics),
-        gateway_injected_caching_savings_spend=sum(metric.gateway_injected_caching_savings_spend for metric in metrics),
-        autorouter_savings_spend=sum(metric.autorouter_savings_spend for metric in metrics),
-        total_tokens=sum(metric.total_tokens for metric in metrics),
-        successful_requests=sum(metric.successful_requests for metric in metrics),
-        failed_requests=sum(metric.failed_requests for metric in metrics),
-        api_requests=sum(metric.api_requests for metric in metrics),
-        total_response_time_ms=sum(metric.total_response_time_ms for metric in metrics),
-        timed_requests=sum(metric.timed_requests for metric in metrics),
-    )
-
-
 def _key_metadata(api_key: str, metadata: Mapping[str, KeyMetadataRow]) -> KeyMetadata:
+    if not api_key:
+        return KeyMetadata(key_alias="Unattributed", key_exists=False)
     row: Final[KeyMetadataRow | None] = metadata.get(api_key)
     if row is None:
         return KeyMetadata()
@@ -131,7 +125,7 @@ def _key_metadata(api_key: str, metadata: Mapping[str, KeyMetadataRow]) -> KeyMe
 
 def _key_activity_row(row: KeySpendRow, metadata: Mapping[str, KeyMetadataRow]) -> KeySpendActivityRow:
     return KeySpendActivityRow(
-        api_key=row.api_key,
+        api_key=api_key_bucket(row.api_key),
         metrics=KeySpendMetrics(
             spend=row.spend,
             prompt_tokens=row.prompt_tokens,
@@ -156,10 +150,36 @@ async def _key_activity_rows(
         frozenset((resolved_scope.scope.start_date, resolved_scope.scope.end_date))
     )
     metadata: Final[Mapping[str, KeyMetadataRow]] = await repository.key_metadata(
-        frozenset(row.api_key for row in rows),
+        frozenset(row.api_key for row in rows if row.api_key),
         spend_window,
     )
     return [_key_activity_row(row, metadata) for row in rows]
+
+
+def _user_activity_row(row: UserSpendRow, metadata: Mapping[str, UserMetadataRow]) -> UserActivityRow:
+    meta: Final = metadata.get(row.user_id) if row.user_id is not None else None
+    return UserActivityRow(
+        user_id=row.user_id,
+        user_email=meta.user_email if meta is not None else None,
+        user_alias=meta.user_alias if meta is not None else None,
+        spend=row.spend,
+        prompt_tokens=row.prompt_tokens,
+        completion_tokens=row.completion_tokens,
+        total_tokens=row.total_tokens,
+        api_requests=row.api_requests,
+        successful_requests=row.successful_requests,
+        failed_requests=row.failed_requests,
+    )
+
+
+async def _user_activity_rows(
+    repository: DailyActivityRepository,
+    rows: Sequence[UserSpendRow],
+) -> Sequence[UserActivityRow]:
+    metadata: Final[Mapping[str, UserMetadataRow]] = await repository.user_metadata(
+        frozenset(user_id for row in rows if (user_id := row.user_id) is not None)
+    )
+    return [_user_activity_row(row, metadata) for row in rows]
 
 
 def _export_filename(
@@ -193,11 +213,11 @@ def _fold_key_metrics(api_key: str, response: SpendAnalyticsPaginatedResponse) -
     metadata: Final[KeyMetadata] = next(
         day.breakdown.api_keys[api_key].metadata for day in response.results if api_key in day.breakdown.api_keys
     )
-    return KeyActivityRow(api_key=api_key, metrics=_sum_metrics(metrics), metadata=metadata)
+    return KeyActivityRow(api_key=api_key, metrics=sum_spend_metrics(metrics), metadata=metadata)
 
 
 def _search_rows(keys: Sequence[str], response: SpendAnalyticsPaginatedResponse) -> list[KeyActivityRow]:
-    return [row for key in keys if (row := _fold_key_metrics(key, response)) is not None]
+    return [row for key in keys if (row := _fold_key_metrics(api_key_bucket(key), response)) is not None]
 
 
 def _csv_cell(value: object) -> object:
@@ -244,6 +264,7 @@ def _register_aggregated_route(router: APIRouter, resolver: EntityScopeResolver,
         user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
         repository: Annotated[DailyActivityRepository, Depends(get_daily_activity_repository)],
         prisma_client: Annotated[PrismaClient, Depends(get_daily_activity_prisma_client)],
+        llm_router: Annotated[Router | None, Depends(get_daily_activity_llm_router)],
         api_key_limit: Annotated[
             int, Query(ge=1, le=constants.USAGE_TOP_API_KEYS_MAX)
         ] = constants.USAGE_TOP_API_KEYS_DEFAULT,
@@ -256,13 +277,17 @@ def _register_aggregated_route(router: APIRouter, resolver: EntityScopeResolver,
                 prisma_client,
                 user_aggregated=resolver.entity == "user",
             )
-            return await get_daily_activity_aggregated(
+            activity: Final = await get_daily_activity_aggregated(
                 repository,
                 resolved.scope,
                 entity_metadata_field=resolved.entity_metadata,
                 include_entity_breakdown=resolver.include_entity_breakdown,
+                include_guardrail_breakdown=resolver.include_guardrail_breakdown,
                 api_key_limit=api_key_limit,
             )
+            if resolver.entity != "team":
+                return activity
+            return with_ptu_consumption(activity, llm_router, single_team_id(resolved.scope.entity_ids))
         except HTTPException:
             raise
         except Exception as exc:
@@ -513,6 +538,49 @@ def _register_export_route(router: APIRouter, resolver: EntityScopeResolver, pre
     )
 
 
+def _register_user_page_route(router: APIRouter, resolver: EntityScopeResolver, prefix: str) -> None:
+    @management_endpoint_wrapper
+    async def user_page(
+        entity_query: Annotated[EntityQuery, Depends(resolver.query)],
+        user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+        repository: Annotated[DailyActivityRepository, Depends(get_daily_activity_repository)],
+        prisma_client: Annotated[PrismaClient, Depends(get_daily_activity_prisma_client)],
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=constants.USAGE_USER_PAGE_MAX)] = constants.USAGE_USER_PAGE_DEFAULT,
+    ) -> DailyActivityUserPageResponse:
+        try:
+            resolved: Final = await _resolved_scope(
+                resolver,
+                entity_query,
+                user_api_key_dict,
+                prisma_client,
+                user_aggregated=False,
+            )
+            page: Final = await repository.user_page(resolved.scope, offset=offset, limit=limit)
+            return DailyActivityUserPageResponse(
+                users=await _user_activity_rows(repository, page.rows),
+                total_users=page.total_users,
+                offset=offset,
+                limit=limit,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001, LIT003  # mirrors the sibling daily-activity routes' 500 mapping
+            verbose_proxy_logger.exception("Daily activity user page failed: %s", exc)
+            raise HTTPException(status_code=500, detail={"error": f"Failed to fetch analytics: {exc}"})
+
+    router.add_api_route(
+        f"{prefix}/daily/activity/aggregated/users",
+        user_page,
+        methods=["GET"],
+        name=resolver.operation_names["user_page"],
+        tags=list(resolver.tags),
+        dependencies=(Depends(user_api_key_auth),),
+        response_model=DailyActivityUserPageResponse,
+        include_in_schema=prefix != "/end_user",
+    )
+
+
 def _register_cache_leakage_route(router: APIRouter, resolver: EntityScopeResolver, prefix: str) -> None:
     @management_endpoint_wrapper
     async def cache_leakage_keys(
@@ -565,6 +633,7 @@ def register_daily_activity_routes(router: APIRouter, resolver: EntityScopeResol
         _register_model_top_keys_route(router, resolver, prefix)
         _register_export_route(router, resolver, prefix)
         if resolver.entity == "user":
+            _register_user_page_route(router, resolver, prefix)
             _register_cache_leakage_route(router, resolver, prefix)
 
 

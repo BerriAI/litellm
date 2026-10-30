@@ -3,39 +3,61 @@ use litellm_host::observation::ObservationSender;
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use litellm_host::interceptors::{Interceptors, RawResponse, WireRequest};
-use litellm_llms::base_llm::auth::{Authenticated, resolve_auth};
+use litellm_host::interceptors::{Interceptors, RawResponse, RequestContext, WireRequest};
+use litellm_llms::base_llm::auth::{AuthScheme, Authenticated, resolve_auth};
+use litellm_secrets::source::Secrets;
 
 use super::{
-    Error,
-    types::{ProviderResponsesRequest, ResponsesOutput, ResponsesStreamHead},
+    Error, ResponsesRoute,
+    types::{ResponsesCall, ResponsesOutput, ResponsesProvider, ResponsesStreamHead},
 };
 
 pub(super) async fn execute(
-    http: &litellm_http::Client,
-    auth: &litellm_auth::AuthServices,
-    request: ProviderResponsesRequest,
-    cache: Option<litellm_cache_response::ScopedCache>,
+    route: &ResponsesRoute,
+    ResponsesProvider { identity, config }: ResponsesProvider,
+    call: ResponsesCall,
+    secrets: Secrets,
     cache_options: Option<litellm_cache_response::CachePolicy>,
     interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
 ) -> Result<ResponsesOutput, Error> {
-    let authenticated = resolve_auth(auth, request.environment, &|_| None).await?;
-    let identity = litellm_host::interceptors::ProviderIdentity {
-        model: request.context.model.clone(),
-        provider: request.context.custom_llm_provider.clone(),
+    let lookup = |name: &str| secrets.get(name);
+    let environment = config.validate_environment(
+        litellm_http::request::string_headers("responses", call.extra_headers)?,
+        call.api_key.as_deref(),
+        &lookup,
+    )?;
+    let url = config.get_complete_url(call.api_base.as_deref(), &lookup);
+    let context = RequestContext {
+        model: identity.model.clone(),
+        custom_llm_provider: identity.provider.clone(),
+        optional_params: serde_json::Value::Object(call.optional_params.clone()),
+        secret_fields: Vec::new(),
+        api_key: match &environment.auth {
+            AuthScheme::Credential { secret, .. } => Some(secret.clone()),
+            _ => None,
+        },
     };
+    let body = config.transform_responses_api_request(
+        &identity.model,
+        call.input,
+        call.optional_params,
+    )?;
+    let authenticated = resolve_auth(&route.auth, environment, &|_| None).await?;
     let wire = interceptors
         .before_provider_request(
             WireRequest {
-                url: request.url,
+                url,
                 headers: authenticated.headers,
-                body: request.body,
+                body,
             },
-            request.context,
+            context,
         )
         .await?;
-    let cache = cache.filter(|_| authenticated.signer.is_none());
+    let cache = route
+        .cache
+        .clone()
+        .filter(|_| authenticated.signer.is_none());
     let cache_request = litellm_inference::caching::CacheRequest::from_wire(
         identity,
         cache.as_ref().map(|_| &wire),
@@ -50,28 +72,29 @@ pub(super) async fn execute(
             let stream = match wire.body.get("stream") {
                 None => false,
                 Some(serde_json::Value::Bool(value)) => *value,
-                Some(_) => return Err(Error::InvalidRequest("stream must be a boolean".into())),
+                Some(_) => {
+                    return Err(Error::invalid_request(
+                        litellm_llms::ErrorDetail::Expected {
+                            subject: "stream",
+                            expected: "a boolean",
+                        },
+                    ));
+                }
             };
             let outbound = litellm_inference::outbound::outbound_request(
                 Authenticated {
                     headers: wire.headers,
                     signer: authenticated.signer,
                 },
-                wire.url,
+                &wire.url,
                 &wire.body,
-                Some(request.timeout.unwrap_or(Duration::from_secs(600))),
+                Some(call.timeout.unwrap_or(Duration::from_secs(600))),
             )?;
-            let response = litellm_inference::outbound::send(outbound, http)
-                .await
-                .map_err(network)?;
+            let response = litellm_inference::outbound::send(outbound, &route.http).await?;
             let status = response.status().as_u16();
             if !response.status().is_success() {
-                let body = response.text().await.map_err(network)?;
-                return Err(litellm_http::transport::Error::Http {
-                    status,
-                    body: litellm_http::request::truncate_error_body(&body),
-                }
-                .into());
+                let body = response.text().await.map_err(litellm_http::Error::from)?;
+                return Err(litellm_http::Error::upstream(status, body).into());
             }
             if stream {
                 let headers = response
@@ -83,14 +106,14 @@ pub(super) async fn execute(
                     .collect();
                 let chunks = response
                     .bytes_stream()
-                    .map(|chunk| chunk.map_err(network))
+                    .map(|chunk| chunk.map_err(|error| litellm_http::Error::from(error).into()))
                     .boxed();
                 return Ok(ResponsesOutput::Stream {
                     head: ResponsesStreamHead { headers },
                     chunks,
                 });
             }
-            let body = response.text().await.map_err(network)?;
+            let body = response.text().await.map_err(litellm_http::Error::from)?;
             let raw = RawResponse { body: body.clone() };
             if let Some(observers) = observers {
                 observers.emit(litellm_host::lifecycle::CallEvent::Execution(
@@ -101,18 +124,18 @@ pub(super) async fn execute(
                 .after_provider_response(raw)
                 .await
                 .map_err(Error::post_call)?;
-            let value = serde_json::from_str(&body)
-                .map_err(|error| Error::InvalidResponse(error.to_string().into()))?;
-            request
-                .config
+            let value = serde_json::from_str(&body).map_err(|error| {
+                Error::invalid_response(litellm_llms::ErrorDetail::invalid(
+                    "Responses API response JSON",
+                    error,
+                ))
+            })?;
+            config
                 .transform_response_api_response(value)
                 .map(ResponsesOutput::Complete)
                 .map_err(Error::from)
+                .map_err(Error::after_send)
         },
     )
     .await
-}
-
-fn network(error: reqwest::Error) -> Error {
-    litellm_http::transport::Error::Network(error.to_string()).into()
 }

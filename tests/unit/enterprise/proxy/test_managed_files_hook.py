@@ -15,6 +15,7 @@ import pytest
 from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from litellm.llms.base_llm.files.transformation import FileListModelScope
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import BATCH_CREATE_HIDDEN_PARAM
 from litellm.types.llms.openai import FileListPage, OpenAIFileObject
@@ -177,15 +178,17 @@ def _make_managed_files_over_rows(rows):
 
 
 def _make_managed_files_instance():
-    """Create a _PROXY_LiteLLMManagedFiles with storage methods mocked out."""
+    """Create a PROXY_LiteLLMManagedFiles with storage methods mocked out."""
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
 
     mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
     mock_prisma = MagicMock()
+    mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
 
-    instance = _PROXY_LiteLLMManagedFiles(
+    instance = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=mock_cache,
         prisma_client=mock_prisma,
     )
@@ -219,7 +222,7 @@ async def test_should_pass_credentials_to_afile_retrieve():
     }
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(
+    mock_router.registry.return_value.credentials = MagicMock(
         return_value=mock_credentials
     )
 
@@ -640,6 +643,22 @@ async def test_afile_list_denies_a_caller_with_no_identity_at_all():
         purpose=None,
         litellm_parent_otel_span=None,
         user_api_key_dict=UserAPIKeyAuth(parent_otel_span=None),
+    )
+
+    assert response.data == []
+    assert response.has_more is False
+    assert table.find_many_calls == []
+
+
+@pytest.mark.asyncio
+async def test_afile_list_reads_no_rows_when_no_deployment_can_hold_a_file() -> None:
+    managed_files, table = _make_managed_files_over_rows([_make_managed_file_row("unified-mine")])
+
+    response: Final = await managed_files.afile_list(
+        purpose=None,
+        litellm_parent_otel_span=None,
+        user_api_key_dict=_make_user_api_key_dict(),
+        model_scope=FileListModelScope(frozenset()),
     )
 
     assert response.data == []
@@ -1077,7 +1096,7 @@ async def test_should_not_double_wrap_already_unified_output_file_id():
         "custom_llm_provider": "openai",
     }
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(
+    mock_router.registry.return_value.credentials = MagicMock(
         return_value=mock_credentials
     )
     mock_afile_retrieve = AsyncMock(return_value=_make_file_object(provider_file_id))
@@ -1158,7 +1177,7 @@ async def test_afile_content_passes_trusted_model_credentials_to_router():
     )
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(
+    mock_router.registry.return_value.credentials = MagicMock(
         return_value={
             "custom_llm_provider": "bedrock",
             "s3_bucket_name": "my-bucket",
@@ -1193,7 +1212,7 @@ def _managed_deletion_file_id(provider_file_id):
 def _managed_files_with_deletion_row(unified_file_id, provider_file_id, file_object):
     from litellm.caching import DualCache
     from litellm.models.managed_files import LiteLLM_ManagedFileTable
-    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 
     row = LiteLLM_ManagedFileTable(
         unified_file_id=unified_file_id,
@@ -1205,7 +1224,7 @@ def _managed_files_with_deletion_row(unified_file_id, provider_file_id, file_obj
         find_first=AsyncMock(return_value=row),
         delete=AsyncMock(),
     )
-    return _PROXY_LiteLLMManagedFiles(
+    return PROXY_LiteLLMManagedFiles(
         internal_usage_cache=DualCache(),
         prisma_client=MagicMock(db=MagicMock(litellm_managedfiletable=table)),
     ), table
@@ -1267,7 +1286,7 @@ async def test_afile_delete_returns_managed_id_for_stored_provider_output():
     stored_file = _make_file_object(provider_file_id)
     managed_files, table = _managed_files_with_deletion_row(unified_file_id, provider_file_id, stored_file)
     router = MagicMock(
-        get_deployment_credentials_with_provider=MagicMock(return_value=None),
+        **{"registry.return_value.credentials.return_value": None},
         afile_delete=AsyncMock(return_value=FileDeleted(id=provider_file_id, object="file", deleted=True)),
     )
     response = await managed_files.afile_delete(
@@ -1361,7 +1380,7 @@ async def test_afile_content_error_reports_unified_id_not_provider_uri():
     )
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(return_value=None)
+    mock_router.registry.return_value.credentials = MagicMock(return_value=None)
     mock_router.afile_content = AsyncMock(side_effect=Exception("deployment failed"))
 
     with pytest.raises(Exception, match='LiteLLM Managed File object with') as exc_info:
@@ -1377,16 +1396,18 @@ async def test_afile_content_error_reports_unified_id_not_provider_uri():
 
 
 def _make_real_managed_files_instance():
-    """Create a _PROXY_LiteLLMManagedFiles with a real store_unified_file_id but
+    """Create a PROXY_LiteLLMManagedFiles with a real store_unified_file_id but
     an AsyncMock prisma client, so the DB write path itself can be asserted."""
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
 
     mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
     mock_cache.async_set_cache = AsyncMock()
 
     mock_prisma = MagicMock()
+    mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
     mock_prisma.db.litellm_managedfiletable.upsert = AsyncMock()
     mock_prisma.db.litellm_managedfiletable.create = AsyncMock(
         side_effect=AssertionError(
@@ -1395,7 +1416,7 @@ def _make_real_managed_files_instance():
     )
 
     return (
-        _PROXY_LiteLLMManagedFiles(
+        PROXY_LiteLLMManagedFiles(
             internal_usage_cache=mock_cache,
             prisma_client=mock_prisma,
         ),
@@ -1407,7 +1428,7 @@ def _make_object_store_instance():
     """A real store_unified_object_id over an AsyncMock prisma client, so both the
     upsert and the update-only write path can be asserted."""
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
 
     mock_cache = MagicMock()
@@ -1418,7 +1439,7 @@ def _make_object_store_instance():
     mock_prisma.db.litellm_managedobjecttable.update_many = AsyncMock()
 
     return (
-        _PROXY_LiteLLMManagedFiles(
+        PROXY_LiteLLMManagedFiles(
             internal_usage_cache=mock_cache,
             prisma_client=mock_prisma,
         ),
@@ -1493,6 +1514,51 @@ async def test_create_still_upserts_and_claims_attribution():
     assert created["api_key"] != "sk-the-creator"
     assert created["created_by"] == "alice"
     assert created["team_id"] == "team-alpha"
+
+
+@pytest.mark.asyncio
+async def test_a_stored_background_response_names_its_creators_end_user_and_holds_none_of_its_output():
+    """Billing reads only a stored response's status and model, so neither the row nor its cache
+    entry keeps what the model generated, and the row names the end user the create billed to."""
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    managed_files, mock_prisma = _make_object_store_instance()
+    generated_text = "the generated answer"
+    response = ResponsesAPIResponse(
+        id="resp_unified",
+        object="response",
+        status="completed",
+        created_at=1,
+        model="gpt-5.6",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_1",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": generated_text, "annotations": []}],
+            }
+        ],
+        background=True,
+    )
+
+    await managed_files.store_unified_object_id(
+        unified_object_id="resp_unified",
+        file_object=response,
+        litellm_parent_otel_span=None,
+        model_object_id="resp_provider",
+        file_purpose="response",
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-the-creator", end_user_id="customer-42", parent_otel_span=None),
+        persist_attribution=True,
+    )
+
+    written = mock_prisma.db.litellm_managedobjecttable.upsert.await_args.kwargs["data"]
+    cached = managed_files.internal_usage_cache.async_set_cache.await_args.kwargs["value"]
+    assert generated_text not in json.dumps(written, default=str)
+    assert generated_text not in json.dumps(cached, default=str)
+    assert json.loads(written["create"]["file_object"])["status"] == "completed"
+    assert written["create"]["end_user_id"] == "customer-42"
+    assert generated_text in response.model_dump_json()
 
 
 @pytest.mark.asyncio
@@ -1621,7 +1687,7 @@ async def test_hook_mint_prefers_input_file_target_model_names():
     )
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(return_value={})
+    mock_router.registry.return_value.credentials = MagicMock(return_value={})
 
     with (
         patch("litellm.afile_retrieve", AsyncMock(return_value=_make_file_object())),
@@ -1651,7 +1717,7 @@ async def test_hook_mint_falls_back_to_response_input_file_id_target_models():
     }
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(return_value={})
+    mock_router.registry.return_value.credentials = MagicMock(return_value={})
 
     with (
         patch("litellm.afile_retrieve", AsyncMock(return_value=_make_file_object())),
@@ -1870,7 +1936,7 @@ async def test_afile_delete_passes_trusted_model_credentials_to_router():
     managed_files.delete_unified_file_id = AsyncMock(return_value=_make_file_object(unified_file_id))
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(
+    mock_router.registry.return_value.credentials = MagicMock(
         return_value={
             "custom_llm_provider": "bedrock",
             "s3_bucket_name": "my-bucket",
@@ -1955,7 +2021,7 @@ async def test_afile_delete_bedrock_unified_id_end_to_end(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_afile_delete_storage_backed_row_deletes_stored_content_not_provider_files():
-    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
     from openai.types import FileDeleted
 
     from litellm.caching import DualCache
@@ -1973,14 +2039,14 @@ async def test_afile_delete_storage_backed_row_deletes_stored_content_not_provid
     )
     file_table = MagicMock(find_first=AsyncMock(return_value=row), delete=AsyncMock())
     content_table = MagicMock(delete=AsyncMock())
-    managed_files = _PROXY_LiteLLMManagedFiles(
+    managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=DualCache(),
         prisma_client=MagicMock(
             db=MagicMock(litellm_managedfiletable=file_table, litellm_managedfilecontenttable=content_table)
         ),
     )
     router = MagicMock(
-        get_deployment_credentials_with_provider=MagicMock(return_value=None),
+        **{"registry.return_value.credentials.return_value": None},
         afile_delete=AsyncMock(),
     )
 
@@ -1998,7 +2064,7 @@ async def test_afile_delete_storage_backed_row_deletes_stored_content_not_provid
 
 @pytest.mark.asyncio
 async def test_afile_content_storage_backed_row_returns_stored_bytes_not_provider_content():
-    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
     from prisma import Base64
 
     from litellm.caching import DualCache
@@ -2017,14 +2083,14 @@ async def test_afile_content_storage_backed_row_returns_stored_bytes_not_provide
     )
     file_table = MagicMock(find_first=AsyncMock(return_value=row))
     content_table = MagicMock(find_unique=AsyncMock(return_value=MagicMock(content=Base64.encode(stored_bytes))))
-    managed_files = _PROXY_LiteLLMManagedFiles(
+    managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=DualCache(),
         prisma_client=MagicMock(
             db=MagicMock(litellm_managedfiletable=file_table, litellm_managedfilecontenttable=content_table)
         ),
     )
     router = MagicMock(
-        get_deployment_credentials_with_provider=MagicMock(return_value=None),
+        **{"registry.return_value.credentials.return_value": None},
         afile_content=AsyncMock(),
     )
 
@@ -2070,12 +2136,12 @@ async def test_store_unified_object_id_batch_processed_is_written_only_when_aske
 
 @pytest.mark.asyncio
 async def test_store_unified_file_id_caches_the_storage_location_the_db_row_gets():
-    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 
     from litellm.caching import DualCache
 
     file_table = MagicMock(upsert=AsyncMock(), find_first=AsyncMock(side_effect=AssertionError("cache miss")))
-    managed_files = _PROXY_LiteLLMManagedFiles(
+    managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=DualCache(),
         prisma_client=MagicMock(db=MagicMock(litellm_managedfiletable=file_table)),
     )

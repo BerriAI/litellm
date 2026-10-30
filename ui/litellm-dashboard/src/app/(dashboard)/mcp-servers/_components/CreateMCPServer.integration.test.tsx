@@ -396,6 +396,46 @@ describe("CreateMCPServer", () => {
       expect(payload.credentials).toEqual({ auth_value: "my-secret-key" });
     });
 
+    it("creates an Authorization (raw header) server with the header value sent verbatim", async () => {
+      await selectHttpTransport();
+
+      fireEvent.change(getServerNameInput(), { target: { value: "Raw_Auth_Server" } });
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://example.com/mcp" },
+      });
+
+      await selectOption("Authentication", "Authorization (raw header)");
+
+      fireEvent.change(await screen.findByPlaceholderText("Enter token or secret"), {
+        target: { value: "ApiKey raw-key-123" },
+      });
+
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-2",
+        server_name: "Raw_Auth_Server",
+        alias: "Raw_Auth_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "authorization",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+      });
+
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
+
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.auth_type).toBe("authorization");
+      expect(payload.credentials).toEqual({ auth_value: "ApiKey raw-key-123" });
+    });
+
     it("does not write the browser-authorized token into form.credentials for true_passthrough", async () => {
       await selectHttpTransport();
 
@@ -1044,6 +1084,8 @@ describe("CreateMCPServer", () => {
 
       const limitInput = screen.getByPlaceholderText("e.g. 10");
       fireEvent.change(limitInput, { target: { value: "5" } });
+      const rpmInput = screen.getByPlaceholderText("e.g. 60");
+      fireEvent.change(rpmInput, { target: { value: "7" } });
 
       vi.mocked(networking.createMCPServer).mockResolvedValue({
         server_id: "new-server-1",
@@ -1069,6 +1111,7 @@ describe("CreateMCPServer", () => {
 
       const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
       expect(payload.max_concurrent_requests).toBe(5);
+      expect(payload.rpm).toBe(7);
     });
 
     it("routes OAuth Token Exchange (OBO) config to the backend payload", async () => {

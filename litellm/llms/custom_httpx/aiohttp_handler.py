@@ -18,9 +18,10 @@ from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
+    get_httpx_client,
     get_ssl_configuration,
 )
+from litellm.llms.custom_httpx.sse_lines import iter_sse_lines
 from litellm.types.llms.openai import FileTypes
 from litellm.types.utils import HttpHandlerRequestFields, ImageResponse, LlmProviders
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
@@ -60,7 +61,7 @@ class BaseLLMAIOHTTPHandler:
         # Create a transport using AsyncHTTPHandler's logic
         try:
             ssl_config: Final = get_ssl_configuration()
-            self.transport = AsyncHTTPHandler._create_aiohttp_transport(
+            self.transport = AsyncHTTPHandler.create_aiohttp_transport(
                 ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
                 ssl_context=ssl_config if isinstance(ssl_config, ssl.SSLContext) else None,
             )
@@ -94,7 +95,7 @@ class BaseLLMAIOHTTPHandler:
         transport: Final = self.transport or self._get_or_create_transport()
         if transport is not None and hasattr(transport, "_get_valid_client_session"):
             try:
-                return transport._get_valid_client_session()
+                return transport.get_valid_client_session()
             except RuntimeError:
                 pass
 
@@ -401,7 +402,7 @@ class BaseLLMAIOHTTPHandler:
             )
 
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = _get_httpx_client()
+            sync_httpx_client = get_httpx_client()
         else:
             sync_httpx_client = client
 
@@ -440,9 +441,9 @@ class BaseLLMAIOHTTPHandler:
         timeout: float | httpx.Timeout,
         fake_stream: bool = False,
         client: HTTPHandler | None = None,
-    ) -> tuple[Any, dict]:
+    ) -> tuple[object, dict]:
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = _get_httpx_client()
+            sync_httpx_client = get_httpx_client()
         else:
             sync_httpx_client = client
         stream = True
@@ -466,7 +467,7 @@ class BaseLLMAIOHTTPHandler:
             )
         else:
             completion_stream = provider_config.get_model_response_iterator(
-                streaming_response=response.iter_lines(), sync_stream=True
+                streaming_response=iter_sse_lines(response.iter_text()), sync_stream=True
             )
 
         # LOGGING
@@ -560,11 +561,8 @@ class BaseLLMAIOHTTPHandler:
         organization: str | None = None,
         headers: dict | None = None,
     ) -> ImageResponse:
-        if model is None:
-            raise ValueError("model is required for non-openai image variations")
-
         provider_config: Final = ProviderConfigManager.get_provider_image_variation_config(
-            model=model,  # openai defaults to dall-e-2
+            model=model or "",
             provider=LlmProviders(custom_llm_provider),
         )
 
@@ -625,7 +623,7 @@ class BaseLLMAIOHTTPHandler:
             )
 
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = _get_httpx_client()
+            sync_httpx_client = get_httpx_client()
         else:
             sync_httpx_client = client
 
@@ -671,7 +669,7 @@ class BaseLLMAIOHTTPHandler:
         status_code: Final = getattr(e, "status_code", 500)
         error_headers = getattr(e, "headers", None)
         error_text = getattr(e, "text", str(e))
-        error_response: Final = getattr(e, "response", None)
+        error_response: Final[object] = getattr(e, "response", None)
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
         if error_response and hasattr(error_response, "text"):

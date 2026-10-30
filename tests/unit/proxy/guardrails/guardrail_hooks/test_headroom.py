@@ -21,9 +21,10 @@ Tests cover:
   loop resolves the retrieve tool call, then fake-streamed back to the client
 """
 
+import datetime
 import json
 import time
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -33,6 +34,7 @@ from fastapi import HTTPException
 
 import litellm
 
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
     HeadroomGuardrail,
     has_headroom_retrieve_tool,
@@ -41,7 +43,7 @@ from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
 )
-from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
+from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY, HEADROOM_STREAM_OPTIONS_KEY
 from litellm.types.utils import (
     CallTypes,
     GenericGuardrailAPIInputs,
@@ -769,6 +771,72 @@ async def test_async_build_agentic_loop_plan_builds_responses_api_function_call_
     assert output_item is not None
     assert output_item["call_id"] == "call_abc123"
     assert output_item["output"] == original_content
+
+
+@pytest.mark.asyncio
+async def test_responses_retrieval_followup_reuses_the_model_the_caller_requested(
+    guardrail: HeadroomGuardrail,
+) -> None:
+    requested_model: Final = "bedrock/converse/us.anthropic.claude-sonnet-5-5"
+    retrieve_hash: Final = "b573993006976af767214fac"
+    logging_obj: Final = Logging(
+        model=requested_model,
+        messages=[],
+        stream=False,
+        call_type=CallTypes.responses.value,
+        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="call-1",
+        function_id="fn-headroom-followup",
+    )
+    litellm.responses(
+        model=requested_model,
+        input=f"What does it say? hash={retrieve_hash}",
+        mock_response="retrieving",
+        litellm_logging_obj=logging_obj,
+    )
+    response: Final = MagicMock()
+    response.choices = None
+    response.content = None
+    response.output = [
+        {
+            "type": "function_call",
+            "id": "fc_abc123",
+            "call_id": "call_abc123",
+            "name": HEADROOM_RETRIEVE_TOOL_NAME,
+            "arguments": json.dumps({"hash": retrieve_hash}),
+        }
+    ]
+    guardrail._issued_hashes_by_call_id["call-1"] = (frozenset({retrieve_hash}), time.monotonic() + 999)
+
+    with patch.object(
+        guardrail.async_handler,
+        "get",
+        new_callable=AsyncMock,
+        return_value=_make_retrieve_response("The full compressed content."),
+    ):
+        plan: Final = await guardrail.async_build_agentic_loop_plan(
+            tools={
+                "tool_calls": [
+                    {
+                        "id": "call_abc123",
+                        "type": "function",
+                        "name": HEADROOM_RETRIEVE_TOOL_NAME,
+                        "arguments": {"hash": retrieve_hash},
+                    }
+                ]
+            },
+            model="converse/us.anthropic.claude-sonnet-5-5",
+            messages=[{"role": "user", "content": f"What does it say? hash={retrieve_hash}"}],
+            response=response,
+            anthropic_messages_provider_config=None,
+            anthropic_messages_optional_request_params={},
+            logging_obj=logging_obj,
+            stream=False,
+            kwargs={"litellm_call_id": "call-1"},
+        )
+
+    assert plan.request_patch is not None
+    assert plan.request_patch.model == requested_model
 
 
 @pytest.mark.asyncio
@@ -2009,6 +2077,45 @@ async def test_apply_guardrail_sends_textless_parts_rows_unflattened(
 
 
 @pytest.mark.asyncio
+async def test_sdk_echoed_null_tool_calls_never_reach_compression_service(guardrail: HeadroomGuardrail):
+    """LIT-6921: OpenAI SDK assistant messages echoed back as history carry
+    ``"tool_calls": null``, which headroom-ai 0.27-0.30 answer with a 503. The
+    chat handler sends no row carrying that null and forwards the echoed rows
+    unchanged."""
+    from openai.types.chat import ChatCompletionMessage
+
+    from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
+
+    def _sdk_assistant(**fields: object) -> dict:
+        return ChatCompletionMessage.model_validate({"role": "assistant", **fields}).model_dump()
+
+    tool_call = {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+    history = [
+        {"role": "user", "content": "E" * 5000},
+        _sdk_assistant(content=None, tool_calls=[tool_call]),
+        {"role": "tool", "tool_call_id": "call_1", "content": "R" * 5000},
+        _sdk_assistant(content="summary"),
+        {"role": "user", "content": "F" * 5000},
+        _sdk_assistant(content="noted"),
+        {"role": "user", "content": "and now?"},
+    ]
+    assert history[3]["tool_calls"] is None
+    sent: dict = {}
+
+    def _echo(**kwargs):
+        sent["messages"] = kwargs["json"]["messages"]
+        return _make_compress_response(json.loads(json.dumps(sent["messages"])))
+
+    data = {"model": "claude-sonnet-5", "messages": json.loads(json.dumps(history))}
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=_echo):
+        result = await OpenAIChatCompletionsHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    assert [row["role"] for row in sent["messages"]] == ["user", "tool", "user"]
+    assert all(row.get("tool_calls", []) is not None for row in sent["messages"])
+    assert [result["messages"][index] for index in (1, 3, 5)] == [history[index] for index in (1, 3, 5)]
+
+
+@pytest.mark.asyncio
 async def test_fail_open_returns_original_parts_shapes():
     guardrail = _make_guardrail(unreachable_fallback="fail_open")
     inputs = GenericGuardrailAPIInputs(
@@ -2169,6 +2276,28 @@ async def test_pre_call_deployment_hook_converts_stream_only_for_ccr_chat_comple
     assert result["stream"] is False
     assert result[HEADROOM_CONVERTED_STREAM_KEY] is True
     assert kwargs["stream"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", (CallTypes.acompletion, CallTypes.aresponses))
+async def test_pre_call_deployment_hook_moves_stream_options_off_the_forced_non_stream_call(
+    guardrail: HeadroomGuardrail, call_type: CallTypes
+):
+    stream_options: Final = {"include_usage": True}
+    kwargs: Final[dict[str, object]] = {
+        "model": "gpt-4o",
+        "stream": True,
+        "stream_options": stream_options,
+        "tools": [_retrieve_tool_definition()],
+    }
+
+    result: Final = await guardrail.async_pre_call_deployment_hook(kwargs=kwargs, call_type=call_type)
+
+    assert result is not None
+    assert result["stream"] is False
+    assert "stream_options" not in result
+    assert result[HEADROOM_STREAM_OPTIONS_KEY] == stream_options
+    assert kwargs["stream_options"] == stream_options
 
 
 @pytest.mark.asyncio
@@ -2650,7 +2779,7 @@ async def test_retrieved_content_protected_when_mcp_tool_name_is_truncated(guard
     the OpenAI-translated view the guardrail scans, dropping the suffix. The call
     id read from the request's own Anthropic tool_use (never truncated) still
     pairs the retrieved row so it is held back."""
-    from litellm.llms.anthropic.pass_through.adapters.transformation import (
+    from litellm.llms.anthropic.messages.adapters.transformation import (
         truncate_tool_name,
     )
 

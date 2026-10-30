@@ -4,6 +4,7 @@ Tests for the Content Filter Guardrail
 
 import json
 import os
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -30,7 +31,17 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
     ContentFilterCategoryConfig,
     ContentFilterDetection,
 )
-from litellm.types.utils import StandardLoggingGuardrailInformation
+from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field
+from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
+from litellm.types.utils import (
+    Delta,
+    ModelResponseStream,
+    StandardLoggingGuardrailInformation,
+    StreamingChoices,
+    TextChoices,
+    TextCompletionResponse,
+    Usage,
+)
 
 
 class TestContentFilterGuardrail:
@@ -3523,3 +3534,180 @@ async def test_image_whose_description_is_clean_passes_through_unchanged():
     )
 
     assert result == {"images": ["https://example.com/desk.png"], "texts": []}
+
+
+def _fruit_word_filter() -> ContentFilterGuardrail:
+    return ContentFilterGuardrail(
+        guardrail_name="fruit-filter",
+        blocked_words=[
+            BlockedWord(keyword="persimmon", action=ContentFilterAction.MASK),
+            BlockedWord(keyword="kumquat", action=ContentFilterAction.BLOCK),
+        ],
+        event_hook=GuardrailEventHooks.post_call,
+    )
+
+
+async def _text_completion_stream(*parts: tuple[str | None, str | None]):
+    for text, finish_reason in parts:
+        yield TextCompletionResponse(
+            id="cmpl-stream",
+            model="gpt-3.5-turbo-instruct",
+            object="text_completion",
+            choices=[TextChoices(index=0, text=text, finish_reason=finish_reason)],
+        )
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_masks_a_word_split_across_text_completion_chunks():
+    request_data: Final[dict] = {}
+
+    delivered: Final = [
+        chunk
+        async for chunk in _fruit_word_filter().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=MagicMock(),
+            response=_text_completion_stream(("A pers", None), ("immon tart", None), (None, "stop")),
+            request_data=request_data,
+        )
+    ]
+
+    assert "".join(chunk.choices[0].text or "" for chunk in delivered) == "A [KEYWORD_REDACTED] tart"
+    assert request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_status"] == "success"
+
+
+_LONG_TAIL: Final = "the quick brown fox jumps over the lazy dog and then eats a ripe persimmon"
+
+
+async def _text_completion_n2_stream_without_choice_1_finish() -> AsyncGenerator[TextCompletionResponse, None]:
+    for index, text, finish_reason in (
+        (0, "A short answer", None),
+        (1, _LONG_TAIL[:30], None),
+        (1, _LONG_TAIL[30:], None),
+        (0, None, "stop"),
+    ):
+        yield TextCompletionResponse(
+            id="cmpl-stream",
+            model="gpt-3.5-turbo-instruct",
+            object="text_completion",
+            choices=[TextChoices(index=index, text=text, finish_reason=finish_reason)],
+        ).model_copy(update={"usage": None})
+
+
+async def _chat_n2_stream_without_choice_1_finish() -> AsyncGenerator[ModelResponseStream, None]:
+    for index, content, finish_reason in (
+        (0, "A short answer", None),
+        (1, _LONG_TAIL[:30], None),
+        (1, _LONG_TAIL[30:], None),
+        (0, None, "stop"),
+    ):
+        yield ModelResponseStream(
+            id="chatcmpl-stream",
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(index=index, delta=Delta(content=content), finish_reason=finish_reason)],
+        )
+
+
+def _streamed_text(chunk: ModelResponseStream | TextCompletionResponse, index: int) -> str:
+    return "".join(_choice_text(choice) for choice in chunk.choices if choice.index == index)
+
+
+def _choice_text(choice: TextChoices | StreamingChoices) -> str:
+    content: Final = stream_item_field(choice, "text") if isinstance(choice, TextChoices) else choice.delta.content
+    return content if isinstance(content, str) else ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stream", [_text_completion_n2_stream_without_choice_1_finish, _chat_n2_stream_without_choice_1_finish]
+)
+async def test_streaming_hook_releases_the_held_tail_of_a_choice_the_stream_never_finished(
+    stream: Callable[[], AsyncIterator[ModelResponseStream | TextCompletionResponse]],
+) -> None:
+    delivered: Final = [
+        chunk
+        async for chunk in _fruit_word_filter().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=MagicMock(), response=stream(), request_data={}
+        )
+    ]
+
+    assert "".join(_streamed_text(chunk, 0) for chunk in delivered) == "A short answer"
+    assert "".join(_streamed_text(chunk, 1) for chunk in delivered) == _LONG_TAIL.replace(
+        "persimmon", "[KEYWORD_REDACTED]"
+    )
+    assert all(getattr(chunk, "usage", None) is None for chunk in delivered)
+
+
+_STREAM_USAGE: Final = Usage(prompt_tokens=5, completion_tokens=20, total_tokens=25)
+
+
+async def _then_usage_chunk(
+    stream: Callable[[], AsyncIterator[ModelResponseStream | TextCompletionResponse]],
+    usage_chunk: ModelResponseStream | TextCompletionResponse,
+) -> AsyncGenerator[ModelResponseStream | TextCompletionResponse, None]:
+    async for chunk in stream():
+        yield chunk
+    yield usage_chunk
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stream", "usage_chunk"),
+    [
+        (
+            _text_completion_n2_stream_without_choice_1_finish,
+            TextCompletionResponse(id="cmpl-stream", object="text_completion", choices=[], usage=_STREAM_USAGE),
+        ),
+        (_chat_n2_stream_without_choice_1_finish, ModelResponseStream(id="chatcmpl-stream", choices=[], usage=_STREAM_USAGE)),
+    ],
+)
+async def test_streaming_hook_keeps_the_usage_chunk_last_after_releasing_a_held_tail(
+    stream: Callable[[], AsyncIterator[ModelResponseStream | TextCompletionResponse]],
+    usage_chunk: ModelResponseStream | TextCompletionResponse,
+) -> None:
+    delivered: Final = [
+        chunk
+        async for chunk in _fruit_word_filter().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=MagicMock(), response=_then_usage_chunk(stream, usage_chunk), request_data={}
+        )
+    ]
+
+    assert delivered[-1] is usage_chunk
+    assert "".join(_streamed_text(chunk, 1) for chunk in delivered[:-1]) == _LONG_TAIL.replace(
+        "persimmon", "[KEYWORD_REDACTED]"
+    )
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_relays_each_responses_api_event_as_it_arrives() -> None:
+    timeline: Final[list[str]] = []
+
+    async def responses_api_events() -> AsyncGenerator[OutputTextDeltaEvent, None]:
+        for delta in ("first", "second"):
+            timeline.append(f"upstream sent {delta}")
+            yield OutputTextDeltaEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+                item_id="msg_1",
+                output_index=0,
+                content_index=0,
+                delta=delta,
+            )
+
+    async for event in _fruit_word_filter().async_post_call_streaming_iterator_hook(
+        user_api_key_dict=MagicMock(), response=responses_api_events(), request_data={}
+    ):
+        timeline.append(f"client got {event.delta}")
+
+    assert timeline == ["upstream sent first", "client got first", "upstream sent second", "client got second"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_blocks_a_word_split_across_text_completion_chunks():
+    with pytest.raises(HTTPException) as exc_info:
+        async for _ in _fruit_word_filter().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=MagicMock(),
+            response=_text_completion_stream(("A kum", None), ("quat tart", None), (None, "stop")),
+            request_data={},
+        ):
+            pass
+
+    assert exc_info.value.status_code == 400
+    assert "kumquat" in str(exc_info.value.detail)

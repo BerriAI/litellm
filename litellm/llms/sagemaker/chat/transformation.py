@@ -21,14 +21,14 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import LlmProviders
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
-from ..common_utils import AWSEventStreamDecoder, SagemakerError
+from ..common_utils import INFERENCE_COMPONENT_HEADER, OBJECT_KEYED_MAPPING, AWSEventStreamDecoder, SagemakerError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -59,7 +59,12 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         inference_component_name: Final = optional_params.get("model_id")
         if not isinstance(inference_component_name, str):
             return headers
-        return {**headers, "X-Amzn-SageMaker-Inference-Component": inference_component_name}
+        other_headers: Final = {
+            name: value
+            for name, value in OBJECT_KEYED_MAPPING.validate_python(headers).items()
+            if not isinstance(name, str) or name.lower() != INFERENCE_COMPONENT_HEADER.lower()
+        }
+        return {**other_headers, INFERENCE_COMPONENT_HEADER: inference_component_name}
 
     def transform_request(
         self,
@@ -69,17 +74,19 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         litellm_params: dict,  # mutable-ok: matches the base chat transform signature
         headers: dict,  # mutable-ok: matches the base chat transform signature
     ) -> dict:  # mutable-ok: the handler sends this body straight to httpx
-        request: Final = super().transform_request(
+        request: Final[dict[str, object]] = super().transform_request(  # mutable-ok: base transform returns a dict
             model=model,
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
         )
+        header_only_params: Final = frozenset((*self.aws_authentication_params, "model_id"))
+        container_request: Final = {key: value for key, value in request.items() if key not in header_only_params}
         served_model_name: Final = litellm_params.get("hf_model_name")
         if not isinstance(served_model_name, str):
-            return request
-        return {**request, "model": served_model_name}
+            return container_request
+        return {**container_request, "model": served_model_name}
 
     def get_complete_url(
         self,
@@ -155,7 +162,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         timeout: float | httpx.Timeout | None = None,
     ) -> CustomStreamWrapper:
         if client is None or isinstance(client, AsyncHTTPHandler):
-            client = _get_httpx_client(params={})
+            client = get_httpx_client(params={})
 
         try:
             response: Final = client.post(

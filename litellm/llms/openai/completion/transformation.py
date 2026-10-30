@@ -5,12 +5,13 @@ Support for gpt model family
 from collections.abc import Mapping
 from typing import Final
 
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUserMessage
 from litellm.types.utils import Choices, Message, ModelResponse, TextCompletionResponse
 
 from ..chat.gpt_transformation import OpenAIGPTConfig
-from .utils import _transform_prompt
+from .utils import transform_prompt
 
 
 class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
@@ -112,8 +113,10 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
             if "model" in response_object:
                 model_response_object.model = response_object["model"]
 
-            model_response_object._hidden_params["original_response"] = (
-                response_object  # track original response, if users make a litellm.text_completion() request, we can return the original response
+            set_hidden_param(
+                model_response_object,
+                "original_response",
+                response_object,
             )
             return model_response_object
         except Exception as e:
@@ -151,7 +154,7 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        prompt: Final = _transform_prompt(messages)
+        prompt: Final = transform_prompt(messages)
         return {
             "model": model,
             "prompt": prompt,

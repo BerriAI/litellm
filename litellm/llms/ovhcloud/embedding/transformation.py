@@ -3,11 +3,14 @@ This is OpenAI compatible - no transformation is applied
 
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.secret_managers.main import get_secret_str
@@ -15,6 +18,9 @@ from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
 
 from ..utils import OVHCloudException
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_INT: Final = TypeAdapter(int)
 
 
 class OVHCloudEmbeddingConfig(BaseEmbeddingConfig):
@@ -30,9 +36,8 @@ class OVHCloudEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        api_base = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1" if api_base is None else api_base.rstrip("/")
-        complete_url: Final = f"{api_base}/embeddings"
-        return complete_url
+        base_url: Final = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1" if api_base is None else api_base
+        return join_api_base(base_url, "embeddings")
 
     def validate_environment(
         self,
@@ -107,9 +112,10 @@ class OVHCloudEmbeddingConfig(BaseEmbeddingConfig):
         model_response.data = raw_response_json.get("data")
         model_response.object = raw_response_json.get("object")
 
+        usage_payload: Final = _JSON_OBJECT.validate_python(raw_response_json.get("usage", {}))
         usage: Final = Usage(
-            prompt_tokens=raw_response_json.get("usage", {}).get("prompt_tokens", 0),
-            total_tokens=raw_response_json.get("usage", {}).get("total_tokens", 0),
+            prompt_tokens=_INT.validate_python(usage_payload.get("prompt_tokens", 0) or 0),
+            total_tokens=_INT.validate_python(usage_payload.get("total_tokens", 0) or 0),
         )
 
         model_response.usage = usage

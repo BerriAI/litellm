@@ -17,7 +17,7 @@ import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._lazy_features import LAZY_FEATURES
 from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import _cache_key_object
+from litellm.proxy.auth.auth_checks import cache_key_object
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     _websocket_relay,
     deepgram_listen_websocket_route,
@@ -365,7 +365,7 @@ def test_deepgram_listen_authenticates_the_litellm_key_and_relays_to_deepgram(mo
 
 async def _cache_restricted_key(virtual_key: str, models: list[str]) -> DualCache:
     cache = DualCache()
-    await _cache_key_object(
+    await cache_key_object(
         hashed_token=hash_token(virtual_key),
         user_api_key_obj=UserAPIKeyAuth(token=hash_token(virtual_key), models=models),
         user_api_key_cache=cache,

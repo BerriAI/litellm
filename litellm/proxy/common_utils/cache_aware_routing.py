@@ -100,7 +100,7 @@ def eligible_models(
 
 
 def _candidate(router: Router, tier: str, model: str, request_kwargs: Mapping[str, object]) -> _Candidate | None:
-    deployments: Final = router.deployments_for_request(model, request_kwargs)
+    deployments: Final = router.registry().deployments(model, source="for_request", request=request_kwargs)
     if len(deployments) != 1:
         return None
     deployment: Final = Deployment.model_validate(deployments[0])
@@ -118,11 +118,12 @@ async def _available(
 ) -> bool:
     try:
         await can_key_call_resolved_model(
-            model=candidate.model, llm_model_list=router.get_model_list(), valid_token=caller, llm_router=router
+            model=candidate.model, llm_model_list=router.registry().deployments(), valid_token=caller, llm_router=router
         )
         healthy: Final = _DEPLOYMENTS.validate_python(
-            await router.async_get_healthy_deployments(  # pyright: ignore[reportUnknownMemberType]  # legacy router results are validated at this boundary
+            await router.select(  # pyright: ignore[reportCallIssue]  # messages below: router annotations predate structured native messages
                 model=candidate.model,
+                kind="healthy",
                 messages=_MESSAGES.validate_python(messages) if messages else None,  # pyright: ignore[reportArgumentType]  # router annotations predate structured native messages
                 request_kwargs=dict(request_kwargs),
             )
@@ -135,7 +136,8 @@ async def _available(
 
 def supported_router_marker(router: Router, alias: str, request_kwargs: Mapping[str, object]) -> bool:
     markers: Final = tuple(
-        Deployment.model_validate(entry) for entry in router.deployments_for_request(alias, request_kwargs)
+        Deployment.model_validate(entry)
+        for entry in router.registry().deployments(alias, source="for_request", request=request_kwargs)
     )
     return bool(markers) and all(
         marker.litellm_params.model == "auto_router/complexity_router"
@@ -243,13 +245,13 @@ async def _choose_cached_model(
     from litellm.proxy import proxy_server
     from litellm.proxy.common_utils.prompt_cache_prediction import has_request_transforms
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-        _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # use the configured proxy limiter's shared capacity owner
+        PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # use the configured proxy limiter's shared capacity owner
     )
     from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
 
     if (
         proxy_server.llm_router is not router
-        or router.routing_plugins
+        or router.registry().plugins("routing")
         or has_request_transforms()
         or compaction_pending(request_kwargs)
         or not supported_router_marker(router, response.routing_decision.get("router_model_name") or "", request_kwargs)
@@ -289,7 +291,7 @@ async def _choose_cached_model(
     if body is None:
         return None
     limiter: Final = proxy_server.proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
-    if not isinstance(limiter, _PROXY_MaxParallelRequestsHandler_v3):
+    if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
         return None
 
     def counter_for_model(model_name: str) -> TokenCounter:

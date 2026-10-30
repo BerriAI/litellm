@@ -2,7 +2,12 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
-import { InheritedBudgetHint, inheritedBudgetGates, keyOwnerBudgetSource } from "./InheritedBudgetHint";
+import {
+  InheritedBudgetHint,
+  inheritedBudgetGates,
+  keyOwnerBudgetSource,
+  teamMemberBudgetGate,
+} from "./InheritedBudgetHint";
 
 const team = { team_id: "team-1", team_alias: "Platform", max_budget: 1200, budget_duration: "30d" };
 const organization = {
@@ -72,6 +77,237 @@ describe("inheritedBudgetGates", () => {
       "Organization",
       "User",
     ]);
+  });
+
+  it("places the team-member gate after the team and before organization and user gates", () => {
+    const memberGate = {
+      scope: "Team member" as const,
+      alias: "owner@example.com in Platform",
+      maxBudget: 50,
+      budgetDuration: "30d",
+    };
+
+    expect(inheritedBudgetGates(team, organization, user, memberGate).map((gate) => gate.scope)).toEqual([
+      "Team",
+      "Team member",
+      "Organization",
+      "User",
+    ]);
+  });
+});
+
+describe("teamMemberBudgetGate", () => {
+  const teamInfo = {
+    team_info: {
+      team_id: "team-1",
+      team_alias: "Platform",
+      team_member_budget_table: { max_budget: 50, budget_duration: "30d" },
+    },
+    team_memberships: [
+      { user_id: "custom-user", spend: 14, litellm_budget_table: { max_budget: 25, budget_duration: "7d" } },
+      { user_id: "default-user", spend: 35, litellm_budget_table: { max_budget: null, budget_duration: null } },
+    ],
+  };
+
+  it("uses a custom membership budget instead of the team default", () => {
+    const expectedGate = {
+      scope: "Team member",
+      alias: "custom@example.com in Platform",
+      maxBudget: 25,
+      budgetDuration: "7d",
+      spend: 14,
+    };
+
+    expect(teamMemberBudgetGate(teamInfo, "custom-user", "custom@example.com")).toEqual(expectedGate);
+  });
+
+  it("falls back to the team default when the membership budget is null", () => {
+    const expectedGate = {
+      scope: "Team member",
+      alias: "default-user in Platform",
+      maxBudget: 50,
+      budgetDuration: "30d",
+      spend: 35,
+    };
+
+    expect(teamMemberBudgetGate(teamInfo, "default-user")).toEqual(expectedGate);
+  });
+
+  it("uses the team default when there is no membership row", () => {
+    expect(teamMemberBudgetGate(teamInfo, "other-user")?.maxBudget).toBe(50);
+  });
+
+  it("defaults member spend to zero when there is no membership row", () => {
+    const expectedGate = {
+      scope: "Team member",
+      alias: "other-user in Platform",
+      maxBudget: 50,
+      budgetDuration: "30d",
+      spend: 0,
+    };
+
+    expect(teamMemberBudgetGate(teamInfo, "other-user")).toEqual(expectedGate);
+  });
+
+  it("adds an active membership increase to a custom membership budget", () => {
+    const now = new Date("2026-06-20T12:00:00.000Z");
+    const increasedTeamInfo = {
+      ...teamInfo,
+      team_memberships: [
+        {
+          user_id: "custom-user",
+          spend: 45,
+          litellm_budget_table: {
+            max_budget: 25,
+            budget_duration: "7d",
+            temp_budget_increase: 10,
+            temp_budget_expiry: "2026-06-20T12:30:00Z",
+          },
+        },
+      ],
+    };
+    const expectedGate = {
+      scope: "Team member",
+      alias: "custom-user in Platform",
+      maxBudget: 35,
+      budgetDuration: "7d",
+      spend: 45,
+    };
+
+    expect(teamMemberBudgetGate(increasedTeamInfo, "custom-user", null, now)).toEqual(expectedGate);
+  });
+
+  it("adds an active membership increase to the team default when the membership budget is null", () => {
+    const now = new Date("2026-06-20T12:00:00.000Z");
+    const increasedTeamInfo = {
+      ...teamInfo,
+      team_memberships: [
+        {
+          user_id: "default-user",
+          spend: 42,
+          litellm_budget_table: {
+            max_budget: null,
+            budget_duration: null,
+            temp_budget_increase: 10,
+            temp_budget_expiry: "2026-06-20T12:30:00Z",
+          },
+        },
+      ],
+    };
+    const expectedGate = {
+      scope: "Team member",
+      alias: "default-user in Platform",
+      maxBudget: 60,
+      budgetDuration: "30d",
+      spend: 42,
+    };
+
+    expect(teamMemberBudgetGate(increasedTeamInfo, "default-user", null, now)).toEqual(expectedGate);
+  });
+
+  it("ignores an expired membership increase", () => {
+    const now = new Date("2026-06-20T12:00:00.000Z");
+    const expiredTeamInfo = {
+      ...teamInfo,
+      team_memberships: [
+        {
+          user_id: "custom-user",
+          litellm_budget_table: {
+            max_budget: 25,
+            budget_duration: "7d",
+            temp_budget_increase: 10,
+            temp_budget_expiry: "2026-06-20T11:30:00Z",
+          },
+        },
+      ],
+    };
+
+    expect(teamMemberBudgetGate(expiredTeamInfo, "custom-user", null, now)?.maxBudget).toBe(25);
+  });
+
+  it("treats a naive membership expiry as UTC", () => {
+    const teamInfoWithNaiveExpiry = {
+      ...teamInfo,
+      team_memberships: [
+        {
+          user_id: "default-user",
+          litellm_budget_table: {
+            max_budget: null,
+            temp_budget_increase: 10,
+            temp_budget_expiry: "2026-06-20T12:00:00",
+          },
+        },
+      ],
+    };
+    const beforeExpiry = new Date("2026-06-20T11:59:59.000Z");
+    const afterExpiry = new Date("2026-06-20T12:00:01.000Z");
+
+    expect(teamMemberBudgetGate(teamInfoWithNaiveExpiry, "default-user", null, beforeExpiry)?.maxBudget).toBe(60);
+    expect(teamMemberBudgetGate(teamInfoWithNaiveExpiry, "default-user", null, afterExpiry)?.maxBudget).toBe(50);
+  });
+
+  it("returns no gate when the team default is zero and the member has no budget", () => {
+    expect(
+      teamMemberBudgetGate(
+        { ...teamInfo, team_info: { ...teamInfo.team_info, team_member_budget_table: { max_budget: 0 } } },
+        "other-user",
+      ),
+    ).toBeNull();
+  });
+
+  it("does not create a gate from an increase when the team default is zero", () => {
+    const now = new Date("2026-06-20T12:00:00.000Z");
+    const noBudgetWithIncrease = {
+      ...teamInfo,
+      team_info: { ...teamInfo.team_info, team_member_budget_table: { max_budget: 0 } },
+      team_memberships: [
+        {
+          user_id: "default-user",
+          litellm_budget_table: {
+            max_budget: null,
+            temp_budget_increase: 10,
+            temp_budget_expiry: "2026-06-20T12:30:00Z",
+          },
+        },
+      ],
+    };
+
+    expect(teamMemberBudgetGate(noBudgetWithIncrease, "default-user", null, now)).toBeNull();
+  });
+
+  it("keeps an explicit zero membership budget as a gate", () => {
+    const expectedGate = {
+      scope: "Team member",
+      alias: "zero-user in Platform",
+      maxBudget: 0,
+      budgetDuration: null,
+      spend: 0,
+    };
+
+    expect(
+      teamMemberBudgetGate(
+        {
+          ...teamInfo,
+          team_memberships: [{ user_id: "zero-user", litellm_budget_table: { max_budget: 0 } }],
+        },
+        "zero-user",
+      ),
+    ).toEqual(expectedGate);
+  });
+
+  it("returns no gate without a user id", () => {
+    expect(teamMemberBudgetGate(teamInfo, null)).toBeNull();
+  });
+
+  it("falls back to the user id and team id when labels are absent", () => {
+    expect(
+      teamMemberBudgetGate(
+        {
+          team_info: { team_id: "team-id", team_member_budget_table: { max_budget: 50 } },
+        },
+        "user-id",
+      )?.alias,
+    ).toBe("user-id in team-id");
   });
 });
 
