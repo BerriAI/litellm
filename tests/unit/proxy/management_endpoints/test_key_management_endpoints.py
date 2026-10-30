@@ -7,15 +7,16 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 import yaml
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 
 import litellm
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
@@ -41,12 +42,15 @@ from litellm.proxy._types import (
     RegenerateKeyRequest,
     ResetSpendRequest,
     UpdateKeyRequest,
+    hash_token,
 )
 from litellm.proxy.auth.auth_checks import (
     delete_cache_key_object,
+    get_key_object,
     jwt_key_mapping_cache_key,
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, project_cache_key
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -5755,6 +5759,231 @@ async def test_delete_verification_tokens_evicts_jwt_key_mapping_cache(monkeypat
     )
 
 
+class _ChannelSubscription:
+    """Marks a message done when the subscriber comes back for the next one, so ``messages.join()``
+    returns once every delivered message has been applied"""
+
+    def __init__(self) -> None:
+        self.messages: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+        self._holding_message = False
+
+    async def subscribe(self, *channels: str) -> None:
+        return None
+
+    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> dict[str, object] | None:
+        if self._holding_message:
+            self._holding_message = False
+            self.messages.task_done()
+        try:
+            message: Final = await asyncio.wait_for(self.messages.get(), timeout)
+        except asyncio.TimeoutError:
+            return None
+        self._holding_message = True
+        return message
+
+    async def aclose(self) -> None:
+        return None
+
+
+class _ChannelPipeline:
+    def __init__(self, redis: "_SharedCoordinationRedis") -> None:
+        self._redis = redis
+        self._messages: tuple[str, ...] = ()
+
+    def publish(self, channel: str, message: str) -> "_ChannelPipeline":
+        self._messages = (*self._messages, message)
+        return self
+
+    async def execute(self) -> None:
+        for message in self._messages:
+            self._redis.deliver(message)
+
+
+class _SharedCoordinationRedis:
+    """The coordination Redis two workers share: whatever one worker publishes reaches the other's subscriber"""
+
+    namespace = None
+
+    def __init__(self) -> None:
+        self.published: tuple[str, ...] = ()
+        self._subscriptions: tuple[_ChannelSubscription, ...] = ()
+
+    def init_pubsub_client(self) -> "_SharedCoordinationRedis":
+        return self
+
+    def pubsub(self) -> _ChannelSubscription:
+        subscription: Final = _ChannelSubscription()
+        self._subscriptions = (*self._subscriptions, subscription)
+        return subscription
+
+    def pipeline(self, transaction: bool = True) -> _ChannelPipeline:
+        return _ChannelPipeline(self)
+
+    async def publish(self, channel: str, message: str) -> int:
+        self.deliver(message)
+        return 1
+
+    def deliver(self, message: str) -> None:
+        self.published = (*self.published, message)
+        for subscription in self._subscriptions:
+            subscription.messages.put_nowait({"type": "message", "data": message.encode()})
+
+    async def until_every_subscriber_applied_its_messages(self) -> None:
+        _ = await asyncio.gather(*(subscription.messages.join() for subscription in self._subscriptions))
+
+
+def _owned_key_row(hashed_token: str) -> LiteLLM_VerificationToken:
+    return LiteLLM_VerificationToken(
+        token=hashed_token,
+        user_id="user-123",
+        team_id=None,
+        key_alias="doomed-key",
+        spend=0.0,
+        max_budget=None,
+        models=[],
+        aliases={},
+        config={},
+        permissions={},
+        metadata={},
+        model_max_budget={},
+        model_spend={},
+        soft_budget_cooldown=False,
+        allowed_routes=[],
+    )
+
+
+def _prisma_with_key_row(key_row: LiteLLM_VerificationToken) -> AsyncMock:
+    prisma_client: Final = AsyncMock()
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[key_row])
+    prisma_client.db.litellm_jwtkeymapping = _CascadingJWTMappingTable([])
+    prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
+    prisma_client.delete_data = AsyncMock(return_value=[key_row.token])
+    prisma_client.get_data = AsyncMock(return_value=None)
+    return prisma_client
+
+
+@pytest.mark.asyncio
+async def test_delete_verification_tokens_stops_the_key_on_a_peer_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Auth serves key objects cache-first, so a peer worker that is not told about the delete keeps
+    authenticating the deleted key from its own copy until user_api_key_cache_ttl expires"""
+    raw_key: Final = "sk-" + uuid4().hex
+    hashed_token: Final = hash_token(raw_key)
+    deleting_worker_cache: Final = UserApiKeyCache()
+    peer_worker_cache: Final = UserApiKeyCache()
+    for cache in (deleting_worker_cache, peer_worker_cache):
+        cache.set_cache(key=hashed_token, value=UserAPIKeyAuth(token=hashed_token, user_id="user-123"))
+    coordination_redis: Final = _SharedCoordinationRedis()
+    peer_subscriber: Final = AuthCacheInvalidationSubscriber(
+        redis_cache=coordination_redis, user_api_key_cache=peer_worker_cache
+    )
+    peer_subscriber.start()
+    prisma_client: Final = _prisma_with_key_row(_owned_key_row(hashed_token))
+    monkeypatch.setattr("litellm.proxy.proxy_server.redis_usage_cache", coordination_redis)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+
+    try:
+        await delete_verification_tokens(
+            tokens=[raw_key],
+            user_api_key_cache=deleting_worker_cache,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="admin-user", api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN.value
+            ),
+        )
+        await coordination_redis.until_every_subscriber_applied_its_messages()
+    finally:
+        await peer_subscriber.stop()
+
+    assert deleting_worker_cache.get_cache(key=hashed_token) is None
+    with pytest.raises(ProxyException) as denied:
+        await get_key_object(
+            hashed_token=hashed_token, prisma_client=prisma_client, user_api_key_cache=peer_worker_cache
+        )
+    assert denied.value.code == "401"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deleter",
+    [
+        UserAPIKeyAuth(user_id="admin-user", api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN.value),
+        UserAPIKeyAuth(user_id="user-123", api_key="sk-owner", user_role=LitellmUserRoles.INTERNAL_USER.value),
+    ],
+    ids=["proxy_admin", "key_owner"],
+)
+async def test_delete_verification_tokens_evicts_a_requested_key_whose_row_is_already_gone(
+    monkeypatch: pytest.MonkeyPatch, deleter: UserAPIKeyAuth
+) -> None:
+    """A key whose row was removed outside the API stays cached on every worker, so deleting it in a
+    batch beside a live key must still stop it everywhere instead of only evicting the rows found"""
+    live_key: Final = "sk-" + uuid4().hex
+    gone_key: Final = "sk-" + uuid4().hex
+    live_token: Final = hash_token(live_key)
+    gone_token: Final = hash_token(gone_key)
+    deleting_worker_cache: Final = UserApiKeyCache()
+    peer_worker_cache: Final = UserApiKeyCache()
+    for cache in (deleting_worker_cache, peer_worker_cache):
+        for token in (live_token, gone_token):
+            cache.set_cache(key=token, value=UserAPIKeyAuth(token=token, user_id="user-123"))
+    coordination_redis: Final = _SharedCoordinationRedis()
+    peer_subscriber: Final = AuthCacheInvalidationSubscriber(
+        redis_cache=coordination_redis, user_api_key_cache=peer_worker_cache
+    )
+    peer_subscriber.start()
+    monkeypatch.setattr("litellm.proxy.proxy_server.redis_usage_cache", coordination_redis)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _prisma_with_key_row(_owned_key_row(live_token)))
+
+    try:
+        await delete_verification_tokens(
+            tokens=[live_key, gone_key], user_api_key_cache=deleting_worker_cache, user_api_key_dict=deleter
+        )
+        await coordination_redis.until_every_subscriber_applied_its_messages()
+    finally:
+        await peer_subscriber.stop()
+
+    assert [deleting_worker_cache.get_cache(key=token) for token in (live_token, gone_token)] == [None, None]
+    assert [peer_worker_cache.get_cache(key=token) for token in (live_token, gone_token)] == [None, None]
+
+
+@pytest.mark.asyncio
+async def test_delete_verification_tokens_leaves_unowned_cache_entries_alone_on_every_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """/key/delete accepts any string, and a name that is not a key row passes through unhashed. A key
+    owner padding the request with another team's spend counter name must not wipe that counter from
+    every worker's memory: only the rows the caller was allowed to delete are evicted and broadcast"""
+    raw_key: Final = "sk-" + uuid4().hex
+    hashed_token: Final = hash_token(raw_key)
+    other_team_counter: Final = "spend:team:other-team"
+    deleting_worker_cache: Final = UserApiKeyCache()
+    peer_worker_cache: Final = UserApiKeyCache()
+    peer_spend_counters: Final = InMemoryCache()
+    peer_spend_counters.set_cache(other_team_counter, 42.0)
+    peer_worker_cache.set_cache(key=hashed_token, value=UserAPIKeyAuth(token=hashed_token, user_id="user-123"))
+    coordination_redis: Final = _SharedCoordinationRedis()
+    peer_subscriber: Final = AuthCacheInvalidationSubscriber(
+        redis_cache=coordination_redis,
+        user_api_key_cache=peer_worker_cache,
+        additional_in_memory_caches=(peer_spend_counters,),
+    )
+    peer_subscriber.start()
+    monkeypatch.setattr("litellm.proxy.proxy_server.redis_usage_cache", coordination_redis)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _prisma_with_key_row(_owned_key_row(hashed_token)))
+
+    try:
+        await delete_verification_tokens(
+            tokens=[other_team_counter, raw_key],
+            user_api_key_cache=deleting_worker_cache,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="user-123", api_key="sk-owner", user_role=LitellmUserRoles.INTERNAL_USER.value
+            ),
+        )
+        await coordination_redis.until_every_subscriber_applied_its_messages()
+    finally:
+        await peer_subscriber.stop()
+
+    assert peer_worker_cache.get_cache(key=hashed_token) is None
+    assert peer_spend_counters.get_cache(other_team_counter) == 42.0
+    assert coordination_redis.published == (json.dumps({"cache_key": hashed_token}),)
+
+
 @pytest.mark.asyncio
 async def test_delete_key_fn_persists_deleted_keys(monkeypatch):
     from litellm.proxy._types import KeyRequest
@@ -7597,6 +7826,7 @@ async def test_generate_key_with_router_settings(monkeypatch):
         "num_retries": 3,
         "model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}},
         "weights": {"gpt-4": {"weighted-id": 1}},
+        "content_policy_fallbacks": [{"gpt-4": ["gpt-4o", "gpt-4o-mini"]}],
     }
 
     request_data = GenerateKeyRequest(
@@ -7734,6 +7964,19 @@ async def test_update_key_with_router_settings(
     )
     assert cleared["team_id"] == target_team
     assert json.loads(cleared["router_settings"]) == {}
+
+
+@pytest.mark.parametrize("request_type", [GenerateKeyRequest, UpdateKeyRequest])
+@pytest.mark.parametrize("dict_target", [{"model": "gpt-4o-mini"}, {}])
+def test_a_key_content_policy_rule_can_only_name_fallback_models(
+    request_type: type[GenerateKeyRequest] | type[UpdateKeyRequest],
+    dict_target: dict[str, str],
+):
+    with pytest.raises(ValidationError, match="must be model names"):
+        request_type(
+            key="sk-key",
+            router_settings={"content_policy_fallbacks": [{"gpt-4": ["gpt-4o", dict_target]}]},
+        )
 
 
 @pytest.mark.asyncio
@@ -18736,7 +18979,7 @@ async def test_list_keys_rejects_invalid_expires():
                 expires="expred",
             )
 
-    assert exc_info.value.code == "400"
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
     assert "Invalid expires value" in str(exc_info.value.message)
 
 
@@ -23377,6 +23620,23 @@ def test_key_info_database_not_connected_sanitized_500(
         assert "Database not connected" in caplog.text
     finally:
         proxy_server.app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_key_health_failure_body_carries_a_json_null_param():
+    import litellm.proxy.proxy_server as ps
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="hashed-key", metadata={"logging": ["not-a-callback-object"]}
+    )
+    try:
+        response = client.post("/key/health", headers={"Authorization": "Bearer sk-test"})
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 500
+    error = response.json()["error"]
+    assert error["type"] == "internal_server_error"
+    assert error["param"] is None
 
 
 @pytest.mark.asyncio
