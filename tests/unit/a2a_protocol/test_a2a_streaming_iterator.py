@@ -5,6 +5,7 @@ async_success_handler (cross-thread pydantic mutation segfaults pydantic-core).
 """
 
 import asyncio
+import importlib.util
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from datetime import datetime
@@ -12,7 +13,6 @@ from typing import Final
 from types import SimpleNamespace
 
 import pytest
-from a2a.compat.v0_3.types import SendStreamingMessageResponse
 
 import litellm
 from litellm.a2a_protocol import streaming_iterator as a2a_streaming_iterator_module
@@ -272,7 +272,9 @@ async def _artifact_without_id_stream() -> AsyncIterator[Mapping[str, object]]:
     yield _status_event("completed")
 
 
-async def _url_agent_sdk_stream() -> AsyncIterator[SendStreamingMessageResponse]:
+async def _url_agent_sdk_stream() -> AsyncIterator[object]:
+    from a2a.compat.v0_3.types import SendStreamingMessageResponse
+
     for event in (
         _status_event("working", "Looking that up"),
         _artifact_event(_REPLY, append=False),
@@ -289,7 +291,12 @@ async def _url_agent_sdk_stream() -> AsyncIterator[SendStreamingMessageResponse]
         pytest.param(_two_artifact_stream, f"{_FIRST_ARTIFACT} {_SECOND_ARTIFACT}", id="two_artifacts"),
         pytest.param(_status_message_stream, _REPLY, id="status_message_reply"),
         pytest.param(_artifact_without_id_stream, _REPLY, id="artifact_without_id"),
-        pytest.param(_url_agent_sdk_stream, _REPLY, id="url_agent_sdk_events"),
+        pytest.param(
+            _url_agent_sdk_stream,
+            _REPLY,
+            id="url_agent_sdk_events",
+            marks=pytest.mark.skipif(importlib.util.find_spec("a2a") is None, reason="needs the optional a2a-sdk"),
+        ),
     ),
 )
 @pytest.mark.asyncio

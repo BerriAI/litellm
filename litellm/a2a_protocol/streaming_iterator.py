@@ -79,7 +79,7 @@ class A2AStreamingIterator:
             # Store chunk
             self.chunks.append(chunk)
             payload: Final = _chunk_payload(chunk)
-            self.saw_error = self.saw_error or "error" in payload
+            self.saw_error = self.saw_error or payload.get("error") is not None
 
             # Extract text from chunk for token counting
             self._collect_text_from_chunk(payload)

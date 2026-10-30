@@ -1009,14 +1009,17 @@ async def test_agentcore_send_bills_a_task_reply_at_the_agents_token_prices(
     _assert_billed_at_agent_prices(spend, a2a_spend_recorder, _per_token_cost, _LONG_AGENT_REPLY)
 
 
+@pytest.mark.parametrize(
+    "extra_fields",
+    (pytest.param({}, id="result_only"), pytest.param({"error": None}, id="null_error_field")),
+)
 @pytest.mark.asyncio
 async def test_agentcore_stream_bills_every_appended_reply_chunk(
-    a2a_spend_recorder: _A2ASpendRecorder, respx_reachable_httpx: None
+    extra_fields: Mapping[str, object], a2a_spend_recorder: _A2ASpendRecorder, respx_reachable_httpx: None
 ) -> None:
+    events: Final = tuple({**event, **extra_fields} for event in _agentcore_appended_chunks(_LONG_AGENT_REPLY, 40))
     with respx.mock(assert_all_called=True) as router:
-        router.post(url__regex=r".*/invocations.*").mock(
-            return_value=_sse(*_agentcore_appended_chunks(_LONG_AGENT_REPLY, chunk_size=40))
-        )
+        router.post(url__regex=r".*/invocations.*").mock(return_value=_sse(*events))
         await _drain_bridge_stream({**_AGENTCORE_PARAMS, **_PER_TOKEN_PRICES})
 
     spend: Final = await a2a_spend_recorder.logged_spend()
