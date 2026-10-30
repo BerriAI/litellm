@@ -60,6 +60,7 @@ from litellm.litellm_core_utils.bug_report import (
     strip_bug_report_notice,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    finite_cost,
     get_or_create_metadata_bucket,
     independent_snapshot,
     is_expected_client_error,
@@ -1812,14 +1813,16 @@ def _get_cost_breakdown_from_logging_obj(
 
 
 def _header_value(value: float | None) -> str | None:
-    return str(value) if value is not None else None
+    return str(value) if finite_cost(value) is not None else None
 
 
 def _response_cost_header_value(hidden_params: Mapping[str, object]) -> float | str:
     if hidden_params.get("cache_hit") is True:
         return 0.0
     response_cost: Final = hidden_params.get("response_cost")
-    return response_cost if isinstance(response_cost, (int, float, str)) and response_cost else ""
+    if isinstance(response_cost, str):
+        return response_cost
+    return response_cost if isinstance(response_cost, int | float) and finite_cost(response_cost) else ""
 
 
 def cost_headers(
@@ -4509,7 +4512,7 @@ class ProxyBaseLLMRequestProcessing:
         """
         if isinstance(chunk, dict):
             # Use safe_dumps for proper JSON serialization with circular reference detection
-            chunk_str: Final = safe_dumps(chunk)
+            chunk_str: Final = safe_dumps(chunk, non_finite_as_null=True)
             return f"{STREAM_SSE_DATA_PREFIX}{chunk_str}\n\n"
         else:
             return chunk
@@ -4885,7 +4888,11 @@ class ProxyBaseLLMRequestProcessing:
                             obj, model_name, litellm_logging_obj
                         )
                         if maybe_modified is not None:
-                            lines[idx] = "data: " + safe_dumps(maybe_modified) + ("\r" if ln.endswith("\r") else "")
+                            lines[idx] = (
+                                "data: "
+                                + safe_dumps(maybe_modified, non_finite_as_null=True)
+                                + ("\r" if ln.endswith("\r") else "")
+                            )
                             return "\n".join(lines)
             return None
         except Exception:
