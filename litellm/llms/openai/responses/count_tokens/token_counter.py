@@ -61,12 +61,14 @@ def _workload_identity_config(
 class _CountCredential:
     api_base: str | None
     credential: str | OpenAIWorkloadIdentityConfig
+    organization: str | None
 
 
 def _count_credential(deployment: Mapping[str, object] | None, model_label: str) -> _CountCredential | OpenAIError:
     litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {}
     api_base: Final = litellm_params.get("api_base")
     api_key: Final = litellm_params.get("api_key")
+    organization: Final = litellm_params.get("organization")
     credentials: Final = get_openai_credentials(
         api_base=api_base if isinstance(api_base, str) else None,
         api_key=api_key if isinstance(api_key, str) else None,
@@ -82,7 +84,11 @@ def _count_credential(deployment: Mapping[str, object] | None, model_label: str)
                 "workload identity on the deployment, or OPENAI_API_KEY in the proxy environment."
             ),
         )
-    return _CountCredential(api_base=credentials.api_base, credential=credential)
+    return _CountCredential(
+        api_base=credentials.api_base,
+        credential=credential,
+        organization=organization if isinstance(organization, str) else None,
+    )
 
 
 def _count_error(model_to_use: str, request_model: str, message: str, status_code: int) -> TokenCountResponse:
@@ -245,6 +251,7 @@ class OpenAITokenCounter(BaseTokenCounter):
                 tools=counted_tools,
                 instructions=instructions,
                 text=text,
+                organization=resolved.organization,
             ),
             model_to_use,
             request_model,
@@ -264,7 +271,9 @@ class OpenAITokenCounter(BaseTokenCounter):
         body: Final = native_count_request(request, model_to_use, policy)
         return await self._counted(
             resolved,
-            lambda api_key, api_base: openai_count_tokens_handler.post_count_request(body, api_key, api_base),
+            lambda api_key, api_base: openai_count_tokens_handler.post_count_request(
+                body, api_key, api_base, organization=resolved.organization
+            ),
             model_to_use,
             request_model,
         )

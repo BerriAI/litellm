@@ -34,6 +34,7 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
         tools: Sequence[Mapping[str, object]] | None = None,
         instructions: str | None = None,
         text: Mapping[str, object] | None = None,
+        organization: str | None = None,
     ) -> Mapping[str, object]:
         """
         Handle a token counting request to OpenAI's Responses API.
@@ -59,7 +60,7 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
         except ValueError as e:
             verbose_logger.error("Error in CountTokens handler: %s", e)
             raise OpenAIError(status_code=500, message=f"CountTokens processing error: {e}")
-        return await self.post_count_request(request_body, api_key, api_base, timeout)
+        return await self.post_count_request(request_body, api_key, api_base, timeout, organization)
 
     async def post_count_request(
         self,
@@ -67,13 +68,14 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
         api_key: str,
         api_base: str | None = None,
         timeout: float | httpx.Timeout | None = None,
+        organization: str | None = None,
     ) -> Mapping[str, object]:
         try:
             endpoint_url: Final = self.get_openai_count_tokens_endpoint(api_base)
 
             verbose_logger.debug("Making request to: %s", endpoint_url)
 
-            headers: Final = self.get_required_headers(api_key)
+            headers: Final = self.get_required_headers(api_key, organization)
 
             async_client: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.OPENAI)
 

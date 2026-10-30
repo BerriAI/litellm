@@ -1,7 +1,7 @@
 import copy
 import json
 import operator
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from itertools import chain
 from typing import Final
 
@@ -718,6 +718,48 @@ async def test_native_count_sends_the_callers_body_without_litellm_fields(
     assert sent == expected_sent
     assert result is not None
     assert (result.total_tokens, result.model_used, result.error) == (76, "gpt-4o", False)
+
+
+_DEPLOYMENT_WITH_ORGANIZATION: Final[dict[str, object]] = {
+    "litellm_params": {"api_key": "sk-test", "organization": "org-deployment"}
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "count",
+    [
+        pytest.param(
+            lambda counter: counter.count_tokens(
+                model_to_use="gpt-4o",
+                messages=[{"role": "user", "content": "hi"}],
+                contents=None,
+                deployment=_DEPLOYMENT_WITH_ORGANIZATION,
+                request_model="my-gpt",
+            ),
+            id="converted-request",
+        ),
+        pytest.param(
+            lambda counter: counter.count_responses_request(
+                model_to_use="gpt-4o",
+                request={"model": "gpt-4o", "input": "hi"},
+                policy=_KEEP_ALL,
+                deployment=_DEPLOYMENT_WITH_ORGANIZATION,
+                request_model="my-gpt",
+            ),
+            id="native-request",
+        ),
+    ],
+)
+async def test_count_sends_the_deployment_organization(
+    monkeypatch: pytest.MonkeyPatch, count: Callable[[OpenAITokenCounter], Awaitable[object]]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 1}))
+        await count(OpenAITokenCounter())
+
+    assert route.calls.last.request.headers["OpenAI-Organization"] == "org-deployment"
 
 
 @pytest.mark.asyncio
