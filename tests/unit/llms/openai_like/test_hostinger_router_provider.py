@@ -310,6 +310,7 @@ TRANSPORT_EXTRA_HEADERS: Final = [
     ("TE", "gzip"),
     ("Trailer", "X-Checksum"),
     ("Upgrade", "websocket"),
+    ("Expect", "100-continue"),
 ]
 
 
@@ -402,6 +403,35 @@ def test_hostinger_router_embeddings_trim_whitespace_around_extra_header_values(
         )
 
     assert route.calls.last.request.headers.get_list("x-rig") == [sent]
+
+
+def test_hostinger_router_embeddings_extra_headers_stay_with_their_request():
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "shared",
+                "litellm_params": {
+                    "model": "hostinger_router/text-embedding-3-small",
+                    "api_key": "hostinger-test-key",
+                    "headers": {"X-Org-Id": "org-1"},
+                },
+            }
+        ]
+    )
+
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
+        router.embedding(
+            model="shared", input=["first"], extra_headers={"Authorization": "Bearer caller-a", "X-Leak": "a"}
+        )
+        router.embedding(model="shared", input=["second"])
+
+    first: Final = route.calls[0].request
+    second: Final = route.calls[1].request
+    assert first.headers.get_list("x-leak") == ["a"]
+    assert second.headers.get_list("authorization") == ["Bearer hostinger-test-key"]
+    assert "x-leak" not in second.headers
+    assert second.headers.get_list("x-org-id") == ["org-1"]
 
 
 def test_hostinger_router_embeddings_never_borrow_another_providers_key(monkeypatch: pytest.MonkeyPatch):

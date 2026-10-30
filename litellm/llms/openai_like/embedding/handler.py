@@ -35,6 +35,7 @@ _TRANSPORT_HEADER_NAMES: Final = frozenset(
         "te",
         "trailer",
         "upgrade",
+        "expect",
     }
 )
 _HEADER_NAME: Final = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
@@ -66,7 +67,7 @@ def _extra_headers_as_text(extra_headers: Mapping[str, object], model: str, drop
     unsendable: Final = sorted(name for name, text in named.items() if _HEADER_VALUE.fullmatch(text) is None)
     if unsendable:
         verbose_logger.warning(
-            "extra_headers %s dropped for model %s, since a header value must be printable ASCII on one line",
+            "extra_headers %s dropped for model %r, since a header value must be printable ASCII on one line",
             unsendable,
             model,
         )

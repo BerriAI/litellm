@@ -6890,11 +6890,7 @@ def embedding(
     azure_ad_token_provider: Final = kwargs.get("azure_ad_token_provider", None)
     aembedding: Final[bool | None] = kwargs.get("aembedding", None)
     extra_headers: Final = kwargs.get("extra_headers", None)
-    headers = kwargs.get("headers", None) or extra_headers
-    if headers is None:
-        headers = {}
-    if extra_headers is not None:
-        headers.update(extra_headers)
+    headers = {**(kwargs.get("headers") or {}), **(extra_headers or {})}
     # Inject proxy auth headers if configured
     if litellm.proxy_auth is not None:
         try:
@@ -7058,7 +7054,7 @@ def embedding(
             # set API KEY
             api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
 
-            if headers is not None and headers != {}:
+            if headers:
                 optional_params["extra_headers"] = headers
 
             requested_encoding_format: Final = (
@@ -7158,7 +7154,7 @@ def embedding(
             if api_key is None and not JSONProviderRegistry.supports_embeddings(custom_llm_provider):
                 api_key = litellm.api_key or litellm.openai_like_key or get_secret_str("OPENAI_LIKE_API_KEY")
 
-            if headers is not None and headers != {}:
+            if headers:
                 optional_params["extra_headers"] = headers
 
             ## EMBEDDING CALL
@@ -7176,8 +7172,6 @@ def embedding(
                 drop_params=drop_unsupported_params,
             )
         elif custom_llm_provider == "oci":
-            if headers is None:
-                headers = {}
             response = base_llm_http_handler.embedding(
                 model=model,
                 input=input,
@@ -7201,11 +7195,6 @@ def embedding(
                 or get_secret_str("CO_API_KEY")
                 or litellm.api_key
             )
-
-            # Use the merged headers variable (already merged at the top of the function)
-            # Don't overwrite it with just extra_headers
-            if headers is None:
-                headers = {}
 
             response = base_llm_http_handler.embedding(
                 model=model,
