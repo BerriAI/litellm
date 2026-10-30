@@ -922,12 +922,18 @@ class CustomGuardrail(CustomLogger):
         requested: Final = next((bucket.get("guardrails") for bucket in buckets if "guardrails" in bucket), None)
         if name not in _str_collection(requested):
             return
+        named_lists: Final = tuple(
+            cast("list[object]", bucket["applied_guardrails"])  # cast-ok: entries are only compared with names
+            for bucket in buckets
+            if isinstance(bucket.get("applied_guardrails"), list)
+        )
+        for applied in named_lists:
+            if name not in applied:
+                applied.append(name)
+        if named_lists:
+            return
         metadata_bucket: Final = cast("dict[str, object]", get_or_create_metadata_bucket(data)[1])  # cast-ok: str keys
-        applied: Final = metadata_bucket.get("applied_guardrails")
-        if not isinstance(applied, list):
-            metadata_bucket["applied_guardrails"] = [name]
-        elif name not in applied:
-            cast("list[object]", applied).append(name)  # cast-ok: entries are only compared with names
+        metadata_bucket["applied_guardrails"] = [name]
 
     @classmethod
     def uses_apply_guardrail_interface(cls) -> bool:

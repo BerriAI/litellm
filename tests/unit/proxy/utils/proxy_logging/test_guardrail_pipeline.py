@@ -1844,6 +1844,32 @@ async def test_deployment_hook_names_a_pipeline_step_it_ran_before_any_guardrail
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("named_bucket", ["metadata", "litellm_metadata"])
+async def test_deployment_hook_names_a_pipeline_step_next_to_the_steps_already_named_when_both_buckets_exist(
+    named_bucket: str,
+) -> None:
+    guardrail: Final = _PipelineStepGuardrail("second", "pre_call")
+    metadata: Final[dict[str, object]] = {
+        "guardrails": ["first", "second"],
+        "_pipeline_managed_guardrails": frozenset({"first", "second"}),
+    }
+    litellm_metadata: Final[dict[str, object]] = {}
+    {"metadata": metadata, "litellm_metadata": litellm_metadata}[named_bucket]["applied_guardrails"] = ["first"]
+    kwargs: Final[dict[str, object]] = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "guardrails": ["second"],
+        "metadata": metadata,
+        "litellm_metadata": litellm_metadata,
+    }
+
+    await guardrail.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.completion)
+
+    assert guardrail.calls == 1
+    assert sorted(get_logging_caching_headers(kwargs)["x-litellm-applied-guardrails"].split(",")) == ["first", "second"]
+
+
+@pytest.mark.asyncio
 async def test_deployment_hook_records_a_pipeline_step_it_ran_without_naming_one_the_request_did_not_list() -> None:
     guardrail: Final = _PipelineStepGuardrail("second", "pre_call")
     kwargs: Final[dict[str, object]] = {
