@@ -14402,6 +14402,146 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/roi/categories/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Activate Categories
+         * @description Approve a fixed category set and begin classifying subsequent requests with Jev.
+         */
+        post: operations["activate_categories_roi_categories_activate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi/categories/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Extract Context
+         * @description Extract bounded business context from a PDF, UTF-8 text, or Markdown file.
+         */
+        post: operations["extract_context_roi_categories_context_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi/categories/examples": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Category Examples
+         * @description Return up to five highest-spend request excerpts for a category in the selected interval.
+         */
+        get: operations["category_examples_roi_categories_examples_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi/categories/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Category Report
+         * @description Return daily category spend and model breakdowns for the selected UTC interval.
+         */
+        get: operations["category_report_roi_categories_report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi/categories/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry Discovery
+         * @description Retry a failed discovery with the existing sample and business context.
+         */
+        post: operations["retry_discovery_roi_categories_retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi/categories/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Setup Categories
+         * @description Opt into background discovery from new logged traffic using configured gateway models.
+         */
+        post: operations["setup_categories_roi_categories_setup_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi/categories/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Category Status
+         * @description Return ClickHouse configuration status and the current discovery or classification phase.
+         */
+        get: operations["category_status_roi_categories_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/router/fields": {
         parameters: {
             query?: never;
@@ -28691,6 +28831,20 @@ export interface components {
             /** Threshold */
             threshold: number;
         };
+        /** Categories */
+        Categories: {
+            /** Categories */
+            categories: components["schemas"]["Category"][];
+        };
+        /** Category */
+        Category: {
+            /** Description */
+            description: string;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+        };
         /** ChangePasswordRequest */
         ChangePasswordRequest: {
             /** Current Password */
@@ -30796,6 +30950,20 @@ export interface components {
             /** Type */
             type?: string;
         };
+        /** ContextText */
+        ContextText: {
+            /** Name */
+            name: string;
+            /** Text */
+            text: string;
+        };
+        /** ContextUpload */
+        ContextUpload: {
+            /** Content Base64 */
+            content_base64: string;
+            /** Name */
+            name: string;
+        };
         /**
          * CoordinationRedisNode
          * @description A single startup node of a cluster-mode Redis used for proxy coordination.
@@ -32317,6 +32485,17 @@ export interface components {
             }[];
             /** Updated At */
             updated_at?: number | null;
+        };
+        /** Example */
+        Example: {
+            /** Excerpt */
+            excerpt: string;
+            /** Model */
+            model: string;
+            /** Request Id */
+            request_id: string;
+            /** Spend */
+            spend: number | null;
         };
         /**
          * ExportType
@@ -42458,6 +42637,15 @@ export interface components {
              */
             open: string;
         };
+        /** Report */
+        Report: {
+            /** Buckets */
+            buckets: components["schemas"]["SpendBucket"][];
+            /** Categories */
+            categories: components["schemas"]["Category"][];
+            /** Version */
+            version: string;
+        };
         /**
          * RequestComplexityRouterConfig
          * @description The part of a complexity-router config a request can carry.
@@ -44500,6 +44688,8 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** RetryDiscovery */
+        RetryDiscovery: Record<string, never>;
         /**
          * RetryPolicy
          * @description Use this to set a custom number of retries per exception type
@@ -45338,6 +45528,77 @@ export interface components {
             /** Message */
             message: string;
         };
+        /** Settings */
+        Settings: {
+            /** Activated At */
+            activated_at?: string | null;
+            /**
+             * Categories
+             * @default []
+             */
+            categories: components["schemas"]["Category"][];
+            /** Classifier Model */
+            classifier_model: string;
+            /**
+             * Context
+             * @default
+             */
+            context: string;
+            /** Discovery Model */
+            discovery_model: string;
+            /** Error */
+            error?: string | null;
+            /**
+             * Phase
+             * @default sampling
+             * @enum {string}
+             */
+            phase: "sampling" | "review" | "active" | "error";
+            /**
+             * Sample Size
+             * @default 100
+             */
+            sample_size: number;
+            /**
+             * Sampled
+             * @default 0
+             */
+            sampled: number;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Team Id
+             * @default
+             */
+            team_id: string;
+            /** Version */
+            version: string;
+        };
+        /** Setup */
+        Setup: {
+            /** Classifier Model */
+            classifier_model: string;
+            /**
+             * Context
+             * @default
+             */
+            context: string;
+            /** Discovery Model */
+            discovery_model: string;
+            /**
+             * Sample Size
+             * @default 100
+             */
+            sample_size: number;
+            /**
+             * Team Id
+             * @default
+             */
+            team_id: string;
+        };
         /**
          * ShadowEvalJobResponse
          * @description A shadow-eval job over one or more targets, each with its own budget and stop state;
@@ -45783,6 +46044,24 @@ export interface components {
             /** Results */
             results: components["schemas"]["DailySpendData"][];
         };
+        /** SpendBucket */
+        SpendBucket: {
+            /** Category Id */
+            category_id: string;
+            /** Day */
+            day: string;
+            /** Model */
+            model: string;
+            /** Requests */
+            requests: number;
+            /** Spend */
+            spend: number;
+            /**
+             * Unknown Cost Requests
+             * @default 0
+             */
+            unknown_cost_requests: number;
+        };
         /** SpendCalculateRequest */
         SpendCalculateRequest: {
             /** Completion Response */
@@ -46132,6 +46411,12 @@ export interface components {
              * @default []
              */
             user_ids: string[];
+        };
+        /** Status */
+        Status: {
+            /** Configured */
+            configured: boolean;
+            settings?: components["schemas"]["Settings"] | null;
         };
         /** StoredReport */
         StoredReport: {
@@ -70812,6 +71097,227 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    activate_categories_roi_categories_activate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Categories"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Settings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    extract_context_roi_categories_context_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContextUpload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContextText"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    category_examples_roi_categories_examples_get: {
+        parameters: {
+            query: {
+                start: string;
+                end: string;
+                category_id: string;
+                model?: string;
+                user?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Example"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    category_report_roi_categories_report_get: {
+        parameters: {
+            query: {
+                start: string;
+                end: string;
+                model?: string;
+                user?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Report"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_discovery_roi_categories_retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetryDiscovery"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Settings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    setup_categories_roi_categories_setup_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Setup"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Settings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    category_status_roi_categories_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Status"];
                 };
             };
         };

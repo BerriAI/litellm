@@ -622,6 +622,7 @@ jobs:
               tests/unit/proxy/management
               tests/unit/proxy/management_endpoints/test_roi_calculator_endpoints.py
               tests/unit/proxy/roi_calculator
+              tests/unit/proxy/roi_categories
             python-version: "3.12"
             workers: 4
             reruns: 0

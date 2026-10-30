@@ -9,7 +9,7 @@ import { USAGE_OPTIONS, type UsageOption } from "./components/UsageViewSelect/Us
 import { UsageClient } from "./components/overview/agentCatalog";
 
 export const DEFAULT_USAGE_VIEW: UsageOption = "global";
-export const USAGE_TABS = ["cost", "models", "keys", "users", "mcp", "endpoints", "errors"] as const;
+export const USAGE_TABS = ["cost", "models", "keys", "users", "mcp", "endpoints", "errors", "roi"] as const;
 export type UsageTab = (typeof USAGE_TABS)[number];
 export const DEFAULT_USAGE_TAB: UsageTab = "cost";
 
@@ -93,7 +93,9 @@ export const usageViewFromParams = (params: UsageUrlParams): UsageOption =>
   isUsageOption(params.view) ? params.view : DEFAULT_USAGE_VIEW;
 
 export const usageTabFromParams = (params: UsageUrlParams, isAdmin = true): UsageTab => {
-  return isUsageTab(params.tab) && (params.tab !== "errors" || isAdmin) ? params.tab : DEFAULT_USAGE_TAB;
+  return isUsageTab(params.tab) && (!["errors", "roi"].includes(params.tab) || isAdmin)
+    ? params.tab
+    : DEFAULT_USAGE_TAB;
 };
 
 export const usageViewPatch = (view: UsageOption): UsageUrlPatch => ({

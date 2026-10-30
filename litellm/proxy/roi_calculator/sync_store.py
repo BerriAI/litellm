@@ -35,7 +35,7 @@ class SyncStore:
     def __init__(
         self,
         prisma: PrismaClient,
-        namespace: Literal["roi_calculator", "roi_observed", "roi_oauth_refresh"] = "roi_calculator",
+        namespace: Literal["roi_calculator", "roi_observed", "roi_oauth_refresh", "roi_categories"] = "roi_calculator",
     ) -> None:
         self._db: Final = cast(_SyncDatabase, prisma.writer_db)  # cast-ok: PrismaWrapper delegates methods dynamically
         self._sync_key: Final = namespace + "_sync"

@@ -103,6 +103,7 @@ import SpendByProvider from "./EntityUsage/SpendByProvider";
 import { useTagSummary } from "@/app/(dashboard)/hooks/tags/useTagSummary";
 import { Panel } from "./overview/Primitives";
 import UsageOverview from "./overview/UsageOverview";
+import { ROIUsageContent, ROIUsageTrigger } from "@/components/roi_categories/UsageROITab";
 
 interface UsagePageProps {
   teams: Team[];
@@ -530,6 +531,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                         Errors
                       </TabsTrigger>
                     )}
+                    <ROIUsageTrigger role={userRole} view={usageView} />
                   </TabsList>
                   <div className="flex items-center gap-2">
                     <AriaUsageTrigger />
@@ -539,6 +541,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                     </Button>
                   </div>
                 </div>
+                <ROIUsageContent
+                  role={userRole}
+                  view={usageView}
+                  tab={selectedTab}
+                  token={accessToken}
+                  range={dateValue}
+                  user={effectiveUserId}
+                />
                 <TabsContent value="cost" keepMounted>
                   <UsageOverview
                     results={sortedDailyResults}

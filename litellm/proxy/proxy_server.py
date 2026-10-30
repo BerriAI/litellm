@@ -11522,6 +11522,11 @@ class ProxyStartupEvent:
             prisma_client=prisma_client,
         )
 
+        from litellm.proxy.management_endpoints.roi_categories_endpoints import run_roi_tick
+
+        scheduler.add_job(
+            run_roi_tick, "interval", seconds=30, id="roi_categories", max_instances=1, replace_existing=True
+        )
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
 
         cls._initialize_spend_capture_rate_check_job(
@@ -21761,6 +21766,9 @@ app.include_router(tag_management_router)
 app.include_router(workflow_management_router)
 app.include_router(memory_router)
 app.include_router(lens_router)
+from litellm.proxy.management_endpoints.roi_categories_endpoints import router as roi_categories_router
+
+app.include_router(roi_categories_router)
 app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(prompt_caching_requests_router)
