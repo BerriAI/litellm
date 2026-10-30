@@ -16,8 +16,8 @@ use tower_sessions::{
     session::{Id, Record},
 };
 
-use litellm_auth_types::SecretValue;
 use litellm_gateway_auth::UiBackend;
+use litellm_secret_value::SecretValue;
 
 struct App {
     router: Router,

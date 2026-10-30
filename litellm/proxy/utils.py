@@ -85,12 +85,13 @@ from litellm.proxy._types import (
 from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.openai_error_payload import (
     attribute_of,
-    litellm_call_id_headers,
-    openai_error_param,
+    error_status_code,
+    openai_shaped_proxy_exception,
     with_litellm_call_id,
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
+from litellm.responses.mcp.parked_stream_dispatch import held_round_spend
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
 from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, ModelInfo, Usage
@@ -632,6 +633,8 @@ def _is_client_error_exception(exc: Exception) -> bool:
         return exc.status_code < 500
     if isinstance(exc, ProxyException):
         return not (exc.code.isdigit() and int(exc.code) >= 500)
+    if isinstance(exc, litellm.BudgetExceededError):
+        return exc.status_code < 500
     return False
 
 
@@ -4943,6 +4946,8 @@ class ProxyLogging:
         if not isinstance(error, _PROXY_ONLY_LLM_API_ERRORS):
             return False
         match _args:
+            case (ModelResponse(), *_) if (held := held_round_spend(logging_obj)) is not None:
+                logging_obj.record_billed_rounds_for_failure(held)
             case (ModelResponse() as assembled, *_):
                 logging_obj.record_assembled_response_for_failure(assembled)
             case (BilledRoundsDispatch() as billed,):
@@ -9186,39 +9191,30 @@ def _recreate_writer_on_read_only_transaction(prisma_client: "PrismaClient | Non
     asyncio.create_task(prisma_client.recreate_read_only_writer(reason="postgres_read_only_transaction"))
 
 
+def _client_message(e: Exception) -> str:
+    status_is_none: Final = hasattr(e, "status_code") and attribute_of(e, "status_code") is None
+    return "Internal server error" if status_is_none else strip_bug_report_notice(str(e))
+
+
 def handle_exception_on_proxy(e: Exception, litellm_call_id: str | None = None) -> ProxyException:
     """
     Returns an Exception as ProxyException, this ensures all exceptions are OpenAI API compatible
     """
-    from fastapi import status
-
     verbose_proxy_logger.exception("Exception: %s", e)
     if PrismaDBExceptionHandler.is_read_only_transaction_error(e):
         from litellm.proxy.proxy_server import prisma_client
 
         _recreate_writer_on_read_only_transaction(prisma_client)
 
-    headers: Final = litellm_call_id_headers(litellm_call_id)
-    if isinstance(e, HTTPException):
-        return ProxyException(
-            message=getattr(e, "detail", f"error({e})"),
-            type=ProxyErrorTypes.internal_server_error,
-            param=openai_error_param(e),
-            headers=headers,
-            code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
-        )
-    elif isinstance(e, ProxyException):
+    if isinstance(e, ProxyException):
         return with_litellm_call_id(e, litellm_call_id)
-    _status_code: Final = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
+    if isinstance(e, HTTPException):
+        return with_litellm_call_id(openai_shaped_proxy_exception(e, str(e.detail), e.status_code), litellm_call_id)
     if should_report_bug(e):
         verbose_proxy_logger.error(bug_report_notice(build_proxy_bug_report(e)))
-    return ProxyException(
-        message=strip_bug_report_notice(str(e)),
-        type=ProxyErrorTypes.internal_server_error,
-        param=openai_error_param(e),
-        headers=headers,
-        code=_status_code,
-    )
+    message: Final = _client_message(e)
+    status_code: Final = error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)
+    return with_litellm_call_id(openai_shaped_proxy_exception(e, message, status_code), litellm_call_id)
 
 
 def require_enterprise_license(feature: str | None = None) -> None:
@@ -9506,7 +9502,7 @@ async def _agent_access_group_visible_models(
 ) -> frozenset[str] | None:
     """Models an agent key may still list once its attached access groups cap it, ``None`` when
     nothing caps it, so ``/v1/models`` never advertises a model the same key would be denied on."""
-    from litellm.proxy.auth.model_checks import get_complete_model_list, get_team_models
+    from litellm.proxy.auth.model_checks import get_complete_model_list, get_team_models, run_model_listing
 
     if not user_api_key_dict.agent_id:
         return None
@@ -9527,17 +9523,20 @@ async def _agent_access_group_visible_models(
     if not granted:
         return frozenset()
     return frozenset(
-        get_complete_model_list(
-            key_models=granted,
-            team_models=(),
-            proxy_model_list=proxy_model_list,
-            user_model=None,
-            infer_model_from_keys=False,
-            return_wildcard_routes=return_wildcard_routes,
-            llm_router=llm_router,
-            model_access_groups=model_access_groups,
-            include_model_access_groups=include_model_access_groups,
-            team_id=team_id,
+        await run_model_listing(
+            partial(
+                get_complete_model_list,
+                key_models=granted,
+                team_models=(),
+                proxy_model_list=proxy_model_list,
+                user_model=None,
+                infer_model_from_keys=False,
+                return_wildcard_routes=return_wildcard_routes,
+                llm_router=llm_router,
+                model_access_groups=model_access_groups,
+                include_model_access_groups=include_model_access_groups,
+                team_id=team_id,
+            )
         )
     )
 
@@ -9582,6 +9581,7 @@ async def get_available_models_for_user(
         get_complete_model_list,
         get_key_models,
         get_team_models,
+        run_model_listing,
     )
 
     # Get proxy model list and access groups
@@ -9662,18 +9662,21 @@ async def get_available_models_for_user(
     )
 
     # Get complete model list
-    complete_models: Final = get_complete_model_list(
-        key_models=granted_key_models,
-        team_models=granted_team_models,
-        proxy_model_list=proxy_model_list,
-        user_model=user_model,
-        infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
-        return_wildcard_routes=return_wildcard_routes,
-        llm_router=llm_router,
-        model_access_groups=model_access_groups,
-        include_model_access_groups=include_model_access_groups,
-        only_model_access_groups=only_model_access_groups,
-        team_id=effective_team_id,
+    complete_models: Final = await run_model_listing(
+        partial(
+            get_complete_model_list,
+            key_models=granted_key_models,
+            team_models=granted_team_models,
+            proxy_model_list=proxy_model_list,
+            user_model=user_model,
+            infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
+            return_wildcard_routes=return_wildcard_routes,
+            llm_router=llm_router,
+            model_access_groups=model_access_groups,
+            include_model_access_groups=include_model_access_groups,
+            only_model_access_groups=only_model_access_groups,
+            team_id=effective_team_id,
+        )
     )
     all_models: Final = (
         list(

@@ -1,5 +1,7 @@
 use crate::base_llm::messages::context::MessagesModelCapabilities;
-use litellm_auth::{CredentialPlacement, SecretValue};
+use litellm_auth::CredentialPlacement;
+use litellm_secret_value::SecretValue;
+
 use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{
     has_header, header_value, header_values, with_header, without_headers,
