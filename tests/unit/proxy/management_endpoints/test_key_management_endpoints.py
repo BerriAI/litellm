@@ -2546,14 +2546,16 @@ async def test_prepare_key_update_data_keeps_a_resubmitted_window_mid_period(wee
 
 
 @pytest.mark.asyncio
-async def test_prepare_key_update_data_restarts_a_resubmitted_window_whose_period_ended() -> None:
-    stale_reset_at: Final = datetime.now(timezone.utc) - timedelta(days=1)
+async def test_prepare_key_update_data_leaves_an_ended_window_due_for_its_reset() -> None:
+    ended_reset_at: Final = datetime(2026, 10, 26, tzinfo=timezone.utc)
 
     windows: Final = await _updated_windows_by_duration(
-        _key_with_weekly_window(stale_reset_at), [{"budget_duration": "7d", "max_budget": 50.0}]
+        _key_with_weekly_window(ended_reset_at), [{"budget_duration": "7d", "max_budget": 30.0}]
     )
 
-    assert datetime.fromisoformat(windows["7d"]["reset_at"]) > datetime.now(timezone.utc)
+    assert windows["7d"] == {"budget_duration": "7d", "max_budget": 30.0, "reset_at": ended_reset_at.isoformat()}, (
+        "a restamped ended window is skipped by the reset job, so its counter carries the ended period"
+    )
 
 
 @pytest.mark.asyncio

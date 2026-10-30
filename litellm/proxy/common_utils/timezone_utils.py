@@ -1,9 +1,12 @@
+from collections.abc import Sequence
 from datetime import datetime, time, timezone
+from typing import Final
 
 from pydantic import ConfigDict
 
 import litellm
 from litellm.litellm_core_utils.duration_parser import get_next_standardized_reset_time
+from litellm.models.team import BudgetLimitEntry
 from litellm.types.llms.base import LiteLLMBaseModel
 
 
@@ -79,6 +82,18 @@ def get_budget_reset_time(budget_duration: str) -> datetime:
     `BudgetResetSettings` by injection (creation/update endpoints, startup backfill).
     """
     return compute_budget_reset_at(budget_duration, get_budget_reset_settings())
+
+
+def get_budget_window_reset_time(budget_duration: str, stored_windows: Sequence[BudgetLimitEntry]) -> datetime:
+    """The reset time a `budget_limits` update stores for a window.
+
+    A resubmitted duration keeps its stored reset time, even one already past. Moving a due window forward
+    hides it from the reset job, so its spend counter would carry the ended period into the next one.
+    """
+    stored_reset_at: Final = next(
+        (w.reset_at for w in stored_windows if w.budget_duration == budget_duration and w.reset_at is not None), None
+    )
+    return stored_reset_at if stored_reset_at is not None else get_budget_reset_time(budget_duration=budget_duration)
 
 
 def _is_persistable_budget_duration(budget_duration: str) -> bool:
