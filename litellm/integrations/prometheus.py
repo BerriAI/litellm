@@ -468,15 +468,16 @@ def _bounded_requested_model_label(requested_model: object, router_originated: b
     llm_router: Final = _get_proxy_llm_router()
     if llm_router is None:
         return requested_model if router_originated else UNRECOGNIZED_REQUESTED_MODEL_LABEL
-    if llm_router.is_recognized_model(requested_model):
+    registry: Final = llm_router.registry()
+    if registry.resolve(requested_model, kind="recognized"):
         return requested_model
-    if requested_model in llm_router.team_public_model_names:
+    if requested_model in registry.names(kind="team_public"):
         return requested_model
-    if llm_router.pattern_router.route(requested_model) is not None:
+    if registry.patterns().route(requested_model) is not None:
         return requested_model
     if any(
         team_pattern_router.route(requested_model) is not None
-        for team_pattern_router in llm_router.team_pattern_routers.values()
+        for team_pattern_router in registry.patterns(team=True).values()
     ):
         return requested_model
     return UNRECOGNIZED_REQUESTED_MODEL_LABEL
@@ -1173,8 +1174,8 @@ class PrometheusLogger(CustomLogger):
         # Build label filters from valid configurations
         label_filters: Final = self._build_label_filters(parsed_configs)
 
-        # Pretty print the processed configuration
-        self._pretty_print_prometheus_config(label_filters)
+        if litellm.suppress_startup_output is not True:
+            self._pretty_print_prometheus_config(label_filters)
         return label_filters
 
     def _parse_exclude_config(self) -> tuple[frozenset[str], frozenset[str]]:
@@ -3410,7 +3411,7 @@ class PrometheusLogger(CustomLogger):
         OpenAI / Anthropic / Azure return remaining tokens/requests in response
         headers, but Bedrock and Vertex AI do not. This fallback computes
         ``configured_limit - current_usage`` via
-        ``Router.get_remaining_model_group_usage`` so the same gauges are
+        ``Router.health().usage(model_group, kind="remaining")`` so the same gauges are
         emitted for every provider when tpm/rpm is configured on the
         deployment.
         """
@@ -3437,7 +3438,7 @@ class PrometheusLogger(CustomLogger):
                 return
 
             try:
-                remaining_usage: Final = await llm_router.get_remaining_model_group_usage(model_group)
+                remaining_usage: Final = await llm_router.health().usage(model_group, kind="remaining")
             except Exception as e:
                 verbose_logger.exception(
                     "Prometheus: get_remaining_model_group_usage failed for model_group=%s: %s",
@@ -5148,6 +5149,12 @@ def _get_combined_custom_metadata_from_standard_logging_payload(
         **(requester_metadata if isinstance(requester_metadata, dict) else {}),
         **(user_api_key_auth_metadata if isinstance(user_api_key_auth_metadata, dict) else {}),
         **(spend_logs_metadata if isinstance(spend_logs_metadata, dict) else {}),
+        "is_silent_experiment": (
+            "true"
+            if "is_silent_experiment" in standard_logging_metadata
+            and standard_logging_metadata["is_silent_experiment"] is True
+            else None
+        ),
     }
 
 

@@ -4,6 +4,8 @@ For diagnostic tracing changes, follow [.agents/skills/rust-tracing/SKILL.md](.a
 
 For string-valued enums and their Serde conversions, follow [.agents/skills/rust-string-enums/SKILL.md](.agents/skills/rust-string-enums/SKILL.md)
 
+For error types, error variants and conversions between crate errors, follow [.agents/skills/rust-error/SKILL.md](.agents/skills/rust-error/SKILL.md)
+
 For fieldless enums, derive `strum::VariantArray` and use `VARIANTS` instead of a hand-listed `ALL` array. Derive Strum string conversions instead of hand-written variant-to-string matches
 
 Use the derived conversions directly (`<&'static str>::from(x)` / `.into()`, `str::parse`) with no `as_str`/`parse` wrapper that only delegates, and spell each variant with explicit `#[strum(serialize = "...")]` instead of `serialize_all`
@@ -24,13 +26,3 @@ Use [`#[rstest]`](https://docs.rs/rstest/latest/rstest/attr.rstest.html) for new
 
 - Never loop over inputs (`for`, `.iter().for_each`, `.all`) inside a test body. Give each input its own `#[case::name(...)]`, or use `#[values(...)]` for a cross product
 - Exception: a test pinning a Rust table against a repo-owned data file (for example `include_str!` of a JSON config) may iterate that file's entries
-
-## Error definitions
-
-- A crate's errors live in `src/error.rs`, defined with `thiserror`, and re-exported from `lib.rs`
-- Put message templates in the variant's `#[error(...)]` declaration. Callers pass only the small typed arguments needed to fill them, never `Error::Variant(format!(...))` or a preformatted message. Keep the smallest set of neutral variants that callers need to distinguish. Different wording or providers do not justify new variants
-- Default to one top-level `Error` enum per crate, with one variant per failure mode and a `#[error(...)]` message on each. A failure mode is something a caller handles differently (phase, status code, retry, a message Python parity pins exactly). Failures no caller tells apart share one variant and differ only in its message
-- Keep shared error enums minimal and provider-neutral. Provider names, credential types, configuration fields, and setup guidance belong in caller-supplied data, not dedicated variants or hardcoded shared messages. Reuse a variant for the same failure mode across providers, such as `MissingApiBase { provider: "Azure", guidance: "..." }`. An exact parity message does not justify a provider-specific variant when caller-supplied context can preserve it
-- Wrap a lower-level error as a variant with `#[from]` or `#[source]` instead of flattening it to a string
-- Exception: split into separate types when different functions fail in disjoint ways, especially when different callers see them. A shared enum would force every caller to match variants its function can never return
-- Name a split type after what went wrong (a unit struct is fine for a single failure mode), not after the function that returns it
