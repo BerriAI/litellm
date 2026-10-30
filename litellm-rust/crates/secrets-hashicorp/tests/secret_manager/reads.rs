@@ -138,7 +138,7 @@ async fn read_responses_distinguish_absence_and_malformed_payloads(
         .await;
     match expected {
         ExpectedRead::Missing => assert!(result.unwrap().is_none()),
-        ExpectedRead::Malformed => assert!(matches!(result, Err(Error::MalformedPayload))),
+        ExpectedRead::Malformed => assert!(matches!(result, Err(Error::MalformedPayload(_)))),
         ExpectedRead::NonString => assert!(matches!(result, Err(Error::NonStringValue))),
     }
 }
@@ -382,4 +382,53 @@ async fn concurrent_reads_share_a_load_but_verification_fetches_fresh(
             .expose(),
         "new"
     );
+}
+
+fn unreachable_manager() -> HashicorpVault {
+    let address = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let environment: Arc<dyn Lookup + Send + Sync> = Arc::new(move |name: &str| match name {
+        "HCP_VAULT_ADDR" => Some(format!("http://{address}")),
+        "HCP_VAULT_TOKEN" => Some("token".to_owned()),
+        _ => None,
+    });
+    HashicorpVault::new(environment, true).unwrap()
+}
+
+#[tokio::test]
+async fn unreachable_vault_reads_are_connect_failures_without_the_url() {
+    let error = unreachable_manager()
+        .async_read_secret("do-not-leak")
+        .await
+        .unwrap_err();
+
+    assert!(matches!(&error, Error::Transport(transport) if transport.is_connect()));
+    let report = litellm_error::Report::new(&error).to_string();
+    assert!(
+        report.starts_with("HashiCorp Vault request failed: "),
+        "{report}"
+    );
+    assert!(!report.contains("do-not-leak"), "{report}");
+}
+
+#[tokio::test]
+async fn unreachable_vault_raw_reads_are_connect_failures_without_the_url() {
+    let error = unreachable_manager()
+        .read_raw("do-not-leak", &HashicorpOperationContext::default())
+        .await
+        .unwrap_err();
+
+    assert!(
+        error
+            .transport()
+            .is_some_and(litellm_http::Error::is_connect)
+    );
+    let report = litellm_error::Report::new(&error).to_string();
+    assert!(
+        report.starts_with("HashiCorp Vault request failed: "),
+        "{report}"
+    );
+    assert!(!report.contains("do-not-leak"), "{report}");
 }

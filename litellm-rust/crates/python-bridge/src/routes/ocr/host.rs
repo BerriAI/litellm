@@ -12,8 +12,8 @@ use pyo3::{
 };
 
 use super::{
-    errors::to_pyerr as ocr_error_to_pyerr,
-    project::{OcrHostHandles, SETTINGS_ERROR_MARKER, project_request},
+    errors::route_failure,
+    project::{OcrHostHandles, ROUTE_HOST_MODULE, SETTINGS_ERROR_MARKER, project_request},
 };
 use crate::{marshal::public_response, routes::RequestView};
 
@@ -77,7 +77,7 @@ impl OcrPythonHost {
             _ => "",
         };
         let mapped = py
-            .import("litellm.rust_bridge.host.routes.ocr")
+            .import(ROUTE_HOST_MODULE)
             .and_then(|module| module.getattr("map_failure"))
             .and_then(|map| map.call1((error.value(py), self.view.request(py)?, provider)))
             .and_then(|mapped| mapped.extract::<Py<PyBaseException>>().map_err(PyErr::from));
@@ -115,7 +115,7 @@ impl PythonBinding for OcrPythonHost {
         py: Python<'_>,
         response: LiteLLMOcrResponse,
     ) -> PyResult<Py<PyAny>> {
-        public_response(py, "litellm.rust_bridge.host.routes.ocr", &response)
+        public_response(py, ROUTE_HOST_MODULE, &response)
     }
 
     fn encode_stream_head(
@@ -135,16 +135,11 @@ impl PythonBinding for OcrPythonHost {
     }
 
     fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
-        if let Error::Secret(source) = &error
-            && let Some(original) = crate::secrets::python_error(py, source)
-        {
-            return Ok(original);
-        }
-        Ok(self.map_failure(py, ocr_error_to_pyerr(error)))
+        route_failure(py, error, |native| Ok(self.map_failure(py, native)))
     }
 
-    fn host_error(error: &PyErr) -> Error {
-        Error::InvalidRequest(error.to_string())
+    fn host_error(_: &PyErr) -> Error {
+        Error::HostCall
     }
 }
 
