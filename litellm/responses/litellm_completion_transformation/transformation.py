@@ -3144,6 +3144,18 @@ class LiteLLMCompletionResponsesConfig:
             return "completed"
 
     @staticmethod
+    def _is_paused_turn(choice: Choices) -> bool:
+        return anthropic_stop_reason(choice.message) == "pause_turn"
+
+    @staticmethod
+    def _responses_status_for_choice(choice: Choices) -> ResponsesAPIStatus:
+        if LiteLLMCompletionResponsesConfig._is_paused_turn(choice):
+            return "completed"
+        return LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+            choice.finish_reason
+        )
+
+    @staticmethod
     def _incomplete_details_for_finish_reason(
         finish_reason: str | None,
         existing: IncompleteDetails | None,
@@ -3281,7 +3293,7 @@ class LiteLLMCompletionResponsesConfig:
             chat_completion_response = ModelResponse(**chat_completion_response)
         choices: Final[list[Choices]] = getattr(chat_completion_response, "choices", [])
         finish_reason: Final = choices[0].finish_reason if choices else None
-        paused_turn: Final = bool(choices) and anthropic_stop_reason(choices[0].message) == "pause_turn"
+        paused_turn: Final = bool(choices) and LiteLLMCompletionResponsesConfig._is_paused_turn(choices[0])
 
         echoed: Final = _echoable_request_params(responses_api_request)
         chat_usage: Final = getattr(chat_completion_response, "usage", None)
@@ -3321,11 +3333,7 @@ class LiteLLMCompletionResponsesConfig:
             previous_response_id=echoed.get("previous_response_id"),
             reasoning=echoed.get("reasoning"),
             status=(
-                "completed"
-                if paused_turn
-                else LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
-                    finish_reason
-                )
+                LiteLLMCompletionResponsesConfig._responses_status_for_choice(choices[0]) if choices else "incomplete"
             ),
             text=echoed.get("text") or {},
             truncation=echoed.get("truncation"),
@@ -3601,9 +3609,7 @@ class LiteLLMCompletionResponsesConfig:
                     GenericResponseOutputItem(
                         type="message",
                         id=f"msg_{uuid.uuid4()}",
-                        status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
-                            choice.finish_reason
-                        ),
+                        status=LiteLLMCompletionResponsesConfig._responses_status_for_choice(choice),
                         role=choice.message.role,
                         content=list(content),
                     )

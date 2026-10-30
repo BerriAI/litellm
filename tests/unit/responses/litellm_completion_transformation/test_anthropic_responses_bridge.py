@@ -1758,6 +1758,7 @@ _RAN_SEARCH_RESULT: Final = {
         {"type": "web_search_result", "url": "https://tokyo.example", "title": "Tokyo", "encrypted_content": "e"}
     ],
 }
+_TEXT_BEFORE_PENDING_SEARCH: Final = {"type": "text", "text": "Tokyo pairs with Paris. Checking Paris next."}
 _PENDING_SEARCH: Final = {
     "type": "server_tool_use",
     "id": "srvtoolu_pending",
@@ -1771,7 +1772,15 @@ _EXPECTED_PAUSED_OUTPUT: Final = [
 
 
 def _search_calls(output: Sequence[BaseModel]) -> list[tuple[str, str, str]]:
-    return [(item.type, item.status, item.action.query) for item in output]
+    return [(item.type, item.status, item.action.query) for item in output if item.type == "web_search_call"]
+
+
+def _message_statuses(output: Sequence[BaseModel]) -> list[str]:
+    return [item.status for item in output if item.type == "message"]
+
+
+def _last_item(output: Sequence[BaseModel]) -> tuple[str, str]:
+    return output[-1].type, output[-1].status
 
 
 def _status_and_incomplete_details(response: ResponsesAPIResponse) -> tuple[str | None, Mapping[str, object] | None]:
@@ -1801,7 +1810,7 @@ def test_responses_over_anthropic_report_a_paused_turn_as_completed_with_its_pen
             200,
             json={
                 **ANTHROPIC_DOCS_REFUSAL_MESSAGE,
-                "content": [_RAN_SEARCH, _RAN_SEARCH_RESULT, _PENDING_SEARCH],
+                "content": [_RAN_SEARCH, _RAN_SEARCH_RESULT, _TEXT_BEFORE_PENDING_SEARCH, _PENDING_SEARCH],
                 "stop_reason": stop_reason,
                 "stop_details": None,
             },
@@ -1814,6 +1823,8 @@ def test_responses_over_anthropic_report_a_paused_turn_as_completed_with_its_pen
 
     assert _status_and_incomplete_details(response) == (expected_status, expected_incomplete_details)
     assert _search_calls(response.output) == _EXPECTED_PAUSED_OUTPUT
+    assert _message_statuses(response.output) == [expected_status]
+    assert _last_item(response.output) == ("web_search_call", "in_progress")
 
 
 def _server_tool_use_events(index: int, block: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
@@ -1847,7 +1858,14 @@ def test_streamed_responses_over_anthropic_complete_a_paused_turn_with_its_pendi
                 *_server_tool_use_events(0, _RAN_SEARCH),
                 {"type": "content_block_start", "index": 1, "content_block": _RAN_SEARCH_RESULT},
                 {"type": "content_block_stop", "index": 1},
-                *_server_tool_use_events(2, _PENDING_SEARCH),
+                {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}},
+                {
+                    "type": "content_block_delta",
+                    "index": 2,
+                    "delta": {"type": "text_delta", "text": _TEXT_BEFORE_PENDING_SEARCH["text"]},
+                },
+                {"type": "content_block_stop", "index": 2},
+                *_server_tool_use_events(3, _PENDING_SEARCH),
                 {
                     "type": "message_delta",
                     "delta": {"stop_reason": stop_reason, "stop_sequence": None},
@@ -1884,3 +1902,5 @@ def test_streamed_responses_over_anthropic_complete_a_paused_turn_with_its_pendi
     assert finished.type == f"response.{expected_status}"
     assert _status_and_incomplete_details(finished.response) == (expected_status, expected_incomplete_details)
     assert _search_calls(finished.response.output) == _EXPECTED_PAUSED_OUTPUT
+    assert _message_statuses(finished.response.output) == [expected_status]
+    assert _last_item(finished.response.output) == ("web_search_call", "in_progress")
