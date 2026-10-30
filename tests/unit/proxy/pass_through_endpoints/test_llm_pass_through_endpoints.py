@@ -2757,9 +2757,16 @@ class TestVLLMProxyRoute:
         mock_factory_route.assert_awaited_once()
 
 
-@pytest.mark.parametrize("vllm_api_base", ["http://vllm-upstream.test:8090", "http://vllm-upstream.test:8090/v1"])
+@pytest.mark.parametrize(
+    ("vllm_api_base", "request_path"),
+    [
+        ("http://vllm-upstream.test:8090", "/vllm/v1/chat/completions"),
+        ("http://vllm-upstream.test:8090/v1", "/vllm/v1/chat/completions"),
+        ("http://vllm-upstream.test:8090/v1", "/vllm/chat/completions"),
+    ],
+)
 def test_vllm_provider_route_reaches_v1_paths_with_its_key_as_a_bearer(
-    monkeypatch: pytest.MonkeyPatch, vllm_api_base: str
+    monkeypatch: pytest.MonkeyPatch, vllm_api_base: str, request_path: str
 ) -> None:
     from litellm.proxy import proxy_server
 
@@ -2777,7 +2784,7 @@ def test_vllm_provider_route_reaches_v1_paths_with_its_key_as_a_bearer(
             return_value=httpx.Response(200, json={"id": "chatcmpl-1"})
         )
         response: Final = TestClient(proxy_server.app).post(
-            "/vllm/v1/chat/completions",
+            request_path,
             json={"model": "Qwen/Qwen3-0.6B", "messages": [{"role": "user", "content": "hi"}]},
         )
 

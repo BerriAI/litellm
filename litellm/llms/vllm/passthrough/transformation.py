@@ -13,7 +13,7 @@ from litellm.llms.openai_like.passthrough.transformation import (
     logged_text_completion_stream,
     relays_text_completion,
 )
-from litellm.secret_managers.main import get_secret_str
+from litellm.secret_managers.main import UnresolvableSecretReference, get_secret_str, resolve_local_oidc_reference
 
 from ..common_utils import VLLMModelInfo, endpoint_under_api_base
 
@@ -29,11 +29,16 @@ class VLLMPassthroughConfig(VLLMModelInfo, BasePassthroughConfig):
         return None if api_key == PLACEHOLDER_API_KEY else api_key
 
     def upstream_api_key(self, api_key: str | None, api_base: str | None) -> str | None:
-        if api_base is None or api_base != get_secret_str("VLLM_API_BASE"):
+        if api_key is not None or api_base != get_secret_str("VLLM_API_BASE"):
             return api_key
-        if api_key is not None and api_key != get_secret_str("HOSTED_VLLM_API_KEY"):
-            return api_key
-        return get_secret_str("VLLM_API_KEY")
+        vllm_api_key: Final = get_secret_str("VLLM_API_KEY")
+        if vllm_api_key is None:
+            return None
+        match resolve_local_oidc_reference(vllm_api_key):
+            case UnresolvableSecretReference():
+                return None
+            case str() as resolved:
+                return resolved
 
     def upstream_auth_headers(self, api_key: str) -> Mapping[str, str]:
         return {"Authorization": f"Bearer {api_key}"}
