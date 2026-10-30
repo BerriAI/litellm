@@ -20,7 +20,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 import pytest_asyncio
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
@@ -2099,6 +2099,17 @@ def test_scrub_request_text_replaces_each_way_an_error_quotes_the_prompt(quoted:
     assert scrubbed.startswith("Invalid content: <") and scrubbed.endswith("> rejected")
 
 
+@pytest.mark.parametrize("value", [PROMPT, [PROMPT], {"content": PROMPT}], ids=["str", "list", "dict"])
+def test_scrub_request_text_replaces_both_sides_of_a_pydantic_cut_input_value(value: object) -> None:
+    with pytest.raises(ValidationError, match="input_value=") as raised:
+        TypeAdapter(int).validate_python(value)
+
+    scrubbed: Final = scrub_request_text(str(raised.value), request_texts(PROMPT))
+
+    assert "my ssn" not in scrubbed and "4321" not in scrubbed
+    assert "redacted-by-litellm...redacted-by-litellm" in scrubbed
+
+
 def test_scrub_request_text_leaves_an_error_that_does_not_quote_the_prompt() -> None:
     assert scrub_request_text("Incorrect API key provided", request_texts(PROMPT, "hi")) == "Incorrect API key provided"
 
@@ -2176,6 +2187,15 @@ def test_scrubbed_exception_text_reports_a_scrub_of_either_field(error_informati
 
     assert logged == (error_information["error_message"], error_information["traceback"])
     assert scrubbed_exception_text({"standard_logging_object": {"error_information": {"error_message": "bad"}}}) is None
+
+
+def test_scrubbed_exception_text_reports_a_scrub_of_the_logged_traceback() -> None:
+    model_call_details: Final = {
+        "traceback_exception": "ValueError: bad: redacted-by-litellm",
+        "standard_logging_object": {"error_information": {"error_message": "outer", "traceback": "frames"}},
+    }
+
+    assert scrubbed_exception_text(model_call_details) == ("outer", "ValueError: bad: redacted-by-litellm")
 
 
 def test_scrubbed_error_information_for_request_scrubs_only_when_the_request_redacts() -> None:

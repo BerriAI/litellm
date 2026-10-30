@@ -11806,6 +11806,20 @@ def test_sync_failure_hands_callbacks_and_langfuse_the_scrubbed_error(monkeypatc
     assert SCRUB_PROMPT not in status_message
 
 
+def test_sync_failure_hands_lunary_the_scrubbed_traceback_when_only_the_traceback_quotes_the_prompt(monkeypatch):
+    lunary: Final = MagicMock()
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    monkeypatch.setattr(litellm, "failure_callback", ["lunary"])
+    monkeypatch.setattr(litellm_logging, "lunaryLogger", lunary)
+    error: Final = litellm.APIConnectionError(message="Connection failed", model="gpt-4o", llm_provider="openai")
+
+    _prompt_failure_logging_obj().failure_handler(error, f"ValueError: bad input {SCRUB_PROMPT}\n\n{error}")
+
+    logged_error: Final = lunary.log_event.call_args.kwargs["error"]
+    assert "ValueError: bad input redacted-by-litellm" in logged_error
+    assert SCRUB_PROMPT not in logged_error
+
+
 def test_enterprise_alerting_loggers_resolves_real_classes():
     from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import PagerDutyAlerting
     from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger

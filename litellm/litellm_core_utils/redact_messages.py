@@ -9,6 +9,7 @@
 
 import asyncio
 import copy
+import functools
 import inspect
 import itertools
 import json
@@ -448,7 +449,10 @@ def _redacted_responses_api_response(
 _REQUEST_TEXT_KEYS: Final = ("messages", "input", "prompt", "system", "instructions")
 _STRUCTURAL_KEYS: Final = frozenset({"role", "type", "id", "tool_call_id", "name"})
 _MIN_UNQUOTED_TEXT_LENGTH: Final = 4
-_ECHO_FRAGMENT_LENGTH: Final = 24
+# pydantic shows a long input value as its repr's first 25 and last 24 characters around "...", quotes and
+# container keys included, so each side of the cut shows at most 24 characters of the text
+_MIN_CUT_ECHO_LENGTH: Final = 12
+_MAX_CUT_ECHO_LENGTH: Final = 24
 _MAX_SCRUB_COMPARISONS: Final = 10_000_000
 
 
@@ -485,15 +489,23 @@ def failure_request_texts(model_call_details: Mapping[str, object], *originals: 
     )
 
 
-def _echo_forms(text: str) -> tuple[str, ...]:
-    """How an error can quote ``text``: verbatim or JSON or repr escaped, whole or cut down to its head and tail."""
-    whole: Final = {text, json.dumps(text)[1:-1], json.dumps(text, ensure_ascii=False)[1:-1], repr(text)[1:-1]}
-    long_forms: Final = tuple(form for form in whole if len(form) >= 2 * _ECHO_FRAGMENT_LENGTH)
-    return (
-        *whole,
-        *(form[:_ECHO_FRAGMENT_LENGTH] for form in long_forms),
-        *(form[-_ECHO_FRAGMENT_LENGTH:] for form in long_forms),
-    )
+def _echo_forms(text: str) -> frozenset[str]:
+    """How an error can quote ``text``: verbatim, or JSON or repr escaped."""
+    return frozenset({text, json.dumps(text)[1:-1], json.dumps(text, ensure_ascii=False)[1:-1], repr(text)[1:-1]})
+
+
+def _cut_head_pattern(form: str) -> str:
+    """The start of ``form`` where an error cuts it short with ``...``, as pydantic shows a long input value."""
+    rest: Final = form[_MIN_CUT_ECHO_LENGTH:_MAX_CUT_ECHO_LENGTH]
+    optional_rest: Final = functools.reduce(lambda inner, char: f"(?:{re.escape(char)}{inner})?", reversed(rest), "")
+    return f"{re.escape(form[:_MIN_CUT_ECHO_LENGTH])}{optional_rest}(?=\\.\\.\\.)"
+
+
+def _cut_tail_pattern(form: str) -> str:
+    """The end of ``form`` where an error picks it up again after ``...``."""
+    rest: Final = form[-_MAX_CUT_ECHO_LENGTH:-_MIN_CUT_ECHO_LENGTH]
+    optional_rest: Final = functools.reduce(lambda inner, char: f"(?:{inner}{re.escape(char)})?", rest, "")
+    return f"(?<=\\.\\.\\.){optional_rest}{re.escape(form[-_MIN_CUT_ECHO_LENGTH:])}"
 
 
 def scrub_request_text(text: str, texts: Collection[str]) -> str:
@@ -508,9 +520,14 @@ def scrub_request_text(text: str, texts: Collection[str]) -> str:
         return REDACTED_BY_LITELLM
     forms: Final = frozenset(itertools.chain.from_iterable(map(_echo_forms, texts)))
     quoted: Final = sorted((form for form in forms if form in text), key=len, reverse=True)
-    if not quoted:
+    cut_forms: Final = tuple(form for form in forms if len(form) > _MIN_CUT_ECHO_LENGTH) if "..." in text else ()
+    cut: Final = (
+        *(_cut_head_pattern(form) for form in cut_forms if form[:_MIN_CUT_ECHO_LENGTH] in text),
+        *(_cut_tail_pattern(form) for form in cut_forms if form[-_MIN_CUT_ECHO_LENGTH:] in text),
+    )
+    if not quoted and not cut:
         return text
-    return re.sub("|".join(map(_echo_pattern, quoted)), REDACTED_BY_LITELLM, text)
+    return re.sub("|".join((*map(_echo_pattern, quoted), *cut)), REDACTED_BY_LITELLM, text)
 
 
 def _echo_pattern(form: str) -> str:
@@ -559,14 +576,16 @@ def scrubbed_error_fields(payload: Mapping[str, object], texts: Collection[str])
 
 def scrubbed_exception_text(model_call_details: Mapping[str, object]) -> tuple[str, str] | None:
     """
-    The error message and traceback a failure payload logged when redaction scrubbed the request's text
-    out of either, for callbacks that would otherwise record the raw exception. ``None`` when nothing was
-    scrubbed.
+    The error message and traceback a failure logged when redaction scrubbed the request's text out of
+    either, for callbacks that would otherwise record the raw exception. ``None`` when nothing was scrubbed.
     """
     payload: Final = _as_mapping(model_call_details.get("standard_logging_object")) or {}
     error_information: Final = _as_mapping(payload.get("error_information")) or {}
     message: Final = error_information.get("error_message")
-    traceback_text: Final = error_information.get("traceback")
+    logged_traceback: Final = model_call_details.get("traceback_exception")
+    traceback_text: Final = (
+        logged_traceback if isinstance(logged_traceback, str) else error_information.get("traceback")
+    )
     if not any(isinstance(text, str) and REDACTED_BY_LITELLM in text for text in (message, traceback_text)):
         return None
     return (
