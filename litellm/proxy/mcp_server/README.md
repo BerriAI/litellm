@@ -13,6 +13,8 @@ litellm_settings:
   mcp_code_mode: true
 ```
 
+The displayed tool name `litellm_execute_code` is reserved when code mode is enabled. Rename any existing tool alias with that exact name before enabling; otherwise tool listing returns an explicit name-conflict error.
+
 Reconnect the MCP client or refresh its tool list. It should discover `litellm_execute_code` alongside its existing tools. Turning it off also rejects calls from clients that cached the code tool.
 
 The extra installs QuickJS-NG. Platforms without a compatible wheel need a source build and its compiler toolchain; source builds on these platforms have not been verified. A missing runtime produces an actionable startup error. The original `quickjs` package shares files with `quickjs-ng`; use a separate environment without that package before installing the extra. Regular proxy installations and disabled gateways do not require either runtime.
