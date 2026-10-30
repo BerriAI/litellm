@@ -201,9 +201,13 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
     async def _get_current_spend(self, session_id: str) -> float:
         """Read current accumulated spend for a session."""
         if self._store is not None:
-            stored: Final = await self._store.spend(session_id)
-            if not isinstance(stored, RedisFailure):
-                return 0.0 if stored is None else stored
+            match await self._store.spend(session_id):
+                case None | RedisFailure(kind="transport" | "server"):
+                    return 0.0
+                case RedisFailure():
+                    pass
+                case stored:
+                    return stored
 
         cache_result: Final[str | bytes | int | float | None] = _OPTIONAL_CACHE_AMOUNT_ADAPTER.validate_python(
             await self.internal_usage_cache.async_get_cache(

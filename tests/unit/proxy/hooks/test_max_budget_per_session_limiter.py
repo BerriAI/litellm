@@ -210,26 +210,29 @@ async def test_spend_an_old_pod_wrote_blocks_the_session():
 async def test_a_spend_that_does_not_decode_falls_back_to_local_spend():
     server = fakeredis.FakeServer()
     _, handler = _redis_handler(server)
-    await fakeredis.FakeAsyncRedis(server=server).set("{session_budget:s1}:spend", "not-a-number")
+    await handler._in_memory_increment_spend(handler._make_cache_key("s1"), 2.0)
+    await fakeredis.FakeAsyncRedis(server=server).set("{session_budget:s1}:spend", '"not-a-number"')
 
-    assert await handler._get_current_spend("s1") == 0.0
+    assert await handler._get_current_spend("s1") == 2.0
 
 
 @pytest.mark.asyncio
-async def test_an_unreachable_redis_keeps_counting_spend_locally():
+async def test_an_unreachable_redis_counts_spend_locally_and_reads_it_as_zero():
     server = fakeredis.FakeServer()
     _, handler = _redis_handler(server)
     server.connected = False
 
     assert await handler._increment_spend("s1", 1.0) == 1.0
     assert await handler._increment_spend("s1", 2.0) == 3.0
-    assert await handler._get_current_spend("s1") == 3.0
+    assert await handler._get_current_spend("s1") == 0.0
+    await _pre_call(handler, "s1", max_budget=1.0)
 
 
 @pytest.mark.asyncio
 async def test_an_open_circuit_breaker_reads_session_spend_locally_without_a_warning(caplog):
     server = fakeredis.FakeServer()
     cache, handler = _redis_handler(server)
+    await handler._in_memory_increment_spend(handler._make_cache_key("quiet"), 2.0)
     for _ in range(cache._circuit_breaker.failure_threshold):
         cache._circuit_breaker.record_failure()
     caplog.clear()
@@ -237,6 +240,6 @@ async def test_an_open_circuit_breaker_reads_session_spend_locally_without_a_war
     with caplog.at_level(logging.DEBUG):
         spend = await handler._get_current_spend("quiet")
 
-    assert spend == 0.0
+    assert spend == 2.0
     assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
     assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
