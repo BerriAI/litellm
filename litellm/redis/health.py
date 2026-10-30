@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 from types import FrameType, MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeVar, cast
+from typing import TYPE_CHECKING, Final, TypeVar, cast  # noqa: TID251  # legacy Redis exception cast for old stubs
 
 from litellm._internal_context import current_service_caller
 from litellm._logging import verbose_logger
