@@ -169,7 +169,7 @@ def build_subscription_usage(
     deployment_tuple: Final = tuple(deployments)
     fees_by_account: Final = {(row.custom_llm_provider, row.account_id): row for row in fee_rows}
     deployment_keys: Final = {(d.custom_llm_provider, d.account_id) for d in deployment_tuple}
-    account_keys: Final = sorted(deployment_keys | set(fees_by_account), key=lambda key: (key[0], key[1] or "~"))
+    account_keys: Final = sorted(deployment_keys, key=lambda key: (key[0], key[1] or "~"))
     accounts: Final = tuple(
         _account_usage(
             provider,

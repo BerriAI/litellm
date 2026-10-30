@@ -174,18 +174,17 @@ def test_fee_counts_once_per_billing_period_however_many_deployments_share_the_a
     assert between_starts["accounts"][0]["billing_periods"] == []
 
 
-def test_fee_without_a_matching_deployment_is_still_listed(client):
+def test_fee_of_an_account_no_deployment_uses_is_neither_listed_nor_counted(client):
     test_client, _ = client
     other = {**_TEST_FEE, "account_id": "org-other", "monthly_fee": 200.0, "currency": "EUR"}
     assert test_client.post("/subscription_accounts/new", json=other).status_code == 200
+    assert test_client.post("/subscription_accounts/new", json=_TEST_FEE).status_code == 200
 
     body = _usage(test_client, "2026-10-01", "2026-10-07")
 
-    assert [account["account_id"] for account in body["accounts"]] == ["org-other", _ACCOUNT]
-    assert body["accounts"][0]["deployments"] == []
-    assert body["accounts"][0]["fee"]["currency"] == "EUR"
-    assert body["accounts"][0]["fixed_cost"] == 200.0
-    assert body["accounts"][1]["fee"] is None
+    (account,) = body["accounts"]
+    assert account["account_id"] == _ACCOUNT
+    assert account["fixed_cost"] == 25.0
 
 
 @pytest.mark.parametrize(
