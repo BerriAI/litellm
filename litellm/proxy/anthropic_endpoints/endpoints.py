@@ -8,7 +8,7 @@ from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import JsonValue, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -54,6 +54,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     should_auto_drop_params_for_agentic_cli,
 )
 from litellm.router import Router
+from litellm.types.utils import TokenCountResponse
 
 router: Final = APIRouter()
 
@@ -334,6 +335,15 @@ def _count_tokens_body_options(data: Mapping[str, JsonValue], auto_drop_params: 
     }
 
 
+_PROVIDER_COUNT_REPLY: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+
+
+def _provider_context_management(response: TokenCountResponse) -> Mapping[str, object]:
+    original: Final = _PROVIDER_COUNT_REPLY.validate_python(response.original_response)
+    context_management: Final = original.get("context_management") if original is not None else None
+    return {} if context_management is None else {"context_management": context_management}
+
+
 @router.post(
     "/v1/messages/count_tokens",
     tags=["[beta] Anthropic Messages Token Counting"],
@@ -413,7 +423,11 @@ async def count_tokens(
         log_llm_api_exception(e, litellm_call_id)
         return _anthropic_error_json_response(proxy_exception_from_route_error(e), request)
     else:
-        return {"input_tokens": token_response.total_tokens, **count_source_fields(token_response)}
+        return {
+            "input_tokens": token_response.total_tokens,
+            **_provider_context_management(token_response),
+            **count_source_fields(token_response),
+        }
 
 
 @router.post(
