@@ -94,6 +94,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 )
 from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry, GetModelCostMap
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
+from litellm.litellm_core_utils.model_retirement import is_hidden_as_retired
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
@@ -8852,7 +8853,8 @@ def get_valid_models(
                 models_for_provider = copy.deepcopy(litellm.models_by_provider.get(provider, []))
                 valid_models.extend(models_for_provider)
 
-        return valid_models
+        cost_map: Final = _builtin_cost_map()
+        return [model for model in valid_models if not is_hidden_as_retired(cost_map.get(model, {}))]
     except Exception as e:
         verbose_logger.warning("Error getting valid models: %s", e)
         return []  # NON-Blocking

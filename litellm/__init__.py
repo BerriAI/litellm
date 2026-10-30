@@ -7,7 +7,6 @@ _apply_process_defaults()
 ### INIT VARIABLES #########################
 import threading
 import os
-import datetime
 
 from collections.abc import Mapping, Sequence
 from typing import (
@@ -550,6 +549,7 @@ _key_management_system: Optional["KeyManagementSystem"] = None
 output_parse_pii: bool = False
 #############################################
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map, mark_litellm_import_complete
+from litellm.litellm_core_utils.model_retirement import is_past_deprecation_date as _is_past_deprecation_date
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
 cost_discount_config: Dict[str, float] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
@@ -753,16 +753,6 @@ def is_openai_finetune_model(key: str) -> bool:
         bool: True if the key matches the OpenAI finetune pattern, False otherwise.
     """
     return key.startswith("ft:") and not key.count(":") > 1
-
-
-def _is_past_deprecation_date(value: Mapping[str, object]) -> bool:
-    deprecation_date: Final = value.get("deprecation_date")
-    if not isinstance(deprecation_date, str):
-        return False
-    try:
-        return datetime.date.fromisoformat(deprecation_date) <= datetime.date.today()
-    except ValueError:
-        return False
 
 
 def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
