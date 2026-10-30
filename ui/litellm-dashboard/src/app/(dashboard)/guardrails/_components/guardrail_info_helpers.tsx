@@ -29,6 +29,7 @@ import repelloAiLogo from "../../../../../public/assets/logos/repelloai.png";
 import straikerLogo from "../../../../../public/assets/logos/straiker.svg";
 import wingbackLogo from "../../../../../public/assets/logos/wingback.png";
 import xecguardLogo from "../../../../../public/assets/logos/xecguard.svg";
+import thirdlawLogo from "../../../../../public/assets/logos/thirdlaw.svg";
 import zscalerLogo from "../../../../../public/assets/logos/zscaler.svg";
 
 // Legacy enum - keeping for backward compatibility
@@ -88,6 +89,7 @@ export const guardrail_provider_map: Record<string, string> = {
   Deepkeep: "deepkeep",
   QostodianNexus: "qostodian_nexus",
   Repelloai: "repelloai",
+  ThirdLaw: "thirdlaw",
   Alice: "alice",
   "LLM Shield Proxy": "llm_shield_proxy",
   Conduct: "conduct",
@@ -290,6 +292,7 @@ export const shouldRenderDecisionModelFields = (provider: string | null) => {
 };
 
 export const guardrailLogoMap = {
+  ThirdLaw: thirdlawLogo.src,
   "Zscaler AI Guard": zscalerLogo.src,
   "Presidio PII": microsoftAzureLogo.src,
   "Bedrock Guardrail": bedrockLogo.src,

@@ -14,6 +14,7 @@ from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
+from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines_keepends
 
 _MESSAGE_START_EVENT: Final = "message_start"
@@ -108,11 +109,16 @@ class AnthropicStreamModelRestamper:
 
     def __init__(self, requested_model: str) -> None:
         self._requested_model: Final = requested_model
-        self._held = b""
+        self._held: bytes = b""
         self._armed = True
 
     def process(self, chunk: object) -> object:
         if not self._armed:
+            return chunk
+        if isinstance(chunk, AnthropicErrorSseFrame) and not self._held:
+            # An error event carries no model, and re-encoding it would drop the status the proxy
+            # answers with when the stream fails before its first byte
+            self._armed = False
             return chunk
         if isinstance(chunk, (bytes, bytearray)):
             return self._process_encoded(bytes(chunk))
