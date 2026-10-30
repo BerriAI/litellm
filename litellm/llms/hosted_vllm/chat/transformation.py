@@ -3,9 +3,10 @@ Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
 import json
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Iterable, Mapping, Sequence
 from typing import Final, Literal, cast, overload
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
 )
@@ -16,15 +17,88 @@ from litellm.litellm_core_utils.reasoning_effort_utils import (
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
     ChatCompletionFileObject,
-    ChatCompletionToolCallFunctionChunk,
+    ChatCompletionUserMessage,
     ChatCompletionVideoObject,
     ChatCompletionVideoUrlObject,
+    OpenAIMessageContentListBlock,
 )
 
 from ....utils import remove_additional_properties, remove_strict_from_schema
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+
+_THINKING_KEYS: Final = frozenset({"thinking_blocks"})
+_THINKING_AND_REASONING_KEYS: Final = frozenset({"thinking_blocks", "reasoning_content"})
+
+
+def _content_part_type(part: object) -> object:
+    mapping: Final = as_str_mapping(part)
+    return None if mapping is None else mapping.get("type")
+
+
+def _tool_use_as_tool_call(part: Mapping[str, object]) -> ChatCompletionAssistantToolCall:
+    tool_input: Final = part.get("input", {})
+    return cast(  # cast-ok: id and name are forwarded as the caller sent them
+        ChatCompletionAssistantToolCall,
+        {
+            "id": part.get("id"),
+            "type": "function",
+            "function": {
+                "name": part.get("name"),
+                "arguments": tool_input if isinstance(tool_input, str) else json.dumps(tool_input),
+            },
+        },
+    )
+
+
+def _tool_call_ids(tool_calls: Iterable[object]) -> frozenset[object]:
+    mappings: Final = tuple(mapping for mapping in map(as_str_mapping, tool_calls) if mapping is not None)
+    return frozenset(mapping.get("id") for mapping in mappings if mapping.get("id") is not None)
+
+
+def _tool_calls_update(
+    existing: Sequence[ChatCompletionAssistantToolCall] | None,
+    from_content: tuple[ChatCompletionAssistantToolCall, ...],
+) -> Mapping[str, Sequence[ChatCompletionAssistantToolCall]]:
+    if not from_content:
+        return {}
+    if not isinstance(existing, list):
+        return {"tool_calls": list(from_content)}
+    existing_ids: Final = _tool_call_ids(existing)
+    new_tool_calls: Final = tuple(tool_call for tool_call in from_content if tool_call["id"] not in existing_ids)
+    return {"tool_calls": [*existing, *new_tool_calls]} if new_tool_calls else {}
+
+
+def _vllm_assistant_message(message: ChatCompletionAssistantMessage) -> AllMessageValues:
+    dropped_keys: Final = (
+        _THINKING_KEYS if isinstance(message.get("reasoning_content"), str) else _THINKING_AND_REASONING_KEYS
+    )
+    kept: Final = {key: value for key, value in message.items() if key not in dropped_keys}
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return cast(AllMessageValues, kept)  # cast-ok: only keys vLLM rejects are removed
+    parts: Final[tuple[object, ...]] = tuple(content)
+    mappings: Final = tuple(mapping for mapping in map(as_str_mapping, parts) if mapping is not None)
+    texts: Final = tuple(
+        cast(str, mapping.get("text", ""))  # cast-ok: a text part carries str text, and join rejects anything else
+        for mapping in mappings
+        if mapping.get("type") == "text"
+    )
+    tool_calls: Final = tuple(
+        _tool_use_as_tool_call(mapping) for mapping in mappings if mapping.get("type") == "tool_use"
+    )
+    kept_parts: Final = [part for part in parts if _content_part_type(part) != "tool_use"]
+    has_structured_content: Final = any(_content_part_type(part) not in ("text", "tool_use") for part in parts)
+    return cast(  # cast-ok: content and tool_calls keep the shapes vLLM takes
+        AllMessageValues,
+        {
+            **kept,
+            "content": kept_parts if has_structured_content else "\n".join(texts),
+            **_tool_calls_update(message.get("tool_calls"), tool_calls),
+        },
+    )
 
 
 class HostedVLLMChatConfig(OpenAIGPTConfig):
@@ -172,76 +246,28 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         - thinking_blocks and non-string reasoning_content on assistant messages
           are removed, and content lists are converted to strings for vLLM compatibility
         """
-        for message in messages:
-            if message["role"] == "assistant":
-                message.pop("thinking_blocks", None)
-                if not isinstance(message.get("reasoning_content"), str):
-                    message.pop("reasoning_content", None)
-                existing_content = message.get("content")
-                if isinstance(existing_content, list):
-                    text_parts = []
-                    tool_calls: list[ChatCompletionAssistantToolCall] = []
-                    content_blocks: list[object] = []
-                    has_structured_content = False
-                    for c in existing_content:
-                        if isinstance(c, dict) and c.get("type") == "text":
-                            text_parts.append(c.get("text", ""))
-                            content_blocks.append(c)
-                        elif isinstance(c, dict) and c.get("type") == "tool_use":
-                            tool_input = c.get("input", {})
-                            tool_calls.append(
-                                ChatCompletionAssistantToolCall(
-                                    id=c.get("id"),
-                                    type="function",
-                                    function=ChatCompletionToolCallFunctionChunk(
-                                        name=c.get("name"),
-                                        arguments=(
-                                            tool_input
-                                            if isinstance(
-                                                tool_input,
-                                                str,
-                                            )
-                                            else json.dumps(tool_input)
-                                        ),
-                                    ),
-                                )
-                            )
-                        else:
-                            content_blocks.append(c)
-                            has_structured_content = True
-                    if tool_calls:
-                        existing_tool_calls = message.get("tool_calls")
-                        if isinstance(existing_tool_calls, list):
-                            existing_tool_call_ids = {
-                                tool_call.get("id")
-                                for tool_call in existing_tool_calls
-                                if isinstance(tool_call, dict) and tool_call.get("id") is not None
-                            }
-                            new_tool_calls = [
-                                tool_call
-                                for tool_call in tool_calls
-                                if tool_call.get("id") not in existing_tool_call_ids
-                            ]
-                            if new_tool_calls:
-                                message["tool_calls"] = existing_tool_calls + new_tool_calls
-                        else:
-                            message["tool_calls"] = tool_calls
-                    content_str = "\n".join(text_parts)
-                    new_content = content_blocks if has_structured_content else content_str
-                    message["content"] = new_content
-            elif message["role"] == "user":
-                message_content = message.get("content")
-                if message_content and isinstance(message_content, list):
-                    replaced_content_items: list[tuple[int, ChatCompletionFileObject]] = []
-                    for idx, content_item in enumerate(message_content):
-                        if content_item.get("type") == "file":
-                            content_item = cast(ChatCompletionFileObject, content_item)
-                            if self._is_video_file(content_item):
-                                replaced_content_items.append((idx, content_item))
-                    for idx, content_item in replaced_content_items:
-                        message_content[idx] = self._convert_file_to_video_url(content_item)
-
+        vllm_messages: Final = [self._vllm_message(message) for message in messages]
         if is_async:
-            return super()._transform_messages(messages, model, is_async=cast(Literal[True], True))
-        else:
-            return super()._transform_messages(messages, model, is_async=cast(Literal[False], False))
+            return super()._transform_messages(vllm_messages, model, is_async=True)
+        return super()._transform_messages(vllm_messages, model, is_async=False)
+
+    def _vllm_message(self, message: AllMessageValues) -> AllMessageValues:
+        if message["role"] == "assistant":
+            return _vllm_assistant_message(message)
+        if message["role"] == "user":
+            return self._vllm_user_message(message)
+        return message
+
+    def _vllm_user_message(self, message: ChatCompletionUserMessage) -> AllMessageValues:
+        content: Final = message.get("content")
+        if not content or not isinstance(content, list):
+            return message
+        return cast(  # cast-ok: only video file parts change, to the video_url part vLLM takes
+            AllMessageValues, {**message, "content": [self._with_video_url(part) for part in content]}
+        )
+
+    def _with_video_url(self, part: OpenAIMessageContentListBlock) -> OpenAIMessageContentListBlock:
+        if part.get("type") != "file":
+            return part
+        file_part: Final = cast(ChatCompletionFileObject, part)  # cast-ok: the type tag says this is a file part
+        return self._convert_file_to_video_url(file_part) if self._is_video_file(file_part) else part

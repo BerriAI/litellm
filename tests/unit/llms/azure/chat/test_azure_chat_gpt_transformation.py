@@ -1,4 +1,4 @@
-import asyncio, httpx, importlib, json, os
+import asyncio, copy, httpx, importlib, json, os
 import sys
 from typing import Final
 
@@ -138,6 +138,53 @@ def test_transform_request_drops_tool_reference_parts():
     )
 
     assert request["messages"][2]["content"] == ""
+
+
+def test_transform_request_leaves_the_caller_messages_untouched():
+    city_arguments = json.dumps({"city": "Copenhagen"})
+    messages = [
+        {"role": "user", "content": "What is the weather where I am?"},
+        {"role": "assistant", "content": None, "function_call": {"name": "get_current_city", "arguments": None}},
+        {"role": "function", "name": "get_current_city", "content": "Copenhagen"},
+        {"role": "assistant", "content": None, "function_call": {"name": "get_weather", "arguments": city_arguments}},
+        {"role": "function", "name": "get_weather", "content": "Sunny"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Compare these with the attached report"},
+                {"type": "image_url", "image_url": "https://example.com/forecast.png"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/radar.png", "format": "image/png"}},
+                {"type": "file", "file": {"file_id": "assistant-report", "format": "application/pdf"}},
+            ],
+        },
+    ]
+    snapshot = copy.deepcopy(messages)
+
+    request = AzureOpenAIConfig().transform_request(
+        model="gpt-4o",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [
+        {"role": "user", "content": "What is the weather where I am?"},
+        {"role": "assistant", "content": None, "function_call": {"name": "get_current_city", "arguments": ""}},
+        {"role": "function", "name": "get_current_city", "content": "Copenhagen"},
+        {"role": "assistant", "content": None, "function_call": {"name": "get_weather", "arguments": city_arguments}},
+        {"role": "function", "name": "get_weather", "content": "Sunny"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Compare these with the attached report"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/forecast.png"}},
+                {"type": "image_url", "image_url": {"url": "https://example.com/radar.png"}},
+                {"type": "file", "file": {"file_id": "assistant-report"}},
+            ],
+        },
+    ]
+    assert messages == snapshot
 
 
 @pytest.mark.parametrize(
