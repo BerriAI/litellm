@@ -2065,22 +2065,6 @@ async def test_framing_keeps_the_400_for_blocks_the_provider_counter_cannot_conv
             id="web_search_blocks",
         ),
         pytest.param(
-            {
-                "messages": [{"role": "user", "content": "What is new?"}],
-                "tools": [{"name": "search", "input_schema": {"type": "object", "properties": {"query": True}}}],
-            },
-            id="boolean_subschema_tool",
-        ),
-        pytest.param(
-            {
-                "messages": [{"role": "user", "content": "What is new?"}],
-                "tools": [
-                    {"name": "search", "input_schema": {"type": "object", "properties": {"tags": {"type": "array"}}}}
-                ],
-            },
-            id="array_schema_without_items",
-        ),
-        pytest.param(
             {"messages": [], "contents": [{"role": "user", "parts": [{"text": "What is new?"}]}]},
             id="google_contents",
         ),
@@ -2136,6 +2120,44 @@ async def test_framed_estimate_that_cannot_read_the_body_answers_the_provider_er
 
     assert (raised.value.code, raised.value.message) == ("400", "scripted 400 for kimi")
     assert readable.count_source == "local_estimate"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("shorthand", "explicit"),
+    [
+        pytest.param({"type": "array"}, {"type": "array", "items": {}}, id="array_schema_without_items"),
+        pytest.param(True, {}, id="boolean_subschema"),
+    ],
+)
+async def test_framed_estimate_counts_a_json_schema_shorthand_like_its_explicit_form(
+    monkeypatch: pytest.MonkeyPatch, shorthand: object, explicit: dict[str, object]
+):
+    counter: Final = _ScriptedCounter({"us.moonshotai.kimi-k3": _provider_reply("kimi", status_code=400)})
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(model_list=[{"model_name": "kimi", "litellm_params": {"model": "bedrock/us.moonshotai.kimi-k3"}}]),
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "_get_provider_token_counter", lambda deployment, model: (counter, model, "bedrock")
+    )
+
+    async def count(schema: object) -> TokenCountResponse:
+        return await token_counter(
+            request=TokenCountRequest(
+                model="kimi",
+                messages=[{"role": "user", "content": "What is new?"}],
+                tools=[{"name": "search", "input_schema": {"type": "object", "properties": {"tags": schema}}}],
+            ),
+            call_endpoint=True,
+        )
+
+    from_shorthand: Final = await count(shorthand)
+    from_explicit: Final = await count(explicit)
+
+    assert from_shorthand.count_source == "local_estimate"
+    assert from_shorthand.total_tokens == from_explicit.total_tokens
 
 
 @pytest.mark.asyncio

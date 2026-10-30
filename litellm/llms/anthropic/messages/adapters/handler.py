@@ -160,6 +160,7 @@ async def prepare_context_managed_request(
     """Apply client compaction history, then optional context_management polyfill."""
     from litellm.llms.anthropic.messages.context_management.editors.compact import (
         apply_client_compaction_block_history,
+        slice_around_compaction_block,
     )
 
     # Skip the client-history pre-processing when a ``compact_20260112``
@@ -175,7 +176,7 @@ async def prepare_context_managed_request(
 
     if polyfill_will_run:
         history_result: PolyfillResult | None = None
-        working_messages: _AnthropicMessages = messages
+        working_messages: _AnthropicMessages = list(slice_around_compaction_block(messages)[0])
         working_system: _AnthropicSystem = system
     else:
         history_result = apply_client_compaction_block_history(

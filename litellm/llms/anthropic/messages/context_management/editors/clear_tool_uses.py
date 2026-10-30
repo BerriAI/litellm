@@ -39,6 +39,21 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 # api.anthropic.com, measured 2026-10-19: text results of 1 to 46 bytes are never cleared or counted toward keep
 _TINY_RESULT_BYTES: Final = 46
+_TOKEN_COUNTER_BLOCK_TYPES: Final = frozenset(
+    {
+        "text",
+        "image_url",
+        "image",
+        "document",
+        "file",
+        "tool_use",
+        "tool_result",
+        "thinking",
+        "redacted_thinking",
+        "tool_reference",
+        "search_result",
+    }
+)
 ToolNames = Literal["all"] | frozenset[str]
 
 
@@ -52,16 +67,19 @@ class _ClearAtLeast(BaseModel):
 class _ClearToolUsesFields(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    trigger: Mapping[str, object] | None = None
+    keep: Mapping[str, object] | None = None
     clear_at_least: _ClearAtLeast | None = None
     exclude_tools: tuple[str, ...] | None = None
     clear_tool_inputs: bool | tuple[str, ...] | None = None
 
 
 _BLOCKS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
-# api.anthropic.com, measured 2026-10-19: its wording for the two shapes pydantic words differently
+# api.anthropic.com, measured 2026-10-19 and 2026-10-28: its wording for the shapes pydantic words differently
 _API_MESSAGES: Final = MappingProxyType(
     {
         "tuple_type": "Input should be a valid array",
+        "dict_type": "Input should be an object",
         "model_type": "Input does not match the expected shape.",
     }
 )
@@ -178,10 +196,12 @@ def _cleared_result(block: Mapping[str, object]) -> dict[str, object]:
 
 def _freed_tokens(model: str, result: Mapping[str, object], use: Mapping[str, object], clears_input: bool) -> int:
     """Tokens that clearing this use frees: its result, and its input when ``clear_tool_inputs`` covers it."""
-    before: Final = [result, use] if clears_input else [result]
-    after: Final = [_cleared_result(result), {**use, "input": {}}] if clears_input else [_cleared_result(result)]
+    before: Final[Sequence[Mapping[str, object]]] = (result, use) if clears_input else (result,)
+    after: Final[Sequence[Mapping[str, object]]] = (
+        (_cleared_result(result), {**use, "input": {}}) if clears_input else (_cleared_result(result),)
+    )
     counts: Final = tuple(
-        litellm.token_counter(model=model, messages=[{"role": "user", "content": blocks}]) for blocks in (before, after)
+        _count_tokens(model, [{"role": "user", "content": blocks}], None) for blocks in (before, after)
     )
     return max(counts[0] - counts[1], 0)
 
@@ -197,6 +217,35 @@ def _select_in_batches(candidates: Sequence[str], tokens: Mapping[str, int], cle
 
     batch_end, _ = reduce(step, enumerate(candidates), (0, 0))
     return tuple(candidates[:batch_end])
+
+
+def _without_uncountable_blocks(block: Mapping[str, object]) -> Mapping[str, object]:
+    nested: Final = _parse(_BLOCKS, block.get("content"))
+    if nested is None:
+        return block
+    return {**block, "content": [inner for inner in nested if inner.get("type") in _TOKEN_COUNTER_BLOCK_TYPES]}
+
+
+def _countable_message(message: Mapping[str, object]) -> Mapping[str, object]:
+    blocks: Final = _parse(_BLOCKS, message.get("content"))
+    if blocks is None:
+        return message
+    return {
+        **message,
+        "content": [
+            _without_uncountable_blocks(block) for block in blocks if block.get("type") in _TOKEN_COUNTER_BLOCK_TYPES
+        ],
+    }
+
+
+def _count_tokens(
+    model: str, messages: Sequence[Mapping[str, object]], tools: Sequence[Mapping[str, object]] | None
+) -> int:
+    return litellm.token_counter(
+        model=model,
+        messages=[_countable_message(message) for message in messages],
+        tools=cast("list[ChatCompletionToolParam] | None", tools),
+    )
 
 
 def _trigger_met(
@@ -218,11 +267,7 @@ def _trigger_met(
 
     if not isinstance(threshold, int):
         threshold = DEFAULT_INPUT_TOKENS_TRIGGER
-    message_tokens: Final = litellm.token_counter(
-        model=model,
-        messages=messages,
-        tools=cast("list[ChatCompletionToolParam] | None", tools),
-    )
+    message_tokens: Final = _count_tokens(model, messages, tools)
     if message_tokens > threshold:
         return True, message_tokens
     current_tokens: Final = message_tokens + count_system_tokens(model, system)
@@ -375,17 +420,9 @@ def apply_clear_tool_uses_20250919(
         [_message_without_inputs(message, ids_to_clear, input_tools) for message in edited] if input_tools else edited
     )
 
-    tokens_before: Final = (
-        counted_tokens
-        if counted_tokens is not None
-        else litellm.token_counter(
-            model=model, messages=kept, tools=cast("list[ChatCompletionToolParam] | None", tools)
-        )
-    )
+    tokens_before: Final = counted_tokens if counted_tokens is not None else _count_tokens(model, kept, tools)
     kept_after, _ = history_after_client_compaction(final_messages, system)
-    tokens_after: Final = litellm.token_counter(
-        model=model, messages=kept_after, tools=cast("list[ChatCompletionToolParam] | None", tools)
-    )
+    tokens_after: Final = _count_tokens(model, kept_after, tools)
     cleared_input_tokens: Final = max(tokens_before - tokens_after, 0)
 
     return final_messages, {
