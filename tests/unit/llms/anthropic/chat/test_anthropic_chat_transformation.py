@@ -9720,6 +9720,40 @@ def test_native_mcp_identity_survives_chat_and_responses_translation():
     assert bridged.provider_specific_fields["tool_results"] == [tool_result]
 
 
+def test_native_mcp_stream_preserves_first_identity_and_cumulative_calls():
+    iterator = ModelResponseIterator(streaming_response=iter([]), sync_stream=True)
+    first_call = {
+        "type": "mcp_tool_use", "id": "mcp_1", "server_name": "github",
+        "name": "search_code", "input": {},
+    }
+    first = iterator.chunk_parser({"type": "content_block_start", "index": 0, "content_block": first_call})
+    first_fields = first.choices[0].delta.provider_specific_fields
+    assert first_fields == {"mcp_tool_uses": [first_call]}
+    assert first.choices[0].delta.tool_calls is None
+    for fragment in ('{"query":', '"hello"}'):
+        delta = iterator.chunk_parser({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": fragment},
+        })
+        assert delta.choices[0].delta.tool_calls is None
+    done = iterator.chunk_parser({"type": "content_block_stop", "index": 0})
+    completed_call = {**first_call, "input": {"query": "hello"}}
+    assert done.choices[0].delta.provider_specific_fields == {"mcp_tool_uses": [completed_call]}
+    assert first_fields == {"mcp_tool_uses": [first_call]}
+    result_block = {
+        "type": "mcp_tool_result", "tool_use_id": "mcp_1", "is_error": False,
+        "content": [{"type": "text", "text": "found"}],
+    }
+    result = iterator.chunk_parser({"type": "content_block_start", "index": 1, "content_block": result_block})
+    assert result.choices[0].delta.provider_specific_fields["tool_results"] == [result_block]
+    assert result.choices[0].delta.tool_calls is None
+    iterator.chunk_parser({"type": "content_block_stop", "index": 1})
+    second_call = {**first_call, "id": "mcp_2", "name": "read_file"}
+    second = iterator.chunk_parser({"type": "content_block_start", "index": 2, "content_block": second_call})
+    assert second.choices[0].delta.provider_specific_fields == {"mcp_tool_uses": [completed_call, second_call]}
+    assert second.choices[0].delta.tool_calls is None
+
+
 def test_refusal_stop_details_kept_in_provider_specific_fields():
     stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
     result: Final = _transform_message_body(ANTHROPIC_DOCS_REFUSAL_MESSAGE)

@@ -753,6 +753,7 @@ class ModelResponseIterator:
         # Track server tool use inputs and results for code_interpreter_results
         self._server_tool_inputs: dict[str, object] = {}
         self.tool_results: list[dict[str, Any]] = []
+        self.mcp_tool_uses: list[dict[str, object]] = []
         self._current_server_tool_id: str | None = None
         self._container_id: str | None = None
 
@@ -1004,11 +1005,16 @@ class ModelResponseIterator:
                 content_block_start: Final = self.get_content_block_start(chunk=chunk)
                 self.content_blocks = []  # reset content blocks when new block starts
                 # Track current content block type for filtering deltas
-                self.current_content_block_type = content_block_start["content_block"]["type"]
+                self.current_content_block_type = str(content_block_start["content_block"]["type"])
                 if self.current_content_block_type in _THINKING_BLOCK_TYPES:
                     self.thinking_block_index += 1
                 if content_block_start["content_block"]["type"] == "text":
                     text = self._release_answer_close() + content_block_start["content_block"]["text"]
+                elif self.current_content_block_type == "mcp_tool_use":
+                    # These calls execute at the provider, not in the client.
+                    # Preserve their identity on the first chunk that names it.
+                    self.mcp_tool_uses.append(dict(content_block_start["content_block"]))
+                    provider_specific_fields["mcp_tool_uses"] = [dict(call) for call in self.mcp_tool_uses]
                 elif (
                     content_block_start["content_block"]["type"] == "tool_use"
                     or content_block_start["content_block"]["type"] == "server_tool_use"
@@ -1101,6 +1107,15 @@ class ModelResponseIterator:
 
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)
+                if self.current_content_block_type == "mcp_tool_use":
+                    arguments = "".join(
+                        block["delta"]["partial_json"]
+                        for block in self.content_blocks
+                        if "partial_json" in block["delta"]
+                    )
+                    if arguments:
+                        self.mcp_tool_uses[-1] = {**self.mcp_tool_uses[-1], "input": json.loads(arguments)}
+                    provider_specific_fields["mcp_tool_uses"] = [dict(call) for call in self.mcp_tool_uses]
                 # check if tool call content block - only for tool_use and server_tool_use blocks
                 if self.current_content_block_type in ("tool_use", "server_tool_use"):
                     is_empty: Final = self.check_empty_tool_call_args()
