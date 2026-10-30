@@ -661,37 +661,64 @@ _ROUTES_THAT_RAISE_EACH_401_ERROR_TYPE: Final = pytest.mark.parametrize(
 
 
 @_ROUTES_THAT_RAISE_EACH_401_ERROR_TYPE
+@pytest.mark.parametrize("character", ["\x00", "\x07", "\x0b", "\r", "\x1b", "\x7f", "\x9b"])
 def test_terminal_control_characters_in_a_401_body_never_reach_the_terminal(
-    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault], command: list[str], method: str, route: str
+    requests_mock: Mocker,
+    secret_vault_factory: type[FakeSecretVault],
+    command: list[str],
+    method: str,
+    route: str,
+    character: str,
 ) -> None:
-    requests_mock.register_uri(
-        method,
-        f"{BASE_URL}{route}",
-        status_code=401,
-        text="\x1b]0;title\x07refused\x1b[2J\rnext\tcolumn\nsecond line\x9b31m",
-    )
+    requests_mock.register_uri(method, f"{BASE_URL}{route}", status_code=401, text=f"forbidden{character}[2Jnext")
     sign_in: Final = FakeBrowserSignIn(_credential())
 
     result: Final = _lite(command, secret_vault_factory(), sign_in, ["--api-key", "sk-explicit"])
 
     assert result.exit_code == 1
-    assert "refused" in result.stderr
-    assert "next\tcolumn\nsecond line" in result.stderr
-    assert not {"\x1b", "\x07", "\x9b", "\r"} & set(result.stderr)
+    assert "The proxy said: " in result.stderr
+    assert character not in result.stderr
+    assert "forbidden" not in result.stderr
     assert sign_in.calls == []
+
+
+@_ROUTES_THAT_RAISE_EACH_401_ERROR_TYPE
+def test_tabs_and_line_breaks_in_a_401_body_stay_readable(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault], command: list[str], method: str, route: str
+) -> None:
+    requests_mock.register_uri(method, f"{BASE_URL}{route}", status_code=401, text="refused\tcolumn\r\nsecond line\r\n")
+
+    result: Final = _lite(
+        command, secret_vault_factory(), FakeBrowserSignIn(_credential()), ["--api-key", "sk-explicit"]
+    )
+
+    assert result.exit_code == 1
+    assert "refused\tcolumn\nsecond line" in result.stderr
 
 
 @_ROUTES_THAT_RAISE_EACH_401_ERROR_TYPE
 @pytest.mark.parametrize(
     "body",
     [
-        f"refused sk-{FAKE_SECRET[:9]}\x07{FAKE_SECRET[9:]}",
+        f"refused sk-{FAKE_SECRET[:8]}\x07{FAKE_SECRET[8:]}",
+        f"refused sk-{FAKE_SECRET[:24]}\x07{FAKE_SECRET[24:]}",
+        f"refused Bearer {FAKE_SECRET[:24]}\x00{FAKE_SECRET[24:]}",
         f"refused Bearer\r{FAKE_SECRET}",
+        f"refused Bearer\x07{FAKE_SECRET}",
         f"refused client_secret\r{FAKE_SECRET}",
+        f"refused \x1b[31m{FAKE_SECRET}\x1b[0m",
     ],
-    ids=["key_split_by_the_character", "bearer_token_after_the_character", "named_secret_after_the_character"],
+    ids=[
+        "key_split_near_its_start",
+        "key_split_near_its_end",
+        "bearer_token_split_near_its_end",
+        "bearer_token_after_a_carriage_return",
+        "bearer_token_after_a_bell",
+        "named_secret_after_a_carriage_return",
+        "value_inside_a_color_sequence",
+    ],
 )
-def test_a_secret_beside_a_control_character_in_a_401_body_stays_redacted(
+def test_a_secret_beside_a_control_character_in_a_401_body_never_prints(
     requests_mock: Mocker,
     secret_vault_factory: type[FakeSecretVault],
     command: list[str],
@@ -706,8 +733,7 @@ def test_a_secret_beside_a_control_character_in_a_401_body_stays_redacted(
     )
 
     assert result.exit_code == 1
-    assert "refused" in result.stderr
-    assert FAKE_SECRET[9:] not in result.stderr
+    assert FAKE_SECRET[-8:] not in result.stderr
 
 
 @_ROUTES_THAT_RAISE_EACH_401_ERROR_TYPE
