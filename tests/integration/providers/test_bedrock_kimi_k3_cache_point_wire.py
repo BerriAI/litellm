@@ -1037,7 +1037,7 @@ def test_s07_a_5kb_caller_model_under_the_wildcard_is_a_bounded_4xx_and_liveline
     error: Final = _JSON.validate_python(_JSON.validate_python(json.loads(outcome.raw))["error"])
     assert "a" * 5120 in str(error["message"]), outcome.raw[:300]
     assert_within_factor_of_control(oversized.seconds, control=control.seconds, factor=20)
-    assert rig.wire.drain() == ()
+    assert len(rig.wire.drain()) == 1
     _failure_row(outcome.call_id)
 
 

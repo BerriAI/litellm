@@ -63,6 +63,7 @@ from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_image
 from litellm.llms.bedrock.common_utils import (
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
+    bedrock_model_is_unknown,
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
     bedrock_native_output_is_opt_in,
@@ -529,13 +530,14 @@ class AmazonConverseConfig(BaseConfig):
         """
         Handle the reasoning_effort parameter based on the model type.
 
-        - GPT-OSS and DeepSeek V3 models: passed through unchanged via additionalModelRequestFields.
+        - GPT-OSS, DeepSeek V3 and unknown models (``bedrock_model_is_unknown``): passed through unchanged
+          via additionalModelRequestFields.
         - OpenAI GPT-5.x and GPT-6 models: mapped to ``reasoning.effort`` via additionalModelRequestFields.
         - Nova 2 models: transformed to reasoningConfig.
         - Anthropic models: mapped to ``thinking`` (and ``output_config.effort`` on
           adaptive Claude 4.6 / 4.7).
         """
-        if "gpt-oss" in model or "deepseek" in model:
+        if "gpt-oss" in model or "deepseek" in model or bedrock_model_is_unknown(model):
             optional_params["reasoning_effort"] = reasoning_effort
         elif self._is_openai_gpt_reasoning_model(model):
             reasoning: Final[BedrockConverseGptReasoningEffortBlock] = {"effort": reasoning_effort}
@@ -681,7 +683,7 @@ class AmazonConverseConfig(BaseConfig):
             "parallel_tool_calls",
         ]
 
-        if "arn" in model:  # we can't infer the model from the arn, so just add all params
+        if "arn" in model or bedrock_model_is_unknown(model):
             supported_params.append("tools")
             supported_params.append("tool_choice")
             supported_params.append("thinking")
