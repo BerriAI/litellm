@@ -6,7 +6,8 @@ Base class for sending emails to user after creating keys or invite links
 import html
 import json
 import os
-from typing import Final, List, Literal, Optional
+from datetime import timedelta
+from typing import Final, Literal, Protocol
 
 from litellm_enterprise.types.enterprise_callbacks.send_emails import (
     EmailEvent,
@@ -18,6 +19,7 @@ from litellm_enterprise.types.enterprise_callbacks.send_emails import (
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
     EMAIL_BUDGET_ALERT_TTL,
@@ -46,6 +48,17 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     WebhookEvent,
 )
+from litellm.redis.stores.email_alert_claims import (
+    EmailAlertClaimsStore,
+    EmailBudgetAlert,
+    MaxBudgetAlert,
+    SoftBudgetAlert,
+    TeamMemberAlert,
+    ThresholdBudgetAlert,
+    TransportEmailAlertClaimsStore,
+    alert_key,
+)
+from litellm.redis.transport.contract import RedisFailure
 from litellm.repositories.table_repositories import InvitationLinkRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool
@@ -54,13 +67,27 @@ from litellm.types.integrations.slack_alerting import LITELLM_LOGO_URL
 _BUDGET_ALERT_CLAIMS_TARGET: Final = "budget_alert_claims"
 
 
-def _max_budget_alert_id(user_info: CallInfo) -> str:
+class _LocalAlertCache(Protocol):
+    async def async_increment(self, key: str, value: float, *, ttl: int) -> float: ...
+
+    def delete_cache(self, key: str) -> None: ...
+
+
+class _BudgetAlertCache(Protocol):
+    @property
+    def in_memory_cache(self) -> _LocalAlertCache | None: ...
+
+    @property
+    def redis_cache(self) -> RedisCache | None: ...
+
+
+def _max_budget_alert_id(user_info: CallInfo) -> str | TeamMemberAlert:
     if user_info.event_group == Litellm_EntityType.TEAM_MEMBER:
-        return f"team_member:{user_info.user_id}:{user_info.team_id}"
+        return TeamMemberAlert(user_info.user_id, user_info.team_id)
     return user_info.token or user_info.user_id or "default_id"
 
 
-def _parse_email_list(raw) -> List[str]:
+def _parse_email_list(raw) -> list[str]:
     """Parse emails from a list or comma-separated string."""
     if isinstance(raw, list):
         return [e.strip() for e in raw if isinstance(e, str) and e.strip()]
@@ -80,7 +107,7 @@ class BaseEmailLogger(CustomLogger):
 
     def __init__(
         self,
-        internal_usage_cache: Optional[DualCache] = None,
+        internal_usage_cache: DualCache | None = None,
         **kwargs,
     ):
         """
@@ -104,9 +131,7 @@ class BaseEmailLogger(CustomLogger):
             event_message=event.event_message,
         )
 
-        verbose_proxy_logger.debug(
-            f"send_user_invitation_email_event: {json.dumps(event, indent=4, default=str)}"
-        )
+        verbose_proxy_logger.debug(f"send_user_invitation_email_event: {json.dumps(event, indent=4, default=str)}")
 
         email_html_content = USER_INVITATION_EMAIL_TEMPLATE.format(
             email_logo_url=email_params.logo_url,
@@ -124,11 +149,7 @@ class BaseEmailLogger(CustomLogger):
             html_body=email_html_content,
         )
 
-        pass
-
-    async def send_key_created_email(
-        self, send_key_created_email_event: SendKeyCreatedEmailEvent
-    ):
+    async def send_key_created_email(self, send_key_created_email_event: SendKeyCreatedEmailEvent):
         """
         Send email to user after creating key for the user
         """
@@ -144,9 +165,7 @@ class BaseEmailLogger(CustomLogger):
         )
 
         # Check if API key should be included in email
-        include_api_key = get_secret_bool(
-            secret_name="EMAIL_INCLUDE_API_KEY", default_value=True
-        )
+        include_api_key = get_secret_bool(secret_name="EMAIL_INCLUDE_API_KEY", default_value=True)
         if include_api_key is None:
             include_api_key = True  # Default to True if not set
         key_token_display = (
@@ -171,11 +190,8 @@ class BaseEmailLogger(CustomLogger):
             subject=email_params.subject,
             html_body=email_html_content,
         )
-        pass
 
-    async def send_key_rotated_email(
-        self, send_key_rotated_email_event: SendKeyRotatedEmailEvent
-    ):
+    async def send_key_rotated_email(self, send_key_rotated_email_event: SendKeyRotatedEmailEvent):
         """
         Send email to user after rotating key for the user
         """
@@ -191,9 +207,7 @@ class BaseEmailLogger(CustomLogger):
         )
 
         # Check if API key should be included in email
-        include_api_key = get_secret_bool(
-            secret_name="EMAIL_INCLUDE_API_KEY", default_value=True
-        )
+        include_api_key = get_secret_bool(secret_name="EMAIL_INCLUDE_API_KEY", default_value=True)
         if include_api_key is None:
             include_api_key = True  # Default to True if not set
         key_token_display = (
@@ -218,7 +232,6 @@ class BaseEmailLogger(CustomLogger):
             subject=email_params.subject,
             html_body=email_html_content,
         )
-        pass
 
     async def send_soft_budget_alert_email(self, event: WebhookEvent):
         """
@@ -236,9 +249,7 @@ class BaseEmailLogger(CustomLogger):
         )
 
         # Format budget values
-        soft_budget_str = (
-            f"${event.soft_budget}" if event.soft_budget is not None else "N/A"
-        )
+        soft_budget_str = f"${event.soft_budget}" if event.soft_budget is not None else "N/A"
         spend_str = f"${event.spend}" if event.spend is not None else "$0.00"
         max_budget_info = ""
         if event.max_budget is not None:
@@ -260,7 +271,6 @@ class BaseEmailLogger(CustomLogger):
             subject=email_params.subject,
             html_body=email_html_content,
         )
-        pass
 
     async def send_team_soft_budget_alert_email(self, event: WebhookEvent):
         """
@@ -268,7 +278,7 @@ class BaseEmailLogger(CustomLogger):
         Supports multiple recipients via alert_emails field from team metadata
         """
         # Collect all recipient emails
-        recipient_emails: List[str] = []
+        recipient_emails: list[str] = []
 
         # Add additional alert emails from team metadata.soft_budget_alert_emails
         if hasattr(event, "alert_emails") and event.alert_emails:
@@ -306,9 +316,7 @@ class BaseEmailLogger(CustomLogger):
         )
 
         # Format budget values
-        soft_budget_str = (
-            f"${event.soft_budget}" if event.soft_budget is not None else "N/A"
-        )
+        soft_budget_str = f"${event.soft_budget}" if event.soft_budget is not None else "N/A"
         spend_str = f"${event.spend}" if event.spend is not None else "$0.00"
         max_budget_info = ""
         if event.max_budget is not None:
@@ -335,13 +343,12 @@ class BaseEmailLogger(CustomLogger):
             subject=email_params.subject,
             html_body=email_html_content,
         )
-        pass
 
     async def send_max_budget_alert_email(
         self,
         event: WebhookEvent,
-        threshold_pct: Optional[int] = None,
-        recipient_emails: Optional[List[str]] = None,
+        threshold_pct: int | None = None,
+        recipient_emails: list[str] | None = None,
     ):
         """
         Send email to user when max budget alert threshold is reached.
@@ -359,20 +366,14 @@ class BaseEmailLogger(CustomLogger):
 
         # Format budget values
         spend_str = f"${event.spend}" if event.spend is not None else "$0.00"
-        max_budget_str = (
-            f"${event.max_budget}" if event.max_budget is not None else "N/A"
-        )
+        max_budget_str = f"${event.max_budget}" if event.max_budget is not None else "N/A"
 
         # Calculate percentage and alert threshold
-        percentage = threshold_pct if threshold_pct is not None else int(
-            EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE * 100
+        percentage = (
+            threshold_pct if threshold_pct is not None else int(EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE * 100)
         )
         threshold_fraction = percentage / 100.0
-        alert_threshold_str = (
-            f"${event.max_budget * threshold_fraction:.2f}"
-            if event.max_budget is not None
-            else "N/A"
-        )
+        alert_threshold_str = f"${event.max_budget * threshold_fraction:.2f}" if event.max_budget is not None else "N/A"
 
         if recipient_emails:
             # Multi-threshold path: batch send with generic key-based greeting
@@ -382,9 +383,7 @@ class BaseEmailLogger(CustomLogger):
                 user_email=event.user_email or recipient_emails[0],
                 event_message=event.event_message,
             )
-            greeting = html.escape(
-                event.user_email or event.key_alias or event.token or ""
-            )
+            greeting = html.escape(event.user_email or event.key_alias or event.token or "")
             if event.event_group == Litellm_EntityType.TEAM_MEMBER:
                 email_html_content = TEAM_MEMBER_MAX_BUDGET_ALERT_EMAIL_TEMPLATE.format(
                     email_logo_url=email_params.logo_url,
@@ -488,10 +487,7 @@ class BaseEmailLogger(CustomLogger):
                 # For non-team alerts, require either max_budget or soft_budget
                 if user_info.max_budget is None and user_info.soft_budget is None:
                     return
-            if (
-                user_info.soft_budget is not None
-                and user_info.spend >= user_info.soft_budget
-            ):
+            if user_info.soft_budget is not None and user_info.spend >= user_info.soft_budget:
                 # Generate cache key based on event type and identifier
                 # Use appropriate ID based on event_group to ensure unique cache keys per entity type
                 if user_info.event_group == Litellm_EntityType.TEAM:
@@ -503,13 +499,8 @@ class BaseEmailLogger(CustomLogger):
                 else:
                     # For KEY and other types, use token or user_id
                     _id = user_info.token or user_info.user_id or "default_id"
-                _cache_key = f"email_budget_alerts:soft_budget_crossed:{_id}"
-
-                send_count = await _cache.async_increment_cache(
-                    key=_cache_key,
-                    value=1,
-                    ttl=EMAIL_BUDGET_ALERT_TTL,
-                )
+                soft_alert: Final = SoftBudgetAlert(_id)
+                send_count = await self._claim_budget_alert(_cache, soft_alert)
                 if send_count is None or send_count <= 1:
                     # Create WebhookEvent for soft budget alert
                     event_message = f"Soft Budget Crossed - Total Soft Budget: ${user_info.soft_budget}"
@@ -544,7 +535,7 @@ class BaseEmailLogger(CustomLogger):
                             f"Error sending soft budget alert email: {e}",
                             exc_info=True,
                         )
-                        await self._release_budget_alert_claim(_cache, _cache_key)
+                        await self._release_budget_alert_claim(_cache, soft_alert)
             return
 
         # For max_budget_alert, check if we've already sent an alert
@@ -552,34 +543,20 @@ class BaseEmailLogger(CustomLogger):
             if user_info.max_budget is not None and user_info.spend is not None:
                 if user_info.max_budget_alert_emails:
                     # New path: multi-threshold alerts
-                    await self._handle_multi_threshold_max_budget_alert(
-                        user_info=user_info, _cache=_cache
-                    )
+                    await self._handle_multi_threshold_max_budget_alert(user_info=user_info, _cache=_cache)
                     return
 
-                alert_threshold = (
-                    user_info.max_budget * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
-                )
+                alert_threshold = user_info.max_budget * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
 
                 # Only alert if we've crossed the threshold but haven't exceeded max_budget yet
-                if (
-                    user_info.spend >= alert_threshold
-                    and user_info.spend < user_info.max_budget
-                ):
+                if user_info.spend >= alert_threshold and user_info.spend < user_info.max_budget:
                     # Generate cache key based on event type and identifier
                     _id = user_info.token or user_info.user_id or "default_id"
-                    _cache_key = f"email_budget_alerts:max_budget_alert:{_id}"
-
-                    send_count = await _cache.async_increment_cache(
-                        key=_cache_key,
-                        value=1,
-                        ttl=EMAIL_BUDGET_ALERT_TTL,
-                    )
+                    max_alert: Final = MaxBudgetAlert(_id)
+                    send_count = await self._claim_budget_alert(_cache, max_alert)
                     if send_count is None or send_count <= 1:
                         # Calculate percentage
-                        percentage = int(
-                            EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE * 100
-                        )
+                        percentage = int(EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE * 100)
 
                         # Create WebhookEvent for max budget alert
                         event_message = f"Max Budget Alert - {percentage}% of Maximum Budget Reached"
@@ -609,7 +586,7 @@ class BaseEmailLogger(CustomLogger):
                                 f"Error sending max budget alert email: {e}",
                                 exc_info=True,
                             )
-                            await self._release_budget_alert_claim(_cache, _cache_key)
+                            await self._release_budget_alert_claim(_cache, max_alert)
             return
 
     @with_service_target(_BUDGET_ALERT_CLAIMS_TARGET)
@@ -636,9 +613,7 @@ class BaseEmailLogger(CustomLogger):
                 continue
 
             _id = _max_budget_alert_id(user_info)
-            _cache_key = (
-                f"email_budget_alerts:max_budget_alert:{threshold_pct}:{_id}"
-            )
+            threshold_alert = ThresholdBudgetAlert(_id, threshold_pct)
 
             # Parse emails + auto-include owner
             emails = _parse_email_list(raw_emails)
@@ -653,11 +628,7 @@ class BaseEmailLogger(CustomLogger):
                 continue
             recipient_emails = list(set(emails))
 
-            send_count = await _cache.async_increment_cache(
-                key=_cache_key,
-                value=1,
-                ttl=EMAIL_BUDGET_ALERT_TTL,
-            )
+            send_count = await self._claim_budget_alert(_cache, threshold_alert)
             if send_count is not None and send_count > 1:
                 continue
 
@@ -696,24 +667,44 @@ class BaseEmailLogger(CustomLogger):
                     f"Error sending multi-threshold max budget alert email for {threshold_pct}%: {e}",
                     exc_info=True,
                 )
-                await self._release_budget_alert_claim(_cache, _cache_key)
+                await self._release_budget_alert_claim(_cache, threshold_alert)
 
     @with_service_target(_BUDGET_ALERT_CLAIMS_TARGET)
-    async def _release_budget_alert_claim(self, cache: DualCache, cache_key: str) -> None:
+    async def _claim_budget_alert(self, cache: _BudgetAlertCache, alert: EmailBudgetAlert) -> float | None:
         try:
-            await cache.async_delete_cache(key=cache_key)
-        except Exception:
-            verbose_proxy_logger.debug(
-                "Failed to release budget alert claim for %s; it expires with the TTL",
-                cache_key,
+            local_count: Final = (
+                await cache.in_memory_cache.async_increment(alert_key(alert), 1, ttl=EMAIL_BUDGET_ALERT_TTL)
+                if cache.in_memory_cache is not None
+                else None
             )
+        except Exception:
+            return None
+        if cache.redis_cache is None:
+            return local_count
+        try:
+            store: Final[EmailAlertClaimsStore] = TransportEmailAlertClaimsStore(cache.redis_cache.transport())
+            count: Final = await store.claim(alert, ttl=timedelta(seconds=EMAIL_BUDGET_ALERT_TTL))
+            return local_count if isinstance(count, RedisFailure) else count
+        except Exception:
+            return local_count
+
+    @with_service_target(_BUDGET_ALERT_CLAIMS_TARGET)
+    async def _release_budget_alert_claim(self, cache: _BudgetAlertCache, alert: EmailBudgetAlert) -> None:
+        try:
+            if cache.in_memory_cache is not None:
+                cache.in_memory_cache.delete_cache(alert_key(alert))
+            if cache.redis_cache is not None:
+                store: Final[EmailAlertClaimsStore] = TransportEmailAlertClaimsStore(cache.redis_cache.transport())
+                await store.release_failed_send(alert)
+        except Exception:
+            return
 
     async def _get_email_params(
         self,
         email_event: EmailEvent,
-        user_id: Optional[str] = None,
-        user_email: Optional[str] = None,
-        event_message: Optional[str] = None,
+        user_id: str | None = None,
+        user_email: str | None = None,
+        event_message: str | None = None,
     ) -> EmailParams:
         """
         Get common email parameters used across different email sending methods
@@ -738,12 +729,8 @@ class BaseEmailLogger(CustomLogger):
         unused_custom_fields = []
 
         # Function to safely get custom value or default
-        def get_custom_or_default(
-            custom_value: Optional[str], default_value: str, field_name: str
-        ) -> str:
-            if (
-                custom_value is not None
-            ):  # Only check premium if trying to use custom value
+        def get_custom_or_default(custom_value: str | None, default_value: str, field_name: str) -> str:
+            if custom_value is not None:  # Only check premium if trying to use custom value
                 from litellm.proxy.proxy_server import premium_user
 
                 if premium_user is not True:
@@ -754,15 +741,9 @@ class BaseEmailLogger(CustomLogger):
 
         # Get parameters, falling back to defaults if custom values aren't allowed
         logo_url = get_custom_or_default(custom_logo, LITELLM_LOGO_URL, "logo URL")
-        support_contact = get_custom_or_default(
-            custom_support, self.DEFAULT_SUPPORT_EMAIL, "support contact"
-        )
-        base_url = os.getenv(
-            "PROXY_BASE_URL", "http://0.0.0.0:4000"
-        )  # Not a premium feature
-        signature = get_custom_or_default(
-            custom_signature, EMAIL_FOOTER, "email signature"
-        )
+        support_contact = get_custom_or_default(custom_support, self.DEFAULT_SUPPORT_EMAIL, "support contact")
+        base_url = os.getenv("PROXY_BASE_URL", "http://0.0.0.0:4000")  # Not a premium feature
+        signature = get_custom_or_default(custom_signature, EMAIL_FOOTER, "email signature")
 
         # Get custom subject template based on email event type
         if email_event == EmailEvent.new_user_invitation:
@@ -787,25 +768,15 @@ class BaseEmailLogger(CustomLogger):
         else:
             subject_template = "LiteLLM: {event_message}"
 
-        subject = (
-            subject_template.format(event_message=event_message)
-            if event_message
-            else "LiteLLM Notification"
-        )
+        subject = subject_template.format(event_message=event_message) if event_message else "LiteLLM Notification"
 
-        recipient_email: Optional[str] = (
-            user_email or await self._lookup_user_email_from_db(user_id=user_id)
-        )
+        recipient_email: str | None = user_email or await self._lookup_user_email_from_db(user_id=user_id)
         if recipient_email is None:
-            raise ValueError(
-                f"User email not found for user_id: {user_id}. User email is required to send email."
-            )
+            raise ValueError(f"User email not found for user_id: {user_id}. User email is required to send email.")
 
         # if user invited event then send invitation link
         if email_event == EmailEvent.new_user_invitation:
-            base_url = await self._get_invitation_link(
-                user_id=user_id, base_url=base_url
-            )
+            base_url = await self._get_invitation_link(user_id=user_id, base_url=base_url)
 
         # If any custom fields were not applied, log a warning
         if unused_custom_fields:
@@ -826,7 +797,7 @@ class BaseEmailLogger(CustomLogger):
             signature=signature,
         )
 
-    def _format_key_budget(self, max_budget: Optional[float]) -> str:
+    def _format_key_budget(self, max_budget: float | None) -> str:
         """
         Format the key budget to be displayed in the email
         """
@@ -834,27 +805,23 @@ class BaseEmailLogger(CustomLogger):
             return "No budget"
         return f"${max_budget}"
 
-    async def _lookup_user_email_from_db(self, user_id: Optional[str]) -> Optional[str]:
+    async def _lookup_user_email_from_db(self, user_id: str | None) -> str | None:
         """
         Lookup user email from user_id
         """
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
-            verbose_proxy_logger.debug(
-                f"Prisma client not found. Unable to lookup user email for user_id: {user_id}"
-            )
+            verbose_proxy_logger.debug(f"Prisma client not found. Unable to lookup user email for user_id: {user_id}")
             return None
 
-        user_row = await UserRepository(prisma_client).table.find_unique(
-            where={"user_id": user_id}
-        )
+        user_row = await UserRepository(prisma_client).table.find_unique(where={"user_id": user_id})
 
         if user_row is not None:
             return user_row.user_email
         return None
 
-    async def _get_invitation_link(self, user_id: Optional[str], base_url: str) -> str:
+    async def _get_invitation_link(self, user_id: str | None, base_url: str) -> str:
         """
         Get invitation link for the user
         """
@@ -883,9 +850,7 @@ class BaseEmailLogger(CustomLogger):
             return base_url
 
         invitation_link = self._construct_invitation_link(invitation.id, base_url)
-        verbose_proxy_logger.info(
-            f"Successfully created invitation link for user_id: {user_id}"
-        )
+        verbose_proxy_logger.info(f"Successfully created invitation link for user_id: {user_id}")
         return invitation_link
 
     async def _is_prisma_client_available(self) -> bool:
@@ -893,9 +858,7 @@ class BaseEmailLogger(CustomLogger):
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
-            verbose_proxy_logger.debug(
-                "Prisma client not found. Unable to lookup invitation"
-            )
+            verbose_proxy_logger.debug("Prisma client not found. Unable to lookup invitation")
             return False
         return True
 
@@ -923,39 +886,29 @@ class BaseEmailLogger(CustomLogger):
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
-            verbose_proxy_logger.error(
-                "Prisma client is None in _get_or_create_invitation"
-            )
+            verbose_proxy_logger.error("Prisma client is None in _get_or_create_invitation")
             return None
 
         try:
             # Try to get existing invitation
-            existing_invitations = (
-                await InvitationLinkRepository(prisma_client).table.find_many(
-                    where={"user_id": user_id},
-                    order={"created_at": "desc"},
-                )
+            existing_invitations = await InvitationLinkRepository(prisma_client).table.find_many(
+                where={"user_id": user_id},
+                order={"created_at": "desc"},
             )
 
             if existing_invitations and len(existing_invitations) > 0:
-                verbose_proxy_logger.debug(
-                    f"Found existing invitation for user_id: {user_id}"
-                )
+                verbose_proxy_logger.debug(f"Found existing invitation for user_id: {user_id}")
                 return existing_invitations[0]
 
             # Create new invitation if none exists
-            verbose_proxy_logger.debug(
-                f"Creating new invitation for user_id: {user_id}"
-            )
+            verbose_proxy_logger.debug(f"Creating new invitation for user_id: {user_id}")
             return await create_invitation_for_user(
                 data=InvitationNew(user_id=user_id),
                 user_api_key_dict=UserAPIKeyAuth(user_id=user_id),
             )
 
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"Error getting/creating invitation for user_id {user_id}: {e}"
-            )
+            verbose_proxy_logger.error(f"Error getting/creating invitation for user_id {user_id}: {e}")
             return None
 
     def _construct_invitation_link(self, invitation_id: str, base_url: str) -> str:
@@ -971,7 +924,7 @@ class BaseEmailLogger(CustomLogger):
     async def send_email(
         self,
         from_email: str,
-        to_email: List[str],
+        to_email: list[str],
         subject: str,
         html_body: str,
     ):
