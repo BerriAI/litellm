@@ -1,4 +1,5 @@
 import json
+import math
 import re
 import time
 from collections.abc import Collection, Mapping, Sequence
@@ -1971,6 +1972,19 @@ class ServerToolUse(LiteLLMBaseModel):
         return getattr(self, key)
 
 
+_COST_BREAKDOWN_ADAPTER: Final = TypeAdapter(Mapping[object, object])
+
+
+def _is_non_finite_float(value: object) -> bool:
+    return isinstance(value, float) and not math.isfinite(value)
+
+
+def _carries_non_finite_number(cost: object) -> bool:
+    if not isinstance(cost, Mapping):
+        return _is_non_finite_float(cost)
+    return any(_is_non_finite_float(member) for member in _COST_BREAKDOWN_ADAPTER.validate_python(cost).values())
+
+
 class Usage(SafeAttributeModel, CompletionUsage):
     _cache_creation_input_tokens: int = PrivateAttr(
         0
@@ -1978,6 +1992,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
     _cache_read_input_tokens: int = PrivateAttr(
         0
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
+    _dropped_non_finite_cost: bool = PrivateAttr(False)
 
     server_tool_use: ServerToolUse | None = None
     cost: float | None = None
@@ -2084,10 +2099,14 @@ class Usage(SafeAttributeModel, CompletionUsage):
         else:  # maintain openai compatibility in usage object if possible
             del self.server_tool_use
 
-        if cost is not None:
-            self.cost = cost
-        else:
+        dropped_non_finite_cost: Final = cost is not None and _carries_non_finite_number(cost)
+        if cost is None:
             del self.cost
+        elif dropped_non_finite_cost:
+            verbose_logger.warning("Dropping a non-finite provider usage cost")
+            del self.cost
+        else:
+            self.cost = cost
 
         ## ANTHROPIC MAPPING ##
         if "cache_creation_input_tokens" in params and isinstance(params["cache_creation_input_tokens"], int):
@@ -2102,6 +2121,11 @@ class Usage(SafeAttributeModel, CompletionUsage):
 
         for k, v in params.items():
             setattr(self, k, v)
+        self._dropped_non_finite_cost = dropped_non_finite_cost
+
+    @staticmethod
+    def dropped_non_finite_cost(usage: "Usage") -> bool:
+        return usage._dropped_non_finite_cost
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
