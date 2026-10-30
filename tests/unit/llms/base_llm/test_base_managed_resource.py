@@ -10,6 +10,7 @@ import pytest
 from litellm.llms.base_llm.managed_resources.base_managed_resource import (
     BaseManagedResource,
 )
+from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 
@@ -114,9 +115,10 @@ async def test_list_identity_less_caller_returns_empty_without_query():
     [("team-eng", True), ("team-sales", False), (None, False)],
 )
 async def test_can_access_uses_team_id_for_service_account(caller_team_id, expected):
-    cache = MagicMock()
-    cache.async_get_cache = AsyncMock(
-        return_value={
+    cache = DualCache()
+    await cache.async_set_cache(
+        key="rid",
+        value={
             "created_by": None,
             "team_id": "team-eng",
         }

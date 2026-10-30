@@ -6,16 +6,26 @@ import base64
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Generic, Protocol, TypeVar, cast, runtime_checkable
 
 from litellm import verbose_logger
 from litellm._internal_context import with_service_target
+from litellm.caching.dual_cache import DualCache
+from litellm.caching.redis_batch import active_request_redis_batch
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.llms.base_llm.managed_resources.isolation import (
     build_list_page,
     build_owner_filter,
     can_access_resource,
     resolve_resource_owner_id,
 )
+from litellm.redis.stores.managed_vector_resources import (
+    ManagedVectorResourceStore,
+    TransportManagedVectorResourceStore,
+    vector_resource_key,
+)
+from litellm.redis.transport.contract import RedisFailure
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.utils import SpecialEnums
 
@@ -66,6 +76,12 @@ class _ManagedResourceTable(Protocol[ResourceObjectType]):
     async def delete(self, *, where: Mapping[str, object]) -> object: ...
 
 
+class _LocalVectorResourceCache(Protocol):
+    async def async_get_cache(self, key: str, *, local_only: bool) -> object: ...
+
+    async def async_set_cache(self, key: str, value: object, *, local_only: bool) -> None: ...
+
+
 class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     """
     Base class for managing resources with target_model_names support.
@@ -94,6 +110,46 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
 
     def _resource_table(self) -> _ManagedResourceTable[ResourceObjectType]:
         return getattr(self.prisma_client.db, self.table_name)
+
+    def _metadata_cache(self) -> DualCache:
+        if isinstance(self.internal_usage_cache, DualCache):
+            return self.internal_usage_cache
+        return self.internal_usage_cache.dual_cache
+
+    async def _cache_vector_resource(self, unified_resource_id: str, record: Mapping[str, object] | None) -> None:
+        cache: Final = self._metadata_cache()
+        local_cache: Final = require_attributes(cache, _LocalVectorResourceCache, "async_get_cache", "async_set_cache")
+        await local_cache.async_set_cache(vector_resource_key(unified_resource_id), record, local_only=True)
+        if cache.redis_cache is None:
+            return
+        store: Final[ManagedVectorResourceStore] = TransportManagedVectorResourceStore(cache.redis_cache.transport())
+        seconds: Final = (
+            int(cache.default_in_memory_ttl)
+            if cache.default_in_memory_ttl is not None
+            else cache.redis_cache.default_ttl
+        )
+        ttl: Final = timedelta(seconds=seconds)
+        if record is None:
+            await store.invalidate_vector_resource(unified_resource_id, ttl=ttl)
+        else:
+            await store.write_vector_resource(unified_resource_id, record, ttl=ttl)
+
+    async def _cached_vector_resource(self, unified_resource_id: str) -> object:
+        cache: Final = self._metadata_cache()
+        local_cache: Final = require_attributes(cache, _LocalVectorResourceCache, "async_get_cache", "async_set_cache")
+        local: Final = await local_cache.async_get_cache(vector_resource_key(unified_resource_id), local_only=True)
+        if local is not None or cache.redis_cache is None:
+            return local
+        request_batch: Final = active_request_redis_batch(cache.redis_cache)
+        if request_batch is not None and request_batch.read_as_missing(vector_resource_key(unified_resource_id)):
+            return None
+        store: Final[ManagedVectorResourceStore] = TransportManagedVectorResourceStore(cache.redis_cache.transport())
+        result: Final = await store.read_vector_resource(unified_resource_id)
+        if isinstance(result, RedisFailure):
+            return None
+        if result is not None:
+            await local_cache.async_set_cache(vector_resource_key(unified_resource_id), result, local_only=True)
+        return result
 
     # ============================================================================
     #                          ABSTRACT METHODS
@@ -201,11 +257,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
 
         # Store in cache
         if resource_object is not None:
-            await self.internal_usage_cache.async_set_cache(
-                key=unified_resource_id,
-                value=cache_data,
-                litellm_parent_otel_span=litellm_parent_otel_span,
-            )
+            await self._cache_vector_resource(unified_resource_id, cache_data)
 
         # Prepare database data
         db_data: Final[dict[str, object]] = {
@@ -263,10 +315,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         # Check cache first
         result: Final = cast(
             dict | None,
-            await self.internal_usage_cache.async_get_cache(
-                key=unified_resource_id,
-                litellm_parent_otel_span=litellm_parent_otel_span,
-            ),
+            await self._cached_vector_resource(unified_resource_id),
         )
 
         if result:
@@ -305,11 +354,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             raise Exception(f"LiteLLM Managed {self.resource_type} with id={unified_resource_id} not found")
 
         # Delete from cache
-        await self.internal_usage_cache.async_set_cache(
-            key=unified_resource_id,
-            value=None,
-            litellm_parent_otel_span=litellm_parent_otel_span,
-        )
+        await self._cache_vector_resource(unified_resource_id, None)
 
         # Delete from database
         await table.delete(where={"unified_resource_id": unified_resource_id})
