@@ -256,6 +256,7 @@ from litellm.router_utils.clientside_credential_handler import (
 from litellm.router_utils.common_utils import (
     MID_STREAM_CONTINUATION_KWARG,
     as_retry_skipped_deployment_ids,
+    deployment_model_id_pin,
     deployments_the_caller_may_use,
     filter_team_based_models,
     filter_web_search_deployments,
@@ -378,6 +379,8 @@ from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check impor
     EncryptedContentAffinityCheck,
 )
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
+    async_admit_io_token_turn,
+    async_io_token_refund_failure,
     build_io_token_rate_limit_headers,
     deployment_has_io_token_limits,
     refund_stale_reservation_before_retry,
@@ -738,6 +741,15 @@ def _malformed_request_params_the_deployment_sets(
         malformed: Final = (str(detail["loc"][0]) for detail in error.errors() if detail["loc"])
         return frozenset(key for key in malformed if policy.drops(key))
     return frozenset()
+
+
+def _drop_malformed_request_params_the_deployment_sets(
+    kwargs: dict[str, object],  # mutable-ok: drops the keys from the router's request kwargs in place
+    deployment_params: Mapping[str, object],
+    defaults: Mapping[str, object],
+) -> None:
+    for key in _malformed_request_params_the_deployment_sets(deployment_params, defaults, kwargs):
+        kwargs.pop(key)
 
 
 def _merged_tools(deployment_tools: Sequence[object], request_tools: object) -> list[object] | None:
@@ -1639,7 +1651,7 @@ class Router(DeprecatedRouterMembers):
         self._core_deployment_names: list[str] = []  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self._core_deployment_latency_map = {}
         ### CACHING ###
-        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = "local"  # default to an in-memory cache
+        cache_type: Literal["local", "redis", "redis-semantic", "s3"] = "local"  # default to an in-memory cache
         redis_cache = None
         cache_config: Final[dict[str, Any]] = {}
 
@@ -5133,6 +5145,7 @@ class Router(DeprecatedRouterMembers):
         kwargs: dict,
         function_name: str | None = None,
         splits_stream_timeout: bool = False,
+        opens_responses_socket: bool = False,
     ) -> None:
         """
         5 jobs:
@@ -5165,8 +5178,11 @@ class Router(DeprecatedRouterMembers):
             if isinstance(raw_deployment_params, LiteLLM_Params)
             else raw_deployment_params
         )
-        for key in _malformed_request_params_the_deployment_sets(deployment_context, defaults, request_context):
-            kwargs.pop(key)
+        _drop_malformed_request_params_the_deployment_sets(
+            kwargs,  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the router's untyped request dict
+            deployment_context,
+            defaults,
+        )
         declared_provider: Final = deployment_context.get("custom_llm_provider")
         declared_model: Final = deployment_context.get("model")
         deployment_provider: Final = (
@@ -5224,7 +5240,12 @@ class Router(DeprecatedRouterMembers):
         # here before it's wiped below, instead of relying on that attempt's
         # (possibly still-pending) failure event to do it.
         refund_stale_reservation_before_retry(self._core_cache, kwargs)
-        set_io_token_rate_limit_request_kwargs(kwargs, store_in_context=deployment_has_io_token_limits(deployment))
+        set_io_token_rate_limit_request_kwargs(
+            kwargs,
+            store_in_context=deployment_has_io_token_limits(deployment),
+            opens_responses_socket=opens_responses_socket,
+            metadata_channel=metadata_variable_name,
+        )
 
         kwargs[metadata_variable_name].setdefault(
             ROUTING_REQUEST_TAGS_METADATA_KEY,
@@ -5339,6 +5360,9 @@ class Router(DeprecatedRouterMembers):
         ):
             kwargs[STREAM_USAGE_INJECTED_FIELD] = True
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
+        pinned_model_id: Final = deployment_model_id_pin(deployment_context)
+        if pinned_model_id is not None:
+            kwargs["model_id"] = pinned_model_id  # rebind-ok: this method's contract is filling the caller's kwargs
         hop_kwargs: Final = _FALLBACK_HOP_ADAPTER.validate_python(kwargs)
         if _is_fallback_hop(hop_kwargs):
             EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
@@ -6265,6 +6289,9 @@ class Router(DeprecatedRouterMembers):
                     kwargs[k] = v
                 elif k == "metadata":
                     kwargs[k].update(v)
+            pinned_model_id: Final = deployment_model_id_pin(_LITELLM_PARAMS_ADAPTER.validate_python(data))
+            if pinned_model_id is not None:
+                kwargs["model_id"] = pinned_model_id  # rebind-ok: this call's own kwargs, filled like the defaults
 
             # call via litellm.completion()
             return litellm.text_completion(
@@ -6631,6 +6658,7 @@ class Router(DeprecatedRouterMembers):
                 kwargs=kwargs,
                 function_name=function_name,
                 splits_stream_timeout=handler_name in _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
+                opens_responses_socket=handler_name == "_aresponses_websocket",
             )
 
             data: Final = deployment["litellm_params"].copy()
@@ -9524,7 +9552,7 @@ class Router(DeprecatedRouterMembers):
 
             raise original_exception
 
-    async def make_call(self, original_function: Any, *args, **kwargs):
+    async def make_call(self, original_function: Any, *args: object, **kwargs: object):
         """
         Handler for making a call to the .completion()/.embeddings()/etc. functions.
         """
@@ -9533,17 +9561,26 @@ class Router(DeprecatedRouterMembers):
         endpoint_function: Final = (
             generic_function if callable(generic_function) else _OPAQUE_VALUE_ADAPTER.validate_python(original_function)
         )
-        with endpoint_selection(
-            getattr(endpoint_function, "__name__", None),
-            getattr(endpoint_function, "__module__", None),
-            model=_OPAQUE_VALUE_ADAPTER.validate_python(model_group),
-        ):
-            response = original_function(*args, **kwargs)
-            if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
-                response = await response
+        try:
+            with endpoint_selection(
+                getattr(endpoint_function, "__name__", None),
+                getattr(endpoint_function, "__module__", None),
+                model=_OPAQUE_VALUE_ADAPTER.validate_python(model_group),
+            ):
+                response = original_function(*args, **kwargs)
+                if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
+                    response = await response
+        except Exception:
+            with contextlib.suppress(Exception):
+                await async_io_token_refund_failure(
+                    self.cache, kwargs, parent_otel_span=get_parent_otel_span_from_kwargs(kwargs)
+                )
+            raise
         await self.increment_deployment_usage_for_response(response=response, request_kwargs=kwargs)
         ## PROCESS RESPONSE HEADERS
-        response = await self.set_response_headers(response=response, model_group=model_group, request_kwargs=kwargs)
+        response = await self.set_response_headers(
+            response=response, model_group=model_group if isinstance(model_group, str) else None, request_kwargs=kwargs
+        )
 
         return response
 
@@ -10472,9 +10509,20 @@ class Router(DeprecatedRouterMembers):
         return deployment if current is None else current.model_dump(exclude_none=True)
 
     async def async_admit_deployment_turn(
-        self, model_group: str, opened_on: Mapping[str, object], request_kwargs: Mapping[str, object]
-    ) -> None:
+        self,
+        model_group: str,
+        opened_on: Mapping[str, object],
+        request_kwargs: Mapping[str, object],
+    ) -> Mapping[str, object]:
         deployment: Final = self._deployment_as_configured_now(opened_on)
+        rate_limit_check: Final = next(
+            (callback for callback in self._routing_callbacks() if isinstance(callback, ModelRateLimitingCheck)), None
+        )
+        io_token_admission: Final[Mapping[str, object]] = (
+            MappingProxyType({})
+            if rate_limit_check is None
+            else await async_admit_io_token_turn(rate_limit_check.dual_cache, deployment, get_utc_datetime())
+        )
         budget_limiter: Final = self._core_get_router_deployment_budget_limiter()
         if budget_limiter is not None:
             try:
@@ -10495,6 +10543,7 @@ class Router(DeprecatedRouterMembers):
         await self.async_routing_strategy_pre_call_checks(  # pyright: ignore[reportUnknownMemberType]  # legacy signature takes an untyped deployment dict
             deployment=dict(without_io_token_limits(deployment)), parent_otel_span=None
         )
+        return io_token_admission
 
     async def _admit_turn_through_routing_strategy(
         self, model_group: str, deployment: Mapping[str, object], request_kwargs: Mapping[str, object]
@@ -12882,7 +12931,10 @@ class Router(DeprecatedRouterMembers):
         configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
         reasoning_efforts_initialized = False
         reasoning_efforts_unknown = False
-        model_list: Final = self._core_get_model_list_of_routed_group(model_group)
+        serves_team_deployments: Final = team_id is not None and bool(
+            self._team_deployments_named(team_id, model_group)
+        )
+        model_list: Final = self._core_get_model_list_of_routed_group(model_group, team_id)
         model_group_description: Final[str | None] = next(
             (d for d in (_configured_model_info(m).get("description") for m in model_list) if isinstance(d, str)),
             None,
@@ -12890,7 +12942,8 @@ class Router(DeprecatedRouterMembers):
         for model in model_list:
             is_match = False
             if (
-                "model_name" in model
+                serves_team_deployments
+                or "model_name" in model
                 and model["model_name"] == model_group
                 or "model_name" in model
                 and self._core_pattern_router.route(model_group) is not None
@@ -14239,17 +14292,22 @@ class Router(DeprecatedRouterMembers):
             lambda name: self._core_wildcard_route_deployments(name, team_id),
         )
 
-    def _core_get_model_list_of_routed_group(self, model_group: str) -> list[DeploymentTypedDict]:
+    def _core_get_model_list_of_routed_group(
+        self, model_group: str, team_id: str | None = None
+    ) -> list[DeploymentTypedDict]:
         """
         The deployments a request the router has already resolved to model_group is
-        served from: the ones named model_group, the routing group of that name, or
-        the wildcard route matching it when neither exists.
+        served from: team_id's own deployments under that public name when the team has
+        any, else the ones named model_group, the routing group of that name, or the
+        wildcard route matching it when neither exists.
 
         Unlike get_model_list, model_group's own model_group_alias entry is not
         followed. The router resolves an alias exactly once, so a group reached as
         an alias target is served by its own deployments, never by a second hop:
         in the chain X -> T -> U a request to X is served from T's deployments.
         """
+        if team_id is not None and self._team_deployments_named(team_id, model_group):
+            return self._core_get_all_deployments(model_name=model_group, team_id=team_id)
         own: Final = cast(  # cast-ok: the private alias returns what get_all_deployments returns
             list[DeploymentTypedDict], self._get_all_deployments(model_name=model_group)
         )

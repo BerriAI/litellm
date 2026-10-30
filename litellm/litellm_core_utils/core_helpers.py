@@ -982,25 +982,36 @@ def _usage_field(usage: object, name: str) -> object:
     return getattr(usage, name, None)
 
 
-def _cost_number(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, int | float):
+def finite_cost(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
         return None
     return float(value)
+
+
+def single_log_line(value: object) -> str:
+    return str(value).replace("\r", "").replace("\n", "")
+
+
+def finite_reported_cost(value: object) -> float | None:
+    cost: Final = finite_cost(value)
+    if cost is None and isinstance(value, float):
+        verbose_logger.warning("Ignoring a non-finite provider-reported cost %s", value)
+    return cost
 
 
 def _reported_cost_value(value: object) -> float | None:
     """A reported cost is a number, or a breakdown whose total lives under ``total_cost``."""
     raw: Final[object] = value
     if isinstance(value, Mapping):
-        return _cost_number(_usage_field(raw, "total_cost"))
-    return _cost_number(value)
+        return finite_reported_cost(_usage_field(raw, "total_cost"))
+    return finite_reported_cost(value)
 
 
 def response_cost_in_hidden_params(response: _CarriesHiddenParams) -> float | None:
     additional_headers: Final[object] = response.hidden_params.get("additional_headers")
     if not isinstance(additional_headers, Mapping):
         return None
-    return _cost_number(_USAGE_BLOCK_ADAPTER.validate_python(additional_headers).get(RESPONSE_COST_HEADER))
+    return finite_reported_cost(_USAGE_BLOCK_ADAPTER.validate_python(additional_headers).get(RESPONSE_COST_HEADER))
 
 
 def override_stamped_response_cost(response: _CarriesHiddenParams, cost: float) -> None:
@@ -1017,13 +1028,44 @@ def chunk_usage(chunk: object) -> object:
     return getattr(chunk, "usage", None)
 
 
-USAGE_COST_BILLED_PROVIDERS: Final = frozenset({"kyma"})
+PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS: Final = frozenset({"xai", "perplexity", "opencode_go"})
+
+
+UPSTREAM_USAGE_COST: Final = "upstream_usage_cost"
+
+
+def _numeric(value: object) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def stamp_litellm_bill_on_usage(response: object, usage: object, bill: float) -> None:
+    """Writes litellm's bill into ``usage.cost`` and the hidden ``response_cost`` cache, keeping the upstream's own
+    ``usage.cost`` under ``upstream_usage_cost`` so a later pricing pass still bills the upstream's charge instead of
+    reading litellm's bill back as if the upstream had reported it."""
+    hidden: Final[object] = getattr(response, "_hidden_params", None)
+    if isinstance(hidden, dict):
+        hidden_params: Final = cast(dict[str, object], hidden)  # cast-ok: hidden params ride on the response as a dict
+        upstream: Final = (
+            hidden_params[UPSTREAM_USAGE_COST]
+            if UPSTREAM_USAGE_COST in hidden_params
+            else _numeric(getattr(usage, "cost", None))
+        )
+        hidden_params.update({"response_cost": bill, UPSTREAM_USAGE_COST: upstream})
+    setattr(usage, "cost", bill)
 
 
 def billed_usage_cost(response: object, custom_llm_provider: str | None) -> float | None:
-    if custom_llm_provider not in USAGE_COST_BILLED_PROVIDERS:
+    """The charge an OpenAI-compatible upstream reports in ``usage.cost``, skipped for providers billed from their own
+    usage fields. Once litellm wrote its own bill into ``usage.cost`` (the stream builder and the Responses terminal
+    event do), the upstream's figure is read from ``upstream_usage_cost`` instead."""
+    if custom_llm_provider in PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS:
         return None
-    cost: Final = provider_reported_usage_cost(_usage_field(response, "usage"), custom_llm_provider)
+    hidden: Final = as_str_mapping(getattr(response, "_hidden_params", None))
+    cost: Final = (
+        _numeric(hidden[UPSTREAM_USAGE_COST])
+        if hidden is not None and UPSTREAM_USAGE_COST in hidden
+        else provider_reported_usage_cost(_usage_field(response, "usage"), custom_llm_provider)
+    )
     return cost if cost is not None and math.isfinite(cost) and cost >= 0 else None
 
 

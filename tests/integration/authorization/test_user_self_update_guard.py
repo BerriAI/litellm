@@ -65,7 +65,7 @@ def _ui_session_route_error(user_id: str) -> dict[str, JsonValue]:
                 f"Your user_id={masked_user_id}"
             ),
             "type": "auth_error",
-            "param": "None",
+            "param": None,
             "code": "401",
         }
     }
@@ -279,7 +279,7 @@ def test_new_user_with_admin_role_requires_proxy_admin(gateway: Gateway, role: s
         assert refused.json() == {
             "error": {
                 "message": f"Only proxy admins can create administrative users (proxy_admin, proxy_admin_viewer). Attempted to create user with role: {role}. Your role: internal_user",
-                "type": "internal_server_error",
+                "type": "auth_error",
                 "param": None,
                 "code": "403",
             }

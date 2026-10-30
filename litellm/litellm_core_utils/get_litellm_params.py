@@ -86,6 +86,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "fireworks_forward_user_id",
             "thought_signature_in_tool_call_id",
             "responses_api_version",
+            "allowed_openai_params",
             PROVIDER_AFFINITY_HEADER_KWARG_KEY,
         }
     )

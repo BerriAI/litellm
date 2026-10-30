@@ -16,6 +16,7 @@ from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED, BILLE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     budget_reservation_from_metadata,
+    finite_cost,
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
     get_parent_otel_span_from_kwargs,
@@ -37,7 +38,7 @@ from litellm.proxy.db.db_spend_update_writer import (
     get_llm_router,
 )
 from litellm.proxy.hooks.search_free_tier import apply_search_free_tier
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_route
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_request
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_counter_batch import post_call_counter_keys, spend_counter_batch_scope
 from litellm.proxy.spend_tracking.spend_event import (
@@ -137,17 +138,32 @@ _CAPTURED_IDENTITY_CALL_TYPES: Final[frozenset[str]] = frozenset(
 _OBJECT_MAPPING: Final = TypeAdapter(ObjectMapping)
 
 
-def _proxy_stamped_used_client_oauth_token(
-    request_data: Mapping[str, object], request_route: str | None
-) -> bool | None:
+def _proxy_stamped_metadata(request_data: Mapping[str, object], request_route: str | None) -> Mapping[str, object]:
     proxy_bucket: Final = (
         get_metadata_variable_name_from_kwargs(request_data)
         if request_route is None
-        else metadata_variable_name_for_route(request_route)
+        else metadata_variable_name_for_request(request_route, request_data)
     )
-    proxy_metadata: Final = request_data.get(proxy_bucket)
-    stamped: Final = proxy_metadata.get("used_client_oauth_token") if isinstance(proxy_metadata, dict) else None
+    return _str_keyed_fields(request_data.get(proxy_bucket))
+
+
+def _proxy_stamped_used_client_oauth_token(
+    request_data: Mapping[str, object], request_route: str | None
+) -> bool | None:
+    stamped: Final = _proxy_stamped_metadata(request_data, request_route).get("used_client_oauth_token")
     return stamped if isinstance(stamped, bool) else None
+
+
+_PROXY_STAMPED_REQUEST_FIELDS: Final = ("requester_ip_address", "user_agent")
+
+
+def _proxy_stamped_request_fields(
+    request_data: Mapping[str, object], request_route: str | None
+) -> Mapping[str, object]:
+    if request_route is None:
+        return {}
+    proxy_metadata: Final = _proxy_stamped_metadata(request_data, request_route)
+    return {field: proxy_metadata[field] for field in _PROXY_STAMPED_REQUEST_FIELDS if field in proxy_metadata}
 
 
 def _str_keyed_fields(value: object) -> Mapping[str, object]:
@@ -455,7 +471,13 @@ class _ProxyDBLogger(CustomLogger):
         _metadata["used_client_oauth_token"] = _proxy_stamped_used_client_oauth_token(request_fields, request_route)
 
         existing_metadata: Final[dict] = request_data.get("metadata", None) or {}
-        existing_metadata.update({**_routed_metadata_fallback(request_fields), **_metadata})
+        existing_metadata.update(
+            {
+                **_routed_metadata_fallback(request_fields),
+                **_proxy_stamped_request_fields(request_fields, request_route),
+                **_metadata,
+            }
+        )
 
         litellm_metadata_bucket: Final = request_data.get("litellm_metadata")
         litellm_metadata: Final[ObjectMapping] = (
@@ -682,7 +704,7 @@ class _ProxyDBLogger(CustomLogger):
             raw_cost: Final = _str_keyed_fields(
                 sl_object if sl_object is not None else kwargs  # pyright: ignore[reportUnknownArgumentType]  # untyped success-callback payload
             ).get("response_cost")
-            priced_cost: Final = raw_cost if isinstance(raw_cost, (int, float)) else None
+            priced_cost: Final = finite_cost(raw_cost)
             response_cost: Final = (
                 await apply_search_free_tier(
                     kwargs=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped success-callback payload
