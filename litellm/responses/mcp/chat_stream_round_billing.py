@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend, Uncach
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.mcp.parked_stream_dispatch import (
     DISPATCH_RELEASE,
+    HELD_ROUND_SPEND,
     IN_FLIGHT_ROUND,
     PARKED_DISPATCH,
     SERVED_FROM_CACHE,
@@ -114,6 +115,7 @@ class ChatStreamRoundBilling:
         assembled: Final = _assembled_round(self._peek_parked())
         if assembled is not None:
             self._first = _FirstRound(self._priced(assembled), assembled.parked, assembled.parked)
+            setattr(self._logging_obj, HELD_ROUND_SPEND, self._held_round_one_spend)
 
     def bank_first_round(self) -> BilledRoundsSpend | None:
         self._bank_apart_from_the_follow_up()
@@ -236,6 +238,10 @@ class ChatStreamRoundBilling:
     def _first_round_held_alone(self) -> _FirstRound | None:
         first: Final = self._first
         return first if first is not None and self._holds_round_one_alone(first) else None
+
+    def _held_round_one_spend(self) -> BilledRoundsSpend | None:
+        first: Final = self._first_round_held_alone()
+        return None if first is None else first.priced.spend
 
     def _holds_round_one_alone(self, first: _FirstRound) -> bool:
         parked: Final = self._peek_parked()

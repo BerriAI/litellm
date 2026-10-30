@@ -1934,6 +1934,40 @@ async def test_stream_auto_execute_blocked_by_a_post_call_guardrail_bills_both_r
 
 
 @pytest.mark.asyncio
+async def test_stream_auto_execute_rejected_by_the_proxy_during_the_follow_up_bills_round_one_with_its_own_breakdown(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from fastapi import HTTPException
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.proxy.utils import ProxyLogging
+
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"fixed_amount": _FIXED_MARGIN}})
+    _serve_chat_rounds(respx_mock, monkeypatch, (_streamed(_CHAT_ROUND_ONE), _streamed(_CHAT_ROUND_TWO)))
+    recorder: Final = _ChatRoundRecorder()
+    logging_obj: Final = _chat_rounds_logging_obj(recorder, "mcp-chat-stream-rejected-mid-follow-up", stream=True)
+    rejected: Final = HTTPException(status_code=400, detail="rejected by a stream hook")
+
+    with _echo_tool_served():
+        stream: Final = await _open_chat_echo_stream(logging_obj)
+        ProxyBaseLLMRequestProcessing(data={})._arm_deferred_stream_dispatch(
+            response=stream, route_type="acompletion", user_api_key_dict=MagicMock(), logging_obj=logging_obj
+        )
+        await _read_until(stream, "PING")
+        assert ProxyLogging._discard_deferred_stream_logging_for_failure({"litellm_logging_obj": logging_obj}, rejected)
+        await logging_obj.async_failure_handler(rejected, "rejected by a stream hook")
+        await recorder.settled(failed=1)
+
+    assert recorder.logged == ()
+    assert len(recorder.failed) == 1
+    failed: Final = recorder.failed[0]
+    breakdown: Final = failed["cost_breakdown"]
+    assert (failed["prompt_tokens"], failed["completion_tokens"]) == (71, 19)
+    assert failed["response_cost"] == pytest.approx(_chat_round_cost(_CHAT_ROUND_ONE))
+    assert breakdown is not None
+    assert breakdown["total_cost"] == pytest.approx(failed["response_cost"])
+
+
+@pytest.mark.asyncio
 async def test_stream_auto_execute_answered_without_a_tool_call_logs_its_one_round_once_the_answer_finishes(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
