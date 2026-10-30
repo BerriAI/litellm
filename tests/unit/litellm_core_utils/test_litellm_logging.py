@@ -11793,9 +11793,7 @@ def test_sync_failure_hands_callbacks_and_langfuse_the_scrubbed_error(monkeypatc
     langfuse: Final = MagicMock()
     monkeypatch.setattr(litellm, "turn_off_message_logging", True)
     monkeypatch.setattr(litellm, "failure_callback", [capture, "langfuse"])
-    monkeypatch.setattr(
-        litellm_logging.LangFuseHandler, "get_langfuse_logger_for_request", MagicMock(return_value=langfuse)
-    )
+    monkeypatch.setattr(litellm_logging, "langFuseLogger", langfuse)
 
     _prompt_failure_logging_obj().failure_handler(_prompt_echo_error(), f"Traceback: {SCRUB_PROMPT}")
 
