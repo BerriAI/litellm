@@ -7478,25 +7478,10 @@ def get_standard_logging_object_payload(
             router_model_id=logging_obj.get_router_model_id(),
         )
 
-        metadata_fields: Final = cast(Mapping[str, object], metadata)  # cast-ok: merged request metadata is str-keyed
-        recorded_error: Final = metadata_fields.get("error_information")
-        recorded_failure: Final = (
-            cast(StandardLoggingPayloadErrorInformation, recorded_error)  # cast-ok: a reserved key only litellm writes
-            if isinstance(recorded_error, dict)
-            and status == "success"
-            and call_type == CallTypes.arealtime.value
-            and metadata_fields.get("status") == "failure"
-            else None
-        )
-        payload_status: Final[StandardLoggingPayloadStatus] = "failure" if recorded_failure is not None else status
-        error_information, error_str = (
-            (recorded_failure, error_str or recorded_failure.get("error_message"))
-            if recorded_failure is not None
-            else StandardLoggingPayloadSetup.get_error_information_for_logging_payload(
-                metadata=metadata,
-                original_exception=original_exception,
-                error_str=error_str,
-            )
+        error_information, error_str = StandardLoggingPayloadSetup.get_error_information_for_logging_payload(
+            metadata=metadata,
+            original_exception=original_exception,
+            error_str=error_str,
         )
 
         ## get final response object ##
@@ -7587,9 +7572,9 @@ def get_standard_logging_object_payload(
             call_type=call_type or "",
             cache_hit=cache_hit,
             stream=stream,
-            status=payload_status,
+            status=status,
             status_fields=_get_status_fields(
-                status=payload_status,
+                status=status,
                 guardrail_information=metadata.get("standard_logging_guardrail_information", None),
                 error_str=error_str,
             ),

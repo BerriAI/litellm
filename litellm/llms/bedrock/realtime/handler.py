@@ -63,6 +63,10 @@ _BEDROCK_STREAM_ERROR_STATUS: Final[Mapping[str, int]] = MappingProxyType(
 )
 
 
+def _stream_ended_before_session_closed() -> BedrockError:
+    return BedrockError(status_code=503, message="Bedrock realtime stream ended before the session closed")
+
+
 def _as_bedrock_error(error: BaseException) -> BaseException:
     status_code: Final = _BEDROCK_STREAM_ERROR_STATUS.get(type(error).__name__)
     if status_code is None:
@@ -244,6 +248,8 @@ def _raise_provider_failure(scope: MutableMapping[str, object], failure: BaseExc
     verbose_proxy_logger.error("Bedrock Realtime: provider stream failed: %s", redact_string(str(error)))
     if _is_session_committed(scope):
         scope[BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY] = redact_string(str(error))
+    if error is failure:
+        raise failure
     raise error from failure
 
 
@@ -347,6 +353,18 @@ class BedrockRealtime(BaseAWSLLM):
         super().__init__()
         self._sdk_version_lookup: Final = sdk_version_lookup
         self._close_timeout: Final = close_timeout
+        self._failed_input_closes: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: strong refs to running closes
+
+    def _close_failed_input_in_background(
+        self,
+        bedrock_stream: BedrockBidirectionalStream,
+        send_to_bedrock: Callable[[str], Awaitable[None]],
+    ) -> None:
+        close_task: Final = asyncio.create_task(
+            _close_bedrock_input(bedrock_stream, (), send_to_bedrock, self._close_timeout)
+        )
+        self._failed_input_closes.add(close_task)
+        close_task.add_done_callback(self._failed_input_closes.discard)
 
     async def async_realtime(
         self,
@@ -507,7 +525,10 @@ class BedrockRealtime(BaseAWSLLM):
                 "Bedrock Realtime: stream failed after the client disconnected: %s", outcome.provider_failure
             )
         provider_failure: Final = None if outcome.client_disconnected else outcome.provider_failure
-        if logged_events:
+        provider_ended_committed_session: Final = provider_failure is not None and _is_session_committed(
+            websocket.scope
+        )
+        if logged_events or provider_ended_committed_session:
             if provider_failure is not None:
                 _record_failure_on_spend_log(logging_obj, _as_bedrock_error(provider_failure))
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
@@ -612,7 +633,10 @@ class BedrockRealtime(BaseAWSLLM):
 
         async def send_to_bedrock(bedrock_message: str) -> None:
             event: Final = build_input_chunk(bedrock_message.encode("utf-8"))
-            await bedrock_stream.input_stream.send(event)
+            try:
+                await bedrock_stream.input_stream.send(event)
+            except Exception as e:
+                raise _stream_ended_before_session_closed() from e
             verbose_proxy_logger.debug("Bedrock Realtime: Sent to Bedrock: %s", bedrock_message[:200])
 
         try:
@@ -646,7 +670,9 @@ class BedrockRealtime(BaseAWSLLM):
                     break
             signals.input_closing.set()
         finally:
-            if not signals.output_failed.is_set():
+            if signals.output_failed.is_set():
+                self._close_failed_input_in_background(bedrock_stream, send_to_bedrock)
+            else:
                 await _close_bedrock_input(
                     bedrock_stream, transformation_config.session_close_messages(), send_to_bedrock, self._close_timeout
                 )
@@ -682,10 +708,7 @@ class BedrockRealtime(BaseAWSLLM):
 
             if result is None:
                 if not signals.input_closing.is_set():
-                    raise BedrockError(
-                        status_code=503,
-                        message="Bedrock realtime stream ended before the session closed",
-                    )
+                    raise _stream_ended_before_session_closed()
                 verbose_proxy_logger.debug("Bedrock Realtime: Bedrock stream ended")
                 with contextlib.suppress(Exception):
                     await client_ws.close()
