@@ -212,19 +212,29 @@ class OpenrouterConfig(OpenAIGPTConfig):
         # OpenRouter returns cost information in the usage object when usage.include=true
         try:
             response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
+            response_provider: Final = response_json.get("provider")
+            if isinstance(response_provider, str) and response_provider:
+                if not hasattr(model_response, HIDDEN_PARAMS_ATTR):
+                    set_hidden_params(model_response, {})
+                provider_hidden_params: Final = cast(  # cast-ok: OpenAI response hidden params use dict storage
+                    dict[str, object], getattr(model_response, HIDDEN_PARAMS_ATTR)
+                )
+                provider_hidden_params["upstream_provider"] = response_provider
             if "usage" in response_json and response_json["usage"]:
                 response_cost: Final = _JSON_OBJECT.validate_python(response_json["usage"]).get("cost")
                 if response_cost is not None:
                     # Store cost in hidden params for the cost calculator to use
                     if not hasattr(model_response, HIDDEN_PARAMS_ATTR):
                         set_hidden_params(model_response, {})
-                    hidden_params: Final = cast(  # cast-ok: preserve mapping operations on dynamic response metadata
-                        dict[str, object], getattr(model_response, HIDDEN_PARAMS_ATTR)
+                    cost_hidden_params: Final = (
+                        cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                            dict[str, object], getattr(model_response, HIDDEN_PARAMS_ATTR)
+                        )
                     )
-                    if "additional_headers" not in hidden_params:
-                        hidden_params["additional_headers"] = {}
+                    if "additional_headers" not in cost_hidden_params:
+                        cost_hidden_params["additional_headers"] = {}
                     additional_headers: Final = cast(  # cast-ok: preserve mapping operations on response metadata
-                        dict[str, object], hidden_params["additional_headers"]
+                        dict[str, object], cost_hidden_params["additional_headers"]
                     )
                     reported_cost: Final = (
                         finite_cost(float(response_cost)) if isinstance(response_cost, str | int | float) else None
@@ -282,7 +292,7 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
             for choice in chunk["choices"]:
                 choice["delta"]["reasoning_content"] = choice["delta"].get("reasoning")
                 new_choices.append(choice)
-            return ModelResponseStream(
+            model_response: Final = ModelResponseStream(
                 id=chunk["id"],
                 object="chat.completion.chunk",
                 created=chunk["created"],
@@ -290,6 +300,12 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
                 model=chunk["model"],
                 choices=new_choices,
             )
+            typed_chunk: Final[Mapping[str, object]] = cast(  # cast-ok: stream chunks are decoded JSON objects
+                Mapping[str, object], chunk
+            )
+            upstream_provider: Final[object] = typed_chunk.get("provider")
+            if isinstance(upstream_provider, str) and upstream_provider:
+                set_hidden_params(model_response, {"upstream_provider": upstream_provider})
         except KeyError as e:
             raise OpenRouterException(
                 message=f"KeyError: {e}, Got unexpected response from OpenRouter: {chunk}",
@@ -298,3 +314,5 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
             )
         except Exception as e:
             raise e
+        else:
+            return model_response

@@ -194,6 +194,7 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "autorouter_savings_estimate",
         "autorouter_baseline_observation",
         "used_client_oauth_token",
+        "upstream_provider",
         KUBERNETES_POD_ROUTING_KEY,
         "litellm_roi_estimator",
         "is_silent_experiment",
@@ -221,6 +222,7 @@ def _get_spend_logs_metadata(
     model_map_information: StandardLoggingModelInformation | None = None,
     cold_storage_object_key: str | None = None,
     litellm_overhead_time_ms: float | None = None,
+    upstream_provider: str | None = None,
     cost_breakdown: CostBreakdown | None = None,
     litellm_call_id: str | None = None,
     autorouter_savings: float | None = None,
@@ -265,6 +267,7 @@ def _get_spend_logs_metadata(
             eval_information=None,
             cold_storage_object_key=cold_storage_object_key,
             litellm_overhead_time_ms=None,
+            upstream_provider=upstream_provider,
             attempted_retries=None,
             max_retries=None,
             attempted_fallbacks=None,
@@ -290,6 +293,7 @@ def _get_spend_logs_metadata(
         **MappingProxyType(
             {key: metadata.get(key) for key in SpendLogsMetadata.__annotations__ if key not in _STAMPED_METADATA_KEYS}
         ),
+        upstream_provider=upstream_provider,
         autorouter_savings=autorouter_savings,
         autorouter_savings_estimate=autorouter_savings_estimate,
         autorouter_baseline_observation=autorouter_baseline_observation,
@@ -706,6 +710,14 @@ def get_logging_payload(
     if standard_logging_payload is not None:
         hidden_params: Final = standard_logging_payload.get("hidden_params", {})
         litellm_overhead_time_ms = hidden_params.get("litellm_overhead_time_ms")
+    upstream_provider_value: Final[object] = (
+        standard_logging_payload["hidden_params"]["upstream_provider"]
+        if standard_logging_payload is not None
+        and "hidden_params" in standard_logging_payload
+        and "upstream_provider" in standard_logging_payload["hidden_params"]
+        else None
+    )
+    upstream_provider: Final = upstream_provider_value if isinstance(upstream_provider_value, str) else None
 
     logged_provider: Final = (
         kwargs.get("custom_llm_provider")
@@ -807,6 +819,7 @@ def get_logging_payload(
             else None
         ),
         litellm_overhead_time_ms=litellm_overhead_time_ms,
+        upstream_provider=upstream_provider,
         cost_breakdown=(
             standard_logging_payload.get("cost_breakdown", None) if standard_logging_payload is not None else None
         ),
