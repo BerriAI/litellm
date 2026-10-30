@@ -230,6 +230,7 @@ describe("provider_info_helpers", () => {
         Providers.NLP_CLOUD,
         Providers.NSCALE,
         Providers.OVHCLOUD,
+        Providers.ParallelAI,
         Providers.PETALS,
         Providers.PG_VECTOR,
         Providers.PREDIBASE,
@@ -547,6 +548,16 @@ describe("provider_info_helpers", () => {
         "sagemaker-model": { litellm_provider: "sagemaker" },
       };
       expect(getProviderModels("Sail" as Providers, modelMap)).toEqual(["sail/openai/gpt-oss-120b"]);
+    });
+
+    it("lists Parallel decision models with their provider and model placeholder", () => {
+      const modelMap = {
+        "parallel_ai/fast": { litellm_provider: "parallel_ai", mode: "evaluation" },
+      };
+
+      expect(getProviderModels("ParallelAI", modelMap)).toEqual(["parallel_ai/fast"]);
+      expect(getProviderLogoAndName("parallel_ai").displayName).toBe("Parallel AI");
+      expect(getPlaceholder("ParallelAI")).toBe("parallel_ai/fast");
     });
 
     it("lists Nace decision models and resolves the provider name and model placeholder", () => {

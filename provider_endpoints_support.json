@@ -3132,7 +3132,7 @@
         "batches": false,
         "messages": false,
         "interactions": false,
-        "systemone": false,
+        "systemone": true,
         "a2a": false,
         "generateContent": false
       }

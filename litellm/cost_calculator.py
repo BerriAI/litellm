@@ -604,6 +604,12 @@ def cost_per_token(
         decisions_overrides: Final = decisions_pricing_fields(
             litellm.model_cost.get(decisions_model_info["key"], {})  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # model cost map is dynamically loaded
         )
+        request_price: Final = decisions_overrides.get(
+            "input_cost_per_query", decisions_model_info.get("input_cost_per_query")
+        )
+        if isinstance(request_price, (int, float)):
+            # One Decisions request can answer many questions for the same flat fee.
+            return float(request_price), 0.0
         if decisions_overrides:
             return generic_cost_per_token(
                 model=model,
