@@ -1746,6 +1746,10 @@ def check_coroutine(value) -> bool:
     return get_coroutine_checker().is_async_callable(value)
 
 
+_DEPLOYMENT_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_DEPLOYMENT_VALUE: Final = TypeAdapter(object)
+
+
 def _deployment_provider(kwargs: Mapping[str, object]) -> str:
     model: Final = kwargs.get("model")
     custom_llm_provider: Final = kwargs.get("custom_llm_provider")
@@ -2325,9 +2329,12 @@ def client(original_function):
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
 
+            from litellm.litellm_core_utils.litellm_logging import Logging
+
+            validation_logging: Final = _DEPLOYMENT_VALUE.validate_python(logging_obj)
             bind_validated_request: Final = (
-                logging_obj.deployment_request_validator(kwargs)
-                if logging_obj.deployment_request_validator is not None
+                validation_logging.deployment_request_validator(_DEPLOYMENT_REQUEST_FIELDS.validate_python(kwargs))
+                if isinstance(validation_logging, Logging) and validation_logging.deployment_request_validator is not None
                 else None
             )
 
@@ -2433,7 +2440,7 @@ def client(original_function):
             try:
                 result = await original_function(*args, **call_kwargs)
                 if bind_validated_request is not None:
-                    result = bind_validated_request(result)
+                    result = bind_validated_request(_DEPLOYMENT_VALUE.validate_python(result))
             except Exception as deployment_error:
                 _deployment_call_end_time = datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
                 try:
