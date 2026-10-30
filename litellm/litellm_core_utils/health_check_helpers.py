@@ -28,8 +28,8 @@ IMAGE_EDIT_HEALTH_CHECK_PROMPT: Final = (
 )
 
 ANTHROPIC_MESSAGES_HEALTH_CHECK_MAX_TOKENS: Final = 16
-WILDCARD_HEALTH_CHECK_MODEL_COUNT: Final = 3
-WILDCARD_HEALTH_CHECK_SERVED_MODEL_COUNT: Final = WILDCARD_HEALTH_CHECK_MODEL_COUNT - 1
+WILDCARD_HEALTH_CHECK_SERVED_MODEL_COUNT: Final = 2
+WILDCARD_HEALTH_CHECK_PROVIDER_MODEL_COUNT: Final = 3
 BEDROCK_ANY_MODEL_ROUTES: Final = frozenset({"converse", "invoke"})
 EXTRACTION_HEALTH_CHECK_FIELDS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
     {"reachable": MappingProxyType({"type": "text", "instructions": "Any word from the text"})}
@@ -127,19 +127,22 @@ def wildcard_health_check_models(wildcard: str, custom_llm_provider: str) -> tup
     )
     route_prefix: Final = "".join(f"{segments[segment_index]}/" for segment_index in route_segments)
     model_regex: Final = re.compile(PatternMatchRouter().pattern_to_regex("/".join(segments[len(route_segments) :])))
-    ranked_models: Final = sorted(
-        rank_chat_models_from_llm_provider(custom_llm_provider),
-        key=lambda ranked_model: ranked_model.is_past_deprecation_date,
+    ranked_model_ids: Final = tuple(
+        (ranked_model.model.removeprefix(provider_prefix), ranked_model.is_past_deprecation_date)
+        for ranked_model in rank_chat_models_from_llm_provider(custom_llm_provider)
     )
-    model_ids: Final = tuple(ranked_model.model.removeprefix(provider_prefix) for ranked_model in ranked_models)
+    served_model_ids: Final = sorted(
+        (ranked for ranked in ranked_model_ids if model_regex.fullmatch(ranked[0])),
+        key=lambda ranked: ranked[1],
+    )
     served_probes: Final = itertools.islice(
-        dict.fromkeys(
-            f"{provider_prefix}{route_prefix}{model_id}" for model_id in model_ids if model_regex.fullmatch(model_id)
-        ),
+        dict.fromkeys(f"{provider_prefix}{route_prefix}{model_id}" for model_id, _ in served_model_ids),
         WILDCARD_HEALTH_CHECK_SERVED_MODEL_COUNT,
     )
-    provider_probes: Final = (f"{provider_prefix}{model_id}" for model_id in model_ids)
-    return tuple(itertools.islice(dict.fromkeys((*served_probes, *provider_probes)), WILDCARD_HEALTH_CHECK_MODEL_COUNT))
+    provider_probes: Final = (
+        f"{provider_prefix}{model_id}" for model_id, _ in ranked_model_ids[:WILDCARD_HEALTH_CHECK_PROVIDER_MODEL_COUNT]
+    )
+    return tuple(dict.fromkeys((*served_probes, *provider_probes)))
 
 
 class HealthCheckHelpers:

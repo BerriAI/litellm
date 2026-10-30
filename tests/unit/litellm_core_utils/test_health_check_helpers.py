@@ -1501,9 +1501,9 @@ def wildcard_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 _DATABRICKS_PROVIDER_PROBES: Final = (
+    "databricks/databricks-claude-fixture-retired",
     "databricks/databricks-cheap-chat",
     "databricks/databricks-claude-fixture-a",
-    "databricks/databricks-claude-fixture-b",
 )
 _BEDROCK_PROVIDER_PROBES: Final = ("bedrock/meta.llama-fixture", "bedrock/anthropic.claude-fixture")
 _DATABRICKS_SERVED_CLAUDE_PROBES: Final = (
@@ -1515,22 +1515,14 @@ _DATABRICKS_SERVED_CLAUDE_PROBES: Final = (
 @pytest.mark.parametrize(
     ("custom_llm_provider", "wildcard", "expected"),
     [
-        (
-            "databricks",
-            "databricks-claude-*",
-            (*_DATABRICKS_SERVED_CLAUDE_PROBES, "databricks/databricks-cheap-chat"),
-        ),
+        ("databricks", "databricks-claude-*", (*_DATABRICKS_SERVED_CLAUDE_PROBES, *_DATABRICKS_PROVIDER_PROBES[:2])),
         (
             "databricks",
             "databricks/databricks-claude-*",
-            (*_DATABRICKS_SERVED_CLAUDE_PROBES, "databricks/databricks-cheap-chat"),
+            (*_DATABRICKS_SERVED_CLAUDE_PROBES, *_DATABRICKS_PROVIDER_PROBES[:2]),
         ),
-        ("databricks", "*", _DATABRICKS_PROVIDER_PROBES),
-        (
-            "databricks",
-            "databricks-claude-fixture-r*",
-            ("databricks/databricks-claude-fixture-retired", *_DATABRICKS_PROVIDER_PROBES[:2]),
-        ),
+        ("databricks", "*", (*_DATABRICKS_PROVIDER_PROBES[1:], _DATABRICKS_PROVIDER_PROBES[0])),
+        ("databricks", "databricks-claude-fixture-r*", _DATABRICKS_PROVIDER_PROBES),
         ("databricks", "databricks-llama-*", _DATABRICKS_PROVIDER_PROBES),
         ("databricks", "*-fixture", _DATABRICKS_PROVIDER_PROBES),
         ("databricks", "team-endpoints/*", _DATABRICKS_PROVIDER_PROBES),
@@ -1541,7 +1533,7 @@ _DATABRICKS_SERVED_CLAUDE_PROBES: Final = (
             (
                 "bedrock/converse/meta.llama-fixture",
                 "bedrock/converse/anthropic.claude-fixture",
-                "bedrock/meta.llama-fixture",
+                *_BEDROCK_PROVIDER_PROBES,
             ),
         ),
         ("bedrock", "invoke/anthropic.*", ("bedrock/invoke/anthropic.claude-fixture", *_BEDROCK_PROVIDER_PROBES)),
@@ -1616,22 +1608,22 @@ async def test_partial_wildcard_health_check_falls_back_within_the_wildcard_befo
     assert response == {}
 
 
-def _answer_only_databricks_cheap_chat(request: httpx.Request) -> httpx.Response:
+def _answer_only_the_retired_databricks_claude_model(request: httpx.Request) -> httpx.Response:
     model: Final = json.loads(request.content)["model"]
-    if model != "databricks-cheap-chat":
+    if model != "databricks-claude-fixture-retired":
         return httpx.Response(404, json={"error_code": "ENDPOINT_NOT_FOUND", "message": f"{model} does not exist"})
     return _fail_first_databricks_claude_probe(request)
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("wildcard_catalog")
-async def test_partial_wildcard_health_check_whose_served_cost_map_models_are_gone_stays_healthy_on_the_provider_probe(
+async def test_partial_wildcard_health_check_stays_healthy_while_any_model_the_provider_probes_answers(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     upstream: Final = respx_mock.post(f"{_DATABRICKS_FIXTURE_API_BASE}/chat/completions").mock(
-        side_effect=_answer_only_databricks_cheap_chat
+        side_effect=_answer_only_the_retired_databricks_claude_model
     )
 
     response: Final = await ahealth_check(
@@ -1646,14 +1638,14 @@ async def test_partial_wildcard_health_check_whose_served_cost_map_models_are_go
     assert [json.loads(call.request.content)["model"] for call in upstream.calls] == [
         "databricks-claude-fixture-a",
         "databricks-claude-fixture-b",
-        "databricks-cheap-chat",
+        "databricks-claude-fixture-retired",
     ]
     assert response == {}
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("wildcard_catalog")
-async def test_partial_wildcard_health_check_that_fails_on_every_probe_makes_no_more_upstream_calls_than_before(
+async def test_partial_wildcard_health_check_that_fails_on_every_probe_tries_its_own_models_then_the_provider_probes(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -1674,6 +1666,7 @@ async def test_partial_wildcard_health_check_that_fails_on_every_probe_makes_no_
     assert [json.loads(call.request.content)["model"] for call in upstream.calls] == [
         "databricks-claude-fixture-a",
         "databricks-claude-fixture-b",
+        "databricks-claude-fixture-retired",
         "databricks-cheap-chat",
     ]
     assert "error" in response
@@ -1699,7 +1692,7 @@ async def test_partial_wildcard_health_check_without_a_served_cost_map_model_pro
         }
     )
 
-    assert json.loads(upstream.calls[0].request.content)["model"] == "databricks-cheap-chat"
+    assert json.loads(upstream.calls[0].request.content)["model"] == "databricks-claude-fixture-retired"
     assert response == {}
 
 

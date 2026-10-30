@@ -191,7 +191,10 @@ def _is_past_deprecation_date(cost_map_key: str) -> bool:
     if not isinstance(deprecation_date, str):
         return False
     try:
-        return datetime.date.fromisoformat(deprecation_date) <= datetime.datetime.now(datetime.timezone.utc).date()
+        return (
+            datetime.date.fromisoformat(deprecation_date)
+            <= datetime.datetime.now(datetime.timezone.utc).astimezone().date()
+        )
     except ValueError:
         return False
 
