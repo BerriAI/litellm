@@ -1508,10 +1508,11 @@ TOOLSET_ROWS: Final = (
         toolset_id="ts-other", toolset_name="other-toolset", tools=[{"server_id": "srv-2", "tool_name": "lookup"}]
     ),
     MCPToolset(toolset_id="ts-shouty", toolset_name="CALC", tools=[{"server_id": "srv-2", "tool_name": "lookup"}]),
+    MCPToolset(toolset_id="ts-group", toolset_name="reference", tools=[{"server_id": "srv-1", "tool_name": "add"}]),
 )
 GATEWAY_SERVERS: Final = (
     MCPServer(server_id="srv-1", name="calc", alias="calc", transport=MCPTransport.http, access_groups=["wiki"]),
-    MCPServer(server_id="srv-2", name="docs", alias="docs", transport=MCPTransport.http),
+    MCPServer(server_id="srv-2", name="docs", alias="docs", transport=MCPTransport.http, access_groups=["reference"]),
 )
 UPSTREAM_TOOLS: Final = MappingProxyType(
     {
@@ -1562,6 +1563,7 @@ async def _tools_listed_through_the_gateway(
 
     manager: Final = MCPServerManager()
     manager.registry = {server.server_id: server for server in GATEWAY_SERVERS}
+    manager.config_mcp_servers = dict(manager.registry)
     manager.create_mcp_client = AsyncMock(return_value=object())
     manager._fetch_tools_with_timeout = AsyncMock(side_effect=upstream_listing)
     tables: Final = types.SimpleNamespace(litellm_mcptoolsettable=toolset_table or _toolset_table())
@@ -1711,6 +1713,45 @@ async def test_an_ungranted_toolset_named_like_a_server_adds_no_server_beside_a_
         monkeypatch,
         _key_holding("srv-1", "srv-2"),
         ("litellm_proxy/mcp/docs", "litellm_proxy/mcp/CALC"),
+        _no_toolset_grants,
+    )
+    assert listed == ["docs-lookup"]
+
+
+@pytest.mark.asyncio
+async def test_ungranted_toolsets_are_named_in_request_order_in_the_403(monkeypatch: pytest.MonkeyPatch):
+    with pytest.raises(HTTPException) as denial:
+        await _tools_listed_through_the_gateway(
+            monkeypatch,
+            _key_holding("srv-1", "srv-2"),
+            ("litellm_proxy/mcp/other-toolset", "litellm_proxy/mcp/CALC"),
+            _no_toolset_grants,
+        )
+    assert denial.value.status_code == 403
+    assert str(denial.value.detail).endswith("other-toolset, CALC'}")
+
+
+@pytest.mark.asyncio
+async def test_an_agent_bound_key_naming_an_ungranted_toolset_gets_the_generic_403(monkeypatch: pytest.MonkeyPatch):
+    with pytest.raises(HTTPException) as denial:
+        await _tools_listed_through_the_gateway(
+            monkeypatch,
+            _key_holding("srv-1", "srv-2").model_copy(update={"agent_id": "agent-1"}),
+            ("litellm_proxy/mcp/CALC",),
+            _no_toolset_grants,
+        )
+    assert denial.value.status_code == 403
+    assert denial.value.detail == {"error": "The key is not allowed to access the requested MCP servers: CALC"}
+
+
+@pytest.mark.asyncio
+async def test_an_access_group_the_key_holds_outranks_an_ungranted_toolset_of_the_same_name(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    listed: Final = await _tools_listed_through_the_gateway(
+        monkeypatch,
+        _key_holding("srv-1", "srv-2"),
+        ("litellm_proxy/mcp/reference",),
         _no_toolset_grants,
     )
     assert listed == ["docs-lookup"]

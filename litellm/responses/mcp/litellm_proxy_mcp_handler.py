@@ -263,10 +263,26 @@ class LiteLLM_Proxy_MCP_Handler:
         except Exception as _e:
             verbose_logger.debug("Could not resolve '%s' as toolset: %s", name, _e)
             return ("server", name)
-        if denied:
-            verbose_logger.debug("Key does not have access to toolset '%s', denying it.", name)
-            return ("denied_toolset", name)
-        return ("toolset", toolset.toolset_id)
+        if not denied:
+            return ("toolset", toolset.toolset_id)
+        if await LiteLLM_Proxy_MCP_Handler._holds_access_group_named(name, user_api_key_auth):
+            return ("server", name)
+        verbose_logger.debug("Key does not have access to toolset '%s', denying it.", name)
+        return ("denied_toolset", name)
+
+    @staticmethod
+    async def _holds_access_group_named(name: str, user_api_key_auth: "UserAPIKeyAuth | None") -> bool:
+        from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        group_server_ids: Final = await MCPRequestHandler.get_mcp_servers_from_access_groups([name])
+        return bool(group_server_ids) and not frozenset(group_server_ids).isdisjoint(
+            await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
+        )
 
     @staticmethod
     @catalog_operation(global_manager)
@@ -300,7 +316,7 @@ class LiteLLM_Proxy_MCP_Handler:
         from litellm.proxy.mcp_server.server import (
             _get_allowed_mcp_servers_from_mcp_server_names,
             _get_tools_from_mcp_servers,
-            raise_denied_scoped_mcp_access,
+            raise_generic_mcp_access_denial,
         )
 
         mcp_servers: Final = [
@@ -337,10 +353,7 @@ class LiteLLM_Proxy_MCP_Handler:
         # names), so use None and let the auth object's mcp_servers do the filtering.
         asks_whole_gateway: Final = any(map(names_whole_gateway, mcp_tools_with_litellm_proxy or ()))
         if denied_toolset_names and not (asks_whole_gateway or resolved_mcp_servers or resolved_toolset_ids):
-            await raise_denied_scoped_mcp_access(
-                requested_names=tuple(dict.fromkeys(denied_toolset_names)),
-                user_api_key_auth=user_api_key_auth,
-            )
+            raise_generic_mcp_access_denial(denied_toolset_names)
         effective_server_filter: Final = None if resolved_toolset_ids else (list(resolved_mcp_servers) or None)
 
         listing: Final = await _get_tools_from_mcp_servers(

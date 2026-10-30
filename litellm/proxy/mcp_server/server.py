@@ -519,6 +519,7 @@ if MCP_AVAILABLE:
         "mcp_get_prompt",
         "mcp_read_resource",
         "raise_denied_scoped_mcp_access",
+        "raise_generic_mcp_access_denial",
         "redact_mcp_resource_url",
     )
     from mcp.server import Server
@@ -1143,6 +1144,7 @@ if MCP_AVAILABLE:
         apply_display_name_overrides,
         filter_tools_by_allowed_tools,
         raise_denied_scoped_mcp_access,
+        raise_generic_mcp_access_denial,
     )
 
     @contextlib.asynccontextmanager
