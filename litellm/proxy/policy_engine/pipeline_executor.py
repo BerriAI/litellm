@@ -98,15 +98,11 @@ def _count_change(sent: tuple[object, ...] | None, returned: tuple[object, ...] 
     return (len(sent), len(returned))
 
 
-def _tool_call_mismatch_reason(
-    sent: tuple[tuple[object, object], ...] | None, returned: tuple[tuple[object, object], ...] | None
-) -> str | None:
-    if sent == returned:
-        return None
+def _tool_call_count_mismatch_reason(sent: Sequence[object] | None, returned: Sequence[object] | None) -> str | None:
     sent_count: Final = len(sent or ())
     returned_count: Final = len(returned or ())
     if sent_count == returned_count:
-        return "the legacy hook changed a tool call's name or arguments, which this path cannot write back"
+        return None
     return f"the legacy hook returned {returned_count} tool calls for a stream that carried {sent_count}"
 
 
@@ -205,11 +201,10 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
     non-streaming hooks, an exception it raises ends the stream through the executor's
     fail/error classification, and the response it hands back, or the one it changed in place
     and returned ``None`` for, is re-scanned by the same translation so its texts reach the
-    client through the translation's ended-stream write-back. A
-    replacement whose scanned texts do not line up with the originals, or whose tool calls
-    differ from them, is undeliverable, so the executor releases the original chunks. A stream
-    that carried no text to scan, such as a tool-only Anthropic message, stays deliverable as
-    long as the hook left the tool calls alone."""
+    client through the translation's ended-stream write-back. Tool calls the hook rewrote go to the translation's
+    tool-call write-back like a unified guardrail's. A replacement whose scanned texts or tool
+    calls do not line up with the originals by count is undeliverable, so the executor releases
+    the original chunks."""
 
     def __init__(
         self,
@@ -258,14 +253,19 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
                 guardrail_name,
                 f"the legacy hook returned {returned_text_count} texts for a stream that carried {sent_text_count}",
             )
-        tool_call_mismatch: Final = _tool_call_mismatch_reason(
-            _tool_call_shapes(inputs.get("tool_calls")), _tool_call_shapes(rescanned.get("tool_calls"))
+        sent_tool_calls: Final = inputs.get("tool_calls")
+        rewritten_tool_calls: Final = rescanned.get("tool_calls")
+        tool_call_count_mismatch: Final = _tool_call_count_mismatch_reason(sent_tool_calls, rewritten_tool_calls)
+        if tool_call_count_mismatch is not None:
+            raise UndeliverableStreamRewrite(guardrail_name, tool_call_count_mismatch)
+        texts_update: Final[GenericGuardrailAPIInputs] = {"texts": rewritten} if rewritten else {}
+        tool_calls_update: Final[GenericGuardrailAPIInputs] = (
+            {"tool_calls": rewritten_tool_calls}
+            if rewritten_tool_calls is not None
+            and _rewrote(_tool_call_shapes(sent_tool_calls), _tool_call_shapes(rewritten_tool_calls))
+            else {}
         )
-        if tool_call_mismatch is not None:
-            raise UndeliverableStreamRewrite(guardrail_name, tool_call_mismatch)
-        if not rewritten:
-            return inputs
-        rewritten_inputs: Final[GenericGuardrailAPIInputs] = {**inputs, "texts": rewritten}
+        rewritten_inputs: Final[GenericGuardrailAPIInputs] = {**inputs, **texts_update, **tool_calls_update}
         return rewritten_inputs
 
     async def _rescan(
