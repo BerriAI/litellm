@@ -4541,8 +4541,8 @@ class TestCLIKeyRegenerationFlow:
             fetch_cli_sso_team_details,
         )
 
-        def team_row(team_id):
-            row = MagicMock()
+        def team_row(team_id: str) -> MagicMock:
+            row: Final = MagicMock()
             row.model_dump.return_value = {
                 "team_id": team_id,
                 "team_alias": None,
@@ -4551,12 +4551,12 @@ class TestCLIKeyRegenerationFlow:
             }
             return row
 
-        prisma_client = MagicMock()
+        prisma_client: Final = MagicMock()
         prisma_client.db.litellm_teamtable.find_many = AsyncMock(
             return_value=[team_row("team-alpha"), team_row("team-zeta")]
         )
 
-        details = await fetch_cli_sso_team_details(
+        details: Final = await fetch_cli_sso_team_details(
             prisma_client=prisma_client,
             teams=["team-zeta", "team-gone", "team-alpha", "team-zeta"],
         )
