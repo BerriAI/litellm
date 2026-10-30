@@ -527,23 +527,11 @@ def _routed_deployment_model(name_pattern: str, listed_name: str, deployment_mod
     )
 
 
-def _names_listed_under_wildcard(
-    deployment: Mapping[str, object],
-    wildcard_pattern: str,
-    litellm_params: LiteLLM_Params | None,
-    routed_models: Callable[[str, str | None], frozenset[str]] | None,
-    deployed_by_name: Callable[[str, str | None], bool],
+def _names_no_deployment_serves_by_name(
+    deployment: Mapping[str, object], names: Sequence[str], deployed_by_name: Callable[[str, str | None], bool]
 ) -> tuple[str, ...]:
     team_id: Final = _deployment_team_id(deployment)
-    return tuple(
-        name
-        for name in get_known_models_from_wildcard(
-            wildcard_model=wildcard_pattern,
-            litellm_params=litellm_params,
-            routes_to_model=_routes_to_model(routed_models, team_id),
-        )
-        if not deployed_by_name(name, team_id)
-    )
+    return tuple(name for name in names if not deployed_by_name(name, team_id))
 
 
 def expand_wildcard_deployments_for_model_info(
@@ -584,14 +572,16 @@ def expand_wildcard_deployments_for_model_info(
         except Exception:
             expanded.append(deployment)
             continue
-        expanded_names = _names_listed_under_wildcard(
-            deployment, wildcard_pattern, litellm_params, routed_models, deployed_by_name
+        expanded_names = get_known_models_from_wildcard(
+            wildcard_model=wildcard_pattern,
+            litellm_params=litellm_params,
+            routes_to_model=_routes_to_model(routed_models, _deployment_team_id(deployment)),
         )
         if not expanded_names:
             expanded.append(deployment)
             continue
 
-        for name in expanded_names:
+        for name in _names_no_deployment_serves_by_name(deployment, expanded_names, deployed_by_name):
             row = copy.deepcopy(deployment)
             row["model_name"] = name
             params = row.get("litellm_params")
