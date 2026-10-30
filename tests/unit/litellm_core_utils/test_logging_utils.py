@@ -3,6 +3,7 @@ Tests for litellm.litellm_core_utils.logging_utils — base64 truncation helpers
 """
 
 import asyncio, datetime, importlib, litellm, os, pytest_asyncio
+import sys
 import threading
 from unittest.mock import MagicMock
 
@@ -17,7 +18,7 @@ from litellm.litellm_core_utils.logging_utils import (
     truncate_base64_in_messages,
     truncate_base64_in_messages_async,
 )
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Coroutine
 from datetime import datetime as datetime_assemble_streaming
 from litellm import(
     Choices,
@@ -99,8 +100,8 @@ class TestTruncateBase64InString:
     @pytest.mark.parametrize(
         "text",
         [
-            'data: {"choices": [{"delta": {"content": "hi"}}]}\n\n' * 50_000,
-            "data:" * 200_000,
+            'data: {"choices": [{"delta": {"content": "hi"}}]}\n\n' * 50_000 + ";base64,",
+            "data:" * 200_000 + ";base64,",
         ],
         ids=["sse_lines", "whitespace_free_prefixes"],
     )
@@ -241,19 +242,30 @@ def scan_threads(monkeypatch):
     return threads
 
 
-@pytest.fixture
-def regex_scans(monkeypatch):
-    """Record every string the data URI regex runs over."""
-    scanned: list[str] = []
-    original = logging_utils._DATA_URI_RE
+def _run_without_yielding(coroutine: Coroutine[object, object, object]) -> object:
+    try:
+        coroutine.send(None)
+    except StopIteration as finished:
+        return finished.value
+    coroutine.close()
+    raise AssertionError("the coroutine yielded to the event loop")
 
-    class RecordingPattern:
-        def sub(self, repl, string: str) -> str:
-            scanned.append(string)
-            return original.sub(repl, string)
 
-    monkeypatch.setattr(logging_utils, "_DATA_URI_RE", RecordingPattern())
-    return scanned
+def _regex_calls_while(run: Callable[[], object]) -> tuple[object, list[str]]:
+    calls: list[str] = []
+    previous = sys.getprofile()
+
+    def record(frame, event: str, arg: object) -> None:
+        name = getattr(arg, "__qualname__", "")
+        if event == "c_call" and name.startswith("Pattern."):
+            calls.append(name)
+
+    sys.setprofile(record)
+    try:
+        result = run()
+    finally:
+        sys.setprofile(previous)
+    return result, calls
 
 
 def _tool_result_messages(tool_output: str) -> list:
@@ -300,28 +312,56 @@ class TestTruncateBase64InMessagesAsync:
         assert scan_threads
         assert set(scan_threads) == {threading.get_ident()}
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "row",
         [
             '{"id": 7, "name": "widget", "status": "ok"}\n',
             "data: {\"choices\": [{\"delta\": {\"content\": \"hi\"}}]}\n\n",
             "const total = rows.map((r) => r.price).reduce((a, b) => a + b, 0);\n",
+            'data: {"choices": [{"delta": {"content": "a; b"}}]}\n\n',
+            "Content-Type: text/plain;base64,aGVsbG8=\n",
         ],
-        ids=["json_rows", "sse_lines", "code_with_semicolons"],
+        ids=["json_rows", "sse_lines", "code_with_semicolons", "sse_lines_with_semicolons", "base64_marker_without_data"],
     )
-    async def test_tool_message_without_data_uri_skips_the_regex_and_the_thread_hop(
-        self, scan_threads, regex_scans, row
-    ):
+    @pytest.mark.parametrize(
+        "truncate",
+        [lambda messages: _run_without_yielding(truncate_base64_in_messages_async(messages)), truncate_base64_in_messages],
+        ids=["async", "sync"],
+    )
+    def test_tool_message_without_data_uri_is_copied_inline_without_a_regex_scan(self, row, truncate):
         tool_output = (row * (_PLAIN_TOOL_OUTPUT_CHARS // len(row) + 1))[:_PLAIN_TOOL_OUTPUT_CHARS]
         messages = _tool_result_messages(tool_output)
 
-        result = await truncate_base64_in_messages_async(messages)
+        result, regex_calls = _regex_calls_while(lambda: truncate(messages))
 
         assert result == messages
-        assert regex_scans == []
-        assert scan_threads
-        assert set(scan_threads) == {threading.get_ident()}
+        assert result is not messages
+        assert regex_calls == []
+
+    def test_small_data_uri_is_truncated_inline_with_a_regex_scan(self):
+        payload = "L" * 2_000
+        messages = _image_messages(payload)
+
+        result, regex_calls = _regex_calls_while(
+            lambda: _run_without_yielding(truncate_base64_in_messages_async(messages))
+        )
+
+        assert regex_calls
+        assert payload not in result[0]["content"][1]["image_url"]["url"]
+        assert "base64_data truncated" in result[0]["content"][1]["image_url"]["url"]
+
+    @pytest.mark.asyncio
+    async def test_small_data_uri_beside_large_text_is_scanned_off_the_event_loop(self, monkeypatch, scan_threads):
+        monkeypatch.setattr(logging_utils, "BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS", 1_000)
+        payload = "M" * 200
+        messages = _image_messages(payload) + _tool_result_messages("plain tool output\n" * 100)
+
+        result = await truncate_base64_in_messages_async(messages)
+        offload_threads = tuple(scan_threads)
+
+        assert payload not in result[0]["content"][1]["image_url"]["url"]
+        assert offload_threads
+        assert threading.get_ident() not in offload_threads
 
     @pytest.mark.asyncio
     async def test_none_and_disabled_truncation_short_circuit(self, monkeypatch, scan_threads):
