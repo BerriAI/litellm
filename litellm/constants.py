@@ -1274,7 +1274,7 @@ empower_models: Final = set(
     ]
 )
 
-together_ai_models: Final[set] = set(
+together_ai_models: Final[set[str]] = set(
     [
         # llama llms - chat
         "togethercomputer/llama-2-70b-chat",
