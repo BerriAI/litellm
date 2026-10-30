@@ -213,4 +213,4 @@ def test_non_openrouter_spend_metadata_has_no_provider_guard(gateway: Gateway) -
         _send(gateway, scenario, wire.url, request_id, openrouter=False, stream=False)
         metadata: Final = _spend_metadata(request_id)
 
-    assert metadata.get("upstream_provider") is None, metadata
+    assert "upstream_provider" not in metadata, metadata

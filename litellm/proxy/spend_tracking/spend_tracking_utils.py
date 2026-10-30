@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checkable
 
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -204,6 +205,10 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
 )
 
 
+class _UpstreamProviderMetadata(TypedDict, total=False):
+    upstream_provider: ReadOnly[str]
+
+
 def _stored_user_email(metadata: Mapping[str, object]) -> str | None:
     email: Final = metadata.get("user_api_key_user_email")
     return email if isinstance(email, str) and email.strip() else None
@@ -234,6 +239,9 @@ def _get_spend_logs_metadata(
     kubernetes_pod_routing: StandardLoggingKubernetesPodRouting | None = None,
     is_silent_experiment: bool = False,
 ) -> SpendLogsMetadata:
+    upstream_provider_metadata: Final[_UpstreamProviderMetadata] = (
+        {"upstream_provider": upstream_provider} if upstream_provider is not None else {}
+    )
     if metadata is None:
         return SpendLogsMetadata(
             user_api_key=None,
@@ -267,7 +275,7 @@ def _get_spend_logs_metadata(
             eval_information=None,
             cold_storage_object_key=cold_storage_object_key,
             litellm_overhead_time_ms=None,
-            upstream_provider=upstream_provider,
+            **upstream_provider_metadata,
             attempted_retries=None,
             max_retries=None,
             attempted_fallbacks=None,
@@ -293,7 +301,7 @@ def _get_spend_logs_metadata(
         **MappingProxyType(
             {key: metadata.get(key) for key in SpendLogsMetadata.__annotations__ if key not in _STAMPED_METADATA_KEYS}
         ),
-        upstream_provider=upstream_provider,
+        **upstream_provider_metadata,
         autorouter_savings=autorouter_savings,
         autorouter_savings_estimate=autorouter_savings_estimate,
         autorouter_baseline_observation=autorouter_baseline_observation,

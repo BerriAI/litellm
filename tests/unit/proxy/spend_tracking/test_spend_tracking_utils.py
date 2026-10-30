@@ -2429,6 +2429,32 @@ def test_get_logging_payload_carries_upstream_provider_from_hidden_params_regres
 
 @patch("litellm.proxy.proxy_server.master_key", None)
 @patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_omits_upstream_provider_when_hidden_param_absent_guard() -> None:
+    standard_logging_payload: Final = _make_standard_logging_payload_with_usage_object(usage_object={})
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-5.6",
+            "call_type": "responses",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            "standard_logging_object": standard_logging_payload,
+        },
+        response_obj={
+            "id": "resp-test",
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 10,
+                "total_tokens": 1010,
+            },
+        },
+        start_time=datetime.datetime(2025, 1, 1, tzinfo=timezone.utc),
+        end_time=datetime.datetime(2025, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+    )
+
+    assert "upstream_provider" not in json.loads(payload["metadata"])
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
 def test_get_logging_payload_strips_null_bytes_from_request_tags():
     """Regression for PostgreSQL 22P05: NUL bytes must be stripped from request_tags."""
     kwargs = {
@@ -6944,7 +6970,10 @@ def test_spend_logs_payload(model_id: str | None):
     )
 
     assert len(payload["request_id"]) > 0
-    expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys() - {"is_silent_experiment"}
+    expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys() - {
+        "is_silent_experiment",
+        "upstream_provider",
+    }
 
     assert "metadata" in payload
     assert isinstance(payload["metadata"], str)
