@@ -13,6 +13,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
@@ -59,6 +60,32 @@ def with_admin_api_key_secret_reference(deployment: Deployment) -> Deployment:
 
 def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:
     return {key: value for key, value in kwargs.items() if key not in ROUTER_ONLY_CALL_KWARGS}
+
+
+_ROUTER_OWNED_METADATA_KEYS: Final = frozenset({"caching_groups"})
+
+
+def metadata_defaults_under_request(
+    defaults: Mapping[str, object], request_metadata: Mapping[object, object]
+) -> Mapping[str, object]:
+    return {
+        key: (
+            default
+            if key in _ROUTER_OWNED_METADATA_KEYS
+            else _request_value_over_default(default=default, requested=request_metadata.get(key))
+        )
+        for key, default in defaults.items()
+    }
+
+
+def _request_value_over_default(default: object, requested: object) -> object:
+    if requested is None:
+        return default
+    default_mapping: Final = as_str_mapping(default)
+    requested_mapping: Final = as_str_mapping(requested)
+    if default_mapping is None or requested_mapping is None:
+        return requested
+    return {**default_mapping, **requested_mapping}
 
 
 def as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:

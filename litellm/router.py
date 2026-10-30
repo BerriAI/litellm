@@ -118,6 +118,7 @@ from litellm.litellm_core_utils.batch_utils import (
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     coerce_token_limit,
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
@@ -264,6 +265,7 @@ from litellm.router_utils.common_utils import (
     format_no_fallback_group_message,
     get_request_team_id,
     is_proxy_admin_request,
+    metadata_defaults_under_request,
     provider_for_generic_call,
     request_user_api_key_auth,
     resolve_model_group_alias,
@@ -677,6 +679,7 @@ _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_REQUEST_METADATA_ADAPTER: Final = TypeAdapter(Mapping[object, object])
 _DEPLOYMENT_PARAMS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | GenericLiteLLMParams]] = TypeAdapter(
     Mapping[str, object] | GenericLiteLLMParams
 )
@@ -5037,7 +5040,7 @@ class Router(DeprecatedRouterMembers):
         """
         # 1) copy your defaults and pull out metadata
         defaults: Final = dict(without_retrieve_stream_defaults(self._core_default_litellm_params, kwargs))
-        metadata_defaults: Final = defaults.pop("metadata", {}) or {}
+        metadata_defaults: Final = as_str_mapping(defaults.pop("metadata", None)) or {}
 
         # 2) add any non-metadata defaults that aren't already in kwargs
         for key, value in defaults.items():
@@ -5046,7 +5049,12 @@ class Router(DeprecatedRouterMembers):
             kwargs.setdefault(key, value)
 
         # 3) merge in metadata, this handles inserting this as either "metadata" or "litellm_metadata"
-        kwargs.setdefault(metadata_variable_name, {}).update(metadata_defaults)
+        request_metadata: Final = _REQUEST_METADATA_ADAPTER.validate_python(
+            kwargs.setdefault(metadata_variable_name, {})
+        )
+        kwargs[metadata_variable_name].update(
+            metadata_defaults_under_request(defaults=metadata_defaults, request_metadata=request_metadata)
+        )
 
     def _handle_clientside_credential(
         self, deployment: dict, kwargs: dict, function_name: str | None = None

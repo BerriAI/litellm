@@ -20,6 +20,7 @@ from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS, ROUTER_USAGE_
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
 from litellm.router_strategy.adaptive_router.hooks import AdaptiveRouterPostCallHook
 from litellm.types.litellm_params import RoutingStrategyName
 from litellm.types.router import AlertingConfig, Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo
@@ -394,6 +395,80 @@ def test_update_kwargs_with_default_litellm_params(model_list):
     assert kwargs["api_key"] == "test"
     assert kwargs["metadata"]["key"] == "value"
     assert kwargs["metadata"]["key2"] == "value2"
+
+
+def _vertex_labels_router(metadata_defaults: Mapping[str, object]) -> Router:
+    return Router(
+        model_list=[{"model_name": "g", "litellm_params": {"model": "vertex_ai/gemini-3.8-flash"}}],
+        default_litellm_params={"metadata": dict(metadata_defaults)},
+    )
+
+
+def _vertex_labels_after_defaults(router: Router, request_metadata: dict, metadata_variable_name: str):
+    kwargs: Final = {metadata_variable_name: request_metadata}
+    router._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
+    return pop_vertex_request_labels(optional_params={}, litellm_params=kwargs)
+
+
+@pytest.mark.parametrize("metadata_variable_name", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize(
+    "request_labels, expected_labels",
+    [
+        ({"litellm-team": "ai-platform"}, {"env": "prod", "litellm-team": "ai-platform"}),
+        ({"env": "dev", "litellm-team": "ai-platform"}, {"env": "dev", "litellm-team": "ai-platform"}),
+        (None, {"env": "prod"}),
+        ({}, {"env": "prod"}),
+    ],
+)
+def test_default_requester_metadata_merges_under_request_labels(
+    metadata_variable_name: str, request_labels: dict | None, expected_labels: dict
+):
+    router: Final = _vertex_labels_router({"requester_metadata": {"env": "prod"}})
+    request_metadata: Final = {} if request_labels is None else {"requester_metadata": request_labels}
+
+    labels: Final = _vertex_labels_after_defaults(router, request_metadata, metadata_variable_name)
+
+    assert labels == expected_labels
+
+
+def test_default_requester_metadata_does_not_carry_labels_between_requests():
+    router: Final = _vertex_labels_router({"requester_metadata": {"env": "prod"}})
+
+    first: Final = _vertex_labels_after_defaults(router, {"requester_metadata": {"litellm-team": "a"}}, "metadata")
+    second: Final = _vertex_labels_after_defaults(router, {}, "metadata")
+
+    assert first == {"env": "prod", "litellm-team": "a"}
+    assert second == {"env": "prod"}
+
+
+@pytest.mark.parametrize(
+    "request_metadata, expected_tags",
+    [
+        ({"tags": ["caller"]}, ["caller"]),
+        ({}, ["proxy-default"]),
+        ({"tags": None}, ["proxy-default"]),
+    ],
+)
+def test_default_metadata_list_value_applies_only_when_request_sets_none(request_metadata: dict, expected_tags: list):
+    router: Final = _vertex_labels_router({"tags": ["proxy-default"]})
+    kwargs: Final = {"metadata": request_metadata}
+
+    router._update_kwargs_with_default_litellm_params(kwargs=kwargs)
+
+    assert kwargs["metadata"]["tags"] == expected_tags
+
+
+@pytest.mark.parametrize("router_caching_groups", [[("g", "other")], None])
+def test_router_caching_groups_win_over_request_metadata(router_caching_groups: list | None):
+    router: Final = Router(
+        model_list=[{"model_name": "g", "litellm_params": {"model": "vertex_ai/gemini-3.8-flash"}}],
+        caching_groups=router_caching_groups,
+    )
+    kwargs: Final = {"metadata": {"caching_groups": [("g", "premium")]}}
+
+    router._update_kwargs_with_default_litellm_params(kwargs=kwargs)
+
+    assert kwargs["metadata"]["caching_groups"] == router_caching_groups
 
 
 def test_get_timeout(model_list):
