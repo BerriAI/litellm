@@ -56,6 +56,9 @@ def _model_list():
     ]
 
 
+CALL_STARTED_AT: Final = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+
+
 def _build_router(routing_strategy="simple-shuffle", routing_groups=None):
     return Router(
         model_list=_model_list(),
@@ -468,7 +471,8 @@ def test_two_least_busy_groups_count_a_request_once(monkeypatch):
         "litellm_params": {
             "metadata": {"model_group": "filtered-model"},
             "model_info": {"id": "deploy-1"},
-        }
+        },
+        "api_call_start_time": CALL_STARTED_AT,
     }
 
     for callback in litellm.input_callback:
@@ -498,7 +502,10 @@ def test_a_least_busy_group_pick_stops_counting_once_its_request_finishes(monkey
     )
 
     first: Final = _filtered_model_pick(router)
-    kwargs: Final = {"litellm_params": {"metadata": {"model_group": "filtered-model"}, "model_info": {"id": first}}}
+    kwargs: Final = {
+        "litellm_params": {"metadata": {"model_group": "filtered-model"}, "model_info": {"id": first}},
+        "api_call_start_time": CALL_STARTED_AT,
+    }
     for callback in litellm.input_callback:
         if isinstance(callback, CustomLogger):
             callback.log_pre_api_call(model="filtered-model", messages=[], kwargs=kwargs)
@@ -525,7 +532,8 @@ def test_two_routers_in_one_process_each_count_their_own_requests(monkeypatch):
         "litellm_params": {
             "metadata": {"model_group": "filtered-model"},
             "model_info": {"id": "deploy-1"},
-        }
+        },
+        "api_call_start_time": CALL_STARTED_AT,
     }
 
     for callback in litellm.input_callback:

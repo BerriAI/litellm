@@ -29,6 +29,7 @@ from litellm.router_strategy.least_busy import (
 from litellm.types.utils import ModelResponse
 
 GROUP: Final = "least-busy-group"
+CALL_STARTED_AT: Final = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
 DEPLOYMENT_A: Final[dict[str, object]] = {"model_info": {"id": "dep-a"}}
 DEPLOYMENT_B: Final[dict[str, object]] = {"model_info": {"id": "dep-b"}}
 HEALTHY: Final = [DEPLOYMENT_A, DEPLOYMENT_B]
@@ -39,7 +40,7 @@ def _routed_call_kwargs(deployment_id: str) -> dict[str, object]:
 
 
 def _call_kwargs(deployment_id: str) -> dict[str, object]:
-    return {**_routed_call_kwargs(deployment_id), "api_call_start_time": datetime.datetime.now()}
+    return {**_routed_call_kwargs(deployment_id), "api_call_start_time": CALL_STARTED_AT}
 
 
 class SharedRedisCounters:
@@ -144,7 +145,7 @@ def _routed_through_litellm_metadata(deployment_id: str) -> dict[str, object]:
             "litellm_metadata": {"model_group": GROUP},
             "model_info": {"id": deployment_id},
         },
-        "api_call_start_time": datetime.datetime.now(),
+        "api_call_start_time": CALL_STARTED_AT,
     }
 
 

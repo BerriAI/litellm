@@ -599,7 +599,7 @@ async def test_responses_websocket_turn_is_refused_once_its_deployment_crosses_b
 
 @pytest.mark.asyncio
 async def test_responses_websocket_turns_do_not_make_their_deployment_look_busy_to_least_busy():
-    router = Router(
+    router: Final = Router(
         model_list=[
             {
                 "model_name": "ws-least-busy",
