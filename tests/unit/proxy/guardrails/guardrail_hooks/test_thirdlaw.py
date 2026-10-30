@@ -1419,12 +1419,34 @@ async def test_streaming_buffered_block_raises_streaming_callback_error():
     from litellm.proxy.proxy_server import StreamingCallbackError
 
     g = _make_guardrail(decisions=[_decision_response({"action": "block", "message": "leaked secret"})])
-    with pytest.raises(StreamingCallbackError, match="leaked secret"):
+    with pytest.raises(StreamingCallbackError, match="leaked secret") as raised:
         await _collect(
             g.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=UserAPIKeyAuth(), response=_aiter(_stream_chunks()), request_data=_request_data()
             )
         )
+    assert raised.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("response_status", "expected_status"),
+    [(200, 400), (422, 422), (503, 503)],
+)
+async def test_streaming_buffered_block_raises_with_the_block_status(response_status: int, expected_status: int):
+    from litellm.proxy.proxy_server import StreamingCallbackError
+
+    g = _make_guardrail(
+        decisions=[
+            _decision_response({"action": "block", "message": "leaked secret", "response_status": response_status})
+        ]
+    )
+    with pytest.raises(StreamingCallbackError, match="leaked secret") as raised:
+        await _collect(
+            g.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(), response=_aiter(_stream_chunks()), request_data=_request_data()
+            )
+        )
+    assert raised.value.status_code == expected_status
 
 
 async def test_streaming_buffered_holds_chunks_until_decision():
@@ -1458,15 +1480,16 @@ async def test_streaming_sampled_interim_block_terminates_stream():
         streaming_buffer_until_moderated=False,
         streaming_end_of_stream_only=False,
         streaming_sampling_rate=1,
-        decisions=[_decision_response({"action": "block", "message": "bad interim"})],
+        decisions=[_decision_response({"action": "block", "message": "bad interim", "response_status": 422})],
     )
     agen = g.async_post_call_streaming_iterator_hook(
         user_api_key_dict=UserAPIKeyAuth(), response=_aiter(_stream_chunks()), request_data=_request_data()
     )
     first = await agen.__anext__()
     assert isinstance(first, ModelResponseStream)
-    with pytest.raises(StreamingCallbackError, match="bad interim"):
+    with pytest.raises(StreamingCallbackError, match="bad interim") as raised:
         await agen.__anext__()
+    assert raised.value.status_code == 422
 
 
 def _truncated_tool_use_sse_frames() -> list[bytes]:
@@ -1798,7 +1821,7 @@ async def test_unscannable_stream_fails_closed_by_default():
     from litellm.proxy.proxy_server import StreamingCallbackError
 
     g = _make_guardrail(decisions=[])
-    with pytest.raises(StreamingCallbackError, match="could not be assembled for scanning"):
+    with pytest.raises(StreamingCallbackError, match="could not be assembled for scanning") as raised:
         await _collect(
             g.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
@@ -1806,6 +1829,7 @@ async def test_unscannable_stream_fails_closed_by_default():
                 request_data=_request_data(),
             )
         )
+    assert raised.value.status_code == 400
     assert g.async_handler.post.await_count == 0
 
 
@@ -1905,9 +1929,9 @@ async def test_a_sampled_stream_blocks_on_the_final_decision():
         streaming_buffer_until_moderated=False,
         streaming_end_of_stream_only=False,
         streaming_sampling_rate=100,
-        decisions=[_decision_response({"action": "block", "message": "final says no"})],
+        decisions=[_decision_response({"action": "block", "message": "final says no", "response_status": 451})],
     )
-    with pytest.raises(StreamingCallbackError, match="final says no"):
+    with pytest.raises(StreamingCallbackError, match="final says no") as raised:
         await _collect(
             g.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
@@ -1915,6 +1939,7 @@ async def test_a_sampled_stream_blocks_on_the_final_decision():
                 request_data=_request_data(),
             )
         )
+    assert raised.value.status_code == 451
 
 
 async def test_a_sampled_stream_cannot_apply_a_late_modify_response():

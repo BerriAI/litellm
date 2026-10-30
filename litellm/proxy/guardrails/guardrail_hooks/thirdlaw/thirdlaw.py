@@ -1021,10 +1021,10 @@ class ThirdlawGuardrail(CustomGuardrail):
             return None
         return assembled if isinstance(assembled, ModelResponse) else None
 
-    def _streaming_block_error(self, message: str) -> Exception:
+    def _streaming_block_error(self, message: str, *, response_status: int | None = None) -> Exception:
         from litellm.proxy.proxy_server import StreamingCallbackError
 
-        return StreamingCallbackError(message)
+        return StreamingCallbackError(message, status_code=self._block_status(response_status))
 
     @staticmethod
     def _stream_error_items(
@@ -1138,7 +1138,7 @@ class ThirdlawGuardrail(CustomGuardrail):
             message: Final = decision.message or "Content violates ThirdLaw policy"
             block_items: Final = self._stream_error_items(message, surface, collected)
             if block_items is None:
-                raise self._streaming_block_error(message)
+                raise self._streaming_block_error(message, response_status=decision.response_status)
             for item in block_items:
                 yield item
             return
@@ -1289,7 +1289,10 @@ class ThirdlawGuardrail(CustomGuardrail):
                 response_headers=response_headers,
             )
             if interim_decision is not None and interim_decision.action == "block":
-                raise self._streaming_block_error(interim_decision.message or "Content violates ThirdLaw policy")
+                raise self._streaming_block_error(
+                    interim_decision.message or "Content violates ThirdLaw policy",
+                    response_status=interim_decision.response_status,
+                )
 
         surface: Final = classify_stream(collected)
         if surface is StreamSurface.RESPONSES:
@@ -1322,7 +1325,7 @@ class ThirdlawGuardrail(CustomGuardrail):
             message: Final = final_decision.message or "Content violates ThirdLaw policy"
             block_items: Final = self._stream_error_items(message, surface, collected)
             if block_items is None:
-                raise self._streaming_block_error(message)
+                raise self._streaming_block_error(message, response_status=final_decision.response_status)
             for item in block_items:
                 yield item
             return

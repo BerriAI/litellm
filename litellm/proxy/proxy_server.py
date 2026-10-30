@@ -4854,7 +4854,12 @@ async def _run_background_health_check():
 
 
 class StreamingCallbackError(Exception):
-    pass
+    status_code: int
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        if status_code is not None:
+            self.status_code = status_code
 
 
 # Fields in ``litellm_settings`` / ``general_settings`` whose values flow
