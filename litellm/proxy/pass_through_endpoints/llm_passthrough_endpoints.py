@@ -45,6 +45,8 @@ from litellm.constants import (
     AZURE_SPEECH_STT_DOMAIN,
     AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
+    DEEPGRAM_LISTEN_DEFAULT_MODEL,
+    DEEPGRAM_SPEAK_DEFAULT_MODEL,
     PASS_THROUGH_HEADER_PREFIX,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
 )
@@ -64,7 +66,10 @@ from litellm.llms.deepgram.common_utils import (
     deepgram_listen_is_priced,
     deepgram_listen_registry_key,
     deepgram_listen_requested_model,
-    deepgram_listen_websocket_target,
+    deepgram_speak_character_rate,
+    deepgram_speak_characters,
+    deepgram_speak_registry_key,
+    deepgram_websocket_target,
 )
 from litellm.llms.fal_ai.cost_calculator import fal_ai_passthrough_cost, fal_ai_queue_base
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
@@ -3456,6 +3461,7 @@ class _WebsocketRelay(Protocol):
         forward_headers: bool,
         endpoint: str,
         accept_websocket: bool,
+        count_client_text: Callable[[str], int] | None = None,
     ) -> None: ...
 
 
@@ -3565,6 +3571,77 @@ _DEEPGRAM_WS_UNPRICED_REASON: Final = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class _DeepgramStream:
+    path: str
+    default_model: str
+    refusal: Callable[[str], str | None]
+    count_client_text: Callable[[str], int] | None = None
+
+
+def _deepgram_listen_refusal(target: str) -> str | None:
+    callback_params: Final = deepgram_listen_callback_params(httpx.URL(target).query.decode())
+    if callback_params:
+        return _DEEPGRAM_WS_CALLBACK_REASON.format(params=", ".join(callback_params))
+    if deepgram_listen_is_priced(target):
+        return None
+    return _DEEPGRAM_WS_UNPRICED_REASON.format(registry_key=deepgram_listen_registry_key(target))
+
+
+_DEEPGRAM_LISTEN: Final = _DeepgramStream(
+    path="listen", default_model=DEEPGRAM_LISTEN_DEFAULT_MODEL, refusal=_deepgram_listen_refusal
+)
+
+
+def _deepgram_speak_refusal(target: str) -> str | None:
+    if deepgram_speak_character_rate(target) is not None:
+        return None
+    return _DEEPGRAM_WS_UNPRICED_REASON.format(registry_key=deepgram_speak_registry_key(target))
+
+
+_DEEPGRAM_SPEAK: Final = _DeepgramStream(
+    path="speak",
+    default_model=DEEPGRAM_SPEAK_DEFAULT_MODEL,
+    refusal=_deepgram_speak_refusal,
+    count_client_text=deepgram_speak_characters,
+)
+
+
+async def _relay_deepgram_stream(
+    websocket: WebSocket, user_api_key_dict: UserAPIKeyAuth, relay: _WebsocketRelay, stream: _DeepgramStream
+) -> None:
+    deepgram_api_key: Final = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider=litellm.LlmProviders.DEEPGRAM.value,
+        region_name=None,
+    )
+    if deepgram_api_key is None:
+        await websocket.close(code=1011, reason=_DEEPGRAM_WS_MISSING_KEY_REASON)
+        return
+
+    await websocket.accept(subprotocol=_negotiated_websocket_subprotocol(websocket))
+    target: Final = deepgram_websocket_target(
+        api_base=get_secret_str("DEEPGRAM_API_BASE"),
+        path=stream.path,
+        query_string=websocket.url.query,
+        default_model=stream.default_model,
+    )
+    refusal: Final = stream.refusal(target)
+    if refusal is not None:
+        await websocket.close(code=1008, reason=refusal)
+        return
+
+    await relay(
+        websocket=websocket,
+        target=target,
+        custom_headers={"Authorization": f"Token {deepgram_api_key}"},
+        user_api_key_dict=user_api_key_dict,
+        forward_headers=False,
+        endpoint=websocket.url.path,
+        accept_websocket=False,
+        count_client_text=stream.count_client_text,
+    )
+
+
 async def deepgram_listen_user_api_key_auth(websocket: WebSocket) -> UserAPIKeyAuth:
     return await user_api_key_auth_websocket_for_model(
         websocket, model=deepgram_listen_requested_model(websocket.url.query)
@@ -3578,43 +3655,23 @@ async def deepgram_listen_websocket_route(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(deepgram_listen_user_api_key_auth)],
     relay: Annotated[_WebsocketRelay, Depends(_websocket_relay)],
 ) -> None:
-    deepgram_api_key: Final = passthrough_endpoint_router.get_credentials(
-        custom_llm_provider=litellm.LlmProviders.DEEPGRAM.value,
-        region_name=None,
-    )
-    if deepgram_api_key is None:
-        await websocket.close(code=1011, reason=_DEEPGRAM_WS_MISSING_KEY_REASON)
-        return
+    await _relay_deepgram_stream(websocket, user_api_key_dict, relay, _DEEPGRAM_LISTEN)
 
-    await websocket.accept(subprotocol=_negotiated_websocket_subprotocol(websocket))
-    callback_params: Final = deepgram_listen_callback_params(websocket.url.query)
-    if callback_params:
-        await websocket.close(
-            code=1008,
-            reason=_DEEPGRAM_WS_CALLBACK_REASON.format(params=", ".join(callback_params)),
-        )
-        return
 
-    target: Final = deepgram_listen_websocket_target(
-        api_base=get_secret_str("DEEPGRAM_API_BASE"),
-        query_string=websocket.url.query,
+async def deepgram_speak_user_api_key_auth(websocket: WebSocket) -> UserAPIKeyAuth:
+    return await user_api_key_auth_websocket_for_model(
+        websocket, model=httpx.QueryParams(websocket.url.query).get("model") or DEEPGRAM_SPEAK_DEFAULT_MODEL
     )
-    if not deepgram_listen_is_priced(target):
-        await websocket.close(
-            code=1008,
-            reason=_DEEPGRAM_WS_UNPRICED_REASON.format(registry_key=deepgram_listen_registry_key(target)),
-        )
-        return
 
-    await relay(
-        websocket=websocket,
-        target=target,
-        custom_headers={"Authorization": f"Token {deepgram_api_key}"},
-        user_api_key_dict=user_api_key_dict,
-        forward_headers=False,
-        endpoint=websocket.url.path,
-        accept_websocket=False,
-    )
+
+@router.websocket("/deepgram/v1/speak")
+@router.websocket("/deepgram/speak")
+async def deepgram_speak_websocket_route(
+    websocket: WebSocket,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(deepgram_speak_user_api_key_auth)],
+    relay: Annotated[_WebsocketRelay, Depends(_websocket_relay)],
+) -> None:
+    await _relay_deepgram_stream(websocket, user_api_key_dict, relay, _DEEPGRAM_SPEAK)
 
 
 _OPENAI_BETA_HEADER: Final = "openai-beta"

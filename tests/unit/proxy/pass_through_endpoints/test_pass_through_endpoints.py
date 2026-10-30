@@ -31,7 +31,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
+from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS, WEBSOCKET_CLIENT_TEXT_COUNT_KEY
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
@@ -7711,6 +7711,7 @@ async def test_websocket_passthrough_relays_deepgram_transcript_frames_verbatim_
     ]
     assert success_call["httpx_response"].request.url == DEEPGRAM_LISTEN_TARGET
     assert success_call["logging_obj"].model_call_details.get("custom_llm_provider") is None
+    assert WEBSOCKET_CLIENT_TEXT_COUNT_KEY not in success_call["logging_obj"].model_call_details
     websocket.close.assert_awaited_once_with()
 
 
@@ -7734,6 +7735,50 @@ async def test_websocket_passthrough_sends_deepgram_audio_bytes_and_control_text
     assert [call.args[0] for call in upstream_ws.send.await_args_list] == [audio_chunk, close_stream]
     assert isinstance(upstream_ws.send.await_args_list[0].args[0], bytes)
     upstream_ws.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_hands_billing_the_total_of_its_client_text_counter():
+    """Text frames are relayed unchanged and counted, binary frames are not, and only the session total reaches the
+    success handler, so the client's text itself is never kept."""
+    frames = ("hello", b"\x00\x01binary", "world!")
+    upstream_ws = RecordingUpstreamWebSocket()
+    websocket = _client_websocket(
+        AsyncMock(
+            side_effect=[
+                *(
+                    {"type": "websocket.receive", "bytes": frame}
+                    if isinstance(frame, bytes)
+                    else {"type": "websocket.receive", "text": frame}
+                    for frame in frames
+                ),
+                {"type": "websocket.disconnect"},
+            ]
+        )
+    )
+
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws),
+        patch(  # test-quality-ok: pass_through_endpoint_logging is a module global read inside websocket_passthrough_request; there is no injection seam
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints."
+            "pass_through_endpoint_logging.pass_through_async_success_handler",
+            new=AsyncMock(),
+        ) as success_handler,
+    ):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://upstream.example/v1/stream",
+            custom_headers={},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/provider/v1/stream",
+            accept_websocket=False,
+            count_client_text=len,
+        )
+
+    assert [call.args[0] for call in upstream_ws.send.await_args_list] == list(frames)
+    model_call_details = success_handler.call_args.kwargs["logging_obj"].model_call_details
+    assert model_call_details[WEBSOCKET_CLIENT_TEXT_COUNT_KEY] == len("hello") + len("world!")
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,8 @@
-"""Deepgram ``/v1/listen`` passthrough WebSocket route: registration, auth, credential injection, target URL."""
+"""Deepgram ``/v1/listen`` and ``/v1/speak`` passthrough WebSocket routes: registration, auth, credential injection,
+target URL."""
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
@@ -15,12 +16,15 @@ from starlette.websockets import WebSocketDisconnect
 
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import DEEPGRAM_SPEAK_DEFAULT_MODEL
+from litellm.llms.deepgram.common_utils import deepgram_speak_characters
 from litellm.proxy._lazy_features import LAZY_FEATURES
 from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import cache_key_object
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     _websocket_relay,
     deepgram_listen_websocket_route,
+    deepgram_speak_websocket_route,
     router,
 )
 from litellm.proxy.utils import hash_token
@@ -30,6 +34,11 @@ GET_CREDENTIALS: Final = (
 )
 USER_API_KEY_AUTH: Final = "litellm.proxy.auth.user_api_key_auth.user_api_key_auth"
 LISTEN_PATHS: Final = ("/deepgram/v1/listen", "/deepgram/listen")
+SPEAK_PATHS: Final = ("/deepgram/v1/speak", "/deepgram/speak")
+ROUTES: Final = (
+    pytest.param(deepgram_listen_websocket_route, "/deepgram/v1/listen", id="listen"),
+    pytest.param(deepgram_speak_websocket_route, "/deepgram/v1/speak", id="speak"),
+)
 NOVA_2_STREAMING_KEY: Final = "deepgram/streaming/nova-2"
 
 pytestmark: Final = pytest.mark.usefixtures("local_model_cost_map")
@@ -62,6 +71,7 @@ class _RelayCall:
     forward_headers: bool
     endpoint: str
     accept_websocket: bool
+    count_client_text: Callable[[str], int] | None = None
 
 
 class _FakeRelay:
@@ -78,6 +88,7 @@ class _FakeRelay:
         forward_headers: bool,
         endpoint: str,
         accept_websocket: bool,
+        count_client_text: Callable[[str], int] | None = None,
     ) -> None:
         self.calls.append(
             _RelayCall(
@@ -87,13 +98,18 @@ class _FakeRelay:
                 forward_headers=forward_headers,
                 endpoint=endpoint,
                 accept_websocket=accept_websocket,
+                count_client_text=count_client_text,
             )
         )
 
 
-async def _serve(websocket: _FakeWebSocket, user_api_key_dict: UserAPIKeyAuth | None = None) -> _FakeRelay:
+async def _serve(
+    websocket: _FakeWebSocket,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+    route: Callable[..., Awaitable[None]] = deepgram_listen_websocket_route,
+) -> _FakeRelay:
     relay = _FakeRelay()
-    await deepgram_listen_websocket_route(
+    await route(
         websocket=websocket,
         user_api_key_dict=user_api_key_dict or UserAPIKeyAuth(),
         relay=relay,
@@ -208,11 +224,12 @@ async def test_deepgram_listen_ignores_caller_supplied_api_base(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_deepgram_listen_closes_cleanly_when_provider_credentials_missing():
-    websocket = _FakeWebSocket("/deepgram/v1/listen", "model=nova-3")
+@pytest.mark.parametrize(("route", "path"), ROUTES)
+async def test_deepgram_ws_routes_close_cleanly_when_provider_credentials_missing(route, path):
+    websocket = _FakeWebSocket(path, "")
 
     with patch(GET_CREDENTIALS, return_value=None):
-        relay = await _serve(websocket)
+        relay = await _serve(websocket, route=route)
 
     assert websocket.closed is not None
     assert websocket.closed[0] == 1011
@@ -299,13 +316,14 @@ def _app_with_relay(relay: _FakeRelay) -> FastAPI:
     return app
 
 
-def test_deepgram_listen_rejects_connections_without_a_litellm_key():
+@pytest.mark.parametrize("path", (LISTEN_PATHS[0], SPEAK_PATHS[0]))
+def test_deepgram_ws_routes_reject_connections_without_a_litellm_key(path):
     relay = _FakeRelay()
     client = TestClient(_app_with_relay(relay))
 
     with patch(GET_CREDENTIALS, return_value="dg-provider-key") as get_credentials:
         with pytest.raises(WebSocketDisconnect) as disconnect:
-            with client.websocket_connect("/deepgram/v1/listen?model=nova-3"):
+            with client.websocket_connect(path):
                 pass
 
     assert disconnect.value.code == 1008
@@ -451,7 +469,8 @@ def test_deepgram_listen_strips_a_second_model_that_would_outrank_the_authorized
     assert [call.target for call in relay.calls] == ["wss://api.deepgram.com/v1/listen?model=nova-2&language=en"]
 
 
-def test_deepgram_listen_echoes_the_browser_subprotocol_that_carries_the_litellm_key(monkeypatch):
+@pytest.mark.parametrize("path", (LISTEN_PATHS[0], SPEAK_PATHS[0]))
+def test_deepgram_ws_routes_echo_the_browser_subprotocol_that_carries_the_litellm_key(path, monkeypatch):
     """Browsers cannot set headers, so they send the key as a subprotocol and abort the handshake unless the
     server echoes that subprotocol back; the key itself must still stay off the upstream connection."""
     monkeypatch.delenv("DEEPGRAM_API_BASE", raising=False)
@@ -463,7 +482,7 @@ def test_deepgram_listen_echoes_the_browser_subprotocol_that_carries_the_litellm
         patch(USER_API_KEY_AUTH, new=AsyncMock(return_value=UserAPIKeyAuth(api_key="hashed"))),
     ):
         with client.websocket_connect(
-            "/deepgram/v1/listen?model=nova-3",
+            path,
             subprotocols=["openai-insecure-api-key.sk-litellm-virtual"],
         ) as connection:
             assert connection.accepted_subprotocol == "openai-insecure-api-key.sk-litellm-virtual"
@@ -472,3 +491,114 @@ def test_deepgram_listen_echoes_the_browser_subprotocol_that_carries_the_litellm
         MappingProxyType({"Authorization": "Token dg-provider-key"})
     ]
     assert [call.forward_headers for call in relay.calls] == [False]
+
+
+def test_deepgram_speak_websocket_routes_registered():
+    ws_paths = {route.path for route in router.routes if isinstance(route, WebSocketRoute)}
+    assert set(SPEAK_PATHS) <= ws_paths
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", SPEAK_PATHS)
+async def test_deepgram_speak_relays_with_provider_auth_and_counts_the_spoken_characters(path, monkeypatch):
+    monkeypatch.delenv("DEEPGRAM_API_BASE", raising=False)
+    websocket = _FakeWebSocket(path, "encoding=linear16&sample_rate=24000")
+    caller = UserAPIKeyAuth(api_key="sk-litellm-virtual", team_id="team-tts")
+    relay = _FakeRelay()
+
+    with patch(GET_CREDENTIALS, return_value="dg-provider-key"):
+        await deepgram_speak_websocket_route(websocket=websocket, user_api_key_dict=caller, relay=relay)
+
+    assert relay.calls == [
+        _RelayCall(
+            target=f"wss://api.deepgram.com/v1/speak?encoding=linear16&sample_rate=24000&model={DEEPGRAM_SPEAK_DEFAULT_MODEL}",
+            custom_headers=MappingProxyType({"Authorization": "Token dg-provider-key"}),
+            user_api_key_dict=caller,
+            forward_headers=False,
+            endpoint=path,
+            accept_websocket=False,
+            count_client_text=deepgram_speak_characters,
+        )
+    ]
+    assert websocket.closed is None
+
+
+@pytest.mark.asyncio
+async def test_deepgram_speak_honours_server_configured_api_base(monkeypatch):
+    monkeypatch.setenv("DEEPGRAM_API_BASE", "http://localhost:8080/v1")
+    websocket = _FakeWebSocket("/deepgram/v1/speak", "model=aura-2-thalia-en")
+
+    with patch(GET_CREDENTIALS, return_value="dg-provider-key"):
+        relay = await _serve(websocket, route=deepgram_speak_websocket_route)
+
+    assert [call.target for call in relay.calls] == ["ws://localhost:8080/v1/speak?model=aura-2-thalia-en"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("query", "missing_key"),
+    [
+        pytest.param("model=aura-99-x-en", "deepgram/aura-99", id="generation without a row"),
+        pytest.param("model=nova-3", "deepgram/nova-3", id="listen model has no per-character rate"),
+    ],
+)
+async def test_deepgram_speak_refuses_voices_it_cannot_price(query, missing_key, monkeypatch):
+    monkeypatch.delenv("DEEPGRAM_API_BASE", raising=False)
+    websocket = _FakeWebSocket("/deepgram/v1/speak", query)
+
+    with patch(GET_CREDENTIALS, return_value="dg-provider-key"):
+        relay = await _serve(websocket, route=deepgram_speak_websocket_route)
+
+    assert relay.calls == []
+    assert websocket.closed == (
+        1008,
+        f"No streaming price for '{missing_key}': add it to the model cost map to enable it",
+    )
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_target"),
+    [
+        pytest.param("model=aura-2-thalia-en", "wss://api.deepgram.com/v1/speak?model=aura-2-thalia-en", id="allowed"),
+        pytest.param("model=aura-asteria-en", None, id="denied voice named"),
+        pytest.param("", None, id="voice omitted, default denied"),
+        pytest.param(
+            "model=aura-2-thalia-en&model=aura-asteria-en",
+            "wss://api.deepgram.com/v1/speak?model=aura-2-thalia-en",
+            id="second voice stripped",
+        ),
+    ],
+)
+def test_deepgram_speak_authorizes_the_voice_it_will_actually_send_upstream(query, expected_target, monkeypatch):
+    monkeypatch.delenv("DEEPGRAM_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "max_budget", 0.0)
+    cache = asyncio.run(_cache_restricted_key("sk-only-thalia", ["aura-2-thalia-en"]))
+    relay = _FakeRelay()
+    client = TestClient(_app_with_relay(relay))
+
+    with (
+        patch(GET_CREDENTIALS, return_value="dg-provider-key"),
+        patch.multiple(  # test-quality-ok: the real key auth path reads these proxy_server globals and has no injection seam
+            "litellm.proxy.proxy_server",
+            master_key="sk-master",
+            prisma_client=MagicMock(),
+            user_api_key_cache=cache,
+            llm_model_list=None,
+            llm_router=None,
+        ),
+    ):
+        if expected_target is not None:
+            with client.websocket_connect(
+                f"/deepgram/v1/speak?{query}", headers={"Authorization": "Bearer sk-only-thalia"}
+            ):
+                pass
+            assert [call.target for call in relay.calls] == [expected_target]
+            return
+        with pytest.raises(WebSocketDisconnect) as disconnect:
+            with client.websocket_connect(
+                f"/deepgram/v1/speak?{query}", headers={"Authorization": "Bearer sk-only-thalia"}
+            ):
+                pass
+
+    assert disconnect.value.code == 1008
+    assert relay.calls == []

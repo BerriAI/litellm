@@ -23078,6 +23078,30 @@
         "output_cost_per_token_batches": 1e-06,
         "source": "https://developers.openai.com/api/docs/pricing"
     },
+    "deepgram/aura": {
+        "input_cost_per_character": 1.5e-05,
+        "litellm_provider": "deepgram",
+        "metadata": {
+            "calculation": "$0.0150/1000 characters = $0.000015 per character",
+            "note": "Aura-1 text-to-speech voices (aura-<voice>-<lang>), pay as you go"
+        },
+        "source": "https://deepgram.com/pricing",
+        "supported_endpoints": [
+            "/v1/speak"
+        ]
+    },
+    "deepgram/aura-2": {
+        "input_cost_per_character": 3e-05,
+        "litellm_provider": "deepgram",
+        "metadata": {
+            "calculation": "$0.030/1000 characters = $0.00003 per character",
+            "note": "Aura-2 text-to-speech voices (aura-2-<voice>-<lang>), pay as you go"
+        },
+        "source": "https://deepgram.com/pricing",
+        "supported_endpoints": [
+            "/v1/speak"
+        ]
+    },
     "deepgram/base": {
         "input_cost_per_second": 0.00020833,
         "litellm_provider": "deepgram",

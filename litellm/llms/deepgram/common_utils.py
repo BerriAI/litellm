@@ -1,16 +1,18 @@
 import math
+import re
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
-from litellm.constants import DEEPGRAM_DEFAULT_API_BASE, DEEPGRAM_LISTEN_DEFAULT_MODEL
+from litellm.constants import DEEPGRAM_DEFAULT_API_BASE, DEEPGRAM_LISTEN_DEFAULT_MODEL, DEEPGRAM_SPEAK_DEFAULT_MODEL
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import LlmProviders, ModelInfo
 
 _WEBSOCKET_SCHEMES: Final = MappingProxyType({"https": "wss", "http": "ws", "wss": "wss", "ws": "ws"})
 DEEPGRAM_LISTEN_CALLBACK_PARAMS: Final = frozenset({"callback", "callback_method"})
@@ -28,6 +30,7 @@ DEEPGRAM_LISTEN_ADDON_PRICING_PARAMS: Final = MappingProxyType(
 )
 _DISABLED_PARAM_VALUES: Final = frozenset({"", "false"})
 _SINGLE_VALUED_PARAMS: Final = frozenset({"model", "language"})
+_AURA_GENERATION: Final = re.compile(r"aura(?:-\d+)?(?=-)")
 
 
 class DeepgramException(BaseLLMException):
@@ -50,11 +53,11 @@ def _first_occurrences(query_string: str) -> httpx.QueryParams:
     )
 
 
-def deepgram_listen_websocket_target(api_base: str | None, query_string: str) -> str:
-    listen_url: Final = httpx.URL(join_api_base(api_base or DEEPGRAM_DEFAULT_API_BASE, "listen"))
-    websocket_url: Final = listen_url.copy_with(scheme=_WEBSOCKET_SCHEMES.get(listen_url.scheme, listen_url.scheme))
+def deepgram_websocket_target(api_base: str | None, path: str, query_string: str, default_model: str) -> str:
+    http_url: Final = httpx.URL(join_api_base(api_base or DEEPGRAM_DEFAULT_API_BASE, path))
+    websocket_url: Final = http_url.copy_with(scheme=_WEBSOCKET_SCHEMES.get(http_url.scheme, http_url.scheme))
     params: Final = _first_occurrences(query_string)
-    query: Final = params if params.get("model") else params.remove("model").add("model", DEEPGRAM_LISTEN_DEFAULT_MODEL)
+    query: Final = params if params.get("model") else params.remove("model").add("model", default_model)
     return f"{websocket_url}?{query}"
 
 
@@ -86,15 +89,18 @@ def deepgram_listen_registry_key(upstream_url: str) -> str:
     return f"{LlmProviders.DEEPGRAM.value}/{deepgram_listen_pricing_model(upstream_url)}"
 
 
-def deepgram_listen_is_priced(upstream_url: str) -> bool:
-    """Only an exact registry hit counts: the cost calculator resolves a missing ``streaming/<model>`` row to the
-    pre-recorded ``<model>`` row, which is not the rate Deepgram bills a WebSocket session at."""
-    registry_key: Final = deepgram_listen_registry_key(upstream_url)
+def _exact_registry_entry(registry_key: str) -> ModelInfo | None:
+    """Only an exact registry hit counts: ``get_model_info`` can resolve a missing row to a neighbouring one, such as
+    a missing ``streaming/<model>`` row to the pre-recorded ``<model>`` row, which Deepgram bills at another rate."""
     try:
         model_info: Final = litellm.get_model_info(model=registry_key, custom_llm_provider=LlmProviders.DEEPGRAM.value)
     except Exception:
-        return False
-    return model_info["key"] == registry_key
+        return None
+    return model_info if model_info["key"] == registry_key else None
+
+
+def deepgram_listen_is_priced(upstream_url: str) -> bool:
+    return _exact_registry_entry(deepgram_listen_registry_key(upstream_url)) is not None
 
 
 def deepgram_listen_addon_pricing_models(upstream_url: str) -> tuple[str, ...]:
@@ -199,3 +205,39 @@ def deepgram_listen_transcript(websocket_messages: Sequence[Mapping[str, object]
         if frame.get("type") == "Results"
         if (transcript := _final_transcript(frame)) is not None
     )
+
+
+def deepgram_speak_model(upstream_url: str) -> str:
+    models: Final = parse_qs(urlparse(upstream_url).query).get("model")
+    return models[0] if models else DEEPGRAM_SPEAK_DEFAULT_MODEL
+
+
+def deepgram_speak_registry_key(upstream_url: str) -> str:
+    """Deepgram bills every voice of an Aura generation at one rate, so ``aura-2-thalia-en`` is priced at the
+    ``deepgram/aura-2`` row"""
+    model: Final = deepgram_speak_model(upstream_url)
+    generation: Final = _AURA_GENERATION.match(model)
+    return f"{LlmProviders.DEEPGRAM.value}/{generation.group() if generation else model}"
+
+
+def deepgram_speak_character_rate(upstream_url: str) -> float | None:
+    model_info: Final = _exact_registry_entry(deepgram_speak_registry_key(upstream_url))
+    return None if model_info is None else model_info.get("input_cost_per_character")
+
+
+class _DeepgramSpeakMessage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["Speak"]
+    text: str
+
+
+def deepgram_speak_characters(frame: str) -> int:
+    """Counts a Speak message's text as it is sent. Deepgram also speaks, and bills, unflushed text on its own (a long
+    buffer, Close, a close frame), so counting only flushed text would let a client get audio free, while counting on
+    send can only over-bill text that a Clear discards. Binary frames need no count: Deepgram closes the session on one.
+    Never raises, since a traceback would carry the caller's text into the logs"""
+    try:
+        return len(_DeepgramSpeakMessage.model_validate_json(frame).text)
+    except ValidationError:
+        return 0

@@ -50,6 +50,7 @@ from litellm.constants import (
     PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS,
     REDACTED_BY_LITELLM,
     SESSION_ID_OMITTED_METADATA_KEY,
+    WEBSOCKET_CLIENT_TEXT_COUNT_KEY,
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
 )
 from litellm.integrations.custom_guardrail import (
@@ -2607,6 +2608,7 @@ async def websocket_passthrough_request(
     setup_model_rewriter: Callable[[str], str] | None = None,
     builtin_provider_route: bool = False,
     model: str | None = None,
+    count_client_text: Callable[[str], int] | None = None,
 ):
     """
     WebSocket passthrough request handler.
@@ -2622,6 +2624,8 @@ async def websocket_passthrough_request(
         setup_model_rewriter: Optional rewrite of the setup frame's model before it reaches the upstream
         builtin_provider_route: Whether a built-in provider route serves the connection, so its URL names the provider
         model: The model the caller named before connecting, logged on a failure before the setup frame arrives
+        count_client_text: Optional count of each client text frame delivered upstream, such as billable characters.
+            Only the session total reaches the success handler, under WEBSOCKET_CLIENT_TEXT_COUNT_KEY
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.proxy_server import proxy_config, proxy_logging_obj
@@ -2632,6 +2636,7 @@ async def websocket_passthrough_request(
     # Initialize tracking variables
     start_time: Final = datetime.now()
     websocket_messages: Final[list[dict[str, object]]] = []
+    client_text_count = 0  # rebind-ok: forward_client_to_upstream adds each delivered text frame's count
     litellm_call_id: Final = str(uuid.uuid4())
 
     verbose_proxy_logger.info("WebSocket passthrough (%s): Starting WebSocket connection to %s", endpoint, target)
@@ -2750,6 +2755,7 @@ async def websocket_passthrough_request(
 
             async def forward_client_to_upstream() -> None:
                 """Forward messages from client to upstream WebSocket"""
+                nonlocal client_text_count
                 try:
                     while True:
                         message = await websocket.receive()
@@ -2819,6 +2825,8 @@ async def websocket_passthrough_request(
                                     # Not a JSON message or doesn't contain setup data
 
                             await upstream_ws.send(_rewrite_vertex_live_setup_model(text_data, setup_model_rewriter))
+                            if count_client_text is not None:
+                                client_text_count += count_client_text(text_data)
                         elif bytes_data is not None:
                             await upstream_ws.send(bytes_data)
                 except asyncio.CancelledError:
@@ -2945,6 +2953,8 @@ async def websocket_passthrough_request(
                     self.url = target_url
 
             mock_response: Final = MockWebSocketResponse(target)
+            if count_client_text is not None:
+                logging_obj.model_call_details[WEBSOCKET_CLIENT_TEXT_COUNT_KEY] = client_text_count
 
             # Use the same success handler as HTTP passthrough endpoints
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(

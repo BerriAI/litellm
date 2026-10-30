@@ -17,7 +17,10 @@ from litellm.llms.deepgram.common_utils import (
     deepgram_listen_registry_key,
     deepgram_listen_requested_model,
     deepgram_listen_transcript,
-    deepgram_listen_websocket_target,
+    deepgram_speak_character_rate,
+    deepgram_speak_characters,
+    deepgram_speak_registry_key,
+    deepgram_websocket_target,
 )
 
 NOVA_3_URL: Final = "wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000"
@@ -98,7 +101,7 @@ def _metadata(duration: object, channels: object = 1) -> dict[str, object]:
     ],
 )
 def test_deepgram_listen_websocket_target(api_base: str | None, query_string: str, expected: str):
-    assert deepgram_listen_websocket_target(api_base=api_base, query_string=query_string) == expected
+    assert deepgram_websocket_target(api_base, "listen", query_string, "nova-3") == expected
 
 
 @pytest.mark.parametrize(
@@ -243,7 +246,7 @@ def test_requested_model_is_the_only_model_the_upstream_target_carries(query_str
     """Authorization runs against ``deepgram_listen_requested_model``; the upstream URL is built separately, so the
     two must always agree or a key could be authorized for one model and reach another. Deepgram reads the last
     repeated ``model``, so the target must carry exactly one."""
-    target: Final = deepgram_listen_websocket_target(None, query_string)
+    target: Final = deepgram_websocket_target(None, "listen", query_string, "nova-3")
     assert parse_qs(urlparse(target).query)["model"] == [deepgram_listen_requested_model(query_string)]
     assert deepgram_listen_requested_model(query_string) == deepgram_listen_model(target)
 
@@ -324,3 +327,62 @@ def test_deepgram_listen_is_priced(
 )
 def test_deepgram_listen_addon_pricing_models(upstream_url: str, expected: tuple[str, ...]):
     assert deepgram_listen_addon_pricing_models(upstream_url) == expected
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_target"),
+    [
+        pytest.param(
+            "encoding=linear16",
+            "wss://api.deepgram.com/v1/speak?encoding=linear16&model=aura-asteria-en",
+            id="no model: Deepgram's own default, named so billing and upstream agree",
+        ),
+        pytest.param(
+            "model=aura-asteria-en&model=aura-2-thalia-en",
+            "wss://api.deepgram.com/v1/speak?model=aura-asteria-en",
+            id="second model dropped: Deepgram honours the last, auth and pricing read the first",
+        ),
+    ],
+)
+def test_deepgram_speak_websocket_target(query: str, expected_target: str):
+    assert deepgram_websocket_target(None, "speak", query, "aura-asteria-en") == expected_target
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("model", "registry_key", "priced"),
+    [
+        ("aura-asteria-en", "deepgram/aura", True),
+        ("aura-2-thalia-en", "deepgram/aura-2", True),
+        ("aura-2-celeste-es", "deepgram/aura-2", True),
+        ("aura-99-x-en", "deepgram/aura-99", False),
+        ("nova-3", "deepgram/nova-3", False),
+        (None, "deepgram/aura", True),
+    ],
+)
+def test_deepgram_speak_prices_each_voice_at_its_generation_row_only(
+    model: str | None, registry_key: str, priced: bool
+):
+    """A voice is never billed at another generation's rate, and a listen model's row is not a speak price."""
+    upstream_url = "wss://api.deepgram.com/v1/speak" + ("" if model is None else f"?model={model}")
+    rate = deepgram_speak_character_rate(upstream_url)
+
+    assert deepgram_speak_registry_key(upstream_url) == registry_key
+    assert rate == (litellm.model_cost[registry_key]["input_cost_per_character"] if priced else None)
+
+
+@pytest.mark.parametrize(
+    ("frame", "characters"),
+    [
+        ('{"type": "Speak", "text": "Hello world."}', 12),
+        ('{"type":"Speak","text":"\u00bfqu\u00e9 tal?"}', 9),
+        ('{"type": "Flush"}', 0),
+        ('{"type": "Speak"}', 0),
+        ('{"type": "Speak", "text": 12}', 0),
+        ('["Speak", "Hello"]', 0),
+        ("Hello", 0),
+        ("[" * 100_000, 0),
+    ],
+)
+def test_deepgram_speak_characters_counts_only_speak_text_and_never_raises(frame: str, characters: int):
+    assert deepgram_speak_characters(frame) == characters
