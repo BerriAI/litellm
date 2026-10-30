@@ -3084,7 +3084,7 @@ def batch_cost_calculator(
             batch_rates.cache_creation,
             batch_rates.cache_creation_rates_by_ttl,
         )
-    elif input_cost_per_token:
+    elif input_cost_per_token is not None:
         details: Final = parse_prompt_tokens_details(usage)
         cache_read_tokens: Final = details["cache_hit_tokens"]
         cache_creation_tokens: Final = details["cache_creation_tokens"]

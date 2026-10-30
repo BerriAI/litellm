@@ -4631,6 +4631,27 @@ def test_batch_cost_calculator_preserves_cache_write_prices_and_defaults_only_wh
     assert completion_cost_value == pytest.approx(200 * 15e-6 / 2)
 
 
+def test_batch_cost_calculator_prices_cache_tokens_when_uncached_input_is_free() -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    model_info: Final[ModelInfo] = {
+        "supported_openai_params": [],
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 15e-6,
+        "cache_read_input_token_cost": 3e-7,
+        "cache_creation_input_token_cost": 3.75e-6,
+    }
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=_batch_cache_usage(),
+        model="batch-pricing-fixture",
+        custom_llm_provider="anthropic",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx((8000 * 3e-7 + 2000 * 3.75e-6) / 2)
+    assert completion_cost_value == pytest.approx(200 * 15e-6 / 2)
+
+
 def test_completion_cost_bills_interactions_api_response():
     from litellm.types.interactions import InteractionsAPIResponse
 
