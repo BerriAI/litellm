@@ -184,7 +184,7 @@ async def test_responses_stream_sends_no_failure_event_after_an_upstream_error_e
     assert json.loads(frames[-1].split("data: ", 1)[1])["message"] == "upstream failed"
 
 
-class _HookOutputItem(BaseModel):
+class _HookOutputItem(BaseModel, frozen=True):
     id: str
     type: str
 
