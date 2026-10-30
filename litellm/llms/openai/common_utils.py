@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from aiohttp import ClientSession
 
 import litellm
+from litellm.exceptions import error_response_without_credentials
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning_params
@@ -147,6 +148,14 @@ class OpenAIError(BaseLLMException):
             response=self.response,
             body=body,
         )
+
+
+def upstream_error_response(error: Exception) -> httpx.Response | None:
+    if not isinstance(error, (openai.APIStatusError, httpx.HTTPStatusError)):
+        return None
+    return error_response_without_credentials(
+        error.response.status_code, error.response, "https://docs.litellm.ai/docs"
+    )
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
