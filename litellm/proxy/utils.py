@@ -3526,9 +3526,9 @@ class ProxyLogging:
         if not caps.has_guardrail and not caps.has_moderation_override:
             return data
         # Step 1: Collect all guardrail tasks to run in parallel
-        guardrail_tasks: Final[
+        guardrail_tasks: Final[  # mutable-ok: selected hook coroutines
             list[tuple[CustomLogger, Awaitable[object]]]
-        ] = []  # mutable-ok: selected hook coroutines
+        ] = []
 
         for callback in litellm.callbacks:
             if (
