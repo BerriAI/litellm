@@ -84,6 +84,7 @@ from litellm.litellm_core_utils.core_helpers import (
     proxy_stamped_kubernetes_pod_routing,
     proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
+    reports_native_messages_cost,
     set_response_cost_in_hidden_params,
     single_log_line,
 )
@@ -4990,13 +4991,18 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def billable_result(self, result: object) -> object:
         """The response the cost calculator prices: a /v1/messages body served through the chat
-        bridge is replaced by the ModelResponse its spend row is built from, anything else is
+        bridge is replaced by the ModelResponse its spend row is built from, a native one is only
+        converted when its provider reports the cost the bill is read from, anything else is
         priced as is."""
         served: Final[object] = result
         call_type: Final[object] = getattr(self, "call_type", None)
         if not isinstance(result, dict):
             return served
-        if self.bridged_model_response is None and call_type != CallTypes.anthropic_messages.value:
+        if self.bridged_model_response is not None:
+            return self._anthropic_messages_logged_response(result=served)
+        if call_type != CallTypes.anthropic_messages.value:
+            return served
+        if not reports_native_messages_cost(self.model_call_details.get("custom_llm_provider")):
             return served
         return self._anthropic_messages_logged_response(result=served)
 

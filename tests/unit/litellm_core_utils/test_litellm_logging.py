@@ -14231,6 +14231,48 @@ def test_native_messages_body_carries_the_reported_list_cost_into_the_priced_res
     assert headers.get("llm_provider-x-litellm-response-cost") == expected_header
 
 
+_NATIVE_PRICED_MESSAGE: Final = {
+    "id": "msg_native",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-haiku-4-5",
+    "content": [{"type": "text", "text": "answer"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 1200, "output_tokens": 300},
+}
+
+
+def _native_anthropic_messages_logging_obj() -> LitellmLogging:
+    logging_obj: Final = _anthropic_messages_logging_obj()
+    logging_obj.stream = False
+    logging_obj.optional_params = {}
+    logging_obj.model = "claude-haiku-4-5"
+    logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+    return logging_obj
+
+
+@pytest.mark.parametrize(
+    "served_body",
+    (
+        {**_NATIVE_PRICED_MESSAGE, "content": None},
+        {key: value for key, value in _NATIVE_PRICED_MESSAGE.items() if key != "content"},
+    ),
+    ids=("content-null", "content-missing"),
+)
+def test_a_native_messages_body_without_content_is_priced_from_its_usage(served_body: dict[str, object]) -> None:
+    """Regression: #48254 converted every native /v1/messages body before pricing it, and the conversion
+    raised on a 200 whose ``content`` was null or missing, turning the served 200 into a 500."""
+    with_content: Final = _native_anthropic_messages_logging_obj().response_cost_calculator(
+        result=_NATIVE_PRICED_MESSAGE
+    )
+    assert with_content is not None and with_content > 0
+
+    without_content: Final = _native_anthropic_messages_logging_obj().response_cost_calculator(result=served_body)
+
+    assert without_content == with_content
+
+
 def test_record_native_bedrock_guardrail_bills_when_the_metadata_is_none() -> None:
     import datetime
 
