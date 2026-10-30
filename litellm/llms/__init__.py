@@ -144,7 +144,7 @@ def discover_guardrail_translation_mappings() -> dict[CallTypes, type["BaseTrans
                     continue
 
         try:
-            from litellm.proxy._experimental.mcp_server.guardrail_translation import (
+            from litellm.proxy.mcp_server.guardrail_translation import (
                 guardrail_translation_mappings as mcp_guardrail_translation_mappings,
             )
 

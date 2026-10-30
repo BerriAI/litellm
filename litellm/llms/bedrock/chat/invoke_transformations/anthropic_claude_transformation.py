@@ -4,7 +4,9 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 from pydantic import TypeAdapter
 
+from litellm.anthropic_beta_gated_fields import strip_beta_gated_request_body
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
 )
@@ -22,6 +24,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import (
+    BEDROCK_INVOKE_TRACE_FIELD,
     apply_bedrock_invoke_structured_output,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
@@ -208,7 +211,15 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         if beta_list:
             _anthropic_request["anthropic_beta"] = beta_list
 
-        return _anthropic_request
+        return dict(
+            strip_beta_gated_request_body(
+                _anthropic_request,  # pyright: ignore[reportUnknownArgumentType]  # built by the base signature's bare dict transform
+                {},
+                drop_params=litellm_params.get("drop_params"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # litellm_params is the base signature's bare dict
+                model=model,
+                provider="bedrock_invoke",
+            )
+        )
 
     @property
     def uses_async_transform_request(self) -> bool:
@@ -292,7 +303,6 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         programmatic_tool_calling_used: Final = self.is_programmatic_tool_calling_used(tools)
         input_examples_used: Final = self.is_input_examples_used(tools)
         is_mid_conversation_output_config_used: Final = self.is_mid_conversation_output_config_used(messages)
-        is_thinking_display_updates_used: Final = self.is_thinking_display_updates_used(thinking)
 
         client_beta_set: Final = set(get_anthropic_beta_from_headers(headers))
         user_beta_set: Final = (
@@ -310,7 +320,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             mcp_server_used=self.is_mcp_server_used(optional_params.get("mcp_servers")),
             custom_llm_provider="bedrock",
             is_mid_conversation_output_config_used=is_mid_conversation_output_config_used,
-            is_thinking_display_updates_used=is_thinking_display_updates_used,
+            thinking=thinking,
         )
         beta_set.update(auto_betas)
 
@@ -406,7 +416,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        return AnthropicConfig.transform_response(
+        response: Final = AnthropicConfig.transform_response(
             self,
             model=model,
             raw_response=raw_response,
@@ -420,3 +430,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
+        body: Final = object_mapping(raw_response.json()) or {}
+        trace: Final = object_mapping(body.get(BEDROCK_INVOKE_TRACE_FIELD))
+        if trace is not None:
+            setattr(response, BEDROCK_INVOKE_TRACE_FIELD, trace)
+            logging_obj.record_native_bedrock_guardrail(response)
+        return response

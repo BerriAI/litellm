@@ -10,6 +10,7 @@ repository = "https://github.com/BerriAI/litellm"
 
 [workspace.dependencies]
 litellm-config = { path = "crates/config" }
+litellm-error = { path = "crates/error" }
 litellm-router = { path = "crates/router" }
 litellm-router-types = { path = "crates/router-types" }
 litellm-tracing = { path = "crates/tracing" }
@@ -72,6 +73,9 @@ litellm-python-compat = { path = "crates/python-compat" }
 litellm-circuit-breaker = { path = "crates/circuit-breaker" }
 litellm-redis-client = { path = "crates/redis-client" }
 litellm-redis-testing = { path = "crates/redis-testing" }
+litellm-cost = { path = "crates/cost" }
+litellm-model-catalog = { path = "crates/model-catalog" }
+litellm-model-catalog-refresh = { path = "crates/model-catalog-refresh" }
 
 askama = { version = "0.16.1", default-features = false, features = ["derive", "std"] }
 tracing = "0.1"
@@ -90,7 +94,7 @@ pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }
 rand = "0.8"
 macro_rules_attribute = "0.2.3"
 schemars = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "http2", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "rustls", "http2", "stream", "query"] }
 redis = "1.8.0"
 redis-test = "1.0.4"
 testcontainers-modules = "0.15.0"
@@ -100,14 +104,15 @@ rstest = "0.26.1"
 wiremock = "0.6.5"
 rstest_reuse = "0.7.0"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
 rustify = "=0.7.0"
 rustify_derive = "=0.5.5"
 vaultrs = { version = "=0.8.0", default-features = false, features = ["rustls"] }
-rustls-native-certs = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 serde_with = { version = "=3.21.0", default-features = false, features = ["std", "macros"] }
 sha2 = "0.10"
+sha1 = "0.10"
 syn = { version = "2", default-features = false }
 sqlx = { version = "0.9.0", default-features = false, features = ["json", "macros", "postgres", "runtime-tokio", "chrono", "tls-rustls-ring-native-roots"] }
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
@@ -118,7 +123,7 @@ thiserror = "2.0"
 tokenizers = { version = "0.23.1", default-features = false, features = ["onig"] }
 tiktoken-rs = "0.12.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }
-tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 base64 = "0.22"
 flate2 = "1"
